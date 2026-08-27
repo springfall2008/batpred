@@ -36,9 +36,10 @@ PREDBAT_LOG_FILE_PREV = "predbat.1.log"
 # mcp_secret were all being served in the clear.
 SECRET_KEY_SUBSTRINGS = ("_key", "password", "secret", "token")
 
-# Key suffixes that match a credential substring but hold no secret. A token expiry time is
-# what you want to see when debugging "my cloud integration stopped working", so keep it.
-SECRET_KEY_EXEMPT_SUFFIXES = ("_expires_at",)
+# Key suffixes that match a credential substring but hold no secret - timing metadata about a
+# token rather than the token itself. An expiry time is exactly what you want to see when
+# debugging "my cloud integration stopped working", so keep it readable.
+SECRET_KEY_EXEMPT_SUFFIXES = ("_expires_at", "_expires", "_expiry", "_expiration", "_birth")
 
 # Use datetime.fromisoformat in str2time rather than strptime, set False to revert to strptime
 STR2TIME_USE_FROMISOFORMAT = True
@@ -162,12 +163,15 @@ def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=PREDBAT_LOG_FILE_PRE
     """
     Return the contents of predbat.log, prefixed with the rotated previous log when one exists.
     """
+    # Decoded explicitly rather than with the platform default: a single non-UTF-8 byte anywhere
+    # in the log - an inverter API error message carrying one, say - would otherwise raise
+    # UnicodeDecodeError and take out both /api/log and the get_log MCP tool.
     logdata = ""
     if os.path.exists(logfile):
-        with open(logfile, "r") as f:
+        with open(logfile, "r", encoding="utf-8", errors="replace") as f:
             logdata = f.read()
     if os.path.exists(logfile_prev):
-        with open(logfile_prev, "r") as f:
+        with open(logfile_prev, "r", encoding="utf-8", errors="replace") as f:
             logdata = f.read() + "\n" + logdata
     return logdata
 

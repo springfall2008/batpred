@@ -208,7 +208,7 @@ look wrong"*, or *"find the warnings in the last 24 hours of my log and explain 
 | `filter` | `all`, `info`, `warnings` (the default) or `errors` |
 | `search` | Only return lines containing this text, case-insensitive |
 | `hours` | Only return lines written in the last N hours |
-| `max_lines` | How many lines to return, most recent first (default 500, maximum 5000) |
+| `max_lines` | How many lines to return - the most recent matches are the ones kept, but they come back oldest-first (default 500, maximum 5000) |
 
 `get_state` exposes the same internal state a `predbat_debug.yaml` carries, but a variable at a
 time rather than as a 5MB file. Called with no arguments it returns every variable small enough

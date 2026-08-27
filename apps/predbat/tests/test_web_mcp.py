@@ -36,6 +36,9 @@ from web_mcp import (
     MCP_STATE_DEFAULT_MAX_BYTES,
     MCP_STATE_LARGE_COLLECTION,
     MCP_STATE_MAX_BYTES_LIMIT,
+    MCPArgumentError,
+    parse_number_argument,
+    compile_filter_argument,
 )
 from utils import mask_secret_args, is_secret_key, is_debug_excluded_key, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp
 
@@ -108,6 +111,10 @@ def test_mask_secret_args(my_predbat):
         "mcp_secret": "mcp-secret-value",
         "solis_token_expires_at": "2026-08-27T09:00:00",
         "fox_token_expires_at": "2026-08-27T09:00:00",
+        "partner_token_expiry": "2026-08-27T09:00:00",
+        "session_token_expires": "2026-08-27T09:00:00",
+        "auth_token_expiration": "2026-08-27T09:00:00",
+        "client_token_birth": 1756280000.0,
         "battery_rate_max_charge": 3.0,
         "inverter_type": "GE",
         "keyword_notes": "not a credential",
@@ -119,7 +126,9 @@ def test_mask_secret_args(my_predbat):
             print("  ERROR: expected {} to be masked, got {!r}".format(key, masked.get(key)))
             failed = True
 
-    for key in ["solis_token_expires_at", "fox_token_expires_at", "battery_rate_max_charge", "inverter_type", "keyword_notes"]:
+    # Timing metadata about a token is not itself a secret, and is what you want to see when a
+    # cloud integration stops working - Copilot review of PR #4775
+    for key in ["solis_token_expires_at", "fox_token_expires_at", "partner_token_expiry", "session_token_expires", "auth_token_expiration", "client_token_birth", "battery_rate_max_charge", "inverter_type", "keyword_notes"]:
         if masked.get(key) != args[key]:
             print("  ERROR: expected {} to be left alone, got {!r}".format(key, masked.get(key)))
             failed = True
@@ -565,8 +574,8 @@ def test_debug_excluded_keys(my_predbat):
             print("  ERROR: expected {} to be excluded by prefix".format(key))
             failed = True
 
-    print("Test: ordinary diagnostic state is not excluded")
-    for key in ["soc_max", "charge_limit_best", "load_minutes", "current_status", "dashboard_values", "solis_token_expires_at"]:
+    print("Test: ordinary diagnostic state is not excluded, token timing metadata included")
+    for key in ["soc_max", "charge_limit_best", "load_minutes", "current_status", "dashboard_values", "solis_token_expires_at", "partner_token_expiry", "client_token_birth"]:
         if is_debug_excluded_key(key):
             print("  ERROR: expected {} to be readable".format(key))
             failed = True
@@ -710,6 +719,133 @@ def test_mcp_get_state(my_predbat):
     return failed
 
 
+def test_mcp_argument_validation(my_predbat):
+    """Bad tool arguments come back as a named argument error rather than a raw Python exception,
+    across every tool that takes one - Copilot review of PR #4775.
+    """
+    failed = False
+    print("**** Testing MCP argument validation ****")
+
+    print("Test: parse_number_argument clamps in range but rejects non-numbers")
+    if parse_number_argument(None, "max_lines", 500, minimum=1, maximum=5000) != 500:
+        print("  ERROR: expected the default to be used when the argument is absent")
+        failed = True
+    if parse_number_argument(99999, "max_lines", 500, minimum=1, maximum=5000) != 5000:
+        print("  ERROR: expected an oversized value to be clamped to the maximum")
+        failed = True
+    if parse_number_argument(0, "max_lines", 500, minimum=1, maximum=5000) != 1:
+        print("  ERROR: expected an undersized value to be clamped to the minimum")
+        failed = True
+    if parse_number_argument("250", "max_lines", 500, minimum=1, maximum=5000) != 250:
+        print("  ERROR: expected a numeric string to be accepted")
+        failed = True
+    if parse_number_argument(None, "hours", None) is not None:
+        print("  ERROR: expected an absent optional argument with no default to stay None")
+        failed = True
+    if parse_number_argument("1.5", "hours", None, as_float=True) != 1.5:
+        print("  ERROR: expected a float argument to be parsed")
+        failed = True
+    for bad in ["abc", "", [1], {"a": 1}, True]:
+        try:
+            parse_number_argument(bad, "max_lines", 500)
+            print("  ERROR: expected {!r} to be rejected as a number".format(bad))
+            failed = True
+        except MCPArgumentError as error:
+            if "max_lines" not in str(error):
+                print("  ERROR: the error should name the argument, got {}".format(error))
+                failed = True
+
+    print("Test: compile_filter_argument returns a usable pattern or a named error")
+    if compile_filter_argument(None) is not None or compile_filter_argument("") is not None:
+        print("  ERROR: an absent filter should compile to None")
+        failed = True
+    pattern = compile_filter_argument("^soc_")
+    if not pattern.search("soc_max") or pattern.search("battery_soc"):
+        print("  ERROR: the compiled pattern did not anchor as written")
+        failed = True
+    for bad in ["[unclosed", "*", 42]:
+        try:
+            compile_filter_argument(bad, "filter")
+            print("  ERROR: expected {!r} to be rejected as a regex".format(bad))
+            failed = True
+        except MCPArgumentError as error:
+            if "filter" not in str(error):
+                print("  ERROR: the error should name the argument, got {}".format(error))
+                failed = True
+
+    print("Test: every filtering tool reports a bad regex the same way")
+    mcp = _make_mcp(my_predbat)
+    saved_args = my_predbat.args
+    saved_reader = web_mcp.read_predbat_log
+    try:
+        my_predbat.args = {"battery_rate_max_charge": 3.0}
+        web_mcp.read_predbat_log = lambda: _sample_log()
+        for tool in ["get_apps", "get_config", "get_entities", "get_state"]:
+            result, _ = _call_tool(mcp, tool, {"filter": "[unclosed"})
+            if result.get("success"):
+                print("  ERROR: {} accepted an invalid regex".format(tool))
+                failed = True
+            elif "not a valid regular expression" not in (result.get("error") or ""):
+                print("  ERROR: {} gave an unhelpful error: {}".format(tool, result.get("error")))
+                failed = True
+
+        print("Test: get_log reports bad max_lines and hours by name")
+        for argument, value in [("max_lines", "lots"), ("hours", "yesterday")]:
+            result, _ = _call_tool(mcp, "get_log", {argument: value})
+            if result.get("success") or argument not in (result.get("error") or ""):
+                print("  ERROR: expected get_log to name the bad {} argument, got {}".format(argument, result.get("error")))
+                failed = True
+
+        print("Test: get_state reports a bad max_bytes by name")
+        result, _ = _call_tool(mcp, "get_state", {"max_bytes": "plenty"})
+        if result.get("success") or "max_bytes" not in (result.get("error") or ""):
+            print("  ERROR: expected get_state to name the bad max_bytes argument, got {}".format(result.get("error")))
+            failed = True
+
+        print("Test: a valid filter still works everywhere after the change")
+        result, _ = _call_tool(mcp, "get_apps", {"filter": "^battery_"})
+        if not result.get("success") or list((result.get("data") or {}).keys()) != ["battery_rate_max_charge"]:
+            print("  ERROR: a valid regex filter stopped working, got {}".format(result.get("data")))
+            failed = True
+    finally:
+        my_predbat.args = saved_args
+        web_mcp.read_predbat_log = saved_reader
+
+    return failed
+
+
+def test_log_encoding(my_predbat):
+    """A non-UTF-8 byte in the log is replaced rather than raising UnicodeDecodeError and taking
+    out both /api/log and get_log - Copilot review of PR #4775.
+    """
+    failed = False
+    print("**** Testing log decoding robustness ****")
+
+    tmpdir = tempfile.mkdtemp(prefix="predbat_test_mcp_encoding_")
+    live = os.path.join(tmpdir, "predbat.log")
+    prev = os.path.join(tmpdir, "predbat.1.log")
+
+    # A latin-1 encoded degree sign is not valid UTF-8 - exactly what an inverter API error
+    # message can carry into the log
+    with open(live, "wb") as f:
+        f.write("2026-08-27 09:00:00.000000: Warn: inverter reported 21".encode("utf-8") + b"\xb0" + "C\n".encode("utf-8"))
+
+    try:
+        data = read_predbat_log(logfile=live, logfile_prev=prev)
+    except UnicodeDecodeError as error:
+        print("  ERROR: a non-UTF-8 byte raised instead of being replaced: {}".format(error))
+        return True
+
+    if "inverter reported 21" not in data:
+        print("  ERROR: the readable part of the line was lost, got {!r}".format(data))
+        failed = True
+    if chr(0xFFFD) not in data:
+        print("  ERROR: expected the undecodable byte to become a replacement character, got {!r}".format(data))
+        failed = True
+
+    return failed
+
+
 def test_mcp_tools_list(my_predbat):
     """get_log is advertised by tools/list with a usable schema, and tools/call routes to it."""
     failed = False
@@ -751,6 +887,14 @@ def test_mcp_tools_list(my_predbat):
         failed = True
     if str(MCP_LOG_DEFAULT_LINES) not in schema["properties"]["max_lines"]["description"]:
         print("  ERROR: the max_lines description should name the default")
+        failed = True
+    # The tool keeps the most recent matches but returns them oldest-first; the schema said
+    # "most recent first", which misdescribed the output - Copilot review of PR #4775
+    if "oldest-first" not in schema["properties"]["max_lines"]["description"]:
+        print("  ERROR: the max_lines description must say which order lines come back in, got {!r}".format(schema["properties"]["max_lines"]["description"]))
+        failed = True
+    if "oldest-first" not in by_name["get_log"]["description"]:
+        print("  ERROR: the get_log description should state the return order")
         failed = True
 
     if "masked" not in by_name["get_apps"]["inputSchema"]["properties"]:
@@ -827,6 +971,8 @@ def run_web_mcp_tests(my_predbat):
     failed |= test_state_value_helpers(my_predbat)
     failed |= test_debug_excluded_keys(my_predbat)
     failed |= test_mcp_get_state(my_predbat)
+    failed |= test_mcp_argument_validation(my_predbat)
+    failed |= test_log_encoding(my_predbat)
     failed |= test_mcp_tools_list(my_predbat)
     failed |= test_web_api_log_unchanged(my_predbat)
     return failed

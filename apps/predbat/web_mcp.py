@@ -142,6 +142,52 @@ def measure_state_value(value, max_bytes):
     return True, safe, size
 
 
+class MCPArgumentError(ValueError):
+    """Raised when a tool argument is the wrong type or shape, so it can be reported clearly."""
+
+
+def parse_number_argument(value, name, default, minimum=None, maximum=None, as_float=False):
+    """
+    Coerce a numeric tool argument, clamping it into range.
+
+    Out-of-range values are clamped rather than rejected - a client asking for more than the cap
+    wants as much as it can have - but a value that is not a number at all is a mistake, and the
+    caller is an AI assistant that can only correct itself if told which argument was wrong.
+    """
+    if value is None:
+        value = default
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise MCPArgumentError("'{}' must be a number, not a boolean".format(name))
+    try:
+        value = float(value) if as_float else int(value)
+    except (TypeError, ValueError):
+        raise MCPArgumentError("'{}' must be a {}, got {!r}".format(name, "number" if as_float else "whole number", value))
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def compile_filter_argument(value, name="filter"):
+    """
+    Compile a regex tool argument, or return None when no filter was given.
+
+    Compiling up front turns an invalid pattern into a named argument error instead of a bare
+    Python traceback, and avoids re-compiling it for every entry the caller filters over.
+    """
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise MCPArgumentError("'{}' must be a string regular expression, got {!r}".format(name, value))
+    try:
+        return re.compile(value)
+    except re.error as error:
+        raise MCPArgumentError("'{}' is not a valid regular expression: {}".format(name, error))
+
+
 def parse_bool_argument(value, default=False):
     """
     Coerce an MCP tool argument to a bool, tolerating the strings some clients send.
@@ -1077,7 +1123,7 @@ class MCPServerWrapper:
         Get current Predbat entities
         """
         try:
-            filter = arguments.get("filter", None)
+            filter = compile_filter_argument(arguments.get("filter", None))
             entities = self.base.dashboard_values
             returned_entities = []
             for entity in entities:
@@ -1086,7 +1132,7 @@ class MCPServerWrapper:
                 else:
                     entity_id = entity.get("entity_id", "")
                 if filter:
-                    if not re.search(filter, entity_id):
+                    if not filter.search(entity_id):
                         continue
                 if isinstance(entity, str):
                     value = {"entity_id": entity_id}
@@ -1107,6 +1153,8 @@ class MCPServerWrapper:
                 returned_entities.append(value)
             return {"success": True, "error": None, "data": returned_entities, "timestamp": datetime.now().isoformat(), "description": "The current Predbat entities and their states"}
 
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
         except Exception as e:
             return {"success": False, "error": f"Error retrieving entities data: {str(e)}", "data": None}
 
@@ -1164,17 +1212,19 @@ class MCPServerWrapper:
         Get full HA configuration for Predbat
         """
         try:
-            entity_id_filter = arguments.get("filter", None)
+            entity_id_filter = compile_filter_argument(arguments.get("filter", None))
             config_return = []
             for item in self.base.CONFIG_ITEMS:
                 if entity_id_filter:
                     entity_id = item.get("entity", None)
-                    if entity_id and re.search(entity_id_filter, entity_id):
+                    if entity_id and entity_id_filter.search(entity_id):
                         config_return.append(item)
                 else:
                     config_return.append(item)
             return {"success": True, "error": None, "data": config_return, "timestamp": datetime.now().isoformat(), "description": "The contents of the Predbat configuration settings"}
 
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
         except Exception as e:
             return {"success": False, "error": f"Error retrieving apps.yaml data: {str(e)}", "data": None}
 
@@ -1187,10 +1237,10 @@ class MCPServerWrapper:
             masked = parse_bool_argument(arguments.get("masked", True), default=True)
             configuration = mask_secret_args(self.base.args) if masked else self.base.args
             return_configuration = {}
-            config_id_filter = arguments.get("filter", None)
+            config_id_filter = compile_filter_argument(arguments.get("filter", None))
             for key, value in configuration.items():
                 if config_id_filter:
-                    if re.search(config_id_filter, key):
+                    if config_id_filter.search(key):
                         return_configuration[key] = value
                 else:
                     return_configuration[key] = value
@@ -1200,6 +1250,8 @@ class MCPServerWrapper:
                 description += " (credential-like values redacted as 'xxx')"
             return {"success": True, "error": None, "data": return_configuration, "masked": masked, "timestamp": datetime.now().isoformat(), "description": description}
 
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
         except Exception as e:
             return {"success": False, "error": f"Error retrieving Predbat apps.yaml data: {str(e)}", "data": None}
 
@@ -1210,11 +1262,10 @@ class MCPServerWrapper:
             if isinstance(requested, str):
                 requested = [requested]
             if requested is not None and not isinstance(requested, list):
-                return {"success": False, "error": "'keys' must be a list of state variable names", "data": None}
+                raise MCPArgumentError("'keys' must be a list of state variable names, got {!r}".format(requested))
 
-            key_filter = arguments.get("filter", None)
-            max_bytes = int(arguments.get("max_bytes", MCP_STATE_DEFAULT_MAX_BYTES))
-            max_bytes = max(1, min(max_bytes, MCP_STATE_MAX_BYTES_LIMIT))
+            key_filter = compile_filter_argument(arguments.get("filter", None))
+            max_bytes = parse_number_argument(arguments.get("max_bytes", None), "max_bytes", MCP_STATE_DEFAULT_MAX_BYTES, minimum=1, maximum=MCP_STATE_MAX_BYTES_LIMIT)
 
             state = {}
             omitted = {}
@@ -1234,7 +1285,7 @@ class MCPServerWrapper:
                 # Same filter the debug yaml uses, so this can never return what a debug dump won't
                 if is_debug_excluded_key(key):
                     continue
-                if key_filter and not re.search(key_filter, key):
+                if key_filter and not key_filter.search(key):
                     continue
                 try:
                     value = self.base.__dict__[key]
@@ -1275,6 +1326,8 @@ class MCPServerWrapper:
                 description += ". The overall response budget was reached, so narrow the request with 'keys' or 'filter'"
             return {"success": True, "error": None, "data": data, "timestamp": datetime.now().isoformat(), "description": description}
 
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
         except Exception as e:
             return {"success": False, "error": f"Error retrieving state data: {str(e)}", "data": None}
 
@@ -1286,10 +1339,8 @@ class MCPServerWrapper:
                 return {"success": False, "error": "Unknown filter '{}', expected one of {}".format(filter_type, ", ".join(LOG_FILTER_TYPES)), "data": None}
 
             search_term = str(arguments.get("search", "") or "").lower().strip()
-            max_lines = int(arguments.get("max_lines", MCP_LOG_DEFAULT_LINES))
-            max_lines = max(1, min(max_lines, MCP_LOG_MAX_LINES))
-            hours = arguments.get("hours", None)
-            hours = float(hours) if hours is not None else None
+            max_lines = parse_number_argument(arguments.get("max_lines", None), "max_lines", MCP_LOG_DEFAULT_LINES, minimum=1, maximum=MCP_LOG_MAX_LINES)
+            hours = parse_number_argument(arguments.get("hours", None), "hours", None, minimum=0, as_float=True)
 
             loglines = read_predbat_log().split("\n")
             total_lines = len(loglines)
@@ -1350,6 +1401,8 @@ class MCPServerWrapper:
                 description += ", truncated to the most recent {} of {} matching lines".format(max_lines, matched_lines)
             return {"success": True, "error": None, "data": data, "timestamp": datetime.now().isoformat(), "description": description}
 
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
         except Exception as e:
             return {"success": False, "error": f"Error retrieving log data: {str(e)}", "data": None}
 
@@ -1498,14 +1551,17 @@ class MCPServerWrapper:
                 },
                 {
                     "name": "get_log",
-                    "description": "Get the Predbat log (predbat.log), filtered by level, search term and age - use this to diagnose warnings and errors",
+                    "description": "Get the Predbat log (predbat.log), filtered by level, search term and age - use this to diagnose warnings and errors. Lines are returned oldest-first.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "filter": {"type": "string", "description": "Log level to return: all, info, warnings or errors (default warnings)", "enum": list(LOG_FILTER_TYPES)},
                             "search": {"type": "string", "description": "Only return lines containing this text, case-insensitive (optional)"},
                             "hours": {"type": "number", "description": "Only return lines written in the last N hours (optional)"},
-                            "max_lines": {"type": "integer", "description": "Maximum number of lines to return, most recent first (default {}, maximum {})".format(MCP_LOG_DEFAULT_LINES, MCP_LOG_MAX_LINES)},
+                            "max_lines": {
+                                "type": "integer",
+                                "description": "Maximum number of lines to return. The most recent matching lines are the ones kept, but they are returned oldest-first (default {}, maximum {})".format(MCP_LOG_DEFAULT_LINES, MCP_LOG_MAX_LINES),
+                            },
                         },
                         "required": [],
                     },
