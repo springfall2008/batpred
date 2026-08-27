@@ -516,13 +516,17 @@ def test_model_catalogue(my_predbat):
     agent.default_model = "configured/model"
     agent.base_url = "https://openrouter.example/api/v1"
     agent.log = print
-    agent.storage_override = None
+    # No agent.base is ever set on this bare instance, so ComponentBase's own read-only storage
+    # property already resolves to None here (it guards on hasattr(self, "base")) - list_models()
+    # therefore takes the storage-less path exercised below without anything set explicitly.
+    if agent.storage is not None:
+        print("ERROR: expected a bare ChatAgent's storage to already be None: {}".format(agent.storage))
+        failed = True
 
     async def fake_catalogue():
         """Return a catalogue with one tool-capable model and one without."""
         return {"data": [{"id": "good/model", "name": "Good", "supported_parameters": ["tools", "temperature"]}, {"id": "bad/model", "name": "Bad", "supported_parameters": ["temperature"]}]}
 
-    agent.storage = None
     agent._fetch_model_catalogue = fake_catalogue
     models = asyncio.run(agent.list_models())
     ids = [entry["id"] for entry in models]
@@ -681,8 +685,12 @@ def test_model_picker_script_wires_routes_and_persists_selection(my_predbat):
         if ".textContent" not in populate_body:
             print("ERROR: populateModelPicker() does not set option labels via textContent")
             failed = True
-        if "''" not in populate_body and '""' not in populate_body:
-            print("ERROR: populateModelPicker() never offers an empty-value 'use default' option")
+        # Anchored to the actual option construction (an empty .value immediately followed by a
+        # 'Use default' .textContent), not a bare "''" substring check - select.innerHTML = '';
+        # a few lines above already contains that same substring, so a loose check would still
+        # pass even with the option itself deleted.
+        if re.search(r"\.value\s*=\s*(?:''|\"\")\s*;[\s\S]{0,200}?\.textContent\s*=\s*['\"]Use default", populate_body) is None:
+            print("ERROR: populateModelPicker() does not build an empty-value 'Use default' option: {!r}".format(populate_body))
             failed = True
 
     # The picker's change handler must send both the conversation id and the chosen model id to

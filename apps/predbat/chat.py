@@ -30,9 +30,10 @@ from chat_tools import CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_
 
 EVENT_BUFFER_MAX = 2000
 
-# How long a fetched model catalogue is trusted before list_models() refreshes it, and the extra
-# window past that during which a stale copy is served while one caller refreshes in the
-# background. OpenRouter's catalogue changes rarely enough that once a day is plenty.
+# How long a fetched model catalogue is trusted before list_models() refreshes it. list_models()
+# passes this plus a further 60 minutes as the stale ceiling - the window during which a stale copy
+# is still served while one caller refreshes in the background - so the effective outer limit is 25
+# hours, not 24. OpenRouter's catalogue changes rarely enough that once a day is plenty either way.
 MODEL_CACHE_MINUTES = 1440
 
 # How long past its own deadline a turn must go before its slot is assumed abandoned. Only a
@@ -151,34 +152,11 @@ class ChatAgent(ComponentBase):
         self.active = None
         self.pending_confirm = {}
         self.warned_web_search_base_url = False
-        # Left None here, storage_override never changes what self.storage resolves to - it exists
-        # purely so a test can inject a stand-in (or force storage off) on a bare ChatAgent built
-        # with ChatAgent.__new__, which has no base and no component registry to resolve against.
-        self.storage_override = None
         self.store = ConversationStore(self.storage, self.log, max_history=self.max_history, max_conversations=max_conversations or 20, expiry_days=expiry_days or 30)
         self.index_loaded = False
         self.turn_counter = 0
         self.tools = PredbatTools(self.base, log_func=self.log)
         self.tool_defs_by_name = {entry["name"]: entry for entry in list(TOOL_DEFS) + list(CHAT_TOOL_DEFS)}
-
-    @property
-    def storage(self):
-        """Return the Storage component, or a value a test has injected directly.
-
-        ComponentBase's own property re-resolves the component from the registry on every access,
-        which matters because Storage (phase 0) may not exist yet when a component built later
-        initializes. Overridden here with a setter purely so a test can stand up a bare ChatAgent
-        via __new__ - with no base and no component registry at all - and still control what
-        list_models() sees without needing Storage's real fetch_cached().
-        """
-        if self.storage_override is not None:
-            return self.storage_override
-        return super().storage
-
-    @storage.setter
-    def storage(self, value):
-        """Record a direct value for storage, letting a test inject a stand-in or force it off."""
-        self.storage_override = value
 
     def emit(self, conversation_id, event_type, data=None):
         """Append an event to the buffer and return its sequence number.
