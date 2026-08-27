@@ -135,7 +135,8 @@ to ask about your Predbat setup, backed by a large language model served through
 
 A banner across the top of the page is a standing reminder that tool results - including log
 lines and configuration - are sent to OpenRouter and on to whichever provider serves the selected
-model; dismissing it only hides it for that browser session. Read the
+model; dismissing it persists in that browser (via `localStorage`) until its site data is
+cleared, not just for the current session. Read the
 [chat component's security note](components.md#security-note-chat) before enabling the feature -
 in particular, the web interface has no login of its own, so anyone who can reach it can use the
 chat and read every saved conversation.

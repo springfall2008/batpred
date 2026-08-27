@@ -244,8 +244,8 @@ Adds a Chat tab to the web interface, backed by a large language model served th
 [OpenRouter](https://openrouter.ai). The model can call the same read-only tools the MCP server
 exposes, plus a handful of chat-only tools for searching Predbat's documentation and its own
 installed source code, and can propose the same two write actions MCP has - each one held for
-your approval before it runs. See [the Chat tab](web-interface.md#chat-view) for how to use it
-day to day.
+your approval before it runs when `switch.predbat_chat_confirm_writes` is on (the default). See
+[the Chat tab](web-interface.md#chat-view) for how to use it day to day.
 
 #### When to enable (chat)
 
