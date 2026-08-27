@@ -2229,6 +2229,7 @@ URL query string."
   - `ChatAgent.events_since(cursor, conversation_id) -> (list[dict], int, bool)` — events, next cursor, `reload_needed`
   - `ChatAgent.store: ConversationStore`, `ChatAgent.active: dict | None`, `ChatAgent.loop: asyncio.AbstractEventLoop | None`
   - `async ChatAgent.run_on_agent_loop(coro)` — the cross-thread bridge
+  - `ChatAgent._release_stale_turn()` — frees a turn slot whose coroutine was killed
   - `chat.AgentNotReadyError(RuntimeError)`
   - `chat.EVENT_BUFFER_MAX = 2000`
 
@@ -2570,6 +2571,9 @@ class ChatAgent(ComponentBase):
         self.warned_web_search_base_url = False
         self.store = ConversationStore(self.storage, self.log, max_history=self.max_history, max_conversations=max_conversations or 20, expiry_days=expiry_days or 30)
         self.index_loaded = False
+        self.turn_counter = 0
+        self.last_seen_turn = None
+        self.last_seen_seq = 0
 
     def emit(self, conversation_id, event_type, data=None):
         """Append an event to the buffer and return its sequence number.
@@ -2631,8 +2635,33 @@ class ChatAgent(ComponentBase):
             except Exception as error:
                 self.log("Warn: chat agent could not flush conversations: {}".format(error))
                 self.count_errors += 1
+        self._release_stale_turn()
         self.update_success_timestamp()
         return True
+
+    def _release_stale_turn(self):
+        """Clear a turn slot whose coroutine died without running its own cleanup.
+
+        A turn scheduled on this loop is killed outright if the component is stopped or restarted
+        mid-turn, because asyncio.run() closes the loop on exit and the finally in _execute_turn
+        never gets to run. Without this the composer stays locked in every browser until Predbat
+        restarts. A live turn emits events, so an unchanged turn id *and* an unchanged event
+        sequence across two consecutive ticks is the signal that nothing is running any more.
+        """
+        with self.lock:
+            active = self.active
+            if active is None:
+                self.last_seen_turn = None
+                return
+            turn_id = active.get("turn_id")
+            if self.last_seen_turn != turn_id or self.event_seq != self.last_seen_seq:
+                self.last_seen_turn = turn_id
+                self.last_seen_seq = self.event_seq
+                return
+            self.active = None
+            self.last_seen_turn = None
+        self.log("Warn: chat turn {} produced nothing for a full tick and its slot has been released".format(turn_id))
+        self.emit(None, "idle", {})
 ```
 
 - [ ] **Step 6: Run the test to verify it passes**
@@ -3045,7 +3074,6 @@ In `initialize()`, after building the store, add:
 ```python
         self.tools = PredbatTools(self.base, log_func=self.log)
         self.tool_defs_by_name = {entry["name"]: entry for entry in list(TOOL_DEFS) + list(CHAT_TOOL_DEFS)}
-        self.turn_counter = 0
 ```
 
 Then append these methods to `ChatAgent`:
@@ -4648,11 +4676,12 @@ Tasks 6-7; §7.1 → Task 3; §7.2 → Task 4; §7.3 → Task 5; §7.4 and §15.
    boundary rather than mid-stream. That is honest but not instant; the spec's wording implies
    an abort. Acceptable for v1 — say so in the UI ("stopping after this step").
 2. A turn scheduled on the component loop dies if the component is stopped or restarted
-   mid-turn, because `asyncio.run()` closes that loop on exit. The turn slot is released by the
-   `finally` in `_execute_turn` only if the coroutine gets to run it; a hard loop close will not.
-   `ChatAgent.run()` therefore clears a stale `active` whose turn id has not changed across two
-   consecutive ticks — add that guard when implementing Task 6's `run()`, or a killed turn leaves
-   the composer locked until Predbat restarts.
+   mid-turn, because `asyncio.run()` closes that loop on exit, so the `finally` in
+   `_execute_turn` never runs. Task 6's `_release_stale_turn()` covers it: a turn that has
+   emitted nothing for a full housekeeping tick has its slot released and an `idle` broadcast.
+   The cost is that a genuinely silent turn — a model taking over 60 seconds before its first
+   token — could be released early. `chat_turn_timeout` defaults to 180s, so widen the tick
+   comparison to two or three ticks if that proves too eager in practice.
 
 **Concurrency review.** Each cross-thread call was checked against the contract: `submit_turn`,
 `claim_turn`, `confirm`, `emit`, `events_since`, `get_meta` and `list_conversations` are
