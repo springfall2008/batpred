@@ -339,6 +339,88 @@ def test_snapshot_is_a_safe_copy(my_predbat):
     return failed
 
 
+def test_metadata_only_flush_does_not_clobber_body(my_predbat):
+    """rename() on a conversation whose body has been evicted must not overwrite it with []."""
+    failed = False
+    print("**** Testing metadata-only flush does not clobber an uncached body ****")
+    storage = FakeStorage()
+    store = _store(storage)
+    asyncio.run(store.load_index())
+
+    cid = asyncio.run(store.create())
+    asyncio.run(store.append(cid, {"role": "user", "content": "do not lose me"}))
+    asyncio.run(store.flush())
+
+    # Push cid out of the body LRU by touching BODY_CACHE_SIZE other conversations, exactly as a
+    # real session would once enough other chats are opened.
+    for _ in range(BODY_CACHE_SIZE):
+        other = asyncio.run(store.create())
+        asyncio.run(store.get_messages(other))
+    if cid in store.bodies:
+        print("ERROR: test setup failed to evict {} from the body cache".format(cid))
+        failed = True
+
+    store.rename(cid, "renamed while body is uncached")
+    asyncio.run(store.flush())
+
+    reopened = _store(storage)
+    asyncio.run(reopened.load_index())
+    reloaded = asyncio.run(reopened.get_messages(cid))
+    if not reloaded or reloaded[-1].get("content") != "do not lose me":
+        print("ERROR: a metadata-only save clobbered the stored body: {}".format(reloaded))
+        failed = True
+
+    return failed
+
+
+def test_add_usage_on_deleted_conversation_clears_dirty(my_predbat):
+    """add_usage() on a deleted conversation still dirties it, but flush() clears it, not retries forever."""
+    failed = False
+    print("**** Testing add_usage on a deleted conversation ****")
+    storage = FakeStorage()
+    store = _store(storage)
+    asyncio.run(store.load_index())
+    cid = asyncio.run(store.create())
+    asyncio.run(store.delete(cid))
+
+    store.add_usage(cid, {"prompt_tokens": 5, "completion_tokens": 1, "cost": 0.01})
+    if cid not in store.dirty:
+        print("ERROR: add_usage() did not mark the deleted conversation dirty")
+        failed = True
+
+    asyncio.run(store.flush())
+    if cid in store.dirty:
+        print("ERROR: {} stayed in store.dirty after flush(), so every future flush() would retry it forever".format(cid))
+        failed = True
+
+    return failed
+
+
+def test_get_meta_deep_copies_usage_total(my_predbat):
+    """get_meta()'s usage_total is a copy, so a caller mutating it cannot corrupt the store's state."""
+    failed = False
+    print("**** Testing get_meta usage_total isolation ****")
+    storage = FakeStorage()
+    store = _store(storage)
+    asyncio.run(store.load_index())
+    cid = asyncio.run(store.create())
+    store.add_usage(cid, {"prompt_tokens": 3, "completion_tokens": 2, "cost": 0.02})
+
+    meta = store.get_meta(cid)
+    if meta["usage_total"] is store.index[cid]["usage_total"]:
+        print("ERROR: get_meta()'s usage_total is the same object as the store's live entry")
+        failed = True
+
+    meta["usage_total"]["cost"] = 999
+    meta["usage_total"]["prompt_tokens"] = 999
+    reread = store.get_meta(cid)
+    if reread["usage_total"]["cost"] == 999 or reread["usage_total"]["prompt_tokens"] == 999:
+        print("ERROR: mutating the dict returned by get_meta() changed the stored usage_total: {}".format(reread))
+        failed = True
+
+    return failed
+
+
 def run_chat_store_tests(my_predbat):
     """Run every conversation store test, returning True if any of them failed."""
     failed = False
@@ -352,4 +434,7 @@ def run_chat_store_tests(my_predbat):
     failed |= test_derive_title(my_predbat)
     failed |= test_trim_history_keeps_tool_groups_intact(my_predbat)
     failed |= test_snapshot_is_a_safe_copy(my_predbat)
+    failed |= test_metadata_only_flush_does_not_clobber_body(my_predbat)
+    failed |= test_add_usage_on_deleted_conversation_clears_dirty(my_predbat)
+    failed |= test_get_meta_deep_copies_usage_total(my_predbat)
     return failed

@@ -120,18 +120,27 @@ class ConversationStore:
         return True
 
     def list_conversations(self):
-        """Return metadata for every conversation the user can see, newest first."""
+        """Return metadata for every conversation the user can see, newest first.
+
+        Deep-copied (not just dict(entry)) because a nested field - usage_total - is a dict of
+        its own; a shallow copy would still alias it to the store's live object, which add_usage()
+        mutates on another thread. Same aliasing hazard snapshot() closes for messages.
+        """
         with self.lock:
-            live = [dict(entry) for entry in self.index.values() if not entry.get("deleted")]
+            live = [json.loads(json.dumps(entry)) for entry in self.index.values() if not entry.get("deleted")]
         return sorted(live, key=lambda entry: entry.get("updated") or "", reverse=True)
 
     def get_meta(self, cid):
-        """Return one conversation's metadata, or None if it is unknown or deleted."""
+        """Return one conversation's metadata, or None if it is unknown or deleted.
+
+        Deep-copied for the same reason as list_conversations(): usage_total is a nested dict that
+        a shallow copy would still alias to the store's live object.
+        """
         with self.lock:
             entry = self.index.get(cid)
             if entry is None or entry.get("deleted"):
                 return None
-            return dict(entry)
+            return json.loads(json.dumps(entry))
 
     async def create(self, model=None, protect_id=None):
         """Create a conversation, prune past the cap, and return the new id."""
@@ -287,9 +296,18 @@ class ConversationStore:
         with self.lock:
             entry = self.index.get(cid)
             if entry is None or entry.get("deleted"):
+                self.dirty.discard(cid)
                 return False
             if messages is None:
-                messages = self.bodies.get(cid, [])
+                if cid not in self.bodies:
+                    # A metadata-only change (rename, model, usage) on a conversation whose body
+                    # is not cached. Those fields live in the index, which flush() saves
+                    # separately; writing a body we do not hold would replace the stored history
+                    # with an empty list. Safe to skip, because _cache_body always flushes a
+                    # dirty body before evicting it, so an uncached body is never unsaved.
+                    self.dirty.discard(cid)
+                    return False
+                messages = self.bodies[cid]
             payload = {"version": CONVERSATION_VERSION, "id": cid, "messages": json.loads(json.dumps(messages))}
             self.dirty.discard(cid)
         result = await self.storage.save(STORAGE_MODULE, self._body_name(cid), payload, format="json", expiry=self._expiry())
