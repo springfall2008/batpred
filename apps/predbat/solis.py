@@ -3295,7 +3295,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 if not success:
                     poll_success = False
 
-        # Inverters whose slot registers have already been read this cycle, so the in-window
+        # Inverters whose slot registers were successfully read this cycle, so the in-window
         # re-read below does not read them a second time on an hour boundary
         slot_registers_polled = set()
 
@@ -3334,7 +3334,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     else:
                         await self.fetch_entity_data(sn)
 
-                slot_registers_polled.add(sn)
+                # Only when the read actually refreshed the cache - a failed poll preserves the
+                # old values, so the in-window re-read below should still get its turn
+                if success:
+                    slot_registers_polled.add(sn)
 
         # Inside a live window the slot registers are the ones that decide whether the battery
         # actually charges, and the hourly poll above can leave the inverter drifting from what

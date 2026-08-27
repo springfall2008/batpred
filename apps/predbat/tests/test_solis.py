@@ -1408,6 +1408,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_a_write_that_never_verifies_is_still_a_failure())
         failed |= asyncio.run(test_is_inside_active_window())
         failed |= asyncio.run(test_slot_registers_are_re_read_while_a_window_is_live())
+        failed |= asyncio.run(test_a_failed_hourly_slot_poll_is_retried_by_the_in_window_read())
         failed |= asyncio.run(test_active_window_key_identifies_the_window_in_force())
         failed |= asyncio.run(test_the_storage_mode_is_re_asserted_when_a_window_opens())
         failed |= asyncio.run(test_a_window_rewritten_mid_flight_gets_its_own_mode_assertion())
@@ -4739,6 +4740,42 @@ async def test_slot_registers_are_re_read_while_a_window_is_live():
 
     if not failed:
         print("PASSED: slot registers are re-read every 5 minutes while a window is live")
+    return failed
+
+
+async def test_a_failed_hourly_slot_poll_is_retried_by_the_in_window_read():
+    """PR #4783 review: a failed hourly poll must not count as having read the slot registers.
+
+    poll_inverter_data() returns False only when the read raised, and it preserves the old cache
+    in that case, so nothing was refreshed. Suppressing the in-window re-read on the strength of an
+    attempt would leave stale slot data in place for another 5 minutes during a live window - the
+    one period the extra read exists for.
+    """
+    failed = False
+    print("\n=== Test: a failed hourly slot poll is retried by the in-window read ===")
+
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn])
+    api.inverter_sn = [sn]
+    api._test_v2_mode = True
+    api._test_now_utc_exact = datetime(2026, 8, 26, 23, 35, tzinfo=api.local_tz)
+    api.charge_discharge_time_windows[sn] = {1: {"charge_enable": 1, "charge_start_time": "23:30", "charge_end_time": "23:45"}}
+
+    async def failing_slot_poll(inverter_sn, cids, batch=True):
+        """Fail only the slot register read, so the assertion is about that one call."""
+        api.poll_inverter_data_calls.append((inverter_sn, cids))
+        return cids != SOLIS_CID_LIST_TOU_V2
+
+    api.poll_inverter_data = failing_slot_poll
+
+    await api.run(3600, False)
+    slot_polls = [c for c in api.poll_inverter_data_calls if c[1] == SOLIS_CID_LIST_TOU_V2]
+    if len(slot_polls) != 2:
+        print("ERROR: expected the failed hourly slot poll to be retried in-window, got {} slot polls".format(len(slot_polls)))
+        failed = True
+
+    if not failed:
+        print("PASSED: a failed hourly slot poll is retried by the in-window read")
     return failed
 
 
