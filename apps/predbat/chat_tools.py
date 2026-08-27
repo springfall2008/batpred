@@ -18,7 +18,9 @@ because it needs the conversation the turn belongs to and nothing in this module
 
 import aiohttp
 import json
+import os
 import re
+import time
 from urllib.parse import urljoin
 
 DOCS_SITE_ROOT = "https://springfall2008.github.io/batpred/"
@@ -146,3 +148,138 @@ async def search_docs(storage, query, max_results=5):
     if not isinstance(payload, dict) or not payload.get("docs"):
         return {"success": False, "error": "Documentation index unavailable", "data": None}
     return {"success": True, "error": None, "data": score_documents(payload.get("docs"), query, max_results=max_results), "description": "Predbat documentation pages matching the query"}
+
+
+# Source access. The allowlist is an extension rule rather than a directory rule on purpose:
+# CONFIG_ROOTS falls back to "./" (const.py:33) and the Storage cache lives at config_root/cache
+# (storage.py:199), so apps.yaml, secrets.yaml, predbat.log and cached OAuth tokens can all sit
+# inside the directory being searched. Only an extension rule excludes them on every install.
+SOURCE_EXTENSIONS = (".py", ".cpp", ".h", ".hpp", ".proto", ".sh", ".md")
+SOURCE_SKIP_DIRS = {"venv", "__pycache__", ".git", "cache", "node_modules", ".om_live_cache"}
+SOURCE_MAX_RESULTS = 100
+SOURCE_MAX_LINES = 400
+SOURCE_MAX_BYTES = 65536
+SOURCE_MATCH_LINE_MAX = 300
+SOURCE_PATTERN_MAX = 200
+SOURCE_SCAN_SECONDS = 5.0
+
+
+class SourceAccessError(ValueError):
+    """Raised when a source path is outside the install directory or not an allowed type."""
+
+
+def source_root():
+    """Return the directory Predbat is installed in - the same one the app reads itself from."""
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def resolve_source_path(relative, root=None):
+    """Resolve a caller-supplied path inside the source root, or raise SourceAccessError.
+
+    realpath is used on both sides so a symlink pointing out of the tree fails containment, not
+    just a literal '..' in the path.
+    """
+    root = os.path.realpath(root or source_root())
+    candidate = os.path.realpath(os.path.join(root, str(relative or "")))
+    if candidate != root and not candidate.startswith(root + os.sep):
+        raise SourceAccessError("'{}' is outside the Predbat install directory".format(relative))
+    if os.path.splitext(candidate)[1].lower() not in SOURCE_EXTENSIONS:
+        raise SourceAccessError("'{}' is not a source file - only {} can be read".format(relative, ", ".join(SOURCE_EXTENSIONS)))
+    parts = os.path.relpath(candidate, root).split(os.sep)
+    if any(part in SOURCE_SKIP_DIRS for part in parts):
+        raise SourceAccessError("'{}' is inside a directory that is not part of Predbat's source".format(relative))
+    if not os.path.isfile(candidate):
+        raise SourceAccessError("'{}' does not exist".format(relative))
+    return candidate
+
+
+def _iter_source_files(root):
+    """Yield (relative_path, absolute_path) for every readable source file under root."""
+    for directory, subdirectories, filenames in os.walk(root):
+        subdirectories[:] = [name for name in subdirectories if name not in SOURCE_SKIP_DIRS and not name.startswith(".")]
+        for filename in filenames:
+            if os.path.splitext(filename)[1].lower() not in SOURCE_EXTENSIONS:
+                continue
+            absolute = os.path.join(directory, filename)
+            yield os.path.relpath(absolute, root), absolute
+
+
+def search_source(pattern, file=None, max_results=20, root=None):
+    """Search Predbat's installed source for a regular expression."""
+    root = os.path.realpath(root or source_root())
+    if not isinstance(pattern, str) or not pattern:
+        return {"success": False, "error": "'pattern' must be a non-empty string", "data": None}
+    if len(pattern) > SOURCE_PATTERN_MAX:
+        return {"success": False, "error": "'pattern' is longer than {} characters".format(SOURCE_PATTERN_MAX), "data": None}
+    try:
+        expression = re.compile(pattern, re.IGNORECASE)
+    except re.error as error:
+        return {"success": False, "error": "'pattern' is not a valid regular expression: {}".format(error), "data": None}
+
+    limit = max(1, min(int(max_results or 20), SOURCE_MAX_RESULTS))
+    if file:
+        try:
+            absolute = resolve_source_path(file, root=root)
+        except SourceAccessError as error:
+            return {"success": False, "error": str(error), "data": None}
+        targets = [(os.path.relpath(absolute, root), absolute)]
+    else:
+        targets = _iter_source_files(root)
+
+    hits = []
+    total = 0
+    truncated_scan = False
+    started = time.monotonic()
+    for relative, absolute in targets:
+        if time.monotonic() - started > SOURCE_SCAN_SECONDS:
+            truncated_scan = True
+            break
+        try:
+            with open(absolute, "r", encoding="utf-8", errors="replace") as handle:
+                for number, line in enumerate(handle, start=1):
+                    if expression.search(line):
+                        total += 1
+                        if len(hits) < limit:
+                            hits.append({"file": relative, "line": number, "text": line.rstrip("\n")[:SOURCE_MATCH_LINE_MAX]})
+        except (IOError, OSError):
+            continue
+
+    result = {"success": True, "error": None, "data": hits, "total_matches": total, "description": "Matches in Predbat's installed source, which is the exact version running"}
+    if truncated_scan:
+        result["description"] += " (scan stopped after {} seconds, results are partial)".format(SOURCE_SCAN_SECONDS)
+    return result
+
+
+def read_source(file, start_line=1, max_lines=200, root=None):
+    """Read a numbered slice of one Predbat source file."""
+    try:
+        path = resolve_source_path(file, root=root)
+    except SourceAccessError as error:
+        return {"success": False, "error": str(error), "data": None}
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+    except (IOError, OSError) as error:
+        return {"success": False, "error": "Could not read '{}': {}".format(file, error), "data": None}
+
+    first = max(1, int(start_line or 1))
+    count = max(1, min(int(max_lines or 200), SOURCE_MAX_LINES))
+    window = lines[first - 1 : first - 1 + count]
+
+    rendered = []
+    size = 0
+    for offset, line in enumerate(window):
+        entry = "{:>6}  {}".format(first + offset, line.rstrip("\n"))
+        size += len(entry) + 1
+        if size > SOURCE_MAX_BYTES:
+            rendered.append("... truncated at {} bytes, read again from line {} for more".format(SOURCE_MAX_BYTES, first + offset))
+            break
+        rendered.append(entry)
+
+    return {
+        "success": True,
+        "error": None,
+        "data": {"file": os.path.relpath(path, os.path.realpath(root or source_root())), "start_line": first, "total_lines": len(lines), "lines": "\n".join(rendered)},
+        "description": "A slice of Predbat's installed source",
+    }
