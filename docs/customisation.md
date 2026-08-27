@@ -359,7 +359,7 @@ minimum force export level also (set to 0 if you want to skip some slots).
 If you set this to a non-zero value you will need to use the low rate threshold to control which slots you charge from or you may charge all the time.
 
 **input_number.predbat_best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
-A value of 0kWh (the default) disables this feature.
+A value of 0kWh (the default) disables this feature. Be careful setting this feature on as it will constrain charging in the Predbat plan and may result in charging or grid usage in expensive rate periods.
 
 **input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in pence) to combine charge or export slots into a single larger average rate slot.
 The default is 0p which disables this feature and all rate changes result in a new slot.
