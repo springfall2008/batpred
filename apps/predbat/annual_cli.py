@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from annual import INCLUDED_STATUSES, SCENARIO_KEYS, AnnualConfigError, AnnualPredictor  # noqa: E402
 from storage import StorageLocalFiles  # noqa: E402
+from tariff_catalogue import export_compare_tariffs  # noqa: E402
 
 SCENARIO_LABELS = {"no_pvbat": "No PV/Battery", "pv_only": "PV Only", "without_predbat": "Without Predbat", "with_predbat": "With Predbat"}
 
@@ -105,11 +106,13 @@ def _format_single_table(results, currency):
     lines.append("")
     months_requested = results.get("months_requested")
     if months_requested is not None:
-        # A sweep card carries the run's own months_requested (Task 8's format_table passes
-        # it through per tariff): a deliberate single-month --months run must not read as
-        # "1 of 12 months" - that phrasing implies eleven months failed, when in fact only
-        # one was ever asked for. A plain single-tariff document never carries this key, so
-        # this branch never fires there and the wording below is untouched.
+        # Carried by any document built from an explicit annual.months subset - a plain
+        # single-tariff run (AnnualPredictor._build_results) as well as a sweep card
+        # (format_table threads its own run's months_requested through per tariff): a
+        # deliberate single-month --months run must not read as "1 of 12 months" - that
+        # phrasing implies eleven months failed, when in fact only one was ever asked for. A
+        # full twelve month document never carries this key, so this branch never fires
+        # there and the wording below is untouched.
         lines.append("Based on {} of {} requested month(s).".format(annual["months_included"], len(months_requested)))
     else:
         lines.append("Based on {} of 12 months.".format(annual["months_included"]))
@@ -283,34 +286,14 @@ def make_progress(quiet, machine=False):
     return progress
 
 
-def apply_fast_override(config, fast):
-    """Set ``annual.fast_mode`` when --fast was given, on whichever config shape was loaded.
-
-    ``validate_config`` accepts both the wrapped ({"annual": {...}}) and the bare inner
-    mapping, so the override has to land on the same mapping it will read - writing to the
-    outer dict of a wrapped config would be silently ignored.
-    """
-    if not fast:
-        return config
-    if not isinstance(config, dict):
-        # An empty or malformed YAML file loads as None (or a list, or a bare string).
-        # Returning it untouched lets validate_config raise its own actionable message
-        # rather than this line failing first with a bare TypeError and a traceback.
-        return config
-    inner = config["annual"] if isinstance(config.get("annual"), dict) else config
-    inner["fast_mode"] = True
-    return config
-
-
-def apply_cli_overrides(config, months=None, export_compare=False, fast=False):
+def apply_cli_overrides(config, months=None, export_compare=False, fast=False, year=None):
     """Return a copy of `config` with the CLI flags applied over it.
 
-    Flags win over the file, matching how --fast already behaved. A copy, not a mutation:
-    the caller's document is also what gets echoed back in --machine mode, and silently
-    rewriting it would make the output disagree with the file the user passed.
+    Flags win over the file. A copy, not a mutation: the caller's document is also what
+    gets echoed back in --machine mode, and silently rewriting it would make the output
+    disagree with the file the user passed.
 
-    Mirrors ``apply_fast_override``'s two guards - this now runs on every invocation of
-    main(), not just when --fast is given, so both have to hold generally:
+    Every flag handled here clears the same two config-shape hurdles:
 
     - a non-mapping config (an empty or malformed YAML file loads as None, a list, or a
       bare string) is returned untouched, so validate_config raises its own actionable
@@ -320,14 +303,20 @@ def apply_cli_overrides(config, months=None, export_compare=False, fast=False):
       actually read - writing them under a new top-level "annual" key on a bare-shape
       config would silently discard the rest of that config.
 
-    Raises AnnualConfigError (never a bare ValueError) if --months cannot be parsed, so a
-    malformed --months reaches the user the same way every other config problem does.
+    Raises AnnualConfigError (never a bare ValueError) if --months or --year cannot be
+    parsed, so a malformed flag reaches the user the same way every other config problem
+    does.
     """
     merged = copy.deepcopy(config)
     if not isinstance(merged, dict):
         return merged
     annual = merged["annual"] if isinstance(merged.get("annual"), dict) else merged
 
+    if year is not None:
+        try:
+            annual["year"] = int(year)
+        except (TypeError, ValueError):
+            raise AnnualConfigError("--year must be a whole number, got '{}'".format(year))
     if months:
         try:
             annual["months"] = [int(part.strip()) for part in str(months).split(",") if part.strip()]
@@ -336,8 +325,6 @@ def apply_cli_overrides(config, months=None, export_compare=False, fast=False):
     if fast:
         annual["fast_mode"] = True
     if export_compare:
-        from tariff_catalogue import export_compare_tariffs
-
         # Exactly what whatif_contract emits for the SaaS page, so one flag reproduces a
         # production run. If these two ever disagree, the CLI stops being a way to
         # reproduce what the page printed.
@@ -373,6 +360,7 @@ def main(argv=None, storage_factory=StorageLocalFiles):
     parser.add_argument("--machine", action="store_true", help="Emit results as JSON on stdout and progress as JSON on stderr, for a calling process")
     parser.add_argument("--fast", action="store_true", help="Plan only four seasonal months and interpolate the rest (about 2.5x faster, monthly figures approximate)")
     parser.add_argument("--months", default=None, help="Plan only these months, as a comma-separated list (e.g. --months 7 or --months 6,7)")
+    parser.add_argument("--year", default=None, help="Plan this year instead of the config file's default (the most recent complete calendar year)")
     parser.add_argument("--export-compare", action="store_true", dest="export_compare", help="Evaluate the three Octopus export tariffs against otherwise identical inputs (implies weekday-spread sampling, 5 samples a month, and no fast mode)")
     args = parser.parse_args(argv)
 
@@ -384,7 +372,7 @@ def main(argv=None, storage_factory=StorageLocalFiles):
         return 2
 
     try:
-        config = apply_cli_overrides(config, months=args.months, export_compare=args.export_compare, fast=args.fast)
+        config = apply_cli_overrides(config, months=args.months, export_compare=args.export_compare, fast=args.fast, year=args.year)
     except AnnualConfigError as error:
         sys.stderr.write("Config error: {}\n".format(error))
         return 2
