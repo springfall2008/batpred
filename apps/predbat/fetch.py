@@ -1522,8 +1522,6 @@ class Fetch:
         """
         minute = -24 * 60
         rate_last = 0
-        rate_first = 0
-        rate_first_valid = False
         rate_last_valid = False  # Track if we've seen any real rates yet
         adjusted_rates = {}
         replicated_rates = {}
@@ -1583,9 +1581,6 @@ class Fetch:
             else:
                 rate_last = rates[minute]
                 rate_last_valid = True
-                if not rate_first_valid:
-                    rate_first = rate_last
-                    rate_first_valid = True
             minute += 1
 
         return rates, replicated_rates
@@ -2094,7 +2089,6 @@ class Fetch:
         found_rates = []
         lowest = 99
         highest = -99
-        upcoming_period = self.minutes_now + 4 * 60
 
         while True:
             rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high, alt_rates=alt_rates, pv_light_dark=pv_light_dark)
