@@ -21,8 +21,8 @@ import os
 import tempfile
 from datetime import datetime, timedelta
 
+import agent_tools
 import web
-import web_mcp
 from web import WebInterface
 from web_mcp import (
     MCPServerWrapper,
@@ -321,9 +321,9 @@ def test_mcp_get_log(my_predbat):
     print("**** Testing MCP get_log ****")
 
     mcp = _make_mcp(my_predbat)
-    saved_reader = web_mcp.read_predbat_log
+    saved_reader = agent_tools.read_predbat_log
     try:
-        web_mcp.read_predbat_log = lambda: _sample_log()
+        agent_tools.read_predbat_log = lambda: _sample_log()
 
         print("Test: the default warnings view returns warnings and errors only")
         result, _ = _call_tool(mcp, "get_log")
@@ -413,7 +413,7 @@ def test_mcp_get_log(my_predbat):
             failed = True
 
         print("Test: an empty log is reported as success with no lines")
-        web_mcp.read_predbat_log = lambda: ""
+        agent_tools.read_predbat_log = lambda: ""
         result, _ = _call_tool(mcp, "get_log", {"filter": "all"})
         if not result.get("success") or result["data"]["returned_lines"] != 0:
             print("  ERROR: expected an empty but successful result, got {}".format(result))
@@ -425,13 +425,13 @@ def test_mcp_get_log(my_predbat):
             """Stand-in reader that fails the way an unreadable log file would."""
             raise IOError("log file unreadable")
 
-        web_mcp.read_predbat_log = _boom
+        agent_tools.read_predbat_log = _boom
         result, _ = _call_tool(mcp, "get_log")
         if result.get("success") or "unreadable" not in (result.get("error") or ""):
             print("  ERROR: expected a failure result naming the error, got {}".format(result))
             failed = True
     finally:
-        web_mcp.read_predbat_log = saved_reader
+        agent_tools.read_predbat_log = saved_reader
 
     return failed
 
@@ -776,10 +776,10 @@ def test_mcp_argument_validation(my_predbat):
     print("Test: every filtering tool reports a bad regex the same way")
     mcp = _make_mcp(my_predbat)
     saved_args = my_predbat.args
-    saved_reader = web_mcp.read_predbat_log
+    saved_reader = agent_tools.read_predbat_log
     try:
         my_predbat.args = {"battery_rate_max_charge": 3.0}
-        web_mcp.read_predbat_log = lambda: _sample_log()
+        agent_tools.read_predbat_log = lambda: _sample_log()
         for tool in ["get_apps", "get_config", "get_entities", "get_state"]:
             result, _ = _call_tool(mcp, tool, {"filter": "[unclosed"})
             if result.get("success"):
@@ -809,7 +809,7 @@ def test_mcp_argument_validation(my_predbat):
             failed = True
     finally:
         my_predbat.args = saved_args
-        web_mcp.read_predbat_log = saved_reader
+        agent_tools.read_predbat_log = saved_reader
 
     return failed
 

@@ -1,0 +1,167 @@
+{
+  "tools": [
+    {
+      "description": "Get the current Predbat battery plan data including forecast, costs, and state information",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "get_plan"
+    },
+    {
+      "description": "Get the current Predbat system status and configuration",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "get_status"
+    },
+    {
+      "description": "Get predbat apps.yaml static configuration data, with credentials redacted by default",
+      "inputSchema": {
+        "properties": {
+          "filter": {
+            "description": "The configuration item name to filter on, as a Python regex (optional)",
+            "type": "string"
+          },
+          "masked": {
+            "description": "Redact credential-like values such as API keys, secrets and passwords (default true)",
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "get_apps"
+    },
+    {
+      "description": "Get Predbat's internal state variables - the same data a debug yaml carries, one key at a time. Called with no arguments it returns every small variable and describes the large ones (per-minute series) without returning them.",
+      "inputSchema": {
+        "properties": {
+          "filter": {
+            "description": "Only return variables whose name matches this Python regex (optional)",
+            "type": "string"
+          },
+          "keys": {
+            "description": "Specific state variable names to return (optional - omit for every small variable)",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "max_bytes": {
+            "description": "Per-variable size budget before it is described rather than returned (default 2048, maximum 262144)",
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "get_state"
+    },
+    {
+      "description": "Get the Predbat log (predbat.log), filtered by level, search term and age - use this to diagnose warnings and errors. Lines are returned oldest-first.",
+      "inputSchema": {
+        "properties": {
+          "filter": {
+            "description": "Log level to return: all, info, warnings or errors (default warnings)",
+            "enum": [
+              "all",
+              "info",
+              "warnings",
+              "errors"
+            ],
+            "type": "string"
+          },
+          "hours": {
+            "description": "Only return lines written in the last N hours (optional)",
+            "type": "number"
+          },
+          "max_lines": {
+            "description": "Maximum number of lines to return. The most recent matching lines are the ones kept, but they are returned oldest-first (default 500, maximum 5000)",
+            "type": "integer"
+          },
+          "search": {
+            "description": "Only return lines containing this text, case-insensitive (optional)",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "get_log"
+    },
+    {
+      "description": "Get the current Predbat live configuration settings",
+      "inputSchema": {
+        "properties": {
+          "filter": {
+            "description": "The entity ID name to filter on, as a Python regex (optional)",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "get_config"
+    },
+    {
+      "description": "Get the current Predbat entities",
+      "inputSchema": {
+        "properties": {
+          "filter": {
+            "description": "The configuration item name to filter on, as a Python regex (optional)",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "get_entities"
+    },
+    {
+      "description": "Set Predbat configuration setting",
+      "inputSchema": {
+        "properties": {
+          "entity_id": {
+            "description": "The entity ID of the configuration setting to update",
+            "type": "string"
+          },
+          "value": {
+            "description": "The new value for the configuration setting",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_id",
+          "value"
+        ],
+        "type": "object"
+      },
+      "name": "set_config"
+    },
+    {
+      "description": "Override the current Predbat plan for a specific 30 minute period with a manual action",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "description": "The action to perform: demand, charge, export, freeze_charge, freeze_export, clear",
+            "type": "string"
+          },
+          "time": {
+            "description": "The time at which to perform the action, in \"Day HH:MM\" format (24-hour), covers one 30-minute period",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "time"
+        ],
+        "type": "object"
+      },
+      "name": "set_plan_override"
+    }
+  ]
+}
