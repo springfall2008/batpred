@@ -200,16 +200,19 @@ class PredbatTools:
 
         An unknown name is a result rather than an exception because the caller is a model that
         can only correct itself if the failure comes back through the same channel as a success.
+        A genuine handler crash is not caught here - it propagates so the protocol layer (MCP's
+        isError, or the chat agent's own try/except) can tell a real fault from a normal failed
+        result. Every handler already wraps its own body, so this should never actually fire, but
+        that is an unreachability argument, not a contract one, and a swallowed error here would
+        make a future handler bug look like a clean tool failure instead of crashing loudly.
         """
         handler = getattr(self, "_execute_{}".format(name), None)
         if handler is None or name not in {entry["name"] for entry in TOOL_DEFS}:
-            return {"success": False, "error": "Unknown tool: {}".format(name), "data": None}
+            return {"success": False, "error": "Unknown tool: {}".format(name)}
         try:
             return await handler(arguments or {})
         except MCPArgumentError as error:
             return {"success": False, "error": str(error), "data": None}
-        except Exception as error:
-            return {"success": False, "error": "Tool execution failed: {}".format(error), "data": None}
 
     async def _execute_get_plan(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the get_plan tool"""

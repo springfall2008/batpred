@@ -1021,7 +1021,10 @@ class MCPServerWrapper(PredbatTools):
 
     async def _handle_tools_call(self, params):
         """Handle MCP tools/call request"""
-        result = await self.execute(params.get("name"), params.get("arguments", {}))
+        try:
+            result = await self.execute(params.get("name"), params.get("arguments", {}))
+        except Exception as e:
+            return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": f"Tool execution failed: {str(e)}"})}], "isError": True}
         if not result.get("success") and str(result.get("error", "")).startswith("Unknown tool"):
             return {"content": [{"type": "text", "text": json.dumps(result)}], "isError": True}
         return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}

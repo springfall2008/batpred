@@ -141,6 +141,37 @@ def test_mcp_wrapper_still_inherits(my_predbat):
     return failed
 
 
+def test_handler_crash_sets_is_error(my_predbat):
+    """A handler that raises (rather than returning its own {success: False}) propagates through
+    execute() and is caught by _handle_tools_call(), which still reports isError: True at the MCP
+    protocol level - the contract PredbatTools.execute() must not swallow (review finding on
+    the tool-layer extraction).
+    """
+    failed = False
+    print("**** Testing that a raising handler still sets isError over MCP ****")
+    mcp = MCPServerWrapper(my_predbat, log_func=my_predbat.log)
+
+    async def _boom(arguments):
+        """Stand-in handler that crashes instead of returning a result dict."""
+        raise RuntimeError("simulated handler crash")
+
+    saved_handler = mcp._execute_get_status
+    try:
+        mcp._execute_get_status = _boom
+        result = asyncio.run(mcp._handle_tools_call({"name": "get_status", "arguments": {}}))
+        if not result.get("isError"):
+            print("ERROR: expected isError to be set when a handler raises, got {}".format(result))
+            failed = True
+        decoded = json.loads(result["content"][0]["text"])
+        if decoded.get("success") or "simulated handler crash" not in str(decoded.get("error")):
+            print("ERROR: expected the crash to be reported by name, got {}".format(decoded))
+            failed = True
+    finally:
+        mcp._execute_get_status = saved_handler
+
+    return failed
+
+
 def run_agent_tools_tests(my_predbat):
     """Run every shared tool layer test, returning True if any of them failed."""
     failed = False
@@ -149,4 +180,5 @@ def run_agent_tools_tests(my_predbat):
     failed |= test_openai_tool_list_shape(my_predbat)
     failed |= test_execute_dispatch(my_predbat)
     failed |= test_mcp_wrapper_still_inherits(my_predbat)
+    failed |= test_handler_crash_sets_is_error(my_predbat)
     return failed
