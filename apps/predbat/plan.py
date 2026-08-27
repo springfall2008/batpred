@@ -182,6 +182,37 @@ class Plan:
                         self.log("Dynamic load adjust sees car {} charging now slot {}-{}, previous car slot {}".format(car_n, slot["start"], slot["end"], self.load_last_car_slot))
         self.load_last_car_slot = load_car_slot
         self.dynamic_load_baseline = {}
+
+        # Dynamic load baselines are stored as kWh per PREDICT_STEP. When the car is inside the
+        # inverter CT clamp, remove its measured energy from the most recent load period before
+        # carrying a high-load observation into the next plan slot. The car-energy sensor is an
+        # incrementing kWh series, so sum its per-minute increments over the same period as
+        # load_last_period. If the sensor has no current increment, retain the planned-slot fallback
+        # below for a charger whose energy sensor is lagging.
+        load_last_period_energy = self.load_last_period / 60 * PREDICT_STEP
+        # Planned car energy is also an upper-bound estimate for a sensor that has not caught up
+        # yet. Calculate it over the same trailing period as load_last_period, including partial
+        # slot overlaps, then convert the per-minute kW values to kWh.
+        car_load_planned = 0.0
+        if self.car_energy_reported_load:
+            for minute in range(self.minutes_now - PREDICT_STEP, self.minutes_now):
+                car_load_planned += sum(in_car_slot(minute, self.num_cars, self.car_charging_slots)[0]) / 60
+
+        car_energy_sensor_used = False
+        if self.car_energy_reported_load and self.car_charging_hold and self.car_charging_energy:
+            car_energy_last_period = sum(self.get_from_incrementing(self.car_charging_energy, minute) for minute in range(PREDICT_STEP))
+            if car_energy_last_period > 0:
+                car_energy_to_exclude = max(car_energy_last_period, car_load_planned)
+                load_last_period_energy = max(load_last_period_energy - car_energy_to_exclude, 0)
+                car_energy_sensor_used = True
+                self.log("Dynamic load adjust excluded {:.2f}kWh car energy from the last {} minutes".format(car_energy_last_period, PREDICT_STEP))
+                if car_load_planned > car_energy_last_period:
+                    self.log("Dynamic load adjust used planned car energy {:.2f}kWh because the sensor reported only {:.2f}kWh".format(car_load_planned, car_energy_last_period))
+
+        # If measured car energy was unavailable, use the planned trailing-period energy as a fallback.
+        if self.car_energy_reported_load and not car_energy_sensor_used:
+            load_last_period_energy = max(load_last_period_energy - car_load_planned, 0)
+
         if self.metric_dynamic_load_adjust:
             minutes_now = self.minutes_now
             minutes_end_slot = int((self.minutes_now + self.plan_interval_minutes) / self.plan_interval_minutes) * self.plan_interval_minutes
@@ -207,19 +238,13 @@ class Plan:
                     # Load has been high for two consecutive checks, so also predict it will continue
                     # into the following slot to keep the plan up to date across the slot boundary
                     minutes_end_baseline = minutes_end_slot + self.plan_interval_minutes
+                load_baseline = load_last_period_energy
                 for minute_absolute in range(minutes_now, minutes_end_baseline, PREDICT_STEP):
-                    if not self.car_energy_reported_load:
-                        # If car energy is not reported as load then we should not attempt to adjust the load prediction based on car load.
-                        car_load = 0
-                    else:
-                        car_load = sum(in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)[0])
-                    load_last_period = self.load_last_period / 60 * PREDICT_STEP
-                    load_last_period = max(load_last_period - car_load, 0)
-                    if load_last_period > 0:
+                    if load_baseline > 0:
                         if not have_printed:
-                            self.log("Dynamic load adjust is setting load minimum {:.2f}kW at {}".format(load_last_period, self.time_abs_str(minute_absolute)))
+                            self.log("Dynamic load adjust is setting load minimum {:.2f}kWh at {}".format(load_baseline, self.time_abs_str(minute_absolute)))
                             have_printed = True
-                        self.dynamic_load_baseline[minute_absolute] = load_last_period
+                        self.dynamic_load_baseline[minute_absolute] = load_baseline
             if prev_last_load_status != self.load_last_status:
                 self.log("Dynamic load status changed from {} to {}".format(prev_last_load_status, self.load_last_status))
                 return True
