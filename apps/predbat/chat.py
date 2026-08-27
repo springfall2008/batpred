@@ -34,6 +34,13 @@ EVENT_BUFFER_MAX = 2000
 # component restart can strand a slot, and that is rare - so the grace period is generous.
 STALE_TURN_GRACE_SECONDS = 60
 
+# How long a write tool waits for a user's confirm/reject answer before it is treated as declined,
+# and how often await_confirmation polls for it. Polling rather than an asyncio.Event because the
+# answer arrives from the web thread's loop while the turn runs on the component's own loop, and
+# an Event is bound to whichever loop created it.
+CONFIRM_TIMEOUT_SECONDS = 300
+CONFIRM_POLL_SECONDS = 0.2
+
 PRIMER = """You are an assistant built into Predbat, a home battery optimisation system that plans when to charge and discharge a household battery based on electricity rates, solar forecasts and historical load. The person you are talking to owns this system and is looking at its web interface.
 
 Answer concisely and quote the user's real values rather than generalities. Call a tool rather than guessing: the tools read this specific installation. Use search_docs for questions about how to configure Predbat, and search_source then read_source for questions about what the code actually does - the source you can read is the exact version running here. Never invent an entity name; look it up with get_entities or get_config."""
@@ -489,6 +496,21 @@ class ChatAgent(ComponentBase):
             await self.store.append(conversation_id, {"role": "tool", "tool_call_id": call_id, "name": name, "content": json.dumps(result)})
             return
 
+        definition = self.tool_defs_by_name.get(name) or {}
+        if definition.get("writes") and self.confirm_writes_enabled():
+            with self.lock:
+                self.pending_confirm[call_id] = {"conversation_id": conversation_id, "turn_id": turn_id, "approved": None}
+            self.emit(conversation_id, "confirm", {"call_id": call_id, "name": name, "arguments": arguments})
+            approved = await self.await_confirmation(call_id)
+            with self.lock:
+                self.pending_confirm.pop(call_id, None)
+            if not approved:
+                # An ordinary tool result rather than aborting the turn: the model acknowledges the
+                # decline and can offer an alternative, which is what a user expects from a refusal.
+                result = {"success": False, "error": "User declined this change", "data": None}
+                await self.store.append(conversation_id, {"role": "tool", "tool_call_id": call_id, "name": name, "content": json.dumps(result)})
+                return
+
         started = time.monotonic()
         self.emit(conversation_id, "tool_start", {"call_id": call_id, "name": name, "arguments": arguments})
         try:
@@ -500,6 +522,58 @@ class ChatAgent(ComponentBase):
         self.emit(conversation_id, "tool_end", {"call_id": call_id, "name": name, "ok": bool(result.get("success")), "elapsed": elapsed, "preview": encoded[:400]})
         await self.store.append(conversation_id, {"role": "tool", "tool_call_id": call_id, "name": name, "content": encoded})
 
+    def confirm_writes_enabled(self):
+        """Return whether a write tool must be confirmed before it runs.
+
+        Read at the moment the tool is called rather than cached at turn start, so toggling the
+        switch mid-turn takes effect on the next tool call.
+        """
+        value, _ = self.get_ha_config("chat_confirm_writes", True)
+        return True if value is None else bool(value)
+
     def web_search_enabled(self):
-        """Return whether OpenRouter's web search plugin should be added to the request."""
+        """Return whether OpenRouter's web search plugin should be added to the request.
+
+        The plugin is an OpenRouter feature. If the user has pointed openrouter_base_url at
+        something else it is silently ignored by that endpoint, so say so once rather than
+        leaving them wondering why nothing changed.
+        """
+        value, _ = self.get_ha_config("chat_web_search", False)
+        if not value:
+            return False
+        if "openrouter.ai" not in self.base_url:
+            if not self.warned_web_search_base_url:
+                self.warned_web_search_base_url = True
+                self.log("Warn: chat web search is enabled but openrouter_base_url is '{}', which is not OpenRouter - the web plugin will be ignored by that endpoint".format(self.base_url))
+            return False
+        return True
+
+    def confirm(self, call_id, conversation_id, approved):
+        """Record a user's answer to a pending write confirmation."""
+        with self.lock:
+            pending = self.pending_confirm.get(call_id)
+            if pending is None or pending.get("conversation_id") != conversation_id:
+                return False
+            pending["approved"] = bool(approved)
+        self.emit(conversation_id, "confirm_result", {"call_id": call_id, "approved": bool(approved)})
+        return True
+
+    async def await_confirmation(self, call_id):
+        """Wait for a confirmation answer, polling rather than blocking on a primitive.
+
+        Polling keeps this free of loop-bound objects, so the turn runs correctly on whichever
+        event loop invoked it. The time spent parked is added back to the turn deadline: a user
+        who steps away should not turn their own approval into a timeout.
+        """
+        started = time.monotonic()
+        while time.monotonic() - started < CONFIRM_TIMEOUT_SECONDS:
+            with self.lock:
+                pending = self.pending_confirm.get(call_id)
+                if pending is None:
+                    break
+                if pending.get("approved") is not None:
+                    self.deadline += time.monotonic() - started
+                    return bool(pending["approved"])
+            await asyncio.sleep(CONFIRM_POLL_SECONDS)
+        self.deadline += time.monotonic() - started
         return False

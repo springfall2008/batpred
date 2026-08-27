@@ -762,6 +762,163 @@ def test_submit_turn_needs_a_running_component(my_predbat):
     return failed
 
 
+def _write_call_response(entity_id="input_number.predbat_best_soc_keep", value="2.0"):
+    """Build a chunk list for a streamed set_config call."""
+    return _tool_call_response("set_config", {"entity_id": entity_id, "value": value}, call_id="call_write")
+
+
+def _confirm_soon(agent, approved):
+    """Answer the next pending confirmation from a background thread, as a browser would."""
+
+    def answer():
+        """Poll for the pending confirmation and resolve it."""
+        for _ in range(200):
+            with agent.lock:
+                pending = dict(agent.pending_confirm)
+            if pending:
+                call_id = sorted(pending)[0]
+                agent.confirm(call_id, pending[call_id]["conversation_id"], approved)
+                return
+            time.sleep(0.05)
+
+    thread = threading.Thread(target=answer, daemon=True)
+    thread.start()
+    return thread
+
+
+def test_write_confirmation_approved(my_predbat):
+    """With the switch on, a write waits for approval and then executes."""
+    failed = False
+    print("**** Testing write confirmation - approved ****")
+    agent = _agent_with_fake(my_predbat, _write_call_response(), _text_response("done"))
+    agent.confirm_writes_enabled = lambda: True
+    cid = asyncio.run(agent.store.create())
+
+    _confirm_soon(agent, True)
+    asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+
+    kinds = [event["type"] for event in agent.events_since(0, cid)[0]]
+    for required in ("confirm", "confirm_result", "tool_start", "tool_end"):
+        if required not in kinds:
+            print("ERROR: approval path did not emit {!r}: {}".format(required, kinds))
+            failed = True
+
+    results = [message for message in asyncio.run(agent.store.get_messages(cid)) if message["role"] == "tool"]
+    if not results or "declined" in str(results[0].get("content")).lower():
+        print("ERROR: an approved write was not executed: {}".format(results))
+        failed = True
+
+    return failed
+
+
+def test_write_confirmation_rejected(my_predbat):
+    """A rejected write becomes an ordinary tool result so the model can respond to it."""
+    failed = False
+    print("**** Testing write confirmation - rejected ****")
+    agent = _agent_with_fake(my_predbat, _write_call_response(), _text_response("understood"))
+    agent.confirm_writes_enabled = lambda: True
+    cid = asyncio.run(agent.store.create())
+
+    _confirm_soon(agent, False)
+    asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+
+    results = [message for message in asyncio.run(agent.store.get_messages(cid)) if message["role"] == "tool"]
+    if not results or "declined" not in str(results[0].get("content")).lower():
+        print("ERROR: a rejected write did not come back as a declined tool result: {}".format(results))
+        failed = True
+    if "tool_start" in [event["type"] for event in agent.events_since(0, cid)[0]]:
+        print("ERROR: a rejected write still ran the tool")
+        failed = True
+    if agent.pending_confirm:
+        print("ERROR: the pending confirmation outlived its turn")
+        failed = True
+
+    return failed
+
+
+def test_write_confirmation_timeout(my_predbat):
+    """An unanswered confirmation times out into a decline rather than hanging."""
+    failed = False
+    print("**** Testing write confirmation - timeout ****")
+    agent = _agent_with_fake(my_predbat, _write_call_response(), _text_response("no answer"))
+    agent.confirm_writes_enabled = lambda: True
+    chat.CONFIRM_TIMEOUT_SECONDS_ORIGINAL = chat.CONFIRM_TIMEOUT_SECONDS
+    chat.CONFIRM_TIMEOUT_SECONDS = 0.5
+    try:
+        cid = asyncio.run(agent.store.create())
+        started = time.monotonic()
+        asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+        elapsed = time.monotonic() - started
+    finally:
+        chat.CONFIRM_TIMEOUT_SECONDS = chat.CONFIRM_TIMEOUT_SECONDS_ORIGINAL
+
+    if elapsed > 10:
+        print("ERROR: the timeout path took {:.1f}s, so it is not honouring CONFIRM_TIMEOUT_SECONDS".format(elapsed))
+        failed = True
+    results = [message for message in asyncio.run(agent.store.get_messages(cid)) if message["role"] == "tool"]
+    if not results or "declined" not in str(results[0].get("content")).lower():
+        print("ERROR: a timed-out confirmation did not decline: {}".format(results))
+        failed = True
+
+    return failed
+
+
+def test_write_without_confirmation(my_predbat):
+    """With the switch off, a write executes directly but is still recorded in the transcript."""
+    failed = False
+    print("**** Testing writes with confirmation off ****")
+    agent = _agent_with_fake(my_predbat, _write_call_response(), _text_response("changed"))
+    agent.confirm_writes_enabled = lambda: False
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "just do it"))
+
+    kinds = [event["type"] for event in agent.events_since(0, cid)[0]]
+    if "confirm" in kinds:
+        print("ERROR: a confirmation was requested with the switch off")
+        failed = True
+    for required in ("tool_start", "tool_end"):
+        if required not in kinds:
+            print("ERROR: the write was not recorded in the transcript: {}".format(kinds))
+            failed = True
+
+    return failed
+
+
+def test_web_search_switch(my_predbat):
+    """The plugin is added only when the switch is on, and a foreign base URL warns once."""
+    failed = False
+    print("**** Testing the web search switch ****")
+    off = _agent_with_fake(my_predbat, _text_response("no plugin"))
+    off.web_search_enabled = lambda: False
+    cid = asyncio.run(off.store.create())
+    asyncio.run(off.run_turn(cid, "hello"))
+    if "plugins" in off.fake.payloads[0]:
+        print("ERROR: the web plugin was sent with the switch off")
+        failed = True
+
+    on = _agent_with_fake(my_predbat, _text_response("with plugin"))
+    on.web_search_enabled = lambda: True
+    cid2 = asyncio.run(on.store.create())
+    asyncio.run(on.run_turn(cid2, "hello"))
+    if on.fake.payloads[0].get("plugins") != [{"id": "web"}]:
+        print("ERROR: the web plugin was not sent with the switch on: {}".format(on.fake.payloads[0].get("plugins")))
+        failed = True
+
+    foreign = _make_agent(my_predbat, base_url="http://localhost:11434/v1")
+    warnings = []
+    foreign.log = lambda message, **kwargs: warnings.append(str(message))
+    foreign.get_ha_config = lambda name, default: (True, False)
+    foreign.web_search_enabled()
+    foreign.web_search_enabled()
+    matched = [line for line in warnings if "web search" in line.lower()]
+    if len(matched) != 1:
+        print("ERROR: expected exactly one warning for a non-OpenRouter base URL, got {}".format(matched))
+        failed = True
+
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
@@ -781,4 +938,9 @@ def run_chat_tests(my_predbat):
     failed |= test_search_source_runs_off_the_loop(my_predbat)
     failed |= test_submit_turn_hands_off_to_the_component_loop(my_predbat)
     failed |= test_submit_turn_needs_a_running_component(my_predbat)
+    failed |= test_write_confirmation_approved(my_predbat)
+    failed |= test_write_confirmation_rejected(my_predbat)
+    failed |= test_write_confirmation_timeout(my_predbat)
+    failed |= test_write_without_confirmation(my_predbat)
+    failed |= test_web_search_switch(my_predbat)
     return failed
