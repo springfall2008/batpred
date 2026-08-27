@@ -1285,6 +1285,7 @@ def test_sigenergy_apply_controls_export_mode(my_predbat):
     bat_cmds = [c for c in commands_sent if c[0] == "battery_cmd"]
     assert len(bat_cmds) >= 1, "send_battery_command called for export"
     assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_DISCHARGE, "discharge mode sent for export"
+    assert bat_cmds[0][4] == 3.0, "configured export rate (3000W) sent as charging_power_kw, got {}".format(bat_cmds[0][4])
 
     return failed
 
