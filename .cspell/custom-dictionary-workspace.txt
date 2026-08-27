@@ -409,6 +409,7 @@ oninput
 onmouseout
 onmouseover
 openapi
+openrouter
 openweathermap
 overfitting
 overvoltage

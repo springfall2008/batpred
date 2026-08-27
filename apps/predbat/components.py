@@ -41,6 +41,7 @@ from sunsynk import SunsynkAPI
 from enphase import EnphaseAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
+from chat import ChatAgent
 
 try:
     from gateway import GatewayMQTT
@@ -98,6 +99,24 @@ COMPONENT_LIST = {
             "mcp_port": {"required": False, "config": "mcp_port", "default": 8199},
         },
         "phase": 1,
+    },
+    "chat": {
+        "class": ChatAgent,
+        "name": "AI Chat Agent",
+        "can_restart": True,
+        "phase": 1,
+        "args": {
+            "api_key": {"required": True, "config": "openrouter_api_key"},
+            "model": {"required": True, "config": "openrouter_model"},
+            "base_url": {"required": False, "config": "openrouter_base_url", "default": "https://openrouter.ai/api/v1"},
+            "max_tokens": {"required": False, "config": "openrouter_max_tokens", "default": 0},
+            "max_tool_calls": {"required": False, "config": "chat_max_tool_calls", "default": 8},
+            "max_history": {"required": False, "config": "chat_max_history", "default": 40},
+            "max_conversations": {"required": False, "config": "chat_max_conversations", "default": 20},
+            "expiry_days": {"required": False, "config": "chat_expiry_days", "default": 30},
+            "turn_timeout": {"required": False, "config": "chat_turn_timeout", "default": 180},
+            "fetch_allowlist": {"required": False, "config": "chat_fetch_allowlist", "default": None},
+        },
     },
     "solar": {
         "class": SolarAPI,
