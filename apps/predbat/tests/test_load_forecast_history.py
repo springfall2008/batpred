@@ -469,33 +469,41 @@ def test_load_forecast_history(my_predbat):
         my_predbat.get_history_wrapper = original_get_history_wrapper
 
     # ---------------------------------------------------------------
-    # Test 10: apply_load_ml_forecast_history gates on load_ml_forecast_active (batpred#4750)
+    # Test 10: apply_load_ml_forecast_history gates on the ml_forecast passed in (batpred#4750, #4762)
     # ---------------------------------------------------------------
     print("Test 10: apply_load_ml_forecast_history overrides elapsed minutes only when Load ML is genuinely active")
     my_predbat.minutes_now = 600
     original_fetch_ml_load_forecast_history = my_predbat.fetch_ml_load_forecast_history
-    original_load_ml_forecast_active = my_predbat.load_ml_forecast_active
     original_load_forecast = my_predbat.load_forecast
 
     try:
         # Case A: Load ML not active this cycle (e.g. running in the background but not selected as
-        # the forecast source) - must NOT touch self.load_forecast even if h1 history exists.
-        my_predbat.load_ml_forecast_active = False
+        # the forecast source, so fetch_sensor_data's own load_ml_forecast stayed empty) - must NOT
+        # touch self.load_forecast even if h1 history exists.
         my_predbat.load_forecast = {300: 1.0, 600: 20.0}
         my_predbat.fetch_ml_load_forecast_history = lambda now_utc: {300: 99.0}  # should be ignored entirely
-        my_predbat.apply_load_ml_forecast_history(now_utc)
+        my_predbat.apply_load_ml_forecast_history(now_utc, {})
         if my_predbat.load_forecast != {300: 1.0, 600: 20.0}:
-            print("ERROR: load_forecast should be untouched when load_ml_forecast_active is False, got {}".format(my_predbat.load_forecast))
+            print("ERROR: load_forecast should be untouched when no ML forecast was fetched this cycle, got {}".format(my_predbat.load_forecast))
             failed = True
         else:
             print("PASS: inactive Load ML leaves load_forecast untouched (falls through to the weighted-bucket baseline)")
 
+        # Case A2: the gate is a required precondition, not something a caller can skip by omitting
+        # the argument - the default must be inert rather than "assume ML was active".
+        my_predbat.load_forecast = {300: 1.0, 600: 20.0}
+        my_predbat.apply_load_ml_forecast_history(now_utc)
+        if my_predbat.load_forecast != {300: 1.0, 600: 20.0}:
+            print("ERROR: load_forecast should be untouched when ml_forecast is omitted, got {}".format(my_predbat.load_forecast))
+            failed = True
+        else:
+            print("PASS: omitted ml_forecast defaults to inactive rather than backfilling")
+
         # Case B: Load ML active - overrides the weighted-bucket baseline for elapsed minutes only,
         # leaves future (>= minutes_now) minutes from the live ML forecast untouched.
-        my_predbat.load_ml_forecast_active = True
         my_predbat.load_forecast = {300: 1.0, 600: 20.0, 900: 30.0}  # 300 = weighted-bucket baseline; 600/900 = live ML
         my_predbat.fetch_ml_load_forecast_history = lambda now_utc: {300: 9.5, 900: 999.0}  # 900 is future, must not apply
-        my_predbat.apply_load_ml_forecast_history(now_utc)
+        my_predbat.apply_load_ml_forecast_history(now_utc, {600: 20.0, 900: 30.0})  # this cycle's live ML forecast
         expected = {300: 9.5, 600: 20.0, 900: 30.0}
         if my_predbat.load_forecast != expected:
             print("ERROR: expected {} got {}".format(expected, my_predbat.load_forecast))
@@ -504,7 +512,6 @@ def test_load_forecast_history(my_predbat):
             print("PASS: active Load ML overrides only elapsed minutes with genuine past forecasts ({})".format(my_predbat.load_forecast))
     finally:
         my_predbat.fetch_ml_load_forecast_history = original_fetch_ml_load_forecast_history
-        my_predbat.load_ml_forecast_active = original_load_ml_forecast_active
         my_predbat.load_forecast = original_load_forecast
 
     # ---------------------------------------------------------------

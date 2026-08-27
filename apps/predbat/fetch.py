@@ -815,7 +815,6 @@ class Fetch:
             load_ml_forecast = self.fetch_ml_load_forecast(self.now_utc)
             if load_ml_forecast:
                 self.load_forecast_only = True  # Use only ML forecast for load if enabled and we have data
-                self.load_ml_forecast_active = True  # Load ML is genuinely the active source this cycle, not just running in the background
 
         # Fetch extra load forecast
         self.load_forecast, self.load_forecast_array = self.fetch_extra_load_forecast(self.now_utc, load_ml_forecast)
@@ -1137,8 +1136,10 @@ class Fetch:
                 self.log("Using weighted-bucket historical load forecast over {} days".format(min(self.load_minutes_age, self.max_days_previous - 1)))
 
         # Where Load ML genuinely supplied this cycle's forecast, backfill the elapsed part of today
-        # with its own past predictions (the weighted-bucket forecast above is skipped in that case)
-        self.apply_load_ml_forecast_history(self.now_utc)
+        # with its own past predictions (the weighted-bucket forecast above is skipped in that case).
+        # load_ml_forecast is this cycle's own fetch result from earlier in this function, so there is
+        # no cross-cycle state that could leave a stale "ML was active" reading behind (#4762 review).
+        self.apply_load_ml_forecast_history(self.now_utc, load_ml_forecast)
 
         # Load today vs actual
         if self.load_minutes:
@@ -2524,21 +2525,23 @@ class Fetch:
         load_forecast[horizon_end] = dp4(cumulative)
         return load_forecast
 
-    def apply_load_ml_forecast_history(self, now_utc):
+    def apply_load_ml_forecast_history(self, now_utc, ml_forecast=None):
         """
         Backfill the elapsed part of today with genuine past Load ML predictions.
 
-        Only takes effect when Load ML is genuinely the active forecast source this cycle
-        (self.load_ml_forecast_active) - a Load ML component running in the background without
-        being selected as the forecast source (load_ml_enable/load_ml_source) must not influence
-        the chart, so it has no effect and the weighted-bucket historical forecast above (skipped
-        while Load ML owns load_forecast_only) is what would apply instead. Load ML's own forecast
-        entity only ever publishes predictions from "now" onward (load_ml_component.py
-        _publish_entity), so without this the already-elapsed part of today has no forecast data
-        at all and load_today_comparison's Predicted chart series sits at zero from midnight until
-        "now" (batpred#4750).
+        Only takes effect when Load ML is genuinely the active forecast source this cycle, which is
+        exactly "fetch_sensor_data() fetched a non-empty ml_forecast this cycle" - a Load ML component
+        running in the background without being selected as the forecast source
+        (load_ml_enable/load_ml_source) must not influence the chart, so it has no effect and the
+        weighted-bucket historical forecast above (skipped while Load ML owns load_forecast_only) is
+        what would apply instead. This is passed in rather than held on self so there is no cycle-scoped
+        flag whose correctness depends on fetch_config_options() always running first (#4762 review).
+        Load ML's own forecast entity only ever publishes predictions from "now" onward
+        (load_ml_component.py _publish_entity), so without this the already-elapsed part of today has no
+        forecast data at all and load_today_comparison's Predicted chart series sits at zero from
+        midnight until "now" (batpred#4750).
         """
-        if not self.load_ml_forecast_active:
+        if not ml_forecast:
             return
         h1_forecast = self.fetch_ml_load_forecast_history(now_utc)
         for minute, value in h1_forecast.items():
@@ -2696,7 +2699,6 @@ class Fetch:
         self.holiday_days_left = self.get_arg("holiday_days_left")
         self.holiday_load_scaling = self.get_arg("holiday_load_scaling", 0.7)
         self.load_forecast_only = self.get_arg("load_forecast_only", False)
-        self.load_ml_forecast_active = False  # Set True in fetch_sensor_data() only when Load ML genuinely supplies this cycle's forecast
 
         self.days_previous = self.get_arg("days_previous", [7])
         self.days_previous_weight = self.get_arg("days_previous_weight", [1 for i in range(len(self.days_previous))])
