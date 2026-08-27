@@ -276,6 +276,7 @@ from tests.test_annual_scenarios import test_annual_scenarios
 from tests.test_annual_results import test_annual_results
 from tests.test_annual_integration import test_annual_integration
 from tests.test_annual_cli import test_annual_cli, test_annual_cli_fast_flag, test_annual_cli_machine, test_annual_cli_machine_end_to_end, test_annual_cli_export_compare_flags, test_annual_cli_apply_cli_overrides_config_shapes
+from tests.test_annual_cli import test_annual_cli_export_compare_table
 from tests.test_annual_job import test_annual_job
 from tests.test_tariff_catalogue import test_tariff_catalogue
 from tests.test_annual_store import test_annual_store
@@ -667,6 +668,7 @@ def main():
         ("annual_cli_machine_end_to_end", test_annual_cli_machine_end_to_end, "Annual CLI machine mode end-to-end tests", False),
         ("annual_cli_export_compare", test_annual_cli_export_compare_flags, "Annual CLI export-compare flag tests", False),
         ("annual_cli_overrides_shapes", test_annual_cli_apply_cli_overrides_config_shapes, "Annual CLI apply_cli_overrides config-shape and error-handling tests", False),
+        ("annual_cli_export_compare_table", test_annual_cli_export_compare_table, "Annual CLI export-compare table tests", False),
         ("annual_job", test_annual_job, "Annual subprocess job control tests", False),
         ("annual_store", test_annual_store, "Annual run store tests", False),
         ("annual_costs", test_annual_costs, "Annual install cost and payback model tests", False),

@@ -643,3 +643,94 @@ def test_annual_cli_apply_cli_overrides_config_shapes(my_predbat):
             failed = True
 
     return failed
+
+
+def test_annual_cli_export_compare_table(my_predbat):
+    """format_table renders a per-tariff table and a comparison summary for a sweep."""
+    failed = False
+    from annual_cli import format_table
+
+    def scenarios(with_predbat_p, without_predbat_p):
+        """Build a minimal four-scenario block with the two figures the summary uses."""
+        blank = {"cost_p": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "battery_cycles": 0.0, "export_credit_p_estimate": 0.0}
+        return {
+            "no_pvbat": dict(blank, cost_p=10000.0),
+            "pv_only": dict(blank, cost_p=8000.0),
+            "without_predbat": dict(blank, cost_p=without_predbat_p),
+            "with_predbat": dict(blank, cost_p=with_predbat_p),
+        }
+
+    def tariff_block(name, with_p, without_p):
+        """Build one by_export entry covering a single month."""
+        return {
+            "name": name,
+            "annual": {
+                "scenarios": scenarios(with_p, without_p),
+                "standing_charge_p": 1550.0,
+                "savings": {"pv_battery_vs_none_p": 2000.0, "predbat_vs_baseline_p": without_p - with_p},
+                "months_included": 1,
+                "months_excluded": [],
+                "costs": {},
+                "payback": {},
+            },
+            "months": [{"month": 7, "status": "ok", "scenarios": scenarios(with_p, without_p)}],
+        }
+
+    results = {
+        "year": 2026,
+        "months_requested": [7],
+        "by_export": {
+            "outgoing_fixed": tariff_block("Octopus Outgoing Fixed", 5000.0, 6000.0),
+            "outgoing_prime": tariff_block("Octopus Outgoing Prime", 4200.0, 6400.0),
+            "agile_outgoing": tariff_block("Octopus Agile Outgoing", 4800.0, 5800.0),
+        },
+        "caveats": ["a caveat"],
+    }
+
+    print("Test: every tariff appears in the rendered table")
+    text = format_table(results)
+    for name in ("Octopus Outgoing Fixed", "Octopus Outgoing Prime", "Octopus Agile Outgoing"):
+        if name not in text:
+            print("  ERROR: '{}' missing from the rendered sweep table".format(name))
+            failed = True
+
+    print("Test: the summary names the with-Predbat winner")
+    # Prime is cheapest with Predbat (4200p) though NOT without it (6400p is the worst).
+    if "Octopus Outgoing Prime" not in text.split("Best with Predbat")[-1][:120]:
+        print("  ERROR: the summary should name Outgoing Prime as the with-Predbat winner")
+        failed = True
+
+    print("Test: the summary names the without-Predbat winner separately")
+    if "Best without Predbat" not in text:
+        print("  ERROR: the summary should also report the without-Predbat winner")
+        failed = True
+
+    print("Test: caveats still render")
+    if "a caveat" not in text:
+        print("  ERROR: caveats should render for a sweep document too")
+        failed = True
+
+    print("Test: a single-tariff document is unaffected")
+    legacy = {
+        "year": 2025,
+        "annual": {
+            "scenarios": scenarios(5000.0, 6000.0),
+            "standing_charge_p": 1550.0,
+            "savings": {"pv_battery_vs_none_p": 2000.0, "predbat_vs_baseline_p": 1000.0},
+            "months_included": 12,
+            "months_excluded": [],
+            "costs": {},
+            "payback": {},
+        },
+        "months": [{"month": month, "status": "ok", "scenarios": scenarios(5000.0, 6000.0)} for month in range(1, 13)],
+        "caveats": [],
+    }
+    legacy_text = format_table(legacy)
+    if "Best with Predbat" in legacy_text:
+        print("  ERROR: the sweep summary leaked into a single-tariff document")
+        failed = True
+    if "Annual prediction for 2025" not in legacy_text:
+        print("  ERROR: the single-tariff table header changed")
+        failed = True
+
+    return failed

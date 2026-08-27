@@ -46,8 +46,8 @@ def _format_pence(pence, currency):
     return "{:.2f} {}".format(amount, currency)
 
 
-def format_table(results, currency="p"):
-    """Render the results document as a human-readable table.
+def _format_single_table(results, currency):
+    """Render a single-tariff results document as a human-readable table.
 
     Handles two cases the original design missed: a "degraded" month (some, but not
     all, of its sampled days failed) is still costed and included in the annual total,
@@ -57,30 +57,6 @@ def format_table(results, currency="p"):
     so the totals/savings section is skipped entirely instead of dividing ``None`` or
     printing a fabricated zero-cost year.
     """
-    if "by_export" in results:
-        # Stopgap only: an export-tariff sweep document has no top-level "months"/"annual"
-        # keys, so the rendering below would KeyError on it. This exists so the CLI's
-        # --export-compare flag (arriving before the real by-export renderer) doesn't crash
-        # after a multi-minute run - it is deliberately minimal, not the intended presentation.
-        lines = []
-        lines.append("Annual export-tariff comparison for {}".format(results["year"]))
-        lines.append("")
-        for tariff_id, entry in results["by_export"].items():
-            lines.append("{} ({})".format(entry["name"], tariff_id))
-            annual = entry["annual"]
-            if annual["scenarios"] is not None:
-                lines.append("  With Predbat: {}".format(_format_pence(annual["scenarios"]["with_predbat"]["cost_p"], currency)))
-            else:
-                lines.append("  No annual total available: no month produced a usable result.")
-            if entry.get("rates_synthesised"):
-                lines.append("  Note: this tariff's export rates were synthesised from current rates, not modelled historically.")
-            lines.append("")
-        if results.get("caveats"):
-            lines.append("Caveats")
-            for caveat in results["caveats"]:
-                lines.append("  - {}".format(caveat))
-        return "\n".join(lines)
-
     lines = []
     lines.append("Annual prediction for {}".format(results["year"]))
     lines.append("")
@@ -123,6 +99,73 @@ def format_table(results, currency="p"):
         lines.append("  Predbat vs without Predbat:  {}".format(_format_pence(annual["savings"].get("predbat_vs_baseline_p", 0.0), currency)))
         lines.append("  Standing charge (all scenarios): {}".format(_format_pence(annual["standing_charge_p"], currency)))
         lines.append("  Export credit (with Predbat, estimate - already included in cost above): {}".format(_format_pence(annual["scenarios"]["with_predbat"]["export_credit_p_estimate"], currency)))
+
+    if results.get("caveats"):
+        lines.append("")
+        lines.append("Caveats")
+        for caveat in results["caveats"]:
+            lines.append("  - {}".format(caveat))
+
+    return "\n".join(lines)
+
+
+def format_table(results, currency="p"):
+    """Render the results document as a human-readable table.
+
+    A sweep document (one produced with annual.export_tariffs) carries several tariffs under
+    "by_export" and gets one table each plus a comparison summary. Anything else is a
+    single-tariff document and renders exactly as it always has.
+    """
+    if "by_export" not in results:
+        return _format_single_table(results, currency)
+
+    lines = []
+    for tariff_id, block in results["by_export"].items():
+        lines.append("=== {} ({}) ===".format(block["name"], tariff_id))
+        # This tariff's OWN caveats, not the run-wide list: a tariff whose rates were
+        # synthesised must say so where its figures are, not in a shared footnote.
+        lines.append(_format_single_table({"year": results["year"], "annual": block["annual"], "months": block["months"], "caveats": block.get("caveats", [])}, currency))
+        lines.append("")
+
+    lines.append("Export tariff comparison")
+    lines.append("")
+    header = "{:<32}{:>18}{:>18}{:>18}".format("Tariff", "With Predbat", "Without Predbat", "Predbat saving")
+    lines.append(header)
+    lines.append("-" * len(header))
+
+    # Outgoing Fixed is the baseline the page quotes the other two against, so if it is in
+    # the sweep it anchors the deltas. Falling back to the first entry keeps this working
+    # for a sweep that does not include it, e.g. a hand-written CLI config.
+    order = list(results["by_export"].keys())
+    baseline_id = "outgoing_fixed" if "outgoing_fixed" in results["by_export"] else order[0]
+
+    def cost(tariff_id, scenario):
+        """Return one scenario's cost in pence for a tariff in the sweep."""
+        return results["by_export"][tariff_id]["annual"]["scenarios"][scenario]["cost_p"]
+
+    for tariff_id in order:
+        block = results["by_export"][tariff_id]
+        with_p = cost(tariff_id, "with_predbat")
+        without_p = cost(tariff_id, "without_predbat")
+        row = "{:<32}{:>18}{:>18}{:>18}".format(block["name"], _format_pence(with_p, currency), _format_pence(without_p, currency), _format_pence(without_p - with_p, currency))
+        if tariff_id != baseline_id:
+            row += "   ({} vs {})".format(_format_pence(cost(baseline_id, "with_predbat") - with_p, currency), results["by_export"][baseline_id]["name"])
+        if block.get("rates_synthesised"):
+            # Marked inline, not footnoted: a synthetic tariff compared against two real ones
+            # is the difference between a useful answer and a misleading one. This is the
+            # CARD-level bool (by_export[id]["rates_synthesised"]) - distinct from the
+            # month-row-level "rates_synthesised", which is a list of sides (e.g. ["export"])
+            # and is truthy for a different reason (see _synthesised_sides).
+            row += "   [rates synthesised - not this month's real rates]"
+        lines.append(row)
+
+    best_with = min(order, key=lambda tariff_id: cost(tariff_id, "with_predbat"))
+    best_without = min(order, key=lambda tariff_id: cost(tariff_id, "without_predbat"))
+    lines.append("")
+    lines.append("Best with Predbat:    {}".format(results["by_export"][best_with]["name"]))
+    lines.append("Best without Predbat: {}".format(results["by_export"][best_without]["name"]))
+    if best_with != best_without:
+        lines.append("The best tariff DIFFERS with and without Predbat - optimisation is what makes {} the right choice.".format(results["by_export"][best_with]["name"]))
 
     if results.get("caveats"):
         lines.append("")
