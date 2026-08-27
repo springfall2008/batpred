@@ -15,14 +15,18 @@ event loop invoked it, which in practice is the web component's, while this comp
 thread only flushes and prunes. See spec section 3.
 """
 
+import aiohttp
 import asyncio
+import functools
+import json
 import threading
 import time
 from datetime import datetime
 
+from agent_tools import TOOL_DEFS, PredbatTools, openai_tool_list
 from component_base import ComponentBase
-from chat_store import ConversationStore
-from chat_tools import DEFAULT_FETCH_ALLOWLIST
+from chat_store import ConversationStore, NEW_CONVERSATION_TITLE, derive_title, trim_history
+from chat_tools import CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_source, search_docs, search_source
 
 EVENT_BUFFER_MAX = 2000
 
@@ -41,6 +45,26 @@ class ChatBusyError(RuntimeError):
 
 class AgentNotReadyError(RuntimeError):
     """Raised when work is handed to the component before its event loop exists."""
+
+
+class ChatRequestError(RuntimeError):
+    """Raised when the chat-completions endpoint returns a non-200 response."""
+
+    def __init__(self, status, body):
+        """Keep the status and body so the message can name what actually went wrong."""
+        super().__init__("HTTP {}: {}".format(status, body[:500]))
+        self.status = status
+        self.body = body
+
+    def friendly(self):
+        """Return a message worth showing a user rather than a raw HTTP error."""
+        if self.status == 401:
+            return "OpenRouter rejected the API key - check openrouter_api_key in apps.yaml"
+        if self.status == 402:
+            return "OpenRouter reports insufficient credit: {}".format(self.body[:200])
+        if self.status == 429:
+            return "Rate limited by OpenRouter, try again shortly"
+        return "OpenRouter returned HTTP {}: {}".format(self.status, self.body[:200])
 
 
 def build_snapshot(base):
@@ -118,6 +142,8 @@ class ChatAgent(ComponentBase):
         self.store = ConversationStore(self.storage, self.log, max_history=self.max_history, max_conversations=max_conversations or 20, expiry_days=expiry_days or 30)
         self.index_loaded = False
         self.turn_counter = 0
+        self.tools = PredbatTools(self.base, log_func=self.log)
+        self.tool_defs_by_name = {entry["name"]: entry for entry in list(TOOL_DEFS) + list(CHAT_TOOL_DEFS)}
 
     def emit(self, conversation_id, event_type, data=None):
         """Append an event to the buffer and return its sequence number.
@@ -207,3 +233,250 @@ class ChatAgent(ComponentBase):
             self.active = None
         self.log("Warn: chat turn {} outlived its {}s timeout with no cleanup - releasing the turn slot".format(turn_id, self.turn_timeout))
         self.emit(None, "idle", {})
+
+    def build_messages(self, conversation_id, history):
+        """Assemble the request messages: a freshly built system prompt plus trimmed history."""
+        meta = self.store.get_meta(conversation_id) or {}
+        parts = [PRIMER, "", build_snapshot(self.base)]
+        if meta.get("title", NEW_CONVERSATION_TITLE) == NEW_CONVERSATION_TITLE:
+            parts.append("")
+            parts.append("This conversation has no title yet. Call set_chat_title once, early in your reply, with a short descriptive title of at most 60 characters summarising what the user is asking about.")
+        return [{"role": "system", "content": "\n".join(parts)}] + trim_history(history, self.max_history, log=self.log)
+
+    def tool_payload(self):
+        """Return the tool list offered to the model: the shared tools plus the chat-only ones."""
+        return openai_tool_list() + openai_tool_list(CHAT_TOOL_DEFS)
+
+    async def _stream_chunks(self, payload):
+        """Yield decoded chunk dicts from the chat-completions endpoint.
+
+        The only network call in the component, and the seam the tests replace. The session is
+        created per request because this coroutine runs on whichever event loop invoked the turn.
+        """
+        headers = {"Authorization": "Bearer {}".format(self.api_key), "Content-Type": "application/json", "HTTP-Referer": "https://springfall2008.github.io/batpred/", "X-Title": "Predbat"}
+        timeout = aiohttp.ClientTimeout(total=self.turn_timeout)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post("{}/chat/completions".format(self.base_url), headers=headers, json=payload) as response:
+                if response.status != 200:
+                    body = await response.text()
+                    raise ChatRequestError(response.status, body)
+                async for raw in response.content:
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:") :].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        yield json.loads(data)
+                    except ValueError:
+                        continue
+
+    async def _run_completion(self, conversation_id, messages, model):
+        """Stream one completion, returning the assistant message, its usage and any sources."""
+        payload = {"model": model, "messages": messages, "tools": self.tool_payload(), "stream": True, "usage": {"include": True}}
+        if self.max_tokens:
+            payload["max_tokens"] = self.max_tokens
+        if self.web_search_enabled():
+            payload["plugins"] = [{"id": "web"}]
+
+        content = ""
+        usage = {}
+        sources = []
+        accumulator = {}
+        async for chunk in self._stream_chunks(payload):
+            if chunk.get("usage"):
+                usage = chunk["usage"]
+            choices = chunk.get("choices") or []
+            delta = (choices[0].get("delta") or {}) if choices else {}
+            if delta.get("content"):
+                content += delta["content"]
+                self.emit(conversation_id, "delta", {"text": delta["content"]})
+            for annotation in delta.get("annotations") or []:
+                citation = annotation.get("url_citation") or {}
+                if citation.get("url"):
+                    sources.append({"url": citation["url"], "title": citation.get("title") or citation["url"]})
+            # Tool call fragments are keyed by index, not id: the id and name arrive only in the
+            # first fragment and the arguments are split across the rest.
+            for fragment in delta.get("tool_calls") or []:
+                slot = accumulator.setdefault(fragment.get("index", 0), {"id": None, "type": "function", "function": {"name": "", "arguments": ""}})
+                if fragment.get("id"):
+                    slot["id"] = fragment["id"]
+                function = fragment.get("function") or {}
+                if function.get("name"):
+                    slot["function"]["name"] += function["name"]
+                if function.get("arguments"):
+                    slot["function"]["arguments"] += function["arguments"]
+
+        message = {"role": "assistant", "content": content or None}
+        if accumulator:
+            message["tool_calls"] = [accumulator[index] for index in sorted(accumulator)]
+        return message, usage, sources
+
+    async def _dispatch(self, conversation_id, name, arguments):
+        """Run one tool, trying the chat-only tools before the shared Predbat ones."""
+        if name == "set_chat_title":
+            title = self.store.set_title(conversation_id, arguments.get("title"))
+            if title is None:
+                return {"success": False, "error": "This conversation no longer exists", "data": None}
+            self.titled_this_turn = True
+            self.emit(conversation_id, "title", {"title": title})
+            return {"success": True, "error": None, "data": {"title": title}}
+        if name == "search_docs":
+            return await search_docs(self.storage, arguments.get("query"), max_results=arguments.get("max_results", 5))
+        # read_source is bounded work on this loop, which is fine: the component loop's only
+        # other job is a five-second tick, and the web server is a different loop in a different
+        # thread. search_source is different - it runs a MODEL-SUPPLIED regular expression, and
+        # Python's re engine backtracks with no timeout, so a pattern like (.*)*x can hang inside
+        # a single search() call that no elapsed-time check can interrupt. Run it on a worker
+        # thread so a pathological pattern burns that thread rather than killing the component's
+        # only event loop: the component stays alive, other turns still run, and this turn dies on
+        # its own deadline. Containment, not latency.
+        #
+        # Never pass `root` to either function. It is deliberately absent from both tool schemas -
+        # a model that could set it would point the search at /config and walk straight past the
+        # extension allowlist that keeps apps.yaml and the token cache out.
+        if name == "search_source":
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, functools.partial(search_source, arguments.get("pattern"), file=arguments.get("file"), max_results=arguments.get("max_results", 20)))
+        if name == "read_source":
+            return read_source(arguments.get("file"), start_line=arguments.get("start_line", 1), max_lines=arguments.get("max_lines", 200))
+        if name == "fetch_url":
+            return await fetch_url(arguments.get("url"), allowlist=self.fetch_allowlist)
+        return await self.tools.execute(name, arguments)
+
+    def claim_turn(self, conversation_id):
+        """Reserve the single turn slot and return the new turn id.
+
+        Synchronous and lock-guarded so the web thread can decide busy-or-not without waiting on
+        either loop: by the time submit_turn returns, a concurrent send is already a clean 409.
+        """
+        meta = self.store.get_meta(conversation_id)
+        if meta is None:
+            raise KeyError("Unknown conversation {}".format(conversation_id))
+        with self.lock:
+            if self.active is not None:
+                raise ChatBusyError("A reply is already in progress in '{}'".format(self.active.get("title")))
+            self.turn_counter += 1
+            turn_id = self.turn_counter
+            # started is what _release_stale_turn measures against; without it a stranded slot is
+            # never freed, and with a tick count instead it would free live ones.
+            self.active = {"conversation_id": conversation_id, "turn_id": turn_id, "title": meta.get("title"), "started": time.monotonic()}
+        return turn_id
+
+    def submit_turn(self, conversation_id, text):
+        """Start a turn on this component's loop and return its id without waiting for it.
+
+        This is the web layer's entry point. The reply is delivered through the event buffer, so
+        the HTTP request that started it has nothing left to wait for.
+        """
+        loop = self.loop
+        if loop is None:
+            raise AgentNotReadyError("The chat component has not finished starting")
+        turn_id = self.claim_turn(conversation_id)
+        asyncio.run_coroutine_threadsafe(self._execute_turn(conversation_id, turn_id, text), loop)
+        return turn_id
+
+    async def run_turn(self, conversation_id, text):
+        """Claim and run a turn inline on the current loop, returning its id when it finishes."""
+        turn_id = self.claim_turn(conversation_id)
+        await self._execute_turn(conversation_id, turn_id, text)
+        return turn_id
+
+    async def _execute_turn(self, conversation_id, turn_id, text):
+        """Run one full agentic turn, releasing the turn slot however it ends."""
+        meta = self.store.get_meta(conversation_id) or {}
+        self.titled_this_turn = False
+        self.deadline = time.monotonic() + self.turn_timeout
+        self.emit(None, "busy", {"conversation_id": conversation_id, "title": meta.get("title"), "turn_id": turn_id})
+        try:
+            await self.store.append(conversation_id, {"role": "user", "content": text})
+            self.emit(conversation_id, "user", {"text": text})
+            await self._turn_loop(conversation_id, turn_id, text)
+        except ChatRequestError as error:
+            self.count_errors += 1
+            self.emit(conversation_id, "error", {"message": error.friendly()})
+        except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+            self.count_errors += 1
+            self.emit(conversation_id, "error", {"message": "Could not reach {}: {}".format(self.base_url, error)})
+        except Exception as error:
+            self.count_errors += 1
+            self.log("Error: chat turn failed: {}".format(error))
+            self.emit(conversation_id, "error", {"message": "The chat turn failed: {}".format(error)})
+        finally:
+            if not self.titled_this_turn and (self.store.get_meta(conversation_id) or {}).get("title") == NEW_CONVERSATION_TITLE:
+                title = self.store.set_title(conversation_id, derive_title(text))
+                if title:
+                    self.emit(conversation_id, "title", {"title": title})
+            try:
+                await self.store.flush(conversation_id)
+            except Exception as error:
+                self.count_errors += 1
+                self.log("Warn: could not persist chat conversation {}: {}".format(conversation_id, error))
+            with self.lock:
+                self.pending_confirm = {key: value for key, value in self.pending_confirm.items() if value.get("turn_id") != turn_id}
+                # Only clear the slot if this turn still owns it. If _release_stale_turn already
+                # freed it and another turn has since claimed it, an unconditional clear here
+                # would silently unlock the composer while that turn is still running.
+                if (self.active or {}).get("turn_id") == turn_id:
+                    self.active = None
+            self.emit(conversation_id, "done", {"turn_id": turn_id})
+            self.emit(None, "idle", {})
+
+    async def _turn_loop(self, conversation_id, turn_id, text):
+        """Alternate completions and tool calls until the model answers or the cap is reached."""
+        model = (self.store.get_meta(conversation_id) or {}).get("model") or self.default_model
+        for iteration in range(self.max_tool_calls + 1):
+            if time.monotonic() > self.deadline:
+                self.emit(conversation_id, "error", {"message": "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)})
+                return
+            history = await self.store.get_messages(conversation_id)
+            message, usage, sources = await self._run_completion(conversation_id, self.build_messages(conversation_id, history), model)
+            await self.store.append(conversation_id, message)
+            if usage:
+                self.store.add_usage(conversation_id, usage)
+                total = (self.store.get_meta(conversation_id) or {}).get("usage_total", {})
+                self.emit(conversation_id, "usage", {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0), "cost": usage.get("cost", 0), "conversation_cost": total.get("cost", 0)})
+            self.emit(conversation_id, "assistant", {"text": message.get("content") or "", "sources": sources})
+
+            calls = message.get("tool_calls") or []
+            if not calls:
+                return
+            if iteration >= self.max_tool_calls:
+                break
+            for call in calls:
+                await self._run_one_tool(conversation_id, turn_id, call)
+
+        note = "I stopped after {} tool calls, which is the configured limit for one turn. Ask me to continue if you want me to keep going.".format(self.max_tool_calls)
+        await self.store.append(conversation_id, {"role": "assistant", "content": note})
+        self.emit(conversation_id, "assistant", {"text": note, "sources": []})
+
+    async def _run_one_tool(self, conversation_id, turn_id, call):
+        """Execute one tool call and append its result as a tool message."""
+        name = (call.get("function") or {}).get("name") or ""
+        call_id = call.get("id") or "call_{}".format(turn_id)
+        raw = (call.get("function") or {}).get("arguments") or "{}"
+        try:
+            arguments = json.loads(raw) if raw.strip() else {}
+            if not isinstance(arguments, dict):
+                raise ValueError("arguments must be a JSON object")
+        except ValueError as error:
+            result = {"success": False, "error": "Could not read the tool argument JSON: {}".format(error), "data": None}
+            self.emit(conversation_id, "tool_end", {"call_id": call_id, "name": name, "ok": False, "elapsed": 0, "preview": result["error"]})
+            await self.store.append(conversation_id, {"role": "tool", "tool_call_id": call_id, "name": name, "content": json.dumps(result)})
+            return
+
+        started = time.monotonic()
+        self.emit(conversation_id, "tool_start", {"call_id": call_id, "name": name, "arguments": arguments})
+        try:
+            result = await self._dispatch(conversation_id, name, arguments)
+        except Exception as error:
+            result = {"success": False, "error": "Tool '{}' failed: {}".format(name, error), "data": None}
+        elapsed = round(time.monotonic() - started, 2)
+        encoded = json.dumps(result)
+        self.emit(conversation_id, "tool_end", {"call_id": call_id, "name": name, "ok": bool(result.get("success")), "elapsed": elapsed, "preview": encoded[:400]})
+        await self.store.append(conversation_id, {"role": "tool", "tool_call_id": call_id, "name": name, "content": encoded})
+
+    def web_search_enabled(self):
+        """Return whether OpenRouter's web search plugin should be added to the request."""
+        return False
