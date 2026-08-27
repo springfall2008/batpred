@@ -1362,9 +1362,18 @@ class SolisAPI(ComponentBase, OAuthMixin):
         (batteryTypeCode is '0000' in this state, against '0001'/'0063' for real packs, but it is
         left out on purpose: a code that means "unknown" on some firmware would silently ignore a
         working battery, and the names above already cover every case seen.)
+
+        A top-level batteryType that names a real pack settles it on its own: batteryList is only
+        consulted when batteryType is absent. Accounts exist whose batteryType is 'PYLON_LV' with a
+        live, healthy pack while batteryList still carries a "No Battery" entry, and letting the
+        list win there drops a working battery. Both no-battery accounts observed so far state it
+        in batteryType as well, so nothing that motivated checking the list is lost by this.
         """
-        if str(detail.get("batteryType", "")).strip().lower() == "no battery":
+        battery_type = str(detail.get("batteryType", "")).strip()
+        if battery_type.lower() == "no battery":
             return True
+        if battery_type:
+            return False
         for entry in detail.get("batteryList") or []:
             if not isinstance(entry, dict):
                 continue
