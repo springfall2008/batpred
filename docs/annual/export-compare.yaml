@@ -4,12 +4,16 @@
 #
 # Or, without this file at all, the same run from flags:
 #
-#   python3 apps/predbat/annual_cli.py --config <your-config>.yaml --months 7 --export-compare
+#   python3 apps/predbat/annual_cli.py --config <your-config>.yaml --year 2026 --months 7 --export-compare
 #
 # This is deliberately the same shape the hosted page submits, so a figure it prints can be
-# reproduced here. Change `year` and `months` to the most recent COMPLETE calendar month:
-# the Open-Meteo archive runs about five days behind, so a month is only usable once it
-# ended at least six days ago, and validate_config will reject one that has not.
+# reproduced here. Change `--year`/`--months` (or this file's `year`/`months`) to the most
+# recent COMPLETE calendar month: the Open-Meteo archive runs about five days behind, and
+# the weather window itself reaches two days past the month's end on top of that, so a
+# month is only usable once it ended at least eight days ago - validate_config will reject
+# one that has not. `--year` defaults to last year, which is wrong for Outgoing Prime (it
+# launched 23 June 2026): a month before that falls back to synthesised current rates on
+# the export side, so name the year explicitly for any month in Prime's first year.
 annual:
   location:
     # London GSP region centroid. Region C.
