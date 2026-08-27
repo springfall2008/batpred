@@ -9,12 +9,14 @@
 
 """Tests for the annual prediction command line output."""
 
+import copy
 import io
 import os
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 
 import annual_cli
+from annual import AnnualConfigError
 from annual_cli import format_table, make_progress
 from storage import StorageLocalFiles
 
@@ -510,10 +512,25 @@ def test_annual_cli_export_compare_flags(my_predbat):
         print("  ERROR: --export-compare must not leave fast_mode on")
         failed = True
 
-    print("Test: no flags leaves the config untouched")
+    print("Test: no flags leaves the config untouched (wrapped shape, full equality)")
+    # A weak "months/export_tariffs absent" check let a real regression through review (a
+    # setdefault() that injected an empty "annual" key into a bare-shape config still passed
+    # this weaker form) - asserting full equality against an independent deep copy catches
+    # any unwanted key, not just the two this test happens to think to name.
+    expected = copy.deepcopy(config)
     merged = annual_cli.apply_cli_overrides(config, months=None, export_compare=False, fast=False)
-    if "months" in merged["annual"] or "export_tariffs" in merged["annual"]:
-        print("  ERROR: with no flags the config should be unchanged, got {}".format(merged["annual"]))
+    if merged != expected:
+        print("  ERROR: with no flags the wrapped config should be byte-for-byte unchanged, got {} (expected {})".format(merged, expected))
+        failed = True
+
+    print("Test: no flags leaves the config untouched (bare shape, full equality)")
+    # validate_config accepts the bare inner mapping too (raw = config.get("annual", config)),
+    # so the no-op path has to hold for that shape as well, not just the wrapped one above.
+    bare_config = {"location": {"latitude": 51.5, "longitude": -0.1}, "solar": [{"kwp": 5.0}], "load": {"annual_kwh": 3000}, "tariff": {"rates_import": [{"rate": 25.0}]}}
+    expected_bare = copy.deepcopy(bare_config)
+    merged_bare = annual_cli.apply_cli_overrides(bare_config, months=None, export_compare=False, fast=False)
+    if merged_bare != expected_bare:
+        print("  ERROR: with no flags the bare-shape config should be byte-for-byte unchanged, got {} (expected {})".format(merged_bare, expected_bare))
         failed = True
 
     print("Test: overrides do not mutate the caller's config")
@@ -522,5 +539,107 @@ def test_annual_cli_export_compare_flags(my_predbat):
     if "months" in original["annual"]:
         print("  ERROR: apply_cli_overrides mutated the caller's config")
         failed = True
+
+    return failed
+
+
+def test_annual_cli_apply_cli_overrides_config_shapes(my_predbat):
+    """apply_cli_overrides must mirror apply_fast_override's two shape guards, and --months must fail cleanly.
+
+    Regression test for a review round on the export-compare flags: the first cut of
+    apply_cli_overrides used ``merged.setdefault("annual", {})`` unconditionally, which (a)
+    raised a bare AttributeError on a non-mapping config (an empty/malformed YAML file loads
+    as None, a list, or a bare string) and (b) injected a brand-new, near-empty "annual" key
+    into a bare-shape config instead of writing into the mapping validate_config actually
+    reads - silently discarding the rest of that config even with no flags at all.
+    """
+    failed = False
+    import annual_cli
+
+    print("Test: a non-dict config is returned untouched, not crashed on")
+    # Mirrors apply_fast_override's own non-mapping test. Checked with flags ON, since the
+    # bug this guards was a bare setdefault() call that ran unconditionally before any flag
+    # was even consulted.
+    for broken in (None, [], "not a config", 42):
+        try:
+            result = annual_cli.apply_cli_overrides(broken, months="7", export_compare=True, fast=True)
+        except Exception as error:  # noqa: BLE001 - the whole point is that nothing raises
+            print("  ERROR: apply_cli_overrides({!r}, ...) raised {}: {}".format(broken, type(error).__name__, error))
+            failed = True
+            continue
+        if result != broken:
+            print("  ERROR: a non-mapping config should be returned unchanged, got {!r} for {!r}".format(result, broken))
+            failed = True
+
+    print("Test: a bare-shape config with --months writes into the bare mapping, not a new nested 'annual' key")
+    bare_config = {"location": {"latitude": 51.5, "longitude": -0.1}, "solar": [{"kwp": 5.0}], "load": {"annual_kwh": 3000}, "tariff": {"rates_import": [{"rate": 25.0}]}}
+    merged = annual_cli.apply_cli_overrides(bare_config, months="7", export_compare=False, fast=False)
+    if merged.get("months") != [7]:
+        print("  ERROR: --months should land directly on the bare mapping, got {}".format(merged))
+        failed = True
+    if "annual" in merged:
+        print("  ERROR: a bare-shape config must not gain a new nested 'annual' key, got {}".format(merged))
+        failed = True
+    if merged.get("location") != bare_config["location"]:
+        print("  ERROR: the rest of the bare config must survive untouched, got {}".format(merged))
+        failed = True
+
+    print("Test: --export-compare on a bare-shape config also writes into the bare mapping")
+    merged = annual_cli.apply_cli_overrides(bare_config, months=None, export_compare=True, fast=False)
+    if "annual" in merged:
+        print("  ERROR: --export-compare must not create a nested 'annual' key on a bare config, got {}".format(merged))
+        failed = True
+    if [entry["id"] for entry in merged.get("export_tariffs", [])] != ["outgoing_fixed", "outgoing_prime", "agile_outgoing"]:
+        print("  ERROR: --export-compare should set export_tariffs directly on the bare mapping, got {}".format(merged.get("export_tariffs")))
+        failed = True
+
+    print("Test: a malformed --months raises AnnualConfigError, not a bare ValueError")
+    config = {"annual": {"location": {"latitude": 51.5, "longitude": -0.1}, "solar": [{"kwp": 5.0}], "load": {"annual_kwh": 3000}, "tariff": {"rates_import": [{"rate": 25.0}]}}}
+    try:
+        annual_cli.apply_cli_overrides(config, months="abc", export_compare=False, fast=False)
+        print("  ERROR: --months abc should have raised AnnualConfigError")
+        failed = True
+    except AnnualConfigError:
+        pass
+    except Exception as error:  # noqa: BLE001 - the whole point is that it's AnnualConfigError, nothing else
+        print("  ERROR: --months abc raised a bare {} ('{}') instead of AnnualConfigError".format(type(error).__name__, error))
+        failed = True
+
+    print("Test: a partially-malformed --months (e.g. '6,abc') also raises AnnualConfigError")
+    try:
+        annual_cli.apply_cli_overrides(config, months="6,abc", export_compare=False, fast=False)
+        print("  ERROR: --months 6,abc should have raised AnnualConfigError")
+        failed = True
+    except AnnualConfigError:
+        pass
+    except Exception as error:  # noqa: BLE001
+        print("  ERROR: --months 6,abc raised a bare {} ('{}') instead of AnnualConfigError".format(type(error).__name__, error))
+        failed = True
+
+    print("Test: main() itself reports a bad --months cleanly (exit 2, readable stderr, no traceback) rather than a bare crash")
+    with tempfile.TemporaryDirectory() as work_dir:
+        config_path = os.path.join(work_dir, "annual.yaml")
+        with open(config_path, "w") as handle:
+            handle.write("annual: {}\n")
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+        try:
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                exit_code = annual_cli.main(["--config", config_path, "--work-dir", os.path.join(work_dir, "work"), "--months", "abc"])
+        except Exception as error:  # noqa: BLE001 - main() must never let this escape as a raw traceback
+            print("  ERROR: main() let a bad --months escape as {}: {}".format(type(error).__name__, error))
+            failed = True
+            exit_code = None
+
+    if exit_code is not None:
+        if exit_code != 2:
+            print("  ERROR: a bad --months should exit 2, got {}".format(exit_code))
+            failed = True
+        if stdout_capture.getvalue() != "":
+            print("  ERROR: stdout must stay empty on a --months config error, got {!r}".format(stdout_capture.getvalue()))
+            failed = True
+        if "--months" not in stderr_capture.getvalue():
+            print("  ERROR: the stderr message should name --months as the problem, got {!r}".format(stderr_capture.getvalue()))
+            failed = True
 
     return failed

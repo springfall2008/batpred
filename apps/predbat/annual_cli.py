@@ -200,12 +200,31 @@ def apply_cli_overrides(config, months=None, export_compare=False, fast=False):
     Flags win over the file, matching how --fast already behaved. A copy, not a mutation:
     the caller's document is also what gets echoed back in --machine mode, and silently
     rewriting it would make the output disagree with the file the user passed.
+
+    Mirrors ``apply_fast_override``'s two guards - this now runs on every invocation of
+    main(), not just when --fast is given, so both have to hold generally:
+
+    - a non-mapping config (an empty or malformed YAML file loads as None, a list, or a
+      bare string) is returned untouched, so validate_config raises its own actionable
+      message rather than this function failing first with a bare AttributeError;
+    - validate_config accepts either the wrapped ({"annual": {...}}) or the bare inner
+      mapping form, so the overrides land on whichever mapping validate_config will
+      actually read - writing them under a new top-level "annual" key on a bare-shape
+      config would silently discard the rest of that config.
+
+    Raises AnnualConfigError (never a bare ValueError) if --months cannot be parsed, so a
+    malformed --months reaches the user the same way every other config problem does.
     """
     merged = copy.deepcopy(config)
-    annual = merged.setdefault("annual", {})
+    if not isinstance(merged, dict):
+        return merged
+    annual = merged["annual"] if isinstance(merged.get("annual"), dict) else merged
 
     if months:
-        annual["months"] = [int(part.strip()) for part in str(months).split(",") if part.strip()]
+        try:
+            annual["months"] = [int(part.strip()) for part in str(months).split(",") if part.strip()]
+        except ValueError:
+            raise AnnualConfigError("--months must be a comma-separated list of month numbers, got '{}'".format(months))
     if fast:
         annual["fast_mode"] = True
     if export_compare:
@@ -256,7 +275,11 @@ def main(argv=None, storage_factory=StorageLocalFiles):
         sys.stderr.write("Could not read config {}: {}\n".format(args.config, error))
         return 2
 
-    config = apply_cli_overrides(config, months=args.months, export_compare=args.export_compare, fast=args.fast)
+    try:
+        config = apply_cli_overrides(config, months=args.months, export_compare=args.export_compare, fast=args.fast)
+    except AnnualConfigError as error:
+        sys.stderr.write("Config error: {}\n".format(error))
+        return 2
 
     # Under --machine, the engine's log must go to stderr rather than the default print()
     # (stdout): predictor.run() can log warnings - P10 fallbacks, missing rate data, failed
