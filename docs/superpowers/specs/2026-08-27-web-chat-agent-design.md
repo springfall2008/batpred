@@ -20,12 +20,13 @@ Scope for this first implementation:
 - A new `chat` component, enabled only when OpenRouter credentials and a model are configured
   in `apps.yaml`.
 - A shared tool layer, extracted from the MCP server so both surfaces call one implementation.
-- A single shared conversation, persisted through the Storage component.
+- Multiple saved conversations with a switcher, persisted through the Storage component. One
+  turn runs at a time across the whole component; other conversations stay readable while it does.
 - Server-sent-event streaming of tokens, tool calls and confirmations to the browser.
 - A write-confirmation gate, on by default, controlled by a Predbat switch.
-- A model picker in the tab, defaulting to the `apps.yaml` model.
+- A model picker, per conversation, defaulting to the `apps.yaml` model.
 
-Explicitly out of scope, listed in section 16.
+Explicitly out of scope, listed in section 17.
 
 ## 2. Why not drive the existing MCP server
 
@@ -58,8 +59,9 @@ component's. This works only because those coroutines hold no loop-bound state.
 
 - `aiohttp.ClientSession` is created per request inside an `async with`, as `axle.py:250` does.
   No session is cached on the component.
-- Shared state (message list, event buffer, pending confirmations) uses plain lists/dicts
-  guarded by a `threading.Lock`, never `asyncio.Queue`, `asyncio.Event` or `asyncio.Lock`.
+- Shared state (conversation index, message bodies, event buffer, pending confirmations) uses
+  plain lists/dicts guarded by a `threading.Lock`, never `asyncio.Queue`, `asyncio.Event` or
+  `asyncio.Lock`.
 - The confirmation gate is polled, not awaited on a synchronisation primitive: the parked
   turn loops on `await asyncio.sleep(0.2)` reading `pending_confirm` under the lock. This
   needs no thread and no loop-bound object, and matches the cursor polling the SSE handler
@@ -75,7 +77,7 @@ coroutine that can be awaited from a test.
 
 ## 4. Architecture
 
-Three new files, one refactor.
+Three new files, two refactors.
 
 | File | Contents |
 | ---- | -------- |
@@ -83,13 +85,15 @@ Three new files, one refactor.
 | `apps/predbat/chat.py` | `ChatAgent(ComponentBase)`; OpenRouter client, agentic loop, conversation store, confirmation gate |
 | `apps/predbat/web_chat.py` | `WebChat`; the Chat tab page and its routes |
 | `apps/predbat/web_mcp.py` | *refactored*: `MCPServerWrapper(PredbatTools)`, keeping only the protocol envelope |
+| `apps/predbat/storage.py` | *extended*: a `delete()` method, so a deleted conversation's file can actually be removed (section 8.4) |
 
 ```text
 browser ──HTTP/SSE──▶ web_chat.WebChat ──await──▶ chat.ChatAgent ──HTTPS──▶ OpenRouter
                                                         │
-                                                        └──▶ agent_tools.PredbatTools ──▶ base (PredBat)
-                                                                      ▲
-                                        MCP client ──JSON-RPC──▶ web_mcp.MCPServerWrapper
+                                                        ├──▶ agent_tools.PredbatTools ──▶ base (PredBat)
+                                                        │              ▲
+                                                        │  MCP client ─┴─JSON-RPC──▶ web_mcp.MCPServerWrapper
+                                                        └──▶ storage.StorageComponent
 ```
 
 ## 5. The shared tool layer
@@ -135,7 +139,7 @@ TOOL_DEFS = [
 | ----- | ------- |
 | `name`, `description`, `parameters` | Exactly the values the MCP server publishes today |
 | `writes` | `True` for `set_config` and `set_plan_override`, `False` for the other seven |
-| `chat_omit_properties` | Properties removed from the *chat* projection only (section 12.1) |
+| `chat_omit_properties` | Properties removed from the *chat* projection only (section 13.1) |
 
 Two projections and one dispatcher:
 
@@ -161,14 +165,15 @@ Added to `COMPONENT_LIST` in `apps/predbat/components.py`, phase 1, restartable:
     "can_restart": True,
     "phase": 1,
     "args": {
-        "api_key":        {"required": True,  "config": "openrouter_api_key"},
-        "model":          {"required": True,  "config": "openrouter_model"},
-        "base_url":       {"required": False, "config": "openrouter_base_url",
-                           "default": "https://openrouter.ai/api/v1"},
-        "max_tool_calls": {"required": False, "config": "openrouter_max_tool_calls", "default": 8},
-        "max_history":    {"required": False, "config": "openrouter_max_history", "default": 40},
-        "max_tokens":     {"required": False, "config": "openrouter_max_tokens", "default": 0},
-        "turn_timeout":   {"required": False, "config": "openrouter_turn_timeout", "default": 180},
+        "api_key":           {"required": True,  "config": "openrouter_api_key"},
+        "model":             {"required": True,  "config": "openrouter_model"},
+        "base_url":          {"required": False, "config": "openrouter_base_url",
+                              "default": "https://openrouter.ai/api/v1"},
+        "max_tool_calls":    {"required": False, "config": "openrouter_max_tool_calls", "default": 8},
+        "max_history":       {"required": False, "config": "openrouter_max_history", "default": 40},
+        "max_conversations": {"required": False, "config": "openrouter_max_conversations", "default": 20},
+        "max_tokens":        {"required": False, "config": "openrouter_max_tokens", "default": 0},
+        "turn_timeout":      {"required": False, "config": "openrouter_turn_timeout", "default": 180},
     },
 },
 ```
@@ -180,11 +185,12 @@ targeted warning when a component is *partially* configured
 `Warn: Skipping AI Chat Agent interface, missing required configuration: openrouter_model`
 rather than silence.
 
-`ChatAgent.run()` returns `True` on its first tick without any network I/O. Credentials are
-validated lazily on the first turn. Validating at startup would let a slow or unreachable
-OpenRouter block Predbat's boot inside `wait_api_started()` for up to ten minutes.
+`ChatAgent.run()` returns `True` on its first tick without any network I/O; it loads the
+conversation index from storage and nothing else. Credentials are validated lazily on the first
+turn. Validating at startup would let a slow or unreachable OpenRouter block Predbat's boot
+inside `wait_api_started()` for up to ten minutes.
 
-`run()` thereafter, once a minute: flush a dirty conversation to storage, prune history, and
+`run()` thereafter, once a minute: flush dirty conversations to storage, prune, and
 `update_success_timestamp()` so the Components tab shows the component as healthy.
 
 ## 7. Configuration
@@ -199,7 +205,8 @@ All added to `APPS_SCHEMA` in `apps/predbat/config.py`:
 | `openrouter_model` | string | Yes | — | Default model id, e.g. `anthropic/claude-sonnet-4.5` |
 | `openrouter_base_url` | string | No | `https://openrouter.ai/api/v1` | Override for any OpenAI-compatible endpoint (Ollama, LiteLLM, a proxy) |
 | `openrouter_max_tool_calls` | integer | No | 8 | Tool calls allowed in one turn before the loop stops |
-| `openrouter_max_history` | integer | No | 40 | Messages retained in the conversation |
+| `openrouter_max_history` | integer | No | 40 | Messages retained per conversation |
+| `openrouter_max_conversations` | integer | No | 20 | Saved conversations retained before the least recently used is pruned |
 | `openrouter_max_tokens` | integer | No | 0 (unset) | Per-response completion cap; omitted from the request when 0 |
 | `openrouter_turn_timeout` | integer | No | 180 | Wall-clock seconds for one turn, excluding time spent awaiting a confirmation |
 
@@ -228,42 +235,100 @@ Surfaces as `switch.predbat_chat_confirm_writes` in Home Assistant and in the Co
 read at the moment a write tool is called, not cached at turn start, so toggling it takes
 effect immediately.
 
-## 8. Conversation model and persistence
+## 8. Conversations
 
-One conversation, shared by everyone who opens the tab. A Predbat instance serves one
-household; separate per-browser conversations would fragment context without anyone asking for
-it, and would make a mid-turn reload lose the turn.
+### 8.1 Model
 
-State held on the component under `self.lock`:
+Many saved conversations; **one running turn at a time across the whole component**. While a
+turn runs, every other conversation stays readable and switchable; only sending is locked, and
+the lock is global rather than per-conversation. This keeps the concurrency story to a single
+flag while still letting a user go and read something else during a slow turn.
+
+A conversation is:
+
+```python
+{
+    "id": "3f9a1c8e5b2d4a70",       # secrets.token_hex(8)
+    "title": "Why is it charging at 3am",
+    "created": "2026-08-27T09:14:02+01:00",
+    "updated": "2026-08-27T09:18:44+01:00",
+    "model": "anthropic/claude-sonnet-4.5",   # None means "use the apps.yaml default"
+    "usage_total": {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0},
+    "messages": [...],              # OpenAI format: user, assistant (with tool_calls), tool
+}
+```
+
+Ids are `secrets.token_hex(8)` rather than slugified titles. Storage sanitises identifiers with
+`_safe_name()` (`apps/predbat/storage.py:55`), which maps any unsafe character to `_` — so two
+different human titles could collapse onto the same filename. Hex ids cannot.
+
+Titles are derived from the first user message: whitespace collapsed, truncated to 60
+characters, `"New chat"` until then. Renaming is a route, not an LLM call — auto-titling with
+the model would cost a request per conversation for a cosmetic gain.
+
+### 8.2 Server state
 
 | Attribute | Contents |
 | --------- | -------- |
-| `messages` | OpenAI-format list: `user`, `assistant` (with `tool_calls`), `tool` |
-| `events` | Append-only event buffer, each stamped with a monotonic `seq` |
+| `index` | `id` → conversation metadata (everything but `messages`, plus `message_count`) |
+| `bodies` | `OrderedDict` `id` → `messages`, an LRU cache of at most 5 loaded conversations |
+| `dirty` | Set of ids with unflushed changes |
+| `events` | Append-only global event buffer, each stamped with `seq` and `conversation_id` |
 | `event_seq` | Next sequence number |
-| `active_turn` | Turn id of the running turn, or `None` |
-| `pending_confirm` | `call_id` → `{"approved": bool or None, "expires": datetime}` |
-| `selected_model` | Currently chosen model id; defaults to `openrouter_model` |
-| `usage_total` | Running `{prompt_tokens, completion_tokens, cost}` for the conversation |
+| `active` | `{"conversation_id", "turn_id", "title"}` while a turn runs, else `None` |
+| `pending_confirm` | `call_id` → `{"conversation_id", "approved": bool or None, "expires": datetime}` |
+
+There is deliberately **no server-side "current conversation"**. Which conversation a browser is
+looking at is client state, held in `localStorage` and passed on every request. Two browsers can
+therefore sit in different conversations without fighting over a shared cursor, and the only
+global server state is `active`.
+
+Bodies load lazily on first access and are evicted LRU beyond five, flushing first if dirty, so
+twenty saved conversations do not have to sit in memory.
 
 The system message is **not** stored — it is rebuilt from live data at the start of every turn
 (section 10), so a restored conversation is never anchored to a stale snapshot.
 
-### 8.1 Persistence
+### 8.3 Persistence
 
-Through the Storage component, as CLAUDE.md requires:
+Through the Storage component, as CLAUDE.md requires. One index plus one file per conversation,
+so a turn rewrites only the conversation it touched:
+
+- `chat/index` → `{"version": 1, "conversations": [metadata, ...]}`
+- `chat/conv_<id>` → `{"version": 1, "id": ..., "messages": [...]}`
+
+Both `format="json"`, no `expiry` — conversations are pruned by policy (section 8.5), not
+silently expired mid-use. Written at the end of each turn and on the housekeeping tick when
+dirty, never per token. A payload with an unrecognised `version` is discarded and logged rather
+than half-parsed; an index entry whose body file is missing is dropped from the index on load.
+
+### 8.4 A `delete()` for the Storage abstraction
+
+Deleting a conversation must remove its file, and CLAUDE.md forbids reaching around the Storage
+component to do direct file access. `StorageBase`, `StorageLocalFiles` and `StorageComponent`
+therefore gain:
 
 ```python
-await self.storage.save("chat", "conversation", payload, format="json", expiry=...)
+async def delete(self, module, filename) -> bool
 ```
 
-Payload: `{"version": 1, "model": selected_model, "messages": [...], "usage_total": {...}, "updated": iso8601}`.
+`StorageLocalFiles.delete()` removes both the data file and its `.meta` sidecar, returns `True`
+when the entry is gone (including when it was already absent, so the call is idempotent) and
+`False` only on an actual I/O error. Covered by additions to `tests/test_storage.py`.
 
-Written at the end of each turn and on the housekeeping tick when dirty — never per token.
-Loaded on the first `run()`; a payload with an unrecognised `version` is discarded and logged
-rather than half-parsed.
+This is a genuine gap in the abstraction rather than a chat-specific hack — nothing could
+previously remove a cache entry.
 
-### 8.2 History trimming — a trap worth stating
+### 8.5 Pruning
+
+Two independent limits:
+
+- **Within a conversation**, `openrouter_max_history` messages (section 8.6).
+- **Across conversations**, `openrouter_max_conversations`. On creating a new one, the least
+  recently `updated` conversations beyond the cap are deleted, their storage entries removed,
+  and a line logged naming what went. The conversation with a running turn is never pruned.
+
+### 8.6 History trimming — a trap worth stating
 
 Trimming to "the last N messages" will eventually cut between an `assistant` message carrying
 `tool_calls` and the `tool` messages answering them. OpenAI-compatible APIs reject that with a
@@ -276,18 +341,20 @@ within the window the whole conversation is kept and a warning is logged.
 ## 9. The agentic turn
 
 ```text
-run_turn(text):
-    claim active_turn, else raise Busy
-    append user message + emit "user" event
+run_turn(conversation_id, text):
+    claim active = {conversation_id, turn_id}, else raise Busy
+    emit global "busy" event
+    load body; append user message; set title if first; emit "user" event
     for iteration in range(max_tool_calls + 1):
-        messages = [system_snapshot()] + trim(self.messages)
+        messages = [system_snapshot()] + trim(body.messages)
         stream POST {base_url}/chat/completions
-              {model, messages, tools: openai_tool_list(),
-               stream: true, usage: {include: true}, [max_tokens]}
+              {model: conversation.model or default, messages,
+               tools: openai_tool_list(), stream: true,
+               usage: {include: true}, [max_tokens]}
         for each SSE chunk:
             content delta      -> emit "delta"
             tool_call delta    -> accumulate by index
-            usage              -> emit "usage", add to usage_total
+            usage              -> emit "usage", add to conversation usage_total
         append assistant message; emit "assistant"
         if no tool_calls: break
         for each tool_call:
@@ -299,7 +366,7 @@ run_turn(text):
             append tool message
     else:
         emit "assistant" with a visible "tool call limit reached" note
-    persist; emit "done"; release active_turn
+    mark dirty; persist; emit "done"; clear active; emit global "idle"
 ```
 
 Notes:
@@ -311,8 +378,8 @@ Notes:
 - The whole turn is wrapped in `asyncio.wait_for(..., turn_timeout)`. Time parked awaiting a
   confirmation is excluded by pausing the deadline, otherwise a user who steps away turns their
   own approval into a timeout.
-- `active_turn` is claimed and released under the lock, and released in a `finally`, so a
-  crashed turn cannot wedge the tab.
+- `active` is claimed and released under the lock, and released in a `finally`, so a crashed
+  turn cannot wedge the tab. The `idle` event is emitted on every exit path.
 
 ## 10. System prompt and the live snapshot
 
@@ -352,12 +419,109 @@ acknowledge it and offer an alternative — which is the behaviour a user expect
 With the switch off, write tools execute directly and still emit `tool_start`/`tool_end`, so the
 transcript always records what was changed.
 
-A pending confirmation is dropped when its turn ends, and `POST /chat/confirm` for an unknown or
-expired `call_id` returns 404 rather than silently succeeding.
+A pending confirmation is dropped when its turn ends. `POST /chat/confirm` for an unknown or
+expired `call_id`, or one belonging to a different conversation than the caller claims, returns
+404 rather than silently succeeding.
 
-## 12. Security and privacy
+Because a user can navigate away from the running conversation, a confirmation can be waiting in
+a conversation nobody is looking at. The global `busy` banner therefore names the conversation
+and links to it, and the list entry for a conversation with a pending confirmation is badged.
 
-### 12.1 Credentials must not reach OpenRouter
+## 12. Web layer
+
+Registered from `WebInterface.start()` via `self._register_chat_routes(app)`, mirroring the
+existing `_register_annual_routes()` split so the routes can be asserted against a bare
+`aiohttp.Application` in a test without opening a socket. Routes are registered only when
+`components.get_component("chat")` is not None.
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| GET | `/chat` | The tab |
+| GET | `/chat/conversations` | List: `{id, title, updated, message_count, cost, pending_confirm}` plus the current `active` |
+| POST | `/chat/conversations` | Create; returns the new `{id}` |
+| POST | `/chat/rename` | `{id, title}` |
+| POST | `/chat/delete` | `{id}`; **409** if that conversation has the active turn |
+| GET | `/chat/history?conversation=<id>` | Full transcript, `usage_total` and model, for first paint |
+| POST | `/chat/send` | `{conversation, message}` → `{turn_id}`; **409** if any turn is active |
+| GET | `/chat/stream?conversation=<id>&cursor=N` | SSE from sequence `N` |
+| POST | `/chat/confirm` | `{conversation, turn_id, call_id, approve}` |
+| POST | `/chat/cancel` | `{turn_id}`; aborts the active turn |
+| GET | `/chat/models` | Model catalogue for the picker |
+| POST | `/chat/model` | `{conversation, id}`; **409** if that conversation is mid-turn |
+
+An unknown `conversation` id returns 404 on every route that takes one.
+
+### 12.1 SSE protocol
+
+Frames are `id: <seq>\nevent: <type>\ndata: <json>\n\n`. The handler loops: read events after
+the cursor under the lock, write those whose `conversation_id` is either the requested one or
+`None` (global), `await asyncio.sleep(0.1)`. A comment heartbeat every 15 s keeps proxies from
+closing an idle stream.
+
+| Event | Scope | Payload |
+| ----- | ----- | ------- |
+| `user` | conversation | `{text}` |
+| `delta` | conversation | `{text}` — assistant token chunk |
+| `assistant` | conversation | `{text}` — the completed message |
+| `tool_start` | conversation | `{call_id, name, arguments}` |
+| `tool_end` | conversation | `{call_id, name, ok, elapsed, preview}` |
+| `confirm` | conversation | `{call_id, name, arguments}` |
+| `confirm_result` | conversation | `{call_id, approved}` |
+| `usage` | conversation | `{prompt_tokens, completion_tokens, cost, conversation_cost}` |
+| `title` | conversation | `{title}` — emitted when the first message names an untitled conversation |
+| `error` | conversation | `{message}` |
+| `done` | conversation | `{turn_id}` |
+| `busy` | global | `{conversation_id, title, turn_id}` — lock the composer everywhere |
+| `idle` | global | `{}` — unlock |
+| `reload` | global | `{}` — the cursor predates the buffer; refetch |
+
+Cursor replay rather than a live queue means two open browsers both follow the same turn, a
+reload mid-turn resumes from where it left off, and switching conversations is just a new cursor
+against the same buffer. The buffer is capped at 2000 events; a cursor older than the buffer's
+base gets `reload`.
+
+Global `busy`/`idle` events reach every browser regardless of which conversation it is viewing,
+which is what makes "browse freely, sending locked" work.
+
+### 12.2 Model picker
+
+`GET /chat/models` fetches `{base_url}/models`, keeps only entries whose
+`supported_parameters` contains `tools`, and returns `{id, name, prompt_price, completion_price}`
+sorted by id. Cached through `storage.fetch_cached("chat", "models", ..., fresh_minutes=1440)`,
+so the picker costs one request a day. If the fetch fails, the list degrades to the single
+`apps.yaml` model and the dropdown notes that the catalogue is unavailable.
+
+`POST /chat/model` sets the model **on that conversation** and persists it, so a cheap model can
+be used for one thread and an expensive one for another. Switching mid-conversation is allowed
+between turns and appends a visible note to the transcript. A "Use default" entry clears the
+override back to `None`, meaning the `apps.yaml` value. That value is always offered even if it
+is missing from the catalogue, so a custom `openrouter_base_url` with no `/models` endpoint
+still works.
+
+### 12.3 The tab
+
+A conversation list down the left: title, relative updated time, cost, a badge for a pending
+confirmation, and a **New chat** button; rename and delete on each row. The transcript to the
+right, with a growing textarea below it — Enter to send, Shift+Enter for a newline — and a
+footer showing the per-conversation model picker, turn tokens and cost, and conversation cost.
+
+Tool calls render **collapsed**: a single line, *"called `get_plan`"*, with a disclosure
+triangle revealing arguments and the JSON result. Confirmation cards render inline and expanded.
+
+While a turn runs, the composer is disabled in every conversation and a banner reads
+*"Replying in 'why is it charging at 3am'"* with a link that switches to it. Switching
+conversations while a turn runs is unrestricted; the selection is client state, so it is a
+history refetch plus a new SSE cursor.
+
+Dark mode follows the existing `get_header_html()` mechanism. Nav: `<a href='./chat'>Chat</a>`
+added to the menu bar in `web_helper.py`, emitted only when chat is enabled.
+`get_header_html()` gains a `chat_enabled=False` keyword argument, set at its single production
+call site (`apps/predbat/web.py:1698`) from `components.get_component("chat")`. The default
+keeps the existing test call site valid.
+
+## 13. Security and privacy
+
+### 13.1 Credentials must not reach OpenRouter
 
 Chat output goes to a third party — OpenRouter, and through it whichever provider serves the
 chosen model. `get_apps` accepts a `masked` argument that defaults to true but *can be set
@@ -372,19 +536,21 @@ asserts the property is absent from `openai_tool_list()` and present in `mcp_too
 `get_state` already filters through `DEBUG_EXCLUDE_LIST`, and `get_config`/`get_entities`
 return Predbat's own settings, which hold no credentials.
 
-### 12.2 Disclosure
+### 13.2 Disclosure
 
 The Chat tab shows a dismissible banner on first use naming the destination — OpenRouter and
 the selected model's provider — and stating that tool results, including log lines and
 configuration, are sent there. The dismissal is stored in `localStorage`.
 
-### 12.3 Network exposure
+### 13.3 Network exposure
 
-The Predbat web UI has no authentication, so anyone who can reach port 5052 can use the chat
-and spend the user's OpenRouter credit. This is the same exposure the existing MCP caution
-documents, and `docs/components.md` will carry the equivalent warning for chat.
+The Predbat web UI has no authentication, so anyone who can reach port 5052 can use the chat,
+read every saved conversation, and spend the user's OpenRouter credit. This is the same exposure
+the existing MCP caution documents, and `docs/components.md` will carry the equivalent warning
+for chat. Saved conversations make it slightly worse than a transient chat would be, which is
+worth saying plainly in the docs.
 
-### 12.4 Prompt injection
+### 13.4 Prompt injection
 
 Tool results are data, and some of it (log lines, entity names, `apps.yaml` comments) is text
 the model could be steered by. The only privileged action available to a steered model is a
@@ -392,81 +558,12 @@ write, and writes are behind the confirmation gate whose card shows the *actual*
 arguments rather than the model's description of them. The `max_tool_calls` cap bounds a
 runaway loop.
 
-### 12.5 XSS
+### 13.5 XSS
 
-Model output is rendered as markdown. The renderer escapes HTML **first**, then applies a small
-fixed set of transforms (fenced code, inline code, bold, italic, links, bullet and numbered
-lists, line breaks). No `innerHTML` of unescaped text anywhere, and no external markdown
-library.
-
-## 13. Web layer
-
-Registered from `WebInterface.start()` via `self._register_chat_routes(app)`, mirroring the
-existing `_register_annual_routes()` split so the routes can be asserted against a bare
-`aiohttp.Application` in a test without opening a socket. Routes are registered only when
-`components.get_component("chat")` is not None.
-
-| Method | Path | Purpose |
-| ------ | ---- | ------- |
-| GET | `/chat` | The tab |
-| GET | `/chat/history` | Full transcript + `usage_total` + current model, for first paint |
-| POST | `/chat/send` | `{message}` → `{turn_id}`; **409** if a turn is already active |
-| GET | `/chat/stream?cursor=N` | SSE event stream from sequence `N` |
-| POST | `/chat/confirm` | `{turn_id, call_id, approve}` |
-| POST | `/chat/cancel` | Abort the active turn |
-| POST | `/chat/new` | Clear the conversation |
-| GET | `/chat/models` | Model list for the picker |
-| POST | `/chat/model` | `{id}` → set the active model |
-
-### 13.1 SSE protocol
-
-Frames are `id: <seq>\nevent: <type>\ndata: <json>\n\n`. The handler loops: read events after
-the cursor under the lock, write them, `await asyncio.sleep(0.1)`. A comment heartbeat every
-15 s keeps proxies from closing an idle stream.
-
-| Event | Payload |
-| ----- | ------- |
-| `user` | `{text}` |
-| `delta` | `{text}` — assistant token chunk |
-| `assistant` | `{text}` — the completed message |
-| `tool_start` | `{call_id, name, arguments}` |
-| `tool_end` | `{call_id, name, ok, elapsed, preview}` |
-| `confirm` | `{call_id, name, arguments}` |
-| `confirm_result` | `{call_id, approved}` |
-| `usage` | `{prompt_tokens, completion_tokens, cost, conversation_cost}` |
-| `error` | `{message}` |
-| `done` | `{turn_id}` |
-| `reload` | `{}` — the cursor predates the buffer; refetch `/chat/history` |
-
-Cursor replay rather than a live queue means two open browsers both follow the same turn, and a
-reload mid-turn resumes from where it left off. The buffer is capped at 2000 events; a cursor
-older than the buffer's base gets a `reload` event telling the client to refetch `/chat/history`.
-
-### 13.2 Model picker
-
-`GET /chat/models` fetches `{base_url}/models`, keeps only entries whose
-`supported_parameters` contains `tools`, and returns `{id, name, prompt_price, completion_price}`
-sorted by id. Cached through `storage.fetch_cached("chat", "models", ..., fresh_minutes=1440)`,
-so the picker costs one request a day. If the fetch fails, the list degrades to the single
-`apps.yaml` model and the dropdown notes that the catalogue is unavailable.
-
-`POST /chat/model` sets `selected_model` and persists it. Switching mid-conversation is allowed
-and appends a visible note to the transcript. A "Use default" entry restores the `apps.yaml`
-value. The `apps.yaml` model is always offered even if it is missing from the catalogue, so a
-custom `openrouter_base_url` with no `/models` endpoint still works.
-
-### 13.3 The tab
-
-Transcript pane; a growing textarea with Enter to send and Shift+Enter for a newline; a footer
-showing the model picker, turn tokens and cost, conversation cost, and **New chat**. Tool calls
-render **collapsed** — a single line, *"called `get_plan`"*, with a disclosure triangle
-revealing arguments and the JSON result. Confirmation cards render inline and expanded. Dark
-mode follows the existing `get_header_html()` mechanism.
-
-Nav: `<a href='./chat'>Chat</a>` added to the menu bar in `web_helper.py`, emitted only when
-chat is enabled. `get_header_html()` gains a `chat_enabled=False` keyword argument, set at its
-single production call site (`apps/predbat/web.py:1698`) from
-`components.get_component("chat")`. The default keeps the existing test call site valid.
+Model output is rendered as markdown, and so are conversation titles, which are derived from
+user text. The renderer escapes HTML **first**, then applies a small fixed set of transforms
+(fenced code, inline code, bold, italic, links, bullet and numbered lists, line breaks). No
+`innerHTML` of unescaped text anywhere, and no external markdown library.
 
 ## 14. Error handling
 
@@ -479,8 +576,12 @@ single production call site (`apps/predbat/web.py:1698`) from
 | Model does not support tools | Detected at selection from the catalogue and refused with an explanation; if it slips through, the missing `tool_calls` simply yields a text answer |
 | Tool raises | Caught per call; the exception text becomes the tool result so the model can react |
 | Malformed tool arguments | Same path — reported to the model as a tool error |
+| `send` while busy | 409 with `{"error": "busy", "conversation_id", "title"}` so the client can offer the jump link |
+| Unknown conversation id | 404 on every route taking one |
+| Storage write failure | Logged, `count_errors` incremented; the in-memory conversation survives so the turn is not lost |
 
-Every error path ends the turn cleanly, releases `active_turn` and emits `done`.
+Every error path ends the turn cleanly, clears `active`, and emits both `done` and the global
+`idle`.
 
 ## 15. Testing
 
@@ -509,53 +610,74 @@ byte streams:
 - Write with confirm on: approved, rejected, and timed out.
 - Write with confirm off: executes directly.
 - History trimming stops at a `user` boundary and never orphans a `tool` message.
-- Persistence round-trip through a fake storage, including an unknown `version`.
 - `build_snapshot()` against a stub base, including missing/None fields.
-- Second `run_turn()` while one is active raises Busy.
-- 401, 429 and timeout responses produce the documented `error` events.
+- 401, 429 and timeout responses produce the documented `error` events, and `idle` always follows.
+
+**`tests/test_chat_conversations.py`**
+
+- Create, rename, delete; ids are hex and unique.
+- Title derived from the first user message, truncated, and not overwritten by the second.
+- Index/body persistence round-trip through a fake storage, including an unknown `version` and
+  an index entry whose body file is missing.
+- LRU eviction flushes a dirty body before dropping it.
+- `openrouter_max_conversations` pruning removes the least recently updated and never the active one.
+- A turn in conversation A leaves B readable; `run_turn` on B while A is active raises Busy.
+- Per-conversation model override, and "use default" clearing it.
+- Events carry the right `conversation_id`, and `busy`/`idle` are global.
 
 **`tests/test_web_chat.py`**
 
 - Routes register on a bare `aiohttp.Application` when chat is enabled, and do not when it is not.
 - The nav link appears only when `chat_enabled=True`.
-- `/chat/send` returns 409 while a turn is active.
-- SSE framing: `id`/`event`/`data` lines, cursor replay, `reload` when the cursor is too old.
-- `/chat/confirm` with an unknown `call_id` returns 404.
+- `/chat/send` returns 409 with the active conversation's title while a turn runs.
+- `/chat/delete` returns 409 for the active conversation.
+- Unknown conversation id → 404 on each route taking one.
+- SSE framing: `id`/`event`/`data` lines, conversation filtering, global events reaching a
+  browser viewing another conversation, cursor replay, `reload` when the cursor is too old.
+- `/chat/confirm` with an unknown `call_id`, or the wrong conversation, returns 404.
 - `/chat/models` filters to tool-capable models and always includes the `apps.yaml` model.
-- The markdown renderer escapes HTML before transforming (the XSS case).
+- The markdown renderer escapes HTML before transforming (the XSS case), for both messages and titles.
 
-**Regression:** `./run_all --test web_mcp` must pass unchanged after the extraction.
+**`tests/test_storage.py`** — additions for `delete()`: removes data and meta, idempotent on a
+missing entry, and a subsequent `load()` returns `None`.
 
-## 16. Out of scope
+**Regression:** `./run_all --test web_mcp` and `./run_all --test storage` must pass unchanged
+after the extraction and the storage extension.
 
-- Multiple named conversations or per-user history.
-- Authentication for the web UI, or per-user access control on chat.
+## 16. Implementation order
+
+1. `storage.delete()` plus its tests — independent and small.
+2. Extract `agent_tools.py`; refactor `web_mcp.py`; prove `test_web_mcp` is green and the golden
+   tool list is unchanged.
+3. `ChatAgent` conversation store: index, bodies, LRU, persistence, pruning, titles.
+4. The agentic loop, snapshot and streaming, against a fake OpenRouter.
+5. Confirmation gate and the `chat_confirm_writes` switch.
+6. `web_chat.py` routes and SSE.
+7. The tab's HTML, CSS and client JS, including the conversation list.
+8. Model picker.
+9. Documentation.
+
+Steps 1 to 5 are independently useful and independently testable; the feature is not visible to
+a user until step 6.
+
+## 17. Out of scope
+
+- Per-user history or any access control on who sees which conversation.
+- Authentication for the web UI.
+- Concurrent turns, or queueing a message in one conversation while another is running.
 - Image, file or debug-YAML upload into the conversation.
+- Search across conversations, or exporting one.
 - The agent calling out to anything other than Predbat's own tools.
 - Letting the agent define new tools, or run arbitrary code.
 - MCP client mode (the chat agent consuming *external* MCP servers).
 - Voice input, or a Home Assistant conversation-agent integration.
 
-## 17. Documentation
+## 18. Documentation
 
 - `docs/components.md`: a new "AI Chat Agent (chat)" section — what it does, when to enable,
-  the configuration table, the network-exposure and third-party-data cautions, and the tool
-  table cross-referenced to the MCP one.
-- `docs/web-interface.md`: the Chat tab, the confirmation gate, the model picker.
-- `docs/apps-yaml.md`: the seven new keys.
+  the configuration table, the network-exposure and third-party-data cautions, the note that
+  conversations are stored on disk, and the tool table cross-referenced to the MCP one.
+- `docs/web-interface.md`: the Chat tab, conversations, the confirmation gate, the model picker.
+- `docs/apps-yaml.md`: the eight new keys.
 - New words to `.cspell/custom-dictionary-workspace.txt`: `openrouter`, `ollama`, `litellm`
   and anything else the hook flags (the file is auto-sorted on commit, so re-stage after).
-
-## 18. Implementation order
-
-1. Extract `agent_tools.py`; refactor `web_mcp.py`; prove `test_web_mcp` is green and the golden
-   tool list is unchanged.
-2. `ChatAgent` with config, persistence, snapshot and the agentic loop, against a fake OpenRouter.
-3. Confirmation gate and the `chat_confirm_writes` switch.
-4. `web_chat.py` routes and SSE.
-5. The tab's HTML, CSS and client JS.
-6. Model picker.
-7. Documentation.
-
-Steps 1 and 2 are independently useful and independently testable; the feature is not visible to
-a user until step 4.
