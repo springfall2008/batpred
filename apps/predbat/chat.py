@@ -17,6 +17,7 @@ thread only flushes and prunes. See spec section 3.
 
 import asyncio
 import threading
+import time
 from datetime import datetime
 
 from component_base import ComponentBase
@@ -24,6 +25,10 @@ from chat_store import ConversationStore
 from chat_tools import DEFAULT_FETCH_ALLOWLIST
 
 EVENT_BUFFER_MAX = 2000
+
+# How long past its own deadline a turn must go before its slot is assumed abandoned. Only a
+# component restart can strand a slot, and that is rare - so the grace period is generous.
+STALE_TURN_GRACE_SECONDS = 60
 
 PRIMER = """You are an assistant built into Predbat, a home battery optimisation system that plans when to charge and discharge a household battery based on electricity rates, solar forecasts and historical load. The person you are talking to owns this system and is looking at its web interface.
 
@@ -113,8 +118,6 @@ class ChatAgent(ComponentBase):
         self.store = ConversationStore(self.storage, self.log, max_history=self.max_history, max_conversations=max_conversations or 20, expiry_days=expiry_days or 30)
         self.index_loaded = False
         self.turn_counter = 0
-        self.last_seen_turn = None
-        self.last_seen_seq = 0
 
     def emit(self, conversation_id, event_type, data=None):
         """Append an event to the buffer and return its sequence number.
@@ -184,22 +187,23 @@ class ChatAgent(ComponentBase):
         """Clear a turn slot whose coroutine died without running its own cleanup.
 
         A turn scheduled on this loop is killed outright if the component is stopped or restarted
-        mid-turn, because asyncio.run() closes the loop on exit and the finally in _execute_turn
-        never gets to run. Without this the composer stays locked in every browser until Predbat
-        restarts. A live turn emits events, so an unchanged turn id *and* an unchanged event
-        sequence across two consecutive ticks is the signal that nothing is running any more.
+        mid-turn, because asyncio.run() closes the loop and the finally in _execute_turn never
+        runs, leaving the composer locked in every browser until Predbat restarts.
+
+        The test is elapsed wall-clock against the turn's own deadline, NOT a count of quiet
+        ticks. A turn emits one busy event and can then legitimately produce nothing for a minute
+        or more while the model thinks, and the housekeeping tick only fires every 60 seconds - so
+        a two-tick rule frees the slot of a turn that is merely slow. Waiting until the turn has
+        outlived its own deadline plus a grace period means a live turn is never touched.
         """
         with self.lock:
             active = self.active
             if active is None:
-                self.last_seen_turn = None
+                return
+            started = active.get("started")
+            if started is None or time.monotonic() - started < self.turn_timeout + STALE_TURN_GRACE_SECONDS:
                 return
             turn_id = active.get("turn_id")
-            if self.last_seen_turn != turn_id or self.event_seq != self.last_seen_seq:
-                self.last_seen_turn = turn_id
-                self.last_seen_seq = self.event_seq
-                return
             self.active = None
-            self.last_seen_turn = None
-        self.log("Warn: chat turn {} produced nothing for a full tick and its slot has been released".format(turn_id))
+        self.log("Warn: chat turn {} outlived its {}s timeout with no cleanup - releasing the turn slot".format(turn_id, self.turn_timeout))
         self.emit(None, "idle", {})

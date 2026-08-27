@@ -13,9 +13,10 @@ Drives ChatAgent against a fake OpenRouter that replays canned SSE byte streams,
 loop, the tool dispatch and the confirmation gate are all exercised without a network or a model.
 """
 
+import time
 
-from chat import EVENT_BUFFER_MAX, ChatAgent, build_snapshot
-from components import COMPONENT_LIST
+from chat import EVENT_BUFFER_MAX, STALE_TURN_GRACE_SECONDS, ChatAgent, build_snapshot
+from components import COMPONENT_LIST, Components
 
 
 def _make_agent(my_predbat, **overrides):
@@ -56,6 +57,66 @@ def test_component_gating(my_predbat):
         failed = True
     if not entry.get("can_restart"):
         print("ERROR: the chat component should be restartable from the Components tab")
+        failed = True
+
+    return failed
+
+
+class _FakeBase:
+    """A minimal stand-in base object for driving Components.initialize() on the chat entry alone."""
+
+    def __init__(self, args):
+        """Store the apps.yaml-style args this fake base should report, and prepare log capture."""
+        self.args = args
+        self.args_from_apps_yaml = args
+        self.local_tz = None
+        self.prefix = "predbat"
+        self.logged = []
+
+    def log(self, message):
+        """Capture a log line instead of printing it, so a test can inspect what was said."""
+        self.logged.append(message)
+
+    def get_arg(self, name, default=None, indirect=True, **kwargs):
+        """Return the configured value for name, or default, ignoring the indirection kwargs."""
+        return self.args.get(name, default)
+
+
+def test_component_gating_end_to_end(my_predbat):
+    """Components.initialize() genuinely withholds construction and logs precisely for chat.
+
+    test_component_gating only inspects the static COMPONENT_LIST entry; it cannot fail if the
+    gating mechanism itself is broken. This drives the real Components.initialize() against a
+    stub base for all three configuration states it can be in.
+    """
+    failed = False
+    print("**** Testing chat gating via Components.initialize() ****")
+
+    base = _FakeBase({})
+    comps = Components(base)
+    comps.initialize(only="chat", phase=1)
+    if comps.components.get("chat") is not None:
+        print("ERROR: chat component was constructed with neither key configured")
+        failed = True
+    if base.logged:
+        print("ERROR: an unconfigured install should stay quiet, got: {}".format(base.logged))
+        failed = True
+
+    base = _FakeBase({"openrouter_api_key": "sk-test"})
+    comps = Components(base)
+    comps.initialize(only="chat", phase=1)
+    if comps.components.get("chat") is not None:
+        print("ERROR: chat component was constructed with only the API key configured")
+        failed = True
+    if not any("openrouter_model" in line for line in base.logged):
+        print("ERROR: the partial-configuration warning did not name the missing openrouter_model key, got: {}".format(base.logged))
+        failed = True
+
+    base = _FakeBase({"openrouter_api_key": "sk-test", "openrouter_model": "test/model"})
+    comps = Components(base)
+    comps.initialize(only="chat", phase=1)
+    if comps.components.get("chat") is None:
+        print("ERROR: chat component was not constructed with both keys configured")
         failed = True
 
     return failed
@@ -144,10 +205,50 @@ def test_event_buffer(my_predbat):
     return failed
 
 
+def test_release_stale_turn(my_predbat):
+    """_release_stale_turn only frees a slot once its own deadline plus grace period has passed."""
+    failed = False
+    print("**** Testing stale turn release ****")
+    agent = _make_agent(my_predbat, turn_timeout=30)
+
+    agent.active = None
+    agent._release_stale_turn()
+    if agent.active is not None:
+        print("ERROR: releasing with no active turn should leave it at None")
+        failed = True
+
+    agent.active = {"turn_id": 1, "started": time.monotonic()}
+    agent._release_stale_turn()
+    if agent.active is None:
+        print("ERROR: a turn that just started was released")
+        failed = True
+
+    agent.active = {"turn_id": 2}
+    agent._release_stale_turn()
+    if agent.active is None:
+        print("ERROR: a turn with no 'started' timestamp was released - this must be the safe (untouched) direction")
+        failed = True
+
+    events_before = len(agent.events)
+    agent.active = {"turn_id": 3, "started": time.monotonic() - (agent.turn_timeout + STALE_TURN_GRACE_SECONDS + 5)}
+    agent._release_stale_turn()
+    if agent.active is not None:
+        print("ERROR: a turn past its timeout plus grace period was not released")
+        failed = True
+    new_events = agent.events[events_before:]
+    if not any(event["type"] == "idle" and event["conversation_id"] is None for event in new_events):
+        print("ERROR: releasing a stale turn did not emit a global idle event, got {}".format(new_events))
+        failed = True
+
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
     failed |= test_component_gating(my_predbat)
+    failed |= test_component_gating_end_to_end(my_predbat)
     failed |= test_build_snapshot(my_predbat)
     failed |= test_event_buffer(my_predbat)
+    failed |= test_release_stale_turn(my_predbat)
     return failed
