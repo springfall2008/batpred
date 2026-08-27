@@ -256,8 +256,8 @@ GitHub is not lost, either: `github.com` and `raw.githubusercontent.com` are alr
 `fetch_url` allowlist (section 7.3), so history, issues, pull requests and other branches remain
 reachable when the model genuinely needs them rather than as the default path to the code.
 
-`search_source(pattern, file=None, max_results=20)` walks the source root for `*.py`, skipping
-`venv/` and `__pycache__/`, and returns `{file, line, text}` for each regex match with the line
+`search_source(pattern, file=None, max_results=20)` walks the source root for source files,
+skipping `venv/` and `__pycache__/`, and returns `{file, line, text}` for each regex match with the line
 truncated to 300 characters, plus a `total_matches` count so a truncated result is visible as
 truncated rather than silently short. `file` narrows the search to one path.
 
@@ -269,13 +269,11 @@ Both enforce:
 
 1. The path is resolved with `os.path.realpath` and must remain under the realpath of the source
    root, which blocks `../` traversal and symlinks pointing outward.
-2. **The extension must be `.py`.** This is the control that matters, and it is an extension
-   rule rather than a directory rule on purpose: `config_root` is resolved separately from the
-   source directory by a search over `CONFIG_ROOTS` (`apps/predbat/predbat.py:626`) and the two
-   *can be the same directory*. A directory-based rule would therefore expose `apps.yaml`,
-   `secrets.yaml` and `predbat.log` on some installs. The extension rule excludes all of them on
-   every install, and the masked `get_apps` and filtered `get_log` tools remain the only routes
-   to that content.
+2. **The extension must be on the allowlist**: `.py`, `.cpp`, `.h`, `.hpp`, `.proto`, `.sh`.
+   That is every file type Predbat's source actually uses — 312 `.py`, the
+   `prediction_kernel.cpp`, two `.proto`, two build `.sh` — with headers included so a future
+   kernel split needs no change here. It is deliberately an **allowlist, not a denylist**, and
+   deliberately an extension rule rather than a directory rule. Section 7.2.1 explains why.
 3. `venv/` and `__pycache__/` are skipped, or a search would drag in every installed dependency.
 4. Caps: 100 matches, 400 lines, 64 KB per response, and a wall-clock budget on the scan. A
    pattern over 200 characters, or one `re.compile` rejects, returns a plain error rather than
@@ -283,6 +281,36 @@ Both enforce:
 
 Predbat's source is a public repository, so this exposes nothing that is not already public.
 The guards exist to stop the tool reaching *beyond* the source into configuration and logs.
+
+#### 7.2.1 Why an allowlist rather than "everything except `.yaml`"
+
+A directory rule cannot work, because the source directory and the configuration directory can
+be the same one. `CONFIG_ROOTS` is `["/config", "/conf", "/homeassistant", "./"]`
+(`apps/predbat/const.py:33`), so `config_root` falls back to the working directory; the
+repository additionally ships `apps/predbat/config/apps.yaml` and
+`apps/predbat/config/secrets.yaml`, and `StorageLocalFiles` puts its cache at
+`config_root/cache` (`apps/predbat/storage.py:199`).
+
+That makes the source tree a plausible home for all of the following:
+
+| File | Why excluding only `.yaml` would not be enough |
+| ---- | --------------------------------------------- |
+| `cache/*.json` | Storage cache — whatever components persisted, including OAuth tokens |
+| `predbat.log` | Up to 10 MB, and the raw log is what `get_log` deliberately filters |
+| `*.bak` | A backup of a config file wears the backup's extension, not the original's |
+| `*.so`, `*.pyc` | Megabytes of binary, useless in a context window |
+| `*.yml` | The same YAML with the other spelling |
+| `.env` | Not present today; nothing stops a user adding one |
+
+A denylist has to anticipate every extension a secret might arrive wearing, and is wrong the
+first time one arrives in a new one. An allowlist only has to name the extensions source code
+wears, which is a closed and short list. The cost of being wrong is asymmetric — a missing
+extension means the agent cannot read one file, while a missing denylist entry means credentials
+go to a third-party model — so the allowlist is the right default even though it is the less
+convenient one.
+
+If a user genuinely needs another extension, widening the constant is a one-line change with a
+visible diff, which is the right place for that decision to be made.
 
 ### 7.3 `fetch_url` and why it is fenced
 
@@ -649,11 +677,13 @@ be widened to a wildcard.
 
 ### 14.3 Source reading stays inside the source
 
-`search_source` and `read_source` are restricted by file extension rather than by directory,
-because `config_root` and the source directory can be the same path on some installs (section
-7.2). `apps.yaml`, `secrets.yaml` and `predbat.log` are therefore unreachable through them on
-every install, leaving the masked `get_apps` and the filtered `get_log` as the only routes to
-that content — which is the point, since those two redact and this one would not.
+`search_source` and `read_source` are restricted by an extension allowlist rather than by
+directory, because `config_root` and the source directory can be the same path — the repository
+even ships `apps/predbat/config/apps.yaml` — and the Storage cache lives under `config_root`
+(section 7.2.1). `apps.yaml`, `secrets.yaml`, `predbat.log` and the token cache are therefore
+unreachable through these tools on every install, leaving the masked `get_apps` and the filtered
+`get_log` as the only routes to that content. That is the point: those two redact, and a raw
+file read would not.
 
 ### 14.4 Disclosure
 
@@ -792,7 +822,7 @@ keeps the existing test call site valid.
 | Malformed tool arguments | Same path — reported to the model as a tool error |
 | `fetch_url` rejected by the allowlist or address check | Plain tool error naming the rule that refused it |
 | Docs index unfetchable | `search_docs` returns an error result; the turn continues |
-| `read_source` path outside the source root, or not `.py` | Plain tool error naming the rule that refused it |
+| `read_source` path outside the source root, or an off-allowlist extension | Plain tool error naming the rule that refused it |
 | `search_source` pattern too long or uncompilable | Plain tool error; no exception, no scan started |
 | `chat_web_search` on with a non-OpenRouter base URL | One-time warning logged; the request is sent without the plugin |
 | `send` while busy | 409 with `{"error": "busy", "conversation_id", "title"}` so the client can offer the jump link |
@@ -842,9 +872,12 @@ New tests, registered in `TEST_REGISTRY` in `apps/predbat/unit_test.py`.
   `total_matches` when truncated, and skips `venv/` and `__pycache__/`.
 - `search_source` rejects an over-long pattern and an uncompilable one without raising.
 - `read_source` returns the requested slice with `total_lines`, clamps `max_lines`, and pages.
-- `read_source` refuses a `../` traversal, a symlink pointing outside the source root, and any
-  path that is not `.py` — including `apps.yaml`, `secrets.yaml` and `predbat.log` placed in the
-  source directory, which is the case that matters when `config_root` coincides with it.
+- `read_source` accepts each allowlisted extension and refuses a `../` traversal, a symlink
+  pointing outside the source root, and any off-allowlist extension — specifically `apps.yaml`,
+  `secrets.yaml`, `predbat.log`, `cache/*.json`, a `.bak` and a `.so` placed in the source
+  directory, which is the case that matters when `config_root` coincides with it.
+- `search_source` matches inside a `.cpp` as well as a `.py`, and never reports a hit from an
+  off-allowlist file.
 
 **`tests/test_chat.py`** — driving `ChatAgent` against a fake OpenRouter that replays canned SSE
 byte streams:
