@@ -7,6 +7,7 @@ Run directly with `python3 tools/test_triage_daemon.py`. Every gh/git/claude cal
 mocked - nothing here touches a real repo, GitHub, or Claude Code session.
 """
 
+import fnmatch
 import json
 import subprocess
 import tempfile
@@ -15,6 +16,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import triage_daemon
+
+
+def bash_rule_matches(rule, command):
+    """Simulate Claude Code's Bash(...) permission-rule prefix-glob matching against a command."""
+    pattern = rule.removeprefix("Bash(").removesuffix(")")
+    return fnmatch.fnmatchcase(command, pattern)
 
 
 class DaemonPathsTestCase(unittest.TestCase):
@@ -381,6 +388,39 @@ class PermissionModelTests(unittest.TestCase):
         pr_denied = triage_daemon.DISALLOWED_TOOLS_PR.split(",")
         self.assertTrue(any("force" in entry for entry in pr_denied), pr_denied)
         self.assertTrue(any("-f" in entry for entry in pr_denied), pr_denied)
+
+    def test_force_push_denials_do_not_false_positive_on_a_branch_name_containing_f(self):
+        """Regression test for issue #4788: the force-push heuristic used to be
+        "Bash(git push*-f*)", an unanchored substring match that read the "-f" inside
+        an ordinary branch name as the force-push flag and denied a completely normal
+        push. "fix/power-flow-car-outside-ct-clamp-4788" contains "-flow", which tripped
+        it - the PR flow's own push step got silently denied and the branch never made
+        it to origin from that run. Anchoring "-f" to its own token (spaces on both
+        sides, or the end of the command) must not regress back to matching substrings
+        like "-flow", "-fix" or "-format"."""
+        ordinary_pushes = [
+            "git push -u origin fix/power-flow-car-outside-ct-clamp-4788",
+            "git push -u origin fix/auto-format-thing-1234",
+            "git push -u origin feat/prefix-field-support-9001",
+        ]
+        force_push_denials = [rule for rule in triage_daemon.DISALLOWED_TOOLS_PR.split(",") if "force" in rule or "-f" in rule]
+        for command in ordinary_pushes:
+            matched = [rule for rule in force_push_denials if bash_rule_matches(rule, command)]
+            self.assertEqual(matched, [], f"{command!r} was falsely denied by {matched}")
+
+    def test_force_push_denials_still_catch_real_force_push_spellings(self):
+        """The tightened force-push rules must still deny every spelling a maintainer
+        or a prompt-injected instruction would actually use."""
+        real_force_pushes = [
+            "git push -f origin main",
+            "git push origin main -f",
+            "git push --force origin main",
+            "git push --force-with-lease origin main",
+        ]
+        force_push_denials = [rule for rule in triage_daemon.DISALLOWED_TOOLS_PR.split(",") if "force" in rule or "-f" in rule]
+        for command in real_force_pushes:
+            matched = any(bash_rule_matches(rule, command) for rule in force_push_denials)
+            self.assertTrue(matched, f"{command!r} should still be denied, but no rule in {force_push_denials} matched")
 
     def test_review_disallowed_tools_still_blocks_dangerous_gh_subcommands(self):
         """The BOT_REVIEW-on-PR flow keeps every dangerous gh subcommand denied,
