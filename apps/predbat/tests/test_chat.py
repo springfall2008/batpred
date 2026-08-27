@@ -298,6 +298,36 @@ def _tool_call_response(name, arguments, call_id="call_1"):
     ]
 
 
+def _dangling_tool_calls(messages):
+    """Return a description of every assistant tool_calls left without a matching tool reply.
+
+    General over the whole conversation rather than tied to one turn's shape, so it guards both
+    the normal round-trip path and any place - like the tool-call cap - that might append an
+    assistant message carrying tool_calls without the tool replies the real API requires
+    immediately afterwards. An unanswered tool_call_id here is exactly what gets a 400 back from
+    OpenRouter on the next turn once the pair is sent again.
+    """
+    problems = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        calls = message.get("tool_calls") if message.get("role") == "assistant" else None
+        if not calls:
+            index += 1
+            continue
+        expected = {call.get("id") for call in calls}
+        following = index + 1
+        seen = set()
+        while following < len(messages) and messages[following].get("role") == "tool":
+            seen.add(messages[following].get("tool_call_id"))
+            following += 1
+        missing = expected - seen
+        if missing:
+            problems.append("assistant message at index {} has tool_calls {} with no matching tool reply among {}".format(index, sorted(missing), sorted(seen)))
+        index = following
+    return problems
+
+
 def _agent_with_fake(my_predbat, *responses, **overrides):
     """Build an agent whose only network call is replaced by a canned chunk replayer."""
     agent = _make_agent(my_predbat, **overrides)
@@ -406,6 +436,12 @@ def test_tool_call_cap(my_predbat):
         failed = True
     if agent.active is not None:
         print("ERROR: the active turn was not released after hitting the cap")
+        failed = True
+
+    messages = asyncio.run(agent.store.get_messages(cid))
+    problems = _dangling_tool_calls(messages)
+    if problems:
+        print("ERROR: hitting the cap left the stored history API-invalid: {}".format(problems))
         failed = True
 
     return failed
