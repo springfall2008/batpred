@@ -1607,7 +1607,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 if "float" in sensor_types and self.validate_is_float(sensor) and not spec.get("modify", False):
                                     # Allow fixed float values
                                     continue
-                                if "string" in sensor_types and isinstance(sensor, str) and not spec.get("modify", False) and not "." in sensor:
+                                if "string" in sensor_types and isinstance(sensor, str) and not spec.get("modify", False) and "." not in sensor:
                                     # Allow fixed string values
                                     continue
 

@@ -1201,7 +1201,7 @@ class Inverter:
                                 this_soc = soc_percent.get(target_minute, 0)
                                 if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) >= 0):
                                     break
-                                if discharge and (not ((predbat_status.get(target_minute, "") in ["Exporting", "Discharging"])) or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) <= 0):
+                                if discharge and (predbat_status.get(target_minute, "") not in ["Exporting", "Discharging"] or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) <= 0):
                                     break
 
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
