@@ -2329,9 +2329,7 @@ class Octopus:
         """
 
         if res:
-            dayname = res.group(1)
             daynumber = res.group(2)
-            daysymbol = res.group(3)
             month = res.group(4)
             time_from = res.group(5)
             time_to = res.group(6)
@@ -2510,7 +2508,6 @@ class Octopus:
                     start_hour = int(match.group(1))
                     end_hour = int(match.group(2))
                     period = match.group(3).lower()
-                    day_of_week = match.group(4)
                     day_num = int(match.group(5))
                     month = match.group(6)
 
