@@ -232,15 +232,1148 @@ class WebChat:
 
 
 def get_chat_styles():
-    """Return the Chat tab's CSS."""
-    return "<style></style>"
+    """Return the Chat tab's CSS.
+
+    Colours are read from page-local CSS custom properties, redefined under `body.dark-mode`,
+    following the same approach `get_plan_css()` uses - so `toggleDarkMode()` (which just toggles
+    that class and reloads) works without any extra wiring here.
+    """
+    return """
+<style>
+:root {
+    --chat-bg: #ffffff;
+    --chat-panel-bg: #f7f7f7;
+    --chat-border: #dddddd;
+    --chat-text: #222222;
+    --chat-text-muted: #666666;
+    --chat-accent: #4CAF50;
+    --chat-user-bubble: #e3f2ea;
+    --chat-assistant-bubble: #f1f1f1;
+    --chat-error-bubble: #ffe3e3;
+    --chat-input-bg: #ffffff;
+    --chat-code-bg: #ececec;
+    --chat-badge-bg: #ff9800;
+}
+
+body.dark-mode {
+    --chat-bg: #121212;
+    --chat-panel-bg: #1e1e1e;
+    --chat-border: #444444;
+    --chat-text: #e0e0e0;
+    --chat-text-muted: #aaaaaa;
+    --chat-accent: #66bb6a;
+    --chat-user-bubble: #16321f;
+    --chat-assistant-bubble: #2a2a2a;
+    --chat-error-bubble: #4a1f1f;
+    --chat-input-bg: #2b2b2b;
+    --chat-code-bg: #262626;
+    --chat-badge-bg: #b96a00;
+}
+
+#chat-page {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: 14px;
+    height: calc(100vh - 130px);
+    min-height: 420px;
+    color: var(--chat-text);
+    background: var(--chat-bg);
+}
+
+#chat-sidebar {
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--chat-border);
+    padding-right: 10px;
+    overflow: hidden;
+}
+
+#chat-new {
+    flex: 0 0 auto;
+    margin-bottom: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--chat-accent);
+    border-radius: 4px;
+    background: var(--chat-accent);
+    color: #ffffff;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+#chat-list {
+    flex: 1 1 auto;
+    overflow-y: auto;
+}
+
+.chat-conv-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: 4px;
+}
+
+.chat-conv-row:hover {
+    background: var(--chat-panel-bg);
+}
+
+.chat-conv-row.active {
+    background: var(--chat-user-bubble);
+}
+
+.chat-conv-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    cursor: pointer;
+}
+
+.chat-conv-title {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-conv-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--chat-text-muted);
+}
+
+.chat-pending-badge {
+    background: var(--chat-badge-bg);
+    color: #ffffff;
+    border-radius: 8px;
+    padding: 0 6px;
+    font-size: 10px;
+    line-height: 16px;
+}
+
+.chat-conv-actions {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 2px;
+}
+
+.chat-conv-actions button {
+    border: none;
+    background: transparent;
+    color: var(--chat-text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 2px 4px;
+}
+
+.chat-conv-actions button:hover {
+    color: var(--chat-text);
+}
+
+#chat-main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+
+#chat-banner {
+    display: none;
+    background: #fff3cd;
+    border: 1px solid #ffe08a;
+    color: #664d03;
+    padding: 8px 12px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+}
+
+#chat-banner.visible {
+    display: block;
+}
+
+#chat-privacy {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--chat-panel-bg);
+    border: 1px solid var(--chat-border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--chat-text-muted);
+}
+
+#chat-privacy.dismissed {
+    display: none;
+}
+
+#chat-privacy button {
+    flex: 0 0 auto;
+    border: 1px solid var(--chat-border);
+    background: var(--chat-bg);
+    color: var(--chat-text);
+    border-radius: 4px;
+    padding: 2px 8px;
+    cursor: pointer;
+}
+
+#chat-transcript {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    border: 1px solid var(--chat-border);
+    border-radius: 6px;
+    padding: 12px;
+    background: var(--chat-panel-bg);
+}
+
+.chat-bubble {
+    max-width: 80%;
+    margin: 6px 0;
+    padding: 8px 12px;
+    border-radius: 8px;
+    line-height: 1.4;
+    word-wrap: break-word;
+}
+
+.chat-bubble-user {
+    margin-left: auto;
+    background: var(--chat-user-bubble);
+}
+
+.chat-bubble-assistant {
+    margin-right: auto;
+    background: var(--chat-assistant-bubble);
+}
+
+.chat-bubble-error {
+    margin-right: auto;
+    background: var(--chat-error-bubble);
+}
+
+.chat-bubble pre,
+.chat-tool-row pre,
+.chat-confirm-card pre {
+    background: var(--chat-code-bg);
+    padding: 8px;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin: 6px 0 0 0;
+}
+
+.chat-bubble code {
+    background: var(--chat-code-bg);
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+
+.chat-sources {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--chat-text-muted);
+}
+
+.chat-sources ul {
+    margin: 4px 0 0 18px;
+    padding: 0;
+}
+
+.chat-tool-row {
+    margin: 6px 0;
+}
+
+.chat-tool-row details {
+    border: 1px solid var(--chat-border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    background: var(--chat-bg);
+}
+
+.chat-tool-row summary {
+    cursor: pointer;
+    color: var(--chat-text-muted);
+}
+
+.chat-tool-row summary code {
+    color: var(--chat-text);
+}
+
+.chat-tool-pending {
+    font-style: italic;
+    color: var(--chat-text-muted);
+}
+
+.chat-tool-ok {
+    color: var(--chat-accent);
+}
+
+.chat-tool-error {
+    color: #c62828;
+}
+
+.chat-tool-elapsed {
+    font-size: 11px;
+    color: var(--chat-text-muted);
+    margin-top: 4px;
+}
+
+.chat-confirm-card {
+    margin: 8px 0;
+    border: 2px solid var(--chat-accent);
+    border-radius: 6px;
+    padding: 10px 12px;
+    background: var(--chat-bg);
+}
+
+.chat-confirm-heading {
+    font-weight: bold;
+    margin-bottom: 6px;
+}
+
+.chat-confirm-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.chat-confirm-actions button {
+    padding: 6px 14px;
+    border-radius: 4px;
+    border: 1px solid var(--chat-border);
+    cursor: pointer;
+}
+
+.chat-confirm-approve {
+    background: var(--chat-accent);
+    color: #ffffff;
+    border-color: var(--chat-accent);
+}
+
+.chat-confirm-reject {
+    background: var(--chat-bg);
+    color: var(--chat-text);
+}
+
+.chat-confirm-outcome {
+    font-style: italic;
+    color: var(--chat-text-muted);
+}
+
+#chat-composer {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+#chat-input {
+    flex: 1 1 auto;
+    resize: vertical;
+    min-height: 48px;
+    max-height: 200px;
+    padding: 8px;
+    border: 1px solid var(--chat-border);
+    border-radius: 4px;
+    background: var(--chat-input-bg);
+    color: var(--chat-text);
+    font-family: inherit;
+    font-size: 14px;
+}
+
+#chat-input:disabled,
+#chat-send:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+#chat-send {
+    flex: 0 0 auto;
+    padding: 8px 18px;
+    border: none;
+    border-radius: 4px;
+    background: var(--chat-accent);
+    color: #ffffff;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+#chat-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--chat-text-muted);
+}
+
+#chat-model {
+    padding: 4px 6px;
+    border: 1px solid var(--chat-border);
+    border-radius: 4px;
+    background: var(--chat-input-bg);
+    color: var(--chat-text);
+}
+</style>
+"""
 
 
 def get_chat_body():
-    """Return the Chat tab's markup."""
-    return "<body><div id='chat-root'></div>"
+    """Return the Chat tab's markup.
+
+    `get_header_html()` has already opened `<body>` and written the nav bar, so this only adds
+    the page's own content, following the same `<body>...` convention `web_annual.py` uses for its
+    own pages.
+    """
+    return """
+<body>
+<div id="chat-page">
+    <div id="chat-sidebar">
+        <button id="chat-new" type="button">+ New chat</button>
+        <div id="chat-list"></div>
+    </div>
+    <div id="chat-main">
+        <div id="chat-banner"></div>
+        <div id="chat-privacy">
+            <span>Tool results - including log lines and configuration - are sent to <strong>OpenRouter</strong>, and on to the provider behind whichever model is selected.</span>
+            <button id="chat-privacy-dismiss" type="button">Dismiss</button>
+        </div>
+        <div id="chat-transcript"></div>
+        <div id="chat-composer">
+            <textarea id="chat-input" rows="2" placeholder="Ask Predbat... (Enter to send, Shift+Enter for a new line)"></textarea>
+            <button id="chat-send" type="button">Send</button>
+        </div>
+        <div id="chat-footer">
+            <select id="chat-model"><option value="">Default model</option></select>
+            <span id="chat-turn-usage"></span>
+            <span id="chat-total-cost"></span>
+        </div>
+    </div>
+</div>
+"""
 
 
 def get_chat_script():
-    """Return the Chat tab's client script."""
-    return "function escapeHtml(text){return String(text).replace(/[&<>\"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}\nfunction renderMarkdown(text){var safe = escapeHtml(text); return safe;}\nfunction setTitleText(node, title){node.textContent = title;}\n"
+    """Return the Chat tab's client script.
+
+    A raw string throughout: the markdown renderer's regexes carry literal backslash sequences
+    (`\\n`, `\\s`, `\\d`, ...) that must reach the browser unchanged, and a non-raw Python string
+    would silently turn `\\n` into an actual newline byte, corrupting the regex it sits inside.
+    """
+    return r"""
+function escapeHtml(text) {
+    return String(text === null || text === undefined ? '' : text).replace(/[&<>"']/g, function (character) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character];
+    });
+}
+
+// Escape first, then transform. Model output and conversation titles are both untrusted text -
+// a title is derived from whatever the user or the model wrote - so nothing reaches innerHTML
+// before it has been through escapeHtml.
+function renderMarkdown(text) {
+    var safe = escapeHtml(text);
+    safe = safe.replace(/```([\s\S]*?)```/g, function (match, code) { return '<pre><code>' + code + '</code></pre>'; });
+    safe = safe.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    safe = safe.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    safe = safe.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    safe = safe.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    safe = safe.replace(/^\s*[-*]\s+(.*)$/gm, '<li>$1</li>');
+    safe = safe.replace(/^\s*\d+\.\s+(.*)$/gm, '<li>$1</li>');
+    safe = safe.replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>');
+    return safe.replace(/\n/g, '<br>');
+}
+
+function setTitleText(node, title) {
+    node.textContent = title;
+}
+
+// ---------------------------------------------------------------------------------------------
+// State. Which conversation is being viewed is client state (localStorage), not server state -
+// the server's only shared state is the single active turn, broadcast via the busy/idle events.
+// ---------------------------------------------------------------------------------------------
+
+var state = { conversation: localStorage.getItem('predbatChatConversation'), cursor: 0, source: null, busy: null };
+var toolRows = {};
+var confirmCards = {};
+var pendingBubble = null;
+var pendingText = '';
+
+function byId(id) {
+    return document.getElementById(id);
+}
+
+function safeJsonPreview(value) {
+    try {
+        return JSON.stringify(value, null, 2);
+    } catch (error) {
+        return String(value);
+    }
+}
+
+function scrollTranscriptToBottom() {
+    var transcript = byId('chat-transcript');
+    transcript.scrollTop = transcript.scrollHeight;
+}
+
+function formatRelativeTime(iso) {
+    if (!iso) {
+        return '';
+    }
+    var then = new Date(iso).getTime();
+    if (isNaN(then)) {
+        return '';
+    }
+    var deltaSeconds = Math.round((Date.now() - then) / 1000);
+    if (deltaSeconds < 60) {
+        return 'just now';
+    }
+    var deltaMinutes = Math.round(deltaSeconds / 60);
+    if (deltaMinutes < 60) {
+        return deltaMinutes + 'm ago';
+    }
+    var deltaHours = Math.round(deltaMinutes / 60);
+    if (deltaHours < 24) {
+        return deltaHours + 'h ago';
+    }
+    return Math.round(deltaHours / 24) + 'd ago';
+}
+
+function formatCost(cost) {
+    return '$' + (Number(cost) || 0).toFixed(4);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Composer and busy banner. busy/idle are global events - they arrive whatever conversation this
+// browser is looking at - so the composer is locked and unlocked here regardless of which
+// conversation is currently selected.
+// ---------------------------------------------------------------------------------------------
+
+function setComposerDisabled(disabled) {
+    byId('chat-input').disabled = disabled;
+    byId('chat-send').disabled = disabled;
+}
+
+function showBanner(conversationId, title) {
+    var banner = byId('chat-banner');
+    banner.innerHTML = '';
+    banner.appendChild(document.createTextNode("Replying in '"));
+    var titleSpan = document.createElement('span');
+    setTitleText(titleSpan, title || '');
+    banner.appendChild(titleSpan);
+    banner.appendChild(document.createTextNode("' - "));
+    var link = document.createElement('a');
+    link.href = '#';
+    link.textContent = 'switch to it';
+    link.addEventListener('click', function (event) {
+        event.preventDefault();
+        selectConversation(conversationId);
+    });
+    banner.appendChild(link);
+    banner.classList.add('visible');
+}
+
+function hideBanner() {
+    var banner = byId('chat-banner');
+    banner.classList.remove('visible');
+    banner.innerHTML = '';
+}
+
+function setBusy(conversationId, title) {
+    state.busy = { conversation_id: conversationId, title: title };
+    setComposerDisabled(true);
+    showBanner(conversationId, title);
+}
+
+function setIdle() {
+    state.busy = null;
+    setComposerDisabled(false);
+    hideBanner();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Transcript rendering. User/assistant text goes through renderMarkdown (which escapes first);
+// tool arguments, tool results and source titles never touch innerHTML with untrusted text - they
+// are built with createElement/textContent instead, which cannot be interpreted as markup.
+// ---------------------------------------------------------------------------------------------
+
+function appendBubble(role, text) {
+    var bubble = document.createElement('div');
+    bubble.className = 'chat-bubble chat-bubble-' + role;
+    bubble.innerHTML = renderMarkdown(text || '');
+    byId('chat-transcript').appendChild(bubble);
+    scrollTranscriptToBottom();
+    return bubble;
+}
+
+function appendSources(container, sources) {
+    if (!sources || !sources.length) {
+        return;
+    }
+    var wrap = document.createElement('div');
+    wrap.className = 'chat-sources';
+    wrap.appendChild(document.createTextNode('Sources:'));
+    var list = document.createElement('ul');
+    sources.forEach(function (source) {
+        var item = document.createElement('li');
+        var url = String((source && source.url) || '');
+        var title = (source && source.title) || url;
+        // Only ever build a link for http(s) - a citation url is exactly as untrusted as the page
+        // text it was found in, and a javascript: url would run when the link was clicked.
+        if (/^https?:\/\//i.test(url)) {
+            var link = document.createElement('a');
+            link.href = url;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = title;
+            item.appendChild(link);
+        } else {
+            item.textContent = title;
+        }
+        list.appendChild(item);
+    });
+    wrap.appendChild(list);
+    container.appendChild(wrap);
+}
+
+function appendToolStart(data) {
+    var container = document.createElement('div');
+    container.className = 'chat-tool-row';
+    var details = document.createElement('details');
+    var summary = document.createElement('summary');
+    // The tool name is developer-controlled (it is one of Predbat's own registered tools) but is
+    // still escaped before going through innerHTML, on the same escape-first principle as
+    // everything else that reaches the DOM as markup.
+    summary.innerHTML = 'called <code>' + escapeHtml(data.name || '') + '</code>';
+    details.appendChild(summary);
+
+    var argsPre = document.createElement('pre');
+    var argsCode = document.createElement('code');
+    argsCode.textContent = safeJsonPreview(data.arguments);
+    argsPre.appendChild(argsCode);
+    details.appendChild(argsPre);
+
+    var resultHolder = document.createElement('div');
+    resultHolder.className = 'chat-tool-result chat-tool-pending';
+    resultHolder.textContent = 'Running...';
+    details.appendChild(resultHolder);
+
+    container.appendChild(details);
+    byId('chat-transcript').appendChild(container);
+    toolRows[data.call_id] = resultHolder;
+    scrollTranscriptToBottom();
+}
+
+function appendToolEnd(data) {
+    var holder = toolRows[data.call_id];
+    if (!holder) {
+        appendToolStart({ call_id: data.call_id, name: data.name, arguments: {} });
+        holder = toolRows[data.call_id];
+    }
+    holder.textContent = '';
+    holder.classList.remove('chat-tool-pending');
+    holder.classList.add(data.ok ? 'chat-tool-ok' : 'chat-tool-error');
+    var pre = document.createElement('pre');
+    var code = document.createElement('code');
+    code.textContent = data.preview || '';
+    pre.appendChild(code);
+    holder.appendChild(pre);
+    var elapsed = document.createElement('div');
+    elapsed.className = 'chat-tool-elapsed';
+    elapsed.textContent = (data.elapsed || 0) + 's';
+    holder.appendChild(elapsed);
+    scrollTranscriptToBottom();
+}
+
+function appendConfirmCard(data) {
+    var card = document.createElement('div');
+    card.className = 'chat-confirm-card';
+    var heading = document.createElement('div');
+    heading.className = 'chat-confirm-heading';
+    heading.innerHTML = 'Approve <code>' + escapeHtml(data.name || '') + '</code>?';
+    card.appendChild(heading);
+
+    var pre = document.createElement('pre');
+    var code = document.createElement('code');
+    code.textContent = safeJsonPreview(data.arguments);
+    pre.appendChild(code);
+    card.appendChild(pre);
+
+    var actions = document.createElement('div');
+    actions.className = 'chat-confirm-actions';
+    var approveButton = document.createElement('button');
+    approveButton.type = 'button';
+    approveButton.className = 'chat-confirm-approve';
+    approveButton.textContent = 'Approve';
+    approveButton.addEventListener('click', function () { answerConfirm(data.call_id, true); });
+    var rejectButton = document.createElement('button');
+    rejectButton.type = 'button';
+    rejectButton.className = 'chat-confirm-reject';
+    rejectButton.textContent = 'Reject';
+    rejectButton.addEventListener('click', function () { answerConfirm(data.call_id, false); });
+    actions.appendChild(approveButton);
+    actions.appendChild(rejectButton);
+    card.appendChild(actions);
+
+    byId('chat-transcript').appendChild(card);
+    confirmCards[data.call_id] = card;
+    scrollTranscriptToBottom();
+}
+
+function answerConfirm(callId, approve) {
+    fetch('./chat/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ call_id: callId, conversation: state.conversation, approve: approve })
+    }).catch(function (error) { console.error('Failed to answer confirmation', error); });
+}
+
+function resolveConfirmCard(data) {
+    var card = confirmCards[data.call_id];
+    if (!card) {
+        return;
+    }
+    card.innerHTML = '';
+    var heading = document.createElement('div');
+    heading.className = 'chat-confirm-heading';
+    heading.innerHTML = data.approved ? 'Approved <code>' + escapeHtml(data.name || '') + '</code>' : 'Rejected <code>' + escapeHtml(data.name || '') + '</code>';
+    card.appendChild(heading);
+    var outcome = document.createElement('div');
+    outcome.className = 'chat-confirm-outcome';
+    outcome.textContent = data.approved ? 'Approved.' : 'Rejected.';
+    card.appendChild(outcome);
+    delete confirmCards[data.call_id];
+}
+
+function clearPendingBubble() {
+    if (pendingBubble && !pendingText) {
+        pendingBubble.remove();
+    }
+    pendingBubble = null;
+    pendingText = '';
+}
+
+function handleUser(data) {
+    appendBubble('user', data.text || '');
+}
+
+function handleDelta(data) {
+    if (!pendingBubble) {
+        pendingBubble = appendBubble('assistant', '');
+        pendingText = '';
+    }
+    pendingText += data.text || '';
+    pendingBubble.innerHTML = renderMarkdown(pendingText);
+    scrollTranscriptToBottom();
+}
+
+function handleAssistant(data) {
+    var text = data.text || '';
+    if (!pendingBubble) {
+        if (!text && !(data.sources && data.sources.length)) {
+            return;
+        }
+        pendingBubble = appendBubble('assistant', '');
+    }
+    pendingBubble.innerHTML = renderMarkdown(text);
+    appendSources(pendingBubble, data.sources);
+    pendingBubble = null;
+    pendingText = '';
+    scrollTranscriptToBottom();
+}
+
+function handleError(data) {
+    clearPendingBubble();
+    appendBubble('error', data.message || 'Something went wrong');
+}
+
+function handleDone() {
+    clearPendingBubble();
+}
+
+function findConversationRow(id) {
+    var rows = byId('chat-list').querySelectorAll('.chat-conv-row');
+    for (var index = 0; index < rows.length; index++) {
+        if (rows[index].getAttribute('data-id') === id) {
+            return rows[index];
+        }
+    }
+    return null;
+}
+
+function highlightActiveRow(id) {
+    var rows = byId('chat-list').querySelectorAll('.chat-conv-row');
+    for (var index = 0; index < rows.length; index++) {
+        rows[index].classList.toggle('active', rows[index].getAttribute('data-id') === id);
+    }
+}
+
+function handleTitle(data) {
+    var row = findConversationRow(state.conversation);
+    if (row) {
+        var titleNode = row.querySelector('.chat-conv-title');
+        if (titleNode) {
+            setTitleText(titleNode, data.title || '');
+        }
+    }
+    if (state.busy && state.busy.conversation_id === state.conversation) {
+        showBanner(state.busy.conversation_id, data.title);
+    }
+}
+
+function renderUsageEvent(data) {
+    byId('chat-turn-usage').textContent = 'This turn: ' + (data.prompt_tokens || 0) + ' in / ' + (data.completion_tokens || 0) + ' out - ' + formatCost(data.cost);
+    byId('chat-total-cost').textContent = 'Conversation total: ' + formatCost(data.conversation_cost);
+}
+
+function renderConversationTotal(usageTotal) {
+    usageTotal = usageTotal || {};
+    byId('chat-turn-usage').textContent = '';
+    byId('chat-total-cost').textContent = 'Conversation total: ' + formatCost(usageTotal.cost);
+}
+
+// ---------------------------------------------------------------------------------------------
+// History replay - reconstructs the transcript from the stored message list on first paint or
+// after a reload event, in the same shape _run_one_tool() and _turn_loop() append to the store.
+// ---------------------------------------------------------------------------------------------
+
+function renderHistory(payload) {
+    var transcript = byId('chat-transcript');
+    transcript.innerHTML = '';
+    toolRows = {};
+    confirmCards = {};
+    pendingBubble = null;
+    pendingText = '';
+    (payload.messages || []).forEach(function (message) {
+        if (message.role === 'user') {
+            appendBubble('user', message.content || '');
+        } else if (message.role === 'assistant') {
+            if (message.content) {
+                appendBubble('assistant', message.content);
+            }
+            (message.tool_calls || []).forEach(function (call) {
+                var name = (call.function || {}).name || '';
+                var args = {};
+                try {
+                    args = JSON.parse((call.function || {}).arguments || '{}');
+                } catch (error) {
+                    args = {};
+                }
+                appendToolStart({ call_id: call.id, name: name, arguments: args });
+            });
+        } else if (message.role === 'tool') {
+            var holder = toolRows[message.tool_call_id];
+            if (holder) {
+                var content = message.content || '';
+                var ok = true;
+                try {
+                    ok = !!JSON.parse(content).success;
+                } catch (error) {
+                    ok = true;
+                }
+                appendToolEnd({ call_id: message.tool_call_id, name: message.name, ok: ok, elapsed: 0, preview: content.slice(0, 400) });
+            }
+        }
+    });
+    renderConversationTotal(payload.usage_total);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Streaming and conversation switching.
+// ---------------------------------------------------------------------------------------------
+
+function on(source, type, handler) {
+    source.addEventListener(type, function (event) {
+        if (event.lastEventId) {
+            state.cursor = Number(event.lastEventId) || state.cursor;
+        }
+        handler(event.data ? JSON.parse(event.data) : {});
+    });
+}
+
+function openStream() {
+    if (state.source) {
+        state.source.close();
+        state.source = null;
+    }
+    if (!state.conversation) {
+        return;
+    }
+    var source = new EventSource('./chat/stream?conversation=' + encodeURIComponent(state.conversation) + '&cursor=' + state.cursor);
+    on(source, 'user', handleUser);
+    on(source, 'delta', handleDelta);
+    on(source, 'assistant', handleAssistant);
+    on(source, 'tool_start', appendToolStart);
+    on(source, 'tool_end', appendToolEnd);
+    on(source, 'confirm', appendConfirmCard);
+    on(source, 'confirm_result', resolveConfirmCard);
+    on(source, 'usage', renderUsageEvent);
+    on(source, 'title', handleTitle);
+    on(source, 'error', handleError);
+    on(source, 'done', handleDone);
+    on(source, 'busy', function (data) { setBusy(data.conversation_id, data.title); });
+    on(source, 'idle', function () { setIdle(); });
+    on(source, 'reload', function () { handleReload(); });
+    state.source = source;
+}
+
+function loadConversationData(id) {
+    return fetch('./chat/history?conversation=' + encodeURIComponent(id))
+        .then(function (response) {
+            if (!response.ok) {
+                throw new Error('history ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function (payload) {
+            renderHistory(payload);
+            state.cursor = payload.cursor || 0;
+            if (payload.active) {
+                setBusy(payload.active.conversation_id, payload.active.title);
+            } else {
+                setIdle();
+            }
+            openStream();
+        });
+}
+
+function selectConversation(id) {
+    if (!id) {
+        return;
+    }
+    state.conversation = id;
+    try {
+        localStorage.setItem('predbatChatConversation', id);
+    } catch (error) {
+        // Storage unavailable (private browsing, quota) - the conversation just will not survive a reload.
+    }
+    highlightActiveRow(id);
+    loadConversationData(id).catch(function (error) { console.error('Failed to load chat history', error); });
+}
+
+function handleReload() {
+    if (!state.conversation) {
+        return;
+    }
+    loadConversationData(state.conversation).catch(function (error) { console.error('Failed to reload chat history', error); });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Conversation list.
+// ---------------------------------------------------------------------------------------------
+
+function renderConversationList(conversations) {
+    var list = byId('chat-list');
+    list.innerHTML = '';
+    conversations.forEach(function (meta) {
+        var row = document.createElement('div');
+        row.className = 'chat-conv-row' + (meta.id === state.conversation ? ' active' : '');
+        row.setAttribute('data-id', meta.id);
+
+        var main = document.createElement('div');
+        main.className = 'chat-conv-main';
+        main.addEventListener('click', function () { selectConversation(meta.id); });
+
+        var titleNode = document.createElement('div');
+        titleNode.className = 'chat-conv-title';
+        setTitleText(titleNode, meta.title || 'New chat');
+        main.appendChild(titleNode);
+
+        var metaNode = document.createElement('div');
+        metaNode.className = 'chat-conv-meta';
+        var metaText = document.createElement('span');
+        metaText.textContent = [formatRelativeTime(meta.updated), formatCost(meta.cost)].join(' - ');
+        metaNode.appendChild(metaText);
+        if (meta.pending_confirm) {
+            var badge = document.createElement('span');
+            badge.className = 'chat-pending-badge';
+            badge.textContent = 'pending';
+            metaNode.appendChild(badge);
+        }
+        main.appendChild(metaNode);
+        row.appendChild(main);
+
+        var actions = document.createElement('div');
+        actions.className = 'chat-conv-actions';
+        var renameButton = document.createElement('button');
+        renameButton.type = 'button';
+        renameButton.title = 'Rename';
+        renameButton.textContent = String.fromCharCode(9998);
+        renameButton.addEventListener('click', function (event) {
+            event.stopPropagation();
+            renameConversation(meta.id, meta.title);
+        });
+        var deleteButton = document.createElement('button');
+        deleteButton.type = 'button';
+        deleteButton.title = 'Delete';
+        deleteButton.textContent = String.fromCharCode(10005);
+        deleteButton.addEventListener('click', function (event) {
+            event.stopPropagation();
+            deleteConversation(meta.id);
+        });
+        actions.appendChild(renameButton);
+        actions.appendChild(deleteButton);
+        row.appendChild(actions);
+
+        list.appendChild(row);
+    });
+}
+
+function refreshConversations() {
+    fetch('./chat/conversations')
+        .then(function (response) { return response.json(); })
+        .then(function (payload) { renderConversationList(payload.conversations || []); })
+        .catch(function (error) { console.error('Failed to load conversations', error); });
+}
+
+function createConversation() {
+    fetch('./chat/conversations', { method: 'POST' })
+        .then(function (response) { return response.json(); })
+        .then(function (payload) {
+            refreshConversations();
+            if (payload.id) {
+                selectConversation(payload.id);
+            }
+        })
+        .catch(function (error) { console.error('Failed to create conversation', error); });
+}
+
+function renameConversation(id, currentTitle) {
+    var next = window.prompt('Rename conversation', currentTitle || '');
+    if (next === null) {
+        return;
+    }
+    fetch('./chat/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: id, title: next })
+    })
+        .then(function () { refreshConversations(); })
+        .catch(function (error) { console.error('Failed to rename conversation', error); });
+}
+
+function deleteConversation(id) {
+    if (!window.confirm('Delete this conversation?')) {
+        return;
+    }
+    fetch('./chat/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: id })
+    })
+        .then(function (response) { return response.json(); })
+        .then(function (payload) {
+            if (payload && payload.error) {
+                window.alert(payload.message || payload.error);
+                return;
+            }
+            refreshConversations();
+            if (id === state.conversation) {
+                state.conversation = null;
+                try {
+                    localStorage.removeItem('predbatChatConversation');
+                } catch (error) {
+                    // Storage unavailable - nothing to clean up.
+                }
+                byId('chat-transcript').innerHTML = '';
+                if (state.source) {
+                    state.source.close();
+                    state.source = null;
+                }
+            }
+        })
+        .catch(function (error) { console.error('Failed to delete conversation', error); });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Composer.
+// ---------------------------------------------------------------------------------------------
+
+function doSend(conversationId, text) {
+    fetch('./chat/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation: conversationId, message: text })
+    })
+        .then(function (response) {
+            if (response.status === 409) {
+                return response.json().then(function (payload) {
+                    setBusy(payload.conversation_id, payload.title);
+                    throw new Error('busy');
+                });
+            }
+            if (!response.ok) {
+                throw new Error('send ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function () { refreshConversations(); })
+        .catch(function (error) {
+            if (!error || error.message !== 'busy') {
+                console.error('Failed to send message', error);
+            }
+        });
+}
+
+function createAndSend(text) {
+    fetch('./chat/conversations', { method: 'POST' })
+        .then(function (response) { return response.json(); })
+        .then(function (payload) {
+            selectConversation(payload.id);
+            doSend(payload.id, text);
+            refreshConversations();
+        })
+        .catch(function (error) { console.error('Failed to start conversation', error); });
+}
+
+function sendMessage() {
+    var input = byId('chat-input');
+    var text = input.value.trim();
+    if (!text) {
+        return;
+    }
+    input.value = '';
+    if (!state.conversation) {
+        createAndSend(text);
+        return;
+    }
+    doSend(state.conversation, text);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Startup.
+// ---------------------------------------------------------------------------------------------
+
+document.addEventListener('DOMContentLoaded', function () {
+    byId('chat-new').addEventListener('click', createConversation);
+    byId('chat-send').addEventListener('click', sendMessage);
+    byId('chat-input').addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendMessage();
+        }
+    });
+
+    var dismiss = byId('chat-privacy-dismiss');
+    dismiss.addEventListener('click', function () {
+        byId('chat-privacy').classList.add('dismissed');
+        try {
+            localStorage.setItem('predbatChatPrivacyDismissed', '1');
+        } catch (error) {
+            // Storage unavailable - the banner will simply reappear next visit.
+        }
+    });
+    try {
+        if (localStorage.getItem('predbatChatPrivacyDismissed') === '1') {
+            byId('chat-privacy').classList.add('dismissed');
+        }
+    } catch (error) {
+        // Storage unavailable - leave the banner showing.
+    }
+
+    refreshConversations();
+    if (state.conversation) {
+        selectConversation(state.conversation);
+    }
+});
+"""

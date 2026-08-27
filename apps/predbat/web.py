@@ -1724,7 +1724,7 @@ class WebInterface(ComponentBase):
         if self.base.update_pending:
             calculating = True
         self.update_success_timestamp()
-        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror)
+        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror, chat_enabled=self.chat_enabled())
 
     def get_chart_series(self, name, results, chart_type, color):
         """

@@ -296,6 +296,112 @@ def test_markdown_escapes_before_transforming(my_predbat):
     return failed
 
 
+def test_nav_link_visibility(my_predbat):
+    """The Chat nav link is emitted only when chat is enabled."""
+    failed = False
+    print("**** Testing the Chat nav link ****")
+    from web_helper import get_header_html
+
+    without = get_header_html("Test", False, "./dash", [], "v1.0", "", chat_enabled=False)
+    if "./chat" in without:
+        print("ERROR: the Chat link appears with chat disabled")
+        failed = True
+
+    with_chat = get_header_html("Test", False, "./dash", [], "v1.0", "", chat_enabled=True)
+    if "./chat" not in with_chat:
+        print("ERROR: the Chat link is missing with chat enabled")
+        failed = True
+
+    default = get_header_html("Test", False, "./dash", [], "v1.0", "")
+    if "./chat" in default:
+        print("ERROR: the Chat link appears by default, which would break every existing caller")
+        failed = True
+
+    return failed
+
+
+def test_client_script_contract(my_predbat):
+    """The client script wires the SSE events the server actually emits."""
+    failed = False
+    print("**** Testing the client script contract ****")
+    script = web_chat.get_chat_script()
+    for event in ["delta", "assistant", "tool_start", "tool_end", "confirm", "confirm_result", "usage", "title", "error", "done", "busy", "idle", "reload"]:
+        if "'{}'".format(event) not in script and '"{}"'.format(event) not in script:
+            print("ERROR: the client script does not handle the {!r} event".format(event))
+            failed = True
+    for endpoint in ["/chat/conversations", "/chat/history", "/chat/send", "/chat/stream", "/chat/confirm", "/chat/delete", "/chat/rename"]:
+        if endpoint not in script:
+            print("ERROR: the client script never calls {}".format(endpoint))
+            failed = True
+    if "localStorage" not in script:
+        print("ERROR: the client script does not persist the selected conversation")
+        failed = True
+    return failed
+
+
+def test_chat_page_assembles_real_content(my_predbat):
+    """The stubs are gone: styles, body and script all carry real, non-trivial content."""
+    failed = False
+    print("**** Testing the Chat tab page assembly ****")
+    styles = web_chat.get_chat_styles()
+    if "<style" not in styles or "chat-sidebar" not in styles:
+        print("ERROR: get_chat_styles() does not look like a real stylesheet: {!r}".format(styles[:200]))
+        failed = True
+
+    body = web_chat.get_chat_body()
+    for element_id in ["chat-sidebar", "chat-list", "chat-new", "chat-banner", "chat-transcript", "chat-composer", "chat-input", "chat-footer", "chat-model", "chat-turn-usage", "chat-total-cost", "chat-privacy"]:
+        if element_id not in body:
+            print("ERROR: get_chat_body() is missing #{}".format(element_id))
+            failed = True
+    if "openrouter" not in body.lower():
+        print("ERROR: the privacy banner does not name OpenRouter as the destination for tool results")
+        failed = True
+
+    script = web_chat.get_chat_script()
+    for helper in ["function selectConversation", "function openStream", "function refreshConversations"]:
+        if helper not in script:
+            print("ERROR: the client script is missing {}".format(helper))
+            failed = True
+    if "<details>" not in script and "createElement('details')" not in script and 'createElement("details")' not in script:
+        print("ERROR: the client script never builds a collapsible <details> element for tool calls")
+        failed = True
+    if "called <code>" not in script and "called &lt;code&gt;" not in script:
+        # The literal text is built in JS, so it may be split across a template/concatenation -
+        # check loosely for the two words either side of the marker instead.
+        if "called" not in script or "<code>" not in script:
+            print("ERROR: the client script never renders a 'called <code>name</code>' summary for tool calls")
+            failed = True
+    return failed
+
+
+def test_sources_and_tool_output_are_escaped():
+    """Web-search sources and tool call arguments/results reach the DOM only via an escape path.
+
+    Both are untrusted: a url_citation title or URL comes back from a web search, and tool
+    arguments/results can carry arbitrary text a prior tool call fetched from the web. This walks
+    the code around every place data.sources, call arguments and tool previews are turned into
+    markup and requires escapeHtml (directly, or via renderMarkdown which itself escapes first)
+    to appear nearby - it is not proof of correctness, but it does fail if one of those sinks
+    starts string-concatenating raw text into innerHTML.
+    """
+    failed = False
+    print("**** Testing that sources and tool call text are escaped before rendering ****")
+    script = web_chat.get_chat_script()
+    for marker in ["sources", "arguments", "preview"]:
+        index = script.find(marker)
+        seen = False
+        while index >= 0:
+            window = script[max(0, index - 300) : index + 300]
+            if "escapeHtml(" in window or "renderMarkdown(" in window or "textContent" in window:
+                seen = True
+                break
+            index = script.find(marker, index + 1)
+        if not seen:
+            print("ERROR: could not find an escapeHtml/renderMarkdown/textContent guard near any use of {!r}".format(marker))
+            failed = True
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -305,4 +411,8 @@ def run_web_chat_tests(my_predbat):
     failed |= test_history_reads_via_snapshot_not_get_messages(my_predbat)
     failed |= test_sse_framing(my_predbat)
     failed |= test_markdown_escapes_before_transforming(my_predbat)
+    failed |= test_nav_link_visibility(my_predbat)
+    failed |= test_client_script_contract(my_predbat)
+    failed |= test_chat_page_assembles_real_content(my_predbat)
+    failed |= test_sources_and_tool_output_are_escaped()
     return failed
