@@ -52,9 +52,23 @@ MINIMUM_YEAR = 1940
 # The Open-Meteo archive (archive-api.open-meteo.com) is ERA5T-backed and runs about five
 # days behind. A month whose end is closer than this has no complete actuals, and the
 # sampler would simply not see the missing days as candidates - costing the month on a
-# short sample with nothing to indicate anything was wrong. Six, not five, to leave a day
-# of margin.
-WEATHER_ARCHIVE_LAG_DAYS = 6
+# short sample with nothing to indicate anything was wrong.
+#
+# This constant is the sum of three things, not just the archive lag on its own:
+#   ~5 days  - the genuine ERA5T lag described above.
+#    2 days  - AnnualWeather._window() (annual_weather.py) requests up to two days past
+#              the month's end, mirroring the buffer annual_tariff.fetch_month uses so the
+#              last sampled day's 48 hour plan has somewhere to spill into. Guarding on the
+#              archive lag alone is not enough: at 6 days past month-end the window's own
+#              trailing day(s) still land inside the lag, come back with nulls that
+#              _payload_problem's length-only check lets through, coerce to 0.0, and get
+#              cached with no expiry - a permanent all-zero day for that cache key.
+#    1 day   - margin on top of both.
+# Kept as one constant rather than splitting the +2 into the guard below and leaving this at
+# 6: a separate consumer outside this module decides which month is worth requesting using
+# this same number, and if the two ever disagreed on what "ready" means, its request would
+# arrive here and be rejected.
+WEATHER_ARCHIVE_LAG_DAYS = 8
 
 # Substrings that mark a config value as secret and therefore scrubbable
 SECRET_MARKERS = ["_key", "password", "token", "secret"]
@@ -779,7 +793,7 @@ def _percentile_indices(count, samples):
     return chosen
 
 
-def _weekday_spread_days(candidates, year, month, samples):
+def _weekday_spread_days(candidates, samples):
     """Choose `samples` days covering distinct weekdays, spread across the weeks of the month.
 
     Target weekday positions come from ``_percentile_indices(7, samples)`` - the same helper the
@@ -854,7 +868,7 @@ def select_samples(weather, year, month, samples_per_month, has_solar=True, samp
         return []
 
     if sampling == "weekday_spread":
-        chosen = _weekday_spread_days(candidates, year, month, samples_per_month)
+        chosen = _weekday_spread_days(candidates, samples_per_month)
     else:
         # _percentile_indices() already guarantees distinct indices, so no set() is needed here.
         indices = _percentile_indices(len(candidates), samples_per_month)
@@ -1684,19 +1698,34 @@ class AnnualPredictor:
         """Build one by_export[id] card from a swept tariff's own planned months.
 
         Extracted out of run()'s sweep loop so a stub-tariff test can exercise the card's
-        exact shape (the five keys Task 8 renders) without a real network run through
-        _plan_months. Attributed to THIS tariff, not merged into the run-wide caveats list:
-        Outgoing Prime launched in June 2026, so on any month before that it silently falls
-        back to today's rates repeated - and a synthetic tariff sitting unlabelled beside two
-        real ones is the one failure mode that makes the comparison actively misleading. The
-        consumer needs to be able to mark that one card.
+        exact shape (the five keys rendered by annual_cli's format_table) without a real
+        network run through _plan_months. Attributed to THIS tariff, not merged into the
+        run-wide caveats list: Outgoing Prime launched in June 2026, so on any month before
+        that it silently falls back to today's rates repeated - and a synthetic tariff
+        sitting unlabelled beside two real ones is the one failure mode that makes the
+        comparison actively misleading. The consumer needs to be able to mark that one card.
+
+        ``_build_results`` also appends its own caveats as a SIDE EFFECT onto whatever
+        ``self.caveats`` currently is (the "no month produced a usable result" and payback
+        messages - see its docstring) - harmless when it runs once for a single-tariff
+        document, but this is called once per swept tariff, so left alone every one of
+        those per-tariff messages would land on the shared run-wide list: a visitor looking
+        at two working tariff cards would be told nothing was modelled at all, with neither
+        message naming which tariff actually failed. ``self.caveats`` is swapped out for an
+        empty scratch list for the duration of the call and restored immediately after, so
+        those messages are captured as THIS card's own caveats instead.
         """
-        results = self._build_results(months, fast_mode=False, months_interpolated=0)
+        run_caveats, self.caveats = self.caveats, []
+        try:
+            results = self._build_results(months, fast_mode=False, months_interpolated=0)
+            card_caveats = self.caveats
+        finally:
+            self.caveats = run_caveats
         return {
             "name": entry["name"],
             "annual": results["annual"],
             "months": results["months"],
-            "caveats": self._tariff_fallback_caveats(tariff.fallback_months, tariff.unpaid_export_months, year),
+            "caveats": self._tariff_fallback_caveats(tariff.fallback_months, tariff.unpaid_export_months, year) + card_caveats,
             # Export-side only, and scoped to the modelled year: this exists to flag a card
             # whose EXPORT rates were synthesised from the current-rates fallback (Outgoing
             # Prime has no history before June 2026), not one whose shared import side fell
@@ -1830,9 +1859,10 @@ class AnnualPredictor:
             fast_mode = await self._fast_mode_viable(year, zone)
         else:
             fast_mode = False
-        # Rate downloads and availability checks still cover all twelve months even in fast
-        # mode - they are network-bound and cheap next to planning, and skipping them would
-        # let interpolation paper over a month that genuinely had no rates.
+        # Rate downloads and availability checks cover every month this run actually plans -
+        # all twelve in a full run, just the four anchors in fast mode - even though they are
+        # network-bound and cheap next to planning; skipping them would let interpolation
+        # paper over a month that genuinely had no rates.
         months_to_plan = list(ANCHOR_MONTHS) if fast_mode else list(self.config["months"])
         total_units = len(months_to_plan) + (1 if fast_mode else 0)
         completed = 0
@@ -1845,6 +1875,10 @@ class AnnualPredictor:
             # run-wide fact, not a per-export-tariff one - accumulated here across every
             # iteration rather than reported (or lost) per entry.
             baseline_fallback_months_sweep = set()
+            # Every tariff in the sweep plans the same months_to_plan, so the progress total
+            # is this run's usual total_units multiplied by how many tariffs there are -
+            # computed once here rather than recomputed (and re-typed) inside the loop below.
+            sweep_total_units = total_units * len(export_tariffs)
             # One AnnualTariff per export product, each sharing the import side and the
             # standing charge. Built from config["tariff"] with the export keys REPLACED, not
             # merged, so a config that also names an export side on annual.tariff cannot leak
@@ -1855,12 +1889,18 @@ class AnnualPredictor:
                     if entry.get(key):
                         tariff_config[key] = entry[key]
                 tariff = AnnualTariff(tariff_config, log=self.log, predbat=self.predbat, storage=self.storage, timezone=self.config["timezone"])
-                months, baseline_fallback_months, completed, _ = await self._plan_months(tariff, year, zone, months_to_plan, progress, total_units * len(export_tariffs), completed)
+                months, baseline_fallback_months, completed, _ = await self._plan_months(tariff, year, zone, months_to_plan, progress, sweep_total_units, completed)
                 baseline_fallback_months_sweep.update(baseline_fallback_months)
                 by_export[entry["id"]] = self._export_card(entry, tariff, months, year)
             baseline_fallback_caveat = self._baseline_fallback_caveat(baseline_fallback_months_sweep)
             if baseline_fallback_caveat:
                 self.caveats.append(baseline_fallback_caveat)
+            # Without this, a sweep never emits the terminal (total, total, "Complete") event
+            # _plan_months only ever reports progress up to sweep_total_units - 1 (the last
+            # "Month N/year" line for the final tariff), so a caller watching for completion
+            # the way the single-tariff path below does would wait forever.
+            if progress:
+                progress(sweep_total_units, sweep_total_units, "Complete")
             return {
                 "year": year,
                 "months_requested": list(self.config["months"]),
@@ -2073,6 +2113,16 @@ class AnnualPredictor:
         figures and is included. When no month is included at all, ``annual.scenarios`` and
         ``annual.standing_charge_p`` are ``None`` and ``annual.savings`` is empty rather than
         reporting a fabricated zero-cost, zero-saving year.
+
+        The document carries a top-level ``months_requested`` key only when ``annual.months``
+        named an explicit subset (below twelve months) - never for a full-year run, so an
+        existing document/caller has no new key to notice. Without it, a plain single-tariff
+        document produced from a ``--months 7`` run has no way to tell
+        ``annual_cli._format_single_table`` that only one month was ever asked for, and it
+        prints the contradictory pair "Based on 1 of 12 months." next to a payback caveat
+        that (correctly) says "this run deliberately covered 1 of 12 month(s)." A sweep
+        document already carries this key itself (see ``run()``'s ``by_export`` branch); this
+        is the same key on the plain, non-sweep path.
         """
         included = [entry for entry in months if entry["status"] in INCLUDED_STATUSES]
         excluded = [entry["month"] for entry in months if entry["status"] not in INCLUDED_STATUSES]
@@ -2103,7 +2153,7 @@ class AnnualPredictor:
         if payback_message not in self.caveats:
             self.caveats.append(payback_message)
 
-        return {
+        results = {
             "year": self.config["year"],
             "config": self.config["raw"],
             "months": months,
@@ -2122,3 +2172,8 @@ class AnnualPredictor:
             },
             "caveats": self.caveats,
         }
+        # Added only for an explicit subset, per this method's docstring - a full twelve
+        # month run gains no new key.
+        if len(self.config["months"]) < 12:
+            results["months_requested"] = list(self.config["months"])
+        return results
