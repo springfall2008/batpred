@@ -474,3 +474,53 @@ def test_annual_cli_machine_end_to_end(my_predbat):
         failed = True
 
     return failed
+
+
+def test_annual_cli_export_compare_flags(my_predbat):
+    """--months and --export-compare override the config file."""
+    failed = False
+    import annual_cli
+
+    print("Test: --months sets annual.months")
+    config = {"annual": {"location": {"latitude": 51.5, "longitude": -0.1}, "solar": [{"kwp": 5.0}], "load": {"annual_kwh": 3000}, "tariff": {"rates_import": [{"rate": 25.0}]}}}
+    merged = annual_cli.apply_cli_overrides(config, months="7", export_compare=False, fast=False)
+    if merged["annual"]["months"] != [7]:
+        print("  ERROR: --months 7 should set annual.months to [7], got {}".format(merged["annual"].get("months")))
+        failed = True
+
+    print("Test: --months accepts a comma-separated list")
+    merged = annual_cli.apply_cli_overrides(config, months="6,7", export_compare=False, fast=False)
+    if merged["annual"]["months"] != [6, 7]:
+        print("  ERROR: --months 6,7 should set [6, 7], got {}".format(merged["annual"].get("months")))
+        failed = True
+
+    print("Test: --export-compare sets the sweep, sampling, sample count and disables fast mode")
+    merged = annual_cli.apply_cli_overrides(config, months="7", export_compare=True, fast=False)
+    annual = merged["annual"]
+    if [entry["id"] for entry in annual.get("export_tariffs", [])] != ["outgoing_fixed", "outgoing_prime", "agile_outgoing"]:
+        print("  ERROR: --export-compare should set the three Octopus export products, got {}".format(annual.get("export_tariffs")))
+        failed = True
+    if annual.get("sampling") != "weekday_spread":
+        print("  ERROR: --export-compare should set sampling to weekday_spread, got {}".format(annual.get("sampling")))
+        failed = True
+    if annual.get("samples_per_month") != 5:
+        print("  ERROR: --export-compare should set samples_per_month to 5, got {}".format(annual.get("samples_per_month")))
+        failed = True
+    if annual.get("fast_mode"):
+        print("  ERROR: --export-compare must not leave fast_mode on")
+        failed = True
+
+    print("Test: no flags leaves the config untouched")
+    merged = annual_cli.apply_cli_overrides(config, months=None, export_compare=False, fast=False)
+    if "months" in merged["annual"] or "export_tariffs" in merged["annual"]:
+        print("  ERROR: with no flags the config should be unchanged, got {}".format(merged["annual"]))
+        failed = True
+
+    print("Test: overrides do not mutate the caller's config")
+    original = {"annual": {"location": {"latitude": 51.5, "longitude": -0.1}, "solar": [{"kwp": 5.0}], "load": {"annual_kwh": 3000}, "tariff": {"rates_import": [{"rate": 25.0}]}}}
+    annual_cli.apply_cli_overrides(original, months="7", export_compare=True, fast=False)
+    if "months" in original["annual"]:
+        print("  ERROR: apply_cli_overrides mutated the caller's config")
+        failed = True
+
+    return failed

@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import calendar
 import contextlib
+import copy
 import json
 import os
 import sys
@@ -193,6 +194,33 @@ def apply_fast_override(config, fast):
     return config
 
 
+def apply_cli_overrides(config, months=None, export_compare=False, fast=False):
+    """Return a copy of `config` with the CLI flags applied over it.
+
+    Flags win over the file, matching how --fast already behaved. A copy, not a mutation:
+    the caller's document is also what gets echoed back in --machine mode, and silently
+    rewriting it would make the output disagree with the file the user passed.
+    """
+    merged = copy.deepcopy(config)
+    annual = merged.setdefault("annual", {})
+
+    if months:
+        annual["months"] = [int(part.strip()) for part in str(months).split(",") if part.strip()]
+    if fast:
+        annual["fast_mode"] = True
+    if export_compare:
+        from tariff_catalogue import export_compare_tariffs
+
+        # Exactly what whatif_contract emits for the SaaS page, so one flag reproduces a
+        # production run. If these two ever disagree, the CLI stops being a way to
+        # reproduce what the page printed.
+        annual["export_tariffs"] = export_compare_tariffs()
+        annual["sampling"] = "weekday_spread"
+        annual["samples_per_month"] = 5
+        annual["fast_mode"] = False
+    return merged
+
+
 def main(argv=None, storage_factory=StorageLocalFiles):
     """Parse arguments, run the projection, and write the results. Returns an exit code.
 
@@ -217,6 +245,8 @@ def main(argv=None, storage_factory=StorageLocalFiles):
     parser.add_argument("--quiet", action="store_true", help="Suppress progress output")
     parser.add_argument("--machine", action="store_true", help="Emit results as JSON on stdout and progress as JSON on stderr, for a calling process")
     parser.add_argument("--fast", action="store_true", help="Plan only four seasonal months and interpolate the rest (about 2.5x faster, monthly figures approximate)")
+    parser.add_argument("--months", default=None, help="Plan only these months, as a comma-separated list (e.g. --months 7 or --months 6,7)")
+    parser.add_argument("--export-compare", action="store_true", dest="export_compare", help="Evaluate the three Octopus export tariffs against otherwise identical inputs (implies weekday-spread sampling, 5 samples a month, and no fast mode)")
     args = parser.parse_args(argv)
 
     try:
@@ -226,7 +256,7 @@ def main(argv=None, storage_factory=StorageLocalFiles):
         sys.stderr.write("Could not read config {}: {}\n".format(args.config, error))
         return 2
 
-    config = apply_fast_override(config, args.fast)
+    config = apply_cli_overrides(config, months=args.months, export_compare=args.export_compare, fast=args.fast)
 
     # Under --machine, the engine's log must go to stderr rather than the default print()
     # (stdout): predictor.run() can log warnings - P10 fallbacks, missing rate data, failed
