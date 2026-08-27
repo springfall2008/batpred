@@ -187,6 +187,7 @@ etok
 euids
 EVDC
 evergen
+evilspringfall
 evse
 exog
 expmsg
@@ -214,6 +215,7 @@ freephase
 fronius
 funcs
 futurerate
+gaierror
 gcoan
 gecloud
 gekey
@@ -275,6 +277,7 @@ inva
 invb
 invbatpower
 invname
+IPPROTO
 isinstance
 isoformat
 isort
@@ -385,6 +388,7 @@ nordpool
 noreferrer
 nosc
 nosuchrun
+notgithub
 notsn
 nrgheat
 numpy
