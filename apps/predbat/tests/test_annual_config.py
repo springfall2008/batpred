@@ -292,6 +292,11 @@ def test_annual_config(my_predbat):
     config["annual"]["samples_per_month"] = 0
     failed = expect_error("zero samples", config, "annual.samples_per_month must be at least", failed)
 
+    print("Test: an invalid sampling value is rejected")
+    config = base_config()
+    config["annual"]["sampling"] = "monte_carlo"
+    failed = expect_error("bad sampling", config, "annual.sampling must be 'percentile' or 'weekday_spread'", failed)
+
     print("Test: a postcode-only location validates")
     config = base_config()
     config["annual"]["location"] = {"postcode": "SW1A 1AA"}
@@ -590,7 +595,7 @@ def test_annual_config(my_predbat):
     config = base_config()
     config["annual"]["year"] = 2026
     config["annual"]["months"] = [8]
-    # 2 September is 1 day past 31 August, well inside the 6 day ERA5 lag.
+    # 2 September is 2 days past 31 August, well inside the 8 day ERA5 lag.
     try:
         validate_config(config, today=date(2026, 9, 2))
         print("  ERROR: August 2026 should be rejected on 2 September 2026, inside the archive lag")
@@ -600,14 +605,14 @@ def test_annual_config(my_predbat):
             print("  ERROR: the lag rejection should explain the month is not yet complete, got '{}'".format(error))
             failed = True
 
-    print("Test: the lag boundary is inclusive at exactly six days")
+    print("Test: the lag boundary is inclusive at exactly eight days")
     config = base_config()
     config["annual"]["year"] = 2026
     config["annual"]["months"] = [8]
     try:
-        validate_config(config, today=date(2026, 9, 6))
+        validate_config(config, today=date(2026, 9, 8))
     except AnnualConfigError as error:
-        print("  ERROR: 6 September is exactly six days past 31 August and should be accepted, got '{}'".format(error))
+        print("  ERROR: 8 September is exactly eight days past 31 August and should be accepted, got '{}'".format(error))
         failed = True
 
     print("Test: an in-progress month is rejected")

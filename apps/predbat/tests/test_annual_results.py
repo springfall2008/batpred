@@ -292,6 +292,13 @@ def test_annual_results(my_predbat):
             print("  ERROR: payback should include {}, got {}".format(key, list(payback)))
             failed = True
 
+    print("Test: a full twelve month document carries no months_requested key at all")
+    # Load-bearing for default-off (see _build_results' docstring): an existing full-year
+    # document/caller must gain no new key from this.
+    if "months_requested" in result:
+        print("  ERROR: a full twelve month document should not carry months_requested, got {!r}".format(result.get("months_requested")))
+        failed = True
+
     print("Test: a partial year refuses payback rather than extrapolating")
     partial_months = [make_month_row(month, {"no_pvbat": 1000.0, "pv_only": 700.0, "without_predbat": 600.0, "with_predbat": 400.0}) for month in range(1, 12)]
     partial_months.append(make_unavailable_row(12))
@@ -332,6 +339,14 @@ def test_annual_results(my_predbat):
     matching_run_wide_caveats = [caveat for caveat in subset_predictor.caveats if "deliberately covered" in caveat]
     if len(matching_run_wide_caveats) != 1:
         print("  ERROR: expected exactly one run-wide caveat naming the deliberate subset, got {}".format(subset_predictor.caveats))
+        failed = True
+
+    print("Test: a plain single-tariff document from an explicit month subset carries months_requested")
+    # This is what actually fixes the "Based on 1 of 12 months." / "this run deliberately
+    # covered 1 of 12 month(s)." contradiction above: annual_cli._format_single_table only
+    # switches wording once the document itself names how many months were requested.
+    if subset_result.get("months_requested") != [7]:
+        print("  ERROR: a --months [7] document should carry months_requested=[7], got {!r}".format(subset_result.get("months_requested")))
         failed = True
 
     print("Test: INCLUDED_STATUSES covers planned, degraded and interpolated months")

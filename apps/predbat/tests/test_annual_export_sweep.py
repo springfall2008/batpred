@@ -331,7 +331,7 @@ def test_annual_export_sweep_tariff_threading(my_predbat):
 
 
 def test_annual_export_sweep_card_shape(my_predbat):
-    """_export_card assembles the exact five by_export keys Task 8 renders, from a stub tariff's own rows.
+    """_export_card assembles the exact five by_export keys format_table renders, from a stub tariff's own rows.
 
     This is the coverage the original 'results document gains by_export' test claimed to have
     but did not: that block only re-checked config["export_tariffs"], never touching by_export
@@ -352,7 +352,7 @@ def test_annual_export_sweep_card_shape(my_predbat):
         }
     ]
 
-    print("Test: the card carries exactly the five keys Task 8 renders")
+    print("Test: the card carries exactly the five keys format_table renders")
     entry = {"id": "seg", "name": "SEG"}
     card = predictor._export_card(entry, _StubTariff(), months, year)
     expected_keys = {"name", "annual", "months", "caveats", "rates_synthesised"}
@@ -419,5 +419,124 @@ def test_annual_export_sweep_rates_synthesised(my_predbat):
         if card["rates_synthesised"] is not expected:
             print("  ERROR: {} should give rates_synthesised={}, got {}".format(label, expected, card["rates_synthesised"]))
             failed = True
+
+    return failed
+
+
+def test_annual_export_sweep_run(my_predbat):
+    """AnnualPredictor.run()'s sweep branch: a failed tariff's caveats land on ITS card, not
+    the run-wide list, and the sweep emits a terminal progress event once it finishes.
+
+    Nothing else in the suite calls run() itself - test_annual_export_sweep_card_shape and
+    test_annual_export_sweep_tariff_threading exercise _export_card/_plan_months/
+    _plan_one_month directly, which is what let both regressions through: _build_results
+    (called once per swept tariff by _export_card) appends its "no month produced a usable
+    result" and payback caveats onto self.caveats as a side effect, and left alone that
+    lands on the shared run-wide list every time it is called - so one failed tariff out of
+    three tells every card's reader that NOTHING was modelled, naming no tariff at all. And
+    _plan_months only ever reports progress up to (sweep_total - 1, sweep_total), so a
+    sweep never closed out its own progress bar.
+
+    Fully stubbed - AnnualTariff, run_day, select_samples and create_headless_predbat are
+    all replaced, and the config has no solar array so run() never touches the weather
+    module (self.weather stays None) - so this needs no network and no real Predbat
+    instance.
+    """
+    failed = False
+
+    class _StubHeadlessPredbat:
+        """Stands in for create_headless_predbat()'s return value; nothing reads it here."""
+
+    class _RunStubTariff:
+        """A per-instance AnnualTariff stand-in, one call to AnnualTariff() per sweep entry.
+
+        Every fetch_month() fails when this tariff's own config carries the sentinel
+        export_octopus_url "FAIL", modelling the "1 of 3 sweep tariffs has no rate data"
+        case I1 describes; the other two succeed and plan a real (stubbed) month.
+        """
+
+        def __init__(self, config, log=None, predbat=None, storage=None, timezone=None):
+            self.fails = config.get("export_octopus_url") == "FAIL"
+            self.fallback_months = set()
+            self.unpaid_export_months = set()
+            self.standing_charge_p_per_day = 50.0
+
+        async def fetch_month(self, year, month):
+            return not self.fails
+
+        def rates_for(self, midnight_utc, minutes):
+            return {}, {}
+
+    def fake_run_day(predbat, config, weather, tariff, load_source, day, midnight_utc, plans=None, baseline_tariff=None):
+        # Not async: the real run_day() is a plain sync function.
+        return {key: {field: 0.0 for field in SCENARIO_FIELDS} for key in SCENARIO_KEYS}
+
+    def fake_select_samples(weather, year, month, samples_per_month, has_solar=True, sampling="percentile"):
+        return [(date(year, month, 15), 1.0)]
+
+    config = {
+        "annual": {
+            "location": {"latitude": 51.5, "longitude": -0.1},
+            "battery": {"size_kwh": 9.5, "inverter_kw": 5.0},
+            "load": {"annual_kwh": 3800},
+            "tariff": {"rates_import": [{"rate": 25.0}]},
+            "months": [6],
+            "export_tariffs": [
+                {"id": "ok_one", "name": "OK One", "rates_export": [{"rate": 4.1}]},
+                {"id": "fails", "name": "Fails", "export_octopus_url": "FAIL"},
+                {"id": "ok_two", "name": "OK Two", "rates_export": [{"rate": 8.0}]},
+            ],
+        }
+    }
+    predictor = AnnualPredictor(config)
+
+    progress_events = []
+
+    def progress(completed, total, message):
+        progress_events.append((completed, total, message))
+
+    original_tariff, original_run_day, original_select_samples, original_create_headless = (
+        annual.AnnualTariff,
+        annual.run_day,
+        annual.select_samples,
+        annual.create_headless_predbat,
+    )
+    annual.AnnualTariff = _RunStubTariff
+    annual.run_day = fake_run_day
+    annual.select_samples = fake_select_samples
+    annual.create_headless_predbat = lambda work_dir, timezone, log: _StubHeadlessPredbat()
+    try:
+        results = asyncio.run(predictor.run(progress=progress))
+    finally:
+        annual.AnnualTariff = original_tariff
+        annual.run_day = original_run_day
+        annual.select_samples = original_select_samples
+        annual.create_headless_predbat = original_create_headless
+
+    print("Test: the failing tariff's own card says nothing was modelled (I1)")
+    failing_caveats = " ".join(results["by_export"]["fails"]["caveats"])
+    if "No month produced a usable result" not in failing_caveats:
+        print("  ERROR: the failing tariff's card should carry the no-usable-result caveat, got {}".format(results["by_export"]["fails"]["caveats"]))
+        failed = True
+
+    print("Test: that caveat does NOT leak onto the run-wide list or the other two cards (I1)")
+    run_wide_caveats = " ".join(results["caveats"])
+    if "No month produced a usable result" in run_wide_caveats:
+        print("  ERROR: the failing tariff's caveat leaked into the run-wide caveats, got {}".format(results["caveats"]))
+        failed = True
+    for tariff_id in ("ok_one", "ok_two"):
+        card_caveats = " ".join(results["by_export"][tariff_id]["caveats"])
+        if "No month produced a usable result" in card_caveats:
+            print("  ERROR: {}'s card should not carry the failed tariff's caveat, got {}".format(tariff_id, results["by_export"][tariff_id]["caveats"]))
+            failed = True
+
+    print("Test: the sweep emits a terminal completed==total 'Complete' progress event (I2)")
+    if not progress_events or progress_events[-1][0] != progress_events[-1][1] or progress_events[-1][2] != "Complete":
+        print("  ERROR: expected a final (total, total, 'Complete') progress event, got {}".format(progress_events[-1] if progress_events else None))
+        failed = True
+    # A 1-month x 3-tariff sweep should report a total of 3 throughout, closing at (3, 3).
+    if any(total != 3 for _, total, _ in progress_events):
+        print("  ERROR: expected every progress event to report total=3, got {}".format(progress_events))
+        failed = True
 
     return failed
