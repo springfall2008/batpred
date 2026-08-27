@@ -18,8 +18,13 @@
 - **Spelling:** British English (`en-gb`) via CSpell. Add unknown words to `.cspell/custom-dictionary-workspace.txt`; the file is auto-sorted on commit, so re-stage after running pre-commit. `docs/superpowers/` is excluded from both cspell and markdownlint.
 - **Naming:** `lower_case_with_underscores`.
 - **File access:** must go through the Storage component. Never `open()`/`os.remove()` for cached data. The one exception is `chat_tools.py` reading Predbat's own source files, which is a read-only bounded scan of the install directory, not cache data.
-- **No loop-bound state in the chat component.** Components each run in their own thread with their own `asyncio.run()` (`apps/predbat/hass.py:223`), but web handlers await other components' coroutines on the *web* loop (`apps/predbat/web.py:4866`). So: create `aiohttp.ClientSession` per request inside `async with`; guard shared state with `threading.Lock`; never use `asyncio.Queue`, `asyncio.Event` or `asyncio.Lock` anywhere in `chat.py`, `chat_store.py` or `chat_tools.py`.
-- **Never block the web event loop.** A turn runs on the *web* component's loop, not the chat component's, so any synchronous work inside a tool freezes the web server — SSE stops mid-token and every other Predbat tab hangs. Synchronous tool bodies must be offloaded with `await asyncio.get_running_loop().run_in_executor(None, function, *args)`, the pattern at `apps/predbat/db_manager.py:152`. **Do not use `base.run_in_executor`**: its `with ThreadPoolExecutor() as pool` exits via `shutdown(wait=True)`, so it blocks the loop until the callback finishes and then returns the raw `Future` rather than the result (`apps/predbat/hass.py:203`). Storage is safe — it uses `aiofiles` throughout.
+- **The web layer is a UI only. The component does the work.** Every component runs in its own thread with its own `asyncio.run()` (`apps/predbat/hass.py:223`). The OpenRouter conversation, the tool calls and all conversation persistence run on **the chat component's own loop**. Web handlers never do that work on the web loop: they start a turn and read state, nothing more. This is what keeps a five-second source scan or a 10MB log read from freezing the web server and stalling the very SSE stream delivering the reply.
+- **The cross-thread contract.** Three kinds of call, and using the wrong one is a bug:
+  1. **Fire-and-forget work** — `ChatAgent.submit_turn()` is a *synchronous* method the web thread calls. It claims the turn under the lock, then schedules the coroutine with `asyncio.run_coroutine_threadsafe(coro, self.loop)` and returns a turn id immediately. It never waits.
+  2. **Work whose result the handler needs** — `await agent.run_on_agent_loop(coro)`, which wraps `run_coroutine_threadsafe` in `asyncio.wrap_future` so the *web* loop awaits while the *component* loop executes. Neither loop blocks. All `ConversationStore` mutations go through this, so storage writes stay single-threaded.
+  3. **Pure in-memory reads and flag flips** — `events_since()`, `get_meta()`, `list_conversations()`, `confirm()`. These are guarded by a `threading.Lock` and are called directly from the web thread.
+- **Guard shared state with `threading.Lock`, never `asyncio.Lock`/`Event`/`Queue`.** Two threads genuinely touch the conversation index, the event buffer and the pending confirmations; an asyncio primitive is bound to one loop and would silently fail to synchronise across them. Create `aiohttp.ClientSession` per request inside `async with`.
+- **Do not use `base.run_in_executor`.** Its `with ThreadPoolExecutor() as pool` exits via `shutdown(wait=True)`, so it blocks the calling loop until the callback finishes and then returns the raw `Future` rather than the result (`apps/predbat/hass.py:203`). Where an executor really is wanted, use `await asyncio.get_running_loop().run_in_executor(None, fn, *args)` as `apps/predbat/db_manager.py:152` does. Storage needs neither — it is `aiofiles` throughout.
 - **Tests are not pytest.** Each test is a function taking `my_predbat`, printing diagnostics, and returning `True` on failure. A `run_<name>_tests(my_predbat)` driver aggregates with `failed |= ...` and returns `failed`. Register in `TEST_REGISTRY` in `apps/predbat/unit_test.py` as `("<name>", run_<name>_tests, "<description>", False)`.
 - **Running tests:** from `coverage/`, `./run_all --test <name>`. Always redirect output to a file and grep the file afterwards — never pipe straight to grep, or a wrong search means re-running.
 - **Every new `.py` file starts with the house header** (copy verbatim from `apps/predbat/web_mcp.py:1-9`):
@@ -1517,10 +1522,12 @@ cache, `apps.yaml` and `predbat.log` all sit inside the tree being searched. A d
 cannot exclude them; the extension allowlist can.
 
 `search_source` and `read_source` are deliberately plain synchronous functions: they are far
-easier to test that way, and `os.walk` has no async equivalent worth having. They are **not safe
-to call directly from a turn** — a full-tree scan would freeze the web loop for up to
-`SOURCE_SCAN_SECONDS`, stalling every other Predbat tab and this turn's own SSE stream. Task 7's
-`_dispatch` is what offloads them to an executor; this task's job is only to make them correct.
+easier to test that way, and `os.walk` has no async equivalent worth having. They are called
+from a turn, which runs on the chat component's own loop — a loop whose only other job is a
+five-second housekeeping tick, so a scan stalling it briefly costs nothing a user can see. The
+web server is a different loop in a different thread, and the SSE stream reads the event buffer
+through a `threading.Lock` rather than through this loop. `SOURCE_SCAN_SECONDS` still bounds the
+worst case.
 
 **Files:**
 - Modify: `apps/predbat/chat_tools.py`
@@ -2220,7 +2227,9 @@ URL query string."
   - `chat.ChatBusyError(RuntimeError)`
   - `ChatAgent.emit(conversation_id, event_type, data) -> int`
   - `ChatAgent.events_since(cursor, conversation_id) -> (list[dict], int, bool)` — events, next cursor, `reload_needed`
-  - `ChatAgent.store: ConversationStore`, `ChatAgent.active: dict | None`
+  - `ChatAgent.store: ConversationStore`, `ChatAgent.active: dict | None`, `ChatAgent.loop: asyncio.AbstractEventLoop | None`
+  - `async ChatAgent.run_on_agent_loop(coro)` — the cross-thread bridge
+  - `chat.AgentNotReadyError(RuntimeError)`
   - `chat.EVENT_BUFFER_MAX = 2000`
 
 - [ ] **Step 1: Add the configuration**
@@ -2464,6 +2473,7 @@ event loop invoked it, which in practice is the web component's, while this comp
 thread only flushes and prunes. See spec section 3.
 """
 
+import asyncio
 import threading
 from datetime import datetime
 
@@ -2480,6 +2490,10 @@ Answer concisely and quote the user's real values rather than generalities. Call
 
 class ChatBusyError(RuntimeError):
     """Raised when a turn is requested while another is already running."""
+
+
+class AgentNotReadyError(RuntimeError):
+    """Raised when work is handed to the component before its event loop exists."""
 
 
 def build_snapshot(base):
@@ -2544,6 +2558,10 @@ class ChatAgent(ComponentBase):
         self.turn_timeout = turn_timeout or 180
         self.fetch_allowlist = list(fetch_allowlist) if fetch_allowlist else list(DEFAULT_FETCH_ALLOWLIST)
         self.lock = threading.Lock()
+        # Set on the first run() tick, from inside this component's own thread. Everything the
+        # web layer hands over is scheduled onto it; until it exists, the component is still
+        # starting and handlers answer 503.
+        self.loop = None
         self.events = []
         self.event_seq = 0
         self.event_base = 0
@@ -2580,12 +2598,27 @@ class ChatAgent(ComponentBase):
             selected = [event for event in self.events if event["seq"] > cursor and event["conversation_id"] in (None, conversation_id)]
             return selected, self.event_seq, reload_needed
 
+    async def run_on_agent_loop(self, coro):
+        """Await a coroutine on this component's own loop, from another thread's loop.
+
+        run_coroutine_threadsafe schedules the work on the component loop and hands back a
+        concurrent Future; wrap_future turns that into something the *calling* loop can await.
+        The web loop therefore yields rather than blocking, and the work runs where it belongs.
+        """
+        loop = self.loop
+        if loop is None:
+            coro.close()
+            raise AgentNotReadyError("The chat component has not finished starting")
+        return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, loop))
+
     async def run(self, seconds, first):
-        """Load the index on the first tick, then flush and keep the health timestamp fresh.
+        """Record this component's loop, load the index, then flush and stay healthy.
 
         No network call happens here. Validating credentials at startup would let a slow or
         unreachable OpenRouter block Predbat's boot inside wait_api_started() for ten minutes.
         """
+        if self.loop is None:
+            self.loop = asyncio.get_running_loop()
         if not self.index_loaded:
             try:
                 await self.store.load_index()
@@ -2654,7 +2687,10 @@ Predbat's boot inside wait_api_started()."
   - `async ChatAgent._run_completion(conversation_id, messages, model) -> (message, usage, sources)`
   - `async ChatAgent._dispatch(conversation_id, name, arguments) -> dict`
   - `ChatAgent.build_messages(conversation_id, history) -> list`
-  - `async ChatAgent.run_turn(conversation_id, text) -> int` — the turn id; raises `ChatBusyError` or `KeyError`
+  - `ChatAgent.claim_turn(conversation_id) -> int` — synchronous; raises `ChatBusyError` or `KeyError`
+  - `ChatAgent.submit_turn(conversation_id, text) -> int` — synchronous, called from the web thread; schedules the turn on the component loop and returns at once
+  - `async ChatAgent.run_turn(conversation_id, text) -> int` — claims and runs inline; used by tests and by anything already on the component loop
+  - `async ChatAgent._execute_turn(conversation_id, turn_id, text)` — the turn body
   - `ChatAgent.tool_defs_by_name: dict[str, dict]`
 
 - [ ] **Step 1: Write the failing tests**
@@ -2901,55 +2937,85 @@ def test_busy_rejects_a_second_turn(my_predbat):
 ```
 
 ```python
-def test_source_tools_do_not_block_the_loop(my_predbat):
-    """A synchronous source scan is offloaded, so the event loop keeps running during it.
+def test_submit_turn_hands_off_to_the_component_loop(my_predbat):
+    """submit_turn returns at once and the turn runs to completion on the component's own loop.
 
-    This is the regression guard for the whole no-blocking rule: a turn runs on the web
-    component's loop, so a scan called directly would freeze the web server and stall this
-    turn's own SSE stream.
+    This is the regression guard for the whole architecture: the web layer is a UI, so the call
+    that starts a turn must not wait for it. A slow synchronous tool is used deliberately - if
+    the work ever moves back onto the caller's loop, this test's timing assertion fails.
     """
     failed = False
-    print("**** Testing that source tools do not block the event loop ****")
+    print("**** Testing the cross-thread turn handoff ****")
     import chat as chat_module
 
     def slow_search(*args, **kwargs):
         """Stand in for a slow synchronous full-tree scan."""
-        time.sleep(0.3)
+        time.sleep(0.4)
         return {"success": True, "error": None, "data": [], "total_matches": 0}
 
     agent = _agent_with_fake(my_predbat, _tool_call_response("search_source", {"pattern": "def "}), _text_response("found it"))
-    cid = asyncio.run(agent.store.create())
-    ticks = {"count": 0}
 
-    async def heartbeat():
-        """Tick continuously; a blocked loop stops this dead."""
-        while True:
-            ticks["count"] += 1
-            await asyncio.sleep(0.01)
-
-    async def drive():
-        """Run the turn alongside the heartbeat."""
-        beat = asyncio.ensure_future(heartbeat())
-        try:
-            await agent.run_turn(cid, "search the source")
-        finally:
-            beat.cancel()
-
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    agent.loop = loop
     original = chat_module.search_source
     chat_module.search_source = slow_search
     try:
-        asyncio.run(drive())
+        cid = asyncio.run_coroutine_threadsafe(agent.store.create(), loop).result(10)
+
+        started = time.monotonic()
+        turn_id = agent.submit_turn(cid, "search the source")
+        elapsed = time.monotonic() - started
+        if elapsed > 0.2:
+            print("ERROR: submit_turn took {:.2f}s - it is waiting for the turn rather than handing it off".format(elapsed))
+            failed = True
+        if not turn_id:
+            print("ERROR: submit_turn did not return a turn id")
+            failed = True
+
+        deadline = time.monotonic() + 15
+        while agent.active is not None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if agent.active is not None:
+            print("ERROR: the handed-off turn never completed or never released the turn slot")
+            failed = True
+
+        kinds = [event["type"] for event in agent.events_since(0, cid)[0]]
+        for required in ("tool_start", "tool_end", "done"):
+            if required not in kinds:
+                print("ERROR: the turn did not run through on the component loop: {}".format(kinds))
+                failed = True
+                break
     finally:
         chat_module.search_source = original
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=5)
+        loop.close()
 
-    if ticks["count"] < 5:
-        print("ERROR: the loop ticked {} times during a 0.3s scan - it is being blocked, not offloaded".format(ticks["count"]))
+    return failed
+
+
+def test_submit_turn_needs_a_running_component(my_predbat):
+    """Handing work over before the component loop exists is a clean error, not a hang."""
+    failed = False
+    print("**** Testing submit_turn before the component has started ****")
+    agent = _agent_with_fake(my_predbat, _text_response("hello"))
+    agent.loop = None
+    cid = asyncio.run(agent.store.create())
+    try:
+        agent.submit_turn(cid, "too early")
+        print("ERROR: submit_turn was accepted with no component loop")
         failed = True
-
+    except chat.AgentNotReadyError:
+        pass
+    if agent.active is not None:
+        print("ERROR: a refused submit_turn left the turn slot claimed")
+        failed = True
     return failed
 ```
 
-Add `import time` to the test file's imports. Extend the driver with `test_plain_answer`, `test_tool_call_round_trip`, `test_tool_call_cap`, `test_tool_failures_are_results`, `test_titles`, `test_busy_rejects_a_second_turn` and `test_source_tools_do_not_block_the_loop`.
+Add `import threading`, `import time` and `import chat` to the test file's imports. Extend the driver with `test_plain_answer`, `test_tool_call_round_trip`, `test_tool_call_cap`, `test_tool_failures_are_results`, `test_titles`, `test_busy_rejects_a_second_turn`, `test_submit_turn_hands_off_to_the_component_loop` and `test_submit_turn_needs_a_running_component`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -2966,8 +3032,6 @@ Add to the imports at the top of `apps/predbat/chat.py`:
 
 ```python
 import aiohttp
-import asyncio
-import functools
 import json
 import time
 
@@ -3077,31 +3141,57 @@ Then append these methods to `ChatAgent`:
             return {"success": True, "error": None, "data": {"title": title}}
         if name == "search_docs":
             return await search_docs(self.storage, arguments.get("query"), max_results=arguments.get("max_results", 5))
-        # search_source and read_source are synchronous file scans, and this coroutine runs on
-        # the web component's event loop. Calling them directly would freeze the web server - and
-        # with it this turn's own SSE stream - for as long as the scan takes. Offload both.
-        loop = asyncio.get_running_loop()
+        # These are synchronous scans, and they run here on the component's own loop, whose only
+        # other job is a five-second housekeeping tick. Stalling it briefly costs nothing the user
+        # can see: the web server is a different loop in a different thread, and the SSE stream
+        # reads the event buffer through a threading.Lock rather than through this loop.
         if name == "search_source":
-            return await loop.run_in_executor(None, functools.partial(search_source, arguments.get("pattern"), file=arguments.get("file"), max_results=arguments.get("max_results", 20)))
+            return search_source(arguments.get("pattern"), file=arguments.get("file"), max_results=arguments.get("max_results", 20))
         if name == "read_source":
-            return await loop.run_in_executor(None, functools.partial(read_source, arguments.get("file"), start_line=arguments.get("start_line", 1), max_lines=arguments.get("max_lines", 200)))
+            return read_source(arguments.get("file"), start_line=arguments.get("start_line", 1), max_lines=arguments.get("max_lines", 200))
         if name == "fetch_url":
             return await fetch_url(arguments.get("url"), allowlist=self.fetch_allowlist)
         return await self.tools.execute(name, arguments)
 
-    async def run_turn(self, conversation_id, text):
-        """Run one full agentic turn in a conversation and return its turn id."""
+    def claim_turn(self, conversation_id):
+        """Reserve the single turn slot and return the new turn id.
+
+        Synchronous and lock-guarded so the web thread can decide busy-or-not without waiting on
+        either loop: by the time submit_turn returns, a concurrent send is already a clean 409.
+        """
         meta = self.store.get_meta(conversation_id)
         if meta is None:
             raise KeyError("Unknown conversation {}".format(conversation_id))
-
         with self.lock:
             if self.active is not None:
                 raise ChatBusyError("A reply is already in progress in '{}'".format(self.active.get("title")))
             self.turn_counter += 1
             turn_id = self.turn_counter
             self.active = {"conversation_id": conversation_id, "turn_id": turn_id, "title": meta.get("title")}
+        return turn_id
 
+    def submit_turn(self, conversation_id, text):
+        """Start a turn on this component's loop and return its id without waiting for it.
+
+        This is the web layer's entry point. The reply is delivered through the event buffer, so
+        the HTTP request that started it has nothing left to wait for.
+        """
+        loop = self.loop
+        if loop is None:
+            raise AgentNotReadyError("The chat component has not finished starting")
+        turn_id = self.claim_turn(conversation_id)
+        asyncio.run_coroutine_threadsafe(self._execute_turn(conversation_id, turn_id, text), loop)
+        return turn_id
+
+    async def run_turn(self, conversation_id, text):
+        """Claim and run a turn inline on the current loop, returning its id when it finishes."""
+        turn_id = self.claim_turn(conversation_id)
+        await self._execute_turn(conversation_id, turn_id, text)
+        return turn_id
+
+    async def _execute_turn(self, conversation_id, turn_id, text):
+        """Run one full agentic turn, releasing the turn slot however it ends."""
+        meta = self.store.get_meta(conversation_id) or {}
         self.titled_this_turn = False
         self.deadline = time.monotonic() + self.turn_timeout
         self.emit(None, "busy", {"conversation_id": conversation_id, "title": meta.get("title"), "turn_id": turn_id})
@@ -3134,7 +3224,6 @@ Then append these methods to `ChatAgent`:
                 self.active = None
             self.emit(conversation_id, "done", {"turn_id": turn_id})
             self.emit(None, "idle", {})
-        return turn_id
 
     async def _turn_loop(self, conversation_id, turn_id, text):
         """Alternate completions and tool calls until the model answers or the cap is reached."""
@@ -3563,6 +3652,12 @@ user who steps away does not time out their own approval."
 
 ## Task 9: The web layer — routes and SSE
 
+The handlers here are a thin transport. They start turns, read the event buffer and mutate the
+conversation index — they never run a model conversation or a tool themselves. Three call
+shapes, matching the cross-thread contract in Global Constraints: `submit_turn()` synchronously
+for starting a turn, `await agent.run_on_agent_loop(...)` for store mutations whose result the
+handler needs, and direct calls for lock-guarded in-memory reads.
+
 **Files:**
 - Create: `apps/predbat/web_chat.py`
 - Create: `apps/predbat/tests/test_web_chat.py`
@@ -3672,10 +3767,16 @@ def test_send_is_busy_and_unknown_is_404(my_predbat):
     failed = False
     print("**** Testing chat send busy and unknown conversation handling ****")
 
+    from chat import ChatBusyError
+
     class BusyAgent:
         """An agent stand-in that is always mid-turn."""
 
         active = {"conversation_id": "aaaabbbbccccdddd", "turn_id": 3, "title": "why is it charging at 3am"}
+
+        def submit_turn(self, conversation, message):
+            """Refuse the handoff the way a busy component would."""
+            raise ChatBusyError("A reply is already in progress in 'why is it charging at 3am'")
 
         class store:
             """A conversation store stand-in that knows one conversation."""
@@ -3828,6 +3929,8 @@ import json
 
 from aiohttp import web
 
+from chat import AgentNotReadyError, ChatBusyError
+
 SSE_POLL_SECONDS = 0.1
 SSE_HEARTBEAT_SECONDS = 15
 
@@ -3888,7 +3991,10 @@ class WebChat:
         if agent is None:
             return web.json_response({"error": "Chat is not configured"}, status=404)
         protect = (agent.active or {}).get("conversation_id")
-        cid = await agent.store.create(protect_id=protect)
+        try:
+            cid = await agent.run_on_agent_loop(agent.store.create(protect_id=protect))
+        except AgentNotReadyError:
+            return web.json_response({"error": "The chat component is still starting"}, status=503)
         return web.json_response({"id": cid})
 
     async def html_chat_rename(self, request):
@@ -3901,7 +4007,7 @@ class WebChat:
         if error:
             return error
         title = agent.store.rename(body.get("id"), body.get("title"))
-        await agent.store.flush(body.get("id"))
+        await agent.run_on_agent_loop(agent.store.flush(body.get("id")))
         return web.json_response({"id": body.get("id"), "title": title})
 
     async def html_chat_delete(self, request):
@@ -3916,7 +4022,7 @@ class WebChat:
             return error
         if (agent.active or {}).get("conversation_id") == cid:
             return web.json_response({"error": "busy", "message": "This conversation is mid-reply"}, status=409)
-        await agent.store.delete(cid)
+        await agent.run_on_agent_loop(agent.store.delete(cid))
         return web.json_response({"deleted": cid})
 
     async def html_chat_history(self, request):
@@ -3928,7 +4034,7 @@ class WebChat:
         meta, error = self._conversation_or_404(agent, cid)
         if error:
             return error
-        messages = await agent.store.get_messages(cid)
+        messages = await agent.run_on_agent_loop(agent.store.get_messages(cid))
         _, cursor, _ = agent.events_since(0, cid)
         return web.json_response({"id": cid, "title": meta.get("title"), "model": meta.get("model"), "usage_total": meta.get("usage_total"), "messages": messages or [], "cursor": cursor, "active": agent.active})
 
@@ -3945,16 +4051,18 @@ class WebChat:
         message = str(body.get("message") or "").strip()
         if not message:
             return web.json_response({"error": "Message is empty"}, status=400)
-        active = agent.active
-        if active is not None:
-            return web.json_response({"error": "busy", "conversation_id": active.get("conversation_id"), "title": active.get("title")}, status=409)
+        # submit_turn claims the slot under the lock and schedules the turn on the component's
+        # own loop, so this returns while the reply is still being produced. Everything the user
+        # sees arrives over the SSE stream; there is nothing for this request to wait for.
         try:
-            turn_id = await agent.run_turn(cid, message)
-        except Exception as error:
-            active = agent.active
-            if active is not None:
-                return web.json_response({"error": "busy", "conversation_id": active.get("conversation_id"), "title": active.get("title")}, status=409)
-            return web.json_response({"error": str(error)}, status=500)
+            turn_id = agent.submit_turn(cid, message)
+        except ChatBusyError:
+            active = agent.active or {}
+            return web.json_response({"error": "busy", "conversation_id": active.get("conversation_id"), "title": active.get("title")}, status=409)
+        except AgentNotReadyError:
+            return web.json_response({"error": "The chat component is still starting"}, status=503)
+        except KeyError:
+            return web.json_response({"error": "Unknown conversation"}, status=404)
         return web.json_response({"turn_id": turn_id})
 
     async def html_chat_confirm(self, request):
@@ -4082,7 +4190,7 @@ For this task only, `html_chat_models` and `html_chat_model` do not exist yet �
         if error:
             return error
         agent.store.set_model(body.get("conversation"), body.get("id") or None)
-        await agent.store.flush(body.get("conversation"))
+        await agent.run_on_agent_loop(agent.store.flush(body.get("conversation")))
         return web.json_response({"ok": True})
 ```
 
@@ -4323,6 +4431,7 @@ def test_model_catalogue(my_predbat):
         """Return a catalogue with one tool-capable model and one without."""
         return {"data": [{"id": "good/model", "name": "Good", "supported_parameters": ["tools", "temperature"]}, {"id": "bad/model", "name": "Bad", "supported_parameters": ["temperature"]}]}
 
+    agent.storage = None
     agent._fetch_model_catalogue = fake_catalogue
     models = asyncio.run(agent.list_models())
     ids = [entry["id"] for entry in models]
@@ -4413,7 +4522,10 @@ Replace the `html_chat_models` placeholder in `web_chat.py`:
         agent = self.agent
         if agent is None:
             return web.json_response({"error": "Chat is not configured"}, status=404)
-        models = await agent.list_models()
+        try:
+            models = await agent.run_on_agent_loop(agent.list_models())
+        except AgentNotReadyError:
+            return web.json_response({"error": "The chat component is still starting"}, status=503)
         return web.json_response({"models": models, "default_model": agent.default_model, "catalogue_available": len(models) > 1})
 ```
 
@@ -4532,18 +4644,22 @@ Tasks 6-7; §7.1 → Task 3; §7.2 → Task 4; §7.3 → Task 5; §7.4 and §15.
 
 **Known gaps, deliberately carried:**
 
-1. `POST /chat/send` awaits `run_turn` before responding, so the HTTP response returns at the
-   *end* of the turn rather than the start. The SSE stream still delivers everything live, so the
-   user sees the reply stream in, but a client that waits on the POST will hold a connection open
-   for the whole turn. The spec describes `send` returning `{turn_id}` immediately. Fixing it
-   means firing the turn as a task on the web loop and returning at once — do that in Task 9 if
-   `asyncio.ensure_future(agent.run_turn(...))` proves reliable in this codebase's threading
-   model, and keep the awaited version if it does not. Either way the 409 busy semantics are
-   unchanged, because `agent.active` is claimed synchronously inside `run_turn` before its first
-   await.
-2. `POST /chat/cancel` sets `agent.deadline = 0`, which stops the turn at its next iteration
+1. `POST /chat/cancel` sets `agent.deadline = 0`, which stops the turn at its next iteration
    boundary rather than mid-stream. That is honest but not instant; the spec's wording implies
    an abort. Acceptable for v1 — say so in the UI ("stopping after this step").
+2. A turn scheduled on the component loop dies if the component is stopped or restarted
+   mid-turn, because `asyncio.run()` closes that loop on exit. The turn slot is released by the
+   `finally` in `_execute_turn` only if the coroutine gets to run it; a hard loop close will not.
+   `ChatAgent.run()` therefore clears a stale `active` whose turn id has not changed across two
+   consecutive ticks — add that guard when implementing Task 6's `run()`, or a killed turn leaves
+   the composer locked until Predbat restarts.
+
+**Concurrency review.** Each cross-thread call was checked against the contract: `submit_turn`,
+`claim_turn`, `confirm`, `emit`, `events_since`, `get_meta` and `list_conversations` are
+synchronous and lock-guarded, so the web thread may call them directly. `store.create`,
+`store.delete`, `store.flush`, `store.get_messages` and `list_models` all touch Storage and are
+therefore routed through `run_on_agent_loop`, keeping every write on one loop. Nothing in a
+handler awaits model or tool work.
 
 **Type consistency checked:** `ConversationStore.create(model=None, protect_id=None)` is called
 with `protect_id` in Task 9; `events_since` returns a 3-tuple everywhere it is used;
