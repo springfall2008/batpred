@@ -162,6 +162,7 @@ SOURCE_MAX_BYTES = 65536
 SOURCE_MATCH_LINE_MAX = 300
 SOURCE_PATTERN_MAX = 200
 SOURCE_SCAN_SECONDS = 5.0
+SOURCE_SCAN_CHECK_LINES = 500  # how often the per-line loop re-checks the scan budget, in lines
 
 
 class SourceAccessError(ValueError):
@@ -194,13 +195,22 @@ def resolve_source_path(relative, root=None):
 
 
 def _iter_source_files(root):
-    """Yield (relative_path, absolute_path) for every readable source file under root."""
+    """Yield (relative_path, absolute_path) for every readable source file under root.
+
+    root is expected to already be realpath'd by the caller. Each candidate's real path is
+    checked against it too, so a file that is itself a symlink pointing outside the tree is
+    skipped here the same way resolve_source_path would refuse it if read directly - search and
+    read agree about what counts as inside the tree.
+    """
     for directory, subdirectories, filenames in os.walk(root):
         subdirectories[:] = [name for name in subdirectories if name not in SOURCE_SKIP_DIRS and not name.startswith(".")]
         for filename in filenames:
             if os.path.splitext(filename)[1].lower() not in SOURCE_EXTENSIONS:
                 continue
             absolute = os.path.join(directory, filename)
+            real = os.path.realpath(absolute)
+            if real != root and not real.startswith(root + os.sep):
+                continue
             yield os.path.relpath(absolute, root), absolute
 
 
@@ -237,12 +247,20 @@ def search_source(pattern, file=None, max_results=20, root=None):
         try:
             with open(absolute, "r", encoding="utf-8", errors="replace") as handle:
                 for number, line in enumerate(handle, start=1):
+                    # The budget is re-checked here too, not just between files: a single large
+                    # file must not be able to stall the scan past SOURCE_SCAN_SECONDS on its own.
+                    # Checking every SOURCE_SCAN_CHECK_LINES lines keeps the check itself cheap.
+                    if number % SOURCE_SCAN_CHECK_LINES == 0 and time.monotonic() - started > SOURCE_SCAN_SECONDS:
+                        truncated_scan = True
+                        break
                     if expression.search(line):
                         total += 1
                         if len(hits) < limit:
                             hits.append({"file": relative, "line": number, "text": line.rstrip("\n")[:SOURCE_MATCH_LINE_MAX]})
         except (IOError, OSError):
             continue
+        if truncated_scan:
+            break
 
     result = {"success": True, "error": None, "data": hits, "total_matches": total, "description": "Matches in Predbat's installed source, which is the exact version running"}
     if truncated_scan:

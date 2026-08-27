@@ -143,12 +143,20 @@ def test_search_docs_uses_the_cache(my_predbat):
 
 
 def _make_source_tree():
-    """Build a throwaway source tree with the decoy files a real install can contain."""
+    """Build a throwaway source tree with the decoy files a real install can contain.
+
+    plan.py is deliberately oversized: enough filler lines to exceed SOURCE_MAX_LINES, plus one
+    line long enough to exceed SOURCE_MATCH_LINE_MAX, so the tests that assert those caps
+    actually exercise them rather than passing because the fixture never came close. wide.py
+    exists purely to exceed SOURCE_MAX_BYTES within its first SOURCE_MAX_LINES lines.
+    """
     root = tempfile.mkdtemp(prefix="predbat_src_")
     with open(os.path.join(root, "plan.py"), "w", encoding="utf-8") as handle:
-        handle.write("def calculate_plan(self):\n    # marker_symbol lives here\n    return True\n" + "# filler\n" * 50)
+        handle.write("def calculate_plan(self):\n    # marker_symbol lives here\n    return True\n" + "# filler\n" * 450 + "# marker_symbol " + ("y" * 320) + "\n")
     with open(os.path.join(root, "prediction_kernel.cpp"), "w", encoding="utf-8") as handle:
         handle.write("// marker_symbol in C++\nint main() { return 0; }\n")
+    with open(os.path.join(root, "wide.py"), "w", encoding="utf-8") as handle:
+        handle.write(("# " + ("w" * 200) + "\n") * 500)
     with open(os.path.join(root, "predbat.log"), "w", encoding="utf-8") as handle:
         handle.write("2026-08-27: marker_symbol should never be reachable\n")
     with open(os.path.join(root, "apps.yaml"), "w", encoding="utf-8") as handle:
@@ -195,13 +203,19 @@ def test_search_source(my_predbat):
             print("ERROR: search_source reached files it must never read: {}".format(leaked))
             failed = True
 
+        truncated_hit = False
         for hit in result.get("data") or []:
-            if len(hit.get("text", "")) > 300:
+            if len(hit.get("text", "")) > chat_tools.SOURCE_MATCH_LINE_MAX:
                 print("ERROR: a match line was not truncated: {} chars".format(len(hit["text"])))
                 failed = True
+            if len(hit.get("text", "")) == chat_tools.SOURCE_MATCH_LINE_MAX:
+                truncated_hit = True
             if "line" not in hit:
                 print("ERROR: a match is missing its line number: {}".format(hit))
                 failed = True
+        if not truncated_hit:
+            print("ERROR: no match line was long enough to exercise the {}-character truncation".format(chat_tools.SOURCE_MATCH_LINE_MAX))
+            failed = True
 
         capped = search_source("filler", max_results=2, root=root)
         if len(capped.get("data") or []) > 2:
@@ -267,9 +281,19 @@ def test_read_source(my_predbat):
             failed = True
 
         clamped = read_source("plan.py", max_lines=99999, root=root)
-        clamped_lines = str(clamped.get("data", {}).get("lines", "")).strip().splitlines()
-        if len(clamped_lines) > 400:
-            print("ERROR: max_lines was not clamped, got {} lines".format(len(clamped_lines)))
+        clamped_data = clamped.get("data", {})
+        clamped_lines = str(clamped_data.get("lines", "")).strip().splitlines()
+        if clamped_data.get("total_lines", 0) <= chat_tools.SOURCE_MAX_LINES:
+            print("ERROR: plan.py is not long enough to exercise the {}-line cap, has {} lines".format(chat_tools.SOURCE_MAX_LINES, clamped_data.get("total_lines")))
+            failed = True
+        if len(clamped_lines) != chat_tools.SOURCE_MAX_LINES:
+            print("ERROR: max_lines was not clamped to exactly {}, got {} lines".format(chat_tools.SOURCE_MAX_LINES, len(clamped_lines)))
+            failed = True
+
+        byte_capped = read_source("wide.py", max_lines=99999, root=root)
+        byte_capped_text = str(byte_capped.get("data", {}).get("lines", ""))
+        if "truncated at" not in byte_capped_text or "bytes" not in byte_capped_text:
+            print("ERROR: the byte cap did not fire on an oversized file, or its marker is missing: {!r}".format(byte_capped_text[-160:]))
             failed = True
 
         if read_source("prediction_kernel.cpp", root=root).get("success") is not True:
@@ -308,6 +332,10 @@ def test_read_source_refuses_everything_it_should(my_predbat):
             if read_source("escaped.py", root=root).get("success"):
                 print("ERROR: a symlink pointing outside the source root was followed")
                 failed = True
+            scanned = search_source("outside the source root", root=root)
+            if scanned.get("data"):
+                print("ERROR: search_source's full-tree walk followed a symlink out of the source root: {}".format(scanned.get("data")))
+                failed = True
 
         try:
             resolve_source_path("apps.yaml", root=root)
@@ -315,6 +343,84 @@ def test_read_source_refuses_everything_it_should(my_predbat):
             failed = True
         except SourceAccessError:
             pass
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    return failed
+
+
+class _FakeClock:
+    """A scripted monotonic clock: returns each value from a list in order, then holds the last one."""
+
+    def __init__(self, values):
+        """Store the sequence of timestamps this fake clock will return, in order."""
+        self._values = list(values)
+
+    def monotonic(self):
+        """Return the next scripted timestamp, holding at the last one once the list is exhausted."""
+        if len(self._values) > 1:
+            return self._values.pop(0)
+        return self._values[0]
+
+
+def test_search_source_bounds_a_single_large_file(my_predbat):
+    """The scan budget is re-checked inside the per-line loop, not just between files.
+
+    A single large file must not be able to stall the scan past SOURCE_SCAN_SECONDS on its own.
+    The clock is scripted rather than real time, so this fires deterministically instead of
+    needing an actual multi-second sleep: `started` and the top-of-file check both land inside
+    the budget, so only the per-line check (fired every SOURCE_SCAN_CHECK_LINES lines) can be the
+    one that trips it here.
+    """
+    failed = False
+    print("**** Testing search_source per-line scan budget ****")
+    root = _make_source_tree()
+    try:
+        huge_name = "huge_scan_budget.py"
+        with open(os.path.join(root, huge_name), "w", encoding="utf-8") as handle:
+            for number in range(2000):
+                handle.write("# marker_symbol filler line {}\n".format(number))
+
+        original_clock = chat_tools.time
+        chat_tools.time = _FakeClock([0.0, 0.0, chat_tools.SOURCE_SCAN_SECONDS + 1.0])
+        try:
+            result = search_source("marker_symbol", file=huge_name, root=root)
+        finally:
+            chat_tools.time = original_clock
+
+        if not result.get("success"):
+            print("ERROR: search_source failed: {}".format(result.get("error")))
+            failed = True
+        if result.get("total_matches", 0) >= 2000:
+            print("ERROR: the per-line scan budget did not stop a single large file, saw {} matches".format(result.get("total_matches")))
+            failed = True
+        if "partial" not in str(result.get("description", "")):
+            print("ERROR: a scan stopped mid-file did not report itself as partial: {}".format(result.get("description")))
+            failed = True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    return failed
+
+
+def test_source_extension_matching_edge_cases(my_predbat):
+    """Extension matching is case-insensitive and judges a double extension by its final suffix."""
+    failed = False
+    print("**** Testing source extension matching edge cases ****")
+    root = _make_source_tree()
+    try:
+        with open(os.path.join(root, "SHOUTY.PY"), "w", encoding="utf-8") as handle:
+            handle.write("marker_symbol = 'uppercase extension'\n")
+        with open(os.path.join(root, "foo.py.yaml"), "w", encoding="utf-8") as handle:
+            handle.write("marker_symbol: not source\n")
+
+        uppercase = read_source("SHOUTY.PY", root=root)
+        if not uppercase.get("success"):
+            print("ERROR: an uppercase .PY extension was refused: {}".format(uppercase.get("error")))
+            failed = True
+
+        double_extension = read_source("foo.py.yaml", root=root)
+        if double_extension.get("success"):
+            print("ERROR: foo.py.yaml was accepted - its final extension is .yaml, not .py")
+            failed = True
     finally:
         shutil.rmtree(root, ignore_errors=True)
     return failed
@@ -330,4 +436,6 @@ def run_chat_tools_tests(my_predbat):
     failed |= test_search_source_rejects_bad_patterns(my_predbat)
     failed |= test_read_source(my_predbat)
     failed |= test_read_source_refuses_everything_it_should(my_predbat)
+    failed |= test_search_source_bounds_a_single_large_file(my_predbat)
+    failed |= test_source_extension_matching_edge_cases(my_predbat)
     return failed
