@@ -1227,7 +1227,7 @@ class OhmeApiClient:
 
         try:
             self.cap_enabled = resp["userSettings"]["chargeSettings"][0]["enabled"]
-        except:
+        except Exception:
             pass
 
         device = resp["chargeDevices"][0]
