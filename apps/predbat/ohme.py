@@ -23,8 +23,7 @@ from dataclasses import dataclass
 import datetime
 import aiohttp
 import time
-from dataclasses import dataclass
-from typing import Any, Dict, List, Union
+from typing import Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA
 from component_base import ComponentBase
