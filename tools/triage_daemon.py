@@ -210,7 +210,20 @@ _ALLOWED_GH_PR_READ = [
 # deliberately no "gh pr review*" either: that would also allow --approve/
 # --request-changes, a governance action beyond "post a comment."
 _REVIEW_REMOVED_DENIALS = {"Bash(gh api*)"}
-_REVIEW_EXTRA_ALLOWED = [f"Bash(gh api repos/{REPO}/*)"]
+# Prefix-glob matching is literal, so a single "Bash(gh api repos/O/R/*)" rule only fires
+# when the endpoint is the very next token, bare. Two forms the agent reaches for miss it
+# and are denied outright under dontAsk: a quoted endpoint, and a method flag ahead of the
+# endpoint - which is the canonical way to write a POST, and therefore exactly the form the
+# comment-posting step picks. That is what silently reduced PR #4758's review to printed
+# findings, while #4759's POST happened to be endpoint-first and went through. Enumerate the
+# realistic (method flag, quoting) combinations instead. Only POST and PATCH are listed -
+# the flow creates and edits comments, it never needs DELETE or PUT - and every variant stays
+# pinned to this repo, so the extra forms widen the accepted spelling, not the reach.
+# GH_API_ENDPOINT_FIRST_PROMPT below steers the agent onto the bare form, making this list a
+# safety net for the spellings we did not think of rather than the primary mechanism.
+_GH_API_METHOD_FLAGS = ["", "--method POST ", "--method PATCH ", "-X POST ", "-X PATCH "]
+_GH_API_ENDPOINT_QUOTES = ["", '"', "'"]
+_REVIEW_EXTRA_ALLOWED = [f"Bash(gh api {flag}{quote}repos/{REPO}/*)" for flag in _GH_API_METHOD_FLAGS for quote in _GH_API_ENDPOINT_QUOTES]
 ALLOWED_TOOLS_REVIEW = ",".join(_ALLOWED_GH_PR_READ + _ALLOWED_TOOLS_NON_GH + _REVIEW_EXTRA_ALLOWED)
 DISALLOWED_TOOLS_REVIEW = ",".join(item for item in _DISALLOWED_TOOLS_BASE if item not in _REVIEW_REMOVED_DENIALS)
 # BOT_CLEANUP needs the review flow's read access and scoped gh api grant, plus
@@ -229,6 +242,23 @@ _CLEANUP_EXTRA_WRITE = [
 ALLOWED_TOOLS_CLEANUP = ",".join(_ALLOWED_GH_PR_READ + _CLEANUP_EXTRA_GH + _ALLOWED_TOOLS_NON_GH + _CLEANUP_EXTRA_WRITE + _REVIEW_EXTRA_ALLOWED)
 _CLEANUP_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)"} | _REVIEW_REMOVED_DENIALS
 DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _CLEANUP_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
+# The other half of the #4758 fix. /code-review is a built-in skill, so the command form it
+# has to use cannot be pinned in a SKILL.md we own - it goes in as an appended system prompt
+# on the two flows holding the scoped gh api grant. Belt and braces with _REVIEW_EXTRA_ALLOWED
+# above: the allowlist covers the spellings we enumerated, this keeps the agent on the one
+# spelling that is certain to be covered, and asks it to say so loudly when a call is denied
+# anyway - #4758 quietly degraded to printing the comments it could not post, which reads like
+# a finished review in the log.
+GH_API_ENDPOINT_FIRST_PROMPT = (
+    "Permission rules in this session match a literal command prefix, so `gh api` calls are only permitted when the current allowlist covers the exact spelling you use. "
+    "Prefer the endpoint-first, unquoted form (endpoint immediately after `gh api`) and put flags after the endpoint - for example "
+    f"`gh api repos/{REPO}/pulls/123/comments --method POST -f path=apps/predbat/example.py`. "
+    'Other spellings (e.g. `gh api --method POST repos/...`, `gh api -X POST repos/...`, `gh api -H ... repos/...` or `gh api "repos/..."`) may be denied in restricted sessions even when the same request is allowed in endpoint-first form. '
+    "Keep each call to a single command: piping into head/tail/grep is fine, but redirecting output anywhere outside "
+    f"{SCRATCH_DIR} or the repository clone - /tmp included - is denied as well. "
+    "If a call is denied regardless, state that plainly in your final message and name the command; do not quietly fall back "
+    "to printing the comments you would have posted."
+)
 
 
 def load_state():
@@ -624,10 +654,13 @@ def remove_pr_review_label(pr_number):
     subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_REVIEW"], check=True)
 
 
-def mark_pr_review_failed(pr_number):
+def mark_pr_review_failed(pr_number, reason=""):
     """Post a note and swap BOT_REVIEW for BOT_FAILED on a PR, so a failing review isn't
-    retried every poll cycle. Remove BOT_FAILED and re-add BOT_REVIEW to retry.
+    retried every poll cycle. Remove BOT_FAILED and re-add BOT_REVIEW to retry. `reason`
+    names the specific failure when there is one - "see the logs" is poor advice for the
+    run that exits 0 having posted nothing, because its log reads like a finished review.
     """
+    detail = f" {reason}" if reason else ""
     subprocess.run(
         [
             "gh",
@@ -637,7 +670,7 @@ def mark_pr_review_failed(pr_number):
             "--repo",
             REPO,
             "--body",
-            "Automated review failed to complete for this PR - see the triage bot's logs for details. " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
+            f"Automated review failed to complete for this PR - see the triage bot's logs for details.{detail} " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
         ],
         check=True,
     )
@@ -721,6 +754,8 @@ def review_pr(pr_number):
         "claude",
         "-p",
         f"/code-review {pr_number} high --comment",
+        "--append-system-prompt",
+        GH_API_ENDPOINT_FIRST_PROMPT,
         "--permission-mode",
         "dontAsk",
         "--allowedTools",
@@ -748,21 +783,58 @@ def review_pr(pr_number):
     print(f"[review-pr] PR #{pr_number}: exited {result.returncode}", flush=True)
 
 
+def pr_review_activity_count(pr_number):
+    """Return how many review bodies sit on a PR: submitted reviews, inline review
+    comments and plain PR comments, summed. process_bot_review_pr() samples this before
+    and after a run, because the exit status cannot answer the question that matters -
+    `claude -p` exits 0 whether or not the posting step was actually permitted, so the
+    count moving is the only available evidence that a review landed.
+    """
+    total = 0
+    for endpoint in (f"repos/{REPO}/pulls/{pr_number}/reviews", f"repos/{REPO}/pulls/{pr_number}/comments", f"repos/{REPO}/issues/{pr_number}/comments"):
+        result = subprocess.run(["gh", "api", endpoint, "--paginate", "--jq", "length"], capture_output=True, text=True, check=True)
+        total += sum(int(page) for page in result.stdout.split())
+    return total
+
+
 def process_bot_review_pr(pr):
     """Run the BOT_REVIEW flow for one PR: /code-review posts findings as comments,
     nothing here ever touches the PR's code. On success, remove BOT_REVIEW - the
     posted review is the artifact, there's no separate "done" state to track. A
-    failed invocation swaps to BOT_FAILED instead, with an explanatory comment.
+    failed invocation swaps to BOT_FAILED instead, with an explanatory comment, as
+    does a run that exits 0 without posting anything: PR #4758's review had every
+    inline comment denied by the permission rules, still exited 0, and had BOT_REVIEW
+    cleared - leaving no review, no BOT_FAILED, and nothing marking it for retry.
     """
     pr_number = pr["number"]
     print(f'[review-pr] PR #{pr_number}: "{pr["title"]}" - {pr_url(pr_number)}', flush=True)
     sync_repo()
     reset_scratch()
+
+    try:
+        before = pr_review_activity_count(pr_number)
+    except subprocess.CalledProcessError as exc:
+        print(f"[review-pr] PR #{pr_number}: failed to sample activity count before review: {exc}", flush=True)
+        mark_pr_review_failed(pr_number, "Unable to sample PR review activity before running the review, so the result could not be verified.")
+        return
+
     try:
         review_pr(pr_number)
     except subprocess.CalledProcessError as exc:
         print(f"[review-pr] PR #{pr_number}: review failed: {exc}", flush=True)
         mark_pr_review_failed(pr_number)
+        return
+
+    try:
+        after = pr_review_activity_count(pr_number)
+    except subprocess.CalledProcessError as exc:
+        print(f"[review-pr] PR #{pr_number}: failed to sample activity count after review: {exc}", flush=True)
+        mark_pr_review_failed(pr_number, "The review run finished, but the activity count check failed, so it could not be verified that anything was posted.")
+        return
+
+    if after <= before:
+        print(f"[review-pr] PR #{pr_number}: exited cleanly but posted nothing, marking failed", flush=True)
+        mark_pr_review_failed(pr_number, "The run exited cleanly but posted nothing, so the review step itself did not complete.")
         return
     remove_pr_review_label(pr_number)
 
@@ -775,6 +847,8 @@ def cleanup_pr(pr_number):
         "claude",
         "-p",
         f"/pr-cleanup {pr_number} scratch={SCRATCH_DIR}",
+        "--append-system-prompt",
+        GH_API_ENDPOINT_FIRST_PROMPT,
         "--permission-mode",
         "dontAsk",
         "--allowedTools",
