@@ -11,7 +11,7 @@
 
 from datetime import date
 
-from annual import AnnualConfigError, scrub_secrets, validate_config
+from annual import DEFAULT_SAMPLES_PER_MONTH, AnnualConfigError, scrub_secrets, validate_config
 
 
 def base_config():
@@ -621,6 +621,22 @@ def test_annual_config(my_predbat):
     except AnnualConfigError as error:
         if "complete" not in str(error).lower():
             print("  ERROR: in-progress month rejection raised '{}', expected it to mention 'complete'".format(error))
+            failed = True
+
+    print("Test: a config using none of the new keys validates to the same document as before")
+    config = base_config()
+    result = validate_config(config, today=date(2026, 8, 26))
+    expected_defaults = {
+        "months": list(range(1, 13)),
+        "sampling": "percentile",
+        "export_tariffs": [],
+        "fast_mode": False,
+        "year": 2025,
+        "samples_per_month": DEFAULT_SAMPLES_PER_MONTH,
+    }
+    for key, expected in expected_defaults.items():
+        if result[key] != expected:
+            print("  ERROR: default for '{}' should be {}, got {}".format(key, expected, result[key]))
             failed = True
 
     return failed
