@@ -625,7 +625,15 @@ def test_fetch_url_revalidates_every_redirect_hop(my_predbat):
     public = _resolver("140.82.121.4")
     original_session_class = chat_tools.aiohttp.ClientSession
 
-    off_allowlist_session = _FakeFetchSession({"https://github.com/x": _FakeFetchResponse(302, headers={"Location": "https://attacker.example/steal"})})
+    # A scripted 200 for the attacker URL too: if the guard is removed, the fake must be able to
+    # actually serve it, so the assertion below is what catches the regression - not a KeyError
+    # from the fake's dict lookup, which would fail the test for the wrong reason.
+    off_allowlist_session = _FakeFetchSession(
+        {
+            "https://github.com/x": _FakeFetchResponse(302, headers={"Location": "https://attacker.example/steal"}),
+            "https://attacker.example/steal": _FakeFetchResponse(200, headers={"Content-Type": "text/plain"}, body=b"stolen"),
+        }
+    )
     chat_tools.aiohttp.ClientSession = lambda timeout=None: off_allowlist_session
     try:
         result = asyncio.run(chat_tools.fetch_url("https://github.com/x", resolver=public))
@@ -662,6 +670,37 @@ def test_fetch_url_revalidates_every_redirect_hop(my_predbat):
     return failed
 
 
+def test_fetch_url_malformed_inputs_return_results(my_predbat):
+    """A malformed URL or an unencodable hostname is a clean failure result, never an exception.
+
+    urlparse() itself accepts syntax such as an unterminated IPv6 bracket or a bracketed non-IPv6
+    literal - it is the .hostname property access that raises a bare ValueError for those, and
+    FetchRefusedError subclassing ValueError does not catch it (Python matches on the actual
+    instance type, not a shared base class). A hostname label over 63 characters fails IDNA
+    encoding inside socket.getaddrinfo with UnicodeEncodeError, which is not an OSError subclass
+    either. Both used to escape fetch_url as a live exception instead of a tool result.
+
+    No resolver override is passed: the third case only exercises the fix if the real
+    _default_resolver path runs, since a fake resolver would bypass socket.getaddrinfo entirely.
+    That is still hermetic - the IDNA encoding failure happens locally before any DNS query or
+    socket call, so nothing here touches the network. Letting an escaping exception propagate out
+    of asyncio.run() here fails this test with an uncaught exception, which is itself evidence of
+    a regression.
+    """
+    failed = False
+    print("**** Testing fetch_url on malformed inputs that must not raise ****")
+    malformed = ["https://[::1", "https://[gh]/x", "https://" + "a" * 64 + ".github.com/x"]
+    for url in malformed:
+        result = asyncio.run(chat_tools.fetch_url(url))
+        if result.get("success"):
+            print("ERROR: a malformed URL was treated as fetchable: {!r}".format(url))
+            failed = True
+        if not result.get("error"):
+            print("ERROR: a malformed URL was refused without naming a reason: {!r} -> {}".format(url, result))
+            failed = True
+    return failed
+
+
 def run_chat_tools_tests(my_predbat):
     """Run every chat-only tool test, returning True if any of them failed."""
     failed = False
@@ -680,4 +719,5 @@ def run_chat_tools_tests(my_predbat):
     failed |= test_fetch_url_refusals_are_results(my_predbat)
     failed |= test_validate_fetch_target_checks_every_resolved_address(my_predbat)
     failed |= test_fetch_url_revalidates_every_redirect_hop(my_predbat)
+    failed |= test_fetch_url_malformed_inputs_return_results(my_predbat)
     return failed

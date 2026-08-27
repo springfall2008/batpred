@@ -343,29 +343,39 @@ def _default_resolver(host):
 
 
 def validate_fetch_target(url, allowlist, resolver=None):
-    """Check one URL against every fetch rule, returning it, or raise FetchRefusedError."""
-    parsed = urlparse(str(url or ""))
+    """Check one URL against every fetch rule, returning it, or raise FetchRefusedError.
+
+    urlparse() itself accepts malformed bracket/IPv6-literal syntax such as 'https://[::1' - it is
+    the .hostname property access that raises a bare ValueError for it, so both are wrapped here.
+    FetchRefusedError subclasses ValueError but 'except FetchRefusedError' would not catch that
+    bare ValueError, since Python matches on the actual instance type, not a shared base class.
+    """
+    try:
+        parsed = urlparse(str(url or ""))
+        hostname = parsed.hostname
+    except ValueError as error:
+        raise FetchRefusedError("'{}' is not a valid URL: {}".format(url, error))
     if parsed.scheme != "https":
         raise FetchRefusedError("only https URLs can be fetched, got '{}'".format(parsed.scheme or url))
-    if not parsed.hostname:
+    if not hostname:
         raise FetchRefusedError("'{}' is not a valid URL".format(url))
-    if not host_allowed(parsed.hostname, allowlist):
-        raise FetchRefusedError("'{}' is not on the fetch allowlist ({})".format(parsed.hostname, ", ".join(allowlist)))
+    if not host_allowed(hostname, allowlist):
+        raise FetchRefusedError("'{}' is not on the fetch allowlist ({})".format(hostname, ", ".join(allowlist)))
 
     try:
-        addresses = (resolver or _default_resolver)(parsed.hostname)
-    except (socket.gaierror, OSError) as error:
-        raise FetchRefusedError("could not resolve '{}': {}".format(parsed.hostname, error))
+        addresses = (resolver or _default_resolver)(hostname)
+    except (socket.gaierror, OSError, UnicodeError) as error:
+        raise FetchRefusedError("could not resolve '{}': {}".format(hostname, error))
     if not addresses:
-        raise FetchRefusedError("'{}' did not resolve to any address".format(parsed.hostname))
+        raise FetchRefusedError("'{}' did not resolve to any address".format(hostname))
 
     for address in addresses:
         try:
             parsed_address = ipaddress.ip_address(str(address).split("%")[0])
         except ValueError:
-            raise FetchRefusedError("'{}' resolved to an address that could not be parsed".format(parsed.hostname))
+            raise FetchRefusedError("'{}' resolved to an address that could not be parsed".format(hostname))
         if parsed_address.is_private or parsed_address.is_loopback or parsed_address.is_link_local or parsed_address.is_reserved or parsed_address.is_multicast or parsed_address.is_unspecified:
-            raise FetchRefusedError("'{}' resolves to the internal address {}, which cannot be fetched".format(parsed.hostname, parsed_address))
+            raise FetchRefusedError("'{}' resolves to the internal address {}, which cannot be fetched".format(hostname, parsed_address))
     return url
 
 

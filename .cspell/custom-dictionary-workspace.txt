@@ -618,6 +618,7 @@ unconfigured
 underivable
 undiscounted
 undriven
+unencodable
 unfetchable
 unflushed
 unnormalised
