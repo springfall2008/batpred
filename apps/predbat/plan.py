@@ -862,7 +862,6 @@ class Plan:
             soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
             soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
             soc_percent_max = max(soc_percent, soc_percent_end)
-            soc_percent_min = min(soc_percent, soc_percent_end)
 
             if charge_window_n >= 0 and export_window_n >= 0:
                 value = "Chrg/Exp"
@@ -3414,7 +3413,6 @@ class Plan:
                         window_start_orig = self.export_window_best[window_n].get("start_orig", window_start)
                         window_start_from_now = max(window_start, self.minutes_now)
                         window_length = self.export_window_best[window_n]["end"] - window_start_from_now
-                        window_length_orig = self.export_window_best[window_n]["end"] - window_start_orig
                         export_limit = self.export_limits_best[window_n]
                         window_day = self.export_window_best[window_n]["start"] // 1440
 
@@ -4066,7 +4064,6 @@ class Plan:
             self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows], calculate_import_low_export=self.calculate_import_low_export, calculate_export_high_import=self.calculate_export_high_import
         )
 
-        best_soc = self.soc_max
         best_cost = best_metric
         best_keep = metric_keep
         best_cycle = 0
