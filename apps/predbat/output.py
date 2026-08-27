@@ -687,6 +687,7 @@ class Output:
         rate_amount_min = rate_amount
         rate_amount_max = rate_amount
         start_minute = self.minutes_now
+        rate_range = "({}{})".format(rate_amount_min, self.currency_symbols[1])
 
         for minute in range(self.minutes_now, end_plan):
             if export:
