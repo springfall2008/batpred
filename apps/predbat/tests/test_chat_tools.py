@@ -526,6 +526,142 @@ def test_fetch_url_refusals_are_results(my_predbat):
     return failed
 
 
+def test_validate_fetch_target_checks_every_resolved_address(my_predbat):
+    """A future 'optimisation' to check only the first resolved address must not go unnoticed.
+
+    validate_fetch_target must refuse a host that resolves to a private address anywhere in its
+    address list, not just when DNS happens to return it first - and must accept a host that
+    resolves only to public addresses. This is hermetic: no HTTP request is involved, only the
+    resolver seam.
+    """
+    failed = False
+    print("**** Testing that every resolved address is checked, not just the first ****")
+    allowlist = ["github.com"]
+
+    def public_then_private(host):
+        """Resolve to a public address followed by a private one."""
+        return ["93.184.216.34", "10.0.0.5"]
+
+    def two_public(host):
+        """Resolve to two distinct public addresses."""
+        return ["93.184.216.34", "140.82.121.4"]
+
+    try:
+        validate_fetch_target("https://github.com/x", allowlist, resolver=public_then_private)
+        print("ERROR: a host resolving to a private address after a public one was accepted")
+        failed = True
+    except FetchRefusedError:
+        pass
+
+    try:
+        validate_fetch_target("https://github.com/x", allowlist, resolver=two_public)
+    except FetchRefusedError as error:
+        print("ERROR: a host resolving to two public addresses was refused: {}".format(error))
+        failed = True
+
+    return failed
+
+
+class _FakeFetchResponse:
+    """An async context manager standing in for one aiohttp response in fetch_url redirect tests."""
+
+    def __init__(self, status, headers=None, body=b""):
+        """Store the scripted status, headers and body this fake response returns."""
+        self.status = status
+        self.headers = headers or {}
+        self.content = self
+        self._body = body
+
+    async def read(self, n):
+        """Return the scripted body, ignoring the requested byte limit for this simple fake."""
+        return self._body
+
+    async def __aenter__(self):
+        """Enter the async context manager, returning this fake response."""
+        return self
+
+    async def __aexit__(self, *exc):
+        """Exit the async context manager without suppressing any exception."""
+        return False
+
+
+class _FakeFetchSession:
+    """A fake aiohttp.ClientSession: scripts one response per URL and records every request made.
+
+    fetch_url creates its own aiohttp.ClientSession, so the seam for testing its redirect
+    behaviour is chat_tools.aiohttp.ClientSession itself - the tests that use this class replace
+    it for their duration and restore it in a finally block.
+    """
+
+    def __init__(self, responses):
+        """Store the URL-to-response mapping to serve and start an empty request log."""
+        self.responses = responses
+        self.requested = []
+
+    async def __aenter__(self):
+        """Enter the async context manager, returning this fake session."""
+        return self
+
+    async def __aexit__(self, *exc):
+        """Exit the async context manager without suppressing any exception."""
+        return False
+
+    def get(self, url, allow_redirects=False):
+        """Record the requested URL and return the scripted fake response for it."""
+        self.requested.append(url)
+        return self.responses[url]
+
+
+def test_fetch_url_revalidates_every_redirect_hop(my_predbat):
+    """Each redirect hop is re-validated before it is requested, and endless chains are bounded.
+
+    The return value alone cannot prove a hop was re-validated: a guard that ran too late, or not
+    at all, could still end up reporting failure after the off-allowlist host had already been
+    asked for data. What matters is whether the fake session was ever asked to fetch it - that
+    request going out is the leak, regardless of what the final result says.
+    """
+    failed = False
+    print("**** Testing fetch_url re-validates every redirect hop ****")
+    public = _resolver("140.82.121.4")
+    original_session_class = chat_tools.aiohttp.ClientSession
+
+    off_allowlist_session = _FakeFetchSession({"https://github.com/x": _FakeFetchResponse(302, headers={"Location": "https://attacker.example/steal"})})
+    chat_tools.aiohttp.ClientSession = lambda timeout=None: off_allowlist_session
+    try:
+        result = asyncio.run(chat_tools.fetch_url("https://github.com/x", resolver=public))
+    finally:
+        chat_tools.aiohttp.ClientSession = original_session_class
+
+    if result.get("success"):
+        print("ERROR: fetch_url followed a redirect off the allowlist and reported success")
+        failed = True
+    if not result.get("error"):
+        print("ERROR: fetch_url refused the redirect without naming a reason: {}".format(result))
+        failed = True
+    if any("attacker.example" in url for url in off_allowlist_session.requested):
+        print("ERROR: fetch_url actually requested the off-allowlist redirect target - the leak already happened: {}".format(off_allowlist_session.requested))
+        failed = True
+
+    chain_responses = {}
+    for hop in range(chat_tools.FETCH_MAX_REDIRECTS + 2):
+        chain_responses["https://github.com/hop{}".format(hop)] = _FakeFetchResponse(302, headers={"Location": "https://github.com/hop{}".format(hop + 1)})
+    chain_session = _FakeFetchSession(chain_responses)
+    chat_tools.aiohttp.ClientSession = lambda timeout=None: chain_session
+    try:
+        chain_result = asyncio.run(chat_tools.fetch_url("https://github.com/hop0", resolver=public))
+    finally:
+        chat_tools.aiohttp.ClientSession = original_session_class
+
+    if chain_result.get("success"):
+        print("ERROR: an endless allowlisted redirect chain was followed to success")
+        failed = True
+    if "too many redirects" not in str(chain_result.get("error", "")).lower():
+        print("ERROR: an over-long redirect chain did not report the too-many-redirects reason: {}".format(chain_result))
+        failed = True
+
+    return failed
+
+
 def run_chat_tools_tests(my_predbat):
     """Run every chat-only tool test, returning True if any of them failed."""
     failed = False
@@ -542,4 +678,6 @@ def run_chat_tools_tests(my_predbat):
     failed |= test_validate_fetch_target(my_predbat)
     failed |= test_html_to_text(my_predbat)
     failed |= test_fetch_url_refusals_are_results(my_predbat)
+    failed |= test_validate_fetch_target_checks_every_resolved_address(my_predbat)
+    failed |= test_fetch_url_revalidates_every_redirect_hop(my_predbat)
     return failed
