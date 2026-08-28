@@ -1254,6 +1254,34 @@ class Plan:
             return preclip_new, preclip_prev
         return plan_new, plan_prev
 
+    def retain_best_plan(self, plan_prev, preclip_prev, preclip_new, debug_mode):
+        """Keep the incumbent plan unless the current best plan passes the replacement policy."""
+        if plan_prev is None or debug_mode:
+            return preclip_new
+
+        plan_new = (self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best)
+        score_new, score_prev = self.plan_scoring_pair(plan_new, plan_prev, preclip_new, preclip_prev)
+        metric_new, battery_value_new, cost_new, metric_keep_new, battery_cycle_new, final_carbon_g_new, import_kwh_new, export_kwh_new = self.run_prediction_metric(score_new[0], score_new[1], score_new[2], score_new[3], end_record=self.end_record)
+        metric_prev, battery_value_prev, cost_prev, metric_keep_prev, battery_cycle_prev, final_carbon_g_prev, import_kwh_prev, export_kwh_prev = self.run_prediction_metric(
+            score_prev[0], score_prev[1], score_prev[2], score_prev[3], end_record=self.end_record
+        )
+
+        self.log("Previous plan best metric is {} (cost {}) and new plan best metric is {} (cost {})".format(dp2(metric_prev), dp2(cost_prev), dp2(metric_new), dp2(cost_new)))
+        fragmentation_prev = self.plan_fragmentation(score_prev[1], score_prev[0], score_prev[2], score_prev[3])
+        fragmentation_new = self.plan_fragmentation(score_new[1], score_new[0], score_new[2], score_new[3])
+        if not self.should_replace_plan(metric_prev, metric_new, fragmentation_prev, fragmentation_new):
+            self.log("New plan metric is not significantly better (metric_min_improvement_plan {}) than previous plan, using previous plan".format(self.metric_min_improvement_plan))
+            self.charge_limit_best = plan_prev[0].copy()
+            self.charge_window_best = clone_windows(plan_prev[1])
+            self.export_window_best = clone_windows(plan_prev[2])
+            self.export_limits_best = plan_prev[3].copy()
+            return preclip_prev
+        if (metric_prev - metric_new) >= self.metric_min_improvement_plan:
+            self.log("New plan metric is significantly better from previous plan, using new plan")
+        else:
+            self.log("New plan is a cost-neutral improvement but less fragmented ({} vs {} segments), using new plan".format(fragmentation_new, fragmentation_prev))
+        return preclip_new
+
     @staticmethod
     def pv_series_signature(series):
         """Return a cheap content and coverage signature for a per-minute PV series.
@@ -1564,35 +1592,10 @@ class Plan:
             preclip_new = self.optimise_best_windows_once(metric, metric_keep, debug_mode)
 
             # Plan comparison
-            if charge_window_best_prev is not None and not debug_mode:
-                # Score the plans as optimised rather than as clipped - see plan_scoring_pair()
-                score_new, score_prev = self.plan_scoring_pair(
-                    (self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best),
-                    (charge_limit_best_prev, charge_window_best_prev, export_window_best_prev, export_limits_best_prev),
-                    preclip_new,
-                    preclip_prev,
-                )
-                metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh, export_kwh = self.run_prediction_metric(score_new[0], score_new[1], score_new[2], score_new[3], end_record=self.end_record)
-                metric_prev, battery_value_prev, cost_prev, metric_keep_prev, battery_cycle_prev, final_carbon_g_prev, import_kwh_prev, export_kwh_prev = self.run_prediction_metric(
-                    score_prev[0], score_prev[1], score_prev[2], score_prev[3], end_record=self.end_record
-                )
-
-                self.log("Previous plan best metric is {} (cost {}) and new plan best metric is {} (cost {})".format(dp2(metric_prev), dp2(cost_prev), dp2(metric), dp2(cost)))
-                fragmentation_prev = self.plan_fragmentation(score_prev[1], score_prev[0], score_prev[2], score_prev[3])
-                fragmentation_new = self.plan_fragmentation(score_new[1], score_new[0], score_new[2], score_new[3])
-                if not self.should_replace_plan(metric_prev, metric, fragmentation_prev, fragmentation_new):
-                    self.log("New plan metric is not significantly better (metric_min_improvement_plan {}) than previous plan, using previous plan".format(self.metric_min_improvement_plan))
-                    self.charge_window_best = clone_windows(charge_window_best_prev)
-                    self.charge_limit_best = charge_limit_best_prev.copy()
-                    self.export_window_best = clone_windows(export_window_best_prev)
-                    self.export_limits_best = export_limits_best_prev.copy()
-                    # Keeping the incumbent keeps its pre-clip snapshot too, so the next cycle still compares
-                    # like for like
-                    preclip_new = preclip_prev
-                elif (metric_prev - metric) >= self.metric_min_improvement_plan:
-                    self.log("New plan metric is significantly better from previous plan, using new plan")
-                else:
-                    self.log("New plan is a cost-neutral improvement but less fragmented ({} vs {} segments), using new plan".format(fragmentation_new, fragmentation_prev))
+            plan_prev = None
+            if charge_window_best_prev is not None:
+                plan_prev = (charge_limit_best_prev, charge_window_best_prev, export_window_best_prev, export_limits_best_prev)
+            preclip_new = self.retain_best_plan(plan_prev, preclip_prev, preclip_new, debug_mode)
 
             # Carry the pre-clip snapshot of whichever plan we kept into the next cycle
             self.plan_preclip = preclip_new
@@ -1609,22 +1612,25 @@ class Plan:
             self.plan_last_updated = self.now_utc
             self.plan_last_updated_minutes = self.minutes_now
 
-        additional_load_adjust_before = self.house_load_additional_forecast_adjust.copy()
-        flexible_selected, load_minutes_step, load_minutes_step10 = self.select_flexible_additional_loads(load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step)
-        if flexible_selected:
-            selected_load_adjust = {
-                minute: self.house_load_additional_forecast_adjust.get(minute, 0.0) - additional_load_adjust_before.get(minute, 0.0)
-                for minute in self.house_load_additional_forecast_adjust.keys() | additional_load_adjust_before.keys()
-                if self.house_load_additional_forecast_adjust.get(minute, 0.0) != additional_load_adjust_before.get(minute, 0.0)
-            }
-            load_minutes_step90 = self.add_additional_load_to_step_data(load_minutes_step90, selected_load_adjust)
-            self.load_minutes_step = load_minutes_step
-            self.load_minutes_step10 = load_minutes_step10
-            self.load_minutes_step90 = load_minutes_step90
-            self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90)
-            self.prediction.batch_threads = resolve_batch_threads(self.get_arg("threads", "auto"), cpu_count())
-            if recompute and self.calculate_best and self.house_load_additional_flexible_selection_changed:
+        if self.calculate_best and recompute:
+            additional_load_adjust_before = self.house_load_additional_forecast_adjust.copy()
+            flexible_selected, load_minutes_step, load_minutes_step10 = self.select_flexible_additional_loads(load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step)
+            if flexible_selected:
+                selected_load_adjust = {
+                    minute: self.house_load_additional_forecast_adjust.get(minute, 0.0) - additional_load_adjust_before.get(minute, 0.0)
+                    for minute in self.house_load_additional_forecast_adjust.keys() | additional_load_adjust_before.keys()
+                    if self.house_load_additional_forecast_adjust.get(minute, 0.0) != additional_load_adjust_before.get(minute, 0.0)
+                }
+                load_minutes_step90 = self.add_additional_load_to_step_data(load_minutes_step90, selected_load_adjust)
+                self.load_minutes_step = load_minutes_step
+                self.load_minutes_step10 = load_minutes_step10
+                self.load_minutes_step90 = load_minutes_step90
+                self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90)
+                self.prediction.batch_threads = resolve_batch_threads(self.get_arg("threads", "auto"), cpu_count())
+            if flexible_selected and self.house_load_additional_flexible_selection_changed:
                 self.log("Re-optimising plan after flexible additional load selection")
+                plan_prev = (self.charge_limit_best.copy(), clone_windows(self.charge_window_best), clone_windows(self.export_window_best), self.export_limits_best.copy())
+                preclip_prev = self.plan_preclip
                 metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
                     self.charge_limit,
                     self.charge_window,
@@ -1633,7 +1639,8 @@ class Plan:
                     False,
                     end_record=self.end_record,
                 )
-                self.plan_preclip = self.optimise_best_windows_once(metric, metric_keep, debug_mode)
+                preclip_new = self.optimise_best_windows_once(metric, metric_keep, debug_mode)
+                self.plan_preclip = self.retain_best_plan(plan_prev, preclip_prev, preclip_new, debug_mode)
 
         # Final simulation of base
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(

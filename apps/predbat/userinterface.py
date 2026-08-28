@@ -156,6 +156,13 @@ class UserInterface:
             else:
                 self.args[arg] = value
 
+    @staticmethod
+    def get_arg_bool(value):
+        """Convert supported string forms and other values to boolean."""
+        if isinstance(value, str):
+            return value.lower() in ["on", "true", "yes", "enabled", "enable", "connected", "1"]
+        return bool(value)
+
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
         Argument getter that can use HA state as well as fixed values
@@ -201,10 +208,7 @@ class UserInterface:
                                     value[idx] = default
                             elif isinstance(org_value, bool) and isinstance(value[idx], str):
                                 # Convert to Boolean
-                                if value[idx].lower() in ["on", "true", "yes", "enabled", "enable", "connected"]:
-                                    value[idx] = True
-                                else:
-                                    value[idx] = False
+                                value[idx] = self.get_arg_bool(value[idx])
                             self.log("Note: API Overridden arg {} value {} index {}".format(arg, value, idx))
                 if index:
                     if index < len(value):
@@ -268,10 +272,7 @@ class UserInterface:
                     value = default
         elif isinstance(default, bool) and isinstance(value, str):
             # Convert to Boolean
-            if value.lower() in ["on", "true", "yes", "enabled", "enable", "connected"]:
-                value = True
-            else:
-                value = False
+            value = self.get_arg_bool(value)
         elif isinstance(default, list):
             # Convert to list?
             if not isinstance(value, list):
@@ -1279,12 +1280,6 @@ class UserInterface:
         if value.startswith("+"):
             # Ignore selections which are just the current value
             return
-        if config_item == "load_forecast_delta_api" and value != "off":
-            name = value.split("?", 1)[0].split("=", 1)[0].replace("[", "").replace("]", "")
-            if "[" not in value and self.has_additional_load_api_command(name):
-                value = self.preserve_additional_load_api_metadata(value)
-            else:
-                self.house_load_additional_forecast_overrides.pop(name, None)
         values = item.get("value", "")
         if not values:
             values = ""
@@ -1367,12 +1362,15 @@ class UserInterface:
         if value.startswith("+"):
             # Ignore selections which are just the current value
             return
-        if config_item == "load_forecast_delta_api" and value != "off" and "[" not in value:
-            name = value.split("?", 1)[0].split("=", 1)[0]
-            if self.has_additional_load_api_command(name):
-                value = self.preserve_additional_load_api_metadata(value)
+        if config_item == "load_forecast_delta_api":
+            if value == "off":
+                self.house_load_additional_forecast_overrides.clear()
             else:
-                self.house_load_additional_forecast_overrides.pop(name, None)
+                name = self.additional_load_command_name(value)
+                if "[" not in value and self.has_additional_load_api_command(name):
+                    value = self.preserve_additional_load_api_metadata(value)
+                else:
+                    self.remove_additional_load_runtime_override(name)
         values = item.get("value", "")
         if not values:
             values = ""

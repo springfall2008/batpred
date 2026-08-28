@@ -1103,12 +1103,15 @@ class HAInterface(ComponentBase):
         Delete a state from Home Assistant.
         """
         entity_id_lower = entity_id.lower()
+        success = True
+        if self.db_enable:
+            success = self.db_manager is not None and self.db_manager.delete_state_db(entity_id_lower) is not None
         self.db_mirror_list.pop(entity_id, None)
         self.db_mirror_list.pop(entity_id_lower, None)
         self.state_data.pop(entity_id_lower, None)
         if self.ha_key:
-            self.api_call("/api/states/{}".format(entity_id), delete=True)
-        return True
+            success = self.api_call("/api/states/{}".format(entity_id_lower), delete=True) is not None and success
+        return success
 
     def api_call(self, endpoint, data_in=None, post=False, delete=False, core=True, silent=False):
         """
@@ -1151,8 +1154,13 @@ class HAInterface(ComponentBase):
                     response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
                 else:
                     response = requests.get(url, headers=headers, timeout=TIMEOUT)
-            data = {} if delete and not response.text else response.json()
-            self.api_errors = 0
+            if delete and not 200 <= response.status_code < 300:
+                self.log("Warn: HTTP status {} deleting state from {}".format(response.status_code, url))
+                self.api_errors += 1
+                data = None
+            else:
+                data = {} if delete and not response.text else response.json()
+                self.api_errors = 0
         except requests.exceptions.JSONDecodeError:
             if not silent:  # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)
                 self.log("Warn: Failed to decode response {} from {}".format(response, url))
