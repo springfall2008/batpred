@@ -7717,7 +7717,15 @@ def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, 
     text += """
 <script>
 // Apply dark mode immediately before CSS is parsed to prevent flash of white
-if (localStorage.getItem('darkMode') === 'true') {
+// Falls back to the OS/browser prefers-color-scheme setting when the user hasn't made an explicit choice (batpred#4800)
+function getDarkModePreference() {
+    const storedDarkMode = localStorage.getItem('darkMode');
+    if (storedDarkMode !== null) {
+        return storedDarkMode === 'true';
+    }
+    return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+if (getDarkModePreference()) {
     document.documentElement.classList.add('dark-mode');
     document.addEventListener('DOMContentLoaded', function() {
         if (document.body) {
@@ -8037,7 +8045,7 @@ window.onload = function() {
     applyDarkMode();
 };
 function applyDarkMode() {
-    const darkModeEnabled = localStorage.getItem('darkMode') === 'true';
+    const darkModeEnabled = getDarkModePreference();
     if (darkModeEnabled) {
         document.body.classList.add('dark-mode');
         document.documentElement.classList.add('dark-mode');
@@ -8057,6 +8065,15 @@ function applyDarkMode() {
         }
     }
 };
+
+// Re-apply if the OS/browser theme changes while no explicit preference is stored (batpred#4800)
+if (window.matchMedia) {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+        if (localStorage.getItem('darkMode') === null) {
+            applyDarkMode();
+        }
+    });
+}
 
 function toggleDarkMode() {
     const isDarkMode = document.body.classList.toggle('dark-mode');

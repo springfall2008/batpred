@@ -111,7 +111,7 @@ from tests.test_web_debug_history_routes import test_web_debug_history_routes
 from tests.test_web_mcp import run_web_mcp_tests
 from tests.test_debug_history_client_js import test_debug_history_client_js
 from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
-from tests.test_web_functions import run_web_functions_tests, run_web_logo_image_tests
+from tests.test_web_functions import run_web_functions_tests, run_web_logo_image_tests, run_web_dark_mode_preference_tests
 from tests.test_web_power_flow import run_web_power_flow_tests
 from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
@@ -469,6 +469,7 @@ def main():
         ("web_functions", run_web_functions_tests, "Web function unit tests", False),
         ("web_power_flow", run_web_power_flow_tests, "Power flow diagram car charging tests", False),
         ("web_logo_image", run_web_logo_image_tests, "Local logo image route tests (issue #4562)", False),
+        ("web_dark_mode_preference", run_web_dark_mode_preference_tests, "Dark mode follows OS prefers-color-scheme when unset (issue #4800)", False),
         ("web_annual", test_web_annual, "Annual web tab prefill tests", False),
         ("web_annual_form", test_web_annual_form, "Annual web tab form tests", False),
         ("web_annual_fast_mode", test_web_annual_fast_mode, "Annual web tab fast mode tests", False),
