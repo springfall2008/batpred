@@ -41,7 +41,7 @@ from datetime import datetime, timedelta
 
 from agent_tools import TOOL_DEFS, PredbatTools, openai_tool_list
 from component_base import ComponentBase
-from chat_store import ConversationStore, NEW_CONVERSATION_TITLE, derive_title, extract_cached_tokens, trim_history
+from chat_store import APPROVAL_APPROVED, APPROVAL_REJECTED, ConversationStore, NEW_CONVERSATION_TITLE, derive_title, extract_cached_tokens, trim_history
 from chat_tools import APPS_YAML_RESTART_WARNING, CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_source, search_docs, search_source, set_apps_config
 from utils import SECRET_MASK, is_secret_key, parse_yaml_path, resolve_nested_yaml_value
 
@@ -551,6 +551,10 @@ class ChatAgent(ComponentBase):
         self.active = None
         self.pending_confirm = {}
         self.warned_web_search_base_url = False
+        # Set to the turn id the user pressed Stop on. Distinct from zeroing self.deadline, which
+        # only the turn loop reads: a turn parked on a confirmation is not in that loop, so
+        # without this it could not be stopped at all.
+        self.stop_requested = None
         self.store = ConversationStore(self.storage, self.log, max_history=self.max_history, max_conversations=max_conversations or 20, expiry_days=expiry_days or 30)
         self.index_loaded = False
         self.turn_counter = 0
@@ -1075,6 +1079,8 @@ class ChatAgent(ComponentBase):
             # started is what _release_stale_turn measures against; without it a stranded slot is
             # never freed, and with a tick count instead it would free live ones.
             self.active = {"conversation_id": conversation_id, "turn_id": turn_id, "title": meta.get("title"), "started": time.monotonic()}
+            # Cleared per turn so a Stop aimed at a finished turn cannot kill the next one.
+            self.stop_requested = None
         return turn_id
 
     def submit_turn(self, conversation_id, text):
@@ -1318,11 +1324,20 @@ class ChatAgent(ComponentBase):
         definition = self.tool_defs_by_name.get(name) or {}
         if definition.get("writes") and self.confirm_writes_enabled():
             with self.lock:
-                self.pending_confirm[call_id] = {"conversation_id": conversation_id, "turn_id": turn_id, "approved": None}
-            self.emit(conversation_id, "confirm", {"call_id": call_id, "name": name, "arguments": self._confirmation_card_arguments(name, arguments)})
+                # The card is kept, not just the fact that something is pending: a client that
+                # reconnects or reloads has no other way to get it back, and without it the user
+                # is left with a turn that waits for an answer to a question no longer on screen.
+                card = {"call_id": call_id, "name": name, "arguments": self._confirmation_card_arguments(name, arguments)}
+                self.pending_confirm[call_id] = {"conversation_id": conversation_id, "turn_id": turn_id, "approved": None, "card": card}
+            # Persisted as a record of the decision, so it survives a reconnect or a restart and
+            # the transcript shows what was asked. Never enters `messages`, so it is never
+            # replayed to the model - which learns the outcome from the tool result instead.
+            self.store.add_approval(conversation_id, card)
+            self.emit(conversation_id, "confirm", card)
             approved = await self.await_confirmation(call_id)
             with self.lock:
                 self.pending_confirm.pop(call_id, None)
+            self.store.resolve_approval(conversation_id, call_id, APPROVAL_APPROVED if approved else APPROVAL_REJECTED)
             if not approved:
                 # An ordinary tool result rather than aborting the turn: the model acknowledges the
                 # decline and can offer an alternative, which is what a user expects from a refusal.
@@ -1397,6 +1412,13 @@ class ChatAgent(ComponentBase):
             with self.lock:
                 pending = self.pending_confirm.get(call_id)
                 if pending is None:
+                    break
+                # Stop must reach a turn parked here. This loop deliberately ignores self.deadline
+                # - the parked time is added back precisely so a slow human does not time their
+                # own approval out - but that also made the Stop button inert for up to
+                # CONFIRM_TIMEOUT_SECONDS, with the timer visibly climbing and nothing able to end
+                # it. An explicit stop is not a deadline, so it is checked separately.
+                if self.stop_requested is not None and self.stop_requested == pending.get("turn_id"):
                     break
                 if pending.get("approved") is not None:
                     elapsed = time.monotonic() - started

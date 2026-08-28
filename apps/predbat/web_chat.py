@@ -186,6 +186,11 @@ class WebChat:
                 # the transcript but is not part of the conversation, and must never be replayed
                 # to the model. See ChatAgent._report_turn_error().
                 "last_error": agent.store.get_last_error(cid),
+                # Every write approval this conversation has asked for, and what was answered.
+                # Carried separately from messages: an approval is a record of a decision, not
+                # something the model said, and it must never be replayed. The pending ones are
+                # what a reconnecting client needs to get its card back.
+                "approvals": agent.store.get_approvals(cid),
                 "cursor": cursor,
                 "active": self._active_with_elapsed(agent),
             }
@@ -287,6 +292,9 @@ class WebChat:
         if turn_id is None or active.get("turn_id") != turn_id:
             return web.json_response({"error": "No running turn with that id"}, status=409)
         agent.deadline = 0
+        # A turn parked on a confirmation is not in the loop that reads the deadline, so the
+        # deadline alone cannot stop it - see ChatAgent.await_confirmation().
+        agent.stop_requested = turn_id
         return web.json_response({"ok": True})
 
     async def html_chat_stream(self, request):
@@ -1031,6 +1039,39 @@ body {
     font-size: 13px;
     border-top: 1px solid var(--chat-border);
     padding-top: 12px;
+}
+
+.chat-approval-badge {
+    margin-left: 8px;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: var(--chat-border);
+    color: var(--chat-text-muted);
+}
+
+.chat-approval-approved {
+    color: #3aee85;
+}
+
+.chat-approval-rejected {
+    color: #ff6b6b;
+}
+
+.chat-approval-record {
+    margin: 6px 0;
+    padding: 6px 10px;
+    border-left: 3px solid var(--chat-border);
+    font-size: 12px;
+    color: var(--chat-text-muted);
+}
+
+.chat-approval-record pre {
+    margin: 4px 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 200px;
+    overflow-y: auto;
 }
 
 .chat-error-detail {
@@ -1864,7 +1905,32 @@ function appendToolStart(data) {
     container.appendChild(details);
     byId('chat-transcript').appendChild(container);
     toolRows[data.call_id] = resultHolder;
+    toolSummaries[data.call_id] = summary;
+    // A write may already have been approved before its tool block was drawn - on a history
+    // replay the approvals arrive first - so claim any badge waiting for this call.
+    if (pendingApprovalBadges[data.call_id]) {
+        markToolApproval(data.call_id, pendingApprovalBadges[data.call_id]);
+        delete pendingApprovalBadges[data.call_id];
+    }
     scrollTranscriptToBottom();
+}
+
+function markToolApproval(callId, status) {
+    // The approval belongs on the request it approved, not in a block of its own: a user scanning
+    // the transcript wants to see, against the call that changed something, that they said yes.
+    // Held until the tool block exists, since the two arrive in either order.
+    var summary = toolSummaries[callId];
+    if (!summary) {
+        pendingApprovalBadges[callId] = status;
+        return;
+    }
+    if (summary.querySelector('.chat-approval-badge')) {
+        return;
+    }
+    var badge = document.createElement('span');
+    badge.className = 'chat-approval-badge chat-approval-' + status;
+    badge.textContent = APPROVAL_BADGES[status] || status;
+    summary.appendChild(badge);
 }
 
 function appendToolEnd(data) {
@@ -1946,6 +2012,7 @@ function resolveConfirmCard(data) {
     outcome.className = 'chat-confirm-outcome';
     outcome.textContent = data.approved ? 'Approved.' : 'Rejected.';
     card.appendChild(outcome);
+    markToolApproval(data.call_id, data.approved ? 'approved' : 'rejected');
     delete confirmCards[data.call_id];
 }
 
@@ -2197,6 +2264,31 @@ function handleError(data) {
     clearThinkingBubble();
     var bubble = appendBubble('error', data.message || 'Something went wrong');
     appendErrorDetail(bubble, data.detail);
+}
+
+var APPROVAL_LABELS = { approved: 'Approved', rejected: 'Rejected', unanswered: 'Never answered - Predbat restarted while it was waiting' };
+var APPROVAL_BADGES = { approved: '\u2713 approved', rejected: '\u2717 rejected', unanswered: '\u26a0 never answered' };
+// Tool summaries by call id, and badges that arrived before their tool block existed.
+var toolSummaries = {};
+var pendingApprovalBadges = {};
+
+function appendApprovalRecord(entry) {
+    // A settled approval, replayed from history. Deliberately not a live card: the turn that
+    // asked is long gone, so a button here would resolve nothing.
+    var wrap = document.createElement('div');
+    wrap.className = 'chat-approval-record';
+    var head = document.createElement('div');
+    head.className = 'chat-approval-head';
+    head.textContent = (APPROVAL_LABELS[entry.status] || entry.status) + ' ' + (entry.name || 'a change');
+    wrap.appendChild(head);
+    if (entry.arguments) {
+        var pre = document.createElement('pre');
+        // textContent, not the markdown renderer: these are tool arguments, which include text
+        // the model chose.
+        pre.textContent = JSON.stringify(entry.arguments, null, 2);
+        wrap.appendChild(pre);
+    }
+    byId('chat-transcript').appendChild(wrap);
 }
 
 function appendErrorDetail(bubble, detail) {
@@ -2516,6 +2608,22 @@ function loadConversationData(id) {
             // renderHistory() cannot show it - it has to be replayed here. Without this the
             // transcript loses the error on every reload, which is exactly when a user goes
             // looking for it.
+            // Approvals are stored beside the messages, not among them, so renderHistory()
+            // cannot restore them. A pending one comes back as a live card - losing it strands
+            // the turn, waiting for an answer the user can no longer give. A resolved one comes
+            // back as a record of what was decided, which is the audit trail for anything the
+            // agent changed.
+            (payload.approvals || []).forEach(function (entry) {
+                if (entry.status === 'pending') {
+                    appendConfirmCard(entry);
+                } else if (entry.status === 'unanswered') {
+                    // Nothing ran for this one, so there is no tool block to badge - it needs a
+                    // record of its own or the transcript simply loses the question.
+                    appendApprovalRecord(entry);
+                } else {
+                    markToolApproval(entry.call_id, entry.status);
+                }
+            });
             if (payload.last_error) {
                 var bubble = appendBubble('error', payload.last_error.message || 'The last turn failed');
                 appendErrorDetail(bubble, payload.last_error.detail);

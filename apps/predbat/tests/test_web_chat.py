@@ -246,6 +246,11 @@ def test_send_is_busy_and_unknown_is_404(my_predbat):
             """A conversation store stand-in that knows one conversation."""
 
             @staticmethod
+            def get_approvals(cid):
+                """No approvals recorded - the history route reports them beside messages."""
+                return []
+
+            @staticmethod
             def get_last_error(cid):
                 """No failed turn recorded. The history route reports last_error beside messages."""
                 return None
@@ -302,6 +307,11 @@ def test_delete_refuses_the_active_conversation(my_predbat):
             """A store stand-in that knows the busy conversation."""
 
             @staticmethod
+            def get_approvals(cid):
+                """No approvals recorded - the history route reports them beside messages."""
+                return []
+
+            @staticmethod
             def get_last_error(cid):
                 """No failed turn recorded. The history route reports last_error beside messages."""
                 return None
@@ -341,6 +351,11 @@ def test_history_reads_via_snapshot_not_get_messages(my_predbat):
 
         class store:
             """A store stand-in recording which read method the handler actually calls."""
+
+            @staticmethod
+            def get_approvals(cid):
+                """No approvals recorded - the history route reports them beside messages."""
+                return []
 
             @staticmethod
             def get_last_error(cid):
@@ -495,6 +510,11 @@ def test_history_route_reports_last_prompt_tokens(my_predbat):
             """A store stand-in with a conversation carrying two different usage figures."""
 
             @staticmethod
+            def get_approvals(cid):
+                """No approvals recorded - the history route reports them beside messages."""
+                return []
+
+            @staticmethod
             def get_last_error(cid):
                 """No failed turn recorded. The history route reports last_error beside messages."""
                 return None
@@ -539,6 +559,11 @@ def test_history_route_reports_last_prompt_tokens(my_predbat):
 
         class store(RichAgent.store):
             """A store stand-in returning a conversation saved before last_prompt_tokens existed."""
+
+            @staticmethod
+            def get_approvals(cid):
+                """No approvals recorded - the history route reports them beside messages."""
+                return []
 
             @staticmethod
             def get_last_error(cid):

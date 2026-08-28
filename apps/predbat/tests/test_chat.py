@@ -43,6 +43,8 @@ from chat import (
     is_empty_completion,
 )
 from chat_tools import APPS_YAML_RESTART_WARNING
+from chat_store import ConversationStore
+from tests.test_chat_store import FakeStorage
 from components import COMPONENT_LIST, Components
 
 
@@ -2916,6 +2918,139 @@ def test_confirmation_card_resolves_nested_paths(my_predbat):
     return failed
 
 
+def test_stop_reaches_a_turn_parked_on_a_confirmation(my_predbat):
+    """Stop ends a turn waiting for an approval, instead of hanging until the confirm timeout.
+
+    await_confirmation() deliberately ignores self.deadline - the parked time is added back so a
+    slow human cannot time their own approval out - but that also made Stop inert for up to
+    CONFIRM_TIMEOUT_SECONDS (300s). The observed symptom was a turn stuck on "thinking" with the
+    counter climbing, a Stop button that did nothing, and no way to end it but to wait.
+
+    An explicit stop is not a deadline, so it is tracked separately and checked here.
+
+    Mutation checks: removing the stop_requested check in await_confirmation, or the assignment
+    in the cancel route, leaves this hanging for the full timeout.
+    """
+    failed = False
+    print("**** Testing Stop reaches a turn parked on a confirmation ****")
+
+    agent = _agent_with_fake(my_predbat, _text_response("done"))
+    with agent.lock:
+        agent.pending_confirm["call_x"] = {"conversation_id": "c1", "turn_id": "t1", "approved": None, "card": {}}
+
+    async def drive():
+        """Park on the confirmation, then press Stop from another task."""
+
+        async def press_stop():
+            """Stand in for POST /chat/cancel, which sets both of these."""
+            await asyncio.sleep(0)
+            agent.deadline = 0
+            agent.stop_requested = "t1"
+
+        asyncio.ensure_future(press_stop())
+        started = time.monotonic()
+        approved = await agent.await_confirmation("call_x")
+        return approved, time.monotonic() - started
+
+    approved, elapsed = asyncio.run(drive())
+
+    if approved:
+        print("ERROR: a stopped confirmation was treated as approved")
+        failed = True
+    # The point: it returns promptly rather than sitting out the confirm timeout.
+    if elapsed > 5:
+        print("ERROR: Stop did not reach the parked turn - it waited {:.1f}s".format(elapsed))
+        failed = True
+
+    # A stop aimed at a finished turn must not kill the next one.
+    agent.stop_requested = "t1"
+    cid = asyncio.run(agent.store.create())
+    agent.claim_turn(cid)
+    if agent.stop_requested is not None:
+        print("ERROR: a stale stop survived into the next turn: {}".format(agent.stop_requested))
+        failed = True
+
+    return failed
+
+
+def test_approvals_are_recorded_but_never_replayed(my_predbat):
+    """An approval is persisted as a decision record, and never reaches the model.
+
+    Previously the card existed only as an SSE event, so a reconnect or a restart lost it while
+    the turn went on waiting for an answer to a question no longer on screen. It is now stored
+    beside the messages: a pending record is what a reconnecting client needs to get its card
+    back, and a settled one is the audit trail for anything the agent changed.
+
+    Beside the messages, never among them. The model learns the outcome from the tool result it
+    gets back; putting the approval in the replayed history would both duplicate that and let a
+    record of a human decision be re-read as conversation. This asserts the negative, because that
+    is the half that fails silently.
+
+    Mutation checks: dropping add_approval, resolve_approval, or the relabelling of a pending
+    record on load, each fails an assertion below.
+    """
+    failed = False
+    print("**** Testing approvals are recorded and never replayed ****")
+
+    storage = FakeStorage()
+    store = ConversationStore(storage, my_predbat.log)
+    asyncio.run(store.load_index())
+    cid = asyncio.run(store.create())
+    asyncio.run(store.append(cid, {"role": "user", "content": "change a setting"}))
+
+    card = {"call_id": "call_1", "name": "set_apps_config", "arguments": {"key": "num_inverters", "current_value": 1, "proposed_value": 2}}
+    store.add_approval(cid, card)
+
+    pending = store.get_approvals(cid)
+    if len(pending) != 1 or pending[0].get("status") != "pending":
+        print("ERROR: the approval was not recorded as pending: {}".format(pending))
+        failed = True
+    if not pending[0].get("asked_at"):
+        print("ERROR: the approval record has no timestamp: {}".format(pending))
+        failed = True
+
+    store.resolve_approval(cid, "call_1", "approved")
+    resolved = store.get_approvals(cid)
+    if resolved[0].get("status") != "approved" or not resolved[0].get("answered_at"):
+        print("ERROR: the answer was not recorded: {}".format(resolved))
+        failed = True
+
+    # Never in the conversation the model is sent.
+    messages = asyncio.run(store.get_messages(cid))
+    for message in messages:
+        if "proposed_value" in json.dumps(message):
+            print("ERROR: the approval leaked into the replayed messages: {}".format(message))
+            failed = True
+
+    # It survives a restart, and a still-pending one is relabelled rather than offered as a live
+    # button - the turn that was waiting for it did not survive.
+    store.add_approval(cid, {"call_id": "call_2", "name": "set_config", "arguments": {}})
+    asyncio.run(store.flush(cid))
+
+    reloaded = ConversationStore(storage, my_predbat.log)
+    asyncio.run(reloaded.load_index())
+    asyncio.run(reloaded.get_messages(cid))
+    after = reloaded.get_approvals(cid)
+    if len(after) != 2:
+        print("ERROR: approvals did not survive the reload: {}".format(after))
+        failed = True
+    by_id = {entry.get("call_id"): entry for entry in after}
+    if by_id.get("call_1", {}).get("status") != "approved":
+        print("ERROR: a settled approval changed on reload: {}".format(after))
+        failed = True
+    if by_id.get("call_2", {}).get("status") != "unanswered":
+        print("ERROR: a pending approval was not relabelled after a restart: {}".format(after))
+        failed = True
+
+    # A copy, so a caller serialising it cannot mutate the stored record.
+    after[0]["status"] = "mutated"
+    if reloaded.get_approvals(cid)[0].get("status") == "mutated":
+        print("ERROR: get_approvals handed out the live record rather than a copy")
+        failed = True
+
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
@@ -2923,6 +3058,8 @@ def run_chat_tests(my_predbat):
     failed |= test_model_resolution_order(my_predbat)
     failed |= test_turn_error_is_detailed_and_stored_but_never_replayed(my_predbat)
     failed |= test_confirmation_card_resolves_nested_paths(my_predbat)
+    failed |= test_stop_reaches_a_turn_parked_on_a_confirmation(my_predbat)
+    failed |= test_approvals_are_recorded_but_never_replayed(my_predbat)
     failed |= test_component_gating_end_to_end(my_predbat)
     failed |= test_build_snapshot(my_predbat)
     failed |= test_snapshot_formats_times_and_percentages(my_predbat)

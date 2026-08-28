@@ -29,6 +29,15 @@ from datetime import datetime, timedelta, timezone
 # in Storage stay compact.
 CONVERSATION_JSON_INDENT = 2
 
+# Approval record states. "pending" is the only one that is actionable; the rest are history.
+# "unanswered" exists because a pending approval cannot survive a restart - the turn waiting on it
+# was in memory - so a pending record loaded from disk is known to be dead and is relabelled on
+# load rather than shown as a button that can no longer do anything.
+APPROVAL_PENDING = "pending"
+APPROVAL_APPROVED = "approved"
+APPROVAL_REJECTED = "rejected"
+APPROVAL_UNANSWERED = "unanswered"
+
 CONVERSATION_VERSION = 1
 STORAGE_MODULE = "chat"
 INDEX_FILENAME = "index"
@@ -115,6 +124,11 @@ class ConversationStore:
         # replayed back to it. Kept for the user and for a bug report, and overwritten by the next
         # failure rather than accumulating.
         self.last_errors = {}
+        # Write approvals per conversation: what was asked, and what the user answered. Saved
+        # beside the messages, never among them - an approval is a record of a decision, not
+        # something the model said, and the model already learns the outcome from the tool result
+        # it gets back. Keeping it out of `messages` is what guarantees it is never replayed.
+        self.approvals = {}
         self.lock = threading.Lock()
         self.loaded = False
 
@@ -233,6 +247,18 @@ class ConversationStore:
         if last_error:
             with self.lock:
                 self.last_errors.setdefault(cid, last_error)
+
+        approvals = payload.get("approvals") if valid else None
+        if approvals:
+            # A pending approval on disk is always dead: the turn that was waiting for it lived in
+            # memory and did not survive whatever ended this process. Relabelled so the transcript
+            # records that it was asked and never answered, rather than offering a button that
+            # would resolve nothing.
+            for entry in approvals:
+                if entry.get("status") == APPROVAL_PENDING:
+                    entry["status"] = APPROVAL_UNANSWERED
+            with self.lock:
+                self.approvals.setdefault(cid, approvals)
         await self._cache_body(cid, messages, system_prompt=system_prompt, system_prompt_at=system_prompt_at)
         return messages
 
@@ -415,6 +441,32 @@ class ConversationStore:
         with self.lock:
             return self.last_errors.get(cid)
 
+    def add_approval(self, cid, card):
+        """Record a write awaiting the user's answer."""
+        if not cid or not card:
+            return
+        entry = {"call_id": card.get("call_id"), "name": card.get("name"), "arguments": card.get("arguments"), "status": APPROVAL_PENDING, "asked_at": datetime.now(timezone.utc).isoformat()}
+        with self.lock:
+            self.approvals.setdefault(cid, []).append(entry)
+            self.dirty.add(cid)
+
+    def resolve_approval(self, cid, call_id, status):
+        """Record what the user answered, or that the approval expired."""
+        if not cid or not call_id:
+            return
+        with self.lock:
+            for entry in self.approvals.get(cid, []):
+                if entry.get("call_id") == call_id and entry.get("status") == APPROVAL_PENDING:
+                    entry["status"] = status
+                    entry["answered_at"] = datetime.now(timezone.utc).isoformat()
+                    self.dirty.add(cid)
+                    break
+
+    def get_approvals(self, cid):
+        """Return copies of this conversation's approval records, oldest first."""
+        with self.lock:
+            return [dict(entry) for entry in self.approvals.get(cid, [])]
+
     def get_selected_model(self):
         """Return the model the user last chose in the picker, or None."""
         with self.lock:
@@ -462,7 +514,15 @@ class ConversationStore:
                 info = self.system_prompts.get(cid) or {}
                 system_prompt = info.get("system_prompt")
                 system_prompt_at = info.get("system_prompt_at")
-            payload = {"version": CONVERSATION_VERSION, "id": cid, "messages": json.loads(json.dumps(messages)), "system_prompt": system_prompt, "system_prompt_at": system_prompt_at, "last_error": self.last_errors.get(cid)}
+            payload = {
+                "version": CONVERSATION_VERSION,
+                "id": cid,
+                "messages": json.loads(json.dumps(messages)),
+                "system_prompt": system_prompt,
+                "system_prompt_at": system_prompt_at,
+                "last_error": self.last_errors.get(cid),
+                "approvals": self.approvals.get(cid, []),
+            }
             self.dirty.discard(cid)
         result = await self.storage.save(STORAGE_MODULE, self._body_name(cid), payload, format="json", expiry=self._expiry(), indent=CONVERSATION_JSON_INDENT)
         if evicted:
