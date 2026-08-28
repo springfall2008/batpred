@@ -277,6 +277,19 @@ installed source code, and can propose the same two write actions MCP has - each
 your approval before it runs when `switch.predbat_chat_confirm_writes` is on (the default). See
 [the Chat tab](web-interface.md#chat-view) for how to use it day to day.
 
+Each conversation's system prompt (your Predbat snapshot plus the agent's instructions) is
+captured once, when the conversation starts, and replayed byte-for-byte on every later turn rather
+than being rebuilt from live state each time. It is also sent with an explicit prompt-caching
+breakpoint. Together this means a provider that supports prompt caching only charges full price
+for that prompt on the first turn - later turns charge a fraction of it, since the cached portion
+is billed at a steep discount rather than as fresh input. The first turn itself costs slightly
+*more* than it otherwise would, because writing the prompt into the cache is itself a billed
+operation. A provider with no prompt-caching support simply ignores the breakpoint and is
+unaffected either way. Measured against `anthropic/claude-sonnet-5` on OpenRouter, with a roughly
+2,600-token system prompt: an uncached turn cost $0.005282, and a turn that hit the cache cost
+$0.000580 - about a ninth as much. Treat those figures as an illustration of the mechanism, not a
+guarantee - the actual saving depends on the model, the provider and the size of your own prompt.
+
 #### When to enable (chat)
 
 - You want a conversational way to ask about your Predbat setup, without running an MCP client

@@ -29,6 +29,7 @@ from chat import (
     EVENT_BUFFER_MAX,
     PRIMER,
     STALE_TURN_GRACE_SECONDS,
+    SYSTEM_PROMPT_CACHE_CONTROL,
     TITLE_INSTRUCTION,
     ChatAgent,
     ChatBusyError,
@@ -629,6 +630,20 @@ def _dangling_tool_calls(messages):
     return problems
 
 
+def _system_text(message):
+    """Return the text inside a system message's single content block.
+
+    build_messages() sends the system message's content as a one-element array carrying a
+    cache_control breakpoint rather than a plain string (see chat.py's module docstring for why) -
+    this pulls the prompt text back out so callers can keep making the same substring/equality
+    assertions against it that they made when content was a plain string. Deliberately does not
+    fall back to a bare string: a test wanting the raw content list itself, cache_control included,
+    should just read message["content"] directly, as test_system_message_carries_cache_control()
+    does.
+    """
+    return message["content"][0]["text"]
+
+
 def _agent_with_fake(my_predbat, *responses, **overrides):
     """Build an agent whose only network call is replaced by a canned chunk replayer.
 
@@ -904,7 +919,7 @@ def test_titles(my_predbat):
         print("ERROR: the fallback title is {!r}, expected the collapsed first message".format(title))
         failed = True
 
-    system_content = quiet.fake.payloads[0]["messages"][0]["content"]
+    system_content = _system_text(quiet.fake.payloads[0]["messages"][0])
     if "set_chat_title" in system_content:
         print("ERROR: the title instruction leaked into the system prompt, which must stay frozen: {!r}".format(system_content))
         failed = True
@@ -944,7 +959,7 @@ def test_title_instruction_reaches_the_model_without_touching_the_stored_message
     history = asyncio.run(agent.store.get_messages(cid))
     messages = asyncio.run(agent.build_messages(cid, history))
 
-    if TITLE_INSTRUCTION in messages[0]["content"]:
+    if TITLE_INSTRUCTION in _system_text(messages[0]):
         print("ERROR: the title instruction appeared in the system message: {!r}".format(messages[0]["content"]))
         failed = True
     if TITLE_INSTRUCTION not in messages[-1]["content"]:
@@ -976,6 +991,13 @@ def test_system_prompt_is_frozen_byte_identical_across_turns_including_a_titling
     reads is asserted to stay the same after the second turn as it was after the first, so a
     rebuild cannot hide behind a lucky coincidence.
 
+    build_messages() sends the system message's content as a one-element array carrying a
+    cache_control breakpoint, not a plain string (see chat.py's module docstring) - system_1 and
+    system_2 are pulled out with _system_text() specifically so this still compares the prompt
+    *text* byte-for-byte, rather than leaning on Python's structural list equality to do that
+    inspection implicitly. test_system_message_carries_cache_control() covers the wrapper shape
+    itself.
+
     Mutation-checked by hand: temporarily changing ChatAgent._frozen_system_prompt() to call
     build_system_prompt() unconditionally, rather than returning the stored value once one exists,
     turns this test red immediately (system_1 != system_2, and the read count climbs again on the
@@ -989,7 +1011,7 @@ def test_system_prompt_is_frozen_byte_identical_across_turns_including_a_titling
 
     asyncio.run(agent.store.append(cid, {"role": "user", "content": "why is it charging?"}))
     messages_1 = asyncio.run(agent.build_messages(cid, asyncio.run(agent.store.get_messages(cid))))
-    system_1 = messages_1[0]["content"]
+    system_1 = _system_text(messages_1[0])
     reads_after_turn_1 = agent.base.reads
     if not reads_after_turn_1:
         print("ERROR: test setup did not consult the ticking clock at all while building the first prompt")
@@ -999,7 +1021,7 @@ def test_system_prompt_is_frozen_byte_identical_across_turns_including_a_titling
     asyncio.run(agent.store.append(cid, {"role": "assistant", "content": "because rates are low right now"}))
     asyncio.run(agent.store.append(cid, {"role": "user", "content": "and when does it stop?"}))
     messages_2 = asyncio.run(agent.build_messages(cid, asyncio.run(agent.store.get_messages(cid))))
-    system_2 = messages_2[0]["content"]
+    system_2 = _system_text(messages_2[0])
 
     if system_1 != system_2:
         print("ERROR: the system prompt is not byte-identical across turns - the request prefix is not cacheable")
@@ -1012,6 +1034,50 @@ def test_system_prompt_is_frozen_byte_identical_across_turns_including_a_titling
     # reused rather than rebuilt.
     if agent.base.reads != reads_after_turn_1:
         print("ERROR: now_utc was read again on the second turn ({} reads, was {} after turn 1) - the prompt was rebuilt instead of reused".format(agent.base.reads, reads_after_turn_1))
+        failed = True
+
+    return failed
+
+
+def test_system_message_carries_cache_control(my_predbat):
+    """The system message's content is array-form, one text block, carrying the ephemeral
+    cache_control breakpoint - the shape a caching-capable provider (Anthropic, Qwen) needs in
+    order to actually cache the frozen prefix; see the module docstring for why this is sent to
+    every provider unconditionally rather than gated on model family.
+
+    Deliberately pins every field rather than just checking content is *some* list: a dict shaped
+    differently, or a second content block, would still let the substring/equality assertions
+    elsewhere in this file (which go through _system_text()) keep passing while missing
+    OpenRouter's documented breakpoint shape entirely.
+    """
+    failed = False
+    print("**** Testing the system message carries a cache_control breakpoint ****")
+    agent = _make_agent(my_predbat)
+    cid = asyncio.run(agent.store.create())
+    asyncio.run(agent.store.append(cid, {"role": "user", "content": "why is it charging?"}))
+    messages = asyncio.run(agent.build_messages(cid, asyncio.run(agent.store.get_messages(cid))))
+
+    system_message = messages[0]
+    if system_message.get("role") != "system":
+        print("ERROR: the first message is not the system message: {!r}".format(system_message))
+        return True
+    content = system_message.get("content")
+    if not isinstance(content, list) or len(content) != 1:
+        print("ERROR: the system message's content is not a one-element array: {!r}".format(content))
+        return True
+
+    block = content[0]
+    if block.get("type") != "text":
+        print("ERROR: the system message's content block has type {!r}, expected 'text'".format(block.get("type")))
+        failed = True
+    if block.get("cache_control") != SYSTEM_PROMPT_CACHE_CONTROL:
+        print("ERROR: the system message's content block cache_control is {!r}, expected {!r}".format(block.get("cache_control"), SYSTEM_PROMPT_CACHE_CONTROL))
+        failed = True
+    if SYSTEM_PROMPT_CACHE_CONTROL != {"type": "ephemeral"}:
+        print("ERROR: SYSTEM_PROMPT_CACHE_CONTROL is {!r}, expected the 'ephemeral' breakpoint OpenRouter and Anthropic define".format(SYSTEM_PROMPT_CACHE_CONTROL))
+        failed = True
+    if not isinstance(block.get("text"), str) or not block["text"]:
+        print("ERROR: the system message's content block has no usable text: {!r}".format(block.get("text")))
         failed = True
 
     return failed
@@ -2164,6 +2230,7 @@ def run_chat_tests(my_predbat):
     failed |= test_titles(my_predbat)
     failed |= test_title_instruction_reaches_the_model_without_touching_the_stored_message(my_predbat)
     failed |= test_system_prompt_is_frozen_byte_identical_across_turns_including_a_titling_turn(my_predbat)
+    failed |= test_system_message_carries_cache_control(my_predbat)
     failed |= test_frozen_system_prompt_is_built_once_and_reused_not_rebuilt(my_predbat)
     failed |= test_usage_event_and_totals_report_cached_tokens(my_predbat)
     failed |= test_execute_turn_preserves_a_slot_claimed_by_a_later_turn(my_predbat)

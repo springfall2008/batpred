@@ -16,12 +16,18 @@ thread only flushes and prunes. See spec section 3.
 
 Prompt caching only ever helps a request whose prefix is byte-identical to one already seen -
 OpenAI, DeepSeek, Grok, Groq and Gemini 2.5 cache such a prefix automatically once it is stable;
-Anthropic and Qwen need an explicit cache_control breakpoint this component does not send, so a
-caching provider from that first group is what actually benefits here. That is why the system
-prompt is built once per conversation and stored verbatim rather than rebuilt from live state on
-every turn - see build_system_prompt() and ChatAgent._frozen_system_prompt() - and why the one
-instruction that still varies within a turn (the title reminder) is appended to that turn's user
-message instead of folded into the prompt: see build_messages() and append_title_instruction().
+Anthropic and Qwen additionally need an explicit cache_control breakpoint, which build_messages()
+sends unconditionally on the system message's one content block. There is deliberately no
+model-family detection here: a request against a real OpenRouter account measured a Claude model's
+cost per turn drop to roughly a ninth once the breakpoint was in place, while a free-tier model
+with no cache_control support was measured returning an identical response whether the field was
+present or not - a provider that does not understand the field just ignores it, so sending it
+blind costs nothing and still helps every provider that does support it, not only the ones this
+component happens to know about. That is why the system prompt is built once per conversation and
+stored verbatim rather than rebuilt from live state on every turn - see build_system_prompt() and
+ChatAgent._frozen_system_prompt() - and why the one instruction that still varies within a turn
+(the title reminder) is appended to that turn's user message instead of folded into the prompt:
+see build_messages() and append_title_instruction().
 """
 
 import aiohttp
@@ -228,6 +234,14 @@ def build_system_prompt(base):
     prompt = "\n\n".join([PRIMER, build_snapshot(base), caveat])
     return prompt, captured_at
 
+
+# The cache_control breakpoint placed on the system message's one content block - see the module
+# docstring for why this is sent to every provider unconditionally rather than only ones known to
+# need it. "ephemeral" is the only breakpoint type OpenRouter and Anthropic define.
+# Copied into each request rather than shared by reference: this dict sits inside the cached
+# prefix, so a stray mutation anywhere would silently change every later request and
+# invalidate caching for the whole install.
+SYSTEM_PROMPT_CACHE_CONTROL = {"type": "ephemeral"}
 
 # Appended to that turn's user message, never folded into the system prompt - see
 # append_title_instruction() for why, and build_messages() for where this is used.
@@ -501,13 +515,21 @@ class ChatAgent(ComponentBase):
         (append_title_instruction()) rather than folded in here. Everything before that point is
         therefore byte-identical across every turn of one conversation, which is the actual
         cacheable prefix a provider sees.
+
+        The system message's content is sent as a one-element array rather than a plain string, its
+        single text block carrying SYSTEM_PROMPT_CACHE_CONTROL - see the module docstring for why
+        every provider gets this unconditionally. The frozen prompt itself is still stored, and read
+        back here, as a plain string (_frozen_system_prompt(), ConversationStore.get/set_system_prompt())
+        - this wrapping is built fresh on every call and never stored, so a human inspecting the saved
+        conversation still sees plain text rather than this request-only shape.
         """
         system_prompt = await self._frozen_system_prompt(conversation_id)
         trimmed = trim_history(history, self.max_history, log=self.log)
         meta = self.store.get_meta(conversation_id) or {}
         if meta.get("title", NEW_CONVERSATION_TITLE) == NEW_CONVERSATION_TITLE:
             trimmed = append_title_instruction(trimmed)
-        return [{"role": "system", "content": system_prompt}] + trimmed
+        system_message = {"role": "system", "content": [{"type": "text", "text": system_prompt, "cache_control": dict(SYSTEM_PROMPT_CACHE_CONTROL)}]}
+        return [system_message] + trimmed
 
     def tool_payload(self):
         """Return the tool list offered to the model: the shared tools plus the chat-only ones."""
