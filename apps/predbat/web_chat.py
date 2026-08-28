@@ -2107,6 +2107,8 @@ function appendConfirmCard(data) {
 
     appendToTranscript(card);
     confirmCards[data.call_id] = card;
+    // The turn stops being "thinking" the instant it asks for approval.
+    clearThinkingBubble();
     scrollTranscriptToBottom();
 }
 
@@ -2135,6 +2137,12 @@ function resolveConfirmCard(data) {
     card.appendChild(outcome);
     markToolApproval(data.call_id, data.approved ? 'approved' : 'rejected');
     delete confirmCards[data.call_id];
+    // Answered, so the model is working again - unless another approval is still outstanding, in
+    // which case showThinkingBubble() declines on its own.
+    if (state.busy && state.busy.conversation_id === state.conversation) {
+        startThinkingTimer(Date.now());
+        showThinkingBubble();
+    }
 }
 
 function clearPendingBubble() {
@@ -2189,7 +2197,25 @@ function ensureThinkingBubble() {
     return bubble;
 }
 
+function awaitingApproval() {
+    // An outstanding approval card means the turn is parked on the user, not working.
+    for (var key in confirmCards) {
+        if (Object.prototype.hasOwnProperty.call(confirmCards, key)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function showThinkingBubble() {
+    // Nothing is thinking while an approval is outstanding - the model is blocked on an answer
+    // only the user can give, and the Approve card directly above says so far better than a
+    // counter climbing against a turn that is not running. Showing both was actively misleading:
+    // the elapsed time was real, but it was time the user was taking, not the model.
+    if (awaitingApproval()) {
+        clearThinkingBubble();
+        return;
+    }
     var bubble = ensureThinkingBubble();
     // Appended every time, not only when it has no parent. hideThinkingBubble() just adds a
     // class - the element stays in the transcript where it was - so everything appended since

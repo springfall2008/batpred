@@ -2456,6 +2456,55 @@ def test_tool_rows_show_a_status_marker_and_wrap_their_output(my_predbat):
     return failed
 
 
+def test_no_thinking_counter_while_an_approval_is_outstanding(my_predbat):
+    """The waiting indicator is suppressed while a turn is parked on an approval.
+
+    A turn awaiting approval is genuinely still active, so switching to it showed "thinking" with
+    a counter climbing beside the Approve card. Nothing was thinking: the model was blocked on an
+    answer only the user could give, and the elapsed time being counted was the user's, not the
+    model's. The card itself states the situation far better than a counter contradicting it.
+
+    The counter must also actually stop, not merely be hidden - a live setInterval ticking against
+    a removed element is the leak stopThinkingTimer() exists to prevent.
+
+    Mutation checks: dropping the awaitingApproval() guard, or the clearThinkingBubble() call when
+    a card appears, each fails below.
+    """
+    failed = False
+    print("**** Testing no thinking counter while an approval is outstanding ****")
+    script = web_chat.get_chat_script()
+
+    guard = _extract_function_body(script, "awaitingApproval")
+    if guard is None:
+        print("ERROR: there is no awaitingApproval() to suppress the indicator")
+        return True
+    if "confirmCards" not in guard:
+        print("ERROR: awaitingApproval() does not consult the outstanding cards: {!r}".format(guard))
+        failed = True
+
+    show = _extract_function_body(script, "showThinkingBubble")
+    if show is None or "awaitingApproval" not in show:
+        print("ERROR: showThinkingBubble() still shows the indicator during an approval: {!r}".format(show))
+        failed = True
+    # Hiding is not enough - the interval has to stop, or it ticks against a removed element.
+    if show and "clearThinkingBubble" not in show:
+        print("ERROR: the indicator is hidden but its timer keeps running: {!r}".format(show))
+        failed = True
+
+    appended = _extract_function_body(script, "appendConfirmCard")
+    if appended is None or "clearThinkingBubble" not in appended:
+        print("ERROR: a turn asking for approval does not drop the indicator: {!r}".format(appended))
+        failed = True
+
+    # And it comes back once the user answers, or the turn looks stalled from then on.
+    resolved = _extract_function_body(script, "resolveConfirmCard")
+    if resolved is None or "showThinkingBubble" not in resolved:
+        print("ERROR: the indicator never returns after an approval is answered: {!r}".format(resolved))
+        failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -2487,6 +2536,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_chat_page_fills_the_window_without_an_outer_scrollbar(my_predbat)
     failed |= test_bubble_content_stays_inside_its_bubble(my_predbat)
     failed |= test_tool_rows_show_a_status_marker_and_wrap_their_output(my_predbat)
+    failed |= test_no_thinking_counter_while_an_approval_is_outstanding(my_predbat)
     failed |= test_thinking_bubble_moves_to_the_end(my_predbat)
     failed |= test_chat_switch_defaults_and_mirror(my_predbat)
     failed |= test_model_picker_shows_prices(my_predbat)
