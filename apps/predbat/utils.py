@@ -159,6 +159,31 @@ def mask_secret_args(args):
     return masked
 
 
+def find_unmasked_secret_paths(node, path=""):
+    """
+    Recursively walk a ruamel round-trip-loaded apps.yaml section and yield the dotted path
+    of every credential-like key (per is_secret_key()) whose value is a plain scalar rather
+    than a '!secret' reference into secrets.yaml (loaded as a ruamel TaggedScalar).
+
+    Only usable against a document loaded with ruamel's round-trip loader - a plain
+    yaml.safe_load() has already resolved '!secret' tags to their real value and lost the
+    distinction this depends on.
+    """
+    from ruamel.yaml.comments import TaggedScalar
+
+    if isinstance(node, dict):
+        for key, value in node.items():
+            key_path = "{}.{}".format(path, key) if path else str(key)
+            if is_secret_key(key):
+                if value not in (None, "") and not isinstance(value, TaggedScalar):
+                    yield key_path
+            else:
+                yield from find_unmasked_secret_paths(value, key_path)
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            yield from find_unmasked_secret_paths(item, "{}[{}]".format(path, index))
+
+
 def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=PREDBAT_LOG_FILE_PREV):
     """
     Return the contents of predbat.log, prefixed with the rotated previous log when one exists.

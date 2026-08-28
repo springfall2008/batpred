@@ -3616,6 +3616,8 @@ chart.render();
         if self.base.arg_errors:
             warning = "&#9888;"
         text += "{}<a href='./debug_apps'>apps.yaml</a> - has {} errors<br>\n".format(warning, len(self.base.arg_errors))
+        if self.base.arg_warnings:
+            text += "&#9888; apps.yaml has {} credential-like value(s) stored in plain text - consider using '!secret' to reference secrets.yaml: {}<br>\n".format(len(self.base.arg_warnings), html_module.escape(", ".join(sorted(self.base.arg_warnings))))
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><th>Actions</th></tr>\n"
 
