@@ -2579,6 +2579,34 @@ def test_model_picker_free_only_filter(my_predbat):
     return failed
 
 
+def test_busy_banner_only_points_at_another_conversation(my_predbat):
+    """The "switch to it" banner appears only when the running turn is somewhere else.
+
+    It exists to say a reply is happening in a conversation the user is not looking at, and to
+    offer a way there. On the conversation already open it was describing the transcript directly
+    below it and offering to switch to where the user already was.
+
+    Mutation check: calling showBanner() unconditionally fails this.
+    """
+    failed = False
+    print("**** Testing the busy banner only points elsewhere ****")
+    script = web_chat.get_chat_script()
+
+    body = _extract_function_body(script, "setBusy")
+    if body is None:
+        print("ERROR: there is no setBusy() to inspect")
+        return True
+    if "state.conversation" not in body:
+        print("ERROR: setBusy() does not compare the busy conversation with the open one: {!r}".format(body))
+        failed = True
+    # Both outcomes must be reachable: shown for another conversation, hidden for this one.
+    if "showBanner" not in body or "hideBanner" not in body:
+        print("ERROR: setBusy() cannot both show and hide the banner: {!r}".format(body))
+        failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -2616,6 +2644,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_model_picker_shows_prices(my_predbat)
     failed |= test_model_picker_free_only_filter(my_predbat)
     failed |= test_busy_banner_is_reconciled_against_the_server(my_predbat)
+    failed |= test_busy_banner_only_points_at_another_conversation(my_predbat)
     failed |= test_context_counter_uses_the_last_turns_prompt_tokens_not_cumulative(my_predbat)
     failed |= test_stop_button_wired_to_cancel_with_turn_id(my_predbat)
     failed |= test_html_chat_cancel_requires_the_running_turn_id(my_predbat)

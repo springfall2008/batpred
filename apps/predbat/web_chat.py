@@ -1965,7 +1965,14 @@ function hideBanner() {
 function setBusy(conversationId, title, turnId) {
     state.busy = { conversation_id: conversationId, title: title, turn_id: turnId };
     setComposerDisabled(true);
-    showBanner(conversationId, title);
+    // The banner exists to say a reply is happening SOMEWHERE ELSE, and to offer a way there.
+    // On the conversation already open it was telling the user about the thing in front of them
+    // and offering to switch to where they already are. The transcript is the status here.
+    if (conversationId && conversationId === state.conversation) {
+        hideBanner();
+    } else {
+        showBanner(conversationId, title);
+    }
     byId('chat-stop').classList.add('visible');
 }
 
