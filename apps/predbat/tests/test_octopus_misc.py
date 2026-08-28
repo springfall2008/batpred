@@ -1017,7 +1017,6 @@ async def test_octopus_fetch_tariffs(my_predbat):
         print("PASS: FLUX-IMPORT rates stored correctly as export fallback")
 
     # Verify the URL constructed has FLUX-IMPORT, not FLUX-EXPORT
-    wrong_url_called = any(flux_export_product in url and "standard-unit-rates" in url and url != f"https://api.octopus.energy/v1/products/{flux_export_product}/electricity-tariffs/{flux_export_tariff}/standard-unit-rates/" for url in urls_called8)
     expected_flux_import_url = f"https://api.octopus.energy/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff}/standard-unit-rates/"
     if expected_flux_import_url not in urls_called8:
         print(f"ERROR: Expected exact URL {expected_flux_import_url}, got {urls_called8}")

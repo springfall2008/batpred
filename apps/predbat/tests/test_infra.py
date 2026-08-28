@@ -174,7 +174,6 @@ class TestHAInterface:
         state = 0.0
         for count in range(int(days * 24 * 60 / self.step)):
             point = start + timedelta(minutes=count * self.step)
-            point_str = point.strftime("%Y-%m-%dT%H:%M:%SZ")
             history.append({"state": state, "last_changed": point})
         self.history = history
 

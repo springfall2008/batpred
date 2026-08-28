@@ -1284,7 +1284,7 @@ def _test_ohme_client_make_request_creates_session(my_predbat=None):
     mock_session_instance.request.return_value = mock_context
 
     with patch('aiohttp.ClientSession', return_value=mock_session_instance):
-        result = run_async(client._make_request("GET", "/v1/test"))
+        run_async(client._make_request("GET", "/v1/test"))
 
         # Verify session was created
         assert client._session is not None, "Expected session to be created"

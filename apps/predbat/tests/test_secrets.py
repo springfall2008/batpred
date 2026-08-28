@@ -61,9 +61,6 @@ def test_secrets_loading():
     with open("secrets.yaml", "w") as f:
         yaml.dump(secrets_data, f)
 
-    # Create a test apps.yaml with !secret tags
-    test_config = {"pred_bat": {"module": "predbat", "class": "PredBat", "api_key": "!secret test_api_key", "username": "!secret test_username"}}
-
     # Write YAML with !secret tags (manually to preserve the tag)
     with open("test_apps.yaml", "w") as f:
         f.write("pred_bat:\n")
