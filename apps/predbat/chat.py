@@ -249,10 +249,13 @@ class ChatAgent(ComponentBase):
         a two-tick rule frees the slot of a turn that is merely slow. Waiting until the turn has
         outlived its own deadline plus a grace period means a live turn is never touched.
 
-        A turn parked in await_confirmation is a further exception: CONFIRM_TIMEOUT_SECONDS (300s)
-        is deliberately longer than turn_timeout + STALE_TURN_GRACE_SECONDS (180 + 60 = 240s by
-        default), because a user reading an Approve/Reject prompt should get a generous window,
-        not the turn's own budget for talking to the model. So a turn whose active call is still
+        A turn parked in await_confirmation is a further exception, and it does not depend on the
+        defaults lining up. At the shipped values CONFIRM_TIMEOUT_SECONDS (300s) sits inside
+        turn_timeout + STALE_TURN_GRACE_SECONDS (300 + 60 = 360s), so the arithmetic is
+        comfortable - but chat_turn_timeout is user-configurable, and anything below 240s puts the
+        confirmation window back outside the stale threshold. The exception is therefore written to
+        hold whatever those numbers are: a user reading an Approve/Reject prompt gets a generous
+        window rather than the turn's own budget for talking to the model. So a turn whose active call is still
         in self.pending_confirm is left alone regardless of elapsed time - its own timeout is
         CONFIRM_TIMEOUT_SECONDS, enforced by await_confirmation itself, not this one.
         """

@@ -284,11 +284,11 @@ caution about exposing the web/MCP port outside your home network applies here, 
 | `model` | String | Yes | - | `openrouter_model` | The OpenRouter model id to use by default, e.g. `openai/gpt-4o-mini` |
 | `base_url` | String | No | `https://openrouter.ai/api/v1` | `openrouter_base_url` | Chat-completions endpoint. Point it at another OpenAI-compatible endpoint if you want one, but doing so disables the OpenRouter-only web search plugin |
 | `max_tokens` | Integer | No | 0 | `openrouter_max_tokens` | Maximum tokens per completion; `0` leaves it to the model/provider's own default |
-| `max_tool_calls` | Integer | No | 8 | `chat_max_tool_calls` | Maximum tool calls allowed within one turn before Predbat stops and asks you to continue |
+| `max_tool_calls` | Integer | No | 32 | `chat_max_tool_calls` | Maximum tool calls allowed within one turn before Predbat stops and asks you to continue |
 | `max_history` | Integer | No | 40 | `chat_max_history` | Maximum recent messages sent to the model each turn, trimmed at a user-message boundary so a tool call and its reply are never split apart. Bounds cost, not how much of the conversation is stored |
 | `max_conversations` | Integer | No | 20 | `chat_max_conversations` | Maximum conversations kept; the least recently updated are pruned once you go over this |
 | `expiry_days` | Integer | No | 30 | `chat_expiry_days` | Days of inactivity before a conversation's stored copy expires |
-| `turn_timeout` | Integer | No | 180 | `chat_turn_timeout` | Seconds a single reply is allowed to run before Predbat stops it |
+| `turn_timeout` | Integer | No | 300 | `chat_turn_timeout` | Seconds a single reply is allowed to run before Predbat stops it |
 | `fetch_allowlist` | List | No | `springfall2008.github.io`, `github.com`, `raw.githubusercontent.com` | `chat_fetch_allowlist` | Hosts `fetch_url` is allowed to reach. Replaces the default list rather than adding to it |
 
 Two switches also control the chat agent, both found under [Config](web-interface.md#config-view):
