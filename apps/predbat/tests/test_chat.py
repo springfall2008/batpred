@@ -2778,11 +2778,151 @@ def test_snapshot_formats_times_and_percentages(my_predbat):
     return failed
 
 
+def test_turn_error_is_detailed_and_stored_but_never_replayed(my_predbat):
+    """A failed turn shows its provider detail, is saved, and never goes back to the model.
+
+    OpenRouter's generic wrapper - "Provider returned error" - says nothing a user can act on.
+    The cause is in the error object's metadata: which provider failed and its raw response. That
+    is surfaced in the transcript and recorded on the conversation.
+
+    Recorded BESIDE the messages, never among them. A transport failure is not something the
+    model said; replaying it would waste context and invite the model to treat a provider outage
+    as part of the conversation. This asserts the negative directly rather than trusting the
+    design, because that is the half that would fail silently.
+
+    Mutation checks: dropping detail() from the emit, or storing the error as a message, each
+    fails an assertion below.
+    """
+    failed = False
+    print("**** Testing turn error detail, storage and non-replay ****")
+
+    # An error chunk shaped the way OpenRouter sends one, with the real cause in metadata.
+    error_chunk = [
+        {
+            "error": {
+                "code": 502,
+                "message": "Provider returned error",
+                "metadata": {"provider_name": "Nvidia", "raw": "upstream connect error: overloaded"},
+            }
+        }
+    ]
+    # A 502 is retryable, so the fake needs a response for every attempt - otherwise the turn
+    # fails for running out of canned replies rather than for the error under test.
+    agent = _agent_with_fake(my_predbat, error_chunk, error_chunk, error_chunk)
+    cid = asyncio.run(agent.store.create())
+    asyncio.run(agent.run_turn(cid, "is it sunny"))
+
+    events = agent.events_since(0, cid)[0]
+    errors = [event for event in events if event["type"] == "error"]
+    if not errors:
+        print("ERROR: a provider error produced no error event")
+        return True
+
+    data = errors[0]["data"]
+    detail = str(data.get("detail") or "")
+    # The generic message alone is what the user complained about - the detail must carry more.
+    if "Nvidia" not in detail or "overloaded" not in detail:
+        print("ERROR: the error detail does not name the provider or its raw response: {}".format(data))
+        failed = True
+    if "502" not in detail:
+        print("ERROR: the error detail does not carry the status code: {}".format(data))
+        failed = True
+
+    # Stored against the conversation.
+    stored = agent.store.get_last_error(cid)
+    if not stored or "overloaded" not in str(stored.get("detail")):
+        print("ERROR: the failure was not recorded on the conversation: {}".format(stored))
+        failed = True
+    if not stored.get("at"):
+        print("ERROR: the recorded failure has no timestamp: {}".format(stored))
+        failed = True
+
+    # And - the point - it is not in the conversation the model would be sent.
+    messages = asyncio.run(agent.store.get_messages(cid))
+    for message in messages:
+        blob = json.dumps(message)
+        if "overloaded" in blob or "Provider returned error" in blob:
+            print("ERROR: the failure was stored as a message and would be replayed to the model: {}".format(message))
+            failed = True
+    roles = [message.get("role") for message in messages]
+    if roles != ["user"]:
+        print("ERROR: expected only the user's message to be stored, got {}".format(roles))
+        failed = True
+
+    return failed
+
+
+def test_confirmation_card_resolves_nested_paths(my_predbat):
+    """The approval card shows the real current value for a nested path, and masks credentials.
+
+    The card looked the current value up with a flat args.get(), which only understands top-level
+    names. Every nested path set_apps_config accepts - "car_charging_exclusive[0]",
+    "forecast_solar[0].azimuth" - therefore showed "current_value": null, telling the user the
+    setting did not exist when it did, on the one screen whose whole purpose is to show what is
+    about to change.
+
+    The card is also built before set_apps_config runs, so a credential key's value would appear
+    in the transcript on its way to being refused.
+
+    Mutation checks: reverting to args.get(key), or dropping the mask, each fails below.
+    """
+    failed = False
+    print("**** Testing the set_apps_config confirmation card ****")
+
+    original_args = my_predbat.args
+    try:
+        my_predbat.args = {
+            "car_charging_exclusive": [True, False],
+            "forecast_solar": [{"azimuth": 180, "api_key": "REAL-KEY"}],
+            "num_inverters": 1,
+            "ha_key": "REAL-HA-TOKEN",
+        }
+        agent = _agent_with_fake(my_predbat, _text_response("ok"))
+
+        def card(key, value):
+            """Build the confirmation card for one proposed change."""
+            return agent._confirmation_card_arguments("set_apps_config", {"key": key, "value": value})
+
+        if card("car_charging_exclusive[0]", False).get("current_value") is not True:
+            print("ERROR: an indexed path showed the wrong current value: {}".format(card("car_charging_exclusive[0]", False)))
+            failed = True
+        if card("forecast_solar[0].azimuth", 90).get("current_value") != 180:
+            print("ERROR: a dotted path showed the wrong current value: {}".format(card("forecast_solar[0].azimuth", 90)))
+            failed = True
+        if card("num_inverters", 2).get("current_value") != 1:
+            print("ERROR: a plain top-level key regressed: {}".format(card("num_inverters", 2)))
+            failed = True
+
+        # A path that genuinely does not exist still shows null rather than raising. Named
+        # without a credential substring on purpose - "no_such_key" would match is_secret_key and
+        # come back masked, which is correct behaviour but not what this line is testing.
+        if card("absent_setting[4].nope", 1).get("current_value") is not None:
+            print("ERROR: a nonexistent path did not resolve to null: {}".format(card("absent_setting[4].nope", 1)))
+            failed = True
+
+        # Credentials never reach the transcript, at either level.
+        for key in ("ha_key", "forecast_solar[0].api_key"):
+            shown = json.dumps(card(key, "new"))
+            if "REAL-KEY" in shown or "REAL-HA-TOKEN" in shown:
+                print("ERROR: the card exposed a credential for {}: {}".format(key, shown))
+                failed = True
+
+        # The restart warning must survive all of this - it is why the card exists.
+        if not card("num_inverters", 2).get("warning"):
+            print("ERROR: the card lost its restart warning")
+            failed = True
+    finally:
+        my_predbat.args = original_args
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
     failed |= test_component_gating(my_predbat)
     failed |= test_model_resolution_order(my_predbat)
+    failed |= test_turn_error_is_detailed_and_stored_but_never_replayed(my_predbat)
+    failed |= test_confirmation_card_resolves_nested_paths(my_predbat)
     failed |= test_component_gating_end_to_end(my_predbat)
     failed |= test_build_snapshot(my_predbat)
     failed |= test_snapshot_formats_times_and_percentages(my_predbat)

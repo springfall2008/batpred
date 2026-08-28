@@ -246,6 +246,11 @@ def test_send_is_busy_and_unknown_is_404(my_predbat):
             """A conversation store stand-in that knows one conversation."""
 
             @staticmethod
+            def get_last_error(cid):
+                """No failed turn recorded. The history route reports last_error beside messages."""
+                return None
+
+            @staticmethod
             def get_meta(cid):
                 """Resolve only the known conversation id."""
                 return {"id": cid, "title": "known"} if cid == "aaaabbbbccccdddd" else None
@@ -297,6 +302,11 @@ def test_delete_refuses_the_active_conversation(my_predbat):
             """A store stand-in that knows the busy conversation."""
 
             @staticmethod
+            def get_last_error(cid):
+                """No failed turn recorded. The history route reports last_error beside messages."""
+                return None
+
+            @staticmethod
             def get_meta(cid):
                 """Resolve the busy conversation."""
                 return {"id": cid, "title": "busy one"} if cid == "aaaabbbbccccdddd" else None
@@ -331,6 +341,11 @@ def test_history_reads_via_snapshot_not_get_messages(my_predbat):
 
         class store:
             """A store stand-in recording which read method the handler actually calls."""
+
+            @staticmethod
+            def get_last_error(cid):
+                """No failed turn recorded. The history route reports last_error beside messages."""
+                return None
 
             @staticmethod
             def get_meta(cid):
@@ -480,6 +495,11 @@ def test_history_route_reports_last_prompt_tokens(my_predbat):
             """A store stand-in with a conversation carrying two different usage figures."""
 
             @staticmethod
+            def get_last_error(cid):
+                """No failed turn recorded. The history route reports last_error beside messages."""
+                return None
+
+            @staticmethod
             def get_meta(cid):
                 """Resolve the one known conversation, with usage_total and last_prompt_tokens deliberately different."""
                 return {"id": cid, "title": "known", "model": "test-model", "usage_total": {"cost": 0.5, "prompt_tokens": 5000}, "last_prompt_tokens": 4000} if cid == "aaaabbbbccccdddd" else None
@@ -519,6 +539,11 @@ def test_history_route_reports_last_prompt_tokens(my_predbat):
 
         class store(RichAgent.store):
             """A store stand-in returning a conversation saved before last_prompt_tokens existed."""
+
+            @staticmethod
+            def get_last_error(cid):
+                """No failed turn recorded. The history route reports last_error beside messages."""
+                return None
 
             @staticmethod
             def get_meta(cid):
@@ -1968,13 +1993,22 @@ def test_chat_page_height_is_measured_not_hardcoded(my_predbat):
     if "getBoundingClientRect" not in body or "innerHeight" not in body:
         print("ERROR: sizeChatPage() does not measure against the viewport: {!r}".format(body))
         failed = True
-    # And correct for whatever still overflows below it.
-    if "scrollHeight" not in body:
-        print("ERROR: sizeChatPage() does not correct for remaining document overflow: {!r}".format(body))
+    # Deliberately NOT a document-overflow correction. An earlier version subtracted any leftover
+    # scrollHeight overflow, assuming it sat below the page; when that assumption was wrong the
+    # page was shrunk by the difference, leaving dead space under the footer while the document
+    # still scrolled. The space below the page is removed in CSS instead.
+    if "scrollHeight" in body:
+        print("ERROR: sizeChatPage() is compensating for document overflow again, which leaves dead space: {!r}".format(body))
         failed = True
-    # The correction must be bounded - a loop could not converge against the min-height floor.
     if "while" in body:
         print("ERROR: sizeChatPage() loops, which cannot converge against the min-height floor: {!r}".format(body))
+        failed = True
+
+    # The cause, removed at source: nothing below the chat page may add height, or the document
+    # scrolls by exactly that much and takes the nav bar off the top.
+    styles = web_chat.get_chat_styles()
+    if "padding-bottom: 0" not in styles or "margin-bottom: 0" not in styles:
+        print("ERROR: the stylesheet does not zero the space below the chat page")
         failed = True
 
     for wiring in ("addEventListener('resize', sizeChatPage)", "addEventListener('load', sizeChatPage)"):

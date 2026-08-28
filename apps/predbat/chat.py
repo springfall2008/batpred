@@ -34,6 +34,7 @@ import aiohttp
 import asyncio
 import functools
 import json
+import traceback
 import threading
 import time
 from datetime import datetime, timedelta
@@ -42,11 +43,17 @@ from agent_tools import TOOL_DEFS, PredbatTools, openai_tool_list
 from component_base import ComponentBase
 from chat_store import ConversationStore, NEW_CONVERSATION_TITLE, derive_title, extract_cached_tokens, trim_history
 from chat_tools import APPS_YAML_RESTART_WARNING, CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_source, search_docs, search_source, set_apps_config
+from utils import SECRET_MASK, is_secret_key, parse_yaml_path, resolve_nested_yaml_value
 
 # Shown when a turn is attempted with no model chosen anywhere. openrouter_default_model is
 # optional, so this is the ordinary state of a fresh install rather than a misconfiguration - the
 # wording points at the picker, which is where the user can fix it without touching apps.yaml.
 NO_MODEL_MESSAGE = "No model has been selected. Choose one from the model picker below the message box, or set 'openrouter_default_model' in apps.yaml."
+
+# How much of a provider's raw error text to keep. Enough to carry a real message, bounded because
+# a failing provider can return an entire HTML page, and this is stored on the conversation and
+# pushed down the SSE stream.
+PROVIDER_DETAIL_MAX = 1000
 
 EVENT_BUFFER_MAX = 2000
 
@@ -135,6 +142,47 @@ class ChatRequestError(RuntimeError):
         self.provider_message = provider_message
         self.error_type = error_type
         self.final_message = final_message
+
+    def detail(self):
+        """Return the provider's own error payload, for the transcript and the saved conversation.
+
+        friendly() deliberately says one short line, but OpenRouter's generic wrappers -
+        "Provider returned error" is the common one - carry the actual cause in the error object's
+        metadata: which provider failed, and its raw response. Without that a user has nothing to
+        act on and nothing to report. Returns None when there is no more to say than friendly()
+        already did, so a caller can skip the detail block entirely.
+        """
+        parts = []
+        if self.status:
+            parts.append("code {}".format(self.status))
+        if self.error_type:
+            parts.append("type {}".format(self.error_type))
+
+        raw = self.body
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                raw = None
+        if isinstance(raw, dict):
+            metadata = raw.get("metadata")
+            if isinstance(metadata, dict):
+                if metadata.get("provider_name"):
+                    parts.append("provider {}".format(metadata["provider_name"]))
+                # The provider's own words, which is the part worth reading.
+                provider_raw = metadata.get("raw")
+                if provider_raw:
+                    text = provider_raw if isinstance(provider_raw, str) else json.dumps(provider_raw)
+                    parts.append(text[:PROVIDER_DETAIL_MAX])
+
+        if not parts:
+            # Nothing structured to show, so fall back to the body itself rather than nothing -
+            # truncated, because a provider can return a whole HTML error page.
+            body_text = self.body if isinstance(self.body, str) else json.dumps(self.body)
+            if body_text and body_text not in ("null", "{}"):
+                return body_text[:PROVIDER_DETAIL_MAX]
+            return None
+        return " | ".join(parts)
 
     def friendly(self):
         """Return a message worth showing a user rather than a raw HTTP error."""
@@ -1060,14 +1108,14 @@ class ChatAgent(ComponentBase):
             await self._turn_loop(conversation_id, turn_id, text)
         except ChatRequestError as error:
             self.count_errors += 1
-            self.emit(conversation_id, "error", {"message": error.friendly()})
+            self._report_turn_error(conversation_id, error.friendly(), error.detail())
         except (aiohttp.ClientError, asyncio.TimeoutError) as error:
             self.count_errors += 1
-            self.emit(conversation_id, "error", {"message": "Could not reach {}: {}".format(self.base_url, error)})
+            self._report_turn_error(conversation_id, "Could not reach {}: {}".format(self.base_url, error), type(error).__name__)
         except Exception as error:
             self.count_errors += 1
             self.log("Error: chat turn failed: {}".format(error))
-            self.emit(conversation_id, "error", {"message": "The chat turn failed: {}".format(error)})
+            self._report_turn_error(conversation_id, "The chat turn failed: {}".format(error), traceback.format_exc()[-PROVIDER_DETAIL_MAX:])
         finally:
             if not self.titled_this_turn and (self.store.get_meta(conversation_id) or {}).get("title") == NEW_CONVERSATION_TITLE:
                 title = self.store.set_title(conversation_id, derive_title(text))
@@ -1185,7 +1233,22 @@ class ChatAgent(ComponentBase):
         if name != "set_apps_config":
             return arguments
         key = arguments.get("key")
-        return {"key": key, "current_value": self.base.args.get(key), "proposed_value": arguments.get("value"), "warning": APPS_YAML_RESTART_WARNING}
+
+        # Resolved through the same path syntax set_apps_config writes with. A plain
+        # self.base.args.get() only understands top-level names, so every nested path -
+        # "car_charging_exclusive[0]", "forecast_solar[0].azimuth" - showed a current value of
+        # null, telling the user the setting did not exist when it did.
+        try:
+            current = resolve_nested_yaml_value(self.base.args, key) if isinstance(key, str) else None
+        except (KeyError, ValueError, TypeError):
+            current = None
+
+        # set_apps_config refuses credential keys, but the card is built before it runs, so
+        # without this the value would be shown in the transcript on the way to being refused.
+        if isinstance(key, str) and any(is_secret_key(segment) for segment in parse_yaml_path(key) if not segment.startswith("[")):
+            current = SECRET_MASK
+
+        return {"key": key, "current_value": current, "proposed_value": arguments.get("value"), "warning": APPS_YAML_RESTART_WARNING}
 
     def resolve_model(self, conversation_id):
         """Return the model this conversation should use, or None if nothing has been chosen.
@@ -1197,6 +1260,20 @@ class ChatAgent(ComponentBase):
         """
         conversation_model = (self.store.get_meta(conversation_id) or {}).get("model")
         return conversation_model or self.store.get_selected_model() or self.default_model or None
+
+    def _report_turn_error(self, conversation_id, message, detail=None):
+        """Show a failed turn in the transcript and record it on the conversation.
+
+        Recorded as conversation metadata, never as a message. A failure is not something the
+        model said, and replaying it would both waste context and invite the model to treat a
+        transport error as part of the conversation - so it is stored beside the messages rather
+        than among them, and build_messages() never sees it.
+        """
+        payload = {"message": message}
+        if detail:
+            payload["detail"] = detail
+        self.emit(conversation_id, "error", payload)
+        self.store.set_last_error(conversation_id, message, detail)
 
     async def _refuse_remaining_calls(self, conversation_id, calls, reason):
         """Answer tool calls the turn is abandoning, so the stored conversation stays well-formed.

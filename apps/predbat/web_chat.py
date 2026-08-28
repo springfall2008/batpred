@@ -182,6 +182,10 @@ class WebChat:
                 # (renderContextUsage() in get_chat_script()), which is what actually reads this.
                 "last_prompt_tokens": meta.get("last_prompt_tokens", 0),
                 "messages": messages or [],
+                # Carried separately from messages on purpose: the last failed turn is shown in
+                # the transcript but is not part of the conversation, and must never be replayed
+                # to the model. See ChatAgent._report_turn_error().
+                "last_error": agent.store.get_last_error(cid),
                 "cursor": cursor,
                 "active": self._active_with_elapsed(agent),
             }
@@ -449,7 +453,16 @@ body.dark-mode {
     --chat-error-text: #ff6b6b;
 }
 
+/* Scoped to the Chat tab: get_chat_styles() is only emitted on this page. The chat view is sized
+   to the viewport, so anything below it is dead space - and any bottom margin here would make the
+   document scroll by exactly that much, taking the nav bar off the top. */
+body {
+    margin-bottom: 0;
+    padding-bottom: 0;
+}
+
 #chat-page {
+    margin-bottom: 0;
     display: grid;
     grid-template-columns: 260px minmax(0, 1fr);
     gap: 14px;
@@ -1018,6 +1031,27 @@ body.dark-mode {
     font-size: 13px;
     border-top: 1px solid var(--chat-border);
     padding-top: 12px;
+}
+
+.chat-error-detail {
+    margin-top: 6px;
+    font-size: 12px;
+}
+
+.chat-error-detail summary {
+    cursor: pointer;
+    opacity: 0.85;
+}
+
+.chat-error-detail pre {
+    margin: 6px 0 0;
+    padding: 6px 8px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 240px;
+    overflow-y: auto;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 4px;
 }
 
 .chat-toggle-cost {
@@ -1632,9 +1666,13 @@ function loadModels() {
 // the page past the viewport, so the document scrolls and the nav scrolls out of sight - which
 // is what the fixed 130px fallback in the stylesheet does on a taller header.
 //
-// Measured instead: the distance from the page's own top to the bottom of the viewport. The
-// second pass then subtracts any remaining document overflow, which catches whatever sits below
-// the page - body margin, a footer - without this needing to know what that is.
+// Measured instead: the page's own top to the bottom of the viewport, and nothing else. An
+// earlier version also subtracted any leftover document overflow, on the assumption that
+// whatever overflowed sat below the page. That is not a safe assumption - a document scrolls for
+// other reasons, a wide element among them - and when it was wrong the page was shrunk by the
+// difference, leaving dead space under the footer while the document still scrolled. The space
+// below the page is removed in CSS instead (#chat-page's margin, and body's bottom padding),
+// which fixes the cause rather than compensating for it.
 // ---------------------------------------------------------------------------------------------
 
 var CHAT_PAGE_MIN_HEIGHT = 420;
@@ -1645,16 +1683,7 @@ function sizeChatPage() {
         return;
     }
     var top = page.getBoundingClientRect().top + (window.scrollY || 0);
-    var height = Math.max(CHAT_PAGE_MIN_HEIGHT, window.innerHeight - top);
-    page.style.height = height + 'px';
-
-    // Anything still overflowing is below the page, so take it off and settle. Bounded to one
-    // correction: the min-height floor means a very short window cannot converge, and looping
-    // would spin.
-    var overflow = document.documentElement.scrollHeight - window.innerHeight;
-    if (overflow > 0) {
-        page.style.height = Math.max(CHAT_PAGE_MIN_HEIGHT, height - overflow) + 'px';
-    }
+    page.style.height = Math.max(CHAT_PAGE_MIN_HEIGHT, window.innerHeight - top) + 'px';
 }
 
 function chatToggles() {
@@ -2166,7 +2195,30 @@ function handleToolEnd(data) {
 function handleError(data) {
     clearPendingBubble();
     clearThinkingBubble();
-    appendBubble('error', data.message || 'Something went wrong');
+    var bubble = appendBubble('error', data.message || 'Something went wrong');
+    appendErrorDetail(bubble, data.detail);
+}
+
+function appendErrorDetail(bubble, detail) {
+    // Collapsed, because most of the time the one-line message is all a user wants; expanded it
+    // carries what OpenRouter actually said - which provider failed and its raw response - which
+    // is the difference between "Provider returned error" and something reportable.
+    //
+    // textContent, never renderMarkdown: this is a third party's error text arriving over the
+    // wire, and it is the one string on the page that a failing provider controls outright.
+    if (!detail) {
+        return;
+    }
+    var details = document.createElement('details');
+    details.className = 'chat-error-detail';
+    var summary = document.createElement('summary');
+    summary.textContent = 'Details';
+    details.appendChild(summary);
+    var pre = document.createElement('pre');
+    pre.textContent = detail;
+    details.appendChild(pre);
+    bubble.appendChild(details);
+    scrollTranscriptToBottom();
 }
 
 function handleDone() {
@@ -2452,6 +2504,14 @@ function loadConversationData(id) {
             state.cursor = payload.cursor || 0;
             state.currentModel = payload.model || null;
             renderHistory(payload);
+            // The last failure is stored beside the messages rather than among them, so
+            // renderHistory() cannot show it - it has to be replayed here. Without this the
+            // transcript loses the error on every reload, which is exactly when a user goes
+            // looking for it.
+            if (payload.last_error) {
+                var bubble = appendBubble('error', payload.last_error.message || 'The last turn failed');
+                appendErrorDetail(bubble, payload.last_error.detail);
+            }
             populateModelPicker(state.models, state.currentModel);
             if (payload.active) {
                 setBusy(payload.active.conversation_id, payload.active.title, payload.active.turn_id);

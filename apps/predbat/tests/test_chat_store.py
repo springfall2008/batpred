@@ -30,7 +30,7 @@ class FakeStorage:
         self.saves = []
         self.expired = set()
 
-    async def save(self, module, filename, data, format="yaml", expiry=None):
+    async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
         """Record a save, keeping the payload and the expiry it was given."""
         key = (module, filename)
         self.data[key] = data
@@ -670,10 +670,51 @@ def test_selected_model_persists(my_predbat):
     return failed
 
 
+def test_conversations_are_written_indented(my_predbat):
+    """Saved conversations are written as indented JSON, not one long line.
+
+    They are read by people - attached to bug reports, or opened to check what the model was
+    actually sent. A single 100KB line is unreadable in any editor. The machine-only caches
+    elsewhere in Storage stay compact, which is why indent is opt-in rather than a Storage-wide
+    default.
+
+    Mutation check: dropping indent= from either save call fails this.
+    """
+    failed = False
+    print("**** Testing conversations are saved as indented JSON ****")
+
+    saved = {}
+
+    class RecordingStorage(FakeStorage):
+        """Records the indent each save was asked for, then behaves as normal."""
+
+        async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
+            """Record the indent and delegate."""
+            saved[filename] = indent
+            return await FakeStorage.save(self, module, filename, data, format=format, expiry=expiry, indent=indent)
+
+    store = ConversationStore(RecordingStorage(), my_predbat.log)
+    asyncio.run(store.load_index())
+    cid = asyncio.run(store.create())
+    asyncio.run(store.append(cid, {"role": "user", "content": "hello"}))
+    asyncio.run(store.flush(cid))
+
+    if not saved:
+        print("ERROR: nothing was saved, so the test proves nothing")
+        return True
+    for filename, indent in saved.items():
+        if not indent:
+            print("ERROR: {} was saved without an indent, so it is one long line: {!r}".format(filename, indent))
+            failed = True
+
+    return failed
+
+
 def run_chat_store_tests(my_predbat):
     """Run every conversation store test, returning True if any of them failed."""
     failed = False
     failed |= test_selected_model_persists(my_predbat)
+    failed |= test_conversations_are_written_indented(my_predbat)
     failed |= test_create_and_list(my_predbat)
     failed |= test_expiry_is_rolling(my_predbat)
     failed |= test_delete_is_a_flag(my_predbat)

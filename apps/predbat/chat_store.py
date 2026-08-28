@@ -24,6 +24,11 @@ import threading
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 
+# Saved conversations are read by people - attached to bug reports, or opened to check what the
+# model was actually sent. Written indented for that reason; the machine-only caches elsewhere
+# in Storage stay compact.
+CONVERSATION_JSON_INDENT = 2
+
 CONVERSATION_VERSION = 1
 STORAGE_MODULE = "chat"
 INDEX_FILENAME = "index"
@@ -105,6 +110,11 @@ class ConversationStore:
         # with no openrouter_default_model does not ask again on every boot. Guarded by the same
         # lock as the index it is stored beside; None means nothing has been chosen yet.
         self.selected_model = None
+        # The most recent failed turn per conversation, saved beside the messages rather than
+        # among them: a transport failure is not something the model said, so it must never be
+        # replayed back to it. Kept for the user and for a bug report, and overwritten by the next
+        # failure rather than accumulating.
+        self.last_errors = {}
         self.lock = threading.Lock()
         self.loaded = False
 
@@ -216,6 +226,13 @@ class ConversationStore:
         # get_system_prompt()'s docstring.
         system_prompt = payload.get("system_prompt") if valid else None
         system_prompt_at = payload.get("system_prompt_at") if valid else None
+        # Read back so the UI can still show the last failure after a reload. Deliberately kept
+        # out of `messages`: it is stored beside them, so nothing that replays the conversation
+        # to the model can pick it up by accident.
+        last_error = payload.get("last_error") if valid else None
+        if last_error:
+            with self.lock:
+                self.last_errors.setdefault(cid, last_error)
         await self._cache_body(cid, messages, system_prompt=system_prompt, system_prompt_at=system_prompt_at)
         return messages
 
@@ -385,6 +402,19 @@ class ConversationStore:
             self.log("Info: chat conversation '{}' ({}) pruned past the {} conversation limit; its stored copy expires in {} days".format(entry.get("title"), entry["id"], self.max_conversations, self.expiry_days))
         await self._save_index()
 
+    def set_last_error(self, cid, message, detail=None):
+        """Record the most recent failed turn for a conversation, to be written on the next flush."""
+        if not cid:
+            return
+        with self.lock:
+            self.last_errors[cid] = {"message": message, "detail": detail, "at": datetime.now(timezone.utc).isoformat()}
+            self.dirty.add(cid)
+
+    def get_last_error(self, cid):
+        """Return the most recent failed turn for a conversation, or None."""
+        with self.lock:
+            return self.last_errors.get(cid)
+
     def get_selected_model(self):
         """Return the model the user last chose in the picker, or None."""
         with self.lock:
@@ -401,7 +431,7 @@ class ConversationStore:
             return False
         with self.lock:
             payload = {"version": CONVERSATION_VERSION, "conversations": [dict(entry) for entry in self.index.values()], "selected_model": self.selected_model}
-        return await self.storage.save(STORAGE_MODULE, INDEX_FILENAME, payload, format="json", expiry=self._expiry())
+        return await self.storage.save(STORAGE_MODULE, INDEX_FILENAME, payload, format="json", expiry=self._expiry(), indent=CONVERSATION_JSON_INDENT)
 
     async def _save_body(self, cid, messages=None, system_prompt=_UNSET, system_prompt_at=_UNSET, evicted=False):
         """Write one conversation body with a renewed expiry.
@@ -432,9 +462,9 @@ class ConversationStore:
                 info = self.system_prompts.get(cid) or {}
                 system_prompt = info.get("system_prompt")
                 system_prompt_at = info.get("system_prompt_at")
-            payload = {"version": CONVERSATION_VERSION, "id": cid, "messages": json.loads(json.dumps(messages)), "system_prompt": system_prompt, "system_prompt_at": system_prompt_at}
+            payload = {"version": CONVERSATION_VERSION, "id": cid, "messages": json.loads(json.dumps(messages)), "system_prompt": system_prompt, "system_prompt_at": system_prompt_at, "last_error": self.last_errors.get(cid)}
             self.dirty.discard(cid)
-        result = await self.storage.save(STORAGE_MODULE, self._body_name(cid), payload, format="json", expiry=self._expiry())
+        result = await self.storage.save(STORAGE_MODULE, self._body_name(cid), payload, format="json", expiry=self._expiry(), indent=CONVERSATION_JSON_INDENT)
         if evicted:
             self.log("Info: flushed chat conversation {} before evicting it from the body cache".format(cid))
         return result

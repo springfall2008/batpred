@@ -66,7 +66,7 @@ class StorageBase(ABC):
     """Abstract base class for storage backends."""
 
     @abstractmethod
-    async def save(self, module, filename, data, format="yaml", expiry=None):
+    async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
         """Save data for a given module and filename.
 
         Args:
@@ -209,7 +209,7 @@ class StorageLocalFiles(StorageBase):
         """Return the full path for the metadata sidecar."""
         return os.path.join(self.cache_path, "{}_{}.meta".format(_safe_name(module), _safe_name(filename)))
 
-    async def save(self, module, filename, data, format="yaml", expiry=None):
+    async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
         """Save data to disk with a JSON metadata sidecar.
 
         Args:
@@ -230,7 +230,11 @@ class StorageLocalFiles(StorageBase):
             if format == "yaml":
                 text = yaml.safe_dump(data)
             elif format == "json":
-                text = json.dumps(data)
+                # indent is opt-in rather than always on: most JSON here is machine-only cache
+                # (the docs index, API responses) where pretty-printing only inflates the file.
+                # Callers that write something a person may open - saved chat conversations - ask
+                # for it explicitly.
+                text = json.dumps(data, indent=indent) if indent else json.dumps(data)
             else:
                 text = str(data)
         except (yaml.YAMLError, TypeError, ValueError) as e:
@@ -424,7 +428,7 @@ class StorageComponent(ComponentBase):
         """Initialise the storage component with a local filesystem backend."""
         self.backend = StorageLocalFiles(self.config_root, self.log)
 
-    async def save(self, module, filename, data, format="yaml", expiry=None):
+    async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
         """Save data via the storage backend.
 
         Args:
@@ -437,7 +441,7 @@ class StorageComponent(ComponentBase):
         Returns:
             True on success, False on failure
         """
-        return await self.backend.save(module, filename, data, format=format, expiry=expiry)
+        return await self.backend.save(module, filename, data, format=format, expiry=expiry, indent=indent)
 
     async def load(self, module, filename):
         """Load data via the storage backend.
