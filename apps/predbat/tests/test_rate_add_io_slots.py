@@ -38,7 +38,10 @@ def run_rate_add_io_slots_test(testname, my_predbat, slots, octopus_slot_low_rat
     for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60)):
         rates[minute] = 10.0
 
-    # Run the function
+    # Run the function. trusted_dynamic_minutes is a per-cycle accumulator that fetch.py clears at
+    # the start of each rate rebuild - clear it here too so one test's trusted minutes can't leak
+    # into the next one's assertions on it.
+    my_predbat.trusted_dynamic_minutes = set()
     tagged_slots = [dict(slot, _confirmed=confirmed) for slot in slots]
     result_rates = my_predbat.rate_add_io_slots(0, rates, tagged_slots)
 
@@ -69,6 +72,11 @@ def run_rate_add_io_slots_tests(my_predbat):
     saved_now_utc = my_predbat.now_utc
     saved_midnight_utc = my_predbat.midnight_utc
     saved_minutes_now = my_predbat.minutes_now
+    # Captured before the "completed" default is applied below, so the restore at the end puts back
+    # the fixture's own value rather than this module's.
+    saved_trust_dynamic = my_predbat.trust_future_dynamic_iog_slots
+    saved_trusted_dynamic_minutes = set(my_predbat.trusted_dynamic_minutes)
+    saved_car_charging_now = list(my_predbat.car_charging_now)
     midnight_utc = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
     my_predbat.midnight_utc = midnight_utc
     my_predbat.now_utc = midnight_utc + timedelta(hours=10)
@@ -375,8 +383,6 @@ def run_rate_add_io_slots_tests(my_predbat):
     # occurs. Trust is graduated by source (confirmed via completed_dispatches/car_charging_now), not
     # by clock time - a slot merely reaching its scheduled start time is not evidence anything
     # actually happened, only that it was due to.
-    saved_trust_dynamic = my_predbat.trust_future_dynamic_iog_slots
-    saved_car_charging_now = list(my_predbat.car_charging_now)
 
     print("\n**** Test 18: 'none' - an unconfirmed dynamic slot is never trusted ****")
     my_predbat.trust_future_dynamic_iog_slots = "none"
@@ -435,7 +441,37 @@ def run_rate_add_io_slots_tests(my_predbat):
     expected_rates_25 = {minute: 4.0 for minute in range(840, 870)}
     failed |= run_rate_add_io_slots_test("test25_planned_trusts_unconfirmed_slot", my_predbat, slots_18, True, 12, expected_rates_25, confirmed=False)
 
+    print("\n**** Test 26: a trusted dynamic slot rejected by the octopus_slot_max cap is not recorded as trusted ****")
+    # trusted_dynamic_minutes is what exclude_dynamic_io_slots() consults to decide whether to strip
+    # the feed-side (io_adjusted) discount for a minute. A slot that passed the trust test but was
+    # then rejected by the daily cap gets no discount from rate_add_io_slots(), so it must not be
+    # recorded as trusted either - otherwise the capped slot would keep a cheap rate by the back door.
+    my_predbat.trust_future_dynamic_iog_slots = "planned"
+    slots_26 = []
+    for i in range(2):
+        slot_start_26 = midnight_utc + timedelta(hours=14, minutes=i * 30)  # 14:00 and 14:30, both dynamic
+        slot_end_26 = slot_start_26 + timedelta(minutes=30)
+        slots_26.append({"start": slot_start_26.strftime(TIME_FORMAT), "end": slot_end_26.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"})
+    # Cap of 1 slot per day: 14:00-14:30 is added, 14:30-15:00 is rejected by the cap
+    expected_rates_26 = {minute: 4.0 for minute in range(840, 870)}
+    expected_rates_26.update({minute: 10.0 for minute in range(870, 900)})
+    failed |= run_rate_add_io_slots_test("test26_capped_slot_is_not_recorded_as_trusted", my_predbat, slots_26, True, 1, expected_rates_26, confirmed=False)
+    if not all(minute in my_predbat.trusted_dynamic_minutes for minute in range(840, 870)):
+        print("ERROR: expected the added slot's minutes 840-869 to be recorded in trusted_dynamic_minutes")
+        failed = True
+    if any(minute in my_predbat.trusted_dynamic_minutes for minute in range(870, 900)):
+        print("ERROR: expected the cap-rejected slot's minutes 870-899 to be absent from trusted_dynamic_minutes")
+        failed = True
+
+    print("\n**** Test 27: a fixed-window slot is never recorded as trusted (it isn't dynamic) ****")
+    my_predbat.trust_future_dynamic_iog_slots = "none"
+    failed |= run_rate_add_io_slots_test("test27_fixed_window_not_recorded_as_trusted", my_predbat, slots_19, True, 12, expected_rates_19, confirmed=False)
+    if any(minute in my_predbat.trusted_dynamic_minutes for minute in range(120, 150)):
+        print("ERROR: expected fixed-window minutes 120-149 to be absent from trusted_dynamic_minutes")
+        failed = True
+
     my_predbat.trust_future_dynamic_iog_slots = saved_trust_dynamic
+    my_predbat.trusted_dynamic_minutes = saved_trusted_dynamic_minutes
     my_predbat.car_charging_now = saved_car_charging_now
 
     # Restore original forecast_minutes

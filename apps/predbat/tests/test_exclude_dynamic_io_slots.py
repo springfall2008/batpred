@@ -26,7 +26,15 @@ def run_exclude_dynamic_io_slots_tests(my_predbat):
 
     saved_io_adjusted = dict(my_predbat.io_adjusted)
     saved_trusted_dynamic_minutes = set(my_predbat.trusted_dynamic_minutes)
+    saved_rate_max_base = my_predbat.rate_max_base
+    saved_trust = my_predbat.trust_future_dynamic_iog_slots
+    saved_minutes_now = my_predbat.minutes_now
+
     my_predbat.rate_max_base = 30.0
+    # A trust level that actually engages the mechanism - it is deliberately a no-op at "planned"
+    # (tested separately below) - and a "now" early enough that every minute under test is future.
+    my_predbat.trust_future_dynamic_iog_slots = "none"
+    my_predbat.minutes_now = 0
 
     try:
         print("Test 1: a dynamic io_adjusted minute not in trusted_dynamic_minutes is restored and cleared")
@@ -106,9 +114,46 @@ def run_exclude_dynamic_io_slots_tests(my_predbat):
         if 120 not in my_predbat.io_adjusted:
             print("  ERROR: expected the fixed-window minute to remain in io_adjusted")
             failed = True
+
+        print("Test 7: an elapsed (past) untrusted dynamic minute is left untouched - it records what was actually charged")
+        my_predbat.minutes_now = 900
+        my_predbat.trusted_dynamic_minutes = set()
+        my_predbat.io_adjusted = {840: True, 960: True}
+        rates = {840: 4.0, 960: 4.0}
+        result = my_predbat.exclude_dynamic_io_slots(rates)
+        if result.get(840) != 4.0:
+            print("  ERROR: expected past minute 840 untouched at 4.0, got {}".format(result.get(840)))
+            failed = True
+        if 840 not in my_predbat.io_adjusted:
+            print("  ERROR: expected past minute 840 to remain marked io_adjusted, was cleared")
+            failed = True
+        if result.get(960) != 30.0:
+            print("  ERROR: expected future minute 960 restored to rate_max_base 30.0, got {}".format(result.get(960)))
+            failed = True
+        if 960 in my_predbat.io_adjusted:
+            print("  ERROR: expected future minute 960 cleared from io_adjusted, still present")
+            failed = True
+        my_predbat.minutes_now = 0
+
+        print("Test 8: at trust level 'planned' the whole mechanism is a no-op, even for an untrusted minute")
+        my_predbat.trust_future_dynamic_iog_slots = "planned"
+        my_predbat.trusted_dynamic_minutes = set()
+        my_predbat.io_adjusted = {840: True}
+        rates = {840: 4.0}
+        result = my_predbat.exclude_dynamic_io_slots(rates)
+        if result.get(840) != 4.0:
+            print("  ERROR: expected minute 840 untouched at 'planned', got {}".format(result.get(840)))
+            failed = True
+        if 840 not in my_predbat.io_adjusted:
+            print("  ERROR: expected minute 840 to remain marked io_adjusted at 'planned', was cleared")
+            failed = True
+        my_predbat.trust_future_dynamic_iog_slots = "none"
     finally:
         my_predbat.io_adjusted = saved_io_adjusted
         my_predbat.trusted_dynamic_minutes = saved_trusted_dynamic_minutes
+        my_predbat.rate_max_base = saved_rate_max_base
+        my_predbat.trust_future_dynamic_iog_slots = saved_trust
+        my_predbat.minutes_now = saved_minutes_now
 
     if failed:
         print("\n**** exclude_dynamic_io_slots tests: FAILED ****")

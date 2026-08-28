@@ -2526,10 +2526,11 @@ class Octopus:
 
         source = slot.get("source", "")
         location = slot.get("location", "")
-        # Whether this slot is genuinely confirmed (completed_dispatches, or a real-time
-        # car_charging_now draw) versus still Octopus's own provisional plan (planned_dispatches) -
-        # see fetch_sensor_data_cars() where this is tagged. Defaults False for anything untagged
-        # (e.g. the action_config service-call path, which only ever returns planned slots).
+        # Whether this slot is genuinely confirmed (completed_dispatches) versus still Octopus's own
+        # provisional plan (planned_dispatches) - see fetch_sensor_data_cars() where this is tagged.
+        # Defaults False for anything untagged (e.g. the action_config service-call path, which only
+        # ever returns planned slots, and add_now_to_octopus_slot()'s live car_charging_now slot,
+        # which is deliberately left unconfirmed - see the comment there).
         confirmed = slot.get("_confirmed", False)
 
         start_minutes = minutes_to_time(start, self.midnight_utc)
@@ -2817,8 +2818,8 @@ class Octopus:
                         #
                         # For a dynamic slot, trust is graduated by trust_future_dynamic_iog_slots:
                         # "none" never trusts one; "completed" also trusts one genuinely confirmed
-                        # (completed_dispatches, or a real-time car_charging_now draw - see
-                        # decode_octopus_slot()); "started" additionally trusts the *current*
+                        # by Octopus's own completed_dispatches record (see decode_octopus_slot());
+                        # "started" additionally trusts the *current*
                         # settlement period the moment car_charging_now shows the car drawing power
                         # right now, without waiting for Octopus's own completed record to catch up.
                         # A slot merely having reached its scheduled start time is deliberately NOT
@@ -2840,9 +2841,6 @@ class Octopus:
                         else:  # "none"
                             trusted = False
 
-                        if trusted and not in_fixed_window:
-                            self.trusted_dynamic_minutes.add(minute)
-
                         # At the start of each 30-min slot, decide if we can add it
                         if minute % 30 == 0:
                             if trusted and slots_per_day[day_offset] < octopus_slot_max:
@@ -2855,6 +2853,14 @@ class Octopus:
                             # For minutes within a 30-min slot, only apply if the slot was added
                             if slot_start in slots_added_set:
                                 rates[minute] = assumed_price
+
+                        # Record the minute as trusted only once the slot has actually survived the
+                        # octopus_slot_max daily cap, not merely the trust test above. A trusted slot
+                        # beyond the cap gets no discount here, so exclude_dynamic_io_slots() must
+                        # still be free to strip the same minute's feed-side (io_adjusted) discount -
+                        # otherwise a capped slot would keep a cheap rate by the back door.
+                        if not in_fixed_window and slot_start in slots_added_set:
+                            self.trusted_dynamic_minutes.add(minute)
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
                             self.log(
@@ -2893,11 +2899,27 @@ class Octopus:
         self.trusted_dynamic_minutes - the set rate_add_io_slots() itself just built while deciding
         which dynamic minutes it trusted, across all cars - rather than re-deriving trust here, so
         the two functions can never disagree about what counts as trusted.
+
+        Only minutes from now onwards are touched. Trust is a statement about a *future* dispatch
+        slot that Octopus could still move or withdraw; a minute already in the past isn't a
+        prediction at all, and its io_adjusted marker records the rate the tariff actually charged.
+        Rewriting those to rate_max_base would have inflated today_cost()'s reported import cost
+        (output.py reads self.rate_import for elapsed minutes) without changing the plan, since
+        planning never looks behind self.minutes_now.
         """
         if not self.io_adjusted:
             return rates
 
+        # "planned" is documented as restoring the pre-#4516 behaviour of trusting every dynamic
+        # slot, so this whole mechanism has to be a no-op there - including for an io_adjusted
+        # minute with no matching octopus_slots entry, which rate_add_io_slots() never visits and
+        # so never records in trusted_dynamic_minutes.
+        if self.trust_future_dynamic_iog_slots == "planned":
+            return rates
+
         for minute in list(self.io_adjusted.keys()):
+            if minute < self.minutes_now:
+                continue
             if self.io_adjusted[minute] and not self.minute_in_iog_fixed_window(minute) and minute not in self.trusted_dynamic_minutes:
                 rates[minute] = self.rate_max_base
                 del self.io_adjusted[minute]
