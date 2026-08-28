@@ -475,10 +475,20 @@ body.dark-mode {
 
    The 10px is body's own 5px margin, top and bottom, from the global stylesheet - without it the
    page is exactly one margin too tall and the document scrolls by that much. */
+html {
+    /* body's overflow does not govern the document: if anything is wider than the window, html
+       grows a horizontal scrollbar, and that bar eats ~15px of HEIGHT - which is what pushed the
+       composer and footer off the bottom even though the height arithmetic below was right.
+       Nothing here should ever need to scroll horizontally, so nothing is allowed to. */
+    overflow: hidden;
+}
+
 body {
     display: flex;
     flex-direction: column;
     height: calc(100vh - 10px);
+    /* Belt and braces alongside html above: this stops a stray wide child scrolling the page
+       body, html stops it scrolling the document. */
     overflow: hidden;
 }
 
@@ -590,7 +600,11 @@ body {
 #chat-main {
     display: flex;
     flex-direction: column;
+    /* min-width: 0 lets it shrink below its content; max-width stops it growing past its grid
+       column. Both are needed: the first permits shrinking, the second forbids growing, and a
+       flex or grid child will happily do the latter on the strength of one long line. */
     min-width: 0;
+    max-width: 100%;
     min-height: 0;
 }
 
@@ -638,6 +652,7 @@ body {
 
 #chat-transcript {
     flex: 1 1 auto;
+    max-width: 100%;
     overflow-y: auto;
     /* The transcript scrolls vertically only. Anything genuinely too wide - a code block, a wide
        table - now scrolls within itself, so a horizontal bar out here means something escaped its
@@ -654,10 +669,16 @@ body {
        a third of the window empty while its own text needed the space. Safe only now that the
        rules below actually keep content inside the box. */
     max-width: 92%;
+    /* border-box, or the 24px of horizontal padding lands OUTSIDE the 92% and the bubble is
+       wider than it claims to be. */
+    box-sizing: border-box;
     margin: 6px 0;
     padding: 8px 12px;
     border-radius: 8px;
-    line-height: 1.4;
+    /* The bubbles were inheriting body's default 16px while the tool rows around them sit at
+       11-13px, which made the conversation look oversized against its own tool output. */
+    font-size: 14px;
+    line-height: 1.45;
     /* anywhere, not break-word: break-word will not break a token that is the sole content of a
        line, which is exactly the case here - "my_predbat.car_charging_planned[car_n]" and the
        like have no spaces to break at, so they ran straight out of the bubble. */
@@ -729,6 +750,19 @@ body {
     display: inline;
 }
 
+
+/* Tool output and approval arguments wrap rather than scrolling sideways. A <pre> does not wrap
+   by default, so a one-line JSON preview - which is what every tool returns - showed a single
+   line with a scrollbar under it and the rest of the text simply unreachable. Code blocks inside
+   an assistant bubble keep horizontal scrolling, where preserving the author's line breaks
+   matters more. */
+.chat-tool-result pre,
+.chat-confirm-card pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 320px;
+    overflow-y: auto;
+}
 
 .chat-bubble pre,
 .chat-tool-row pre,
@@ -867,6 +901,25 @@ body {
 }
 
 .chat-tool-error {
+    color: var(--chat-error-text);
+}
+
+.chat-tool-status {
+    display: inline-block;
+    width: 1.1em;
+    margin-right: 4px;
+    font-weight: 700;
+}
+
+.chat-tool-status-pending {
+    color: var(--chat-text-muted);
+}
+
+.chat-tool-status-ok {
+    color: var(--chat-accent);
+}
+
+.chat-tool-status-error {
     color: var(--chat-error-text);
 }
 
@@ -1450,6 +1503,15 @@ function setTitleText(node, title) {
 
 var state = { conversation: localStorage.getItem('predbatChatConversation'), cursor: 0, source: null, busy: null, models: [], defaultModel: '', selectedModel: '', currentModel: null, catalogueAvailable: true };
 var toolRows = {};
+// Per tool call, keyed by call id: the summary element (so an approval badge can be attached),
+// and the status marker. Declared here beside toolRows rather than next to the functions that
+// use them - var hoisting would make the uses work either way, but only because the whole script
+// runs before any handler fires, which is not a property worth depending on.
+var toolSummaries = {};
+var toolStatuses = {};
+var TOOL_STATUS_PENDING = '\u25cf';
+var TOOL_STATUS_OK = '\u2713';
+var TOOL_STATUS_ERROR = '\u2717';
 var confirmCards = {};
 var pendingBubble = null;
 var pendingText = '';
@@ -1908,6 +1970,14 @@ function appendToolStart(data) {
     // still escaped before going through innerHTML, on the same escape-first principle as
     // everything else that reaches the DOM as markup.
     summary.innerHTML = 'called <code>' + escapeHtml(data.name || '') + '</code>';
+    // A status marker the user can read at a glance without expanding anything: grey while the
+    // call is in flight, then a green tick or a red cross. Inserted rather than written into the
+    // innerHTML above so its text never passes through markup.
+    var status = document.createElement('span');
+    status.className = 'chat-tool-status chat-tool-status-pending';
+    status.textContent = TOOL_STATUS_PENDING;
+    summary.insertBefore(status, summary.firstChild);
+    toolStatuses[data.call_id] = status;
     details.appendChild(summary);
 
     var argsPre = document.createElement('pre');
@@ -1932,6 +2002,17 @@ function appendToolStart(data) {
         delete pendingApprovalBadges[data.call_id];
     }
     scrollTranscriptToBottom();
+}
+
+function setToolStatus(callId, ok) {
+    // A tool whose row was rebuilt from history has a marker too, so a replayed conversation
+    // reads the same as a live one.
+    var marker = toolStatuses[callId];
+    if (!marker) {
+        return;
+    }
+    marker.textContent = ok ? TOOL_STATUS_OK : TOOL_STATUS_ERROR;
+    marker.className = 'chat-tool-status ' + (ok ? 'chat-tool-status-ok' : 'chat-tool-status-error');
 }
 
 function markToolApproval(callId, status) {
@@ -1961,6 +2042,7 @@ function appendToolEnd(data) {
     holder.textContent = '';
     holder.classList.remove('chat-tool-pending');
     holder.classList.add(data.ok ? 'chat-tool-ok' : 'chat-tool-error');
+    setToolStatus(data.call_id, data.ok);
     var pre = document.createElement('pre');
     var code = document.createElement('code');
     code.textContent = data.preview || '';
@@ -2285,8 +2367,7 @@ function handleError(data) {
 
 var APPROVAL_LABELS = { approved: 'Approved', rejected: 'Rejected', unanswered: 'Never answered - Predbat restarted while it was waiting' };
 var APPROVAL_BADGES = { approved: '\u2713 approved', rejected: '\u2717 rejected', unanswered: '\u26a0 never answered' };
-// Tool summaries by call id, and badges that arrived before their tool block existed.
-var toolSummaries = {};
+// Badges that arrived before their tool block existed.
 var pendingApprovalBadges = {};
 
 function appendApprovalRecord(entry) {

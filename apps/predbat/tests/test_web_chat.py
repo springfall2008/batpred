@@ -2028,6 +2028,14 @@ def test_chat_page_fills_the_window_without_an_outer_scrollbar(my_predbat):
     if "overflow: hidden" not in body_rule:
         print("ERROR: body still scrolls, so the outer scrollbar remains: {!r}".format(body_rule))
         failed = True
+
+    # body's overflow does not govern the document. If anything is wider than the window, html
+    # grows a horizontal scrollbar, and that bar consumes ~15px of HEIGHT - which pushed the
+    # composer off the bottom even with the height arithmetic correct.
+    html_rule = _extract_css_rule(styles, "html")
+    if html_rule is None or "overflow: hidden" not in html_rule:
+        print("ERROR: html can still scroll, so a horizontal bar there steals height from the page: {!r}".format(html_rule))
+        failed = True
     # body carries a 5px margin from the global stylesheet, top and bottom. Without allowing for
     # it the page is exactly one margin too tall and the document scrolls by that much.
     if "100vh - 10px" not in body_rule:
@@ -2330,6 +2338,11 @@ def test_bubble_content_stays_inside_its_bubble(my_predbat):
     if bubble is None:
         print("ERROR: there is no .chat-bubble rule")
         return True
+    # Without border-box the 24px of horizontal padding lands outside the 92%, so the bubble is
+    # wider than it claims and its content runs past the visible edge.
+    if "box-sizing: border-box" not in bubble:
+        print("ERROR: .chat-bubble padding is added outside its max-width: {!r}".format(bubble))
+        failed = True
     if "overflow-wrap: anywhere" not in bubble:
         print("ERROR: .chat-bubble cannot break an unbroken identifier: {!r}".format(bubble))
         failed = True
@@ -2364,6 +2377,68 @@ def test_bubble_content_stays_inside_its_bubble(my_predbat):
     return failed
 
 
+def test_tool_rows_show_a_status_marker_and_wrap_their_output(my_predbat):
+    """Tool calls carry a status marker, and their output wraps instead of one clipped line.
+
+    A <pre> does not wrap by default, and every tool returns a single-line JSON preview, so an
+    expanded tool showed one line with a scrollbar under it and the rest of the text unreachable.
+    Tool and approval output now wraps; code blocks inside an assistant bubble keep horizontal
+    scrolling, where the author's line breaks matter more.
+
+    The marker is grey while the call is in flight, then a tick or a cross, so the outcome is
+    readable without expanding anything.
+
+    Mutation checks: dropping white-space: pre-wrap, or the setToolStatus call, each fails below.
+    """
+    failed = False
+    print("**** Testing tool status markers and output wrapping ****")
+    styles = web_chat.get_chat_styles()
+    script = web_chat.get_chat_script()
+
+    # Wrapping, on tool and approval output only.
+    wrap_rule = _extract_css_rule(styles, ".chat-tool-result pre,\n.chat-confirm-card pre")
+    if wrap_rule is None:
+        wrap_rule = styles[styles.find(".chat-tool-result pre") : styles.find(".chat-bubble pre")]
+    if "white-space: pre-wrap" not in (wrap_rule or ""):
+        print("ERROR: tool output does not wrap, so it stays one clipped line: {!r}".format(wrap_rule))
+        failed = True
+    if "overflow-y: auto" not in (wrap_rule or ""):
+        print("ERROR: wrapped tool output has no vertical scroll, so a long result has no bound: {!r}".format(wrap_rule))
+        failed = True
+
+    # Three distinct states, and all three must be reachable.
+    for marker in ("TOOL_STATUS_PENDING", "TOOL_STATUS_OK", "TOOL_STATUS_ERROR"):
+        if marker not in script:
+            print("ERROR: {} is not defined, so a tool cannot show that state".format(marker))
+            failed = True
+
+    start = _extract_function_body(script, "appendToolStart")
+    if start is None or "TOOL_STATUS_PENDING" not in start:
+        print("ERROR: a tool call does not start in the pending state: {!r}".format(start))
+        failed = True
+    # textContent, not innerHTML: the marker must not go through markup.
+    if start and "status.textContent" not in start:
+        print("ERROR: the status marker is not set via textContent: {!r}".format(start))
+        failed = True
+
+    end = _extract_function_body(script, "appendToolEnd")
+    if end is None or "setToolStatus" not in end:
+        print("ERROR: a finished tool never updates its status marker: {!r}".format(end))
+        failed = True
+
+    resolve = _extract_function_body(script, "setToolStatus")
+    if resolve is None or "TOOL_STATUS_OK" not in resolve or "TOOL_STATUS_ERROR" not in resolve:
+        print("ERROR: setToolStatus() cannot show both outcomes: {!r}".format(resolve))
+        failed = True
+
+    for css_class in (".chat-tool-status-pending", ".chat-tool-status-ok", ".chat-tool-status-error"):
+        if css_class not in styles:
+            print("ERROR: {} has no styling, so the states are not visually distinct".format(css_class))
+            failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -2394,6 +2469,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_model_picker_script_wires_routes_and_persists_selection(my_predbat)
     failed |= test_chat_page_fills_the_window_without_an_outer_scrollbar(my_predbat)
     failed |= test_bubble_content_stays_inside_its_bubble(my_predbat)
+    failed |= test_tool_rows_show_a_status_marker_and_wrap_their_output(my_predbat)
     failed |= test_thinking_bubble_moves_to_the_end(my_predbat)
     failed |= test_chat_switch_defaults_and_mirror(my_predbat)
     failed |= test_model_picker_shows_prices(my_predbat)
