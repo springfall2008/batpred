@@ -5191,7 +5191,7 @@ class Plan:
             export_rate = 0
             slot_length = 0
             slot_count = 0
-            for slot_start in range(minute, minute + iboost_min_length, self.plan_interval_minutes):
+            for _slot_start in range(minute, minute + iboost_min_length, self.plan_interval_minutes):
                 import_rate += self.rate_import.get(minute, self.rate_min)
                 export_rate += self.rate_export.get(minute, 0)
                 slot_length += self.plan_interval_minutes

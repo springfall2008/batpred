@@ -3430,7 +3430,7 @@ async def test_solis_api(key_id, secret):  # pragma: no cover
     # Call run() once
     print("Calling run() once...")
     await solis_api.run(seconds=0, first=True)
-    for device_sn, values in solis_api.cached_values.items():
+    for _device_sn, _values in solis_api.cached_values.items():
         #await solis_api.read_cid(device_sn, SOLIS_CID_STORAGE_MODE)  # Ensure we have the latest value for storage mode
         #await solis_api.read_cid(device_sn, SOLIS_CID_BATTERY_RESERVE_SOC)  # Ensure we have the latest value for battery reserve SOC
         #await solis_api.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, "5", field_description="Test write discharge soc to 5")  # Test writing a value

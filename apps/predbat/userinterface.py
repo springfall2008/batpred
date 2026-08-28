@@ -103,7 +103,7 @@ class UserInterface:
                 return final
 
         # Resolve templated data
-        for repeat in range(2):
+        for _repeat in range(2):
             if isinstance(value, str) and "{" in value:
                 try:
                     if extra_args:
@@ -598,7 +598,7 @@ class UserInterface:
             os.mkdir(self.save_restore_dir)
 
         PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
-        for root, dirs, files in os.walk(self.save_restore_dir):
+        for root, _dirs, files in os.walk(self.save_restore_dir):
             for name in files:
                 filepath = os.path.join(root, name)
                 if filepath.endswith(".yaml") and not name.startswith("."):
