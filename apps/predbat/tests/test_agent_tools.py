@@ -77,7 +77,15 @@ def test_mcp_tool_list_matches_golden(my_predbat):
 
 
 def test_openai_tool_list_shape(my_predbat):
-    """openai_tool_list() is well-formed function-calling shape and strips chat_omit_properties."""
+    """openai_tool_list() is well-formed function-calling shape and strips chat_omit_properties.
+
+    This only checks the schema offered to the model - a presentation detail. Removing a property
+    from the schema does not, by itself, stop the model naming it anyway: the guarantee that
+    'masked' cannot reach the real get_apps call has to be enforced where the tool actually runs,
+    which is ChatAgent._dispatch(). That enforcement is exercised (and mutation-checked) by
+    test_chat.py's test_dispatch_strips_chat_omit_properties - this test only guards the schema
+    not silently growing 'masked' back in.
+    """
     failed = False
     print("**** Testing openai_tool_list() shape ****")
     listed = openai_tool_list()
@@ -99,7 +107,7 @@ def test_openai_tool_list_shape(my_predbat):
 
     chat_apps = [e["function"] for e in listed if e["function"]["name"] == "get_apps"][0]
     if "masked" in chat_apps["parameters"].get("properties", {}):
-        print("ERROR: get_apps still exposes 'masked' in the chat projection - credentials could leave the box")
+        print("ERROR: get_apps still exposes 'masked' in the chat schema projection")
         failed = True
 
     mcp_apps = [e for e in mcp_tool_list() if e["name"] == "get_apps"][0]

@@ -439,13 +439,18 @@ class WebInterface(ComponentBase):
         return bool(components and components.get_component("chat"))
 
     def _register_chat_routes(self, app):
-        """Register the Chat tab's routes on ``app``, but only when chat is configured.
+        """Register the Chat tab's routes on ``app``, unconditionally.
 
         Split out of start() the same way the annual routes are, so a test can assert the routes
         exist against a bare aiohttp Application without opening a socket.
+
+        These must be registered regardless of whether chat is configured yet: phase 0 (which
+        builds this Application and starts the site) runs before phase 1 (which initialises the
+        chat component), so gating on chat_enabled() here would freeze the router with the routes
+        permanently absent. Each handler already checks self.agent and returns 404 "Chat is not
+        configured" when the component is not up yet - that per-request check is what stands in
+        for a boot-time gate.
         """
-        if not self.chat_enabled():
-            return
         app.router.add_get("/chat", self.chat_page.html_chat)
         app.router.add_get("/chat/conversations", self.chat_page.html_chat_conversations)
         app.router.add_post("/chat/conversations", self.chat_page.html_chat_create)

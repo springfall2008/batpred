@@ -185,6 +185,20 @@ class ChatAgent(ComponentBase):
             selected = [event for event in self.events if event["seq"] > cursor and event["conversation_id"] in (None, conversation_id)]
             return selected, self.event_seq, reload_needed
 
+    def pending_conversations(self):
+        """Return the set of conversation ids with a write awaiting confirmation.
+
+        pending_confirm is mutated (inserted, popped and wholesale rebuilt) from the component
+        thread under self.lock - see claim/confirm handling in _run_one_tool, confirm() and
+        _execute_turn's cleanup. Iterating it directly from the web thread without the lock races
+        those mutations: a confirmation landing mid-iteration can raise "dictionary changed size
+        during iteration" and 500 the request that called this. Snapshotting the values under the
+        lock, then building the id set outside it, keeps the lock held for as short as possible.
+        """
+        with self.lock:
+            entries = list(self.pending_confirm.values())
+        return {entry["conversation_id"] for entry in entries}
+
     async def run_on_agent_loop(self, coro):
         """Await a coroutine on this component's own loop, from another thread's loop.
 
@@ -234,6 +248,13 @@ class ChatAgent(ComponentBase):
         or more while the model thinks, and the housekeeping tick only fires every 60 seconds - so
         a two-tick rule frees the slot of a turn that is merely slow. Waiting until the turn has
         outlived its own deadline plus a grace period means a live turn is never touched.
+
+        A turn parked in await_confirmation is a further exception: CONFIRM_TIMEOUT_SECONDS (300s)
+        is deliberately longer than turn_timeout + STALE_TURN_GRACE_SECONDS (180 + 60 = 240s by
+        default), because a user reading an Approve/Reject prompt should get a generous window,
+        not the turn's own budget for talking to the model. So a turn whose active call is still
+        in self.pending_confirm is left alone regardless of elapsed time - its own timeout is
+        CONFIRM_TIMEOUT_SECONDS, enforced by await_confirmation itself, not this one.
         """
         with self.lock:
             active = self.active
@@ -243,6 +264,8 @@ class ChatAgent(ComponentBase):
             if started is None or time.monotonic() - started < self.turn_timeout + STALE_TURN_GRACE_SECONDS:
                 return
             turn_id = active.get("turn_id")
+            if any(entry.get("turn_id") == turn_id for entry in self.pending_confirm.values()):
+                return
             self.active = None
         self.log("Warn: chat turn {} outlived its {}s timeout with no cleanup - releasing the turn slot".format(turn_id, self.turn_timeout))
         self.emit(None, "idle", {})
@@ -378,7 +401,23 @@ class ChatAgent(ComponentBase):
         return message, usage, sources
 
     async def _dispatch(self, conversation_id, name, arguments):
-        """Run one tool, trying the chat-only tools before the shared Predbat ones."""
+        """Run one tool, trying the chat-only tools before the shared Predbat ones.
+
+        Every property named in the tool's chat_omit_properties is stripped from arguments right
+        here, before any branch below sees them - the single choke point every tool call passes
+        through regardless of which one handles it. openai_tool_list() only removes the property
+        from the schema offered to the model; nothing stops the model - or content it read via
+        fetch_url/search_docs - from naming the property anyway (this is exactly how 'masked':
+        false reaches get_apps: the tool description still says credentials are redacted "by
+        default", and fetch_url's github.com allowlist can serve a page that names the argument).
+        So the guarantee has to be enforced on the arguments dict actually executed, not merely
+        omitted from what the model was invited to ask for. See spec section 14.1. Builds a new
+        dict rather than popping in place, so this never mutates the arguments already captured
+        by the tool_start/confirm event emitted just before this call.
+        """
+        omit = (self.tool_defs_by_name.get(name) or {}).get("chat_omit_properties") or []
+        if omit and arguments:
+            arguments = {key: value for key, value in arguments.items() if key not in omit}
         if name == "set_chat_title":
             title = self.store.set_title(conversation_id, arguments.get("title"))
             if title is None:
@@ -479,13 +518,16 @@ class ChatAgent(ComponentBase):
                 self.log("Warn: could not persist chat conversation {}: {}".format(conversation_id, error))
             with self.lock:
                 self.pending_confirm = {key: value for key, value in self.pending_confirm.items() if value.get("turn_id") != turn_id}
-                # Only clear the slot if this turn still owns it. If _release_stale_turn already
-                # freed it and another turn has since claimed it, an unconditional clear here
-                # would silently unlock the composer while that turn is still running.
-                if (self.active or {}).get("turn_id") == turn_id:
+                # Only clear the slot - and only announce done/idle - if this turn still owns it.
+                # If _release_stale_turn already freed it and another turn has since claimed it,
+                # an unconditional clear (or an unconditional emit) here would silently unlock the
+                # composer everywhere while that later turn is still running.
+                owns_slot = (self.active or {}).get("turn_id") == turn_id
+                if owns_slot:
                     self.active = None
-            self.emit(conversation_id, "done", {"turn_id": turn_id})
-            self.emit(None, "idle", {})
+            if owns_slot:
+                self.emit(conversation_id, "done", {"turn_id": turn_id})
+                self.emit(None, "idle", {})
 
     async def _turn_loop(self, conversation_id, turn_id, text):
         """Alternate completions and tool calls until the model answers or the cap is reached."""

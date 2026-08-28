@@ -58,6 +58,9 @@ class WebChat:
 
     async def html_chat(self, request):
         """Render the Chat tab."""
+        agent = self.agent
+        if agent is None:
+            return web.json_response({"error": "Chat is not configured"}, status=404)
         text = self.web.get_header("Predbat Chat")
         text += get_chat_styles()
         text += get_chat_body()
@@ -70,7 +73,11 @@ class WebChat:
         agent = self.agent
         if agent is None:
             return web.json_response({"error": "Chat is not configured"}, status=404)
-        pending = {entry["conversation_id"] for entry in agent.pending_confirm.values()}
+        # agent.pending_confirm is mutated from the component thread under agent.lock; reading it
+        # directly here, from the web thread, without that lock can raise "dictionary changed size
+        # during iteration" if a confirmation lands mid-request. pending_conversations() takes the
+        # snapshot under the lock so this request never sees a torn dict.
+        pending = agent.pending_conversations()
         conversations = []
         for meta in agent.store.list_conversations():
             conversations.append(
@@ -131,9 +138,31 @@ class WebChat:
         # component thread may still be appending to while this request serialises it to JSON on
         # the web thread - json.dumps can raise mid-serialisation on a list mutated underneath it.
         # snapshot() takes its copy under the store's lock so it cannot interleave with an append.
-        messages = await agent.run_on_agent_loop(agent.store.snapshot(cid))
-        _, cursor, _ = agent.events_since(0, cid)
+        #
+        # The snapshot and the event cursor are taken together, in one coroutine on the agent's
+        # own loop, with no await between the two calls. Scheduling them as two separate
+        # run_on_agent_loop() calls left a window between them where a brand new turn could append
+        # the user's own message and emit its "user" event: that message would then be in neither
+        # the snapshot (taken before the append) nor the event stream (whose cursor is already
+        # past the event by the time this request reaches events_since) - the user's first message
+        # in a new conversation would silently vanish until they switched away and back. Nothing
+        # can run on the agent's loop between two synchronous statements in the same coroutine, so
+        # combining them closes that window.
+        messages, cursor = await agent.run_on_agent_loop(self._snapshot_and_cursor(agent, cid))
         return web.json_response({"id": cid, "title": meta.get("title"), "model": meta.get("model"), "usage_total": meta.get("usage_total"), "messages": messages or [], "cursor": cursor, "active": agent.active})
+
+    @staticmethod
+    async def _snapshot_and_cursor(agent, conversation_id):
+        """Return a message snapshot and the event cursor as of the same instant.
+
+        events_since() is synchronous and lock-guarded, so calling it immediately after awaiting
+        snapshot() - both inside this one coroutine - leaves no gap in which a concurrently
+        running turn could append a message and emit its event between the two. See the comment
+        at the call site in html_chat_history for why that gap mattered.
+        """
+        messages = await agent.store.snapshot(conversation_id)
+        _, cursor, _ = agent.events_since(0, conversation_id)
+        return messages, cursor
 
     async def html_chat_send(self, request):
         """Start a turn, or refuse with 409 when one is already running."""
@@ -173,10 +202,26 @@ class WebChat:
         return web.json_response({"ok": True})
 
     async def html_chat_cancel(self, request):
-        """Ask the running turn to stop at its next checkpoint."""
+        """Ask the running turn to stop at its next checkpoint.
+
+        Zeroing agent.deadline does not abort mid-step - the model's current completion or tool
+        call still runs to the end, and _turn_loop only notices the blown deadline the next time
+        it checks (see chat.py's deadline check at the top of each iteration) - hence "at its next
+        checkpoint", not immediately.
+
+        Requires the caller's turn_id to match the turn actually running. Without that check, a
+        stale cancel request - one sent for a turn that has already finished, arriving late, or
+        replayed - would zero the deadline of whatever DIFFERENT turn has since claimed the single
+        turn slot, cutting it short for no reason the user asked for.
+        """
         agent = self.agent
         if agent is None:
             return web.json_response({"error": "Chat is not configured"}, status=404)
+        body = await request.json()
+        turn_id = body.get("turn_id")
+        active = agent.active or {}
+        if turn_id is None or active.get("turn_id") != turn_id:
+            return web.json_response({"error": "No running turn with that id"}, status=409)
         agent.deadline = 0
         return web.json_response({"ok": True})
 
@@ -193,6 +238,18 @@ class WebChat:
         idle = 0.0
         try:
             while True:
+                # Re-resolve the agent every iteration rather than trusting the one captured at
+                # handler entry. Chat is a restartable component (Components tab, or an automatic
+                # restart after a health check failure): a restart builds a brand new ChatAgent
+                # instance, and nothing ever writes to the old one's event buffer again. Polling
+                # the stale instance forever would keep this stream alive - it would go on
+                # heartbeating normally - while silently delivering nothing. Identity comparison
+                # also catches the component being stopped outright, since self.agent then becomes
+                # None, which is never `is` the original instance either.
+                current_agent = self.agent
+                if current_agent is not agent:
+                    await response.write(b"event: reload\ndata: {}\n\n")
+                    break
                 events, cursor, reload_needed = agent.events_since(cursor, cid)
                 if reload_needed:
                     await response.write(b"event: reload\ndata: {}\n\n")
@@ -610,6 +667,22 @@ body.dark-mode {
     cursor: pointer;
 }
 
+#chat-stop {
+    flex: 0 0 auto;
+    padding: 8px 18px;
+    border: 1px solid var(--chat-error-text);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--chat-error-text);
+    font-weight: bold;
+    cursor: pointer;
+    display: none;
+}
+
+#chat-stop.visible {
+    display: inline-block;
+}
+
 #chat-footer {
     display: flex;
     align-items: center;
@@ -660,6 +733,7 @@ def get_chat_body():
         <div id="chat-composer">
             <textarea id="chat-input" rows="2" placeholder="Ask Predbat... (Enter to send, Shift+Enter for a new line)"></textarea>
             <button id="chat-send" type="button">Send</button>
+            <button id="chat-stop" type="button" title="Stops after the current step (the tool call or reply in progress finishes first)">Stop</button>
         </div>
         <div id="chat-footer">
             <span id="chat-model-wrap">
@@ -853,16 +927,33 @@ function hideBanner() {
     banner.innerHTML = '';
 }
 
-function setBusy(conversationId, title) {
-    state.busy = { conversation_id: conversationId, title: title };
+function setBusy(conversationId, title, turnId) {
+    state.busy = { conversation_id: conversationId, title: title, turn_id: turnId };
     setComposerDisabled(true);
     showBanner(conversationId, title);
+    byId('chat-stop').classList.add('visible');
 }
 
 function setIdle() {
     state.busy = null;
     setComposerDisabled(false);
     hideBanner();
+    byId('chat-stop').classList.remove('visible');
+}
+
+function stopTurn() {
+    if (!state.busy || !state.busy.turn_id) {
+        return;
+    }
+    var button = byId('chat-stop');
+    button.disabled = true;
+    fetch('./chat/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turn_id: state.busy.turn_id })
+    })
+        .catch(function (error) { console.error('Failed to stop the chat turn', error); })
+        .then(function () { button.disabled = false; });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1232,7 +1323,7 @@ function openStream() {
     on(source, 'usage', renderUsageEvent);
     on(source, 'title', handleTitle);
     on(source, 'done', handleDone);
-    on(source, 'busy', function (data) { setBusy(data.conversation_id, data.title); });
+    on(source, 'busy', function (data) { setBusy(data.conversation_id, data.title, data.turn_id); });
     on(source, 'idle', function () { setIdle(); });
     on(source, 'reload', function () { handleReload(); });
     attachConnectionHandling(source);
@@ -1253,7 +1344,7 @@ function loadConversationData(id) {
             state.currentModel = payload.model || null;
             populateModelPicker(state.models, state.currentModel);
             if (payload.active) {
-                setBusy(payload.active.conversation_id, payload.active.title);
+                setBusy(payload.active.conversation_id, payload.active.title, payload.active.turn_id);
             } else {
                 setIdle();
             }
@@ -1471,6 +1562,7 @@ function sendMessage() {
 document.addEventListener('DOMContentLoaded', function () {
     byId('chat-new').addEventListener('click', createConversation);
     byId('chat-send').addEventListener('click', sendMessage);
+    byId('chat-stop').addEventListener('click', stopTurn);
     byId('chat-model').addEventListener('change', changeModel);
     byId('chat-input').addEventListener('keydown', function (event) {
         if (event.key === 'Enter' && !event.shiftKey) {

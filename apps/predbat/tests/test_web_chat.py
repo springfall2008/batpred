@@ -16,11 +16,15 @@ one performs no network I/O, which is the same trick test_web_annual.py uses.
 import asyncio
 import json
 import re
+import threading
 
 from aiohttp import web as aiohttp_web
+from aiohttp.test_utils import make_mocked_request
 
 import web_chat
 from chat import AgentNotReadyError
+from components import Components
+from tests.test_chat import _make_agent
 from web import WebInterface
 from web_chat import WebChat, format_sse_event
 
@@ -50,10 +54,18 @@ def _make_web(my_predbat, agent=None):
     return interface
 
 
-def test_routes_registered_only_when_enabled(my_predbat):
-    """The chat routes and nav link appear only when the component is configured."""
+def test_routes_always_registered_handlers_404_unconfigured(my_predbat):
+    """The chat routes exist unconditionally; only the handlers gate on chat being configured.
+
+    _register_chat_routes runs during WebInterface.start() in phase 0, before the chat component
+    is constructed in phase 1 (see test_chat_routes_survive_the_real_phase_order for the real
+    ordering). Gating registration itself on chat_enabled() would freeze the router with the
+    routes permanently absent, since aiohttp's router cannot be added to once the site is serving.
+    So registration must be unconditional, and each handler carries its own 404 for "not
+    configured yet" instead.
+    """
     failed = False
-    print("**** Testing chat route registration ****")
+    print("**** Testing chat route registration and handler gating ****")
 
     class NoChat:
         """A components registry with no chat component."""
@@ -78,23 +90,110 @@ def test_routes_registered_only_when_enabled(my_predbat):
             failed = True
         app = aiohttp_web.Application()
         interface._register_chat_routes(app)
-        if [route for route in app.router.routes() if "/chat" in str(route.resource)]:
-            print("ERROR: chat routes were registered with no component")
+        paths = {str(route.resource.canonical) for route in app.router.routes()}
+        expected_routes = ["/chat", "/chat/conversations", "/chat/history", "/chat/send", "/chat/stream", "/chat/confirm", "/chat/cancel", "/chat/delete", "/chat/rename", "/chat/models", "/chat/model"]
+        for expected in expected_routes:
+            if expected not in paths:
+                print("ERROR: route {} was not registered with no chat component present, got {}".format(expected, sorted(paths)))
+                failed = True
+
+        # Every handler must refuse with 404 rather than error out, since nothing is wired up yet.
+        response = asyncio.run(interface.chat_page.html_chat(FakeRequest()))
+        if response.status != 404:
+            print("ERROR: html_chat returned {} with no chat component, expected 404".format(response.status))
             failed = True
 
         my_predbat.components = WithChat()
         if not interface.chat_enabled():
             print("ERROR: chat reported as disabled with a component present")
             failed = True
+        # Re-registering onto a fresh Application is still fine (a restart would rebuild one),
+        # and the set of routes must not depend on whether chat happens to be enabled right now.
         app = aiohttp_web.Application()
         interface._register_chat_routes(app)
         paths = {str(route.resource.canonical) for route in app.router.routes()}
-        for expected in ["/chat", "/chat/conversations", "/chat/history", "/chat/send", "/chat/stream", "/chat/confirm", "/chat/cancel", "/chat/delete", "/chat/rename", "/chat/models", "/chat/model"]:
+        for expected in expected_routes:
             if expected not in paths:
-                print("ERROR: route {} was not registered, got {}".format(expected, sorted(paths)))
+                print("ERROR: route {} was not registered with a chat component present, got {}".format(expected, sorted(paths)))
                 failed = True
     finally:
         my_predbat.components = original_components
+
+    return failed
+
+
+def test_chat_routes_survive_the_real_phase_order(my_predbat):
+    """Routes registered in phase 0 keep working once chat is constructed in phase 1.
+
+    This drives the real boot sequence from predbat.py: Components.initialize(phase=0) then
+    start(phase=0) constructs the real WebInterface and (via start()) registers the chat routes
+    - _register_chat_routes is called here directly, the same split-out trick test_web_annual.py
+    uses, so no real TCP listener is opened. Only afterwards does Components.initialize(phase=1)
+    construct the real ChatAgent, mirroring predbat.py's own ordering (components.initialize(1)
+    at predbat.py:1839, well after components.start(phase=0) at predbat.py:1812). If route
+    registration were still gated on chat_enabled() (Critical 1), /chat would be entirely absent
+    from the router built here and nothing done afterwards could add it back.
+    """
+    failed = False
+    print("**** Testing chat routes across the real phase-0-then-phase-1 boot order ****")
+
+    original_components = getattr(my_predbat, "components", None)
+    original_args = dict(my_predbat.args)
+    try:
+        comps = Components(my_predbat)
+        my_predbat.components = comps
+
+        # Phase 0: construct the real WebInterface, exactly as predbat.py's startup does.
+        comps.initialize(only="web", phase=0)
+        interface = comps.get_component("web")
+        if interface is None:
+            print("ERROR: web component did not construct in phase 0")
+            return True
+
+        # The route-registration half of start(), without opening a socket.
+        app = aiohttp_web.Application()
+        interface._register_chat_routes(app)
+        paths = {str(route.resource.canonical) for route in app.router.routes()}
+        if "/chat" not in paths:
+            print("ERROR: /chat was not registered during the phase-0 step, got {}".format(sorted(paths)))
+            failed = True
+
+        # Chat genuinely does not exist yet at this point in a real boot.
+        if interface.chat_enabled():
+            print("ERROR: chat reported enabled before the chat component exists")
+            failed = True
+        response = asyncio.run(interface.chat_page.html_chat(FakeRequest()))
+        if response.status != 404:
+            print("ERROR: /chat answered {} before phase 1, expected 404".format(response.status))
+            failed = True
+
+        # Phase 1: construct the real ChatAgent.
+        my_predbat.args["openrouter_api_key"] = "sk-test"
+        my_predbat.args["openrouter_model"] = "test/model"
+        comps.initialize(only="chat", phase=1)
+        if comps.get_component("chat") is None:
+            print("ERROR: chat component did not construct in phase 1")
+            return True
+
+        if not interface.chat_enabled():
+            print("ERROR: chat_enabled() is still False after the chat component was constructed")
+            failed = True
+
+        # Resolve /chat through the SAME router built during the phase-0 step - a freshly built
+        # router would not prove anything survived the phase boundary.
+        match = [route for route in app.router.routes() if str(route.resource.canonical) == "/chat" and route.method == "GET"]
+        if not match:
+            print("ERROR: /chat route is missing from the phase-0 router")
+            return True
+        response = asyncio.run(match[0].handler(FakeRequest()))
+        if response.status != 200:
+            body = response.text if hasattr(response, "text") else ""
+            print("ERROR: /chat resolved to {} once chat was configured, expected 200: {}".format(response.status, body))
+            failed = True
+    finally:
+        my_predbat.components = original_components
+        my_predbat.args.clear()
+        my_predbat.args.update(original_args)
 
     return failed
 
@@ -244,6 +343,88 @@ def test_history_reads_via_snapshot_not_get_messages(my_predbat):
     return failed
 
 
+def test_history_snapshot_and_cursor_do_not_lose_a_concurrent_message(my_predbat):
+    """A message a concurrent turn appends between the snapshot and the cursor read is never lost.
+
+    Reproduces the exact race the final review found: html_chat_history used to take the message
+    snapshot on the agent loop via run_on_agent_loop(), then call events_since() separately, back
+    on the calling thread. A turn that appended a message and emitted its event in the window
+    between those two calls landed in neither: not in the snapshot (already taken) nor after the
+    cursor (already past it by the time events_since ran) - a brand new conversation's own first
+    message could silently vanish until the user switched away and back.
+
+    agent.events_since is wrapped so that, the instant it is entered, it schedules a concurrent
+    turn's append+emit onto the agent's own loop and blocks briefly waiting for it to land before
+    computing the cursor - standing in for a second request's turn completing in that window. With
+    the two calls still split (mutation-checked below), events_since runs on whichever thread
+    called it - here, the same thread driving this test - so the scheduled task lands on the idle
+    agent loop well within the wait and the race reproduces reliably. With them combined into one
+    coroutine on the agent loop (the fix), events_since now runs FROM the agent loop's own thread,
+    so blocking that thread waiting for another task on the very loop it is occupying can never be
+    serviced - it times out harmlessly, proving there is no longer a gap to land anything in.
+    """
+    failed = False
+    print("**** Testing chat history does not lose a message concurrent with the snapshot ****")
+    agent = _make_agent(my_predbat, turn_timeout=30)
+    cid = asyncio.run(agent.store.create())
+
+    # A real background loop - the same pattern test_submit_turn_hands_off_to_the_component_loop
+    # uses in test_chat.py - so run_on_agent_loop's cross-thread handoff is genuine, not simulated.
+    loop = asyncio.new_event_loop()
+    loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
+    loop_thread.start()
+    agent.loop = loop
+
+    async def concurrent_turn():
+        """Stand in for a second request's turn landing its first message mid-flight."""
+        await agent.store.append(cid, {"role": "user", "content": "concurrent message"})
+        agent.emit(cid, "user", {"text": "concurrent message"})
+
+    original_events_since = agent.events_since
+    injected = {"tried": False, "landed": False}
+
+    def spying_events_since(cursor, conversation_id):
+        """Try to slip a concurrent append into the gap right before the cursor is computed."""
+        injected["tried"] = True
+        future = asyncio.run_coroutine_threadsafe(concurrent_turn(), loop)
+        try:
+            future.result(timeout=0.3)
+            injected["landed"] = True
+        except Exception:
+            pass  # Could not land it in time - expected once there is no gap left to land it in.
+        return original_events_since(cursor, conversation_id)
+
+    agent.events_since = spying_events_since
+    page = _make_web(my_predbat, agent=agent).chat_page
+
+    try:
+        response = asyncio.run(page.html_chat_history(FakeRequest(query={"conversation": cid})))
+    finally:
+        agent.events_since = original_events_since
+        loop.call_soon_threadsafe(loop.stop)
+        loop_thread.join(timeout=5)
+
+    if response.status != 200:
+        print("ERROR: history returned {}, expected 200".format(response.status))
+        return True
+    if not injected["tried"]:
+        print("ERROR: the test's injection point in events_since was never reached")
+        return True
+
+    body = json.loads(response.text)
+    contents = [message.get("content") for message in body.get("messages", [])]
+    message_in_snapshot = "concurrent message" in contents
+
+    # The only unsafe outcome is the one the bug produced: the concurrent append landed before the
+    # cursor was computed (so the SSE stream will never redeliver it, being already behind the
+    # cursor) AND it is absent from the snapshot returned here - neither channel carries it.
+    if injected["landed"] and not message_in_snapshot:
+        print("ERROR: the concurrently appended message is in neither the snapshot nor reachable from the returned cursor - it would vanish client-side")
+        failed = True
+
+    return failed
+
+
 def test_sse_framing(my_predbat):
     """Events are framed with id/event/data lines and JSON-encoded payloads."""
     failed = False
@@ -331,7 +512,7 @@ def test_client_script_contract(my_predbat):
         if "'{}'".format(event) not in script and '"{}"'.format(event) not in script:
             print("ERROR: the client script does not handle the {!r} event".format(event))
             failed = True
-    for endpoint in ["/chat/conversations", "/chat/history", "/chat/send", "/chat/stream", "/chat/confirm", "/chat/delete", "/chat/rename"]:
+    for endpoint in ["/chat/conversations", "/chat/history", "/chat/send", "/chat/stream", "/chat/confirm", "/chat/cancel", "/chat/delete", "/chat/rename"]:
         if endpoint not in script:
             print("ERROR: the client script never calls {}".format(endpoint))
             failed = True
@@ -351,7 +532,7 @@ def test_chat_page_assembles_real_content(my_predbat):
         failed = True
 
     body = web_chat.get_chat_body()
-    for element_id in ["chat-sidebar", "chat-list", "chat-new", "chat-banner", "chat-transcript", "chat-composer", "chat-input", "chat-footer", "chat-model", "chat-turn-usage", "chat-total-cost", "chat-privacy"]:
+    for element_id in ["chat-sidebar", "chat-list", "chat-new", "chat-banner", "chat-transcript", "chat-composer", "chat-input", "chat-stop", "chat-footer", "chat-model", "chat-turn-usage", "chat-total-cost", "chat-privacy"]:
         if element_id not in body:
             print("ERROR: get_chat_body() is missing #{}".format(element_id))
             failed = True
@@ -503,6 +684,76 @@ def test_dropped_connection_is_told_apart_from_a_real_error_frame(my_predbat):
     if reconnect_body is None or "openStream" not in reconnect_body:
         print("ERROR: scheduleReconnect() does not appear to call openStream()")
         failed = True
+    return failed
+
+
+def test_stream_reconnects_when_the_agent_is_replaced(my_predbat):
+    """A restarted chat component's new instance is picked up mid-stream, not silently ignored.
+
+    html_chat_stream used to capture self.agent once at handler entry and poll only that instance
+    forever. Chat is a restartable component (Components tab, or an automatic restart after a
+    health check failure): a restart builds a brand new ChatAgent and nothing ever writes to the
+    old instance's event buffer again, so an open browser tab would sit there heartbeating
+    normally while silently delivering nothing, forever, with no sign anything was wrong.
+    Re-resolving self.agent every iteration and comparing identity is what turns that into the SSE
+    stream's existing reload mechanism (already used for a buffer wraparound): on a mismatch it
+    emits 'event: reload' and closes, which the client's existing handleReload() already turns
+    into a fresh reconnect against the new instance - unchanged by this fix.
+
+    Drives the real handler against a mocked aiohttp request (aiohttp.test_utils.make_mocked_
+    request; StreamResponse.write is patched to record frames instead of touching a transport).
+    The fake agent that starts the stream swaps the page's agent to a second instance from inside
+    its own events_since() - simulating a restart landing between two poll iterations - and the
+    second instance raises if the loop ever calls into it, since a correct implementation must
+    stop polling the moment the identity check fails, not merely notice it eventually.
+    """
+    failed = False
+    print("**** Testing the SSE stream reconnects when the agent instance is replaced ****")
+
+    class FakeAgentV2:
+        """The instance that replaces the original - the polling loop must never reach it."""
+
+        def events_since(self, cursor, conversation_id):
+            """Fail the test if a stale loop somehow kept polling after the swap."""
+            raise AssertionError("the stream kept polling the conversation after the agent was replaced")
+
+    class FakeAgentV1:
+        """The original instance - a simulated restart replaces it mid-stream."""
+
+        def events_since(self, cursor, conversation_id):
+            """Return nothing, but swap the page's agent to simulate a concurrent restart."""
+            page.agent_override = agent_v2
+            return [], cursor, False
+
+    agent_v2 = FakeAgentV2()
+    agent_v1 = FakeAgentV1()
+    page = _make_web(my_predbat, agent=agent_v1).chat_page
+
+    writes = []
+
+    async def fake_write(self, data):
+        """Record what would have been written instead of touching a real transport."""
+        writes.append(data)
+
+    original_write = aiohttp_web.StreamResponse.write
+    aiohttp_web.StreamResponse.write = fake_write
+    try:
+        request = make_mocked_request("GET", "/chat/stream?conversation=abc&cursor=0")
+        try:
+            response = asyncio.run(asyncio.wait_for(page.html_chat_stream(request), timeout=2))
+        except asyncio.TimeoutError:
+            print("ERROR: the stream never noticed the agent was replaced and kept polling past a 2s timeout")
+            return True
+    finally:
+        aiohttp_web.StreamResponse.write = original_write
+
+    if response.status != 200:
+        print("ERROR: the stream handler returned {}, expected 200".format(response.status))
+        failed = True
+    if not any(b"event: reload" in chunk for chunk in writes):
+        print("ERROR: no reload frame was written after the agent was replaced: {}".format(writes))
+        failed = True
+
     return failed
 
 
@@ -722,13 +973,122 @@ def test_model_picker_script_wires_routes_and_persists_selection(my_predbat):
     return failed
 
 
+def test_stop_button_wired_to_cancel_with_turn_id(my_predbat):
+    """The Stop button posts the running turn's id to /chat/cancel, and its wording is honest.
+
+    /chat/cancel existed and was tested, but nothing in the client called it - grepping the
+    client script for 'chat/cancel' hit only the test. A user watching a runaway turn had no way
+    to stop it short of waiting out chat_turn_timeout, since the composer locks globally for the
+    whole turn. This checks the button exists, is wired to stopTurn(), that stopTurn() posts the
+    turn_id currently tracked in state.busy (not a global "cancel whatever is running" with no id,
+    which the server would then have to accept blindly), and that its wording does not overclaim
+    an immediate abort - the handler only stops the turn at its next checkpoint, not mid-step.
+    """
+    failed = False
+    print("**** Testing the Stop button is wired to /chat/cancel with a turn id ****")
+    script = web_chat.get_chat_script()
+    body = web_chat.get_chat_body()
+
+    if 'id="chat-stop"' not in body and "id='chat-stop'" not in body:
+        print("ERROR: get_chat_body() does not define #chat-stop")
+        return True
+    # The tooltip is the wording surface for a plain HTML button - it must not claim an immediate
+    # abort when the handler only stops the turn at its next checkpoint (see html_chat_cancel's
+    # own docstring in web_chat.py for the same claim on the server side).
+    if "step" not in body.lower() or "chat-stop" not in body:
+        print("ERROR: #chat-stop's markup does not explain that it stops after the current step: {!r}".format(body[body.find("chat-stop") : body.find("chat-stop") + 250]))
+        failed = True
+
+    if "addEventListener('click', stopTurn)" not in script and 'addEventListener("click", stopTurn)' not in script:
+        print("ERROR: #chat-stop is never wired to a stopTurn() click handler")
+        failed = True
+
+    stop_body = _extract_function_body(script, "stopTurn")
+    if stop_body is None:
+        print("ERROR: could not find a stopTurn() function to inspect")
+        return True
+    if "/chat/cancel" not in stop_body:
+        print("ERROR: stopTurn() does not call /chat/cancel")
+        failed = True
+    if "turn_id" not in stop_body or "state.busy" not in stop_body:
+        print("ERROR: stopTurn() does not post the currently running turn's id from state.busy: {!r}".format(stop_body))
+        failed = True
+
+    # setBusy must be the one place turn_id enters state.busy, and both callers (the SSE 'busy'
+    # event and the active-turn restore on history reload) must supply it - a caller that dropped
+    # the argument would silently disable Stop on that path (the button would show, but stopTurn()
+    # would have no turn_id to post) rather than fail loudly.
+    busy_body = _extract_function_body(script, "setBusy")
+    if busy_body is None or "turn_id:turnId" not in busy_body.replace(" ", ""):
+        print("ERROR: setBusy() does not record turnId onto state.busy: {!r}".format(busy_body))
+        failed = True
+    if "setBusy(data.conversation_id,data.title,data.turn_id)" not in script.replace(" ", ""):
+        print("ERROR: the SSE 'busy' handler does not pass the event's turn_id through to setBusy()")
+        failed = True
+    if "setBusy(payload.active.conversation_id,payload.active.title,payload.active.turn_id)" not in script.replace(" ", "").replace("\n", ""):
+        print("ERROR: restoring an in-flight turn on history reload does not pass its turn_id through to setBusy()")
+        failed = True
+
+    idle_body = _extract_function_body(script, "setIdle")
+    if idle_body is None or "chat-stop" not in idle_body:
+        print("ERROR: setIdle() does not hide the Stop button again")
+        failed = True
+
+    return failed
+
+
+def test_html_chat_cancel_requires_the_running_turn_id(my_predbat):
+    """/chat/cancel only stops the turn whose id was posted, and ignores everything else.
+
+    Without this check, a stale cancel request - for a turn that has already finished, arriving
+    late, or simply replayed - would zero the deadline of whatever DIFFERENT turn has since
+    claimed the single turn slot, cutting it short for no reason the user watching it asked for.
+    """
+    failed = False
+    print("**** Testing /chat/cancel requires the currently running turn's id ****")
+
+    class FakeAgent:
+        """An agent stand-in with one turn active, recording whether it was told to stop."""
+
+        def __init__(self):
+            """Start with turn 42 active and a non-zero deadline."""
+            self.active = {"conversation_id": "abc", "turn_id": 42, "title": "t"}
+            self.deadline = 12345
+
+    agent = FakeAgent()
+    page = _make_web(my_predbat, agent=agent).chat_page
+
+    # A missing turn_id, a mismatched turn_id, and no active turn at all must all be refused, and
+    # none of them may touch the deadline of whatever IS (or is not) running.
+    for body in ({}, {"turn_id": 41}, {"turn_id": None}):
+        response = asyncio.run(page.html_chat_cancel(FakeRequest(body=body)))
+        if response.status != 409:
+            print("ERROR: cancelling with body {} returned {}, expected 409".format(body, response.status))
+            failed = True
+        if agent.deadline != 12345:
+            print("ERROR: cancelling with body {} touched the deadline of a turn it was not asked to stop: {}".format(body, agent.deadline))
+            failed = True
+
+    response = asyncio.run(page.html_chat_cancel(FakeRequest(body={"turn_id": 42})))
+    if response.status != 200:
+        print("ERROR: cancelling the actually-running turn's id returned {}, expected 200".format(response.status))
+        failed = True
+    if agent.deadline != 0:
+        print("ERROR: cancelling the running turn did not zero its deadline: {}".format(agent.deadline))
+        failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
-    failed |= test_routes_registered_only_when_enabled(my_predbat)
+    failed |= test_routes_always_registered_handlers_404_unconfigured(my_predbat)
+    failed |= test_chat_routes_survive_the_real_phase_order(my_predbat)
     failed |= test_send_is_busy_and_unknown_is_404(my_predbat)
     failed |= test_delete_refuses_the_active_conversation(my_predbat)
     failed |= test_history_reads_via_snapshot_not_get_messages(my_predbat)
+    failed |= test_history_snapshot_and_cursor_do_not_lose_a_concurrent_message(my_predbat)
     failed |= test_sse_framing(my_predbat)
     failed |= test_markdown_escapes_before_transforming(my_predbat)
     failed |= test_nav_link_visibility(my_predbat)
@@ -737,7 +1097,10 @@ def run_web_chat_tests(my_predbat):
     failed |= test_inner_html_sinks_only_ever_receive_escaped_content(my_predbat)
     failed |= test_stream_cursor_advances_from_every_event(my_predbat)
     failed |= test_dropped_connection_is_told_apart_from_a_real_error_frame(my_predbat)
+    failed |= test_stream_reconnects_when_the_agent_is_replaced(my_predbat)
     failed |= test_model_catalogue(my_predbat)
     failed |= test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_predbat)
     failed |= test_model_picker_script_wires_routes_and_persists_selection(my_predbat)
+    failed |= test_stop_button_wired_to_cancel_with_turn_id(my_predbat)
+    failed |= test_html_chat_cancel_requires_the_running_turn_id(my_predbat)
     return failed

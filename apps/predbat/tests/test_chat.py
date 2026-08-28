@@ -210,6 +210,106 @@ def test_event_buffer(my_predbat):
     return failed
 
 
+def test_pending_conversations_is_lock_guarded(my_predbat):
+    """pending_conversations() reads pending_confirm through agent.lock, not by iterating it raw.
+
+    The component thread inserts, pops and wholesale rebuilds pending_confirm under agent.lock
+    (_run_one_tool's claim/release around the confirmation, confirm(), and _execute_turn's
+    cleanup). A caller on a different thread that iterates pending_confirm.values() directly -
+    which is exactly what html_chat_conversations used to do - can race one of those mutations and
+    raise "dictionary changed size during iteration", 500ing the /chat/conversations poll. This
+    checks the accessor genuinely takes the shared lock rather than reading the dict raw: since
+    the mutators already lock consistently, going through the same lock is what closes the race (a
+    real thread-timing reproduction would be flaky in CI; see
+    test_pending_conversations_survives_concurrent_mutation for a live stress version of the same
+    guarantee).
+    """
+    failed = False
+    print("**** Testing pending_conversations() takes agent.lock ****")
+    agent = _make_agent(my_predbat)
+    agent.pending_confirm = {"call_1": {"conversation_id": "abc", "turn_id": 1, "approved": None}, "call_2": {"conversation_id": "def", "turn_id": 2, "approved": None}}
+
+    acquired = []
+    real_lock = agent.lock
+
+    class RecordingLock:
+        """A lock stand-in that records every acquire, then delegates to the real lock."""
+
+        def __enter__(self):
+            """Record the acquire and hand off to the real lock."""
+            acquired.append(True)
+            return real_lock.__enter__()
+
+        def __exit__(self, *args):
+            """Hand off release to the real lock."""
+            return real_lock.__exit__(*args)
+
+    agent.lock = RecordingLock()
+    try:
+        result = agent.pending_conversations()
+    finally:
+        agent.lock = real_lock
+
+    if not acquired:
+        print("ERROR: pending_conversations() did not take agent.lock")
+        failed = True
+    if result != {"abc", "def"}:
+        print("ERROR: pending_conversations() returned {}, expected {{'abc', 'def'}}".format(result))
+        failed = True
+
+    return failed
+
+
+def test_pending_conversations_survives_concurrent_mutation(my_predbat):
+    """A background thread churning pending_confirm cannot crash a concurrent read.
+
+    Live reproduction of the race Important finding 3 in the final review reported: the web
+    thread's /chat/conversations poll iterating pending_confirm.values() directly against the
+    component thread's insert/pop of a confirmation raises RuntimeError mid-iteration. Both
+    threads hammer the same agent for a bounded time; without the lock this reliably raises within
+    a few hundred iterations, since a dict's iterator checks the size on every step.
+    """
+    failed = False
+    print("**** Testing pending_conversations() survives concurrent mutation ****")
+    agent = _make_agent(my_predbat)
+    stop = threading.Event()
+    errors = []
+
+    def churn():
+        """Insert and remove confirmations in a tight loop, the way turns really do."""
+        counter = 0
+        try:
+            while not stop.is_set():
+                counter += 1
+                call_id = "call_{}".format(counter)
+                with agent.lock:
+                    agent.pending_confirm[call_id] = {"conversation_id": "conv-{}".format(counter % 5), "turn_id": counter, "approved": None}
+                with agent.lock:
+                    agent.pending_confirm.pop(call_id, None)
+        except Exception as error:
+            errors.append(error)
+
+    writer = threading.Thread(target=churn, daemon=True)
+    writer.start()
+    try:
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            try:
+                agent.pending_conversations()
+            except Exception as error:
+                errors.append(error)
+                break
+    finally:
+        stop.set()
+        writer.join(timeout=5)
+
+    if errors:
+        print("ERROR: concurrent read/mutation raised: {}".format(errors))
+        failed = True
+
+    return failed
+
+
 def test_release_stale_turn(my_predbat):
     """_release_stale_turn only frees a slot once its own deadline plus grace period has passed."""
     failed = False
@@ -259,6 +359,48 @@ def test_release_stale_turn(my_predbat):
     new_events = agent.events[events_before:]
     if not any(event["type"] == "idle" and event["conversation_id"] is None for event in new_events):
         print("ERROR: releasing a stale turn did not emit a global idle event, got {}".format(new_events))
+        failed = True
+
+    return failed
+
+
+def test_release_stale_turn_keeps_a_slot_parked_in_confirmation(my_predbat):
+    """A turn waiting on await_confirmation keeps its slot past turn_timeout + grace.
+
+    CONFIRM_TIMEOUT_SECONDS (300s) is deliberately longer than turn_timeout + STALE_TURN_GRACE_
+    SECONDS (240s with the defaults _make_agent uses), because a user reading an Approve/Reject
+    prompt should get its own generous window rather than the turn's own budget for talking to
+    the model. Without this guard, a user taking four minutes to answer has their live slot
+    freed while await_confirmation is still polling for the answer.
+    """
+    failed = False
+    print("**** Testing that a turn parked in confirmation keeps its slot past the stale threshold ****")
+    agent = _make_agent(my_predbat, turn_timeout=30)
+    stale_started = time.monotonic() - (agent.turn_timeout + STALE_TURN_GRACE_SECONDS + 5)
+
+    # With a pending confirmation for this turn, release must be skipped however long it has run.
+    agent.active = {"turn_id": 7, "started": stale_started}
+    agent.pending_confirm = {"call_1": {"conversation_id": "c1", "turn_id": 7, "approved": None}}
+    agent._release_stale_turn()
+    if agent.active is None:
+        print("ERROR: a turn genuinely waiting on a write confirmation was released as stale")
+        failed = True
+
+    # The same elapsed time, with no pending confirmation for this turn, must still release -
+    # otherwise the guard would have silently swallowed the whole staleness check.
+    agent.active = {"turn_id": 7, "started": stale_started}
+    agent.pending_confirm = {}
+    agent._release_stale_turn()
+    if agent.active is not None:
+        print("ERROR: a turn with no pending confirmation was not released once genuinely stale - the confirmation guard is too broad")
+        failed = True
+
+    # A pending confirmation that belongs to a DIFFERENT turn must not protect this one.
+    agent.active = {"turn_id": 7, "started": stale_started}
+    agent.pending_confirm = {"call_1": {"conversation_id": "c1", "turn_id": 8, "approved": None}}
+    agent._release_stale_turn()
+    if agent.active is not None:
+        print("ERROR: a confirmation belonging to a different turn protected this one from release")
         failed = True
 
     return failed
@@ -427,6 +569,52 @@ def test_tool_call_round_trip(my_predbat):
     return failed
 
 
+def test_dispatch_strips_chat_omit_properties(my_predbat):
+    """_dispatch enforces chat_omit_properties on the real arguments, not just the offered schema.
+
+    openai_tool_list() removes 'masked' from the tool schema shown to the model - a presentation
+    detail. Nothing stops the model, or content it read via fetch_url/search_docs, from naming the
+    argument anyway: _dispatch() receives whatever arguments dict the model's own JSON decoded to,
+    independent of what schema it was offered. This drives _dispatch() directly, the same call
+    _run_one_tool() makes, and proves get_apps still redacts credentials even when the caller
+    explicitly asks for 'masked: False' - reproducing the exact shape the review found reachable
+    (chat schema hides 'masked', but a model that names it anyway got raw ha_key/octopus_api_key
+    values back). Pinned at this layer because this is the layer that actually enforces it; the
+    schema-only check lives in test_agent_tools.py's test_openai_tool_list_shape.
+    """
+    failed = False
+    print("**** Testing _dispatch strips chat_omit_properties before executing a tool ****")
+    agent = _make_agent(my_predbat)
+    original_ha_key = my_predbat.args.get("ha_key")
+    original_octopus_key = my_predbat.args.get("octopus_api_key")
+    my_predbat.args["ha_key"] = "SUPER-SECRET-TOKEN"
+    my_predbat.args["octopus_api_key"] = "sk-oct-123"
+    try:
+        result = asyncio.run(agent._dispatch(None, "get_apps", {"masked": False}))
+    finally:
+        if original_ha_key is None:
+            my_predbat.args.pop("ha_key", None)
+        else:
+            my_predbat.args["ha_key"] = original_ha_key
+        if original_octopus_key is None:
+            my_predbat.args.pop("octopus_api_key", None)
+        else:
+            my_predbat.args["octopus_api_key"] = original_octopus_key
+
+    if not result.get("success"):
+        print("ERROR: get_apps failed: {}".format(result))
+        return True
+    data = result.get("data") or {}
+    if data.get("ha_key") == "SUPER-SECRET-TOKEN" or data.get("octopus_api_key") == "sk-oct-123":
+        print("ERROR: raw credentials reached the chat dispatch path despite 'masked: False': {}".format(data))
+        failed = True
+    if result.get("masked") is not True:
+        print("ERROR: get_apps reported masked={} despite the model asking for masked: False through chat".format(result.get("masked")))
+        failed = True
+
+    return failed
+
+
 def test_tool_call_ids_are_normalised_when_the_provider_omits_them(my_predbat):
     """Two id-less tool calls in one message get distinct synthetic ids, and both still run.
 
@@ -573,14 +761,18 @@ def test_titles(my_predbat):
 
 
 def test_execute_turn_preserves_a_slot_claimed_by_a_later_turn(my_predbat):
-    """A turn's cleanup only releases the slot it owns, never one a later turn has since claimed.
+    """A turn's cleanup only releases the slot it owns - and only announces done/idle - when it
+    still owns it, never for a later turn that has since claimed it.
 
     Simulates the race _release_stale_turn's docstring warns about: a stranded turn's slot gets
     freed and a new turn claims it while the old one is still running its own finally block. An
     unconditional clear there would silently unlock the composer while that new turn is still in
-    flight. store.flush is the injection point because it is the last await before the
-    lock-guarded clear, so patching it lets the race be reproduced deterministically instead of
-    relying on real thread timing.
+    flight - and so would an unconditional done/idle emit, even with the clear itself correctly
+    guarded: idle is a GLOBAL event delivered to every browser regardless of which conversation it
+    is looking at, so the finishing (superseded) turn broadcasting it would tell every browser the
+    composer is free while turn 2 is still running. store.flush is the injection point because it
+    is the last await before the lock-guarded clear, so patching it lets the race be reproduced
+    deterministically instead of relying on real thread timing.
     """
     failed = False
     print("**** Testing that a finishing turn does not clobber a slot it no longer owns ****")
@@ -598,10 +790,16 @@ def test_execute_turn_preserves_a_slot_claimed_by_a_later_turn(my_predbat):
 
     agent.store.flush = flush_and_steal
 
+    events_before = len(agent.events)
     asyncio.run(agent.run_turn(cid, "hello"))
 
     if agent.active != other_slot:
         print("ERROR: the finishing turn clobbered a slot it did not own: {}".format(agent.active))
+        failed = True
+
+    new_events = agent.events[events_before:]
+    if any(event["type"] in ("done", "idle") for event in new_events):
+        print("ERROR: the superseded turn broadcast done/idle and would unlock the composer while turn 999 is still running: {}".format([event["type"] for event in new_events]))
         failed = True
 
     return failed
@@ -926,9 +1124,13 @@ def run_chat_tests(my_predbat):
     failed |= test_component_gating_end_to_end(my_predbat)
     failed |= test_build_snapshot(my_predbat)
     failed |= test_event_buffer(my_predbat)
+    failed |= test_pending_conversations_is_lock_guarded(my_predbat)
+    failed |= test_pending_conversations_survives_concurrent_mutation(my_predbat)
     failed |= test_release_stale_turn(my_predbat)
+    failed |= test_release_stale_turn_keeps_a_slot_parked_in_confirmation(my_predbat)
     failed |= test_plain_answer(my_predbat)
     failed |= test_tool_call_round_trip(my_predbat)
+    failed |= test_dispatch_strips_chat_omit_properties(my_predbat)
     failed |= test_tool_call_ids_are_normalised_when_the_provider_omits_them(my_predbat)
     failed |= test_tool_call_cap(my_predbat)
     failed |= test_tool_failures_are_results(my_predbat)

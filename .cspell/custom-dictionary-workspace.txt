@@ -250,6 +250,7 @@ hasattr
 hass
 hassapi
 hassio
+heartbeating
 heatingactive
 heatingtemp
 heatpump
@@ -411,6 +412,7 @@ onmouseover
 openapi
 openrouter
 openweathermap
+overclaim
 overfitting
 overvoltage
 ownerapi
