@@ -150,7 +150,21 @@ class WebChat:
         # can run on the agent's loop between two synchronous statements in the same coroutine, so
         # combining them closes that window.
         messages, cursor = await agent.run_on_agent_loop(self._snapshot_and_cursor(agent, cid))
-        return web.json_response({"id": cid, "title": meta.get("title"), "model": meta.get("model"), "usage_total": meta.get("usage_total"), "messages": messages or [], "cursor": cursor, "active": self._active_with_elapsed(agent)})
+        return web.json_response(
+            {
+                "id": cid,
+                "title": meta.get("title"),
+                "model": meta.get("model"),
+                "usage_total": meta.get("usage_total"),
+                # The most recent completion's prompt_tokens, not the cumulative usage_total.prompt_tokens
+                # - see ConversationStore.add_usage() and the Chat tab's context-size footer
+                # (renderContextUsage() in get_chat_script()), which is what actually reads this.
+                "last_prompt_tokens": meta.get("last_prompt_tokens", 0),
+                "messages": messages or [],
+                "cursor": cursor,
+                "active": self._active_with_elapsed(agent),
+            }
+        )
 
     @staticmethod
     def _active_with_elapsed(agent):
@@ -931,6 +945,7 @@ def get_chat_body():
                 HA state access
             </label>
             <span id="chat-turn-usage"></span>
+            <span id="chat-context-usage"></span>
             <span id="chat-total-cost"></span>
         </div>
     </div>
@@ -1815,9 +1830,12 @@ function renderUsageEvent(data) {
         totalText += ' (' + data.conversation_cached_tokens + ' cached)';
     }
     byId('chat-total-cost').textContent = totalText;
+    // data.prompt_tokens is this one completion's own prompt size, never the running
+    // conversation_cost/conversation_cached_tokens totals above - see renderContextUsage().
+    renderContextUsage(data.prompt_tokens);
 }
 
-function renderConversationTotal(usageTotal) {
+function renderConversationTotal(usageTotal, lastPromptTokens) {
     usageTotal = usageTotal || {};
     byId('chat-turn-usage').textContent = '';
     var totalText = 'Conversation total: ' + formatCost(usageTotal.cost);
@@ -1825,6 +1843,54 @@ function renderConversationTotal(usageTotal) {
         totalText += ' (' + usageTotal.cached_tokens + ' cached)';
     }
     byId('chat-total-cost').textContent = totalText;
+    renderContextUsage(lastPromptTokens);
+}
+
+// Locale-independent thousands separator for the context counter - avoids toLocaleString, whose
+// grouping and separator both vary by browser locale for a figure that should read the same for
+// every user.
+function formatTokenCount(value) {
+    var n = Math.round(Number(value) || 0);
+    var digits = String(Math.abs(n));
+    var withCommas = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return (n < 0 ? '-' : '') + withCommas;
+}
+
+// Looks up the selected model's context_length from state.models, the same catalogue loadModels()
+// already fetched for the picker. Falls back to state.defaultModel when the conversation has no
+// per-conversation override, matching populateModelPicker()'s own 'Use default' behaviour.
+function contextLengthForModel(modelId) {
+    var id = modelId || state.defaultModel;
+    var models = state.models || [];
+    for (var index = 0; index < models.length; index++) {
+        if (models[index].id === id) {
+            return models[index].context_length || null;
+        }
+    }
+    return null;
+}
+
+// Diagnostic context-size counter: the LAST turn's prompt_tokens against the selected model's
+// context_length, never the conversation's cumulative usage_total.prompt_tokens - see
+// ConversationStore.add_usage()'s docstring for why 'how big is this request right now' and 'what
+// has this conversation cost in total' are two different numbers. Falls back to showing the token
+// count alone, rather than a wrong or blank limit, when the model's context_length is unknown -
+// the catalogue could not be read, or this model is missing from it.
+function renderContextUsage(promptTokens) {
+    var el = byId('chat-context-usage');
+    if (!el) {
+        return;
+    }
+    if (!promptTokens) {
+        el.textContent = '';
+        return;
+    }
+    var limit = contextLengthForModel(state.currentModel);
+    var text = 'context ' + formatTokenCount(promptTokens);
+    if (limit) {
+        text += ' / ' + formatTokenCount(limit);
+    }
+    el.textContent = text;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1870,7 +1936,7 @@ function renderHistory(payload) {
             }
         }
     });
-    renderConversationTotal(payload.usage_total);
+    renderConversationTotal(payload.usage_total, payload.last_prompt_tokens);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1990,9 +2056,14 @@ function loadConversationData(id) {
             // a plain conversation switch (as opposed to done/idle/error ending the turn itself)
             // needs to stop it explicitly.
             clearThinkingBubble();
-            renderHistory(payload);
+            // state.currentModel is set before renderHistory() runs, not after: renderHistory()
+            // feeds the conversation's last_prompt_tokens through to renderContextUsage(), which
+            // reads state.currentModel to find the right context_length - setting it afterwards
+            // would render the new conversation's context counter against the PREVIOUS
+            // conversation's model for one frame.
             state.cursor = payload.cursor || 0;
             state.currentModel = payload.model || null;
+            renderHistory(payload);
             populateModelPicker(state.models, state.currentModel);
             if (payload.active) {
                 setBusy(payload.active.conversation_id, payload.active.title, payload.active.turn_id);

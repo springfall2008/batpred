@@ -2519,11 +2519,12 @@ APPS_SCHEMA = {
     "openrouter_model": {"type": "string", "empty": False},
     "openrouter_base_url": {"type": "string", "empty": False},
     "openrouter_max_tokens": {"type": "integer"},
-    "chat_max_tool_calls": {"type": "integer"},
+    "chat_max_tool_rounds": {"type": "integer"},
     "chat_max_history": {"type": "integer"},
     "chat_max_conversations": {"type": "integer"},
     "chat_expiry_days": {"type": "integer"},
     "chat_turn_timeout": {"type": "integer"},
+    "chat_request_timeout": {"type": "integer"},
     "chat_fetch_allowlist": {"type": "string_list"},
     "load_today": {"type": "sensor|sensor_list", "sensor_type": "float", "required": True},
     "import_today": {

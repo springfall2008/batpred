@@ -56,7 +56,19 @@ def _make_agent(my_predbat, **overrides):
     agent.count_errors = 0
     agent.api_started = False
     agent.api_stop = False
-    settings = {"api_key": "test-key", "model": "test/model", "base_url": "https://openrouter.example/api/v1", "max_tokens": 0, "max_tool_calls": 4, "max_history": 40, "max_conversations": 20, "expiry_days": 30, "turn_timeout": 30, "fetch_allowlist": None}
+    settings = {
+        "api_key": "test-key",
+        "model": "test/model",
+        "base_url": "https://openrouter.example/api/v1",
+        "max_tokens": 0,
+        "max_tool_rounds": 4,
+        "max_history": 40,
+        "max_conversations": 20,
+        "expiry_days": 30,
+        "turn_timeout": 30,
+        "request_timeout": 30,
+        "fetch_allowlist": None,
+    }
     settings.update(overrides)
     agent.initialize(**settings)
     return agent
@@ -75,7 +87,7 @@ def test_component_gating(my_predbat):
         if not entry["args"].get(name, {}).get("required"):
             print("ERROR: '{}' is not required, so the component would start unconfigured".format(name))
             failed = True
-    for name in ("base_url", "max_tool_calls", "max_history", "max_conversations", "expiry_days", "turn_timeout", "fetch_allowlist", "max_tokens"):
+    for name in ("base_url", "max_tool_rounds", "max_history", "max_conversations", "expiry_days", "turn_timeout", "request_timeout", "fetch_allowlist", "max_tokens"):
         if entry["args"].get(name, {}).get("required"):
             print("ERROR: '{}' is required, which would stop the component starting on a default install".format(name))
             failed = True
@@ -84,6 +96,18 @@ def test_component_gating(my_predbat):
         failed = True
     if not entry.get("can_restart"):
         print("ERROR: the chat component should be restartable from the Components tab")
+        failed = True
+    if entry["args"]["max_tool_rounds"]["config"] != "chat_max_tool_rounds":
+        print("ERROR: max_tool_rounds is not bound to chat_max_tool_rounds: {}".format(entry["args"]["max_tool_rounds"]))
+        failed = True
+    if entry["args"]["max_history"].get("default") != 0:
+        print("ERROR: chat_max_history should default to 0 (unlimited), got {}".format(entry["args"]["max_history"].get("default")))
+        failed = True
+    if entry["args"]["turn_timeout"].get("default") != 1800:
+        print("ERROR: chat_turn_timeout should default to 1800s (the whole-turn budget), got {}".format(entry["args"]["turn_timeout"].get("default")))
+        failed = True
+    if entry["args"]["request_timeout"].get("default") != 300 or entry["args"]["request_timeout"]["config"] != "chat_request_timeout":
+        print("ERROR: request_timeout should default to 300s and bind to chat_request_timeout: {}".format(entry["args"]["request_timeout"]))
         failed = True
 
     return failed
@@ -166,6 +190,16 @@ def test_build_snapshot(my_predbat):
     if len(snapshot) > 6000:
         print("ERROR: snapshot is {} characters, which would dominate every turn".format(len(snapshot)))
         failed = True
+    # "Time now" reads as current inside a block headed "...as it was when this conversation
+    # started" - a model can read it as live rather than frozen, which fights the staleness caveat
+    # build_system_prompt() adds right after this snapshot. "Conversation started at" says the same
+    # thing the heading already does, so nothing in the snapshot contradicts it.
+    if "Time now" in snapshot:
+        print("ERROR: the snapshot still says 'Time now', which reads as current inside a frozen snapshot: {}".format(snapshot))
+        failed = True
+    if "Conversation started at" not in snapshot:
+        print("ERROR: the snapshot does not label its captured timestamp 'Conversation started at':\n{}".format(snapshot))
+        failed = True
 
     class Sparse:
         """A base with almost nothing set, standing in for a half-started Predbat."""
@@ -218,6 +252,22 @@ def test_build_system_prompt(my_predbat):
         print("ERROR: the live snapshot is missing from the built system prompt")
         failed = True
 
+    return failed
+
+
+def test_primer_says_when_not_to_call_a_tool(my_predbat):
+    """The primer tells the model to prefer the snapshot for a simple fact, not only how to call
+    tools. With the round cap now generous (32, see max_tool_rounds), nothing else in the prompt
+    discourages calling get_plan/get_state/search_source for a question the snapshot already
+    answers - this line is what is meant to.
+    """
+    failed = False
+    print("**** Testing the primer explains when NOT to call a tool ****")
+    lowered = PRIMER.lower()
+    for needle in ("snapshot", "current value", "about to act on"):
+        if needle not in lowered:
+            print("ERROR: the primer is missing {!r}, which is meant to steer the model away from reflexively calling a tool:\n{}".format(needle, PRIMER))
+            failed = True
     return failed
 
 
@@ -604,6 +654,17 @@ def _two_tool_calls_response_without_ids(specs):
     return chunks
 
 
+def _many_tool_calls_response(name, arguments, count):
+    """Build a chunk list for `count` calls of the same tool streamed in one round trip, each with
+    its own real id - the shape used to prove the turn deadline is checked between individual
+    tool calls within a round, not only once per round trip."""
+    chunks = []
+    for index in range(count):
+        chunks.append({"choices": [{"delta": {"tool_calls": [{"index": index, "id": "call_{}".format(index), "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}}]})
+    chunks.append({"choices": [{"delta": {}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 20, "completion_tokens": 8, "cost": 0.0004}})
+    return chunks
+
+
 def _dangling_tool_calls(messages):
     """Return a description of every assistant tool_calls left without a matching tool reply.
 
@@ -836,12 +897,18 @@ def test_tool_call_ids_are_normalised_when_the_provider_omits_them(my_predbat):
     return failed
 
 
-def test_tool_call_cap(my_predbat):
-    """The loop stops at max_tool_calls and says so rather than spinning."""
+def test_tool_round_cap(my_predbat):
+    """The loop stops at max_tool_rounds and says so rather than spinning.
+
+    max_tool_rounds bounds model round trips (completions), not individual tool calls - see
+    _turn_loop's docstring - so this drives a fake that returns one tool call per round trip,
+    which is exactly the shape that makes "round" and "call" indistinguishable and is why the cap
+    used to be named after the wrong one of the two.
+    """
     failed = False
-    print("**** Testing the tool call cap ****")
+    print("**** Testing the tool round cap ****")
     responses = [_tool_call_response("get_status", {}, call_id="call_{}".format(index)) for index in range(10)]
-    agent = _agent_with_fake(my_predbat, *responses, max_tool_calls=2)
+    agent = _agent_with_fake(my_predbat, *responses, max_tool_rounds=2)
     cid = asyncio.run(agent.store.create())
 
     asyncio.run(agent.run_turn(cid, "loop please"))
@@ -865,6 +932,58 @@ def test_tool_call_cap(my_predbat):
     problems = _dangling_tool_calls(messages)
     if problems:
         print("ERROR: hitting the cap left the stored history API-invalid: {}".format(problems))
+        failed = True
+
+    return failed
+
+
+def test_deadline_checked_between_tool_calls_within_a_round(my_predbat):
+    """The turn deadline is checked between individual tool calls, not only once per round.
+
+    A round is one completion - the per-round check at the top of _turn_loop's for-loop only runs
+    before that completion is requested. A model can put an unbounded number of tool calls in the
+    single message that completion returns, and each one dispatched inside _run_one_tool can itself
+    take real time; with no check between them, one round emitting twenty tool calls at up to five
+    seconds each could run for roughly a hundred seconds with no deadline check at all. This drives
+    a single round of 20 tool calls and expires the deadline immediately after the third one runs,
+    then asserts execution actually stopped there - not merely that an error was eventually
+    emitted, which a check running only after all 20 had executed would also produce.
+    """
+    failed = False
+    print("**** Testing the turn deadline is checked between tool calls within one round, not just between rounds ****")
+    round_response = _many_tool_calls_response("get_status", {}, 20)
+    agent = _agent_with_fake(my_predbat, round_response, _text_response("done"))
+    cid = asyncio.run(agent.store.create())
+
+    executed = []
+    real_run_one_tool = agent._run_one_tool
+
+    async def spy_run_one_tool(conversation_id, turn_id, call):
+        """Run the real tool, then expire the turn deadline right after the third call runs."""
+        executed.append(call.get("id"))
+        result = await real_run_one_tool(conversation_id, turn_id, call)
+        if len(executed) == 3:
+            agent.deadline = time.monotonic() - 1
+        return result
+
+    agent._run_one_tool = spy_run_one_tool
+    asyncio.run(agent.run_turn(cid, "run lots of tools please"))
+
+    if len(executed) != 3:
+        print("ERROR: expected exactly 3 of the 20 tool calls to run before the mid-round deadline check stopped the rest, got {}: {}".format(len(executed), executed))
+        failed = True
+
+    events = agent.events_since(0, cid)[0]
+    tool_starts = [event for event in events if event["type"] == "tool_start"]
+    if len(tool_starts) != 3:
+        print("ERROR: expected exactly 3 tool_start events, got {}: {}".format(len(tool_starts), tool_starts))
+        failed = True
+    error_events = [event for event in events if event["type"] == "error"]
+    if len(error_events) != 1 or "seconds" not in str(error_events[0]["data"].get("message", "")):
+        print("ERROR: expected exactly one deadline error event naming the timeout, got {}".format(error_events))
+        failed = True
+    if agent.active is not None:
+        print("ERROR: the turn slot was not released after the mid-round deadline stop")
         failed = True
 
     return failed
@@ -1156,6 +1275,89 @@ def test_usage_event_and_totals_report_cached_tokens(my_predbat):
     meta_after = agent.store.get_meta(cid)
     if meta_after["usage_total"].get("cached_tokens") != 170:
         print("ERROR: cached_tokens did not accumulate across turns: expected 170, got {}".format(meta_after["usage_total"].get("cached_tokens")))
+        failed = True
+
+    return failed
+
+
+def test_last_prompt_tokens_reflects_the_most_recent_turn_not_the_cumulative_total(my_predbat):
+    """The Chat tab's context-size footer shows the LAST turn's prompt_tokens, not the cumulative
+    usage_total.prompt_tokens - see ConversationStore.add_usage(). Two turns are driven with
+    deliberately different prompt sizes (1000, then 4000) so a test - or an implementation - that
+    read the cumulative total (5000) instead of the most recent value (4000) fails rather than
+    passing by coincidence, exactly the trap the task brief warns about.
+    """
+    failed = False
+    print("**** Testing last_prompt_tokens tracks the most recent turn, not the cumulative total ****")
+    usage_1 = {"prompt_tokens": 1000, "completion_tokens": 50, "cost": 0.01}
+    usage_2 = {"prompt_tokens": 4000, "completion_tokens": 80, "cost": 0.02}
+    agent = _agent_with_fake(my_predbat, _text_response("first", usage=usage_1), _text_response("second", usage=usage_2))
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "one"))
+    meta_after_first = agent.store.get_meta(cid)
+    if meta_after_first.get("last_prompt_tokens") != 1000:
+        print("ERROR: last_prompt_tokens is {} after the first turn, expected 1000".format(meta_after_first.get("last_prompt_tokens")))
+        failed = True
+
+    asyncio.run(agent.run_turn(cid, "two"))
+    meta_after_second = agent.store.get_meta(cid)
+    if meta_after_second.get("last_prompt_tokens") != 4000:
+        print("ERROR: last_prompt_tokens is {} after the second turn, expected 4000 (the most recent turn's prompt size, not the 5000 cumulative total)".format(meta_after_second.get("last_prompt_tokens")))
+        failed = True
+    if meta_after_second["usage_total"]["prompt_tokens"] != 5000:
+        print("ERROR: usage_total.prompt_tokens is {}, expected the cumulative 5000 - the cumulative total must still work alongside last_prompt_tokens".format(meta_after_second["usage_total"]["prompt_tokens"]))
+        failed = True
+
+    return failed
+
+
+def test_request_timeout_and_turn_timeout_are_not_confused(my_predbat):
+    """chat_request_timeout bounds one completion's aiohttp.ClientTimeout; chat_turn_timeout bounds
+    self.deadline, the whole turn's budget across every round trip - see initialize()'s docstring
+    for why sharing one value between the two, the previous behaviour, capped a multi-round turn on
+    a budget meant for a single request. The fixture uses two very different numbers (45 vs 999)
+    so a test - or an implementation - that read one where the other belongs would fail rather than
+    passing by coincidence.
+    """
+    failed = False
+    print("**** Testing request_timeout and turn_timeout are not confused ****")
+    agent = _make_agent(my_predbat, request_timeout=45, turn_timeout=999)
+
+    class _StoppedAfterCapture(Exception):
+        """Raised the moment the ClientTimeout's `total` is captured, to skip the real network I/O."""
+
+    captured = {}
+
+    def fake_client_timeout(total=None, **kwargs):
+        """Record the total passed to aiohttp.ClientTimeout, then abort before any real request."""
+        captured["total"] = total
+        raise _StoppedAfterCapture()
+
+    original_client_timeout = chat.aiohttp.ClientTimeout
+    chat.aiohttp.ClientTimeout = fake_client_timeout
+    try:
+        chunk_generator = agent._stream_chunks({"model": "test/model"})
+        try:
+            asyncio.run(chunk_generator.__anext__())
+            print("ERROR: _stream_chunks did not reach aiohttp.ClientTimeout at all")
+            failed = True
+        except _StoppedAfterCapture:
+            pass
+    finally:
+        chat.aiohttp.ClientTimeout = original_client_timeout
+
+    if captured.get("total") != 45:
+        print("ERROR: _stream_chunks built its ClientTimeout with total={}, expected chat_request_timeout's 45 - it must not read turn_timeout here".format(captured.get("total")))
+        failed = True
+
+    before = time.monotonic()
+    agent2 = _agent_with_fake(my_predbat, _text_response("hello"), request_timeout=45, turn_timeout=999)
+    cid = asyncio.run(agent2.store.create())
+    asyncio.run(agent2.run_turn(cid, "hi"))
+    expected_deadline = before + 999
+    if not (expected_deadline - 2 <= agent2.deadline <= expected_deadline + 2):
+        print("ERROR: agent.deadline is {:.1f}, expected close to {:.1f} (started + turn_timeout=999) - self.deadline must be built from turn_timeout, not request_timeout=45".format(agent2.deadline, expected_deadline))
         failed = True
 
     return failed
@@ -2330,6 +2532,7 @@ def run_chat_tests(my_predbat):
     failed |= test_component_gating_end_to_end(my_predbat)
     failed |= test_build_snapshot(my_predbat)
     failed |= test_build_system_prompt(my_predbat)
+    failed |= test_primer_says_when_not_to_call_a_tool(my_predbat)
     failed |= test_event_buffer(my_predbat)
     failed |= test_pending_conversations_is_lock_guarded(my_predbat)
     failed |= test_pending_conversations_survives_concurrent_mutation(my_predbat)
@@ -2339,7 +2542,8 @@ def run_chat_tests(my_predbat):
     failed |= test_tool_call_round_trip(my_predbat)
     failed |= test_dispatch_strips_chat_omit_properties(my_predbat)
     failed |= test_tool_call_ids_are_normalised_when_the_provider_omits_them(my_predbat)
-    failed |= test_tool_call_cap(my_predbat)
+    failed |= test_tool_round_cap(my_predbat)
+    failed |= test_deadline_checked_between_tool_calls_within_a_round(my_predbat)
     failed |= test_tool_failures_are_results(my_predbat)
     failed |= test_titles(my_predbat)
     failed |= test_title_instruction_reaches_the_model_without_touching_the_stored_message(my_predbat)
@@ -2347,6 +2551,8 @@ def run_chat_tests(my_predbat):
     failed |= test_system_message_carries_cache_control(my_predbat)
     failed |= test_frozen_system_prompt_is_built_once_and_reused_not_rebuilt(my_predbat)
     failed |= test_usage_event_and_totals_report_cached_tokens(my_predbat)
+    failed |= test_last_prompt_tokens_reflects_the_most_recent_turn_not_the_cumulative_total(my_predbat)
+    failed |= test_request_timeout_and_turn_timeout_are_not_confused(my_predbat)
     failed |= test_execute_turn_preserves_a_slot_claimed_by_a_later_turn(my_predbat)
     failed |= test_busy_rejects_a_second_turn(my_predbat)
     failed |= test_search_source_runs_off_the_loop(my_predbat)

@@ -302,6 +302,39 @@ def test_trim_history_keeps_tool_groups_intact(my_predbat):
     return failed
 
 
+def test_trim_history_zero_means_unlimited(my_predbat):
+    """max_history=0 - the shipped default - returns a long conversation in full, untrimmed.
+
+    A naive `len(messages) <= max_history` comparison (the code before this change) trims
+    everything down to nothing useful once max_history is 0: `len(messages) <= 0` is False for any
+    non-empty conversation, so the function falls through to `index = len(messages) - 0 =
+    len(messages)`, which is one past the last valid index and raises IndexError on the very next
+    line. This drives a genuinely long history (200 messages, comfortably longer than the old
+    default of 40) through trim_history(..., 0) and asserts it comes back complete, not merely that
+    no exception was raised - a fix that silently trimmed to some other window would pass a
+    no-exception check just as well as a correct one.
+    """
+    failed = False
+    print("**** Testing chat_max_history=0 means unlimited, not a crash or a silent trim ****")
+    messages = []
+    for index in range(50):
+        messages.append({"role": "user", "content": "question {}".format(index)})
+        messages.append({"role": "assistant", "content": "answer {}".format(index)})
+    if len(messages) != 100:
+        print("ERROR: test setup did not build the expected 100-message history")
+        return True
+
+    trimmed = trim_history(messages, 0)
+    if trimmed != messages:
+        print("ERROR: trim_history(messages, 0) returned {} messages, expected all 100 back unchanged".format(len(trimmed)))
+        failed = True
+    if trimmed is messages:
+        print("ERROR: trim_history should return a copy, not alias the input list, even when returning everything")
+        failed = True
+
+    return failed
+
+
 def test_snapshot_is_a_safe_copy(my_predbat):
     """snapshot() matches get_messages(), copies rather than aliases, and is None for a dead id."""
     failed = False
@@ -561,6 +594,38 @@ def test_add_usage_accumulates_cached_tokens(my_predbat):
     return failed
 
 
+def test_add_usage_tracks_last_prompt_tokens_not_cumulative(my_predbat):
+    """entry['last_prompt_tokens'] holds the most recent completion's prompt_tokens, overwritten
+    on every call, not the running sum add_usage() also accumulates onto usage_total.
+
+    The Chat tab's context-size footer needs 'how big is the request I am about to send', not
+    'what has this conversation cost in total' - usage_total.prompt_tokens answers the second
+    question and would read ever larger the longer a conversation runs even though the request
+    itself might have stayed the same size. Two calls with deliberately different prompt sizes
+    (1000, then 4000) are used so a test - or an implementation - that read the cumulative total
+    (5000) instead of the most recent value (4000) fails rather than passing by coincidence.
+    """
+    failed = False
+    print("**** Testing add_usage tracks the last turn's prompt_tokens, not the cumulative total ****")
+    storage = FakeStorage()
+    store = _store(storage)
+    asyncio.run(store.load_index())
+    cid = asyncio.run(store.create())
+
+    store.add_usage(cid, {"prompt_tokens": 1000, "completion_tokens": 50, "cost": 0.01})
+    store.add_usage(cid, {"prompt_tokens": 4000, "completion_tokens": 80, "cost": 0.02})
+
+    meta = store.get_meta(cid)
+    if meta.get("last_prompt_tokens") != 4000:
+        print("ERROR: last_prompt_tokens is {}, expected 4000 (the most recent call's prompt size, not the 5000 cumulative total)".format(meta.get("last_prompt_tokens")))
+        failed = True
+    if meta["usage_total"]["prompt_tokens"] != 5000:
+        print("ERROR: usage_total.prompt_tokens is {}, expected the cumulative 5000 - this must keep working alongside last_prompt_tokens".format(meta["usage_total"]["prompt_tokens"]))
+        failed = True
+
+    return failed
+
+
 def run_chat_store_tests(my_predbat):
     """Run every conversation store test, returning True if any of them failed."""
     failed = False
@@ -573,6 +638,7 @@ def run_chat_store_tests(my_predbat):
     failed |= test_pruning(my_predbat)
     failed |= test_derive_title(my_predbat)
     failed |= test_trim_history_keeps_tool_groups_intact(my_predbat)
+    failed |= test_trim_history_zero_means_unlimited(my_predbat)
     failed |= test_snapshot_is_a_safe_copy(my_predbat)
     failed |= test_metadata_only_flush_does_not_clobber_body(my_predbat)
     failed |= test_system_prompt_migrates_from_a_body_saved_before_it_existed(my_predbat)
@@ -581,5 +647,6 @@ def run_chat_store_tests(my_predbat):
     failed |= test_extract_cached_tokens(my_predbat)
     failed |= test_add_usage_on_deleted_conversation_clears_dirty(my_predbat)
     failed |= test_add_usage_accumulates_cached_tokens(my_predbat)
+    failed |= test_add_usage_tracks_last_prompt_tokens_not_cumulative(my_predbat)
     failed |= test_get_meta_deep_copies_usage_total(my_predbat)
     return failed

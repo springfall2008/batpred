@@ -92,7 +92,9 @@ EMPTY_COMPLETION_RETRY_REASON = "Empty response from the model"
 
 PRIMER = """You are an assistant built into Predbat, a home battery optimisation system that plans when to charge and discharge a household battery based on electricity rates, solar forecasts and historical load. The person you are talking to owns this system and is looking at its web interface.
 
-Answer concisely and quote the user's real values rather than generalities. Call a tool rather than guessing: the tools read this specific installation. Use search_docs for questions about how to configure Predbat, and search_source then read_source for questions about what the code actually does - the source you can read is the exact version running here. Never invent an entity name; look it up with get_entities or get_config."""
+Answer concisely and quote the user's real values rather than generalities. Call a tool rather than guessing: the tools read this specific installation. Use search_docs for questions about how to configure Predbat, and search_source then read_source for questions about what the code actually does - the source you can read is the exact version running here. Never invent an entity name; look it up with get_entities or get_config.
+
+Prefer the snapshot below for simple facts about the setup, and reach for a tool when the answer needs current values, detail the snapshot lacks, or anything the user is about to act on."""
 
 
 class ChatBusyError(RuntimeError):
@@ -168,7 +170,7 @@ def build_snapshot(base):
         return getattr(base, name, default)
 
     lines = ["Predbat state as it was when this conversation started:"]
-    lines.append("- Time now: {}".format(state("now_utc", datetime.now())))
+    lines.append("- Conversation started at: {}".format(state("now_utc", datetime.now())))
     lines.append("- Predbat version: {}".format(state("this_version", "unknown")))
     lines.append("- Status: {}".format(state("current_status", "unknown")))
     lines.append("- Mode: {}".format(arg("mode", "unknown")))
@@ -342,15 +344,29 @@ def empty_completion_message(message):
 class ChatAgent(ComponentBase):
     """Runs the OpenRouter-backed chat agent for the Predbat web interface."""
 
-    def initialize(self, api_key, model, base_url="https://openrouter.ai/api/v1", max_tokens=0, max_tool_calls=8, max_history=40, max_conversations=20, expiry_days=30, turn_timeout=180, fetch_allowlist=None):
-        """Store configuration and build the conversation store and event buffer."""
+    def initialize(self, api_key, model, base_url="https://openrouter.ai/api/v1", max_tokens=0, max_tool_rounds=8, max_history=0, max_conversations=20, expiry_days=30, turn_timeout=1800, request_timeout=300, fetch_allowlist=None):
+        """Store configuration and build the conversation store and event buffer.
+
+        turn_timeout and request_timeout bound two different things and must not be conflated:
+        turn_timeout is the whole turn's budget - self.deadline, checked once per round in
+        _turn_loop and again between tool calls within a round - which has to be generous enough
+        to cover every round trip a multi-tool-call turn makes. request_timeout is the
+        aiohttp.ClientTimeout on one completion request (see _stream_chunks), which only needs to
+        be long enough to catch a single hung or very slow provider call. Sharing one value between
+        the two (the previous behaviour) meant a turn with several rounds could die on its total
+        budget after only two or three completions even though no single request was slow.
+
+        max_history <= 0 (0 is the default) means unlimited - trim_history() itself implements
+        that, this only stores whatever was passed through.
+        """
         self.api_key = api_key
         self.default_model = model
         self.base_url = str(base_url or "https://openrouter.ai/api/v1").rstrip("/")
         self.max_tokens = max_tokens or 0
-        self.max_tool_calls = max_tool_calls or 8
-        self.max_history = max_history or 40
-        self.turn_timeout = turn_timeout or 180
+        self.max_tool_rounds = max_tool_rounds or 8
+        self.max_history = max_history if max_history is not None else 0
+        self.turn_timeout = turn_timeout or 1800
+        self.request_timeout = request_timeout or 300
         self.fetch_allowlist = list(fetch_allowlist) if fetch_allowlist else list(DEFAULT_FETCH_ALLOWLIST)
         self.lock = threading.Lock()
         # Set on the first run() tick, from inside this component's own thread. Everything the
@@ -466,7 +482,7 @@ class ChatAgent(ComponentBase):
 
         A turn parked in await_confirmation is a further exception, and it does not depend on the
         defaults lining up. At the shipped values CONFIRM_TIMEOUT_SECONDS (300s) sits inside
-        turn_timeout + STALE_TURN_GRACE_SECONDS (300 + 60 = 360s), so the arithmetic is
+        turn_timeout + STALE_TURN_GRACE_SECONDS (1800 + 60 = 1860s), so the arithmetic is
         comfortable - but chat_turn_timeout is user-configurable, and anything below 240s puts the
         confirmation window back outside the stale threshold. The exception is therefore written to
         hold whatever those numbers are: a user reading an Approve/Reject prompt gets a generous
@@ -555,6 +571,12 @@ class ChatAgent(ComponentBase):
         populate a dropdown and does not need to be fetched on every page load; a custom
         openrouter_base_url with no /models endpoint at all still works because the configured
         model is added whether or not the catalogue could be read.
+
+        Each model carries context_length straight from OpenRouter's catalogue entry (None when the
+        catalogue could not be read, or for the configured model when the catalogue has no entry
+        for it) - the Chat tab's footer uses it to show how full the context window is against the
+        model actually in use, alongside the token count itself; see html_chat_models() and
+        renderContextUsage() in web_chat.py.
         """
         catalogue = None
         storage = self.storage
@@ -571,10 +593,10 @@ class ChatAgent(ComponentBase):
             if "tools" not in (entry.get("supported_parameters") or []):
                 continue
             pricing = entry.get("pricing") or {}
-            models.append({"id": entry.get("id"), "name": entry.get("name") or entry.get("id"), "prompt_price": pricing.get("prompt"), "completion_price": pricing.get("completion")})
+            models.append({"id": entry.get("id"), "name": entry.get("name") or entry.get("id"), "prompt_price": pricing.get("prompt"), "completion_price": pricing.get("completion"), "context_length": entry.get("context_length")})
         models.sort(key=lambda entry: str(entry.get("id")))
         if self.default_model not in [entry["id"] for entry in models]:
-            models.insert(0, {"id": self.default_model, "name": "{} (from apps.yaml)".format(self.default_model), "prompt_price": None, "completion_price": None})
+            models.insert(0, {"id": self.default_model, "name": "{} (from apps.yaml)".format(self.default_model), "prompt_price": None, "completion_price": None, "context_length": None})
         return models
 
     async def _stream_chunks(self, payload):
@@ -582,9 +604,14 @@ class ChatAgent(ComponentBase):
 
         The only network call in the component, and the seam the tests replace. The session is
         created per request because this coroutine runs on whichever event loop invoked the turn.
+
+        The ClientTimeout is built from self.request_timeout, not self.turn_timeout: this bounds
+        one completion request, while turn_timeout bounds the whole turn across every round trip -
+        see initialize()'s docstring for why conflating the two caps a multi-round turn on a budget
+        meant for a single request.
         """
         headers = {"Authorization": "Bearer {}".format(self.api_key), "Content-Type": "application/json", "HTTP-Referer": "https://springfall2008.github.io/batpred/", "X-Title": "Predbat"}
-        timeout = aiohttp.ClientTimeout(total=self.turn_timeout)
+        timeout = aiohttp.ClientTimeout(total=self.request_timeout)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post("{}/chat/completions".format(self.base_url), headers=headers, json=payload) as response:
                 if response.status != 200:
@@ -941,9 +968,21 @@ class ChatAgent(ComponentBase):
                 self.emit(None, "idle", {})
 
     async def _turn_loop(self, conversation_id, turn_id, text):
-        """Alternate completions and tool calls until the model answers or the cap is reached."""
+        """Alternate completions and tool calls until the model answers or the cap is reached.
+
+        max_tool_rounds bounds model round trips (completions), not tool calls: each iteration of
+        this loop is one completion, and every tool call the model requested inside it runs before
+        the next one - with the cap at 32, that is up to 32 completions but an unbounded number of
+        tool calls inside each. Bounding rounds rather than calls is deliberate: a round is what
+        costs money (one completion), not the tool calls inside it.
+
+        The deadline is checked both here, once per round, and again inside the tool-dispatch loop
+        below, between each individual tool call - see the comment there for why the per-round
+        check alone leaves a gap wide enough for one round, on its own, to run far past the
+        deadline.
+        """
         model = (self.store.get_meta(conversation_id) or {}).get("model") or self.default_model
-        for iteration in range(self.max_tool_calls + 1):
+        for iteration in range(self.max_tool_rounds + 1):
             if time.monotonic() > self.deadline:
                 self.emit(conversation_id, "error", {"message": "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)})
                 return
@@ -975,7 +1014,7 @@ class ChatAgent(ComponentBase):
             calls = message.get("tool_calls") or []
             if not calls:
                 return
-            if iteration >= self.max_tool_calls:
+            if iteration >= self.max_tool_rounds:
                 # Answer the calls we are refusing to run. Leaving an assistant message that
                 # carries tool_calls with no matching tool replies is exactly the shape
                 # trim_history exists to avoid: the next turn sends the pair back, the API
@@ -983,16 +1022,26 @@ class ChatAgent(ComponentBase):
                 # the pair ages out of the trim window. Deliberately no tool_start/tool_end
                 # events - nothing ran, and the transcript should not suggest otherwise.
                 for call in calls:
-                    refused = {"success": False, "error": "Not run: the {} tool call limit for one turn was reached".format(self.max_tool_calls), "data": None}
+                    refused = {"success": False, "error": "Not run: the {} tool round limit for one turn was reached".format(self.max_tool_rounds), "data": None}
                     # call["id"] is guaranteed by _run_completion's normalisation - every stored
                     # tool_calls entry carries one, real or synthetic - so no turn-wide fallback
                     # is needed (and one would collide two id-less calls in the same message).
                     await self.store.append(conversation_id, {"role": "tool", "tool_call_id": call.get("id"), "name": (call.get("function") or {}).get("name") or "", "content": json.dumps(refused)})
                 break
             for call in calls:
+                # Checked before every individual tool call, not only once at the top of the
+                # round: the per-round check above only runs before the completion that requested
+                # these calls, and a model can put an unbounded number of tool calls in one
+                # message. Twenty search_source calls at up to five seconds each can run the round
+                # itself for roughly a hundred seconds with no deadline check in between - this is
+                # what closes that gap, ending the turn the same way the per-round check does
+                # rather than letting every remaining call in the round still run.
+                if time.monotonic() > self.deadline:
+                    self.emit(conversation_id, "error", {"message": "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)})
+                    return
                 await self._run_one_tool(conversation_id, turn_id, call)
 
-        note = "I stopped after {} tool calls, which is the configured limit for one turn. Ask me to continue if you want me to keep going.".format(self.max_tool_calls)
+        note = "I stopped after {} tool rounds, which is the configured limit for one turn. Ask me to continue if you want me to keep going.".format(self.max_tool_rounds)
         await self.store.append(conversation_id, {"role": "assistant", "content": note})
         self.emit(conversation_id, "assistant", {"text": note, "sources": []})
 

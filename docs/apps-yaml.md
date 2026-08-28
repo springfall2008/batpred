@@ -1979,11 +1979,12 @@ Before enabling this, read the [chat component's security note](components.md#se
 - **openrouter_model** - The OpenRouter model id to use by default, e.g. `openai/gpt-4o-mini` - required, together with **openrouter_api_key**
 - **openrouter_base_url** - Chat-completions endpoint (default: `https://openrouter.ai/api/v1`). Point it at another OpenAI-compatible endpoint if you want to, but doing so disables the OpenRouter-only web search plugin
 - **openrouter_max_tokens** - Maximum tokens per completion; `0` leaves it to the model/provider's own default (default: `0`)
-- **chat_max_tool_calls** - Maximum tool calls allowed within one turn before Predbat stops and asks you to continue (default: `32`)
-- **chat_max_history** - Maximum recent messages sent to the model each turn, trimmed at a user-message boundary so a tool call and its reply are never split apart - bounds cost, not how much of the conversation is stored (default: `40`)
+- **chat_max_tool_rounds** - Maximum model round trips (completions) allowed within one turn before Predbat stops and asks you to continue. Every tool call the model makes inside one round trip still runs - this bounds round trips, not tool calls (default: `32`)
+- **chat_max_history** - Maximum recent messages sent to the model each turn, trimmed at a user-message boundary so a tool call and its reply are never split apart - bounds cost, not how much of the conversation is stored. `0` (the default) means unlimited - the whole conversation is sent every turn (default: `0`)
 - **chat_max_conversations** - Maximum conversations kept; the least recently updated are pruned once you go over this (default: `20`)
 - **chat_expiry_days** - Days of inactivity before a conversation's stored copy expires (default: `30`)
-- **chat_turn_timeout** - Seconds a single reply is allowed to run before Predbat stops it (default: `300`)
+- **chat_turn_timeout** - Seconds a whole turn is allowed to run, across every round trip, before Predbat stops it (default: `1800`)
+- **chat_request_timeout** - Seconds a single completion request is allowed to run before it is treated as hung - bounds one request, not the whole turn (default: `300`)
 - **chat_fetch_allowlist** - Hosts the agent's `fetch_url` tool is allowed to reach, replacing rather than extending the default list (default: `springfall2008.github.io`, `github.com`, `raw.githubusercontent.com`)
 
 Two switches also control the chat agent's behaviour once it is running: **switch.predbat_chat_confirm_writes** (default on) holds every configuration change or plan override the agent proposes for your approval before it runs, and **switch.predbat_chat_web_search** (default off) lets the model search the web through OpenRouter's plugin, which costs roughly $0.001-0.015 per request.

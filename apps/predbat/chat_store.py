@@ -64,8 +64,15 @@ def trim_history(messages, max_history, log=None):
     400 - every tool_call_id must have its tool reply present. Walking back to a user message
     can keep slightly more than max_history, which is the right trade: the cap exists to bound
     cost, and a few extra messages is cheaper than a failed turn.
+
+    max_history <= 0 (0 is the shipped default) means unlimited: the whole conversation is
+    returned untrimmed, with no scheme that rewrites or blanks older messages - doing that would
+    change history bytes that are supposed to stay stable and invalidate the prompt cache from
+    that point on, costing more than the trim would ever save. A tool-using exchange is four
+    messages (user, assistant with tool_calls, tool, assistant), so the old default of 40 was only
+    ten to twelve exchanges - too short for a long diagnostic session, hence unlimited by default.
     """
-    if len(messages) <= max_history:
+    if max_history <= 0 or len(messages) <= max_history:
         return list(messages)
     index = len(messages) - max_history
     while index >= 0 and messages[index].get("role") != "user":
@@ -166,7 +173,17 @@ class ConversationStore:
         """Create a conversation, prune past the cap, and return the new id."""
         now = datetime.now(timezone.utc).isoformat()
         cid = secrets.token_hex(8)
-        entry = {"id": cid, "title": NEW_CONVERSATION_TITLE, "created": now, "updated": now, "deleted": False, "model": model, "message_count": 0, "usage_total": {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0, "cached_tokens": 0}}
+        entry = {
+            "id": cid,
+            "title": NEW_CONVERSATION_TITLE,
+            "created": now,
+            "updated": now,
+            "deleted": False,
+            "model": model,
+            "message_count": 0,
+            "usage_total": {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0, "cached_tokens": 0},
+            "last_prompt_tokens": 0,
+        }
         with self.lock:
             self.index[cid] = entry
             self.dirty.add(cid)
@@ -310,6 +327,14 @@ class ConversationStore:
         of its nested prompt_tokens_details via extract_cached_tokens(), the same helper chat.py
         uses for the per-turn 'usage' event, so the running total and the event can never disagree
         about what counts as a cache hit.
+
+        entry["last_prompt_tokens"] is set, not accumulated: it always holds the prompt_tokens of
+        the most recent completion, overwritten on every call rather than summed the way
+        usage_total is. That is deliberate - usage_total answers "what has this conversation cost
+        in total", while last_prompt_tokens answers "how large is the request I am sending right
+        now", which the Chat tab's context-size footer shows against the model's context_length.
+        Reading usage_total.prompt_tokens for that instead would grow forever across turns and
+        answer the wrong question - see chat.py's module docstring and _turn_loop's 'usage' event.
         """
         with self.lock:
             entry = self.index.get(cid)
@@ -319,6 +344,7 @@ class ConversationStore:
             for key in ("prompt_tokens", "completion_tokens", "cost"):
                 total[key] = total.get(key, 0) + (usage.get(key) or 0)
             total["cached_tokens"] = total.get("cached_tokens", 0) + extract_cached_tokens(usage)
+            entry["last_prompt_tokens"] = usage.get("prompt_tokens") or 0
             self.dirty.add(cid)
 
     async def delete(self, cid):

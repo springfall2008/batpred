@@ -434,6 +434,80 @@ def test_history_snapshot_and_cursor_do_not_lose_a_concurrent_message(my_predbat
     return failed
 
 
+def test_history_route_reports_last_prompt_tokens(my_predbat):
+    """/chat/history surfaces last_prompt_tokens for the Chat tab's context-size footer, as a
+    field distinct from usage_total - which is the cumulative total across every turn. The store
+    stand-in reports two different numbers for the two fields (4000 vs usage_total's 5000) so a
+    handler that read the wrong one - or fell back to usage_total.prompt_tokens - would fail this
+    rather than pass by coincidence.
+    """
+    failed = False
+    print("**** Testing /chat/history reports last_prompt_tokens ****")
+
+    class RichAgent:
+        """An agent stand-in whose store reports usage_total and last_prompt_tokens distinctly."""
+
+        active = None
+
+        class store:
+            """A store stand-in with a conversation carrying two different usage figures."""
+
+            @staticmethod
+            def get_meta(cid):
+                """Resolve the one known conversation, with usage_total and last_prompt_tokens deliberately different."""
+                return {"id": cid, "title": "known", "model": "test-model", "usage_total": {"cost": 0.5, "prompt_tokens": 5000}, "last_prompt_tokens": 4000} if cid == "aaaabbbbccccdddd" else None
+
+            @staticmethod
+            async def snapshot(cid):
+                """Return an empty transcript - this test only cares about the usage fields."""
+                return []
+
+        @staticmethod
+        async def run_on_agent_loop(coro):
+            """Await the coroutine inline, standing in for the real cross-loop marshalling."""
+            return await coro
+
+        @staticmethod
+        def events_since(cursor, conversation_id):
+            """Return no events and cursor 0, as a freshly created conversation would."""
+            return [], 0, False
+
+    page = _make_web(my_predbat, agent=RichAgent()).chat_page
+    response = asyncio.run(page.html_chat_history(FakeRequest(query={"conversation": "aaaabbbbccccdddd"})))
+    if response.status != 200:
+        print("ERROR: history returned {}, expected 200".format(response.status))
+        return True
+    body = json.loads(response.text)
+    if body.get("last_prompt_tokens") != 4000:
+        print("ERROR: /chat/history reported last_prompt_tokens={}, expected 4000 - distinct from usage_total.prompt_tokens=5000, which it must not fall back to".format(body.get("last_prompt_tokens")))
+        failed = True
+    if body.get("usage_total", {}).get("prompt_tokens") != 5000:
+        print("ERROR: usage_total must still be reported as-is: {}".format(body.get("usage_total")))
+        failed = True
+
+    # A conversation predating this feature has no last_prompt_tokens key at all - the route must
+    # default it to 0 rather than raising or reporting None.
+    class LegacyAgent(RichAgent):
+        """An agent stand-in whose conversation has no last_prompt_tokens key at all."""
+
+        class store(RichAgent.store):
+            """A store stand-in returning a conversation saved before last_prompt_tokens existed."""
+
+            @staticmethod
+            def get_meta(cid):
+                """Resolve the one known conversation, with no last_prompt_tokens key at all."""
+                return {"id": cid, "title": "legacy", "model": "test-model", "usage_total": {"cost": 0.1}}
+
+    legacy_page = _make_web(my_predbat, agent=LegacyAgent()).chat_page
+    legacy_response = asyncio.run(legacy_page.html_chat_history(FakeRequest(query={"conversation": "aaaabbbbccccdddd"})))
+    legacy_body = json.loads(legacy_response.text)
+    if legacy_body.get("last_prompt_tokens") != 0:
+        print("ERROR: a conversation with no stored last_prompt_tokens should default to 0, got {}".format(legacy_body.get("last_prompt_tokens")))
+        failed = True
+
+    return failed
+
+
 def test_sse_framing(my_predbat):
     """Events are framed with id/event/data lines and JSON-encoded payloads."""
     failed = False
@@ -717,7 +791,7 @@ def test_chat_page_assembles_real_content(my_predbat):
         failed = True
 
     body = web_chat.get_chat_body()
-    for element_id in ["chat-sidebar", "chat-list", "chat-new", "chat-banner", "chat-transcript", "chat-composer", "chat-input", "chat-stop", "chat-footer", "chat-model", "chat-turn-usage", "chat-total-cost", "chat-privacy"]:
+    for element_id in ["chat-sidebar", "chat-list", "chat-new", "chat-banner", "chat-transcript", "chat-composer", "chat-input", "chat-stop", "chat-footer", "chat-model", "chat-turn-usage", "chat-context-usage", "chat-total-cost", "chat-privacy"]:
         if element_id not in body:
             print("ERROR: get_chat_body() is missing #{}".format(element_id))
             failed = True
@@ -961,7 +1035,7 @@ def test_model_catalogue(my_predbat):
 
     async def fake_catalogue():
         """Return a catalogue with one tool-capable model and one without."""
-        return {"data": [{"id": "good/model", "name": "Good", "supported_parameters": ["tools", "temperature"]}, {"id": "bad/model", "name": "Bad", "supported_parameters": ["temperature"]}]}
+        return {"data": [{"id": "good/model", "name": "Good", "supported_parameters": ["tools", "temperature"], "context_length": 1000000}, {"id": "bad/model", "name": "Bad", "supported_parameters": ["temperature"]}]}
 
     agent._fetch_model_catalogue = fake_catalogue
     models = asyncio.run(agent.list_models())
@@ -976,6 +1050,14 @@ def test_model_catalogue(my_predbat):
         print("ERROR: the apps.yaml model must always be offered, even when absent from the catalogue")
         failed = True
 
+    by_id = {entry["id"]: entry for entry in models}
+    if by_id["good/model"].get("context_length") != 1000000:
+        print("ERROR: context_length was not carried through list_models() for a catalogue entry that has one: {}".format(by_id["good/model"]))
+        failed = True
+    if by_id["configured/model"].get("context_length") is not None:
+        print("ERROR: the apps.yaml fallback model (absent from the catalogue) should have context_length=None, not a guessed value: {}".format(by_id["configured/model"]))
+        failed = True
+
     async def broken_catalogue():
         """Simulate an unreachable catalogue."""
         return None
@@ -984,6 +1066,9 @@ def test_model_catalogue(my_predbat):
     fallback = asyncio.run(agent.list_models())
     if [entry["id"] for entry in fallback] != ["configured/model"]:
         print("ERROR: an unreachable catalogue should degrade to the configured model: {}".format(fallback))
+        failed = True
+    if fallback[0].get("context_length") is not None:
+        print("ERROR: the configured model should have context_length=None when the catalogue is unreachable, not a wrong guess: {}".format(fallback[0]))
         failed = True
 
     return failed
@@ -1153,6 +1238,55 @@ def test_model_picker_script_wires_routes_and_persists_selection(my_predbat):
     load_body = _extract_function_body(script, "loadConversationData")
     if load_body is None or "payload.model" not in load_body:
         print("ERROR: loadConversationData() does not read the conversation's stored model back from the history payload")
+        failed = True
+
+    return failed
+
+
+def test_context_counter_uses_the_last_turns_prompt_tokens_not_cumulative(my_predbat):
+    """The context-size footer reads data.prompt_tokens off the live 'usage' event and
+    payload.last_prompt_tokens off /chat/history - never a cumulative field such as
+    usage_total.prompt_tokens or conversation_cost.
+
+    Checked on the actual extracted function bodies (brace-counted, like every other client-script
+    test in this file), not a substring search anywhere in the script - a stray comment mentioning
+    the right field name could otherwise make a wrongly-wired implementation pass.
+    """
+    failed = False
+    print("**** Testing the context counter reads the last turn's prompt_tokens, not a cumulative field ****")
+    script = web_chat.get_chat_script()
+
+    if "chat-context-usage" not in script:
+        print("ERROR: the client script never touches #chat-context-usage")
+        return True
+
+    usage_body = _extract_function_body(script, "renderUsageEvent")
+    if usage_body is None or "renderContextUsage(data.prompt_tokens)" not in usage_body:
+        print("ERROR: renderUsageEvent() does not feed this completion's own prompt_tokens to renderContextUsage(): {!r}".format(usage_body))
+        failed = True
+
+    total_body = _extract_function_body(script, "renderConversationTotal")
+    if total_body is None or "renderContextUsage(lastPromptTokens)" not in total_body:
+        print("ERROR: renderConversationTotal() does not feed the persisted last_prompt_tokens to renderContextUsage(): {!r}".format(total_body))
+        failed = True
+
+    context_body = _extract_function_body(script, "renderContextUsage")
+    if context_body is None:
+        print("ERROR: could not find a renderContextUsage() function to inspect")
+        return True
+    if "usage_total" in context_body or "conversation_cost" in context_body or "conversationCost" in context_body:
+        print("ERROR: renderContextUsage() reads a cumulative field directly, rather than only the value it was passed: {!r}".format(context_body))
+        failed = True
+    if ".innerHTML" in context_body:
+        print("ERROR: renderContextUsage() touches innerHTML - it must only ever use textContent: {!r}".format(context_body))
+        failed = True
+    if "textContent" not in context_body:
+        print("ERROR: renderContextUsage() never sets textContent, so it cannot actually update the footer")
+        failed = True
+
+    history_body = _extract_function_body(script, "renderHistory")
+    if history_body is None or "renderConversationTotal(payload.usage_total, payload.last_prompt_tokens)" not in history_body:
+        print("ERROR: renderHistory() does not pass payload.last_prompt_tokens through to renderConversationTotal(): {!r}".format(history_body))
         failed = True
 
     return failed
@@ -1756,6 +1890,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_delete_refuses_the_active_conversation(my_predbat)
     failed |= test_history_reads_via_snapshot_not_get_messages(my_predbat)
     failed |= test_history_snapshot_and_cursor_do_not_lose_a_concurrent_message(my_predbat)
+    failed |= test_history_route_reports_last_prompt_tokens(my_predbat)
     failed |= test_sse_framing(my_predbat)
     failed |= test_markdown_escapes_before_transforming(my_predbat)
     failed |= test_markdown_tables_render_as_real_tables_with_scroll_wrapper(my_predbat)
@@ -1774,6 +1909,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_model_catalogue(my_predbat)
     failed |= test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_predbat)
     failed |= test_model_picker_script_wires_routes_and_persists_selection(my_predbat)
+    failed |= test_context_counter_uses_the_last_turns_prompt_tokens_not_cumulative(my_predbat)
     failed |= test_stop_button_wired_to_cancel_with_turn_id(my_predbat)
     failed |= test_html_chat_cancel_requires_the_running_turn_id(my_predbat)
     failed |= test_chat_status_route(my_predbat)
