@@ -13,6 +13,15 @@ Presents Predbat's tools directly to an OpenRouter-served model as function-call
 runs the agentic loop. Deliberately holds no loop-bound state: the turn itself runs on whichever
 event loop invoked it, which in practice is the web component's, while this component's own
 thread only flushes and prunes. See spec section 3.
+
+Prompt caching only ever helps a request whose prefix is byte-identical to one already seen -
+OpenAI, DeepSeek, Grok, Groq and Gemini 2.5 cache such a prefix automatically once it is stable;
+Anthropic and Qwen need an explicit cache_control breakpoint this component does not send, so a
+caching provider from that first group is what actually benefits here. That is why the system
+prompt is built once per conversation and stored verbatim rather than rebuilt from live state on
+every turn - see build_system_prompt() and ChatAgent._frozen_system_prompt() - and why the one
+instruction that still varies within a turn (the title reminder) is appended to that turn's user
+message instead of folded into the prompt: see build_messages() and append_title_instruction().
 """
 
 import aiohttp
@@ -25,7 +34,7 @@ from datetime import datetime
 
 from agent_tools import TOOL_DEFS, PredbatTools, openai_tool_list
 from component_base import ComponentBase
-from chat_store import ConversationStore, NEW_CONVERSATION_TITLE, derive_title, trim_history
+from chat_store import ConversationStore, NEW_CONVERSATION_TITLE, derive_title, extract_cached_tokens, trim_history
 from chat_tools import CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_source, search_docs, search_source
 
 EVENT_BUFFER_MAX = 2000
@@ -132,9 +141,13 @@ class ChatRequestError(RuntimeError):
 def build_snapshot(base):
     """Render a compact description of the live system for the system prompt.
 
-    Rebuilt every turn from base state rather than stored with the conversation, so a restored
-    conversation is never anchored to a stale picture. Everything deeper than this stays behind a
-    tool call, which is what keeps the per-turn cost bounded.
+    A pure read of base's current state - this function itself keeps nothing and always reflects
+    whatever is true when it is called. build_system_prompt() is the only caller that matters for
+    a real turn, and it calls this exactly once per conversation, at the moment the conversation's
+    first turn runs, then stores the result; see that function and the module docstring for why a
+    frozen, byte-identical prompt is what actually makes caching work, and its caveat text for how
+    a model is told these figures are a snapshot rather than live. Everything deeper than this
+    stays behind a tool call, which is what keeps the per-turn cost bounded.
     """
 
     def arg(name, default=None):
@@ -148,7 +161,7 @@ def build_snapshot(base):
         """Read one attribute off the base instance."""
         return getattr(base, name, default)
 
-    lines = ["Current Predbat state:"]
+    lines = ["Predbat state as it was when this conversation started:"]
     lines.append("- Time now: {}".format(state("now_utc", datetime.now())))
     lines.append("- Predbat version: {}".format(state("this_version", "unknown")))
     lines.append("- Status: {}".format(state("current_status", "unknown")))
@@ -175,6 +188,76 @@ def build_snapshot(base):
         lines.append("- Next planned export window: {}".format(exports[0]))
 
     return "\n".join(lines)
+
+
+# Filled in with build_system_prompt()'s captured_at, formatted for a person rather than an
+# isoformat string - "09:15 on 28 August 2026" - so the caveat reads naturally inline. Deliberately
+# spells out both that the figures are frozen and where to get a live one instead: a model holding
+# a stale-but-plausible number in its own frozen context, told nothing more than "may be out of
+# date", tends to quote it anyway rather than re-checking - see build_system_prompt()'s docstring.
+SYSTEM_PROMPT_SNAPSHOT_CAVEAT = (
+    "The figures above were captured when this conversation started, at {when}, and are frozen for the "
+    "rest of its lifetime - they are never refreshed on later turns, however long this conversation runs. "
+    "Treat them only as a starting point, not as live data: they may already be wrong. Before stating a "
+    "current SOC, rate, status or window, call get_status or get_plan and answer from what the tool "
+    "returns, not from the snapshot above."
+)
+
+
+def build_system_prompt(base):
+    """Build a conversation's frozen system prompt, and the moment its snapshot was captured.
+
+    Called exactly once per conversation, when its first turn runs - see
+    ChatAgent._frozen_system_prompt(), which stores the result and reuses it verbatim on every
+    later turn instead of calling this again. That is what keeps the request's stable prefix
+    byte-identical across turns, which is what actually lets a caching-capable provider (see the
+    module docstring) hit its cache; rebuilding this fresh every turn, the way build_snapshot()
+    alone used to be used, guarantees a different prefix on every single request instead.
+
+    The obvious risk of freezing a live snapshot is a model later quoting a stale figure as
+    current - SYSTEM_PROMPT_SNAPSHOT_CAVEAT exists specifically to close that: it names the exact
+    capture time and points at get_status/get_plan as the source of truth, so the model has no
+    excuse to treat a figure it read here as live data.
+
+    Returns (prompt, captured_at): captured_at is exactly the timestamp build_snapshot()'s "Time
+    now" line reports, read once here so the prompt's own caveat can never name a different moment.
+    The caller stores captured_at.isoformat() as the conversation's system_prompt_at.
+    """
+    captured_at = getattr(base, "now_utc", None) or datetime.now()
+    caveat = SYSTEM_PROMPT_SNAPSHOT_CAVEAT.format(when=captured_at.strftime("%H:%M on %d %B %Y"))
+    prompt = "\n\n".join([PRIMER, build_snapshot(base), caveat])
+    return prompt, captured_at
+
+
+# Appended to that turn's user message, never folded into the system prompt - see
+# append_title_instruction() for why, and build_messages() for where this is used.
+TITLE_INSTRUCTION = "\n\nThis conversation has no title yet. Call set_chat_title once, early in your reply, with a short descriptive title of at most 60 characters summarising what the user is asking about."
+
+
+def append_title_instruction(messages):
+    """Return a copy of messages with the title reminder appended to the last user message.
+
+    Placed on the user message rather than folded into the system prompt because the system
+    prompt must stay byte-identical across every turn to remain cacheable (see
+    build_system_prompt() and the module docstring), while this instruction is only relevant until
+    the conversation is titled and so cannot be part of that frozen prefix. Appending it after the
+    stable prefix costs nothing: a caching provider still hits the cache on the unchanged part and
+    only processes what follows it fresh.
+
+    Only the copy handed to the model is touched here - the message actually stored in the
+    conversation must keep the user's own words verbatim, which is build_messages()'s job, not
+    this function's; corrupting the transcript with our own instruction, replayed back on every
+    later turn as if the user had typed it, is exactly the failure that split responsibility
+    avoids. Returns messages unchanged if there is no user message to attach it to, which should
+    not happen in practice - _execute_turn always appends one before the turn loop runs.
+    """
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].get("role") == "user":
+            copied = list(messages)
+            original = copied[index]
+            copied[index] = dict(original, content=(original.get("content") or "") + TITLE_INSTRUCTION)
+            return copied
+    return list(messages)
 
 
 def classify_completion_failure(error):
@@ -391,14 +474,40 @@ class ChatAgent(ComponentBase):
         self.log("Warn: chat turn {} outlived its {}s timeout with no cleanup - releasing the turn slot".format(turn_id, self.turn_timeout))
         self.emit(None, "idle", {})
 
-    def build_messages(self, conversation_id, history):
-        """Assemble the request messages: a freshly built system prompt plus trimmed history."""
+    async def _frozen_system_prompt(self, conversation_id):
+        """Return a conversation's frozen system prompt, building and storing it on first use.
+
+        Every later turn reuses the exact stored string rather than calling build_system_prompt()
+        again - that is the whole point, since a byte-identical prefix is what lets an
+        automatically-caching provider actually cache it (see the module docstring), and a single
+        differing byte defeats that. A conversation with no stored prompt yet - every conversation
+        that predates this feature, plus a brand new one on its very first turn - gets one built
+        from the live snapshot at this exact moment and stored; those are the same case, so there
+        is no separate migration path to write.
+        """
+        stored, _ = await self.store.get_system_prompt(conversation_id)
+        if stored is not None:
+            return stored
+        prompt, captured_at = build_system_prompt(self.base)
+        self.store.set_system_prompt(conversation_id, prompt, captured_at.isoformat())
+        return prompt
+
+    async def build_messages(self, conversation_id, history):
+        """Assemble the request messages: the conversation's frozen system prompt plus history.
+
+        The system prompt itself never varies once a conversation exists - see
+        _frozen_system_prompt() - so the only thing that can still change turn to turn is the
+        title reminder, which is why it is appended to the outgoing copy of the last user message
+        (append_title_instruction()) rather than folded in here. Everything before that point is
+        therefore byte-identical across every turn of one conversation, which is the actual
+        cacheable prefix a provider sees.
+        """
+        system_prompt = await self._frozen_system_prompt(conversation_id)
+        trimmed = trim_history(history, self.max_history, log=self.log)
         meta = self.store.get_meta(conversation_id) or {}
-        parts = [PRIMER, "", build_snapshot(self.base)]
         if meta.get("title", NEW_CONVERSATION_TITLE) == NEW_CONVERSATION_TITLE:
-            parts.append("")
-            parts.append("This conversation has no title yet. Call set_chat_title once, early in your reply, with a short descriptive title of at most 60 characters summarising what the user is asking about.")
-        return [{"role": "system", "content": "\n".join(parts)}] + trim_history(history, self.max_history, log=self.log)
+            trimmed = append_title_instruction(trimmed)
+        return [{"role": "system", "content": system_prompt}] + trimmed
 
     def tool_payload(self):
         """Return the tool list offered to the model: the shared tools plus the chat-only ones."""
@@ -811,23 +920,27 @@ class ChatAgent(ComponentBase):
                 self.emit(conversation_id, "error", {"message": "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)})
                 return
             history = await self.store.get_messages(conversation_id)
-            message, usage, sources = await self._run_completion_with_retry(conversation_id, self.build_messages(conversation_id, history), model)
+            messages = await self.build_messages(conversation_id, history)
+            message, usage, sources = await self._run_completion_with_retry(conversation_id, messages, model)
             if usage:
                 self.store.add_usage(conversation_id, usage)
                 total = (self.store.get_meta(conversation_id) or {}).get("usage_total", {})
-                self.emit(conversation_id, "usage", {"prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0), "cost": usage.get("cost", 0), "conversation_cost": total.get("cost", 0)})
-            if not message.get("content") and not message.get("tool_calls"):
-                # Neither an answer nor a tool call is an anomaly whatever produced it - most
-                # plausibly a reasoning model that spent its whole turn on reasoning and never
-                # emitted a visible answer, which is exactly the shape a live OpenRouter capture
-                # showed: content "" on every chunk, no tool_calls, finish_reason "tool_calls" with
-                # none actually sent. Storing this message anyway is how the original bug replayed
-                # silently forever after - it goes back to the model as junk history on the next
-                # turn instead of being surfaced here, once, as an error the user can act on.
-                reasoned = bool(message.get("reasoning_details") or message.get("reasoning"))
-                detail = " It produced only reasoning and no visible answer." if reasoned else ""
-                self.emit(conversation_id, "error", {"message": "The model returned no answer and no tool call.{} Try asking again.".format(detail)})
-                return
+                self.emit(
+                    conversation_id,
+                    "usage",
+                    {
+                        "prompt_tokens": usage.get("prompt_tokens", 0),
+                        "completion_tokens": usage.get("completion_tokens", 0),
+                        "cost": usage.get("cost", 0),
+                        "conversation_cost": total.get("cost", 0),
+                        "cached_tokens": extract_cached_tokens(usage),
+                        "conversation_cached_tokens": total.get("cached_tokens", 0),
+                    },
+                )
+            # message is never empty here: _run_completion_with_retry only returns once
+            # is_empty_completion(message) is False, retrying (and eventually raising a
+            # ChatRequestError caught by _execute_turn) for as long as it stays True - see that
+            # function's docstring. A second check here would be unreachable dead code.
             await self.store.append(conversation_id, message)
             self.emit(conversation_id, "assistant", {"text": message.get("content") or "", "sources": sources})
 

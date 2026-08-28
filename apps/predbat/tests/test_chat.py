@@ -17,6 +17,7 @@ import asyncio
 import json
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
@@ -26,11 +27,14 @@ from chat import (
     COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS,
     COMPLETION_RETRY_DELAYS_SECONDS,
     EVENT_BUFFER_MAX,
+    PRIMER,
     STALE_TURN_GRACE_SECONDS,
+    TITLE_INSTRUCTION,
     ChatAgent,
     ChatBusyError,
     ChatRequestError,
     build_snapshot,
+    build_system_prompt,
     classify_completion_failure,
     is_empty_completion,
 )
@@ -182,6 +186,69 @@ def test_build_snapshot(my_predbat):
         failed = True
 
     return failed
+
+
+def test_build_system_prompt(my_predbat):
+    """build_system_prompt() wraps the snapshot with the primer and a caveat naming the capture
+    time and the tools that hold live data, and returns the captured_at it used to write it."""
+    failed = False
+    print("**** Testing build_system_prompt ****")
+    prompt, captured_at = build_system_prompt(my_predbat)
+
+    if not isinstance(captured_at, datetime):
+        print("ERROR: build_system_prompt did not return a datetime as captured_at: {!r}".format(captured_at))
+        return True
+    when = captured_at.strftime("%H:%M on %d %B %Y")
+    if when not in prompt:
+        print("ERROR: the prompt does not name its own capture time {!r}:\n{}".format(when, prompt))
+        failed = True
+    for needle in ("get_status", "get_plan", "captured", "frozen"):
+        if needle not in prompt:
+            print("ERROR: the prompt is missing {!r}, which the staleness caveat is supposed to say:\n{}".format(needle, prompt))
+            failed = True
+    if PRIMER not in prompt:
+        print("ERROR: the primer is missing from the built system prompt")
+        failed = True
+    if build_snapshot(my_predbat) not in prompt:
+        print("ERROR: the live snapshot is missing from the built system prompt")
+        failed = True
+
+    return failed
+
+
+class _TickingBase:
+    """A minimal base whose now_utc reads a fresh, later timestamp on every access.
+
+    Stands in for a real Predbat base in the cache-stability test below, deliberately instead of
+    my_predbat: my_predbat is a single instance every test in this suite shares, so mutating its
+    now_utc to prove a rebuild would happen would leak into whichever test runs next. This is
+    self-contained and also counts its own reads, which is what lets the test assert not just that
+    two prompts matched (which a coincidence could also produce) but that the second build never
+    consulted the clock at all.
+    """
+
+    prefix = "predbat"
+    args = {}
+
+    def __init__(self):
+        """Start the simulated clock at a fixed moment with no reads yet."""
+        self.reads = 0
+        self._start = datetime(2026, 8, 28, 9, 15, tzinfo=timezone.utc)
+
+    @property
+    def now_utc(self):
+        """Return a timestamp one hour later than the previous read, counting the read."""
+        value = self._start + timedelta(hours=self.reads)
+        self.reads += 1
+        return value
+
+    def get_arg(self, name, default=None, **kwargs):
+        """Return the default for every argument - this fake only cares about the clock."""
+        return default
+
+    def get_ha_config(self, name, default):
+        """Return the default for every config item."""
+        return default, False
 
 
 def test_event_buffer(my_predbat):
@@ -837,16 +904,188 @@ def test_titles(my_predbat):
         print("ERROR: the fallback title is {!r}, expected the collapsed first message".format(title))
         failed = True
 
-    prompts = quiet.fake.payloads[0]["messages"][0]["content"]
-    if "set_chat_title" not in prompts:
-        print("ERROR: the title instruction was missing while the conversation was untitled")
+    system_content = quiet.fake.payloads[0]["messages"][0]["content"]
+    if "set_chat_title" in system_content:
+        print("ERROR: the title instruction leaked into the system prompt, which must stay frozen: {!r}".format(system_content))
+        failed = True
+    user_content = quiet.fake.payloads[0]["messages"][-1]["content"]
+    if "set_chat_title" not in user_content:
+        print("ERROR: the title instruction was missing from the outgoing user message while untitled: {!r}".format(user_content))
         failed = True
 
     titled = _agent_with_fake(my_predbat, _text_response("second turn"))
     titled.store = quiet.store
     asyncio.run(titled.run_turn(cid2, "and my import rate?"))
-    if "set_chat_title" in titled.fake.payloads[0]["messages"][0]["content"]:
-        print("ERROR: the title instruction was still present after the conversation was titled")
+    second_request = titled.fake.payloads[0]["messages"]
+    if any("set_chat_title" in str(message.get("content")) for message in second_request):
+        print("ERROR: the title instruction was still present anywhere in the request after the conversation was titled: {}".format(second_request))
+        failed = True
+
+    return failed
+
+
+def test_title_instruction_reaches_the_model_without_touching_the_stored_message(my_predbat):
+    """The title reminder lands on the copy of the user message sent to the model, and nowhere
+    else - not the system message, and not the message actually stored in the conversation.
+
+    Drives build_messages() directly rather than through a full turn, so this pins the placement
+    at the layer that decides it rather than depending on a particular model response. The
+    stored-message half is the transcript-corruption risk the task called out explicitly: storing
+    the instruction inside the user's own message would replay it back to the model as if the user
+    had typed it, on every later turn, forever.
+    """
+    failed = False
+    print("**** Testing the title instruction reaches only the outgoing user message ****")
+    agent = _make_agent(my_predbat)
+    cid = asyncio.run(agent.store.create())
+    original_text = "why is the battery discharging right now?"
+    asyncio.run(agent.store.append(cid, {"role": "user", "content": original_text}))
+
+    history = asyncio.run(agent.store.get_messages(cid))
+    messages = asyncio.run(agent.build_messages(cid, history))
+
+    if TITLE_INSTRUCTION in messages[0]["content"]:
+        print("ERROR: the title instruction appeared in the system message: {!r}".format(messages[0]["content"]))
+        failed = True
+    if TITLE_INSTRUCTION not in messages[-1]["content"]:
+        print("ERROR: the title instruction did not reach the outgoing user message: {!r}".format(messages[-1]["content"]))
+        failed = True
+    if not messages[-1]["content"].startswith(original_text):
+        print("ERROR: the outgoing user message lost or reordered the user's own words: {!r}".format(messages[-1]["content"]))
+        failed = True
+
+    stored = asyncio.run(agent.store.get_messages(cid))
+    if stored[-1]["content"] != original_text:
+        print("ERROR: the stored user message was corrupted with the title instruction: {!r}".format(stored[-1]["content"]))
+        failed = True
+    if stored[-1] is messages[-1]:
+        print("ERROR: build_messages() handed back the exact stored message object rather than a copy - mutating the outgoing payload would corrupt history")
+        failed = True
+
+    return failed
+
+
+def test_system_prompt_is_frozen_byte_identical_across_turns_including_a_titling_turn(my_predbat):
+    """The system prompt is captured once per conversation and replayed verbatim afterwards -
+    character-for-character identical, not merely 'the same snapshot' - across a turn that titles
+    the conversation, which is the second, easy-to-miss source of prefix instability alongside the
+    live snapshot itself (see the module docstring). Asserting only that both prompts mention the
+    same figures would pass even if the prompt were silently rebuilt every turn and the underlying
+    state simply had not changed between two calls in the same test process; this closes that gap
+    two ways at once - _TickingBase's now_utc genuinely differs on every read, and the number of
+    reads is asserted to stay the same after the second turn as it was after the first, so a
+    rebuild cannot hide behind a lucky coincidence.
+
+    Mutation-checked by hand: temporarily changing ChatAgent._frozen_system_prompt() to call
+    build_system_prompt() unconditionally, rather than returning the stored value once one exists,
+    turns this test red immediately (system_1 != system_2, and the read count climbs again on the
+    second turn) - see the task report for the captured output.
+    """
+    failed = False
+    print("**** Testing the system prompt is byte-identical across turns, including a titling turn ****")
+    agent = _make_agent(my_predbat)
+    agent.base = _TickingBase()
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.store.append(cid, {"role": "user", "content": "why is it charging?"}))
+    messages_1 = asyncio.run(agent.build_messages(cid, asyncio.run(agent.store.get_messages(cid))))
+    system_1 = messages_1[0]["content"]
+    reads_after_turn_1 = agent.base.reads
+    if not reads_after_turn_1:
+        print("ERROR: test setup did not consult the ticking clock at all while building the first prompt")
+        return True
+
+    agent.store.set_title(cid, "Why the battery is charging")
+    asyncio.run(agent.store.append(cid, {"role": "assistant", "content": "because rates are low right now"}))
+    asyncio.run(agent.store.append(cid, {"role": "user", "content": "and when does it stop?"}))
+    messages_2 = asyncio.run(agent.build_messages(cid, asyncio.run(agent.store.get_messages(cid))))
+    system_2 = messages_2[0]["content"]
+
+    if system_1 != system_2:
+        print("ERROR: the system prompt is not byte-identical across turns - the request prefix is not cacheable")
+        print("turn 1: {!r}".format(system_1))
+        print("turn 2: {!r}".format(system_2))
+        failed = True
+    # Not merely "the two prompts matched" (which a rebuild could produce by coincidence if
+    # nothing else in the fake base had changed) - the clock behind the snapshot must genuinely
+    # not have been touched again on the second turn, which only holds if the stored prompt was
+    # reused rather than rebuilt.
+    if agent.base.reads != reads_after_turn_1:
+        print("ERROR: now_utc was read again on the second turn ({} reads, was {} after turn 1) - the prompt was rebuilt instead of reused".format(agent.base.reads, reads_after_turn_1))
+        failed = True
+
+    return failed
+
+
+def test_frozen_system_prompt_is_built_once_and_reused_not_rebuilt(my_predbat):
+    """A conversation with no stored system prompt - every conversation created before this
+    feature existed, and any brand new one before its first turn runs - gets one built and stored
+    on the next call, and every call after that reuses the stored value rather than rebuilding it.
+
+    There is deliberately no separate migration code path (see _frozen_system_prompt()'s
+    docstring): 'no prompt yet' and 'first turn of a new conversation' are the same case, and a
+    freshly created conversation already exercises it. Reuse is proven the same way the byte-
+    identical test proves it - by swapping in a base whose clock would visibly change the output
+    if it were ever consulted again, and asserting it never is.
+    """
+    failed = False
+    print("**** Testing a conversation with no stored system prompt builds one, then reuses it ****")
+    agent = _make_agent(my_predbat)
+    cid = asyncio.run(agent.store.create())
+
+    before = asyncio.run(agent.store.get_system_prompt(cid))
+    if before != (None, None):
+        print("ERROR: a freshly created conversation already has a stored system prompt: {}".format(before))
+        failed = True
+
+    first = asyncio.run(agent._frozen_system_prompt(cid))
+    stored_prompt, stored_at = asyncio.run(agent.store.get_system_prompt(cid))
+    if stored_prompt != first or not stored_at:
+        print("ERROR: the built prompt was not stored: prompt matches stored={}, stored_at={!r}".format(stored_prompt == first, stored_at))
+        failed = True
+
+    agent.base = _TickingBase()
+    second = asyncio.run(agent._frozen_system_prompt(cid))
+    if second != first:
+        print("ERROR: the second call rebuilt the prompt instead of reusing the stored one: {!r} != {!r}".format(second, first))
+        failed = True
+    if agent.base.reads:
+        print("ERROR: the ticking base's clock was read even though the prompt should have come from storage, not been rebuilt: {} reads".format(agent.base.reads))
+        failed = True
+
+    return failed
+
+
+def test_usage_event_and_totals_report_cached_tokens(my_predbat):
+    """OpenRouter's usage.prompt_tokens_details.cached_tokens is surfaced on the 'usage' event for
+    the turn that produced it, and accumulated onto the conversation's usage_total across turns -
+    so a caching hit is something a user can actually observe, not something only assumed to be
+    working once the prefix is stable.
+    """
+    failed = False
+    print("**** Testing cached_tokens is captured on the usage event and the running total ****")
+    usage_1 = {"prompt_tokens": 100, "completion_tokens": 10, "cost": 0.001, "prompt_tokens_details": {"cached_tokens": 80}}
+    usage_2 = {"prompt_tokens": 105, "completion_tokens": 12, "cost": 0.0011, "prompt_tokens_details": {"cached_tokens": 90}}
+    agent = _agent_with_fake(my_predbat, _text_response("first", usage=usage_1), _text_response("second", usage=usage_2))
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "one"))
+    usage_events = [event for event in agent.events_since(0, cid)[0] if event["type"] == "usage"]
+    if not usage_events or usage_events[0]["data"].get("cached_tokens") != 80:
+        print("ERROR: the usage event did not report cached_tokens=80: {}".format(usage_events))
+        return True
+    if usage_events[0]["data"].get("conversation_cached_tokens") != 80:
+        print("ERROR: the usage event's running total did not include this turn's cached tokens: {}".format(usage_events[0]["data"]))
+        failed = True
+    meta = agent.store.get_meta(cid)
+    if meta["usage_total"].get("cached_tokens") != 80:
+        print("ERROR: the conversation's usage_total did not accumulate cached_tokens: {}".format(meta["usage_total"]))
+        failed = True
+
+    asyncio.run(agent.run_turn(cid, "two"))
+    meta_after = agent.store.get_meta(cid)
+    if meta_after["usage_total"].get("cached_tokens") != 170:
+        print("ERROR: cached_tokens did not accumulate across turns: expected 170, got {}".format(meta_after["usage_total"].get("cached_tokens")))
         failed = True
 
     return failed
@@ -1910,6 +2149,7 @@ def run_chat_tests(my_predbat):
     failed |= test_component_gating(my_predbat)
     failed |= test_component_gating_end_to_end(my_predbat)
     failed |= test_build_snapshot(my_predbat)
+    failed |= test_build_system_prompt(my_predbat)
     failed |= test_event_buffer(my_predbat)
     failed |= test_pending_conversations_is_lock_guarded(my_predbat)
     failed |= test_pending_conversations_survives_concurrent_mutation(my_predbat)
@@ -1922,6 +2162,10 @@ def run_chat_tests(my_predbat):
     failed |= test_tool_call_cap(my_predbat)
     failed |= test_tool_failures_are_results(my_predbat)
     failed |= test_titles(my_predbat)
+    failed |= test_title_instruction_reaches_the_model_without_touching_the_stored_message(my_predbat)
+    failed |= test_system_prompt_is_frozen_byte_identical_across_turns_including_a_titling_turn(my_predbat)
+    failed |= test_frozen_system_prompt_is_built_once_and_reused_not_rebuilt(my_predbat)
+    failed |= test_usage_event_and_totals_report_cached_tokens(my_predbat)
     failed |= test_execute_turn_preserves_a_slot_claimed_by_a_later_turn(my_predbat)
     failed |= test_busy_rejects_a_second_turn(my_predbat)
     failed |= test_search_source_runs_off_the_loop(my_predbat)

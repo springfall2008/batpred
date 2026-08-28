@@ -17,7 +17,7 @@ storage delete that does not exist, and history trimming never orphaning a tool 
 import asyncio
 from datetime import datetime, timezone
 
-from chat_store import BODY_CACHE_SIZE, NEW_CONVERSATION_TITLE, TITLE_MAX_LENGTH, ConversationStore, derive_title, trim_history
+from chat_store import BODY_CACHE_SIZE, NEW_CONVERSATION_TITLE, TITLE_MAX_LENGTH, ConversationStore, derive_title, extract_cached_tokens, trim_history
 
 
 class FakeStorage:
@@ -373,6 +373,121 @@ def test_metadata_only_flush_does_not_clobber_body(my_predbat):
     return failed
 
 
+def test_system_prompt_migrates_from_a_body_saved_before_it_existed(my_predbat):
+    """A body saved before system_prompt existed has no such key at all; get_system_prompt() reads
+    that as (None, None) - exactly the same 'not frozen yet' signal a brand new conversation
+    starts with - and once one is set it round-trips through a save and a fresh store reload.
+
+    There is deliberately no special-cased migration branch anywhere in ConversationStore for
+    this: a dict.get() on a missing key already returns None, which is the whole story. This test
+    pins that the old-format shape (no key at all, not the key present with a None value someone
+    might have mis-implemented) actually goes through get() cleanly.
+    """
+    failed = False
+    print("**** Testing system_prompt migration from a body saved before it existed ****")
+    storage = FakeStorage()
+    store = _store(storage)
+    asyncio.run(store.load_index())
+    cid = asyncio.run(store.create())
+    asyncio.run(store.append(cid, {"role": "user", "content": "hello from before caching existed"}))
+    asyncio.run(store.flush())
+
+    # Overwrite the just-saved body with the old, pre-system_prompt shape: no system_prompt or
+    # system_prompt_at key at all, exactly what every conversation saved before this feature has.
+    key = ("chat", "conv_{}".format(cid))
+    old_shaped = dict(storage.data[key])
+    old_shaped.pop("system_prompt", None)
+    old_shaped.pop("system_prompt_at", None)
+    storage.data[key] = old_shaped
+
+    reopened = _store(storage)
+    asyncio.run(reopened.load_index())
+    before = asyncio.run(reopened.get_system_prompt(cid))
+    if before != (None, None):
+        print("ERROR: an old-format body should read as no stored prompt, got {}".format(before))
+        failed = True
+
+    if not reopened.set_system_prompt(cid, "a frozen prompt", "2026-08-28T09:15:00+00:00"):
+        print("ERROR: set_system_prompt() refused a conversation whose body was just loaded")
+        return True
+    asyncio.run(reopened.flush(cid))
+
+    reopened_again = _store(storage)
+    asyncio.run(reopened_again.load_index())
+    after = asyncio.run(reopened_again.get_system_prompt(cid))
+    if after != ("a frozen prompt", "2026-08-28T09:15:00+00:00"):
+        print("ERROR: the frozen prompt did not survive a save and reload: {}".format(after))
+        failed = True
+
+    return failed
+
+
+def test_system_prompt_survives_body_eviction(my_predbat):
+    """A dirty system prompt is flushed alongside its body when the LRU evicts it, not lost or
+    silently reset - exercising _cache_body()'s eviction path, which has to read the prompt out of
+    self.system_prompts before popping it, since _save_body can no longer look it up once it has.
+    """
+    failed = False
+    print("**** Testing a system prompt survives being evicted from the body cache ****")
+    storage = FakeStorage()
+    store = _store(storage)
+    asyncio.run(store.load_index())
+    cid = asyncio.run(store.create())
+    asyncio.run(store.append(cid, {"role": "user", "content": "keep my prompt too"}))
+    store.set_system_prompt(cid, "frozen before eviction", "2026-08-28T09:15:00+00:00")
+
+    for _ in range(BODY_CACHE_SIZE):
+        other = asyncio.run(store.create())
+        asyncio.run(store.get_messages(other))
+    if cid in store.bodies:
+        print("ERROR: test setup failed to evict {} from the body cache".format(cid))
+        return True
+
+    reloaded_prompt, reloaded_at = asyncio.run(store.get_system_prompt(cid))
+    if reloaded_prompt != "frozen before eviction" or reloaded_at != "2026-08-28T09:15:00+00:00":
+        print("ERROR: the system prompt did not survive eviction: {!r}, {!r}".format(reloaded_prompt, reloaded_at))
+        failed = True
+
+    return failed
+
+
+def test_set_system_prompt_requires_a_cached_body(my_predbat):
+    """set_system_prompt() refuses an id whose body is not currently cached, rather than caching a
+    prompt with no message list alongside it to be saved - the same shape of guard
+    _save_body()'s metadata-only path already relies on for rename/model/usage."""
+    failed = False
+    print("**** Testing set_system_prompt refuses an uncached conversation ****")
+    storage = FakeStorage()
+    store = _store(storage)
+    asyncio.run(store.load_index())
+
+    if store.set_system_prompt("deadbeefdeadbeef", "should not stick", "2026-08-28T09:15:00+00:00"):
+        print("ERROR: set_system_prompt() succeeded for an id with no cached body")
+        failed = True
+
+    return failed
+
+
+def test_extract_cached_tokens(my_predbat):
+    """extract_cached_tokens() reads the nested OpenRouter shape and tolerates every field being
+    absent, rather than raising on a provider that does not report caching at all."""
+    failed = False
+    print("**** Testing extract_cached_tokens ****")
+    cases = [
+        ({"prompt_tokens_details": {"cached_tokens": 42}}, 42),
+        ({"prompt_tokens_details": {}}, 0),
+        ({}, 0),
+        ({"prompt_tokens_details": None}, 0),
+    ]
+    for usage, expected in cases:
+        got = extract_cached_tokens(usage)
+        if got != expected:
+            print("ERROR: extract_cached_tokens({!r}) returned {!r}, expected {!r}".format(usage, got, expected))
+            failed = True
+
+    return failed
+
+
 def test_add_usage_on_deleted_conversation_clears_dirty(my_predbat):
     """add_usage() on a deleted conversation still dirties it, but flush() clears it, not retries forever."""
     failed = False
@@ -421,6 +536,31 @@ def test_get_meta_deep_copies_usage_total(my_predbat):
     return failed
 
 
+def test_add_usage_accumulates_cached_tokens(my_predbat):
+    """add_usage() accumulates cached_tokens out of the nested prompt_tokens_details shape, the
+    same way it already accumulates prompt_tokens, completion_tokens and cost - across several
+    calls, and tolerating a usage object that does not report caching at all."""
+    failed = False
+    print("**** Testing add_usage accumulates cached_tokens ****")
+    storage = FakeStorage()
+    store = _store(storage)
+    asyncio.run(store.load_index())
+    cid = asyncio.run(store.create())
+
+    store.add_usage(cid, {"prompt_tokens": 100, "completion_tokens": 10, "cost": 0.001, "prompt_tokens_details": {"cached_tokens": 80}})
+    store.add_usage(cid, {"prompt_tokens": 50, "completion_tokens": 5, "cost": 0.0005})
+
+    total = store.get_meta(cid)["usage_total"]
+    if total.get("cached_tokens") != 80:
+        print("ERROR: expected cached_tokens=80 after one usage object reported caching and one did not, got {}".format(total))
+        failed = True
+    if total.get("prompt_tokens") != 150:
+        print("ERROR: cached_tokens tracking broke the existing prompt_tokens accumulation: {}".format(total))
+        failed = True
+
+    return failed
+
+
 def run_chat_store_tests(my_predbat):
     """Run every conversation store test, returning True if any of them failed."""
     failed = False
@@ -435,6 +575,11 @@ def run_chat_store_tests(my_predbat):
     failed |= test_trim_history_keeps_tool_groups_intact(my_predbat)
     failed |= test_snapshot_is_a_safe_copy(my_predbat)
     failed |= test_metadata_only_flush_does_not_clobber_body(my_predbat)
+    failed |= test_system_prompt_migrates_from_a_body_saved_before_it_existed(my_predbat)
+    failed |= test_system_prompt_survives_body_eviction(my_predbat)
+    failed |= test_set_system_prompt_requires_a_cached_body(my_predbat)
+    failed |= test_extract_cached_tokens(my_predbat)
     failed |= test_add_usage_on_deleted_conversation_clears_dirty(my_predbat)
+    failed |= test_add_usage_accumulates_cached_tokens(my_predbat)
     failed |= test_get_meta_deep_copies_usage_total(my_predbat)
     return failed

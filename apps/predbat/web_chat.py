@@ -1558,15 +1558,30 @@ function handleTitle(data) {
     }
 }
 
+// Cached-token counts are diagnostic (proof prompt caching is actually landing hits, not merely
+// configured), so they are appended modestly in parentheses rather than given their own label -
+// and omitted entirely when zero, since "0 cached" on every turn would just be noise.
 function renderUsageEvent(data) {
-    byId('chat-turn-usage').textContent = 'This turn: ' + (data.prompt_tokens || 0) + ' in / ' + (data.completion_tokens || 0) + ' out - ' + formatCost(data.cost);
-    byId('chat-total-cost').textContent = 'Conversation total: ' + formatCost(data.conversation_cost);
+    var turnText = 'This turn: ' + (data.prompt_tokens || 0) + ' in / ' + (data.completion_tokens || 0) + ' out - ' + formatCost(data.cost);
+    if (data.cached_tokens) {
+        turnText += ' (' + data.cached_tokens + ' cached)';
+    }
+    byId('chat-turn-usage').textContent = turnText;
+    var totalText = 'Conversation total: ' + formatCost(data.conversation_cost);
+    if (data.conversation_cached_tokens) {
+        totalText += ' (' + data.conversation_cached_tokens + ' cached)';
+    }
+    byId('chat-total-cost').textContent = totalText;
 }
 
 function renderConversationTotal(usageTotal) {
     usageTotal = usageTotal || {};
     byId('chat-turn-usage').textContent = '';
-    byId('chat-total-cost').textContent = 'Conversation total: ' + formatCost(usageTotal.cost);
+    var totalText = 'Conversation total: ' + formatCost(usageTotal.cost);
+    if (usageTotal.cached_tokens) {
+        totalText += ' (' + usageTotal.cached_tokens + ' cached)';
+    }
+    byId('chat-total-cost').textContent = totalText;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -31,6 +31,22 @@ BODY_CACHE_SIZE = 5
 TITLE_MAX_LENGTH = 60
 NEW_CONVERSATION_TITLE = "New chat"
 
+# Sentinel distinguishing "no explicit system prompt override was passed" from "the override is
+# genuinely None" (a conversation whose prompt has never been frozen) - see _save_body(), whose
+# normal callers want it read fresh from the system_prompts cache while _cache_body()'s eviction
+# path must pass the value it already popped, even when that value is None.
+_UNSET = object()
+
+
+def extract_cached_tokens(usage):
+    """Return OpenRouter's usage.prompt_tokens_details.cached_tokens, or 0 if absent.
+
+    Shared between ConversationStore.add_usage() (which accumulates it onto a conversation's
+    running total) and chat.py's 'usage' event (which reports it for the turn that just
+    completed), so the two can never read the field two different ways.
+    """
+    return (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
+
 
 def derive_title(text):
     """Turn a message into a conversation title: whitespace collapsed, truncated, never empty."""
@@ -73,6 +89,10 @@ class ConversationStore:
         self.expiry_days = expiry_days
         self.index = OrderedDict()
         self.bodies = OrderedDict()
+        # Mirrors self.bodies key-for-key: an entry exists here exactly when the matching
+        # conversation is cached in self.bodies, populated and evicted together with it (see
+        # _cache_body()) so a lookup never has to ask "loaded, but is the prompt?" separately.
+        self.system_prompts = OrderedDict()
         self.dirty = set()
         self.lock = threading.Lock()
         self.loaded = False
@@ -146,7 +166,7 @@ class ConversationStore:
         """Create a conversation, prune past the cap, and return the new id."""
         now = datetime.now(timezone.utc).isoformat()
         cid = secrets.token_hex(8)
-        entry = {"id": cid, "title": NEW_CONVERSATION_TITLE, "created": now, "updated": now, "deleted": False, "model": model, "message_count": 0, "usage_total": {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0}}
+        entry = {"id": cid, "title": NEW_CONVERSATION_TITLE, "created": now, "updated": now, "deleted": False, "model": model, "message_count": 0, "usage_total": {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0, "cached_tokens": 0}}
         with self.lock:
             self.index[cid] = entry
             self.dirty.add(cid)
@@ -165,8 +185,14 @@ class ConversationStore:
                 return None
 
         payload = await self.storage.load(STORAGE_MODULE, self._body_name(cid)) if self.storage else None
-        messages = payload.get("messages", []) if isinstance(payload, dict) and payload.get("version") == CONVERSATION_VERSION else []
-        await self._cache_body(cid, messages)
+        valid = isinstance(payload, dict) and payload.get("version") == CONVERSATION_VERSION
+        messages = payload.get("messages", []) if valid else []
+        # A body saved before system_prompt existed has no such key at all - get() then returns
+        # None, which is exactly "not frozen yet" and needs no special migration handling; see
+        # get_system_prompt()'s docstring.
+        system_prompt = payload.get("system_prompt") if valid else None
+        system_prompt_at = payload.get("system_prompt_at") if valid else None
+        await self._cache_body(cid, messages, system_prompt=system_prompt, system_prompt_at=system_prompt_at)
         return messages
 
     async def snapshot(self, cid):
@@ -182,24 +208,31 @@ class ConversationStore:
         with self.lock:
             return list(messages)
 
-    async def _cache_body(self, cid, messages):
+    async def _cache_body(self, cid, messages, system_prompt=None, system_prompt_at=None):
         """Put a body in the LRU, evicting the least recently used once the cache is full.
 
-        Eviction candidates are collected under the lock but flushed outside it - _save_body is a
-        coroutine that takes the same lock, and awaiting while holding it would deadlock.
+        system_prompt/system_prompt_at are cached alongside messages in self.system_prompts,
+        keyed the same way and evicted together, so a cache hit never has to ask the two caches
+        two different questions. Eviction candidates are collected under the lock but flushed
+        outside it - _save_body is a coroutine that takes the same lock, and awaiting while
+        holding it would deadlock. A victim's prompt fields are read out of self.system_prompts
+        and passed to _save_body explicitly, rather than left for _save_body to look up itself,
+        because by the time _save_body runs the victim has already been popped from that cache.
         """
         evicted = []
         with self.lock:
             self.bodies[cid] = messages
             self.bodies.move_to_end(cid)
+            self.system_prompts[cid] = {"system_prompt": system_prompt, "system_prompt_at": system_prompt_at}
             while len(self.bodies) > BODY_CACHE_SIZE:
                 victim = next(iter(self.bodies))
                 if victim == cid:
                     break
-                evicted.append((victim, self.bodies.pop(victim), victim in self.dirty))
-        for victim, payload, was_dirty in evicted:
+                victim_prompt = self.system_prompts.pop(victim, None) or {}
+                evicted.append((victim, self.bodies.pop(victim), victim in self.dirty, victim_prompt.get("system_prompt"), victim_prompt.get("system_prompt_at")))
+        for victim, payload, was_dirty, victim_system_prompt, victim_system_prompt_at in evicted:
             if was_dirty:
-                await self._save_body(victim, messages=payload, evicted=True)
+                await self._save_body(victim, messages=payload, system_prompt=victim_system_prompt, system_prompt_at=victim_system_prompt_at, evicted=True)
 
     async def append(self, cid, message):
         """Append a message to a conversation and mark it dirty."""
@@ -212,6 +245,35 @@ class ConversationStore:
             if entry is not None:
                 entry["message_count"] = len(messages)
                 entry["updated"] = datetime.now(timezone.utc).isoformat()
+            self.dirty.add(cid)
+        return True
+
+    async def get_system_prompt(self, cid):
+        """Return (system_prompt, system_prompt_at) for a conversation, loading the body if needed.
+
+        Both are None when a prompt has never been frozen for this conversation - every
+        conversation stored before this existed, plus any conversation whose first turn has not
+        yet run - which is exactly the signal ChatAgent._frozen_system_prompt() uses to decide
+        whether to build and store one now. Also None for an unknown or deleted id.
+        """
+        await self.get_messages(cid)
+        with self.lock:
+            info = self.system_prompts.get(cid) or {}
+            return info.get("system_prompt"), info.get("system_prompt_at")
+
+    def set_system_prompt(self, cid, system_prompt, system_prompt_at):
+        """Freeze a conversation's system prompt in the cache and mark it dirty for the next flush.
+
+        Requires the body to already be cached - every real caller gets there via
+        get_system_prompt() (or get_messages()/append() earlier in the same turn) first, which
+        always populates self.system_prompts for a live conversation as a side effect. Returns
+        False without recording anything if that has not happened, rather than caching a prompt
+        with no messages list to be saved alongside.
+        """
+        with self.lock:
+            if cid not in self.bodies:
+                return False
+            self.system_prompts[cid] = {"system_prompt": system_prompt, "system_prompt_at": system_prompt_at}
             self.dirty.add(cid)
         return True
 
@@ -242,14 +304,21 @@ class ConversationStore:
         return True
 
     def add_usage(self, cid, usage):
-        """Accumulate token and cost usage onto a conversation."""
+        """Accumulate token, cost and cached-token usage onto a conversation.
+
+        usage is the raw OpenRouter usage object for one completion - cached_tokens is read out
+        of its nested prompt_tokens_details via extract_cached_tokens(), the same helper chat.py
+        uses for the per-turn 'usage' event, so the running total and the event can never disagree
+        about what counts as a cache hit.
+        """
         with self.lock:
             entry = self.index.get(cid)
             if entry is None:
                 return
-            total = entry.setdefault("usage_total", {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0})
+            total = entry.setdefault("usage_total", {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0, "cached_tokens": 0})
             for key in ("prompt_tokens", "completion_tokens", "cost"):
                 total[key] = total.get(key, 0) + (usage.get(key) or 0)
+            total["cached_tokens"] = total.get("cached_tokens", 0) + extract_cached_tokens(usage)
             self.dirty.add(cid)
 
     async def delete(self, cid):
@@ -260,6 +329,7 @@ class ConversationStore:
                 return False
             entry["deleted"] = True
             self.bodies.pop(cid, None)
+            self.system_prompts.pop(cid, None)
             self.dirty.discard(cid)
         await self._save_index()
         return True
@@ -276,6 +346,7 @@ class ConversationStore:
             for entry in doomed:
                 entry["deleted"] = True
                 self.bodies.pop(entry["id"], None)
+                self.system_prompts.pop(entry["id"], None)
                 self.dirty.discard(entry["id"])
         for entry in doomed:
             self.log("Info: chat conversation '{}' ({}) pruned past the {} conversation limit; its stored copy expires in {} days".format(entry.get("title"), entry["id"], self.max_conversations, self.expiry_days))
@@ -289,8 +360,14 @@ class ConversationStore:
             payload = {"version": CONVERSATION_VERSION, "conversations": [dict(entry) for entry in self.index.values()]}
         return await self.storage.save(STORAGE_MODULE, INDEX_FILENAME, payload, format="json", expiry=self._expiry())
 
-    async def _save_body(self, cid, messages=None, evicted=False):
-        """Write one conversation body with a renewed expiry."""
+    async def _save_body(self, cid, messages=None, system_prompt=_UNSET, system_prompt_at=_UNSET, evicted=False):
+        """Write one conversation body with a renewed expiry.
+
+        system_prompt/system_prompt_at default to the sentinel _UNSET, meaning "read them from
+        self.system_prompts" - true for every caller except _cache_body()'s eviction path, which
+        passes the values it already popped out of that cache because by the time this runs they
+        are no longer there to look up.
+        """
         if not self.storage:
             return False
         with self.lock:
@@ -308,7 +385,11 @@ class ConversationStore:
                     self.dirty.discard(cid)
                     return False
                 messages = self.bodies[cid]
-            payload = {"version": CONVERSATION_VERSION, "id": cid, "messages": json.loads(json.dumps(messages))}
+            if system_prompt is _UNSET or system_prompt_at is _UNSET:
+                info = self.system_prompts.get(cid) or {}
+                system_prompt = info.get("system_prompt")
+                system_prompt_at = info.get("system_prompt_at")
+            payload = {"version": CONVERSATION_VERSION, "id": cid, "messages": json.loads(json.dumps(messages)), "system_prompt": system_prompt, "system_prompt_at": system_prompt_at}
             self.dirty.discard(cid)
         result = await self.storage.save(STORAGE_MODULE, self._body_name(cid), payload, format="json", expiry=self._expiry())
         if evicted:
