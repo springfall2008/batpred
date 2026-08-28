@@ -23,8 +23,7 @@ from dataclasses import dataclass
 import datetime
 import aiohttp
 import time
-from dataclasses import dataclass
-from typing import Any, Dict, List, Union
+from typing import Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA
 from component_base import ComponentBase
@@ -654,7 +653,6 @@ class OhmeAPI(ComponentBase):
         self.dashboard_item(entity_name_number + "_preconditioning", state=preconditioning, attributes=ohme_attribute_table.get("preconditioning", {}), app="ohme")
 
         # Publish slot information
-        num_slots = len(slots) if slots else 0
         slot_attributes = ohme_attribute_table.get("slots", {}).copy()
 
         planned_dispatches = []
@@ -1173,7 +1171,7 @@ class OhmeApiClient:
         """Set the vehicle to be charged."""
         for vehicle in self._cars:
             if vehicle_to_name(vehicle) == selected_name:
-                result = await self._make_request("PUT", f"/v1/car/{vehicle['id']}/select")
+                await self._make_request("PUT", f"/v1/car/{vehicle['id']}/select")
 
                 return True
         return False
@@ -1228,7 +1226,7 @@ class OhmeApiClient:
 
         try:
             self.cap_enabled = resp["userSettings"]["chargeSettings"][0]["enabled"]
-        except:
+        except Exception:
             pass
 
         device = resp["chargeDevices"][0]

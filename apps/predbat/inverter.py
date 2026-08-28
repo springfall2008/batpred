@@ -306,8 +306,6 @@ class Inverter:
         if self.rest_data and ("Battery_Details" in self.rest_data):
             average_temp = 0
             battery_count = 0
-            battery_capacity = 0
-            battery_voltage = 0
             for battery in self.rest_data["Battery_Details"]:
                 battery_details = self.rest_data["Battery_Details"][battery]
                 if "BMS_Temperature" in battery_details:
@@ -1201,7 +1199,7 @@ class Inverter:
                                 this_soc = soc_percent.get(target_minute, 0)
                                 if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) >= 0):
                                     break
-                                if discharge and (not ((predbat_status.get(target_minute, "") in ["Exporting", "Discharging"])) or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) <= 0):
+                                if discharge and (predbat_status.get(target_minute, "") not in ["Exporting", "Discharging"] or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) <= 0):
                                     break
 
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
@@ -1623,24 +1621,53 @@ class Inverter:
         # Construct discharge window from GivTCP settings
         self.export_window = []
 
+        # Record which source we read from, rather than re-deriving it below. Three branches
+        # reach the empty-value handling and only one of them is REST, so a ternary over
+        # rest_api/ge_cloud_direct mislabels the configured-entity case and sends the user to
+        # check credentials for a source they are not using.
         if self.rest_data:
+            export_source = "REST"
             discharge_start = time_string_to_stamp(self.rest_data["Timeslots"]["Discharge_start_time_slot_1"])
             discharge_end = time_string_to_stamp(self.rest_data["Timeslots"]["Discharge_end_time_slot_1"])
         elif "discharge_start_time" in self.base.args:
+            export_source = "discharge_start_time"
             discharge_start = time_string_to_stamp(self.base.get_arg("discharge_start_time", index=self.id))
             discharge_end = time_string_to_stamp(self.base.get_arg("discharge_end_time", index=self.id))
+        elif self.rest_api or self.base.get_arg("ge_cloud_direct", False, indirect=False):
+            export_source = "REST" if self.rest_api else "GE Cloud"
+            # Same reasoning as the charge window above, and it has to be here too or that fix is
+            # defeated: on a cloud fetch failure the charge window degrades gracefully and then
+            # this branch crashes the whole update loop on the very same cycle, so the inverter
+            # never recovers either way. A configured-but-empty source is transient, so fall
+            # through to the safe-defaults/retry handling below.
+            discharge_start = None
+            discharge_end = None
         else:
-            self.log("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id))
-            self.base.record_status("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
-            raise ValueError
+            # No data source configured at all - a permanent setup gap, handled as such.
+            message = "Error: Inverter {} unable to read Export window - no source is configured (set givtcp_rest, ge_cloud_direct, or discharge_start_time in apps.yaml)".format(self.id)
+            self.log(message)
+            self.base.record_status(message, had_errors=True)
+            raise ValueError(message)
 
         if discharge_start is None or discharge_end is None:
-            self.log("Warn: Inverter {} unable to read Export window as discharge_start or discharge_end is None, will retry next update".format(self.id))
-            self.base.record_status("Warn: Inverter {} unable to read Export window, will retry next update".format(self.id), had_errors=True)
-            # Set safe defaults to allow graceful recovery on next update
+            # Name the source that came back empty, as the charge window does - "discharge_start is
+            # None" sends users to apps.yaml, which is the one thing that is fine here.
+            if export_source == "discharge_start_time":
+                hint = "check the discharge_start_time/discharge_end_time entities in apps.yaml are reporting"
+            else:
+                hint = "check the {} credentials and that the account still has this inverter attached".format(export_source)
+            self.log("Warn: Inverter {} unable to read Export window - {} returned no data, {}, will retry next update".format(self.id, export_source, hint))
+            self.base.record_status("Warn: Inverter {} unable to read Export window - {} returned no data, {}".format(self.id, export_source, hint), had_errors=True)
+            # Safe defaults must be INERT, not merely disabled. forecast_minutes parks the window
+            # beyond the horizon, exactly as the charge window does. The previous 0/0 is midnight,
+            # i.e. in the PAST: execute.py takes `discharge_start_time_minutes <= minutes_now` as
+            # "the window has begun", which is trivially true at 0, so a discharge command gets
+            # backdated to the start of the day. That was survivable while this path was reached
+            # only rarely; the transient branch above makes it reachable on any cloud hiccup, so
+            # the landing state has to be genuinely inert or this trades a crash for a bad write.
             self.discharge_enable_time = False
-            self.discharge_start_time_minutes = 0
-            self.discharge_end_time_minutes = 0
+            self.discharge_start_time_minutes = self.base.forecast_minutes
+            self.discharge_end_time_minutes = self.base.forecast_minutes
             self.track_discharge_start = "00:00:00"
             self.track_discharge_end = "00:00:00"
         else:
@@ -1831,7 +1858,7 @@ class Inverter:
 
         try:
             current_rate = int(current_rate)
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             self.base.log("Error: Inverter {} charge discharge {} is not a number, setting to {}W".format(current_rate, self.id, self.battery_rate_max_raw))
             current_rate = self.battery_rate_max_raw
 
@@ -1850,7 +1877,7 @@ class Inverter:
                 current_rate = self.base.get_arg("charge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
         try:
             current_rate = int(current_rate)
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             self.base.log("Error: Inverter {} charge rate {} is not a number, setting to {}W".format(current_rate, self.id, self.battery_rate_max_raw))
             current_rate = self.battery_rate_max_raw
 
@@ -2689,7 +2716,7 @@ class Inverter:
                 current = self.base.get_arg("discharge_target_soc", index=self.id, required_unit="%")
                 try:
                     current = float(current)
-                except (ValueError, TypeError) as e:
+                except (ValueError, TypeError):
                     current = None
                 if current is None:
                     self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
@@ -3356,7 +3383,7 @@ class Inverter:
         data = {"state": "enable" if enable else "disable"}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             new_value = self.rest_data["Control"].get("Enable_Charge_Target", "disable")
             if isinstance(new_value, str):
@@ -3379,7 +3406,7 @@ class Inverter:
         url = self.rest_api + "/setChargeTarget"
         data = {"chargeToPercent": target}
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             if float(self.rest_data["Control"]["Target_SOC"]) == target:
                 self.count_register_writes += 1
@@ -3399,7 +3426,7 @@ class Inverter:
         url = self.rest_api + "/setChargeRate"
         data = {"chargeRate": rate}
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             new = int(self.rest_data["Control"]["Battery_Charge_Rate"])
             if abs(new - rate) < (self.battery_rate_max_charge * MINUTE_WATT / 12):
@@ -3420,7 +3447,7 @@ class Inverter:
         url = self.rest_api + "/setDischargeRate"
         data = {"dischargeRate": rate}
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             new = int(self.rest_data["Control"]["Battery_Discharge_Rate"])
             if abs(new - rate) < (self.battery_rate_max_discharge * MINUTE_WATT / 25):
@@ -3441,7 +3468,7 @@ class Inverter:
         data = {"mode": inverter_mode}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             if inverter_mode == self.rest_data["Control"]["Mode"]:
                 self.count_register_writes += 1
@@ -3461,7 +3488,7 @@ class Inverter:
         data = {"state": pause_mode}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             if pause_mode == self.rest_data["Control"]["Battery_pause_mode"]:
                 self.count_register_writes += 1
@@ -3482,7 +3509,7 @@ class Inverter:
         url = self.rest_api + "/setBatteryReserve"
         data = {"reservePercent": target}
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             result = int(float(self.rest_data["Control"]["Battery_Power_Reserve"]))
             if result == target:
@@ -3503,7 +3530,7 @@ class Inverter:
         data = {"state": "enable" if enable else "disable"}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             new_value = self.rest_data["Control"]["Enable_Charge_Schedule"]
             if isinstance(new_value, str):
@@ -3529,7 +3556,7 @@ class Inverter:
         data = {"state": "enable" if enable else "disable"}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             new_value = self.rest_data["Control"]["Enable_Discharge_Schedule"]
             if isinstance(new_value, str):
@@ -3555,7 +3582,7 @@ class Inverter:
         data = {"start": start[:5], "finish": finish[:5]}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Battery_pause_start_time_slot"] == start and self.rest_data["Timeslots"]["Battery_pause_end_time_slot"] == finish:
                 self.count_register_writes += 1
@@ -3575,7 +3602,7 @@ class Inverter:
         data = {"start": start[:5], "finish": finish[:5]}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Charge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Charge_end_time_slot_1"] == finish:
                 self.count_register_writes += 1
@@ -3632,7 +3659,7 @@ class Inverter:
         result = None
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             # GivTCP's write handler updates Control.Discharge_Target_SOC_1 synchronously the
             # moment it accepts the command (confirmed against GivTCP's own source - write.py's
             # setDischargeTarget() calls updateControlCache() straight after the Modbus write), so
@@ -3666,7 +3693,7 @@ class Inverter:
         data = {"start": start[:5], "finish": finish[:5]}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Discharge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Discharge_end_time_slot_1"] == finish:
                 self.count_register_writes += 1

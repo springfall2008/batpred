@@ -182,12 +182,54 @@ Example usage in VSCode
 
 #### Available commands (mcp)
 
-- Get current system status
-- View and update configuration settings
-- Browse all entities
-- Retrieve battery plan data
-- Override plan for specific time periods
-- Access apps.yaml configuration
+| Tool | What it returns or does |
+| ---- | ----------------------- |
+| `get_status` | Current system status - mode, SoC, live power figures |
+| `get_plan` | The current battery plan, with forecasts and costs |
+| `get_config` | Every Predbat setting, with its current value and its default |
+| `get_apps` | Your `apps.yaml` configuration, with credentials redacted |
+| `get_log` | Lines from `predbat.log`, filtered by level, search term and age |
+| `get_state` | Predbat's internal state variables - the same data a debug yaml carries |
+| `get_entities` | All Predbat entities and their states |
+| `set_config` | Change a Predbat setting |
+| `set_plan_override` | Override the plan for one 30 minute period |
+
+#### Asking an AI assistant to review your setup (mcp)
+
+`get_config`, `get_apps` and `get_log` together give an assistant everything a bug report
+normally has to carry, so you can ask it to look over your setup without opening an issue -
+for example *"compare my Predbat settings against their defaults and tell me which changes
+look wrong"*, or *"find the warnings in the last 24 hours of my log and explain them"*.
+
+`get_log` takes optional arguments:
+
+| Argument | Description |
+| -------- | ----------- |
+| `filter` | `all`, `info`, `warnings` (the default) or `errors` |
+| `search` | Only return lines containing this text, case-insensitive |
+| `hours` | Only return lines written in the last N hours |
+| `max_lines` | How many lines to return - the most recent matches are the ones kept, but they come back oldest-first (default 500, maximum 5000) |
+
+`get_state` exposes the same internal state a `predbat_debug.yaml` carries, but a variable at a
+time rather than as a 5MB file. Called with no arguments it returns every variable small enough
+to be worth reading - a few hundred of them, together well under a page - and *describes* the
+handful of large ones (the per-minute series such as `load_minutes`, `rate_import` and
+`pv_today`) in an `omitted` section giving each one's type, length and value range. Ask for one
+of those by name with `keys`, narrow by name with `filter`, or raise the per-variable budget
+with `max_bytes`.
+
+| Argument | Description |
+| -------- | ----------- |
+| `keys` | Specific variable names to return (omit for every small variable) |
+| `filter` | Only return variables whose name matches this Python regex |
+| `max_bytes` | Per-variable size budget before a value is described instead of returned (default 2048, maximum 262144) |
+
+`get_state` and `get_apps` both redact credentials. `get_apps` replaces credential-like values
+(anything whose name contains `_key`, `password`, `secret` or `token`) with `xxx`, so your API
+keys are not sent to your AI provider; pass `masked: false` if you deliberately want the raw
+values. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
+return anything a debug dump would not - credentials, the Home Assistant interface, loaded
+secrets and the URL caches are not reachable through it at all.
 
 ---
 
@@ -1084,7 +1126,7 @@ Integrates with AlphaESS SMILE/Storion hybrid inverters via the AlphaESS Open AP
 
 - **EXPERIMENTAL:** nobody on the Predbat project has AlphaESS hardware, so behaviour is inferred from AlphaESS's published Open API documentation and the Home Assistant AlphaESS integration rather than confirmed against real inverters. Every request and response is traced to the log (`api_debug`, on by default) with credentials redacted, so a tester can capture evidence for an issue report. Run the [diagnostics CLI](inverter-setup.md#alphaess-cloud) against your own system before trusting Predbat with control
 - **Control is on by default**, the same as `sunsynk_control_enable`. Set `alphaess_control_enable: false` for monitoring only. `switch.predbat_set_read_only` additionally holds back Predbat's own automatic writes, including its periodic re-apply
-- **Both write endpoints are documented as writable once per 24 hours.** Predbat therefore only writes when the payload actually changes, gates charge and discharge independently so one does not consume the other's budget, and paces writes with `alphaess_min_write_interval`
+- **Both write endpoints are documented as writable once per 24 hours.** Predbat therefore only writes when the payload actually changes, gates charge and discharge independently so one does not consume the other's budget, and paces writes with `alphaess_min_write_interval`. A schedule is committed in stages (window, then enable, then target SoC), so a small, capped number of corrections is allowed through within 60 seconds of a successful write - without it the inverter would run a schedule Predbat had already superseded until the interval expired
 - Predbat's controls map straight onto the schedule fields and the inverter does the timing. `batUseCap` carries the export target while an export window is programmed and the reserve otherwise, because the API has only one field for the discharge floor. A **zero** charge or discharge rate is how Predbat signals a freeze, since AlphaESS has no pause endpoint
 - Times sit on a **15-minute grid** (`00:00` to `23:45`). Off-grid values are accepted by the API and then silently ignored by the inverter, so Predbat snaps windows inward and disables any window that snapping collapses
 - Newer systems may be entitled to the periodic scheduling API (six windows a day, with a power setpoint per window). Predbat probes this once per system; a `6017` response means the account or hardware is not entitled and Predbat falls back to the universally available two-window endpoints. On that legacy path a non-zero charge rate is not honoured by the hardware

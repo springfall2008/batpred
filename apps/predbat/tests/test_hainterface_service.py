@@ -32,7 +32,7 @@ def test_hainterface_call_service_websocket(my_predbat=None):
 
     ha_interface.call_service_websocket_command = mock_call_service_websocket_command
 
-    result = ha_interface.call_service("switch/turn_on", entity_id="switch.test")
+    ha_interface.call_service("switch/turn_on", entity_id="switch.test")
 
     if not call_service_websocket_command_called:
         print("ERROR: call_service_websocket_command should be called")
@@ -69,7 +69,7 @@ def test_hainterface_call_service_loopback(my_predbat=None):
         mock_base.trigger_callback_calls.append(data)
     mock_base.trigger_callback = mock_trigger_callback
 
-    result = ha_interface.call_service("number/set_value", entity_id="number.test", value=42)
+    ha_interface.call_service("number/set_value", entity_id="number.test", value=42)
 
     if not mock_base.trigger_callback_calls:
         print("ERROR: trigger_callback should be called")
@@ -291,7 +291,6 @@ def test_hainterface_async_call_service_exception(my_predbat=None):
     ha_interface.ws_pending_lock = threading.Lock()
 
     # Patch threading.Event.wait to simulate instant timeout
-    original_wait = threading.Event.wait
     def mock_wait(self, timeout=None):
         return False  # Simulate timeout
 

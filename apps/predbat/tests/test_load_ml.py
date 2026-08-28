@@ -1545,7 +1545,7 @@ def _test_real_data_training():
                 plt.savefig(chart_path, dpi=150, bbox_inches="tight")
                 print(f"  Chart saved to {chart_path}")
                 break
-            except:
+            except Exception:
                 continue
 
         plt.close()
@@ -1807,7 +1807,7 @@ def _test_pretrained_model_prediction():
                 plt.savefig(chart_path, dpi=150, bbox_inches="tight")
                 print(f"  Chart saved to {chart_path}")
                 break
-            except:
+            except Exception:
                 continue
 
         plt.close()

@@ -54,6 +54,7 @@ batteryb
 batusecap
 beforeunload
 bierner
+BLAS
 boostable
 brickatius
 byok
@@ -219,6 +220,7 @@ generationmix
 generationpower
 geserial
 geseriale
+getaffinity
 getall
 getrusage
 Ginlong
@@ -574,6 +576,7 @@ Teslemetry
 testname
 thirdparty
 threadpool
+threadpoolctl
 timea
 timeb
 timec
@@ -616,6 +619,8 @@ unparseable
 unpickled
 unpickles
 unpushed
+unredacted
+unreproduced
 unsmoothed
 unstaged
 untriaged

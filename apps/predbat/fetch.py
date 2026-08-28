@@ -1135,6 +1135,12 @@ class Fetch:
                 self.load_forecast_array.append(hist_forecast)
                 self.log("Using weighted-bucket historical load forecast over {} days".format(min(self.load_minutes_age, self.max_days_previous - 1)))
 
+        # Where Load ML genuinely supplied this cycle's forecast, backfill the elapsed part of today
+        # with its own past predictions (the weighted-bucket forecast above is skipped in that case).
+        # load_ml_forecast is this cycle's own fetch result from earlier in this function, so there is
+        # no cross-cycle state that could leave a stale "ML was active" reading behind (#4762 review).
+        self.apply_load_ml_forecast_history(self.now_utc, load_ml_forecast)
+
         # Load today vs actual
         if self.load_minutes:
             self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now, save=save)
@@ -1320,7 +1326,7 @@ class Fetch:
                     self.octopus_slots[car_n] = self.add_now_to_octopus_slot(car_n, self.octopus_slots[car_n], self.now_utc)
                     if not entity_id_list[car_n]:
                         continue
-                    if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]:
+                    if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
                         self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
                         if self.car_charging_slots[car_n]:
                             self.log(
@@ -1522,8 +1528,6 @@ class Fetch:
         """
         minute = -24 * 60
         rate_last = 0
-        rate_first = 0
-        rate_first_valid = False
         rate_last_valid = False  # Track if we've seen any real rates yet
         adjusted_rates = {}
         replicated_rates = {}
@@ -1583,9 +1587,6 @@ class Fetch:
             else:
                 rate_last = rates[minute]
                 rate_last_valid = True
-                if not rate_first_valid:
-                    rate_first = rate_last
-                    rate_first_valid = True
             minute += 1
 
         return rates, replicated_rates
@@ -2094,7 +2095,6 @@ class Fetch:
         found_rates = []
         lowest = 99
         highest = -99
-        upcoming_period = self.minutes_now + 4 * 60
 
         while True:
             rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high, alt_rates=alt_rates, pv_light_dark=pv_light_dark)
@@ -2319,6 +2319,54 @@ class Fetch:
                     return load_forecast
         return {}
 
+    def fetch_ml_load_forecast_history(self, now_utc):
+        """
+        Reconstruct a genuine past Load ML forecast for the elapsed part of today.
+
+        sensor.<prefix>_load_ml_stats publishes a load_today_h1 attribute every cycle: the model's
+        cumulative-load-since-midnight prediction for 60 minutes after that cycle ran. Shifting each
+        recorded reading's timestamp forward by that same 60-minute lead turns the entity's history
+        into a genuine record of what the model predicted for each past target minute - unlike a
+        same-time-of-day historical average, this is the model's own past output (batpred#4750).
+
+        Covers 2 days of history so a reading from shortly before local midnight (whose target minute
+        falls just after midnight) is included, rather than leaving the first hour of the day as a gap.
+        """
+        entity_id = "sensor." + self.prefix + "_load_ml_stats"
+        history = self.get_history_wrapper(entity_id, days=2, required=False)
+        if not history:
+            return {}
+
+        data_array = []
+        for record in history[0]:
+            attributes = record.get("attributes") or {}
+            value = attributes.get("load_today_h1")
+            last_updated = record.get("last_updated")
+            if value is None or not last_updated:
+                continue
+            try:
+                shifted_time = str2time(last_updated) + timedelta(minutes=60)
+            except (ValueError, TypeError):
+                continue
+            data_array.append({"energy": value, "last_updated": shifted_time.isoformat()})
+
+        if not data_array:
+            return {}
+
+        load_forecast, _ = minute_data(
+            data_array,
+            self.forecast_days + 1,
+            self.midnight_utc,
+            "energy",
+            "last_updated",
+            backwards=False,
+            clean_increment=False,
+            smoothing=True,
+            divide_by=1.0,
+            scale=1.0,
+        )
+        return load_forecast or {}
+
     def get_holiday_minutes(self, now_utc, num_days):
         """
         Build a per-minute history of the holiday_days_left value (indexed by minutes-ago) from the recorded
@@ -2470,6 +2518,29 @@ class Fetch:
         # Final boundary so the last span's increment is well defined
         load_forecast[horizon_end] = dp4(cumulative)
         return load_forecast
+
+    def apply_load_ml_forecast_history(self, now_utc, ml_forecast=None):
+        """
+        Backfill the elapsed part of today with genuine past Load ML predictions.
+
+        Only takes effect when Load ML is genuinely the active forecast source this cycle, which is
+        exactly "fetch_sensor_data() fetched a non-empty ml_forecast this cycle" - a Load ML component
+        running in the background without being selected as the forecast source
+        (load_ml_enable/load_ml_source) must not influence the chart, so it has no effect and the
+        weighted-bucket historical forecast above (skipped while Load ML owns load_forecast_only) is
+        what would apply instead. This is passed in rather than held on self so there is no cycle-scoped
+        flag whose correctness depends on fetch_config_options() always running first (#4762 review).
+        Load ML's own forecast entity only ever publishes predictions from "now" onward
+        (load_ml_component.py _publish_entity), so without this the already-elapsed part of today has no
+        forecast data at all and load_today_comparison's Predicted chart series sits at zero from
+        midnight until "now" (batpred#4750).
+        """
+        if not ml_forecast:
+            return
+        h1_forecast = self.fetch_ml_load_forecast_history(now_utc)
+        for minute, value in h1_forecast.items():
+            if minute < self.minutes_now:
+                self.load_forecast[minute] = value
 
     def fetch_extra_load_forecast(self, now_utc, ml_forecast=None):
         """
@@ -2639,11 +2710,13 @@ class Fetch:
             # runs unconditionally every cycle regardless of whether the weighted-bucket forecast
             # actually gets used: Load ML (or any other source that sets load_forecast_only) takes
             # precedence and skips it entirely (fetch_sensor_data(), guarded by
-            # "not self.load_forecast_only"). The "using weighted-bucket..." wording previously
-            # here read as if it was happening every cycle regardless, which is what actually gets
-            # logged only when the forecast is genuinely used (fetch_sensor_data()'s own "Using
-            # weighted-bucket historical load forecast over N days" line) - confusing on a Load ML
-            # setup where this fallback is rarely/never actually invoked (#4496 follow-up).
+            # "not self.load_forecast_only") - apply_load_ml_forecast_history() backfills the
+            # elapsed part of today from Load ML's own history instead in that case (batpred#4750).
+            # The "using weighted-bucket..." wording previously here read as if it was happening
+            # every cycle regardless, which is what actually gets logged only when the forecast is
+            # genuinely used (fetch_sensor_data()'s own "Using weighted-bucket historical load
+            # forecast over N days" line) - confusing on a Load ML setup where this fallback is
+            # rarely/never actually invoked (#4496 follow-up).
             self.log("days_previous_auto enabled - will fall back to a weighted-bucket historical load forecast over up to {} days if no other load forecast source takes precedence".format(window_days))
             self.max_days_previous = window_days + 1
         elif self.holiday_days_left > 0:
