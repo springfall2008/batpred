@@ -486,10 +486,18 @@ def _test_db_manager_persistence(my_predbat=None):
             for entity_id, state, attributes in test_data:
                 await loop.run_in_executor(None, db_mgr1.set_state_db, entity_id, state, attributes)
 
-            # Verify data is stored
+            # Verify data is stored, then delete one current state before restart
             all_entities = await loop.run_in_executor(None, db_mgr1.get_all_entities_db)
             assert len(all_entities) >= 3, f"Expected at least 3 entities before restart, got {len(all_entities)}"
             print(f"✓ Stored {len(all_entities)} entities: {all_entities}")
+
+            deleted_entity = test_data[0][0]
+            deleted = await loop.run_in_executor(None, db_mgr1.delete_state_db, deleted_entity.upper())
+            assert deleted, f"Expected {deleted_entity} current state to be deleted"
+            assert await loop.run_in_executor(None, db_mgr1.get_state_db, deleted_entity) is None, f"Deleted entity {deleted_entity} should have no current state"
+            remaining_entities = await loop.run_in_executor(None, db_mgr1.get_all_entities_db)
+            assert deleted_entity not in remaining_entities, f"Deleted entity {deleted_entity} should not be enumerated"
+            print(f"✓ Deleted {deleted_entity} current state before restart")
 
             # Stop the first instance and verify thread exits
             await db_mgr1.stop()
@@ -527,17 +535,19 @@ def _test_db_manager_persistence(my_predbat=None):
             assert db_mgr2.api_started, "DatabaseManager failed to start (second instance)"
             print("✓ DatabaseManager restarted successfully (second instance)")
 
-            # Verify all entities are still present
+            # Verify remaining current states are present and deletion persisted
             all_entities_after = await loop.run_in_executor(None, db_mgr2.get_all_entities_db)
-            assert len(all_entities_after) == len(all_entities), f"Entity count mismatch: {len(all_entities_after)} after restart vs {len(all_entities)} before"
+            assert len(all_entities_after) == len(remaining_entities), f"Entity count mismatch: {len(all_entities_after)} after restart vs {len(remaining_entities)} before"
+            assert deleted_entity not in all_entities_after, f"Deleted entity {deleted_entity} returned after restart"
+            assert await loop.run_in_executor(None, db_mgr2.get_state_db, deleted_entity) is None, f"Deleted entity {deleted_entity} state returned after restart"
 
-            for entity_id, _, _ in test_data:
+            for entity_id, _, _ in test_data[1:]:
                 assert entity_id in all_entities_after, f"Entity {entity_id} not found after restart"
 
             print(f"✓ All {len(all_entities_after)} entities persisted after restart")
 
             # Verify state and attributes are preserved
-            for entity_id, expected_state, expected_attributes in test_data:
+            for entity_id, expected_state, expected_attributes in test_data[1:]:
                 retrieved = await loop.run_in_executor(None, db_mgr2.get_state_db, entity_id)
                 assert retrieved is not None, f"Entity {entity_id} returned None after restart"
                 assert retrieved["state"] == expected_state, f"State mismatch for {entity_id}: expected {expected_state}, got {retrieved['state']}"
