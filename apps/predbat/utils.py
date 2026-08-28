@@ -16,6 +16,7 @@ dictionaries, time string parsing, data filtering/pruning, rounding,
 and historical data extraction from incrementing energy counters.
 """
 
+import re
 import array
 import os
 from datetime import datetime, timedelta, timezone, time
@@ -357,15 +358,16 @@ def parse_yaml_path(path):
     depend on.
     """
     keys = []
-    for key in path.split("."):
-        if "[" in key and "]" in key:
-            # Handle keys with square brackets, e.g., "battery_charge_low[0]"
-            base_key, index = key.split("[")
-            index = index.rstrip("]")
-            keys.append(base_key)
-            keys.append(f"[{index}]")
-        else:
-            keys.append(key)
+    for component in path.split("."):
+        # Split every bracket group into its own key, so a directly nested index - "foo[0][1]" -
+        # becomes "foo", "[0]", "[1]". The earlier version split on the first "[" and unpacked
+        # into two, which raised ValueError on any path with more than one index rather than
+        # returning anything: reachable from set_apps_config, where it surfaced as a failed tool
+        # call against the user's real configuration. Matches WebInterface._split_yaml_path, which
+        # arrived at the same algorithm independently for the apps.yaml editor.
+        for token in re.split(r"(\[[^\[\]]*\])", component):
+            if token:
+                keys.append(token)
     return keys
 
 
@@ -673,7 +675,7 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
         try:
             timestamp_key = str2time(key)
             oldest_date = min(oldest_date, timestamp_key)
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             continue
 
         value = data[key]
@@ -716,7 +718,6 @@ def minute_data(
     adata = {}
     io_adjusted = {}
     newest_state = 0
-    prev_state = 0
     newest_age = 999999
 
     # Bounds on the data we store
@@ -870,7 +871,6 @@ def minute_data(
 
         if minutes < newest_age:
             newest_age = minutes
-            prev_state = newest_state
             newest_state = state
 
         # Power to Energy

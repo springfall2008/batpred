@@ -56,7 +56,6 @@ def create_test_history_data(my_predbat, num_days=2, battery_size_kwh=10.0):
         timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S%z")
 
         hour = timestamp.hour
-        minute_of_hour = timestamp.minute
 
         # Determine if we're in a charging period
         # Morning charge: 2am-4am (120 minutes) - charges ~49% for 10kWh battery

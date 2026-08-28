@@ -22,7 +22,6 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 import traceback
-import sys
 import gc
 import random
 import time
@@ -35,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.53.4"
+THIS_VERSION = "v8.53.5"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -1607,7 +1606,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 if "float" in sensor_types and self.validate_is_float(sensor) and not spec.get("modify", False):
                                     # Allow fixed float values
                                     continue
-                                if "string" in sensor_types and isinstance(sensor, str) and not spec.get("modify", False) and not "." in sensor:
+                                if "string" in sensor_types and isinstance(sensor, str) and not spec.get("modify", False) and "." not in sensor:
                                     # Allow fixed string values
                                     continue
 

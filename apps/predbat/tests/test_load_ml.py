@@ -788,7 +788,7 @@ def _test_cold_start():
     load_data = _create_synthetic_load_data(n_days=1, now_utc=now_utc)
 
     # Training should fail or return None
-    val_mae = predictor.train(load_data, now_utc, pv_minutes=None, is_initial=True, epochs=5, time_decay_days=7)
+    predictor.train(load_data, now_utc, pv_minutes=None, is_initial=True, epochs=5, time_decay_days=7)
 
     # With only 1 day of data, we can't create a valid dataset for 48h prediction
     # The result depends on actual data coverage
@@ -805,9 +805,6 @@ def _test_fine_tune():
     np.random.seed(42)
     load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
     predictor.train(load_data, now_utc, pv_minutes=None, is_initial=True, epochs=5, time_decay_days=7)
-
-    # Store original weights
-    orig_weights = [w.copy() for w in predictor.weights]
 
     # Fine-tune with same data but as fine-tune mode
     # Note: Fine-tune uses is_finetune=True which only looks at last 24h
@@ -1545,7 +1542,7 @@ def _test_real_data_training():
                 plt.savefig(chart_path, dpi=150, bbox_inches="tight")
                 print(f"  Chart saved to {chart_path}")
                 break
-            except:
+            except Exception:
                 continue
 
         plt.close()
@@ -1807,7 +1804,7 @@ def _test_pretrained_model_prediction():
                 plt.savefig(chart_path, dpi=150, bbox_inches="tight")
                 print(f"  Chart saved to {chart_path}")
                 break
-            except:
+            except Exception:
                 continue
 
         plt.close()

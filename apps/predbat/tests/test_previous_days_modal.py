@@ -32,7 +32,6 @@ def test_previous_days_modal_filter(my_predbat):
     my_predbat.load_minutes_age = 7  # 7 days of data
     my_predbat.days_previous = [1, 2]  # Test with 3 days
     my_predbat.days_previous_weight = [1.0, 1.0]  # Equal weighting
-    number_of_days = 2
     my_predbat.load_filter_modal = True  # Enable modal filtering
     my_predbat.car_charging_hold = False
     my_predbat.car_charging_energy = None

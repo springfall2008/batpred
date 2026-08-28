@@ -28,7 +28,7 @@ import shutil
 import tempfile
 
 import chat_tools
-from utils import mask_secret_args
+from utils import mask_secret_args, parse_yaml_path
 from chat_tools import CHAT_TOOL_DEFS, score_documents, search_docs, read_source, search_source, resolve_source_path, SourceAccessError, is_endpoint_key
 from chat_tools import DEFAULT_FETCH_ALLOWLIST, FetchRefusedError, host_allowed, html_to_text, validate_fetch_target
 from chat_tools import APPS_YAML_RESTART_WARNING, set_apps_config, validate_apps_schema_type
@@ -1167,6 +1167,44 @@ def _nested_path_checks(my_predbat):
     return failed
 
 
+def test_yaml_path_splitter_handles_nested_indices(my_predbat):
+    """A path with more than one index parses, rather than raising.
+
+    parse_yaml_path split on the first "[" and unpacked into exactly two parts, so any path with
+    a directly nested index - "foo[0][1]" - raised ValueError instead of returning anything. That
+    is reachable from set_apps_config, where it surfaced as a failed tool call against the user's
+    real configuration.
+
+    Found when merging main, which had independently grown the same capability for the apps.yaml
+    editor (WebInterface._split_yaml_path) and got it right. This adopts that algorithm.
+
+    Mutation check: restoring the split("[") version raises on the nested case below.
+    """
+    failed = False
+    print("**** Testing the YAML path splitter handles nested indices ****")
+
+    cases = {
+        "plain": ["plain"],
+        "x[0]": ["x", "[0]"],
+        "forecast_solar[0].azimuth": ["forecast_solar", "[0]", "azimuth"],
+        "a.b[2].c": ["a", "b", "[2]", "c"],
+        # The case that used to raise.
+        "foo[0][1]": ["foo", "[0]", "[1]"],
+    }
+    for path, expected in cases.items():
+        try:
+            actual = parse_yaml_path(path)
+        except Exception as error:
+            print("ERROR: parse_yaml_path({!r}) raised {}: {}".format(path, type(error).__name__, error))
+            failed = True
+            continue
+        if actual != expected:
+            print("ERROR: parse_yaml_path({!r}) returned {}, expected {}".format(path, actual, expected))
+            failed = True
+
+    return failed
+
+
 def run_chat_tools_tests(my_predbat):
     """Run every chat-only tool test, returning True if any of them failed."""
     failed = False
@@ -1190,6 +1228,7 @@ def run_chat_tools_tests(my_predbat):
     failed |= test_set_apps_config_refuses_credential_key(my_predbat)
     failed |= test_set_apps_config_refuses_endpoint_keys(my_predbat)
     failed |= test_set_apps_config_nested_paths(my_predbat)
+    failed |= test_yaml_path_splitter_handles_nested_indices(my_predbat)
     failed |= test_set_apps_config_refuses_unknown_key(my_predbat)
     failed |= test_set_apps_config_refuses_a_schema_type_mismatch(my_predbat)
     failed |= test_set_apps_config_success_preserves_formatting_backs_up_and_mirrors_args(my_predbat)

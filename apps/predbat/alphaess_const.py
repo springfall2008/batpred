@@ -93,6 +93,25 @@ ALPHAESS_CACHE_CONTROL = "control"
 # as external interference (the phone app, or another Predbat instance).
 ALPHAESS_SETTLE_POLLS = 3
 
+# How long after a SUCCESSFUL write a further difference still counts as the rest of the
+# SAME schedule update, and is therefore let through alphaess_min_write_interval.
+#
+# Predbat commits a schedule in STAGES - charge window, then the enable switch, then the
+# target SoC - pressing the schedule write button after each one (INVERTER_DEF
+# time_button_press). The first commit of a cycle therefore carries whatever target SoC the
+# control entity still holds from the previous cycle, and the corrected value only arrives a
+# few seconds later. Pacing that correction leaves the inverter running a schedule Predbat
+# has already superseded - GH#4769, where a manual charge for the live slot went out as
+# chargeLimit 10 and the corrected 100 was held for the full 300s, with the house on the grid.
+#
+# Comfortably longer than one inverter write sequence and far shorter than Predbat's
+# five-minute run cadence, so two separate cycles can never merge into a single burst.
+ALPHAESS_WRITE_SETTLE_SECONDS = 60
+# Hard ceiling on the writes one settle burst may spend. Keeps the exemption a correction
+# path rather than a write loop that escapes pacing entirely: the cost against the documented
+# 24-hour write budget stays a small constant per pacing interval instead of being unbounded.
+ALPHAESS_WRITE_BURST_MAX = 3
+
 ALPHAESS_DEBUG_REDACT_KEYS = ("appSecret", "sign", "app_secret", "code", "checkCode")
 ALPHAESS_DEBUG_REDACT_KEYS_RESPONSE = ("appSecret", "sign", "app_secret", "checkCode")
 

@@ -151,7 +151,6 @@ def test_saving_session_null_octopoints(my_predbat):
     print("Test saving session with null octopoints_per_kwh (issue #3079)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -1199,7 +1198,6 @@ def test_saving_session_default_rate(my_predbat):
     ha = my_predbat.ha_interface
     failed = False
     date_today = datetime.now().strftime("%Y-%m-%d")
-    date_yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 

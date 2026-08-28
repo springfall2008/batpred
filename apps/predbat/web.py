@@ -2719,6 +2719,23 @@ chart.render();
 
         raise web.HTTPFound("./config")
 
+    def render_delete_button(self, nested_row_id):
+        """
+        Render the delete button shown against a nested list item or dictionary key
+        """
+        return f'<button class="delete-button" id="delete_button_{nested_row_id}" onclick="deleteNestedValue({nested_row_id})">Delete</button>'
+
+    def render_add_row(self, function, js_args, label, row_counter):
+        """
+        Render the trailing table row holding an add button, which doubles as the anchor new rows are inserted before
+        """
+        if row_counter is None:
+            return ""
+        row_counter[0] += 1
+        anchor_id = row_counter[0]
+        args = ", ".join(["'{}'".format(html_module.escape(str(item), quote=True)) for item in js_args] + [str(anchor_id)])
+        return f"<tr id='add_anchor_{anchor_id}'><td colspan='2'></td><td><button class=\"add-button\" onclick=\"{function}({args})\">{label}</button></td></tr>\n"
+
     def render_type(self, arg, value, parent_path="", row_counter=None):
         """
         Render a value based on its type with support for nested editing.
@@ -2736,67 +2753,81 @@ chart.render();
         """
         text = ""
         if isinstance(value, list):
+            list_path = parent_path if parent_path else arg
             text += "<table>"
             for idx, item in enumerate(value):
-                nested_path = f"{parent_path}[{idx}]" if parent_path else f"{arg}[{idx}]"
+                nested_path = f"{list_path}[{idx}]"
 
                 # Check if this list item is editable
                 can_edit = self.is_editable_value(item)
                 actions_cell = ""
+                nested_row_id = None
 
-                if can_edit and row_counter is not None:
+                if row_counter is not None:
                     row_counter[0] += 1
                     nested_row_id = row_counter[0]
 
-                    if isinstance(item, bool):
-                        toggle_class = "toggle-button active" if item else "toggle-button"
-                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
-                    else:
-                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                    if can_edit:
+                        if isinstance(item, bool):
+                            toggle_class = "toggle-button active" if item else "toggle-button"
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
+                        else:
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
 
-                    # Store the nested value info for later processing
-                    if not hasattr(self, "_nested_values"):
-                        self._nested_values = {}
-                    self._nested_values[nested_row_id] = {"path": nested_path, "value": item}
+                        # Store the nested value info for later processing
+                        if not hasattr(self, "_nested_values"):
+                            self._nested_values = {}
+                        self._nested_values[nested_row_id] = {"path": nested_path, "value": item}
+
+                    # Every list item can be removed, whether or not its value itself is editable
+                    actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(arg, item)
 
-                if actions_cell:
-                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                if nested_row_id is not None:
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{nested_row_id}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item, nested_path, row_counter))
+            text += self.render_add_row("addListItem", [list_path, arg], "Add item", row_counter)
             text += "</table>"
         elif isinstance(value, dict):
+            dict_path = parent_path if parent_path else arg
             text += "<table>"
             for key in value:
-                nested_path = f"{parent_path}.{key}" if parent_path else f"{arg}.{key}"
+                nested_path = f"{dict_path}.{key}"
                 nested_value = value[key]
 
                 # Check if this nested value is editable
                 can_edit = self.is_editable_value(nested_value)
                 actions_cell = ""
+                nested_row_id = None
 
-                if can_edit and row_counter is not None:
+                if row_counter is not None:
                     row_counter[0] += 1
                     nested_row_id = row_counter[0]
 
-                    if isinstance(nested_value, bool):
-                        toggle_class = "toggle-button active" if nested_value else "toggle-button"
-                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
-                    else:
-                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                    if can_edit:
+                        if isinstance(nested_value, bool):
+                            toggle_class = "toggle-button active" if nested_value else "toggle-button"
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
+                        else:
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
 
-                    # Store the nested value info for later processing
-                    if not hasattr(self, "_nested_values"):
-                        self._nested_values = {}
-                    self._nested_values[nested_row_id] = {"path": nested_path, "value": nested_value}
+                        # Store the nested value info for later processing
+                        if not hasattr(self, "_nested_values"):
+                            self._nested_values = {}
+                        self._nested_values[nested_row_id] = {"path": nested_path, "value": nested_value}
+
+                    # Every setting can be removed, whether or not its value itself is editable
+                    actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(key, nested_value)
 
-                if actions_cell:
-                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                if nested_row_id is not None:
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
+            text += self.render_add_row("addDictKey", [dict_path], "Add setting", row_counter)
             text += "</table>"
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z_]+\.\S+", value)
@@ -3634,6 +3665,159 @@ chart.render();
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    def _split_yaml_path(self, path):
+        """
+        Split a dot-notation path into keys, with each list index as its own '[n]' key
+        """
+        keys = []
+        # Split out every set of square brackets into its own key, e.g. "battery_charge_low[0]"
+        # into "battery_charge_low", "[0]", and a directly nested list's "foo[0][1]" into
+        # "foo", "[0]", "[1]"
+        for component in path.split("."):
+            for token in re.split(r"(\[[^\[\]]*\])", component):
+                if token:
+                    keys.append(token)
+        return keys
+
+    def _yaml_path_index(self, key, path):
+        """
+        Return the integer index held by a '[n]' path key, raising KeyError if it is not one
+        """
+        index = key[1:-1]
+        if not index.isdigit():
+            raise KeyError(f"Invalid list index '{key}' in path '{path}'")
+        return int(index)
+
+    def _navigate_yaml_path(self, data, keys, path):
+        """
+        Walk YAML data along all but the last key and return the container holding the final key
+        """
+        current = data
+        for key in keys[:-1]:
+            if key.startswith("[") and key.endswith("]"):
+                # Handle numerical index in square brackets
+                index = self._yaml_path_index(key, path)
+                if not isinstance(current, list) or index >= len(current):
+                    raise KeyError(f"Index '{index}' out of range in path '{path}'")
+                current = current[index]
+            elif key in current:
+                current = current[key]
+            else:
+                raise KeyError(f"Key '{key}' not found in path '{path}'")
+        return current
+
+    def _yaml_path_sort_key(self, path):
+        """
+        Return a sort key for a path so that deeper paths and higher list indices sort last
+        """
+        sort_key = []
+        for key in self._split_yaml_path(path):
+            if key.startswith("[") and key.endswith("]") and key[1:-1].isdigit():
+                sort_key.append((0, int(key[1:-1]), ""))
+            else:
+                sort_key.append((1, 0, str(key)))
+        return sort_key
+
+    def _parse_yaml_fragment(self, text):
+        """
+        Parse a user supplied YAML fragment (a scalar, or a block of key: value lines) into a value
+        """
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        value = yaml.load(text)
+        if value is None:
+            raise ValueError("value is empty")
+        return value
+
+    def _delete_nested_yaml_value(self, data, path):
+        """
+        Delete a nested list item or dictionary key from YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
+
+        key = keys[-1]
+        if key.startswith("[") and key.endswith("]"):
+            # Handle numerical index in square brackets
+            index = self._yaml_path_index(key, path)
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(f"Index '{index}' out of range in path '{path}'")
+            del current[index]
+        elif isinstance(current, dict) and key in current:
+            del current[key]
+        else:
+            raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+    def _add_nested_yaml_value(self, data, path, value):
+        """
+        Add a new list item (path ending in '[]') or dictionary key to YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
+
+        key = keys[-1]
+        if key == "[]":
+            if not isinstance(current, list):
+                raise KeyError(f"Path '{path}' does not refer to a list")
+            current.append(value)
+        elif key.startswith("[") and key.endswith("]"):
+            raise KeyError(f"Cannot add at an existing list index, use [] to append in path '{path}'")
+        elif not isinstance(current, dict):
+            raise KeyError(f"Path '{path}' does not refer to a dictionary")
+        elif key in current:
+            raise KeyError(f"Key '{key}' already exists in path '{path}'")
+        else:
+            current[key] = value
+
+    def _update_nested_yaml_value(self, data, path, value):
+        """
+        Update a nested value in YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
+
+        # Set the final value
+        key = keys[-1]
+        if key.startswith("[") and key.endswith("]"):
+            # Handle numerical index in square brackets
+            index = self._yaml_path_index(key, path)
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(f"Index '{index}' out of range in path '{path}'")
+            current[index] = value
+        elif key in current:
+            current[key] = value
+        else:
+            # If final key is numerical try it as an integer
+            if key.isdigit():
+                key = int(key)
+                if key not in current:
+                    raise KeyError(f"Final key '{key}' not found in path '{path}'")
+                else:
+                    current[key] = value
+            else:
+                raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+    def _validate_compare_list(self, compare_list):
+        """
+        Check every compare_list profile still has the unique id and non-empty name that
+        compare.py indexes results by, raising ValueError if a batch has left one without
+        """
+        if not compare_list:
+            return
+
+        seen_ids = set()
+        for entry in compare_list:
+            if not isinstance(entry, dict):
+                raise ValueError("Each compare_list entry must be a dictionary with an id and a name")
+            entry_id = entry.get("id")
+            if not entry_id:
+                raise ValueError("Each compare_list entry requires a non-empty 'id'")
+            if entry_id in seen_ids:
+                raise ValueError(f"Duplicate compare_list id '{entry_id}'")
+            seen_ids.add(entry_id)
+            if not entry.get("name"):
+                raise ValueError(f"compare_list entry '{entry_id}' requires a non-empty 'name'")
+
     async def html_apps_post(self, request):
         """
         Handle POST request for apps page - batch edit values
@@ -3669,12 +3853,47 @@ chart.render();
             if ROOT_YAML_KEY not in data:
                 return web.json_response({"success": False, "message": "pred_bat section not found in apps.yaml"})
 
-            # Process each change
+            # Process each change - additions and updates are applied first, then deletions, as
+            # deleting a list item shifts the indices every other path was rendered against.
+            # Every mutation lands on live_args, a copy of self.args, rather than self.args
+            # itself - a batch that fails partway, or whose file write fails, must never leave
+            # self.args (which is the same object as self.base.args) reflecting only some of it
             updated_args = []
+            deleted_paths = []
+            live_args = copy.deepcopy(self.args)
             for path_or_arg, change_info in changes.items():
-                new_value = change_info["newValue"]
                 change_type = change_info.get("type", "numerical")
                 is_nested = change_info.get("isNested", False)
+                # Adds are keyed uniquely by the browser so several can target one list, so the
+                # path is taken from the change itself rather than from the key
+                path_or_arg = change_info.get("path", path_or_arg) if is_nested else path_or_arg
+
+                if change_type in ("add", "delete"):
+                    # Determine nesting from the parsed path itself, not the client-supplied
+                    # isNested flag, so a delete posted with isNested spoofed true still cannot
+                    # reach a bare top-level key
+                    if len(self._split_yaml_path(path_or_arg)) < 2:
+                        return web.json_response({"success": False, "message": f"Only nested values can be added or deleted, not {path_or_arg}"})
+
+                if change_type == "delete":
+                    deleted_paths.append(path_or_arg)
+                    continue
+
+                new_value = change_info["newValue"]
+
+                if change_type == "add":
+                    # Added values are entered as YAML so a whole new list entry can be created at once
+                    try:
+                        added_value = self._parse_yaml_fragment(new_value)
+                    except Exception as e:
+                        return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {str(e)}"})
+                    try:
+                        self._add_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, added_value)
+                        self._add_nested_yaml_value(live_args, path_or_arg, copy.deepcopy(added_value))
+                    except (KeyError, TypeError) as e:
+                        return web.json_response({"success": False, "message": f"Could not add {path_or_arg}: {str(e)}"})
+                    updated_args.append(f"added {path_or_arg}")
+                    continue
 
                 # Convert the new value to appropriate type
                 try:
@@ -3696,8 +3915,8 @@ chart.render();
                 if is_nested:
                     # Handle nested paths like "battery_charge_low.normal"
                     try:
-                        update_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, converted_value)
-                        update_nested_yaml_value(self.args, path_or_arg, converted_value)
+                        self._update_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, converted_value)
+                        self._update_nested_yaml_value(live_args, path_or_arg, converted_value)
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     except (KeyError, TypeError) as e:
                         return web.json_response({"success": False, "message": f"Path {path_or_arg} not found or invalid: {str(e)}"})
@@ -3705,15 +3924,38 @@ chart.render();
                     # Handle top-level arguments
                     if path_or_arg in data[ROOT_YAML_KEY]:
                         data[ROOT_YAML_KEY][path_or_arg] = converted_value
-                        self.args[path_or_arg] = converted_value  # Update the base args as well
+                        live_args[path_or_arg] = converted_value
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     else:
                         return web.json_response({"success": False, "message": f"Argument {path_or_arg} not found in apps.yaml"})
+
+            # Deletions run last, deepest path and highest list index first, so that one deletion
+            # never shifts the index another one still refers to
+            for path in sorted(deleted_paths, key=self._yaml_path_sort_key, reverse=True):
+                try:
+                    self._delete_nested_yaml_value(data[ROOT_YAML_KEY], path)
+                    self._delete_nested_yaml_value(live_args, path)
+                except (KeyError, TypeError) as e:
+                    return web.json_response({"success": False, "message": f"Could not delete {path}: {str(e)}"})
+                updated_args.append(f"deleted {path}")
+
+            # Compare profiles are indexed by id elsewhere (e.g. compare.py), so a batch that
+            # leaves one without an id or name, or with a duplicate id, must be refused
+            try:
+                self._validate_compare_list(data[ROOT_YAML_KEY].get("compare_list"))
+            except ValueError as e:
+                return web.json_response({"success": False, "message": str(e)})
 
             # Write back to the file, preserving comments and formatting
             try:
                 with open(apps_yaml_path, "w") as f:
                     yaml.dump(data, f)
+
+                # Only now that the whole batch has validated and the file write has succeeded is
+                # the live config published - in place, so self.args (the same object as
+                # self.base.args) never reflects a partially applied batch
+                self.args.clear()
+                self.args.update(live_args)
 
                 change_count = len(updated_args)
                 self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")
@@ -4565,7 +4807,6 @@ chart.render();
             from components import COMPONENT_LIST
 
             component_info = COMPONENT_LIST.get(component_name, {})
-            component = self.base.components.get_component(component_name)
             is_alive = self.base.components.is_alive(component_name)
             can_restart = self.base.components.can_restart(component_name)
             is_active = component_name in active_components
@@ -5533,13 +5774,13 @@ document.addEventListener('DOMContentLoaded', function() {
                                     import linecache
 
                                     line_code = linecache.getline(code.co_filename, line_no).strip()
-                                except:
+                                except Exception:
                                     line_code = ""
 
                                 stack.append({"file": code.co_filename, "line": line_no, "name": code.co_name, "code": line_code})
 
                             task_info["stack"] = stack
-                except Exception as e:
+                except Exception:
                     # If we can't get the coroutine stack, just skip it
                     pass
 
@@ -5712,7 +5953,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 except Exception as e:
                     try:
                         yaml_key = str(key)
-                    except:
+                    except Exception:
                         yaml_key = f"<unprintable_key_{hash(key)}>"
                     result[yaml_key] = f"<error: {type(e).__name__}>"
             # Remove from visited after processing to allow same object in different branches
@@ -5743,7 +5984,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if len(str_value) > 200:
                 return str_value[:200] + "..."
             return str_value
-        except:
+        except Exception:
             return f"<{type(obj).__name__}>"
 
     def _get_object_members(self, obj, path):
@@ -5848,7 +6089,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     display_value = str_value[:100] + "..."
                 else:
                     display_value = str_value
-            except:
+            except Exception:
                 display_value = f"<{value_type}>"
 
         # Build the full path for this item using :: as separator

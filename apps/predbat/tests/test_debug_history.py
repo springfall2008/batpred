@@ -240,7 +240,7 @@ def test_debug_history(my_predbat):
     print("Test: 'latest' (and a falsy id) resolves to the newest snapshot")
     storage = FakeStorage()
     asyncio.run(capture_snapshot(storage, sample_yaml_text("first"), now, max_count=15))
-    newest_id = asyncio.run(capture_snapshot(storage, sample_yaml_text("newest"), now + datetime.timedelta(hours=1), max_count=15))
+    asyncio.run(capture_snapshot(storage, sample_yaml_text("newest"), now + datetime.timedelta(hours=1), max_count=15))
     if asyncio.run(load_snapshot(storage, "latest")) != sample_yaml_text("newest"):
         print("  ERROR: id='latest' should resolve to the newest snapshot")
         failed = True

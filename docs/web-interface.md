@@ -219,6 +219,11 @@ Click the edit button to change a value, when all the edits are complete hit sav
 
 <img alt="image of Predbat apps view" src="https://github.com/user-attachments/assets/f9aacd17-f25b-45d6-95fe-229431a1f4d6" />
 
+Alongside the edit button, each entry of a list and each setting within it can be removed with the **Delete** button, and new ones created with the
+**Add item** and **Add setting** buttons at the end of each group. This is how you add, change or remove a [tariff to compare](compare.md) without hand-editing
+the YAML - **Add item** against `compare_list` asks for the new tariff as one `setting: value` per line, starting from a template of the required `name` and `id`.
+Deletions and additions are only pending until you hit save, so they can be undone first with the **Undo**, **Remove** and **Discard Changes** buttons.
+
 Predbat validates your `apps.yaml` every time it runs and if there are any configuration issues it displays a count of those errors and highlights the items in error in red:
 
 ![image](images/web-interface-apps-yaml-validation-error.png)

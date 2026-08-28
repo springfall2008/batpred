@@ -12,7 +12,7 @@ import predbat  # noqa: F401  (import first - avoids circular import: config.py 
 from unittest.mock import patch
 from tests.test_alphaess_api import MockAlphaESS, _envelope
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
-from alphaess_const import ALPHAESS_SETTLE_POLLS
+from alphaess_const import ALPHAESS_SETTLE_POLLS, ALPHAESS_WRITE_SETTLE_SECONDS, ALPHAESS_WRITE_BURST_MAX
 
 
 def _schedule(reserve=10, charge=None, export=None, charge_power=3000, export_power=3000):
@@ -848,7 +848,13 @@ def test_alphaess_reconcile_skips_a_serial_predbat_has_not_been_asked_to_drive()
 
 def test_alphaess_minimum_write_interval_holds_a_change_rather_than_dropping_it():
     """The 24h documented write limit is treated as a real budget, but a held change must
-    be applied on the next eligible tick - not lost."""
+    be applied on the next eligible tick - not lost.
+
+    The second write is 100 seconds later, past ALPHAESS_WRITE_SETTLE_SECONDS: a genuinely
+    NEW schedule update, not the tail of the one just committed. Corrections inside the
+    settle window are exempt on purpose and are covered by
+    test_alphaess_same_cycle_correction_is_not_held_by_the_write_pacer.
+    """
     failed = False
     client = _writable()
     client.min_write_interval = 300
@@ -858,7 +864,7 @@ def test_alphaess_minimum_write_interval_holds_a_change_rather_than_dropping_it(
     with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)):
         with patch("alphaess.time.time", return_value=1000.0):
             run_async_local(client.apply_settings("AL70", first))
-        with patch("alphaess.time.time", return_value=1010.0):
+        with patch("alphaess.time.time", return_value=1100.0):
             run_async_local(client.apply_settings("AL70", second))
         held = client.applied_payload["AL70"]["charge"]["batHighCap"]
         if held != 90:
@@ -962,6 +968,9 @@ def test_alphaess_held_write_is_not_reported_as_applied():
     A later consumer (Task 11's periodic reconciliation) could otherwise read a bare True
     as "the inverter matches the plan" when a real change is still pending behind the
     minimum write interval.
+
+    100 seconds apart, so this is a new schedule update rather than a same-cycle correction
+    inside ALPHAESS_WRITE_SETTLE_SECONDS, which is deliberately allowed through.
     """
     failed = False
     client = _writable()
@@ -972,7 +981,7 @@ def test_alphaess_held_write_is_not_reported_as_applied():
     with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)):
         with patch("alphaess.time.time", return_value=1000.0):
             first_result = run_async_local(client.apply_settings("AL70", first))
-        with patch("alphaess.time.time", return_value=1010.0):
+        with patch("alphaess.time.time", return_value=1100.0):
             held_result = run_async_local(client.apply_settings("AL70", second))
     if not first_result:
         print(f"ERROR: a genuinely sent write returned {first_result!r}, should be truthy")
@@ -981,6 +990,135 @@ def test_alphaess_held_write_is_not_reported_as_applied():
         print(f"ERROR: apply_settings returned {held_result!r} for a change HELD by min_write_interval, should be falsy")
         failed = True
     assert not failed, "test_alphaess_held_write_is_not_reported_as_applied"
+
+
+def test_alphaess_same_cycle_correction_is_not_held_by_the_write_pacer():
+    """GH#4769: a stale target SoC committed with the charge window must be correctable now.
+
+    Predbat commits a schedule in stages - window, then enable, then target SoC - pressing
+    the schedule write button after each one. The first commit of a cycle therefore carries
+    whatever target SoC the control entity still holds from the previous cycle, which for a
+    manual charge on the live slot was 0, clamped up to the API's chargeLimit floor of 10.
+    The corrected 100 arrived three seconds later and was held for the full 300s, so the
+    inverter ran a "charge to 10%" schedule on an already-active window and the house sat on
+    the grid at 69% SoC.
+
+    Reproduced on the periodic path, since that is what the reporter's system uses, and
+    asserted on the POST BODY rather than the call count: the point is that the value which
+    actually reached AlphaESS is the corrected one.
+    """
+    failed = False
+    client = _writable()
+    client._periodic_ok["AL70"] = True
+    client.min_write_interval = 300
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    stale = _schedule(charge={"enable": True, "soc": 0, "power": 5000, "start": "00:30:00", "end": "01:00:00"})
+    corrected = _schedule(charge={"enable": True, "soc": 100, "power": 5000, "start": "00:30:00", "end": "01:00:00"})
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)) as session:
+        with patch("alphaess.time.time", return_value=1000.0):
+            run_async_local(client.apply_settings("AL70", stale))
+        # Three seconds later, exactly as adjust_battery_target follows adjust_charge_window.
+        with patch("alphaess.time.time", return_value=1003.0):
+            corrected_result = run_async_local(client.apply_settings("AL70", corrected))
+    limits = [call.kwargs.get("json", {}).get("chargeTimeList", [{}])[0].get("chargeLimit") for call in session.return_value.post.call_args_list]
+    if limits != [10, 100]:
+        print(f"ERROR: the corrected target SoC did not reach AlphaESS in the same cycle, chargeLimit sent: {limits}")
+        failed = True
+    if not corrected_result:
+        print(f"ERROR: apply_settings returned {corrected_result!r} for a correction that was actually sent")
+        failed = True
+    assert not failed, "test_alphaess_same_cycle_correction_is_not_held_by_the_write_pacer"
+
+
+def test_alphaess_correction_burst_is_capped_so_pacing_still_bounds_the_write_budget():
+    """The settle exemption is a correction path, not an open door.
+
+    Once ALPHAESS_WRITE_BURST_MAX writes have gone out inside one settle window, the next
+    differing payload is held again - so the worst case against the documented 24-hour write
+    budget stays a small constant per pacing interval rather than one write per tick.
+    """
+    failed = False
+    client = _writable()
+    # Periodic, so one apply_settings is exactly one POST and the count below is unambiguous -
+    # the legacy pair sends charge and discharge separately and is gated per direction.
+    client._periodic_ok["AL70"] = True
+    client.min_write_interval = 300
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    # One payload per burst slot, plus one more that must be refused.
+    schedules = [_schedule(charge={"enable": True, "soc": soc, "power": 3000, "start": "01:00:00", "end": "05:00:00"}) for soc in range(90, 90 - (ALPHAESS_WRITE_BURST_MAX + 1), -1)]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)) as session:
+        for offset, schedule in enumerate(schedules):
+            with patch("alphaess.time.time", return_value=1000.0 + offset):
+                run_async_local(client.apply_settings("AL70", schedule))
+        sent = session.return_value.post.call_count
+        if sent != ALPHAESS_WRITE_BURST_MAX:
+            print(f"ERROR: burst sent {sent} write(s), expected the cap of {ALPHAESS_WRITE_BURST_MAX}")
+            failed = True
+        # Past the settle window but still inside the pacing interval: still held.
+        with patch("alphaess.time.time", return_value=1000.0 + ALPHAESS_WRITE_SETTLE_SECONDS + 10):
+            run_async_local(client.apply_settings("AL70", schedules[-1]))
+        if session.return_value.post.call_count != sent:
+            print("ERROR: a write went out past the settle window but inside alphaess_min_write_interval")
+            failed = True
+        # Past the pacing interval: the held change goes out, and starts a fresh burst.
+        with patch("alphaess.time.time", return_value=1400.0):
+            run_async_local(client.apply_settings("AL70", schedules[-1]))
+    if session.return_value.post.call_count != sent + 1:
+        print(f"ERROR: the held change never went out past alphaess_min_write_interval, {sent} -> {session.return_value.post.call_count} POST(s)")
+        failed = True
+    if client.write_burst_writes.get(("AL70", "periodic")) != 1:
+        print(f"ERROR: a write outside the settle window did not start a fresh burst: {client.write_burst_writes}")
+        failed = True
+    assert not failed, "test_alphaess_correction_burst_is_capped_so_pacing_still_bounds_the_write_budget"
+
+
+def test_alphaess_rejected_write_does_not_open_a_correction_burst():
+    """Only a SUCCESSFUL write opens the settle window.
+
+    A rejected write applied nothing, so there is no half-applied schedule to correct, and
+    exempting it would reopen exactly the retry storm alphaess_min_write_interval exists to
+    stop - the 6053/6008 pacing this component already fixed once.
+    """
+    failed = False
+    client = _writable()
+    client.min_write_interval = 300
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    changed = _schedule(charge={"enable": True, "soc": 80, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    rejected = create_aiohttp_mock_response(status=200, json_data=_envelope(6008, None, msg="Set failed"))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(rejected)) as session:
+        with patch("alphaess.time.time", return_value=1000.0):
+            run_async_local(client.apply_settings("AL70", schedule))
+            calls_after_first = session.return_value.post.call_count
+        # Three seconds later with a genuinely different payload: still paced, because the
+        # first write never landed.
+        with patch("alphaess.time.time", return_value=1003.0):
+            run_async_local(client.apply_settings("AL70", changed))
+    if session.return_value.post.call_count != calls_after_first:
+        print(f"ERROR: a rejected write opened a correction burst, {calls_after_first} -> {session.return_value.post.call_count} POST(s)")
+        failed = True
+    if client.write_burst_start:
+        print(f"ERROR: a rejected write recorded a settle burst: {client.write_burst_start}")
+        failed = True
+    assert not failed, "test_alphaess_rejected_write_does_not_open_a_correction_burst"
+
+
+def test_alphaess_settle_window_never_outlasts_a_shortened_write_interval():
+    """A user who shortens alphaess_min_write_interval must not get a grace longer than it.
+
+    A fixed 60s window would otherwise swallow a 30s pacer whole, leaving that user with no
+    pacing at all rather than the tighter pacing they asked for.
+    """
+    failed = False
+    client = _writable()
+    client.min_write_interval = 30
+    if client._write_settle_seconds() != 30:
+        print(f"ERROR: settle window {client._write_settle_seconds()}s exceeds a 30s min_write_interval")
+        failed = True
+    client.min_write_interval = 300
+    if client._write_settle_seconds() != ALPHAESS_WRITE_SETTLE_SECONDS:
+        print(f"ERROR: settle window {client._write_settle_seconds()}s should be ALPHAESS_WRITE_SETTLE_SECONDS at the default interval")
+        failed = True
+    assert not failed, "test_alphaess_settle_window_never_outlasts_a_shortened_write_interval"
 
 
 def test_alphaess_write_button_is_not_forced():
@@ -1621,6 +1759,10 @@ def run_alphaess_control_tests(my_predbat):
         ("6053_paces_the_retry", test_alphaess_6053_backs_off_the_retry_via_min_write_interval),
         ("persistent_rejection_paced", test_alphaess_persistently_rejected_write_is_paced_not_retried_every_tick),
         ("held_write_not_applied", test_alphaess_held_write_is_not_reported_as_applied),
+        ("same_cycle_correction_not_held", test_alphaess_same_cycle_correction_is_not_held_by_the_write_pacer),
+        ("correction_burst_capped", test_alphaess_correction_burst_is_capped_so_pacing_still_bounds_the_write_budget),
+        ("rejected_write_opens_no_burst", test_alphaess_rejected_write_does_not_open_a_correction_burst),
+        ("settle_bounded_by_write_interval", test_alphaess_settle_window_never_outlasts_a_shortened_write_interval),
         ("write_button_not_forced", test_alphaess_write_button_is_not_forced),
         ("periodic_6017_cached", test_alphaess_periodic_6017_is_cached_and_never_retried),
         ("periodic_transient_unknown", test_alphaess_periodic_other_failures_leave_the_verdict_unknown),
