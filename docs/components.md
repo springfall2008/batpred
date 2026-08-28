@@ -240,7 +240,9 @@ legitimate reason for an assistant to ever see one raw credential value, so it i
 offered.
 
 `get_apps_config` and `set_apps_config` let an assistant read, and change, one `apps.yaml` setting
-at a time - see [`set_apps_config`](#available-tools-chat) below for the write side, which is
+at a time - either a top-level key or, using a dotted path such as `forecast_solar[0].azimuth`,
+one value inside a nested structure. Both halves accept the same paths, so the model can read back
+what it just wrote, and a path that does not exist is answered with the keys that do - see [`set_apps_config`](#available-tools-chat) below for the write side, which is
 chat-only.
 
 #### Reading Home Assistant state (mcp)

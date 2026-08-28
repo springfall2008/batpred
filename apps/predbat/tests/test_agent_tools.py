@@ -790,6 +790,101 @@ def test_get_entity_history_does_not_block_the_event_loop(my_predbat):
     return failed
 
 
+def test_get_apps_config_paths(my_predbat):
+    """get_apps_config takes the same paths set_apps_config writes, and masks credentials in them.
+
+    The two halves have to agree: a model that writes 'forecast_solar[0].azimuth' will read the
+    same string back to check its work, and a get that only understood top-level names would
+    answer "not found" for a key it had just successfully changed.
+
+    Mutation checks: reverting the lookup to 'key not in self.base.args' fails the nested read;
+    dropping the per-segment mask check returns the real api_key.
+    """
+    failed = False
+    print("**** Testing get_apps_config paths ****")
+
+    original_args = my_predbat.args
+    try:
+        my_predbat.args = {
+            "num_inverters": 1,
+            "forecast_solar": [{"postcode": "SW1A 1AA", "azimuth": 180, "api_key": "REAL-KEY"}],
+            "ha_key": "REAL-HA-TOKEN",
+        }
+        tools = PredbatTools(my_predbat)
+
+        def call(key):
+            """Run get_apps_config for one key and return its result dict."""
+            return asyncio.run(tools.execute("get_apps_config", {"key": key}))
+
+        # A nested path resolves to the single value.
+        result = call("forecast_solar[0].azimuth")
+        if not result.get("success") or result["data"]["value"] != 180:
+            print("ERROR: nested path did not resolve: {}".format(result))
+            failed = True
+
+        # A nested path whose leaf is a credential is masked, not returned.
+        result = call("forecast_solar[0].api_key")
+        if "REAL-KEY" in json.dumps(result):
+            print("ERROR: a nested credential path returned the real key: {}".format(result))
+            failed = True
+        if not result.get("masked"):
+            print("ERROR: a nested credential path was not reported as masked: {}".format(result))
+            failed = True
+
+        # Reading the container still masks the credential inside it.
+        result = call("forecast_solar")
+        if "REAL-KEY" in json.dumps(result):
+            print("ERROR: reading the container leaked the nested credential: {}".format(result))
+            failed = True
+
+        # Top-level behaviour is unchanged.
+        if call("num_inverters")["data"]["value"] != 1:
+            print("ERROR: a plain top-level read broke")
+            failed = True
+        if "REAL-HA-TOKEN" in json.dumps(call("ha_key")):
+            print("ERROR: a top-level credential stopped being masked")
+            failed = True
+
+        # A credential in a non-leaf segment masks the read. Like the write side, this is what
+        # the per-segment check buys over testing the joined path: is_secret_key matches
+        # substrings, so "forecast_solar[0].api_key" is caught either way - but
+        # "password.token_expires" ends with the exempt suffix "_expires", so the joined string
+        # reads as safe while the segment "password" does not. Masking a child of a credential
+        # dict is deliberate over-caution: anything hanging off a key called password is assumed
+        # sensitive until someone says otherwise.
+        my_predbat.args["password"] = {"token_expires": 100}
+        tools = PredbatTools(my_predbat)
+        result = asyncio.run(tools.execute("get_apps_config", {"key": "password.token_expires"}))
+        if not result.get("masked"):
+            print("ERROR: a path descending through a credential key was not masked: {}".format(result))
+            failed = True
+
+        # A path that does not resolve names what does exist, rather than a bare "not found".
+        result = call("forecast_solar[0].no_such_field")
+        if result.get("success"):
+            print("ERROR: a nonexistent nested path was accepted: {}".format(result))
+            failed = True
+        error_text = str(result.get("error", ""))
+        if "azimuth" not in error_text or "postcode" not in error_text:
+            print("ERROR: the not-found error did not list the available keys: {}".format(error_text))
+            failed = True
+
+        # An out-of-range index says so, and says the container is a list.
+        result = call("forecast_solar[7].azimuth")
+        if result.get("success") or "list" not in str(result.get("error", "")):
+            print("ERROR: an out-of-range index was not explained as a list: {}".format(result))
+            failed = True
+
+        # Reading a container suggests the concrete child path, built from its own keys.
+        result = call("forecast_solar")
+        if "forecast_solar[0].postcode" not in str(result.get("description", "")):
+            print("ERROR: reading a container did not suggest a child path: {}".format(result.get("description")))
+            failed = True
+    finally:
+        my_predbat.args = original_args
+    return failed
+
+
 def run_agent_tools_tests(my_predbat):
     """Run every shared tool layer test, returning True if any of them failed."""
     failed = False
@@ -809,6 +904,7 @@ def run_agent_tools_tests(my_predbat):
     failed |= test_get_entity_history_bucket_cap(my_predbat)
     failed |= test_get_entity_history_lookback_clamp(my_predbat)
     failed |= test_nested_credentials_are_redacted(my_predbat)
+    failed |= test_get_apps_config_paths(my_predbat)
     failed |= test_pathological_regex_arguments_are_rejected(my_predbat)
     failed |= test_get_entity_history_does_not_block_the_event_loop(my_predbat)
     return failed

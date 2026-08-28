@@ -1,257 +1,257 @@
 {
   "tools": [
     {
+      "name": "get_plan",
       "description": "Get the current Predbat battery plan data including forecast, costs, and state information",
       "inputSchema": {
+        "type": "object",
         "properties": {},
-        "required": [],
-        "type": "object"
-      },
-      "name": "get_plan"
+        "required": []
+      }
     },
     {
+      "name": "get_status",
       "description": "Get the current Predbat system status and configuration",
       "inputSchema": {
+        "type": "object",
         "properties": {},
-        "required": [],
-        "type": "object"
-      },
-      "name": "get_status"
+        "required": []
+      }
     },
     {
+      "name": "get_apps",
       "description": "Get predbat apps.yaml static configuration data, with credentials redacted by default",
       "inputSchema": {
+        "type": "object",
         "properties": {
           "filter": {
-            "description": "The configuration item name to filter on, as a Python regex (optional)",
-            "type": "string"
+            "type": "string",
+            "description": "The configuration item name to filter on, as a Python regex (optional)"
           },
           "masked": {
-            "description": "Redact credential-like values such as API keys, secrets and passwords (default true)",
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Redact credential-like values such as API keys, secrets and passwords (default true)"
           }
         },
-        "required": [],
-        "type": "object"
-      },
-      "name": "get_apps"
+        "required": []
+      }
     },
     {
-      "description": "Get the current value of one apps.yaml key, with a credential-like value redacted. Use before set_apps_config to read the value you are about to change.",
+      "name": "get_apps_config",
+      "description": "Get the current value of one apps.yaml key, with a credential-like value redacted. Use before set_apps_config to read the value you are about to change. Accepts the same dotted paths set_apps_config writes, so you can read back exactly what you wrote.",
       "inputSchema": {
+        "type": "object",
         "properties": {
           "key": {
-            "description": "The apps.yaml key name to read",
-            "type": "string"
+            "type": "string",
+            "description": "The apps.yaml key to read. Use a dotted path to reach inside a nested structure, e.g. 'forecast_solar[0].azimuth'. Call get_apps first, or read the parent key, to see what the structure contains. If a path does not exist the error lists the keys that do."
           }
         },
         "required": [
           "key"
-        ],
-        "type": "object"
-      },
-      "name": "get_apps_config"
+        ]
+      }
     },
     {
+      "name": "get_state",
       "description": "Get Predbat's internal state variables - the same data a debug yaml carries, one key at a time. Called with no arguments it returns every small variable and describes the large ones (per-minute series) without returning them.",
       "inputSchema": {
+        "type": "object",
         "properties": {
-          "filter": {
-            "description": "Only return variables whose name matches this Python regex (optional)",
-            "type": "string"
-          },
           "keys": {
-            "description": "Specific state variable names to return (optional - omit for every small variable)",
+            "type": "array",
             "items": {
               "type": "string"
             },
-            "type": "array"
+            "description": "Specific state variable names to return (optional - omit for every small variable)"
+          },
+          "filter": {
+            "type": "string",
+            "description": "Only return variables whose name matches this Python regex (optional)"
           },
           "max_bytes": {
-            "description": "Per-variable size budget before it is described rather than returned (default 2048, maximum 262144)",
-            "type": "integer"
+            "type": "integer",
+            "description": "Per-variable size budget before it is described rather than returned (default 2048, maximum 262144)"
           }
         },
-        "required": [],
-        "type": "object"
-      },
-      "name": "get_state"
+        "required": []
+      }
     },
     {
+      "name": "get_log",
       "description": "Get the Predbat log (predbat.log), filtered by level, search term and age - use this to diagnose warnings and errors. Lines are returned oldest-first.",
       "inputSchema": {
+        "type": "object",
         "properties": {
           "filter": {
+            "type": "string",
             "description": "Log level to return: all, info, warnings or errors (default warnings)",
             "enum": [
               "all",
               "info",
               "warnings",
               "errors"
-            ],
-            "type": "string"
-          },
-          "hours": {
-            "description": "Only return lines written in the last N hours (optional)",
-            "type": "number"
-          },
-          "max_lines": {
-            "description": "Maximum number of lines to return. The most recent matching lines are the ones kept, but they are returned oldest-first (default 500, maximum 5000)",
-            "type": "integer"
+            ]
           },
           "search": {
-            "description": "Only return lines containing this text, case-insensitive (optional)",
-            "type": "string"
+            "type": "string",
+            "description": "Only return lines containing this text, case-insensitive (optional)"
+          },
+          "hours": {
+            "type": "number",
+            "description": "Only return lines written in the last N hours (optional)"
+          },
+          "max_lines": {
+            "type": "integer",
+            "description": "Maximum number of lines to return. The most recent matching lines are the ones kept, but they are returned oldest-first (default 500, maximum 5000)"
           }
         },
-        "required": [],
-        "type": "object"
-      },
-      "name": "get_log"
+        "required": []
+      }
     },
     {
+      "name": "get_config",
       "description": "Get the current Predbat live configuration settings",
       "inputSchema": {
+        "type": "object",
         "properties": {
           "filter": {
-            "description": "The entity ID name to filter on, as a Python regex (optional)",
-            "type": "string"
+            "type": "string",
+            "description": "The entity ID name to filter on, as a Python regex (optional)"
           }
         },
-        "required": [],
-        "type": "object"
-      },
-      "name": "get_config"
+        "required": []
+      }
     },
     {
+      "name": "get_entities",
       "description": "Get the current Predbat entities",
       "inputSchema": {
+        "type": "object",
         "properties": {
           "filter": {
-            "description": "The configuration item name to filter on, as a Python regex (optional)",
-            "type": "string"
+            "type": "string",
+            "description": "The configuration item name to filter on, as a Python regex (optional)"
           }
         },
-        "required": [],
-        "type": "object"
-      },
-      "name": "get_entities"
+        "required": []
+      }
     },
     {
+      "name": "set_config",
       "description": "Set Predbat configuration setting",
       "inputSchema": {
+        "type": "object",
         "properties": {
           "entity_id": {
-            "description": "The entity ID of the configuration setting to update",
-            "type": "string"
+            "type": "string",
+            "description": "The entity ID of the configuration setting to update"
           },
           "value": {
-            "description": "The new value for the configuration setting",
-            "type": "string"
+            "type": "string",
+            "description": "The new value for the configuration setting"
           }
         },
         "required": [
           "entity_id",
           "value"
-        ],
-        "type": "object"
-      },
-      "name": "set_config"
+        ]
+      }
     },
     {
+      "name": "set_plan_override",
       "description": "Override the current Predbat plan for a specific 30 minute period with a manual action",
       "inputSchema": {
+        "type": "object",
         "properties": {
           "action": {
-            "description": "The action to perform: demand, charge, export, freeze_charge, freeze_export, clear",
-            "type": "string"
+            "type": "string",
+            "description": "The action to perform: demand, charge, export, freeze_charge, freeze_export, clear"
           },
           "time": {
-            "description": "The time at which to perform the action, in \"Day HH:MM\" format (24-hour), covers one 30-minute period",
-            "type": "string"
+            "type": "string",
+            "description": "The time at which to perform the action, in \"Day HH:MM\" format (24-hour), covers one 30-minute period"
           }
         },
         "required": [
           "action",
           "time"
-        ],
-        "type": "object"
-      },
-      "name": "set_plan_override"
+        ]
+      }
     },
     {
+      "name": "search_entities",
       "description": "Search every Home Assistant entity id with a regular expression - not just Predbat's own. Requires switch.predbat_ai_ha_state_enable.",
       "inputSchema": {
+        "type": "object",
         "properties": {
-          "limit": {
-            "description": "Maximum number of matches to return (default 50, maximum 200)",
-            "type": "integer"
-          },
           "pattern": {
-            "description": "Python regular expression matched against entity ids",
-            "type": "string"
+            "type": "string",
+            "description": "Python regular expression matched against entity ids"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of matches to return (default 50, maximum 200)"
           }
         },
         "required": [
           "pattern"
-        ],
-        "type": "object"
-      },
-      "name": "search_entities"
+        ]
+      }
     },
     {
+      "name": "get_entity_state",
       "description": "Get one Home Assistant entity's current state - not just Predbat's own. Requires switch.predbat_ai_ha_state_enable.",
       "inputSchema": {
+        "type": "object",
         "properties": {
-          "attributes": {
-            "description": "Include the entity's attribute dict as well as its state (default false) - kept separate from search_entities because attribute dicts are bulky",
-            "type": "boolean"
-          },
           "entity_id": {
-            "description": "The entity id to look up, e.g. binary_sensor.front_door",
-            "type": "string"
+            "type": "string",
+            "description": "The entity id to look up, e.g. binary_sensor.front_door"
+          },
+          "attributes": {
+            "type": "boolean",
+            "description": "Include the entity's attribute dict as well as its state (default false) - kept separate from search_entities because attribute dicts are bulky"
           }
         },
         "required": [
           "entity_id"
-        ],
-        "type": "object"
-      },
-      "name": "get_entity_state"
+        ]
+      }
     },
     {
+      "name": "get_entity_history",
       "description": "Get one Home Assistant entity's history over a time window, bucketed into fixed-width time slots - not just Predbat's own. Requires switch.predbat_ai_ha_state_enable.",
       "inputSchema": {
+        "type": "object",
         "properties": {
-          "attribute": {
-            "description": "Bucket this attribute's value instead of the entity's state (optional - defaults to the entity's state)",
-            "type": "string"
-          },
-          "bucket_minutes": {
-            "description": "Width of each bucket in minutes (default 30). The window is pulled in, not the bucket width, if this would exceed 500 buckets",
-            "type": "integer"
-          },
-          "end": {
-            "description": "End of the window, an ISO-8601 timestamp (assumed UTC if it carries no offset)",
-            "type": "string"
-          },
           "entity_id": {
-            "description": "The entity id to fetch history for",
-            "type": "string"
+            "type": "string",
+            "description": "The entity id to fetch history for"
           },
           "start": {
-            "description": "Start of the window, an ISO-8601 timestamp (assumed UTC if it carries no offset). Clamped to at most 30 days before 'end'",
-            "type": "string"
+            "type": "string",
+            "description": "Start of the window, an ISO-8601 timestamp (assumed UTC if it carries no offset). Clamped to at most 30 days before 'end'"
+          },
+          "end": {
+            "type": "string",
+            "description": "End of the window, an ISO-8601 timestamp (assumed UTC if it carries no offset)"
+          },
+          "bucket_minutes": {
+            "type": "integer",
+            "description": "Width of each bucket in minutes (default 30). The window is pulled in, not the bucket width, if this would exceed 500 buckets"
+          },
+          "attribute": {
+            "type": "string",
+            "description": "Bucket this attribute's value instead of the entity's state (optional - defaults to the entity's state)"
           }
         },
         "required": [
           "entity_id",
           "start",
           "end"
-        ],
-        "type": "object"
-      },
-      "name": "get_entity_history"
+        ]
+      }
     }
   ]
 }

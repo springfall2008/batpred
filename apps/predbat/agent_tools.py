@@ -21,7 +21,22 @@ import math
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
-from utils import calc_percent_limit, get_override_time_from_string, mask_secret_args, is_secret_key, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp, is_debug_excluded_key, is_data_numerical, str2time
+from utils import (
+    SECRET_MASK,
+    parse_yaml_path,
+    resolve_nested_yaml_value,
+    calc_percent_limit,
+    get_override_time_from_string,
+    mask_secret_args,
+    is_secret_key,
+    read_predbat_log,
+    classify_log_line,
+    log_line_included,
+    parse_log_timestamp,
+    is_debug_excluded_key,
+    is_data_numerical,
+    str2time,
+)
 
 
 # Log filter levels accepted by the get_log tool, matching the web log view's tabs
@@ -445,6 +460,70 @@ class PredbatTools:
         except Exception as e:
             return {"success": False, "error": f"Error retrieving Predbat apps.yaml data: {str(e)}", "data": None}
 
+    @staticmethod
+    def _example_child_path(key, value):
+        """Build a concrete child path for a container, to show in a description.
+
+        A model that has just read a list of dicts needs to be told the syntax for reaching one
+        field inside it, using its own key names rather than an abstract example it has to adapt.
+        """
+        if isinstance(value, list) and value:
+            first = value[0]
+            if isinstance(first, dict) and first:
+                return "{}[0].{}".format(key, next(iter(first)))
+            return "{}[0]".format(key)
+        if isinstance(value, dict) and value:
+            return "{}.{}".format(key, next(iter(value)))
+        return key
+
+    @staticmethod
+    def _join_yaml_path(segments):
+        """Rebuild a readable path string from parsed segments, e.g. ['a', '[0]', 'b'] -> a[0].b."""
+        out = ""
+        for segment in segments:
+            if segment.startswith("[") and segment.endswith("]"):
+                out += segment
+            elif out:
+                out += "." + segment
+            else:
+                out = segment
+        return out
+
+    def _describe_available_keys(self, key):
+        """Describe what does exist near a path that did not resolve, or return an empty string.
+
+        A bare "not found" leaves a model guessing at both spelling and the path syntax itself.
+        Naming what exists at the deepest point that did resolve turns a failed call into a usable
+        answer, which matters more here than usual: every wasted call costs a round trip and
+        counts against the turn's tool-round budget. Credential names are listed - a name is not
+        a value, get_apps already returns the full masked key list, and hiding them would only
+        make the model retry a key it cannot see.
+        """
+        current = self.base.args
+        resolved = []
+        for segment in parse_yaml_path(key):
+            try:
+                if segment.startswith("[") and segment.endswith("]"):
+                    index = int(segment[1:-1])
+                    if not isinstance(current, list) or index >= len(current):
+                        break
+                    current = current[index]
+                else:
+                    if not isinstance(current, dict) or segment not in current:
+                        break
+                    current = current[segment]
+                resolved.append(segment)
+            except (TypeError, ValueError):
+                break
+
+        where = self._join_yaml_path(resolved) or "the top level"
+        if isinstance(current, dict) and current:
+            names = [str(name) for name in list(current.keys())[:20]]
+            return " Available keys at {}: {}.".format(where, ", ".join(names))
+        if isinstance(current, list) and current:
+            return " '{}' is a list of {} entries - index it, e.g. '{}[0]'.".format(where, len(current), where)
+        return ""
+
     async def _execute_get_apps_config(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the get_apps_config tool.
 
@@ -460,22 +539,30 @@ class PredbatTools:
             key = arguments.get("key")
             if not key or not isinstance(key, str):
                 raise MCPArgumentError("'key' must be a non-empty string, got {!r}".format(key))
-            if key not in self.base.args:
-                return {"success": False, "error": "'{}' was not found in apps.yaml".format(key), "data": None}
+            # Accepts the same dotted/indexed paths set_apps_config writes, so a model can read
+            # back exactly what it just wrote. Without this the two halves disagree: the write
+            # succeeds on "forecast_solar[0].azimuth" and the read of the same string fails.
+            try:
+                value = resolve_nested_yaml_value(self.base.args, key)
+            except (KeyError, ValueError):
+                return {"success": False, "error": "'{}' was not found in apps.yaml.{}".format(key, self._describe_available_keys(key)), "data": None}
 
-            value = self.base.args[key]
-            masked = is_secret_key(key)
+            # Any credential-named segment masks the whole result: for "forecast_solar[0].api_key"
+            # the leaf is the credential, and for "ha_key.anything" the parent is.
+            masked = any(is_secret_key(segment) for segment in parse_yaml_path(key) if not segment.startswith("["))
             if masked:
-                value = "xxx"
+                value = SECRET_MASK
             else:
-                # The key's own name is not credential-like, but the value may still nest one -
-                # forecast_solar is a list of dicts each holding an api_key. mask_secret_args
-                # walks the whole structure, so wrap and unwrap to reuse it for a single key.
-                value = mask_secret_args({key: value})[key]
+                # No segment is credential-like, but the value may still nest one - forecast_solar
+                # is a list of dicts each holding an api_key. mask_secret_args walks the whole
+                # structure, so wrap and unwrap to reuse it here ("value" is not a secret name).
+                value = mask_secret_args({"value": value})["value"]
 
             description = "The current value of apps.yaml key '{}'".format(key)
             if masked:
-                description += " (credential-like value redacted as 'xxx')"
+                description += " (credential-like value redacted as '{}')".format(SECRET_MASK)
+            elif isinstance(value, (dict, list)):
+                description += ". To change one setting inside it, pass a path such as '{}' to set_apps_config rather than writing the whole structure back".format(self._example_child_path(key, value))
             return {"success": True, "error": None, "data": {"key": key, "value": value}, "masked": masked, "timestamp": datetime.now().isoformat(), "description": description}
 
         except MCPArgumentError as e:
@@ -988,10 +1075,15 @@ TOOL_DEFS = [
     },
     {
         "name": "get_apps_config",
-        "description": "Get the current value of one apps.yaml key, with a credential-like value redacted. Use before set_apps_config to read the value you are about to change.",
+        "description": "Get the current value of one apps.yaml key, with a credential-like value redacted. Use before set_apps_config to read the value you are about to change. Accepts the same dotted paths set_apps_config writes, so you can read back exactly what you wrote.",
         "parameters": {
             "type": "object",
-            "properties": {"key": {"type": "string", "description": "The apps.yaml key name to read"}},
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "The apps.yaml key to read. Use a dotted path to reach inside a nested structure, e.g. 'forecast_solar[0].azimuth'. Call get_apps first, or read the parent key, to see what the structure contains. If a path does not exist the error lists the keys that do.",
+                }
+            },
             "required": ["key"],
         },
         "writes": False,
