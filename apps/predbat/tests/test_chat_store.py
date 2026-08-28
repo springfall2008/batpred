@@ -710,11 +710,66 @@ def test_conversations_are_written_indented(my_predbat):
     return failed
 
 
+def test_superseded_error_is_not_replayed(my_predbat):
+    """An error a later turn has superseded is not handed back for replay.
+
+    An error is deliberately not a message - it is kept out of the transcript so it can never be
+    replayed to the model - which leaves a client rebuilding the conversation with no position to
+    put it back at, so it appended it to the end. A failure from several turns ago then reappeared
+    below the successful reply that followed it, on every single reload.
+
+    The message count recorded with the error is what distinguishes "this is the latest thing that
+    happened", which belongs at the end because that is where it happened, from "a turn has since
+    succeeded", which does not belong on screen at all.
+
+    Mutation check: dropping the count comparison returns the stale error again.
+    """
+    failed = False
+    print("**** Testing a superseded error is not replayed ****")
+
+    store = ConversationStore(FakeStorage(), my_predbat.log)
+    asyncio.run(store.load_index())
+    cid = asyncio.run(store.create())
+    asyncio.run(store.append(cid, {"role": "user", "content": "first"}))
+    asyncio.run(store.append(cid, {"role": "assistant", "content": "reply"}))
+
+    # A turn fails here, with two messages already stored.
+    store.set_last_error(cid, "Rate limited", "code 429", message_count=store.message_count(cid))
+
+    # Nothing has happened since, so it is the current state and belongs on screen.
+    if store.get_last_error(cid, message_count=2) is None:
+        print("ERROR: the latest failure was suppressed")
+        failed = True
+
+    # A later turn succeeds. The failure is now history, and appending it after everything would
+    # put it below the reply that came after it.
+    asyncio.run(store.append(cid, {"role": "user", "content": "second"}))
+    asyncio.run(store.append(cid, {"role": "assistant", "content": "worked this time"}))
+    if store.get_last_error(cid, message_count=4) is not None:
+        print("ERROR: a superseded error is still replayed, and would land at the bottom out of order")
+        failed = True
+
+    # Without a count the caller gets whatever is stored - used where the raw record is wanted.
+    if store.get_last_error(cid) is None:
+        print("ERROR: the stored record is unreachable without a count")
+        failed = True
+
+    # A record written before the count existed cannot be placed, so it is treated as history
+    # rather than resurrected at the end.
+    store.last_errors[cid] = {"message": "old", "detail": None, "at": "2026-01-01T00:00:00+00:00"}
+    if store.get_last_error(cid, message_count=4) is not None:
+        print("ERROR: a countless legacy error was replayed anyway")
+        failed = True
+
+    return failed
+
+
 def run_chat_store_tests(my_predbat):
     """Run every conversation store test, returning True if any of them failed."""
     failed = False
     failed |= test_selected_model_persists(my_predbat)
     failed |= test_conversations_are_written_indented(my_predbat)
+    failed |= test_superseded_error_is_not_replayed(my_predbat)
     failed |= test_create_and_list(my_predbat)
     failed |= test_expiry_is_rolling(my_predbat)
     failed |= test_delete_is_a_flag(my_predbat)

@@ -428,18 +428,55 @@ class ConversationStore:
             self.log("Info: chat conversation '{}' ({}) pruned past the {} conversation limit; its stored copy expires in {} days".format(entry.get("title"), entry["id"], self.max_conversations, self.expiry_days))
         await self._save_index()
 
-    def set_last_error(self, cid, message, detail=None):
-        """Record the most recent failed turn for a conversation, to be written on the next flush."""
+    def set_last_error(self, cid, message, detail=None, message_count=None):
+        """Record the most recent failed turn for a conversation, to be written on the next flush.
+
+        The message count at the time is recorded with it. An error is not a message - it is kept
+        out of the transcript so it can never be replayed to the model - which means a client
+        rebuilding the conversation has no position to put it back at, and appended it to the end.
+        A failure from three turns ago then reappeared below the successful reply that followed
+        it, on every reload. The count is what lets the client tell "this is the latest thing that
+        happened" from "a turn has since succeeded"; see html_chat_history's stale check.
+        """
         if not cid:
             return
         with self.lock:
-            self.last_errors[cid] = {"message": message, "detail": detail, "at": datetime.now(timezone.utc).isoformat()}
+            self.last_errors[cid] = {
+                "message": message,
+                "detail": detail,
+                "at": datetime.now(timezone.utc).isoformat(),
+                "message_count": message_count,
+            }
             self.dirty.add(cid)
 
-    def get_last_error(self, cid):
-        """Return the most recent failed turn for a conversation, or None."""
+    def message_count(self, cid):
+        """Return how many messages a conversation currently holds, or 0 if it is not cached."""
         with self.lock:
-            return self.last_errors.get(cid)
+            return len(self.bodies.get(cid) or [])
+
+    def get_last_error(self, cid, message_count=None):
+        """Return the most recent failed turn for a conversation, or None.
+
+        message_count is the number of messages the caller is about to render. Given one, an error
+        that has been superseded is not returned: if the conversation has grown since the failure
+        was recorded, a later turn ran and the failure is history rather than the current state.
+        Returning it anyway is what made an old error reappear at the bottom of the transcript on
+        every reload, out of order and long after it mattered.
+
+        The count is passed in rather than read from self.bodies because that is an LRU cache - an
+        evicted conversation reads as zero messages, which would resurrect exactly the stale error
+        this exists to suppress.
+        """
+        with self.lock:
+            error = self.last_errors.get(cid)
+            if error is None or message_count is None:
+                return error
+            recorded_at = error.get("message_count")
+            if recorded_at is None:
+                # Written before the count existed. No way to place it, so treat it as historical
+                # rather than resurrect it at the end.
+                return None
+            return error if message_count <= recorded_at else None
 
     def add_approval(self, cid, card):
         """Record a write awaiting the user's answer."""

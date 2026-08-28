@@ -251,7 +251,7 @@ def test_send_is_busy_and_unknown_is_404(my_predbat):
                 return []
 
             @staticmethod
-            def get_last_error(cid):
+            def get_last_error(cid, message_count=None):
                 """No failed turn recorded. The history route reports last_error beside messages."""
                 return None
 
@@ -312,7 +312,7 @@ def test_delete_refuses_the_active_conversation(my_predbat):
                 return []
 
             @staticmethod
-            def get_last_error(cid):
+            def get_last_error(cid, message_count=None):
                 """No failed turn recorded. The history route reports last_error beside messages."""
                 return None
 
@@ -358,7 +358,7 @@ def test_history_reads_via_snapshot_not_get_messages(my_predbat):
                 return []
 
             @staticmethod
-            def get_last_error(cid):
+            def get_last_error(cid, message_count=None):
                 """No failed turn recorded. The history route reports last_error beside messages."""
                 return None
 
@@ -515,7 +515,7 @@ def test_history_route_reports_last_prompt_tokens(my_predbat):
                 return []
 
             @staticmethod
-            def get_last_error(cid):
+            def get_last_error(cid, message_count=None):
                 """No failed turn recorded. The history route reports last_error beside messages."""
                 return None
 
@@ -566,7 +566,7 @@ def test_history_route_reports_last_prompt_tokens(my_predbat):
                 return []
 
             @staticmethod
-            def get_last_error(cid):
+            def get_last_error(cid, message_count=None):
                 """No failed turn recorded. The history route reports last_error beside messages."""
                 return None
 

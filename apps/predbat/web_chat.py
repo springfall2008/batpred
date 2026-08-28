@@ -185,7 +185,10 @@ class WebChat:
                 # Carried separately from messages on purpose: the last failed turn is shown in
                 # the transcript but is not part of the conversation, and must never be replayed
                 # to the model. See ChatAgent._report_turn_error().
-                "last_error": agent.store.get_last_error(cid),
+                # Passed the count being rendered, so an error a later turn has superseded is not
+                # replayed. Without it the failure was appended after the whole transcript on
+                # every load, landing below the successful reply that came after it.
+                "last_error": agent.store.get_last_error(cid, message_count=len(messages or [])),
                 # Every write approval this conversation has asked for, and what was answered.
                 # Carried separately from messages: an approval is a record of a decision, not
                 # something the model said, and it must never be replayed. The pending ones are

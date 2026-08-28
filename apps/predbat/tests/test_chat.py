@@ -247,8 +247,13 @@ def test_build_snapshot(my_predbat):
 
 
 def test_build_system_prompt(my_predbat):
-    """build_system_prompt() wraps the snapshot with the primer and a caveat naming the capture
-    time and the tools that hold live data, and returns the captured_at it used to write it."""
+    """build_system_prompt() wraps the snapshot with the primer and a staleness caveat, and
+    returns the captured_at it used to write it.
+
+    The capture time is stated exactly once - by the snapshot's own first line, which carries a
+    weekday. The caveat restated it in a second format immediately below, which is repetition the
+    model pays for on every cached turn.
+    """
     failed = False
     print("**** Testing build_system_prompt ****")
     prompt, captured_at = build_system_prompt(my_predbat)
@@ -256,9 +261,15 @@ def test_build_system_prompt(my_predbat):
     if not isinstance(captured_at, datetime):
         print("ERROR: build_system_prompt did not return a datetime as captured_at: {!r}".format(captured_at))
         return True
-    when = captured_at.strftime("%H:%M on %d %B %Y")
-    if when not in prompt:
-        print("ERROR: the prompt does not name its own capture time {!r}:\n{}".format(when, prompt))
+    # The capture time is stated once, by the snapshot's own first line. The caveat used to
+    # restate it in a different format three lines later, which spent tokens saying the same thing
+    # twice - so this asserts it appears exactly once, not that it is present at all.
+    stamped = captured_at.strftime("%a %Y-%m-%d")
+    if prompt.count(stamped) != 1:
+        print("ERROR: the capture time {!r} appears {} times, expected exactly once:\n{}".format(stamped, prompt.count(stamped), prompt))
+        failed = True
+    if captured_at.strftime("%H:%M on %d %B %Y") in prompt:
+        print("ERROR: the caveat restates the capture time the snapshot already gave:\n{}".format(prompt))
         failed = True
     for needle in ("get_status", "get_plan", "captured", "frozen"):
         if needle not in prompt:
@@ -267,6 +278,26 @@ def test_build_system_prompt(my_predbat):
     if PRIMER not in prompt:
         print("ERROR: the primer is missing from the built system prompt")
         failed = True
+
+    # The two kinds of setting are changed by different tools, and using the wrong one used to
+    # fail silently. The prompt has to say which is which, and name an example of the apps.yaml
+    # side - "it is a setting" is not enough to tell them apart.
+    for needle in ("set_config", "set_apps_config", "car_charging_exclusive"):
+        if needle not in prompt:
+            print("ERROR: the prompt does not explain the live/apps.yaml split: missing {!r}".format(needle))
+            failed = True
+
+    # A model's training data contains some older Predbat, whose settings have since been renamed
+    # or removed, and it will state them with complete confidence. The prompt has to say not to
+    # answer configuration questions from recollection, and name what to check instead.
+    lowered = prompt.lower()
+    if "memory" not in lowered and "recall" not in lowered:
+        print("ERROR: the prompt does not tell the model to stop answering configuration questions from memory:\n{}".format(prompt))
+        failed = True
+    for needle in ("search_docs", "search_source"):
+        if needle not in prompt:
+            print("ERROR: the prompt does not name {!r} as what to check instead of recalling".format(needle))
+            failed = True
     if build_snapshot(my_predbat) not in prompt:
         print("ERROR: the live snapshot is missing from the built system prompt")
         failed = True

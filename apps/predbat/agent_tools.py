@@ -929,8 +929,31 @@ class PredbatTools:
         except Exception as e:
             return {"success": False, "error": f"Error retrieving status: {str(e)}", "data": None}
 
+    def find_config_item(self, entity_id):
+        """Return the CONFIG_ITEMS entry a name refers to, or None.
+
+        Accepts either the full entity id ("switch.predbat_expert_mode") or the bare setting name
+        ("expert_mode"), because a model has no reliable way to know the entity prefix and will
+        reasonably try the short form.
+        """
+        if not entity_id:
+            return None
+        for item in getattr(self.base, "CONFIG_ITEMS", []) or []:
+            if item.get("entity") == entity_id or item.get("name") == entity_id:
+                return item
+        return None
+
     async def _execute_set_config(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the set_config tool"""
+        """Execute the set_config tool.
+
+        Validates the target before writing. set_state_external() matches on the full entity id
+        and simply does nothing when it matches nothing, so an unrecognised name used to be
+        written into the void and still reported "updated successfully" - which is exactly what a
+        model does when it reaches for this tool with an apps.yaml key, since those look like
+        settings but are not CONFIG_ITEMS entities. Reporting success for a write that never
+        happened is worse than failing: the model tells the user it is done, and the user believes
+        it.
+        """
         try:
             entity_id = arguments.get("entity_id")
             value = arguments.get("value")
@@ -938,13 +961,43 @@ class PredbatTools:
             if not entity_id or value is None:
                 return {"success": False, "error": "Both 'entity_id' and 'value' must be provided", "data": None}
 
-            # Update the configuration setting
-            await self.base.ha_interface.set_state_external(entity_id, value)
+            item = self.find_config_item(entity_id)
+            if item is None:
+                return {"success": False, "error": "'{}' is not a Predbat configuration setting.{}".format(entity_id, self._wrong_tool_hint(entity_id)), "data": None}
 
-            return {"success": True, "error": None, "data": {"entity_id": entity_id, "new_value": value}, "timestamp": datetime.now().isoformat(), "description": f"Configuration setting '{entity_id}' updated successfully"}
+            previous_value = item.get("value")
+            target = item.get("entity") or entity_id
+            await self.base.ha_interface.set_state_external(target, value)
+
+            # Read back rather than echoing what was asked for: set_state_external routes the
+            # change through a real service call, which can coerce or reject a value, and the
+            # caller needs to know what actually landed.
+            applied = (self.find_config_item(target) or {}).get("value")
+            return {
+                "success": True,
+                "error": None,
+                "data": {"entity_id": target, "name": item.get("name"), "previous_value": previous_value, "new_value": applied},
+                "timestamp": datetime.now().isoformat(),
+                "description": "Configuration setting '{}' changed from {!r} to {!r}".format(item.get("name") or target, previous_value, applied),
+            }
 
         except Exception as e:
             return {"success": False, "error": f"Error setting configuration: {str(e)}", "data": None}
+
+    def _wrong_tool_hint(self, entity_id):
+        """Return a pointer to the right tool when a name belongs to apps.yaml, else near-matches.
+
+        The common failure is a model reaching for set_config with an apps.yaml key, which looks
+        like a setting but is not an entity. Saying which tool owns it turns a dead end into one
+        more call.
+        """
+        if entity_id in (getattr(self.base, "args", None) or {}):
+            return " It is an apps.yaml key - use set_apps_config to change it."
+        needle = str(entity_id).lower()
+        near = [item.get("name") for item in (getattr(self.base, "CONFIG_ITEMS", []) or []) if item.get("name") and needle in item["name"].lower()]
+        if near:
+            return " Did you mean: {}?".format(", ".join(sorted(near)[:5]))
+        return " Use get_config to list the settings that exist, or set_apps_config for an apps.yaml key."
 
     def _ha_state_access_enabled(self):
         """
@@ -1299,7 +1352,7 @@ TOOL_DEFS = [
     },
     {
         "name": "set_config",
-        "description": "Set Predbat configuration setting",
+        "description": "Set Predbat live configuration setting (not for apps.yaml)",
         "parameters": {
             "type": "object",
             "properties": {"entity_id": {"type": "string", "description": "The entity ID of the configuration setting to update"}, "value": {"type": "string", "description": "The new value for the configuration setting"}},

@@ -119,7 +119,16 @@ EMPTY_COMPLETION_RETRY_REASON = "Empty response from the model"
 
 PRIMER = """You are an assistant built into Predbat, a home battery optimisation system that plans when to charge and discharge a household battery based on electricity rates, solar forecasts and historical load. The person you are talking to owns this system and is looking at its web interface.
 
-Answer concisely and quote the user's real values rather than generalities. Call a tool rather than guessing: the tools read this specific installation. Use search_docs for questions about how to configure Predbat, and search_source then read_source for questions about what the code actually does - the source you can read is the exact version running here. Never invent an entity name; look it up with get_entities or get_config.
+Answer concisely and quote the user's real values rather than generalities. Call a tool rather than guessing: the tools read this specific installation. Never invent an entity name; look it up with get_entities or get_config.
+
+Do not answer configuration questions from memory. Predbat changes continuously - settings are added, renamed and removed between releases - so whatever you learned during training describes some older version and may name settings that no longer exist, or miss ones that do. Anything you recall is a hint about where to look, never an answer. Check before you answer: search_docs for how to configure something, and search_source then read_source for what the code actually does. Both read the exact version running here, so they are the only authority on it. If the documentation and your recollection disagree, the documentation is right.
+
+Predbat has two separate kinds of setting, and they are changed by different tools. Getting this wrong silently does nothing:
+
+- Live settings are Home Assistant entities such as switch.predbat_expert_mode. Read them with get_config and change them with set_config. They take effect immediately.
+- apps.yaml settings are the installation's configuration file - inverter and sensor wiring, car and solar setup, API keys. Read them with get_apps_config and change them with set_apps_config, which rewrites the file and restarts Predbat.
+
+If a name is not in get_config it is not a live setting, so do not pass it to set_config. Names like car_charging_exclusive, num_cars, forecast_solar and the inverter and sensor entity names all live in apps.yaml.
 
 Prefer the snapshot below for simple facts about the setup, and reach for a tool when the answer needs current values, detail the snapshot lacks, or anything the user is about to act on."""
 
@@ -430,7 +439,7 @@ def build_snapshot(base):
 # a stale-but-plausible number in its own frozen context, told nothing more than "may be out of
 # date", tends to quote it anyway rather than re-checking - see build_system_prompt()'s docstring.
 SYSTEM_PROMPT_SNAPSHOT_CAVEAT = (
-    "The figures above were captured when this conversation started, at {when}, and are frozen for the "
+    "The figures above were captured when this conversation started and are frozen for the "
     "rest of its lifetime - they are never refreshed on later turns, however long this conversation runs. "
     "Treat them only as a starting point, not as live data: they may already be wrong. Before stating a "
     "current SOC, rate, status or window, call get_status or get_plan and answer from what the tool "
@@ -458,7 +467,9 @@ def build_system_prompt(base):
     The caller stores captured_at.isoformat() as the conversation's system_prompt_at.
     """
     captured_at = getattr(base, "now_utc", None) or datetime.now()
-    caveat = SYSTEM_PROMPT_SNAPSHOT_CAVEAT.format(when=captured_at.strftime("%H:%M on %d %B %Y"))
+    # No timestamp interpolated: the snapshot's own first line already states when it was taken,
+    # with a weekday, and saying it twice in three lines spends tokens to no purpose.
+    caveat = SYSTEM_PROMPT_SNAPSHOT_CAVEAT
     prompt = "\n\n".join([PRIMER, build_snapshot(base), caveat])
     return prompt, captured_at
 
@@ -1342,7 +1353,9 @@ class ChatAgent(ComponentBase):
         if detail:
             payload["detail"] = detail
         self.emit(conversation_id, "error", payload)
-        self.store.set_last_error(conversation_id, message, detail)
+        # The message count fixes where the failure sits in the conversation, so a client can tell
+        # a current failure from one a later turn has since superseded.
+        self.store.set_last_error(conversation_id, message, detail, message_count=self.store.message_count(conversation_id))
 
     async def _refuse_remaining_calls(self, conversation_id, calls, reason):
         """Answer tool calls the turn is abandoning, so the stored conversation stays well-formed.

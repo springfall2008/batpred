@@ -1024,6 +1024,58 @@ def test_get_plan_is_slimmed(my_predbat):
     return failed
 
 
+def test_set_config_refuses_what_it_cannot_change(my_predbat):
+    """set_config validates its target instead of reporting success for a write that vanished.
+
+    set_state_external() matches on the full entity id and simply returns when it matches nothing:
+    a bare name has no domain either, so it falls through every branch and does nothing at all.
+    set_config called it and reported "updated successfully" regardless - so a model handed an
+    apps.yaml key told the user the change was made, and the user believed it. That is the exact
+    failure seen with car_charging_exclusive, which is an APPS_SCHEMA key, not an entity.
+
+    Mutation checks: dropping the find_config_item guard, or the apps.yaml hint, fails below.
+    """
+    failed = False
+    print("**** Testing set_config refuses what it cannot change ****")
+
+    original_args = my_predbat.args
+    try:
+        my_predbat.args = dict(original_args or {})
+        my_predbat.args["car_charging_exclusive"] = [True]
+        tools = PredbatTools(my_predbat)
+
+        # An apps.yaml key is refused, and the refusal names the tool that owns it.
+        result = asyncio.run(tools.execute("set_config", {"entity_id": "car_charging_exclusive", "value": "False"}))
+        if result.get("success"):
+            print("ERROR: set_config claimed success for an apps.yaml key: {}".format(result))
+            failed = True
+        if "set_apps_config" not in str(result.get("error", "")):
+            print("ERROR: the refusal does not point at the right tool: {}".format(result))
+            failed = True
+
+        # An outright unknown name is refused too, rather than silently doing nothing.
+        result = asyncio.run(tools.execute("set_config", {"entity_id": "no_such_setting_at_all", "value": 1}))
+        if result.get("success"):
+            print("ERROR: set_config claimed success for an unknown name: {}".format(result))
+            failed = True
+
+        # A real config item resolves by bare name as well as by entity id - a model has no way to
+        # know the entity prefix and will reasonably try the short form.
+        item = next((entry for entry in my_predbat.CONFIG_ITEMS if entry.get("type") == "switch" and entry.get("entity")), None)
+        if item is None:
+            print("ERROR: no switch config item to test against")
+            return True
+        if tools.find_config_item(item["name"]) is not item:
+            print("ERROR: a bare setting name does not resolve to its config item")
+            failed = True
+        if tools.find_config_item(item["entity"]) is not item:
+            print("ERROR: a full entity id does not resolve to its config item")
+            failed = True
+    finally:
+        my_predbat.args = original_args
+    return failed
+
+
 def run_agent_tools_tests(my_predbat):
     """Run every shared tool layer test, returning True if any of them failed."""
     failed = False
@@ -1045,6 +1097,7 @@ def run_agent_tools_tests(my_predbat):
     failed |= test_nested_credentials_are_redacted(my_predbat)
     failed |= test_get_apps_config_paths(my_predbat)
     failed |= test_get_plan_is_slimmed(my_predbat)
+    failed |= test_set_config_refuses_what_it_cannot_change(my_predbat)
     failed |= test_pathological_regex_arguments_are_rejected(my_predbat)
     failed |= test_get_entity_history_does_not_block_the_event_loop(my_predbat)
     return failed

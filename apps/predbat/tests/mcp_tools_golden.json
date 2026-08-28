@@ -139,7 +139,7 @@
     },
     {
       "name": "set_config",
-      "description": "Set Predbat configuration setting",
+      "description": "Set Predbat live configuration setting (not for apps.yaml)",
       "inputSchema": {
         "type": "object",
         "properties": {
