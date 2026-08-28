@@ -525,7 +525,7 @@ def minute_data(
     clean_increment=False,
     divide_by=0,
     scale=1.0,
-    accumulate=[],
+    accumulate=None,
     adjust_key=None,
     spreading=None,
     required_unit=None,
@@ -541,6 +541,8 @@ def minute_data(
     Turns data from HA into a hash of data indexed by minute with the data being the value
     Can be backwards in time for history (N minutes ago) or forward in time (N minutes in the future)
     """
+    if accumulate is None:
+        accumulate = []
     mdata = {}
     adata = {}
     io_adjusted = {}
@@ -1390,7 +1392,7 @@ def find_charge_rate(
     battery_loss,
     log_to,
     battery_temperature=20,
-    battery_temperature_curve={},
+    battery_temperature_curve=None,
     current_charge_rate=None,
     pv_window_kwh=0.0,
 ):
@@ -1401,6 +1403,8 @@ def find_charge_rate(
     overlaps PV production low power charging is abandoned as the throttled rate applies for the whole
     window and would push the PV out of the battery, raising the cost above the planned full rate charge
     """
+    if battery_temperature_curve is None:
+        battery_temperature_curve = {}
     margin = charge_low_power_margin
     target_soc = round(target_soc, 2)
 

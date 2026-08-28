@@ -418,8 +418,10 @@ def test_component_base_set_state_external(my_predbat):
 
     calls = []
 
-    async def capture(entity_id, state, attributes={}):
+    async def capture(entity_id, state, attributes=None):
         """Record a forwarded external state write."""
+        if attributes is None:
+            attributes = {}
         calls.append((entity_id, state, attributes))
         return "written"
 

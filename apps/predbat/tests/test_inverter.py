@@ -1400,11 +1400,15 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     return failed
 
 
-def test_call_service_template(test_name, my_predbat, inv, service_name="test", domain="charge", data={}, extra_data={}, clear=True, repeat=False, service_template=None, expected_result=None, twice=True):
+def test_call_service_template(test_name, my_predbat, inv, service_name="test", domain="charge", data=None, extra_data=None, clear=True, repeat=False, service_template=None, expected_result=None, twice=True):
     """
     tests
         def call_service_template(self, service, data, domain="charge", extra_data={})
     """
+    if extra_data is None:
+        extra_data = {}
+    if data is None:
+        data = {}
     failed = False
 
     print("**** Running Test: {} ****".format(test_name))

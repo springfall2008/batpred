@@ -82,7 +82,9 @@ class MockGECloudDirect(GECloudDirect):
             def __init__(self):
                 self.external_states = {}
 
-            async def set_state_external(self, entity_id, state, attributes={}):
+            async def set_state_external(self, entity_id, state, attributes=None):
+                if attributes is None:
+                    attributes = {}
                 self.external_states[entity_id] = state
 
         class MockBase:

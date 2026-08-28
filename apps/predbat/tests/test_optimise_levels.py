@@ -14,12 +14,12 @@ from prediction import Prediction
 def run_optimise_levels(
     name,
     my_predbat,
-    charge_window_best=[],
-    export_window_best=[],
+    charge_window_best=None,
+    export_window_best=None,
     pv_amount=0,
     load_amount=0,
-    expect_charge_limit=[],
-    expect_export_limit=[],
+    expect_charge_limit=None,
+    expect_export_limit=None,
     expect_best_price=0.0,
     rate_import=10.0,
     rate_export=5.0,
@@ -29,6 +29,14 @@ def run_optimise_levels(
     inverter_loss=1.0,
     best_soc_keep=0.0,
 ):
+    if expect_export_limit is None:
+        expect_export_limit = []
+    if expect_charge_limit is None:
+        expect_charge_limit = []
+    if export_window_best is None:
+        export_window_best = []
+    if charge_window_best is None:
+        charge_window_best = []
     failed = False
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()

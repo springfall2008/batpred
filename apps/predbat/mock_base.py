@@ -35,8 +35,10 @@ class MockHAInterface:
     crash on any component that auto-configures a Predbat setting.
     """
 
-    async def set_state_external(self, entity_id, state, attributes={}):
+    async def set_state_external(self, entity_id, state, attributes=None):
         """Print an external state write instead of applying it."""
+        if attributes is None:
+            attributes = {}
         print(f"SET EXTERNAL: {entity_id} = {state}")
 
 

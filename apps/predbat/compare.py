@@ -284,10 +284,12 @@ class Compare:
 
         return result_data
 
-    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True, car_charging_slots=[], start_soc=None):
+    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True, car_charging_slots=None, start_soc=None):
         """
         Compare a single energy tariff with the current settings and report results
         """
+        if car_charging_slots is None:
+            car_charging_slots = []
         my_predbat = self.pb
         name = tariff.get("name", None)
         tariff_id = tariff.get("id", "")
