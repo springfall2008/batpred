@@ -409,6 +409,22 @@ def run_rate_add_io_slots_tests(my_predbat):
     expected_rates_21 = {minute: 4.0 for minute in range(570, 600)}  # 09:30-10:00
     failed |= run_rate_add_io_slots_test("test21_current_dispatch_stays_low_rate", my_predbat, slots_21, True, 12, expected_rates_21)
 
+    # Test 21b (#4808, review follow-up on #4483 from Speshman): a dispatch starting partway
+    # through the current settlement period must not be treated as already underway just because
+    # the period itself has started - only compares the dispatch's real start against minutes_now,
+    # not the 30-min-rounded slot_start against the rounded current block.
+    print("\n**** Test 21b: A dispatch starting later in the current period is not yet underway ****")
+    my_predbat.octopus_intelligent_limit_future_slots = True
+    now_minutes_21b = my_predbat.minutes_now  # whatever "now" actually is - built relative to it, not a hardcoded wall-clock time
+    slot_start_21b = midnight_utc + timedelta(minutes=now_minutes_21b + 20)  # 20 minutes into the current period - genuinely still future
+    slot_end_21b = slot_start_21b + timedelta(minutes=30)
+    slots_21b = [{"start": slot_start_21b.strftime(TIME_FORMAT), "end": slot_end_21b.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"}]
+    my_predbat.car_charging_slots[0] = []  # Car doesn't need it
+    rounded_start_21b = (now_minutes_21b // 30) * 30
+    rounded_end_21b = ((now_minutes_21b + 20 + 30 + 29) // 30) * 30
+    expected_rates_21b = {minute: 10.0 for minute in range(rounded_start_21b, rounded_end_21b)}  # rejected, not yet started, not needed
+    failed |= run_rate_add_io_slots_test("test21b_mid_period_future_dispatch_not_yet_underway", my_predbat, slots_21b, True, 12, expected_rates_21b)
+
     # Test 22: feature disabled - existing (unconditional) behaviour is unchanged even with an
     # empty car_charging_slots that would otherwise have excluded every block.
     print("\n**** Test 22: Switch off restores unconditional low rate ****")

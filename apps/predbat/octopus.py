@@ -3072,7 +3072,6 @@ class Octopus:
         slots_added_set = set()
         plan_interval_minutes = self.plan_interval_minutes
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
-        current_block = (self.minutes_now // 30) * 30
 
         # #4482: Octopus often grants more daytime dispatch slots than the car actually needs - it
         # can't see the car's real SoC, only Predbat can (car_charging_soc/car_charging_limit).
@@ -3095,6 +3094,11 @@ class Octopus:
             # Add in IO slots
             for slot in octopus_slots:
                 start_minutes, end_minutes, kwh, source, location, kwh_valid = self.decode_octopus_slot(car_n, slot, raw=True)
+                # The dispatch's real (unrounded) start, kept apart from the 30-min-rounded
+                # start_minutes below - used only for the "already underway" check (#4808) so a
+                # dispatch starting partway through the current settlement period isn't treated as
+                # already started from the top of that period.
+                raw_start_minutes = start_minutes
 
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
@@ -3138,7 +3142,13 @@ class Octopus:
                         # slot already underway or completed is trusted regardless of what
                         # car_charging_slots now says about future need, and the fixed window is
                         # never affected since it's guaranteed cheap by the tariff itself.
-                        needed = (not limit_future_slots) or (slot_start <= current_block) or (slot_start in expected_blocks) or self.minute_in_iog_fixed_window(slot_start)
+                        #
+                        # "Already underway" compares the dispatch's real start (#4808, review
+                        # follow-up on #4483 from Speshman) rather than its 30-min-rounded
+                        # slot_start, so a dispatch starting partway through the current
+                        # settlement period isn't trusted early just because the period itself has
+                        # begun.
+                        needed = (not limit_future_slots) or (raw_start_minutes <= self.minutes_now) or (slot_start in expected_blocks) or self.minute_in_iog_fixed_window(slot_start)
 
                         # Whether this dispatch entry actually delivers charge to the car. A
                         # zero-kWh entry (e.g. a plug-independent SMART grid-flex event - #4483
