@@ -245,6 +245,7 @@ from tests.test_download import test_download
 from tests.test_ohme import test_ohme
 from tests.test_myenergi import test_myenergi
 from tests.test_component_base import test_component_base_all
+from tests.test_components import test_components_all
 from tests.test_mock_base import test_mock_base_all
 from tests.test_solis import run_solis_tests
 from tests.test_load_ml import test_load_ml
@@ -611,6 +612,7 @@ def main():
         ("myenergi", test_myenergi, "myenergi Zappi and Eddi comprehensive tests (normalisation, transports, publishing, auto-config, controls)", False),
         # ComponentBase lifecycle tests
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
+        ("components", test_components_all, "Components registry tests (all)", False),
         # Shared MockBase tests
         ("mock_base", test_mock_base_all, "Shared CLI-harness MockBase tests", False),
         # Solis Cloud API unit tests

@@ -173,6 +173,11 @@ COMPONENT_LIST = {
                 "required": False,
                 "default": [7],
                 "config": "days_previous",
+                # days_previous is a global load-forecasting setting configured by virtually every
+                # installation regardless of inverter brand, so it must not count towards "did the
+                # user configure GE Cloud Data" - otherwise the missing ge_cloud_data/ge_cloud_key
+                # warning fires for everyone, not just people who tried to enable this component.
+                "shared_config": True,
             },
         },
         "phase": 1,
@@ -705,7 +710,7 @@ class Components:
                 configured_args = getattr(self.base, "args_from_apps_yaml", None)
                 if configured_args is None:
                     configured_args = self.base.args
-                component_configured = any(configured_args.get(arg_info["config"]) for arg_info in component_info["args"].values())
+                component_configured = any(configured_args.get(arg_info["config"]) for arg_info in component_info["args"].values() if not arg_info.get("shared_config", False))
                 if component_configured:
                     reasons = []
                     if missing_config:
