@@ -614,6 +614,18 @@ def run_rate_add_io_slots_tests(my_predbat):
     expected_rates_30 = {minute: 10.0 for minute in range(slot_start_minute_30, slot_start_minute_30 + 30)}  # rejected, not needed, not exempt
     failed |= run_rate_add_io_slots_test("test30_zero_kwh_non_smart_source_not_exempt", my_predbat, slots_30, True, 12, expected_rates_30)
 
+    # Test 31 (#4807): a malformed charge_in_kwh (not a genuine zero-kWh event) must not get the
+    # exemption even when its source is "SMART" - decode_octopus_slot() coerces the unparseable
+    # value to kwh==0 the same way a real zero-kWh entry would, so source alone can't tell them
+    # apart. kwh_valid closes that gap.
+    print("\n**** Test 31: Malformed charge_in_kwh with source SMART is not exempt ****")
+    slot_start_31 = midnight_utc + timedelta(hours=14)  # future, out-of-window
+    slot_end_31 = slot_start_31 + timedelta(minutes=30)
+    slots_31 = [{"start": slot_start_31.strftime(TIME_FORMAT), "end": slot_end_31.strftime(TIME_FORMAT), "charge_in_kwh": "not-a-number", "source": "SMART", "location": ""}]
+    slot_start_minute_31 = int((slot_start_31 - midnight_utc).total_seconds() / 60)
+    expected_rates_31 = {minute: 10.0 for minute in range(slot_start_minute_31, slot_start_minute_31 + 30)}  # rejected, not needed, not exempt
+    failed |= run_rate_add_io_slots_test("test31_malformed_smart_kwh_not_exempt", my_predbat, slots_31, True, 12, expected_rates_31)
+
     my_predbat.octopus_slot_count_zero_kwh = True  # Restore default for any subsequent tests
     my_predbat.octopus_intelligent_limit_future_slots = False  # Restore default for any subsequent tests
     my_predbat.car_charging_slots[0] = saved_car_charging_slots
