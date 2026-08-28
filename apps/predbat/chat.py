@@ -47,6 +47,34 @@ STALE_TURN_GRACE_SECONDS = 60
 CONFIRM_TIMEOUT_SECONDS = 300
 CONFIRM_POLL_SECONDS = 0.2
 
+# Retry policy for one model completion. Live traffic against a free-tier model showed roughly one
+# in three completions fail mid-stream with a transient provider-side error, so a failure worth
+# retrying gets three attempts total (the first try plus two retries) before the turn gives up.
+# COMPLETION_RETRY_DELAYS_SECONDS[0] is the backoff before the second attempt,
+# COMPLETION_RETRY_DELAYS_SECONDS[1] before the third.
+COMPLETION_MAX_ATTEMPTS = 3
+COMPLETION_RETRY_DELAYS_SECONDS = (1, 3)
+
+# A 429 (rate limited) is retried too, but with a longer wait than the plain backoff above - a
+# provider's rate-limit window is unlikely to have cleared inside a single second.
+COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS = 5
+
+# error.code / error.metadata.error_type values that mark a mid-stream "error" chunk as the
+# provider's own trouble rather than something wrong with the request itself - see
+# classify_completion_failure() for where these are read from.
+RETRYABLE_PROVIDER_ERROR_MARKERS = ("provider_unavailable", "server_error")
+
+# The exact provider_message _run_completion raises when a chunk ends a choice with finish_reason
+# "error" but carries no top-level "error" object of its own to explain why. Shared between that
+# raise site and classify_completion_failure() so the two can never drift out of step.
+FINISH_REASON_ERROR_MESSAGE = "The provider ended the response with an error"
+
+# The short, user-facing reason shown for a completion that produced neither a visible answer nor
+# a tool call - see is_empty_completion(). Deliberately distinct from empty_completion_message()'s
+# longer wording: this is what appears in a 'retry' event's reason field, next to the attempt
+# count, not the fuller explanation stored as the turn's final error if every attempt is empty.
+EMPTY_COMPLETION_RETRY_REASON = "Empty response from the model"
+
 PRIMER = """You are an assistant built into Predbat, a home battery optimisation system that plans when to charge and discharge a household battery based on electricity rates, solar forecasts and historical load. The person you are talking to owns this system and is looking at its web interface.
 
 Answer concisely and quote the user's real values rather than generalities. Call a tool rather than guessing: the tools read this specific installation. Use search_docs for questions about how to configure Predbat, and search_source then read_source for questions about what the code actually does - the source you can read is the exact version running here. Never invent an entity name; look it up with get_entities or get_config."""
@@ -69,15 +97,27 @@ class ChatRequestError(RuntimeError):
     through friendly() instead of being forced through the status-code branches below.
     """
 
-    def __init__(self, status, body, provider_message=None):
-        """Keep the status and body so the message can name what actually went wrong."""
+    def __init__(self, status, body, provider_message=None, error_type=None, final_message=None):
+        """Keep the status and body so the message can name what actually went wrong.
+
+        error_type is error.metadata.error_type from a mid-stream error chunk, when the provider
+        sent one - see classify_completion_failure(), which reads it alongside status and
+        provider_message to decide whether a failure is worth retrying. final_message is set only
+        by the retry wrapper once every attempt has been used: it is the complete text friendly()
+        should return verbatim, bypassing the status-code branches below entirely, so a give-up
+        message is never built by feeding an already-formatted string back through them.
+        """
         super().__init__("HTTP {}: {}".format(status, str(body)[:500]))
         self.status = status
         self.body = body
         self.provider_message = provider_message
+        self.error_type = error_type
+        self.final_message = final_message
 
     def friendly(self):
         """Return a message worth showing a user rather than a raw HTTP error."""
+        if self.final_message:
+            return self.final_message
         if self.provider_message:
             return "OpenRouter reported an error: {}".format(self.provider_message)
         if self.status == 401:
@@ -137,6 +177,71 @@ def build_snapshot(base):
     return "\n".join(lines)
 
 
+def classify_completion_failure(error):
+    """Classify one failed completion attempt for the retry wrapper.
+
+    Returns (retryable, reason, rate_limited). reason is None when the failure is not retryable -
+    the caller has nothing further to add - or a short, user-facing phrase otherwise, shared
+    between the mid-turn 'retry' event and the eventual give-up message (via _give_up_error) so
+    the two can never describe the same failure differently. rate_limited is True only for a 429,
+    which the retry wrapper backs off longer for than a plain provider failure.
+
+    Deliberately narrow: a 401 (the key is wrong) or 402 (out of credit) will be wrong again in a
+    second, and a 400 (malformed request) will be malformed again - retrying either only delays
+    the user for a request that cannot succeed, so both fail on the spot. Everything this function
+    does not explicitly recognise - including an HTTP status it has never seen - fails on the spot
+    too, rather than guessing that an unfamiliar failure is safe to retry.
+
+    The mid-stream shape this reads (error.status carrying either an HTTP-like code such as 502 or
+    a provider marker string such as "server_error", plus an optional error.error_type from
+    error.metadata.error_type) is exactly what _run_completion's mid-stream "error" chunk handling
+    raises - see its docstring and the live capture the task that added this was built from.
+    """
+    if isinstance(error, asyncio.TimeoutError):
+        return True, "Timed out reaching the provider", False
+    if isinstance(error, aiohttp.ClientError):
+        return True, "Could not reach the provider", False
+    if not isinstance(error, ChatRequestError):
+        return False, None, False
+    if error.status == 429:
+        return True, "Rate limited by the provider", True
+    if error.status in (401, 402, 400):
+        return False, None, False
+    if error.status in (502, 503):
+        return True, "Provider overloaded", False
+    marker = str(error.status if error.status is not None else "").lower()
+    error_type = str(error.error_type or "").lower()
+    message = str(error.provider_message or "").lower()
+    if marker in RETRYABLE_PROVIDER_ERROR_MARKERS or error_type in RETRYABLE_PROVIDER_ERROR_MARKERS or "overload" in marker or "overload" in error_type or "overload" in message:
+        return True, "Provider overloaded", False
+    if error.provider_message == FINISH_REASON_ERROR_MESSAGE:
+        return True, FINISH_REASON_ERROR_MESSAGE, False
+    return False, None, False
+
+
+def is_empty_completion(message):
+    """Return whether a completion produced neither a visible answer nor a tool call.
+
+    Live traffic showed this is almost always provider trouble - a reasoning model that spent its
+    whole turn on reasoning and never emitted anything else - rather than the model genuinely
+    declining to answer, so the retry wrapper treats it the same as any other retryable failure
+    instead of ending the turn on the spot. See empty_completion_message() for the wording used
+    once every attempt still comes back this way.
+    """
+    return not message.get("content") and not message.get("tool_calls")
+
+
+def empty_completion_message(message):
+    """Return the user-facing explanation for a completion with no content and no tool call.
+
+    Names reasoning as the likely cause when the completion carried reasoning fragments - exactly
+    the shape a live captured OpenRouter run showed, per is_empty_completion().
+    """
+    reasoned = bool(message.get("reasoning_details") or message.get("reasoning"))
+    detail = " It produced only reasoning and no visible answer." if reasoned else ""
+    return "The model returned no answer and no tool call.{} Try asking again.".format(detail)
+
+
 class ChatAgent(ComponentBase):
     """Runs the OpenRouter-backed chat agent for the Predbat web interface."""
 
@@ -166,6 +271,10 @@ class ChatAgent(ComponentBase):
         self.turn_counter = 0
         self.tools = PredbatTools(self.base, log_func=self.log)
         self.tool_defs_by_name = {entry["name"]: entry for entry in list(TOOL_DEFS) + list(CHAT_TOOL_DEFS)}
+        # The retry wrapper's only seam onto real time - see _wait_before_retrying(). Replaced by
+        # a fast recorder in tests, exactly like _stream_chunks is, so a fixture that happens to
+        # trigger a retry never actually pauses the test suite for the real backoff.
+        self._retry_sleep = asyncio.sleep
 
     def emit(self, conversation_id, event_type, data=None):
         """Append an event to the buffer and return its sequence number.
@@ -404,7 +513,8 @@ class ChatAgent(ComponentBase):
             error = chunk.get("error")
             if error:
                 message_text = (error or {}).get("message") or "The provider reported an error"
-                raise ChatRequestError(error.get("code"), json.dumps(error), provider_message=message_text)
+                error_type = (error.get("metadata") or {}).get("error_type")
+                raise ChatRequestError(error.get("code"), json.dumps(error), provider_message=message_text, error_type=error_type)
             if chunk.get("usage"):
                 usage = chunk["usage"]
             choices = chunk.get("choices") or []
@@ -479,6 +589,90 @@ class ChatAgent(ComponentBase):
         if reasoning_text:
             message["reasoning"] = reasoning_text
         return message, usage, sources
+
+    async def _run_completion_with_retry(self, conversation_id, messages, model):
+        """Run one completion, retrying a transient provider failure up to COMPLETION_MAX_ATTEMPTS.
+
+        Wraps _run_completion rather than changing it, so each attempt starts that call fresh with
+        its own empty local accumulator - nothing from a failed attempt's partial content can
+        survive into the next one's message. The only thing that crosses attempts is the 'retry'
+        event emitted just before each wait: it tells the browser to discard whatever partial
+        assistant bubble the failed attempt had already streamed (see the client's handleRetry())
+        before the retried attempt's own deltas start arriving on the same conversation.
+        OpenRouter's own documentation is explicit that a mid-stream error can arrive after tokens
+        have already started, which is exactly the case this guards against.
+
+        An empty completion (no content, no tool_calls) is retried the same way a provider error
+        is - see is_empty_completion() - because live traffic showed that shape is almost always
+        provider trouble, not the model genuinely declining to answer. Everything
+        classify_completion_failure() marks as not retryable (401/402/400, or a failure this
+        function does not recognise) is re-raised on the very first attempt, completely unchanged,
+        exactly as it was before this wrapper existed.
+
+        Gives up - raising a ChatRequestError whose friendly() already reads "<what would have
+        been shown today> Gave up after N attempts." - once COMPLETION_MAX_ATTEMPTS is reached or
+        the turn's own deadline would be blown by the next backoff, whichever comes first.
+        """
+        error = None
+        empty_message = None
+        reason = None
+        rate_limited = False
+        attempt = 1
+        while True:
+            try:
+                message, usage, sources = await self._run_completion(conversation_id, messages, model)
+            except (ChatRequestError, aiohttp.ClientError, asyncio.TimeoutError) as raised:
+                retryable, reason, rate_limited = classify_completion_failure(raised)
+                if not retryable:
+                    raise
+                error, empty_message = raised, None
+            else:
+                if not is_empty_completion(message):
+                    return message, usage, sources
+                error, empty_message = None, message
+                reason, rate_limited = EMPTY_COMPLETION_RETRY_REASON, False
+
+            if attempt >= COMPLETION_MAX_ATTEMPTS or not await self._wait_before_retrying(conversation_id, attempt, rate_limited, reason):
+                raise self._give_up_error(error, empty_message, attempt)
+            attempt += 1
+
+    async def _wait_before_retrying(self, conversation_id, attempt, rate_limited, reason):
+        """Emit a 'retry' event and back off before the next completion attempt.
+
+        Returns False, without sleeping, when the turn's own deadline does not leave room for the
+        backoff - self.deadline bounds the whole turn, and sleeping into it would only trade a
+        provider-side failure for a self-inflicted timeout. The caller treats that exactly like
+        running out of attempts: give up now, with the failure already in hand.
+        """
+        delay = COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS if rate_limited else COMPLETION_RETRY_DELAYS_SECONDS[attempt - 1]
+        remaining = self.deadline - time.monotonic()
+        if remaining < delay:
+            return False
+        self.emit(conversation_id, "retry", {"attempt": attempt + 1, "of": COMPLETION_MAX_ATTEMPTS, "reason": reason, "delay": delay})
+        await self._retry_sleep(delay)
+        return True
+
+    def _give_up_error(self, error, empty_message, attempts):
+        """Build the ChatRequestError raised once every attempt is used or the deadline runs out.
+
+        Its final_message already reads "<what would have been shown today> Gave up after N
+        attempts.", built once here rather than reconstructed by ChatRequestError.friendly()'s
+        status branches - this always follows the same shape regardless of which of the three
+        failure kinds (a real ChatRequestError, an aiohttp/timeout failure, or an empty completion)
+        triggered it. error and empty_message are mutually exclusive: exactly one names the last
+        attempt's outcome, the other is None.
+        """
+        if error is not None:
+            base = error.friendly() if isinstance(error, ChatRequestError) else "Could not reach {}: {}".format(self.base_url, error)
+            status = getattr(error, "status", None)
+            body = getattr(error, "body", "")
+        else:
+            base = empty_completion_message(empty_message)
+            status = None
+            body = ""
+        plural = "" if attempts == 1 else "s"
+        final_message = "{} Gave up after {} attempt{}.".format(base, attempts, plural)
+        return ChatRequestError(status, body, final_message=final_message)
 
     async def _dispatch(self, conversation_id, name, arguments):
         """Run one tool, trying the chat-only tools before the shared Predbat ones.
@@ -617,7 +811,7 @@ class ChatAgent(ComponentBase):
                 self.emit(conversation_id, "error", {"message": "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)})
                 return
             history = await self.store.get_messages(conversation_id)
-            message, usage, sources = await self._run_completion(conversation_id, self.build_messages(conversation_id, history), model)
+            message, usage, sources = await self._run_completion_with_retry(conversation_id, self.build_messages(conversation_id, history), model)
             if usage:
                 self.store.add_usage(conversation_id, usage)
                 total = (self.store.get_meta(conversation_id) or {}).get("usage_total", {})

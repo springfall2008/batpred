@@ -490,6 +490,7 @@ replayer
 resetmidnight
 resultid
 resultmid
+retryable
 reweight
 reweighted
 rname

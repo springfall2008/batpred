@@ -18,8 +18,22 @@ import json
 import threading
 import time
 
+import aiohttp
+
 import chat
-from chat import EVENT_BUFFER_MAX, STALE_TURN_GRACE_SECONDS, ChatAgent, ChatBusyError, build_snapshot
+from chat import (
+    COMPLETION_MAX_ATTEMPTS,
+    COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS,
+    COMPLETION_RETRY_DELAYS_SECONDS,
+    EVENT_BUFFER_MAX,
+    STALE_TURN_GRACE_SECONDS,
+    ChatAgent,
+    ChatBusyError,
+    ChatRequestError,
+    build_snapshot,
+    classify_completion_failure,
+    is_empty_completion,
+)
 from components import COMPONENT_LIST, Components
 
 
@@ -470,9 +484,18 @@ class FakeOpenRouter:
         self.payloads = []
 
     async def stream(self, payload):
-        """Record the request payload and yield the next canned chunk list."""
+        """Record the request payload and yield the next canned chunk list.
+
+        A canned response may be an exception instance instead of a chunk list, in which case it
+        is raised before anything is yielded - mirroring how the real _stream_chunks fails a
+        non-200 response before any chunk ever reaches the caller. This is what lets a retry test
+        drive a specific failure (a given HTTP status, or a generic connection error) without
+        going through the real network stack.
+        """
         self.payloads.append(payload)
         chunks = self.responses.pop(0) if self.responses else [{"choices": [{"delta": {"content": "no more canned responses"}}]}]
+        if isinstance(chunks, BaseException):
+            raise chunks
         for chunk in chunks:
             yield chunk
 
@@ -540,11 +563,25 @@ def _dangling_tool_calls(messages):
 
 
 def _agent_with_fake(my_predbat, *responses, **overrides):
-    """Build an agent whose only network call is replaced by a canned chunk replayer."""
+    """Build an agent whose only network call is replaced by a canned chunk replayer.
+
+    agent._retry_sleep is also replaced by a fast recorder rather than the real asyncio.sleep, so
+    that a test whose fixture happens to trigger a retry never actually pauses the suite for the
+    real backoff - every requested delay is appended to agent.retry_sleeps instead, which is what
+    a backoff test asserts against (per the project's own warning that a retry test which really
+    sleeps makes the suite slow and flaky).
+    """
     agent = _make_agent(my_predbat, **overrides)
     fake = FakeOpenRouter(*responses)
     agent._stream_chunks = fake.stream
     agent.fake = fake
+    agent.retry_sleeps = []
+
+    async def _fast_retry_sleep(seconds):
+        """Record the requested delay instead of actually waiting for it."""
+        agent.retry_sleeps.append(seconds)
+
+    agent._retry_sleep = _fast_retry_sleep
     return agent
 
 
@@ -1190,8 +1227,9 @@ def _mid_stream_error_response():
     ]
 
 
-def test_mid_stream_error_chunk_fails_the_turn_and_stores_nothing(my_predbat):
-    """A mid-stream OpenRouter error chunk surfaces the provider's own message and stores nothing.
+def test_mid_stream_error_chunk_fails_the_turn_loudly_after_exhausting_every_retry(my_predbat):
+    """A mid-stream OpenRouter error chunk that never clears surfaces the provider's own message,
+    names how many attempts were made, and stores nothing.
 
     Reproduces the live failure this task started from: a turn that produced no response at all,
     stored as an assistant message with content: null and no tool_calls. The documented OpenRouter
@@ -1199,21 +1237,42 @@ def test_mid_stream_error_chunk_fails_the_turn_and_stores_nothing(my_predbat):
     code's `if delta.get("content")` silently skipped the empty string, never looked at
     chunk["error"] at all, and finished the turn with nothing to show, which got stored and
     replayed to the model as junk history on every subsequent turn.
+
+    error.code "server_error" is one of the markers classify_completion_failure() treats as
+    retryable provider trouble, so the fixture is supplied COMPLETION_MAX_ATTEMPTS times - one per
+    attempt the retry wrapper is expected to make - rather than once. Asserting the fake was
+    actually called that many times (not just that the turn eventually failed) is what tells a
+    version that retries from one that gives up on the first failure: a wrapper that never retries
+    at all would still produce a failed turn with only one canned response, so the message and
+    active-slot checks alone cannot tell the two apart - only counting attempts can.
     """
     failed = False
-    print("**** Testing a mid-stream OpenRouter error chunk fails the turn loudly ****")
-    agent = _agent_with_fake(my_predbat, _mid_stream_error_response())
+    print("**** Testing a mid-stream OpenRouter error chunk that never clears exhausts every retry and fails loudly ****")
+    agent = _agent_with_fake(my_predbat, *[_mid_stream_error_response() for _ in range(COMPLETION_MAX_ATTEMPTS)])
     cid = asyncio.run(agent.store.create())
 
     asyncio.run(agent.run_turn(cid, "what mode am I in?"))
+
+    if len(agent.fake.payloads) != COMPLETION_MAX_ATTEMPTS:
+        print("ERROR: expected {} completion attempts, the fake was called {} times".format(COMPLETION_MAX_ATTEMPTS, len(agent.fake.payloads)))
+        failed = True
 
     events = agent.events_since(0, cid)[0]
     errors = [event for event in events if event["type"] == "error"]
     if not errors:
         print("ERROR: no error event was emitted for the mid-stream error chunk")
         return True
-    if "Provider disconnected unexpectedly" not in errors[0]["data"].get("message", ""):
+    message = errors[0]["data"].get("message", "")
+    if "Provider disconnected unexpectedly" not in message:
         print("ERROR: the error event did not carry the provider's own message: {}".format(errors[0]["data"]))
+        failed = True
+    if "Gave up after {} attempts".format(COMPLETION_MAX_ATTEMPTS) not in message:
+        print("ERROR: the error event did not say how many attempts were made: {!r}".format(message))
+        failed = True
+
+    retries = [event for event in events if event["type"] == "retry"]
+    if len(retries) != COMPLETION_MAX_ATTEMPTS - 1:
+        print("ERROR: expected {} 'retry' events (one per retry, not per attempt), got {}: {}".format(COMPLETION_MAX_ATTEMPTS - 1, len(retries), retries))
         failed = True
 
     # Assert on the stored conversation itself, not just the emitted events - the original bug's
@@ -1286,29 +1345,42 @@ def _reasoning_only_response():
     ]
 
 
-def test_reasoning_only_completion_is_not_stored_and_names_the_cause(my_predbat):
-    """A completion with no content and no tool calls is reported as an anomaly, never stored.
+def test_reasoning_only_completion_is_retried_then_reported_as_an_anomaly_if_it_never_clears(my_predbat):
+    """A completion with no content and no tool calls is retried like any other provider trouble,
+    and only reported as an anomaly - never stored - once every attempt still comes back empty.
 
     This is the live bug this task started from, reproduced with the shape a real reasoning-model
     run actually showed: reasoning fragments on nearly every chunk, content "" throughout, no
     tool_calls, and nothing else to fall back on. Storing the resulting content-less message
     anyway is how it silently replayed as junk history forever after; this checks the message is
     never stored and that the error names reasoning as the likely cause, not a generic failure.
+
+    Supplied COMPLETION_MAX_ATTEMPTS times, and the fake's call count is asserted against that -
+    see the docstring on the mid-stream-error equivalent of this test for why counting attempts,
+    not just checking the eventual failure, is what actually proves a retry was attempted.
     """
     failed = False
-    print("**** Testing a reasoning-only completion is reported, not silently stored ****")
-    agent = _agent_with_fake(my_predbat, _reasoning_only_response())
+    print("**** Testing a reasoning-only completion is retried, and only reported once every attempt is empty ****")
+    agent = _agent_with_fake(my_predbat, *[_reasoning_only_response() for _ in range(COMPLETION_MAX_ATTEMPTS)])
     cid = asyncio.run(agent.store.create())
 
     asyncio.run(agent.run_turn(cid, "why is it charging?"))
+
+    if len(agent.fake.payloads) != COMPLETION_MAX_ATTEMPTS:
+        print("ERROR: expected {} completion attempts, the fake was called {} times".format(COMPLETION_MAX_ATTEMPTS, len(agent.fake.payloads)))
+        failed = True
 
     events = agent.events_since(0, cid)[0]
     errors = [event for event in events if event["type"] == "error"]
     if not errors:
         print("ERROR: no error event was emitted for a reasoning-only completion")
         return True
-    if "reasoning" not in errors[0]["data"].get("message", "").lower():
+    message = errors[0]["data"].get("message", "")
+    if "reasoning" not in message.lower():
         print("ERROR: the error did not name reasoning as the likely cause: {}".format(errors[0]["data"]))
+        failed = True
+    if "Gave up after {} attempts".format(COMPLETION_MAX_ATTEMPTS) not in message:
+        print("ERROR: the error event did not say how many attempts were made: {!r}".format(message))
         failed = True
 
     messages = asyncio.run(agent.store.get_messages(cid))
@@ -1493,6 +1565,345 @@ def test_plain_reasoning_string_is_captured_as_a_fallback(my_predbat):
     return failed
 
 
+def test_classify_completion_failure_matches_the_documented_retry_policy(my_predbat):
+    """classify_completion_failure() sorts every documented failure kind into retry-or-not.
+
+    A direct unit test of the classifier, independent of the agentic loop, exactly because the
+    task that added it asked for the rule to be "a small named function... testable on its own,
+    rather than a condition buried in the loop". Covers every case named in that task: 502/503 and
+    a mid-stream marker/message match retry as "provider trouble", 429 retries with rate_limited
+    True, 401/402/400 fail immediately, finish_reason "error" with no chunk-level error object
+    still retries, and both aiohttp.ClientError and asyncio.TimeoutError retry unconditionally. An
+    unused Predbat instance is accepted only because every test in this file is called with one by
+    the driver.
+    """
+    failed = False
+    print("**** Testing classify_completion_failure against the documented retry policy ****")
+
+    cases = [
+        (ChatRequestError(502, "bad gateway"), True, False),
+        (ChatRequestError(503, "unavailable"), True, False),
+        (ChatRequestError(429, "slow down"), True, True),
+        (ChatRequestError(401, "bad key"), False, False),
+        (ChatRequestError(402, "no credit"), False, False),
+        (ChatRequestError(400, "malformed"), False, False),
+        (ChatRequestError("server_error", '{"code": "server_error"}', provider_message="Upstream error from Nvidia: Service temporarily overloaded"), True, False),
+        (ChatRequestError(None, "{}", provider_message="Something else", error_type="provider_unavailable"), True, False),
+        (ChatRequestError(None, "{}", provider_message="The upstream host is Overloaded right now"), True, False),
+        (ChatRequestError(None, "{}", provider_message="The provider ended the response with an error"), True, False),
+        (ChatRequestError(418, "teapot"), False, False),
+        (aiohttp.ClientConnectionError("connection reset"), True, False),
+        (asyncio.TimeoutError(), True, False),
+        (ValueError("not a completion failure at all"), False, False),
+    ]
+    for error, expect_retryable, expect_rate_limited in cases:
+        retryable, reason, rate_limited = classify_completion_failure(error)
+        if retryable != expect_retryable:
+            print("ERROR: {!r} classified as retryable={}, expected {}".format(error, retryable, expect_retryable))
+            failed = True
+        if rate_limited != expect_rate_limited:
+            print("ERROR: {!r} classified as rate_limited={}, expected {}".format(error, rate_limited, expect_rate_limited))
+            failed = True
+        if expect_retryable and not reason:
+            print("ERROR: {!r} was classified retryable with no reason to show the user".format(error))
+            failed = True
+        if not expect_retryable and reason:
+            print("ERROR: {!r} was classified not-retryable but still carries a reason {!r}".format(error, reason))
+            failed = True
+
+    return failed
+
+
+def test_is_empty_completion(my_predbat):
+    """is_empty_completion() is true only for a message with neither content nor a tool call."""
+    failed = False
+    print("**** Testing is_empty_completion ****")
+    cases = [
+        ({"role": "assistant", "content": "an answer"}, False),
+        ({"role": "assistant", "content": None, "tool_calls": [{"id": "call_1"}]}, False),
+        ({"role": "assistant", "content": None}, True),
+        ({"role": "assistant", "content": ""}, True),
+        ({"role": "assistant", "content": None, "reasoning": "thinking..."}, True),
+    ]
+    for message, expected in cases:
+        actual = is_empty_completion(message)
+        if actual != expected:
+            print("ERROR: is_empty_completion({}) = {}, expected {}".format(message, actual, expected))
+            failed = True
+    return failed
+
+
+def test_non_retryable_statuses_fail_on_the_first_attempt(my_predbat):
+    """A 401, 402 or 400 fails immediately, unchanged, with exactly one attempt made.
+
+    Asserting the attempt count, not merely that the turn failed, is the whole point: a wrapper
+    that retried a 401 three times before giving up would still leave the turn failed and would
+    still show the 401's own message, so a test that checked only those two things could not tell
+    a broken "retries everything" implementation from a correct one. See the task's own warning
+    about exactly this trap.
+    """
+    failed = False
+    print("**** Testing 401/402/400 fail on the first attempt, not retried ****")
+    for status, expected_phrase in ((401, "rejected the API key"), (402, "insufficient credit"), (400, "malformed request")):
+        agent = _agent_with_fake(my_predbat, ChatRequestError(status, "malformed request" if status == 400 else "denied"))
+        cid = asyncio.run(agent.store.create())
+        asyncio.run(agent.run_turn(cid, "hello"))
+
+        if len(agent.fake.payloads) != 1:
+            print("ERROR: status {} was retried - expected exactly 1 attempt, the fake was called {} times".format(status, len(agent.fake.payloads)))
+            failed = True
+        events = agent.events_since(0, cid)[0]
+        if any(event["type"] == "retry" for event in events):
+            print("ERROR: status {} emitted a 'retry' event despite being non-retryable".format(status))
+            failed = True
+        errors = [event for event in events if event["type"] == "error"]
+        if not errors:
+            print("ERROR: status {} produced no error event".format(status))
+            failed = True
+            continue
+        message = errors[0]["data"].get("message", "")
+        if "Gave up after" in message:
+            print("ERROR: status {} message names a retry count despite never retrying: {!r}".format(status, message))
+            failed = True
+        if status in (401, 402) and expected_phrase.lower() not in message.lower():
+            print("ERROR: status {} lost its documented wording: {!r}".format(status, message))
+            failed = True
+        if agent.retry_sleeps:
+            print("ERROR: status {} requested a backoff sleep despite never retrying: {}".format(status, agent.retry_sleeps))
+            failed = True
+
+    return failed
+
+
+def test_mid_stream_provider_overload_retries_and_recovers(my_predbat):
+    """A retryable mid-stream error on the first attempt is retried, and a clean second attempt
+    succeeds - the turn ends normally with the second attempt's answer, having made two attempts.
+    """
+    failed = False
+    print("**** Testing a retryable mid-stream error is retried and recovers ****")
+    agent = _agent_with_fake(my_predbat, _mid_stream_error_response(), _text_response("confirmed"))
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "why is it charging?"))
+
+    if len(agent.fake.payloads) != 2:
+        print("ERROR: expected exactly 2 completion attempts (one failure, one recovery), got {}".format(len(agent.fake.payloads)))
+        failed = True
+
+    events = agent.events_since(0, cid)[0]
+    retries = [event for event in events if event["type"] == "retry"]
+    if len(retries) != 1:
+        print("ERROR: expected exactly one 'retry' event, got {}: {}".format(len(retries), retries))
+        return True
+    retry = retries[0]["data"]
+    if retry.get("attempt") != 2 or retry.get("of") != COMPLETION_MAX_ATTEMPTS:
+        print("ERROR: the retry event does not name attempt 2 of {}: {}".format(COMPLETION_MAX_ATTEMPTS, retry))
+        failed = True
+    if not retry.get("reason"):
+        print("ERROR: the retry event carries no reason: {}".format(retry))
+        failed = True
+    if retry.get("delay") != COMPLETION_RETRY_DELAYS_SECONDS[0]:
+        print("ERROR: the retry event's delay is {}, expected the first backoff {}".format(retry.get("delay"), COMPLETION_RETRY_DELAYS_SECONDS[0]))
+        failed = True
+
+    if [event["type"] for event in events].count("error") != 0:
+        print("ERROR: a recovered turn should not emit an 'error' event")
+        failed = True
+
+    messages = asyncio.run(agent.store.get_messages(cid))
+    assistant = [message for message in messages if message.get("role") == "assistant"]
+    if not assistant or assistant[0].get("content") != "confirmed":
+        print("ERROR: the recovered turn's stored answer is wrong: {}".format(assistant))
+        failed = True
+
+    if agent.retry_sleeps != [COMPLETION_RETRY_DELAYS_SECONDS[0]]:
+        print("ERROR: expected exactly one backoff sleep of {}, agent requested {}".format(COMPLETION_RETRY_DELAYS_SECONDS[0], agent.retry_sleeps))
+        failed = True
+
+    return failed
+
+
+def test_rate_limited_retry_uses_the_longer_first_delay(my_predbat):
+    """A 429 is retried, but with COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS rather than the plain
+    first backoff - a provider's rate-limit window is unlikely to have cleared inside one second.
+    """
+    failed = False
+    print("**** Testing a 429 retries with the longer rate-limit backoff ****")
+    agent = _agent_with_fake(my_predbat, ChatRequestError(429, "slow down"), _text_response("ok now"))
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "hello"))
+
+    if agent.retry_sleeps != [COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS]:
+        print("ERROR: expected the rate-limit backoff {}, agent requested {}".format(COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS, agent.retry_sleeps))
+        failed = True
+
+    events = agent.events_since(0, cid)[0]
+    retries = [event for event in events if event["type"] == "retry"]
+    if not retries or retries[0]["data"].get("delay") != COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS:
+        print("ERROR: the retry event does not carry the rate-limit delay: {}".format(retries))
+        failed = True
+
+    return failed
+
+
+def test_retry_backoff_sequence_is_one_then_three_seconds(my_predbat):
+    """Three attempts that all fail with a plain retryable error back off 1s then 3s - the module
+    constants named in the task, not hand-rolled numbers - and the suite never actually sleeps for
+    either, since agent._retry_sleep only records what was requested.
+    """
+    failed = False
+    print("**** Testing the plain retry backoff sequence is 1s then 3s ****")
+    agent = _agent_with_fake(my_predbat, *[_mid_stream_error_response() for _ in range(COMPLETION_MAX_ATTEMPTS)])
+    cid = asyncio.run(agent.store.create())
+
+    started = time.monotonic()
+    asyncio.run(agent.run_turn(cid, "hello"))
+    elapsed = time.monotonic() - started
+
+    if agent.retry_sleeps != list(COMPLETION_RETRY_DELAYS_SECONDS):
+        print("ERROR: expected the backoff sequence {}, agent requested {}".format(list(COMPLETION_RETRY_DELAYS_SECONDS), agent.retry_sleeps))
+        failed = True
+    if elapsed > 2:
+        print("ERROR: the turn took {:.2f}s - the injected sleep is not actually replacing the real backoff".format(elapsed))
+        failed = True
+
+    return failed
+
+
+def test_retry_never_sleeps_past_the_turn_deadline(my_predbat):
+    """A retry is not attempted when the remaining turn budget is smaller than the next backoff -
+    the wrapper fails with the last error immediately, having requested no sleep at all, rather
+    than sleeping into a self-inflicted timeout. Drives _run_completion_with_retry directly, with
+    agent.deadline set to leave less time than COMPLETION_RETRY_DELAYS_SECONDS[0] (1s), so this
+    does not depend on winning a real-clock race against the suite's own execution time.
+    """
+    failed = False
+    print("**** Testing a retry backoff that would exceed the turn deadline gives up instead of sleeping ****")
+    agent = _agent_with_fake(my_predbat)
+    calls = []
+
+    async def _always_overloaded(conversation_id, messages, model):
+        """Fail every attempt with a retryable mid-stream-shaped error, counting how many ran."""
+        calls.append(1)
+        raise ChatRequestError(502, "bad gateway", provider_message="Service temporarily overloaded")
+
+    agent._run_completion = _always_overloaded
+    agent.deadline = time.monotonic() + (COMPLETION_RETRY_DELAYS_SECONDS[0] / 2)
+
+    try:
+        asyncio.run(agent._run_completion_with_retry("cid", [], "test/model"))
+        print("ERROR: expected _run_completion_with_retry to raise once the deadline could not fit the backoff")
+        return True
+    except ChatRequestError as error:
+        if "Gave up after 1 attempt" not in error.friendly():
+            print("ERROR: the give-up message does not name the single attempt made: {!r}".format(error.friendly()))
+            failed = True
+
+    if len(calls) != 1:
+        print("ERROR: expected exactly 1 completion attempt before giving up on a deadline too small for the backoff, got {}".format(len(calls)))
+        failed = True
+    if agent.retry_sleeps:
+        print("ERROR: a sleep was requested even though the remaining deadline budget was smaller than the backoff: {}".format(agent.retry_sleeps))
+        failed = True
+
+    return failed
+
+
+def _partial_then_mid_stream_error_response():
+    """Build a chunk list that streams some real content before the mid-stream error chunk.
+
+    Reproduces OpenRouter's own documented shape: "errors can occur after streaming has started".
+    A retry that resends this failed attempt's partial text alongside the second attempt's answer
+    is exactly the bug the task's 'retry' event exists to prevent on the client side; on the
+    server side, the guard against it is simpler still - _run_completion starts a fresh local
+    accumulator on every call, so nothing from this attempt's "Batt" + "ery is " can survive into
+    the next one's message. The test below asserts that directly.
+    """
+    return [
+        {"choices": [{"delta": {"content": "Batt"}}]},
+        {"choices": [{"delta": {"content": "ery is "}}]},
+        {"id": "cmpl-partial", "error": {"code": "server_error", "message": "Provider disconnected unexpectedly"}, "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "error"}]},
+    ]
+
+
+def test_retried_attempt_does_not_duplicate_the_failed_attempts_partial_content(my_predbat):
+    """A retry after partial content has already streamed stores only the second attempt's answer
+    - never the first attempt's partial text concatenated with it.
+
+    This is the actual bug the task's partial-content handling exists to prevent: a naive retry
+    that kept accumulating onto the same buffer across attempts would store "Battery is charging
+    because rates are low" (the discarded "Batt" + "ery is " glued onto the real answer). Asserting
+    an exact match, not a substring ("in"), is what catches that - a substring check would pass
+    just as happily on the duplicated text as on the correct one.
+    """
+    failed = False
+    print("**** Testing a retried attempt's stored message excludes the failed attempt's partial content ****")
+    agent = _agent_with_fake(my_predbat, _partial_then_mid_stream_error_response(), _text_response("resolved"))
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "why is it charging?"))
+
+    messages = asyncio.run(agent.store.get_messages(cid))
+    assistant = [message for message in messages if message.get("role") == "assistant"]
+    if not assistant:
+        print("ERROR: no assistant message was stored")
+        return True
+    content = assistant[0].get("content")
+    if content != "resolved":
+        print("ERROR: the stored answer is {!r}, expected only the second attempt's text ('resolved') with none of the first attempt's partial content ('Batt'/'ery is ') concatenated onto it".format(content))
+        failed = True
+
+    # The first attempt's partial text was genuinely streamed to the browser in real time (delta
+    # events), which is correct and expected - it is the client's job, on the 'retry' event, to
+    # discard whatever bubble those deltas had built. So this checks the deltas are present...
+    deltas = "".join(event["data"].get("text", "") for event in agent.events_since(0, cid)[0] if event["type"] == "delta")
+    if "Batt" not in deltas:
+        print("ERROR: the first attempt's partial content was not streamed as deltas at all: {!r}".format(deltas))
+        failed = True
+    # ...but that the final 'assistant' event (what a client uses once a bubble is not mid-stream,
+    # e.g. after a reload) carries only the recovered answer, not the discarded partial glued on.
+    finals = [event["data"].get("text") for event in agent.events_since(0, cid)[0] if event["type"] == "assistant"]
+    if finals != ["resolved"]:
+        print("ERROR: the final 'assistant' event text is {}, expected only the second attempt's answer".format(finals))
+        failed = True
+
+    return failed
+
+
+def test_empty_completion_is_retried_and_recovers(my_predbat):
+    """A reasoning-only (empty) completion on the first attempt is retried, and a clean second
+    attempt with a real answer succeeds - the turn ends normally, having made two attempts.
+    """
+    failed = False
+    print("**** Testing an empty completion is retried and recovers ****")
+    agent = _agent_with_fake(my_predbat, _reasoning_only_response(), _text_response("recovered"))
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "why is it charging?"))
+
+    if len(agent.fake.payloads) != 2:
+        print("ERROR: expected exactly 2 completion attempts (one empty, one recovery), got {}".format(len(agent.fake.payloads)))
+        failed = True
+
+    events = agent.events_since(0, cid)[0]
+    if [event["type"] for event in events].count("error") != 0:
+        print("ERROR: a recovered turn should not emit an 'error' event")
+        failed = True
+    retries = [event for event in events if event["type"] == "retry"]
+    if len(retries) != 1:
+        print("ERROR: expected exactly one 'retry' event for the empty completion, got {}: {}".format(len(retries), retries))
+        failed = True
+
+    messages = asyncio.run(agent.store.get_messages(cid))
+    assistant = [message for message in messages if message.get("role") == "assistant"]
+    if not assistant or assistant[0].get("content") != "recovered":
+        print("ERROR: the recovered turn's stored answer is wrong: {}".format(assistant))
+        failed = True
+
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
@@ -1521,11 +1932,20 @@ def run_chat_tests(my_predbat):
     failed |= test_write_confirmation_timeout(my_predbat)
     failed |= test_write_without_confirmation(my_predbat)
     failed |= test_web_search_switch(my_predbat)
-    failed |= test_mid_stream_error_chunk_fails_the_turn_and_stores_nothing(my_predbat)
+    failed |= test_mid_stream_error_chunk_fails_the_turn_loudly_after_exhausting_every_retry(my_predbat)
     failed |= test_finish_reason_length_keeps_partial_content_with_a_truncation_note(my_predbat)
-    failed |= test_reasoning_only_completion_is_not_stored_and_names_the_cause(my_predbat)
+    failed |= test_reasoning_only_completion_is_retried_then_reported_as_an_anomaly_if_it_never_clears(my_predbat)
     failed |= test_reasoning_details_fragments_merge_by_index_not_appended(my_predbat)
     failed |= test_reasoning_details_round_trip_to_the_next_request_in_order(my_predbat)
     failed |= test_reasoning_details_fragments_without_index_or_id_are_appended_not_merged(my_predbat)
     failed |= test_plain_reasoning_string_is_captured_as_a_fallback(my_predbat)
+    failed |= test_classify_completion_failure_matches_the_documented_retry_policy(my_predbat)
+    failed |= test_is_empty_completion(my_predbat)
+    failed |= test_non_retryable_statuses_fail_on_the_first_attempt(my_predbat)
+    failed |= test_mid_stream_provider_overload_retries_and_recovers(my_predbat)
+    failed |= test_rate_limited_retry_uses_the_longer_first_delay(my_predbat)
+    failed |= test_retry_backoff_sequence_is_one_then_three_seconds(my_predbat)
+    failed |= test_retry_never_sleeps_past_the_turn_deadline(my_predbat)
+    failed |= test_retried_attempt_does_not_duplicate_the_failed_attempts_partial_content(my_predbat)
+    failed |= test_empty_completion_is_retried_and_recovers(my_predbat)
     return failed

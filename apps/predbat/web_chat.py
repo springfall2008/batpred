@@ -610,6 +610,25 @@ body.dark-mode {
     }
 }
 
+/* Retry status text - reason, attempt count and countdown - shown inside the thinking bubble
+   while a completion is being retried. Hidden by default; .chat-thinking-retrying (toggled by
+   startRetryCountdown()/stopRetryCountdown()) swaps it in and hides the ordinary caret/counter
+   underneath, so the two never show at once. No colour of its own: it inherits
+   .chat-bubble-thinking's var(--chat-text-muted) above rather than declaring one, which is what
+   keeps it theme-aware for free. */
+.chat-thinking-retry {
+    display: none;
+}
+
+.chat-bubble-thinking.chat-thinking-retrying .chat-thinking-caret,
+.chat-bubble-thinking.chat-thinking-retrying .chat-thinking-counter {
+    display: none;
+}
+
+.chat-bubble-thinking.chat-thinking-retrying .chat-thinking-retry {
+    display: inline;
+}
+
 
 .chat-bubble pre,
 .chat-tool-row pre,
@@ -901,6 +920,11 @@ var pendingText = '';
 // exactly the failure mode this exists to avoid.
 var thinkingTimer = null;
 var thinkingStartedAtMs = 0;
+// The retry countdown's own interval, deliberately separate from thinkingTimer above - the two
+// tick different displays inside the same bubble (total elapsed time vs. time until the next
+// attempt) and must be started/stopped independently, or clearing one would silently leak the
+// other. See stopRetryCountdown() for why this must always be nulled out after clearing.
+var retryCountdownTimer = null;
 
 function byId(id) {
     return document.getElementById(id);
@@ -1261,6 +1285,18 @@ function clearPendingBubble() {
     pendingText = '';
 }
 
+// Unlike clearPendingBubble() above - which keeps a bubble that already has real streamed content,
+// correct when a turn simply ends - a retry must throw away whatever the failed attempt streamed
+// unconditionally, content or not, so the retried attempt starts onto a clean bubble rather than
+// appending onto the discarded one. See handleRetry().
+function discardPendingBubble() {
+    if (pendingBubble) {
+        pendingBubble.remove();
+    }
+    pendingBubble = null;
+    pendingText = '';
+}
+
 // ---------------------------------------------------------------------------------------------
 // "thinking..." ghost bubble. Reuses one #chat-thinking element for the whole page - never one
 // per wait - so repeatedly showing and hiding it across a multi-tool-call turn does not jitter
@@ -1283,6 +1319,13 @@ function ensureThinkingBubble() {
     var counter = document.createElement('span');
     counter.className = 'chat-thinking-counter';
     bubble.appendChild(counter);
+    // Holds the retry reason/attempt/countdown text while a completion is being retried - see
+    // startRetryCountdown(). Empty and invisible (.chat-thinking-retry has no content, and
+    // .chat-thinking-retrying is what makes it visible) until a 'retry' event fills it in.
+    var retryStatus = document.createElement('span');
+    retryStatus.id = 'chat-thinking-retry';
+    retryStatus.className = 'chat-thinking-retry';
+    bubble.appendChild(retryStatus);
     return bubble;
 }
 
@@ -1353,7 +1396,86 @@ function stopThinkingTimer() {
 
 function clearThinkingBubble() {
     stopThinkingTimer();
+    stopRetryCountdown();
     hideThinkingBubble();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Retry countdown, shown inside the thinking bubble while a completion attempt is being retried
+// after a transient provider failure. Deliberately independent of thinkingTimer above, which keeps
+// counting the turn's total elapsed time underneath - the two must be started and stopped without
+// touching one another, since a retry is a temporary state inside a turn that is still running.
+// ---------------------------------------------------------------------------------------------
+
+// The only place that clears retryCountdownTimer, mirroring stopThinkingTimer()'s own discipline:
+// called from clearThinkingBubble() (every turn-ending path already goes through that) and again
+// at the start of startRetryCountdown() itself, so a second 'retry' event before the first
+// countdown finishes replaces it cleanly rather than stacking a second interval on top.
+function stopRetryCountdown() {
+    if (retryCountdownTimer) {
+        clearInterval(retryCountdownTimer);
+        retryCountdownTimer = null;
+    }
+    var bubble = byId('chat-thinking');
+    if (bubble) {
+        bubble.classList.remove('chat-thinking-retrying');
+    }
+    var status = byId('chat-thinking-retry');
+    if (status) {
+        status.textContent = '';
+    }
+}
+
+// data carries {attempt, of, reason, delay} - the next attempt's number, the total attempts, the
+// short reason classify_completion_failure() picked on the server, and the backoff in seconds
+// about to be waited before that attempt starts. The countdown itself is cosmetic (nothing here
+// drives the actual wait, which happens entirely server-side); it exists only so a user watching
+// the transcript sees why nothing is happening rather than mistaking a retry for a hang.
+function startRetryCountdown(data) {
+    stopRetryCountdown();
+    var status = byId('chat-thinking-retry');
+    if (!status) {
+        return;
+    }
+    var bubble = byId('chat-thinking');
+    if (bubble) {
+        bubble.classList.add('chat-thinking-retrying');
+    }
+    var reason = (data && data.reason) ? String(data.reason) : 'Provider error';
+    var attempt = Number(data && data.attempt) || 0;
+    var of = Number(data && data.of) || 0;
+    var remaining = Math.max(0, Math.round(Number(data && data.delay) || 0));
+
+    function render() {
+        var suffix = remaining > 0 ? ' in ' + remaining + 's' : '';
+        // textContent, never innerHTML: reason is the provider's own wording relayed by the
+        // server, exactly as untrusted as any other server-relayed text in this client - see the
+        // sink audit (test_inner_html_sinks_only_ever_receive_escaped_content).
+        status.textContent = reason + ' — retrying (' + attempt + ' of ' + of + ')' + suffix + '…';
+    }
+    render();
+    retryCountdownTimer = setInterval(function () {
+        remaining -= 1;
+        if (remaining <= 0) {
+            stopRetryCountdown();
+            return;
+        }
+        render();
+    }, 1000);
+}
+
+function handleRetry(data) {
+    // The failed attempt's partial bubble (if any) must not survive into the retried attempt -
+    // discardPendingBubble() removes it unconditionally, content or not, unlike clearPendingBubble
+    // (used when a turn ends outright, where real partial content is worth keeping on screen).
+    discardPendingBubble();
+    var bubble = ensureThinkingBubble();
+    if (!bubble.parentNode) {
+        byId('chat-transcript').appendChild(bubble);
+    }
+    bubble.classList.remove('chat-thinking-hidden');
+    scrollTranscriptToBottom();
+    startRetryCountdown(data);
 }
 
 function handleUser(data) {
@@ -1567,6 +1689,7 @@ function openStream() {
     on(source, 'assistant', handleAssistant);
     on(source, 'tool_start', appendToolStart);
     on(source, 'tool_end', handleToolEnd);
+    on(source, 'retry', handleRetry);
     on(source, 'confirm', appendConfirmCard);
     on(source, 'confirm_result', resolveConfirmCard);
     on(source, 'usage', renderUsageEvent);

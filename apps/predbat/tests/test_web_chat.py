@@ -517,7 +517,7 @@ def test_client_script_contract(my_predbat):
     failed = False
     print("**** Testing the client script contract ****")
     script = web_chat.get_chat_script()
-    for event in ["delta", "assistant", "tool_start", "tool_end", "confirm", "confirm_result", "usage", "title", "error", "done", "busy", "idle", "reload"]:
+    for event in ["delta", "assistant", "tool_start", "tool_end", "confirm", "confirm_result", "usage", "title", "error", "done", "busy", "idle", "reload", "retry"]:
         if "'{}'".format(event) not in script and '"{}"'.format(event) not in script:
             print("ERROR: the client script does not handle the {!r} event".format(event))
             failed = True
@@ -1425,6 +1425,152 @@ def test_thinking_bubble_css_respects_theme_vars_and_reduced_motion(my_predbat):
     return failed
 
 
+def test_retry_event_wired_to_handle_retry(my_predbat):
+    """The SSE 'retry' event is wired to a handleRetry() function, not left unhandled.
+
+    Server-side, chat.py's _wait_before_retrying() emits 'retry' before every backoff so the
+    browser can discard a partial assistant bubble before the retried attempt's own deltas start
+    arriving - see test_handle_retry_discards_pending_bubble_and_shows_the_reason for what the
+    handler itself must do once it receives one. This just pins the wiring: without it, the event
+    would arrive at the client and be silently dropped by the EventSource, same as any other
+    unregistered event type.
+    """
+    failed = False
+    print("**** Testing the SSE 'retry' event is wired to handleRetry() ****")
+    script = web_chat.get_chat_script()
+    if "on(source, 'retry', handleRetry)" not in script.replace("\n", " "):
+        print("ERROR: the client script does not wire the 'retry' SSE event to handleRetry()")
+        failed = True
+    if "function handleRetry" not in script:
+        print("ERROR: the client script has no handleRetry() function")
+        failed = True
+    return failed
+
+
+def test_handle_retry_discards_pending_bubble_and_shows_the_reason(my_predbat):
+    """handleRetry() discards the in-progress assistant bubble and shows the retry status.
+
+    Discarding via discardPendingBubble() (not the ordinary clearPendingBubble(), which leaves a
+    bubble with real content in place - correct for a turn-ending error, wrong here) is what stops
+    a retried attempt's deltas from being appended onto a bubble the failed attempt had already
+    partly filled in. The status text itself must be set with textContent, never innerHTML: a
+    provider's own error wording (data.reason) is exactly as untrusted as any other server-relayed
+    text in this client, and the sink audit (test_inner_html_sinks_only_ever_receive_escaped_
+    content) never allow-lists a bare property read reaching innerHTML.
+    """
+    failed = False
+    print("**** Testing handleRetry() discards the pending bubble and shows the reason via textContent ****")
+    script = web_chat.get_chat_script()
+    body = _extract_function_body(script, "handleRetry")
+    if body is None:
+        print("ERROR: could not find handleRetry() to inspect")
+        return True
+    if "discardPendingBubble()" not in body:
+        print("ERROR: handleRetry() does not call discardPendingBubble() - a retried attempt would append onto the failed attempt's partial bubble: {!r}".format(body))
+        failed = True
+    if "clearPendingBubble()" in body:
+        print("ERROR: handleRetry() calls clearPendingBubble(), which keeps a bubble that has real content - it must unconditionally discard instead: {!r}".format(body))
+        failed = True
+    if ".innerHTML" in body:
+        print("ERROR: handleRetry() touches innerHTML directly - the reason text must go through textContent only: {!r}".format(body))
+        failed = True
+
+    # handleRetry() itself only needs to hand the event payload off - the actual reason/attempt/
+    # countdown display lives in startRetryCountdown(), which it must call with the raw data.
+    if "startRetryCountdown(data)" not in body:
+        print("ERROR: handleRetry() does not call startRetryCountdown(data), so the retry status would never be shown: {!r}".format(body))
+        failed = True
+    countdown_body = _extract_function_body(script, "startRetryCountdown")
+    if countdown_body is None:
+        print("ERROR: could not find startRetryCountdown() to inspect")
+        return True
+    if ".innerHTML" in countdown_body:
+        print("ERROR: startRetryCountdown() touches innerHTML directly - the reason text must go through textContent only: {!r}".format(countdown_body))
+        failed = True
+    if "textContent" not in countdown_body:
+        print("ERROR: startRetryCountdown() never sets textContent, so the retry status would never actually be shown: {!r}".format(countdown_body))
+        failed = True
+    if "data.reason" not in countdown_body:
+        print("ERROR: startRetryCountdown() does not read data.reason, so the retry's cause would never reach the user: {!r}".format(countdown_body))
+        failed = True
+    if "data.attempt" not in countdown_body or "data.of" not in countdown_body:
+        print("ERROR: startRetryCountdown() does not read data.attempt/data.of, so the attempt count would never reach the user: {!r}".format(countdown_body))
+        failed = True
+    return failed
+
+
+def test_discard_pending_bubble_unconditionally_removes_the_bubble(my_predbat):
+    """discardPendingBubble() removes the bubble element regardless of whether it has text.
+
+    This is what distinguishes it from clearPendingBubble(), whose whole point is the opposite:
+    only remove an empty ghost bubble, leaving one with real streamed content in place. A retry
+    must discard the failed attempt's content unconditionally - see the task this implements -
+    so a discardPendingBubble() that only removed an empty bubble would silently degrade into
+    clearPendingBubble() and let a retried attempt's deltas append onto old content again.
+    """
+    failed = False
+    print("**** Testing discardPendingBubble() unconditionally removes the bubble ****")
+    script = web_chat.get_chat_script()
+    body = _extract_function_body(script, "discardPendingBubble")
+    if body is None:
+        print("ERROR: could not find discardPendingBubble() to inspect")
+        return True
+    if "pendingBubble.remove()" not in body.replace(" ", ""):
+        print("ERROR: discardPendingBubble() does not call pendingBubble.remove(): {!r}".format(body))
+        failed = True
+    if "!pendingText" in body:
+        print("ERROR: discardPendingBubble() is gated on pendingText - that makes it conditional, exactly like clearPendingBubble(), instead of an unconditional discard: {!r}".format(body))
+        failed = True
+    if "pendingBubble=null" not in body.replace(" ", "") or "pendingText=''" not in body.replace(" ", ""):
+        print("ERROR: discardPendingBubble() does not reset pendingBubble/pendingText, so the next delta would append onto the discarded state: {!r}".format(body))
+        failed = True
+    return failed
+
+
+def test_retry_countdown_interval_is_genuinely_cleared(my_predbat):
+    """stopRetryCountdown() clears its own interval on the real handle, and clearThinkingBubble()
+    (the function every turn-ending path already calls) calls it - otherwise a retry countdown
+    left running past done/error/idle, or past a conversation switch, ticks forever against a
+    detached element exactly like the pre-existing thinkingTimer leak this mirrors.
+    """
+    failed = False
+    print("**** Testing the retry countdown interval is actually cleared, not just clearable ****")
+    script = web_chat.get_chat_script()
+
+    stop_body = _extract_function_body(script, "stopRetryCountdown")
+    if stop_body is None:
+        print("ERROR: could not find stopRetryCountdown() to inspect")
+        return True
+    if "clearInterval(retryCountdownTimer)" not in stop_body.replace(" ", ""):
+        print("ERROR: stopRetryCountdown() does not call clearInterval() on the real timer handle: {!r}".format(stop_body))
+        failed = True
+    if "retryCountdownTimer=null" not in stop_body.replace(" ", ""):
+        print("ERROR: stopRetryCountdown() does not null out the handle after clearing it: {!r}".format(stop_body))
+        failed = True
+
+    clear_body = _extract_function_body(script, "clearThinkingBubble")
+    if clear_body is None or "stopRetryCountdown()" not in clear_body:
+        print("ERROR: clearThinkingBubble() does not call stopRetryCountdown() - a retry countdown would outlive every turn-ending path that already relies on clearThinkingBubble(): {!r}".format(clear_body))
+        failed = True
+
+    return failed
+
+
+def test_retry_status_element_takes_its_colour_from_theme_variables(my_predbat):
+    """Any CSS rule styling the retry status text uses a --chat-* custom property, never a
+    hardcoded colour - the same theme-awareness constraint the thinking bubble itself follows.
+    """
+    failed = False
+    print("**** Testing the retry status element's CSS uses theme variables, not hardcoded colours ****")
+    styles = web_chat.get_chat_styles()
+    for match in re.finditer(r"([^{}]*chat-thinking-retr[^{}]*)\{([^}]*)\}", styles):
+        selector, block = match.group(1), match.group(2)
+        if "color" in block and "var(--chat-" not in block:
+            print("ERROR: a rule for {!r} sets a colour without a --chat-* custom property: {!r}".format(selector.strip(), block.strip()))
+            failed = True
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -1454,4 +1600,9 @@ def run_web_chat_tests(my_predbat):
     failed |= test_thinking_bubble_element_is_reused_not_recreated(my_predbat)
     failed |= test_thinking_timer_interval_is_genuinely_cleared_not_merely_clearable(my_predbat)
     failed |= test_thinking_bubble_css_respects_theme_vars_and_reduced_motion(my_predbat)
+    failed |= test_retry_event_wired_to_handle_retry(my_predbat)
+    failed |= test_handle_retry_discards_pending_bubble_and_shows_the_reason(my_predbat)
+    failed |= test_discard_pending_bubble_unconditionally_removes_the_bubble(my_predbat)
+    failed |= test_retry_countdown_interval_is_genuinely_cleared(my_predbat)
+    failed |= test_retry_status_element_takes_its_colour_from_theme_variables(my_predbat)
     return failed
