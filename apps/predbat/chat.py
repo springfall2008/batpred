@@ -41,7 +41,7 @@ from datetime import datetime
 from agent_tools import TOOL_DEFS, PredbatTools, openai_tool_list
 from component_base import ComponentBase
 from chat_store import ConversationStore, NEW_CONVERSATION_TITLE, derive_title, extract_cached_tokens, trim_history
-from chat_tools import CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_source, search_docs, search_source
+from chat_tools import APPS_YAML_RESTART_WARNING, CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_source, search_docs, search_source, set_apps_config
 
 EVENT_BUFFER_MAX = 2000
 
@@ -851,6 +851,12 @@ class ChatAgent(ComponentBase):
             return read_source(arguments.get("file"), start_line=arguments.get("start_line", 1), max_lines=arguments.get("max_lines", 200))
         if name == "fetch_url":
             return await fetch_url(arguments.get("url"), allowlist=self.fetch_allowlist)
+        if name == "set_apps_config":
+            # Synchronous file I/O on this loop, same as read_source above - apps.yaml is small,
+            # and this mirrors WebInterface.html_apps_post doing the same open()/write() inline in
+            # an async handler. See set_apps_config()'s own docstring (chat_tools.py) for the
+            # safety checks it runs before touching the file.
+            return set_apps_config(self.base, arguments.get("key"), arguments.get("value"))
         return await self.tools.execute(name, arguments)
 
     def claim_turn(self, conversation_id):
@@ -990,6 +996,26 @@ class ChatAgent(ComponentBase):
         await self.store.append(conversation_id, {"role": "assistant", "content": note})
         self.emit(conversation_id, "assistant", {"text": note, "sources": []})
 
+    def _confirmation_card_arguments(self, name, arguments):
+        """Return what a write tool's confirmation card should show the human, before they answer.
+
+        For every write tool except set_apps_config this is just the model's own arguments,
+        rendered as-is by the frontend's generic confirm card (appendConfirmCard() in
+        web_chat.py) - fine for set_config/set_plan_override, whose arguments already say exactly
+        what will change. set_apps_config's arguments are only 'key' and 'value' - the model's
+        proposed change, with nothing said about what the key is currently set to - so a human
+        approving it would be approving a change they cannot actually see. This looks the current
+        value up fresh from self.base.args (the same source get_apps_config reads, and the source
+        the confirmed call will overwrite), rather than trusting anything the model said about it,
+        so a prompt-injected description of "the current value" cannot misrepresent the change
+        being approved. The restart warning belongs here too, not only in the tool's own success
+        result, because the point of the warning is to be seen before the user approves, not after.
+        """
+        if name != "set_apps_config":
+            return arguments
+        key = arguments.get("key")
+        return {"key": key, "current_value": self.base.args.get(key), "proposed_value": arguments.get("value"), "warning": APPS_YAML_RESTART_WARNING}
+
     async def _run_one_tool(self, conversation_id, turn_id, call):
         """Execute one tool call and append its result as a tool message."""
         name = (call.get("function") or {}).get("name") or ""
@@ -1011,7 +1037,7 @@ class ChatAgent(ComponentBase):
         if definition.get("writes") and self.confirm_writes_enabled():
             with self.lock:
                 self.pending_confirm[call_id] = {"conversation_id": conversation_id, "turn_id": turn_id, "approved": None}
-            self.emit(conversation_id, "confirm", {"call_id": call_id, "name": name, "arguments": arguments})
+            self.emit(conversation_id, "confirm", {"call_id": call_id, "name": name, "arguments": self._confirmation_card_arguments(name, arguments)})
             approved = await self.await_confirmation(call_id)
             with self.lock:
                 self.pending_confirm.pop(call_id, None)

@@ -316,6 +316,74 @@ def is_data_numerical(history, attribute=None):
     return False
 
 
+# The top-level key apps.yaml wraps its whole Predbat configuration section in. Shared between
+# web.py's apps.yaml editor and the AI tool layer (agent_tools.py/chat_tools.py) so both read and
+# write the same section under one name - moved here, alongside update_nested_yaml_value() below,
+# for the same reason is_data_numerical() was: the tool layer must not import from web.py (#4768).
+ROOT_YAML_KEY = "pred_bat"
+
+
+def update_nested_yaml_value(data, path, value):
+    """
+    Update a nested value in YAML data using a dot-notation path, e.g. "battery_charge_low.normal"
+    or a plain top-level key such as "num_inverters" (a path with no dots).
+
+    Shared by web.py's apps.yaml batch editor (WebInterface.html_apps_post) and the chat agent's
+    set_apps_config tool (chat_tools.py) - moved here so the tool layer can reuse it without
+    importing from web.py (#4768). Raises KeyError when a key in the path - including the final
+    one - is not already present, which is what gives both callers their "a key must already exist
+    to be changed" rule for free, rather than each having to check it separately.
+    """
+    pre_keys = path.split(".")
+    keys = []
+    # Split out set of square brackets into a different key
+    for key in pre_keys:
+        if "[" in key and "]" in key:
+            # Handle keys with square brackets, e.g., "battery_charge_low[0]"
+            base_key, index = key.split("[")
+            index = index.rstrip("]")
+            keys.append(base_key)
+            keys.append(f"[{index}]")
+        else:
+            keys.append(key)
+
+    current = data
+
+    # Navigate to the parent of the target value
+    for key in keys[:-1]:
+        if key.startswith("[") and key.endswith("]"):
+            # Handle numerical index in square brackets
+            index = int(key[1:-1])
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(f"Index '{index}' out of range in path '{path}'")
+            current = current[index]
+        elif key in current:
+            current = current[key]
+        else:
+            raise KeyError(f"Key '{key}' not found in path '{path}'")
+
+    # Set the final value
+    key = keys[-1]
+    if key.startswith("[") and key.endswith("]"):
+        # Handle numerical index in square brackets
+        index = int(key[1:-1])
+        if not isinstance(current, list) or index >= len(current):
+            raise KeyError(f"Index '{index}' out of range in path '{path}'")
+        current[index] = value
+    elif key in current:
+        current[key] = value
+    else:
+        # If final key is numerical try it as an integer
+        if key.isdigit():
+            key = int(key)
+            if key not in current:
+                raise KeyError(f"Final key '{key}' not found in path '{path}'")
+            else:
+                current[key] = value
+        else:
+            raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+
 def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False, is_numerical=True):
     """
     Get historical data for an attribute

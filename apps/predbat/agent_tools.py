@@ -20,7 +20,7 @@ import math
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
-from utils import calc_percent_limit, get_override_time_from_string, mask_secret_args, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp, is_debug_excluded_key, is_data_numerical, str2time
+from utils import calc_percent_limit, get_override_time_from_string, mask_secret_args, is_secret_key, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp, is_debug_excluded_key, is_data_numerical, str2time
 
 
 # Log filter levels accepted by the get_log tool, matching the web log view's tabs
@@ -405,6 +405,39 @@ class PredbatTools:
             return {"success": False, "error": str(e), "data": None}
         except Exception as e:
             return {"success": False, "error": f"Error retrieving Predbat apps.yaml data: {str(e)}", "data": None}
+
+    async def _execute_get_apps_config(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the get_apps_config tool.
+
+        Reads one apps.yaml key at a time, so a model can read-modify-write it with the chat
+        agent's set_apps_config tool (chat_tools.py; not offered here - see that tool's comment
+        for why). Unlike get_apps there is no 'masked' bypass at all: get_apps' escape hatch is
+        stripped from the chat schema but still reachable (see test_dispatch_strips_chat_omit_
+        properties), which is an acceptable trade-off for a full-configuration review tool with an
+        explicit opt-out. A single-key read has no equivalent legitimate use for seeing a raw
+        credential, so it is simpler and safer to never offer the choice (#4768).
+        """
+        try:
+            key = arguments.get("key")
+            if not key or not isinstance(key, str):
+                raise MCPArgumentError("'key' must be a non-empty string, got {!r}".format(key))
+            if key not in self.base.args:
+                return {"success": False, "error": "'{}' was not found in apps.yaml".format(key), "data": None}
+
+            value = self.base.args[key]
+            masked = is_secret_key(key)
+            if masked:
+                value = "xxx"
+
+            description = "The current value of apps.yaml key '{}'".format(key)
+            if masked:
+                description += " (credential-like value redacted as 'xxx')"
+            return {"success": True, "error": None, "data": {"key": key, "value": value}, "masked": masked, "timestamp": datetime.now().isoformat(), "description": description}
+
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
+        except Exception as e:
+            return {"success": False, "error": f"Error retrieving apps.yaml key: {str(e)}", "data": None}
 
     async def _execute_get_state(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the get_state tool"""
@@ -900,6 +933,17 @@ TOOL_DEFS = [
         },
         "writes": False,
         "chat_omit_properties": ["masked"],
+    },
+    {
+        "name": "get_apps_config",
+        "description": "Get the current value of one apps.yaml key, with a credential-like value redacted. Use before set_apps_config to read the value you are about to change.",
+        "parameters": {
+            "type": "object",
+            "properties": {"key": {"type": "string", "description": "The apps.yaml key name to read"}},
+            "required": ["key"],
+        },
+        "writes": False,
+        "chat_omit_properties": [],
     },
     {
         "name": "get_state",

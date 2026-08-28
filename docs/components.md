@@ -189,6 +189,7 @@ Example usage in VSCode
 | `get_plan` | The current battery plan, with forecasts and costs |
 | `get_config` | Every Predbat setting, with its current value and its default |
 | `get_apps` | Your `apps.yaml` configuration, with credentials redacted |
+| `get_apps_config` | The current value of one `apps.yaml` key, with a credential-like value redacted |
 | `get_log` | Lines from `predbat.log`, filtered by level, search term and age |
 | `get_state` | Predbat's internal state variables - the same data a debug yaml carries |
 | `get_entities` | All Predbat entities and their states |
@@ -233,7 +234,14 @@ with `max_bytes`.
 keys are not sent to your AI provider; pass `masked: false` if you deliberately want the raw
 values. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
 return anything a debug dump would not - credentials, the Home Assistant interface, loaded
-secrets and the URL caches are not reachable through it at all.
+secrets and the URL caches are not reachable through it at all. `get_apps_config` uses the same
+credential check as `get_apps`, but with no `masked: false` escape hatch at all - there is no
+legitimate reason for an assistant to ever see one raw credential value, so it is simply never
+offered.
+
+`get_apps_config` and `set_apps_config` let an assistant read, and change, one `apps.yaml` setting
+at a time - see [`set_apps_config`](#available-tools-chat) below for the write side, which is
+chat-only.
 
 #### Reading Home Assistant state (mcp)
 
@@ -343,17 +351,18 @@ Three switches also control the chat agent, all found under [Config](web-interfa
 
 | Entity | Default | Description |
 | ------ | ------- | ----------- |
-| `switch.predbat_chat_confirm_writes` | On | Hold every `set_config` and `set_plan_override` call for your Approve/Reject before it runs |
+| `switch.predbat_chat_confirm_writes` | On | Hold every `set_config`, `set_plan_override` and `set_apps_config` call for your Approve/Reject before it runs |
 | `switch.predbat_chat_web_search` | Off | Let the model search the web through OpenRouter's plugin - costs money per request, see above |
 | `switch.predbat_ai_ha_state_enable` | Off | Let `search_entities`, `get_entity_state` and `get_entity_history` read Home Assistant state - see [Reading Home Assistant state](#reading-home-assistant-state-mcp) above. Unlike the other two, this is `ai_`-prefixed rather than `chat_`-prefixed: it also gates the MCP server, not just this tab |
 
 #### Available tools (chat)
 
-Twelve tools are shared with the [MCP server](#mcp-server-mcp) - see
+Thirteen tools are shared with the [MCP server](#mcp-server-mcp) - see
 [its tool table](#available-commands-mcp) above for what each one returns or does:
 
-`get_status`, `get_plan`, `get_config`, `get_apps`, `get_log`, `get_state`, `get_entities`,
-`search_entities`, `get_entity_state`, `get_entity_history`, `set_config`, `set_plan_override`
+`get_status`, `get_plan`, `get_config`, `get_apps`, `get_apps_config`, `get_log`, `get_state`,
+`get_entities`, `search_entities`, `get_entity_state`, `get_entity_history`, `set_config`,
+`set_plan_override`
 
 `search_entities`, `get_entity_state` and `get_entity_history` are the three that read arbitrary
 Home Assistant state rather than just Predbat's own, and are off by default behind
@@ -361,11 +370,13 @@ Home Assistant state rather than just Predbat's own, and are off by default behi
 [Reading Home Assistant state](#reading-home-assistant-state-mcp) in the MCP section. The Chat
 tab's footer carries a live toggle for this switch, next to the model picker.
 
-`set_config` and `set_plan_override` are the two that write. With `switch.predbat_chat_confirm_writes`
-on (the default), each one pauses in the transcript for your Approve or Reject before it runs,
-showing the tool name and the exact arguments the model wants to call it with.
+`set_config` and `set_plan_override` are two of the tools that write. With
+`switch.predbat_chat_confirm_writes` on (the default), each one pauses in the transcript for your
+Approve or Reject before it runs, showing the tool name and the exact arguments the model wants to
+call it with. `set_apps_config`, below, is the third - and the only one of the three that is
+chat-only rather than shared with MCP.
 
-Five more tools only exist in chat:
+Six more tools only exist in chat:
 
 | Tool | What it returns or does |
 | ---- | ------------------------ |
@@ -374,6 +385,37 @@ Five more tools only exist in chat:
 | `search_source` | Searches Predbat's own installed source code - the exact version that is running - with a Python regular expression. Covers `.py`, `.cpp`, `.h`, `.hpp`, `.proto`, `.sh` and `.md` files only (up to 100 matches, five-second scan budget) |
 | `read_source` | Reads a numbered slice of one source file found by `search_source` (up to 400 lines at a time) |
 | `fetch_url` | Fetches a web page as text, restricted to the hosts in `fetch_allowlist` |
+| `set_apps_config` | Changes one `apps.yaml` key - see below |
+
+#### Changing apps.yaml from chat (chat)
+
+`set_apps_config` changes a single `apps.yaml` setting - the same file the
+[web apps.yaml editor](web-interface.md#apps-view) edits, through the same mechanism: it loads
+the file with `ruamel.yaml`, so your comments and formatting survive, and writes it back with only
+the one key changed.
+
+It is deliberately narrow:
+
+- **It can only change a key that already exists.** This is not a way to add new configuration -
+  ask a key that is not already in your `apps.yaml` and the tool refuses, the same way the web
+  editor does.
+- **It refuses any credential-like key outright** - anything matching the same `_key`, `password`,
+  `secret` or `token` heuristic `get_apps` masks. Neither the model nor an instruction hidden in
+  something it read (a fetched web page, a documentation search result) can use this tool to set
+  or swap an API key.
+- **It checks the new value's type against `apps.yaml`'s schema** where the key has one, so a
+  value that would stop Predbat parsing its own configuration next start-up is refused before it
+  is written, not discovered after a restart.
+- **It backs up your `apps.yaml` to `apps.yaml.backup` first**, every time - the same safety net
+  the raw whole-file editor gives you, extended to this tool too.
+
+Because it is one of the three tools that write, `set_apps_config` is held for your Approve or
+Reject when `switch.predbat_chat_confirm_writes` is on (the default, see above) - and unlike the
+other two, the confirmation card shows the key's **current** value alongside the **proposed** one,
+so you can see the actual change rather than just the model's intent. It also warns you there,
+before you approve, that **saving restarts Predbat to apply the change**: the restart drops the
+chat's live connection and ends that turn abruptly, but your conversation is not lost - it is
+saved to Predbat's storage and is still there once Predbat has reconnected.
 
 ---
 

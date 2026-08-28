@@ -70,7 +70,7 @@ from web_helper import (
 )
 
 from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, read_predbat_log, classify_log_line, log_line_included
-from utils import is_data_numerical  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py must not import from web.py
+from utils import is_data_numerical, ROOT_YAML_KEY, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
@@ -81,8 +81,6 @@ from web_chat import WebChat
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
-
-ROOT_YAML_KEY = "pred_bat"
 
 
 def state_as_of_slots(records, slots):
@@ -3636,59 +3634,6 @@ chart.render();
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
-    def _update_nested_yaml_value(self, data, path, value):
-        """
-        Update a nested value in YAML data using a dot-notation path
-        """
-        pre_keys = path.split(".")
-        keys = []
-        # Split out set of square brackets into a different key
-        for key in pre_keys:
-            if "[" in key and "]" in key:
-                # Handle keys with square brackets, e.g., "battery_charge_low[0]"
-                base_key, index = key.split("[")
-                index = index.rstrip("]")
-                keys.append(base_key)
-                keys.append(f"[{index}]")
-            else:
-                keys.append(key)
-
-        current = data
-
-        # Navigate to the parent of the target value
-        for key in keys[:-1]:
-            if key.startswith("[") and key.endswith("]"):
-                # Handle numerical index in square brackets
-                index = int(key[1:-1])
-                if not isinstance(current, list) or index >= len(current):
-                    raise KeyError(f"Index '{index}' out of range in path '{path}'")
-                current = current[index]
-            elif key in current:
-                current = current[key]
-            else:
-                raise KeyError(f"Key '{key}' not found in path '{path}'")
-
-        # Set the final value
-        key = keys[-1]
-        if key.startswith("[") and key.endswith("]"):
-            # Handle numerical index in square brackets
-            index = int(key[1:-1])
-            if not isinstance(current, list) or index >= len(current):
-                raise KeyError(f"Index '{index}' out of range in path '{path}'")
-            current[index] = value
-        elif key in current:
-            current[key] = value
-        else:
-            # If final key is numerical try it as an integer
-            if key.isdigit():
-                key = int(key)
-                if key not in current:
-                    raise KeyError(f"Final key '{key}' not found in path '{path}'")
-                else:
-                    current[key] = value
-            else:
-                raise KeyError(f"Final key '{key}' not found in path '{path}'")
-
     async def html_apps_post(self, request):
         """
         Handle POST request for apps page - batch edit values
@@ -3751,8 +3696,8 @@ chart.render();
                 if is_nested:
                     # Handle nested paths like "battery_charge_low.normal"
                     try:
-                        self._update_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, converted_value)
-                        self._update_nested_yaml_value(self.args, path_or_arg, converted_value)
+                        update_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, converted_value)
+                        update_nested_yaml_value(self.args, path_or_arg, converted_value)
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     except (KeyError, TypeError) as e:
                         return web.json_response({"success": False, "message": f"Path {path_or_arg} not found or invalid: {str(e)}"})

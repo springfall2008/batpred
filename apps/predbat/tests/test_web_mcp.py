@@ -313,6 +313,62 @@ def test_mcp_get_apps(my_predbat):
     return failed
 
 
+def test_mcp_get_apps_config(my_predbat):
+    """get_apps_config reads one apps.yaml key at a time, redacting a credential-like value with
+    no way to opt out, reporting a clean error for a key that is not present, and never mutating
+    the live args (#4768 follow-up: apps.yaml read/write tools).
+
+    Unlike get_apps there is deliberately no 'masked' argument to bypass here at all - see
+    PredbatTools._execute_get_apps_config's docstring in agent_tools.py for why a single-key read
+    has no legitimate use for an unmasked credential the way a full-configuration review does.
+    """
+    failed = False
+    print("**** Testing MCP get_apps_config ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_args = my_predbat.args
+    try:
+        my_predbat.args = {"ha_key": "supersecret", "battery_rate_max_charge": 3.0, "inverter_type": "GE"}
+
+        result, _ = _call_tool(mcp, "get_apps_config", {"key": "ha_key"})
+        if not result.get("success"):
+            print("  ERROR: get_apps_config failed for an existing credential key: {}".format(result.get("error")))
+            failed = True
+        data = result.get("data") or {}
+        if data.get("value") != "xxx":
+            print("  ERROR: expected the credential value to be redacted, got {!r}".format(data))
+            failed = True
+        if result.get("masked") is not True:
+            print("  ERROR: expected the response to report masked=True for a credential key")
+            failed = True
+        if my_predbat.args["ha_key"] != "supersecret":
+            print("  ERROR: get_apps_config mutated the live args")
+            failed = True
+
+        print("Test: an ordinary key is returned unmasked")
+        result, _ = _call_tool(mcp, "get_apps_config", {"key": "battery_rate_max_charge"})
+        data = result.get("data") or {}
+        if data.get("value") != 3.0 or result.get("masked") is not False:
+            print("  ERROR: expected the ordinary value unmasked, got {!r} masked={}".format(data, result.get("masked")))
+            failed = True
+
+        print("Test: an unknown key is a clean failure, not an exception")
+        result, _ = _call_tool(mcp, "get_apps_config", {"key": "not_a_real_apps_yaml_config_item"})
+        if result.get("success"):
+            print("  ERROR: an unknown key was reported as found: {}".format(result))
+            failed = True
+
+        print("Test: a missing key argument is a clean failure")
+        result, is_error = _call_tool(mcp, "get_apps_config", {})
+        if result.get("success"):
+            print("  ERROR: a missing 'key' argument was accepted")
+            failed = True
+    finally:
+        my_predbat.args = saved_args
+
+    return failed
+
+
 def test_mcp_get_log(my_predbat):
     """get_log filters by level, search term and age, caps the number of lines returned, and
     reports the log oldest-first (#4768).
@@ -967,6 +1023,7 @@ def run_web_mcp_tests(my_predbat):
     failed |= test_read_predbat_log(my_predbat)
     failed |= test_log_filter_helpers(my_predbat)
     failed |= test_mcp_get_apps(my_predbat)
+    failed |= test_mcp_get_apps_config(my_predbat)
     failed |= test_mcp_get_log(my_predbat)
     failed |= test_state_value_helpers(my_predbat)
     failed |= test_debug_excluded_keys(my_predbat)

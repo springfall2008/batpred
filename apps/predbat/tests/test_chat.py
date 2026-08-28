@@ -15,6 +15,9 @@ loop, the tool dispatch and the confirmation gate are all exercised without a ne
 
 import asyncio
 import json
+import os
+import shutil
+import tempfile
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -39,6 +42,7 @@ from chat import (
     classify_completion_failure,
     is_empty_completion,
 )
+from chat_tools import APPS_YAML_RESTART_WARNING
 from components import COMPONENT_LIST, Components
 
 
@@ -1480,6 +1484,116 @@ def test_write_without_confirmation(my_predbat):
     return failed
 
 
+def test_set_apps_config_confirmation_gate_and_card(my_predbat):
+    """set_apps_config hits the same write-confirmation gate set_config does, with a card that
+    names the key, its current value, the proposed value and the restart warning - and declining
+    stops the tool from running at all.
+
+    tool_defs_by_name is built from TOOL_DEFS + CHAT_TOOL_DEFS (see ChatAgent.__init__), so
+    set_apps_config's 'writes': True (chat_tools.py) should reach _run_one_tool's confirmation
+    gate the same way set_config's does - this drives that path directly rather than assuming the
+    merge works. The card content matters because the model's raw {'key', 'value'} arguments say
+    nothing about what the key is currently set to; _confirmation_card_arguments() (chat.py) looks
+    the current value up fresh from self.base.args rather than trusting anything the model said,
+    so this also proves that lookup is wired in. "Did not execute" is checked the same way
+    test_write_confirmation_rejected checks it for set_config: by the absence of any tool_start
+    event, not merely by the declined error text.
+    """
+    failed = False
+    print("**** Testing set_apps_config hits the write-confirmation gate with an informative card ****")
+    original_value = my_predbat.args.get("ha_url")
+    my_predbat.args["ha_url"] = "http://old-value.local:8123"
+    try:
+        agent = _agent_with_fake(my_predbat, _tool_call_response("set_apps_config", {"key": "ha_url", "value": "http://new-value.local:8123"}, call_id="call_apps"), _text_response("understood"))
+        agent.confirm_writes_enabled = lambda: True
+        cid = asyncio.run(agent.store.create())
+
+        _confirm_soon(agent, False)
+        asyncio.run(agent.run_turn(cid, "change the HA url"))
+
+        events, _, _ = agent.events_since(0, cid)
+        kinds = [event["type"] for event in events]
+        if "confirm" not in kinds:
+            print("ERROR: set_apps_config did not trigger a confirmation - the writes gate did not fire for it")
+            return True
+        if "tool_start" in kinds:
+            print("ERROR: a declined set_apps_config call still ran the tool")
+            failed = True
+
+        card = next(event["data"]["arguments"] for event in events if event["type"] == "confirm")
+        if card.get("key") != "ha_url":
+            print("ERROR: the confirmation card did not name the key: {}".format(card))
+            failed = True
+        if card.get("current_value") != "http://old-value.local:8123":
+            print("ERROR: the confirmation card did not show the current value: {}".format(card))
+            failed = True
+        if card.get("proposed_value") != "http://new-value.local:8123":
+            print("ERROR: the confirmation card did not show the proposed value: {}".format(card))
+            failed = True
+        if not card.get("warning") or card["warning"] != APPS_YAML_RESTART_WARNING:
+            print("ERROR: the confirmation card did not carry the restart warning: {}".format(card))
+            failed = True
+
+        results = [message for message in asyncio.run(agent.store.get_messages(cid)) if message["role"] == "tool"]
+        if not results or "declined" not in str(results[0].get("content")).lower():
+            print("ERROR: the declined set_apps_config call did not come back as a declined tool result: {}".format(results))
+            failed = True
+    finally:
+        my_predbat.args["ha_url"] = original_value
+
+    return failed
+
+
+def test_set_apps_config_approved_writes_apps_yaml(my_predbat):
+    """An approved set_apps_config call actually writes apps.yaml and mirrors into base.args - the
+    end-to-end proof that chat.py's _dispatch wiring for 'set_apps_config' calls the real
+    chat_tools.set_apps_config rather than something that only looks right.
+
+    Runs inside a temporary directory, the same way test_web_if.py does for the same reason:
+    set_apps_config's path defaults are relative to the working directory, matching every other
+    apps.yaml access in web.py, so this must never run against the real repository's apps.yaml.
+    """
+    failed = False
+    print("**** Testing an approved set_apps_config call writes apps.yaml ****")
+    original_dir = os.getcwd()
+    temp_dir = tempfile.mkdtemp(prefix="predbat_test_chat_apps_")
+    original_args_value = my_predbat.args.get("num_inverters")
+    try:
+        with open(os.path.join(temp_dir, "apps.yaml"), "w", encoding="utf-8") as handle:
+            handle.write("pred_bat:\n  num_inverters: 1\n")
+        os.chdir(temp_dir)
+        my_predbat.args["num_inverters"] = 1
+
+        agent = _agent_with_fake(my_predbat, _tool_call_response("set_apps_config", {"key": "num_inverters", "value": 2}, call_id="call_apps_ok"), _text_response("done"))
+        agent.confirm_writes_enabled = lambda: True
+        cid = asyncio.run(agent.store.create())
+
+        _confirm_soon(agent, True)
+        asyncio.run(agent.run_turn(cid, "change num_inverters"))
+
+        with open(os.path.join(temp_dir, "apps.yaml"), "r", encoding="utf-8") as handle:
+            written = handle.read()
+        if "num_inverters: 2" not in written:
+            print("ERROR: apps.yaml was not updated by the approved call: {!r}".format(written))
+            failed = True
+        if not os.path.exists(os.path.join(temp_dir, "apps.yaml.backup")):
+            print("ERROR: no backup was created by the approved call")
+            failed = True
+        if my_predbat.args.get("num_inverters") != 2:
+            print("ERROR: base.args was not updated by the approved call")
+            failed = True
+
+        results = [message for message in asyncio.run(agent.store.get_messages(cid)) if message["role"] == "tool"]
+        if not results or not json.loads(results[0]["content"]).get("success"):
+            print("ERROR: the tool result did not report success: {}".format(results))
+            failed = True
+    finally:
+        os.chdir(original_dir)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        my_predbat.args["num_inverters"] = original_args_value
+    return failed
+
+
 def test_web_search_switch(my_predbat):
     """The plugin is added only when the switch is on, and a foreign base URL warns once."""
     failed = False
@@ -2242,6 +2356,8 @@ def run_chat_tests(my_predbat):
     failed |= test_write_confirmation_rejected(my_predbat)
     failed |= test_write_confirmation_timeout(my_predbat)
     failed |= test_write_without_confirmation(my_predbat)
+    failed |= test_set_apps_config_confirmation_gate_and_card(my_predbat)
+    failed |= test_set_apps_config_approved_writes_apps_yaml(my_predbat)
     failed |= test_web_search_switch(my_predbat)
     failed |= test_mid_stream_error_chunk_fails_the_turn_loudly_after_exhausting_every_retry(my_predbat)
     failed |= test_finish_reason_length_keeps_partial_content_with_a_truncation_note(my_predbat)

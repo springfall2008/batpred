@@ -11,9 +11,12 @@
 
 """Tools the chat agent has that the MCP server does not.
 
-Two of them are about the conversation and Predbat's own documentation; three reach outside the
+Two of them are about the conversation and Predbat's own documentation; four reach outside the
 process, and those carry the guards. set_chat_title is declared here but handled in chat.py,
-because it needs the conversation the turn belongs to and nothing in this module does.
+because it needs the conversation the turn belongs to and nothing in this module does; the same is
+true of set_apps_config's confirmation-card enrichment (chat.py's _run_one_tool adds the current
+value and the restart warning before the human ever sees the card), even though the write itself
+happens here.
 """
 
 import aiohttp
@@ -22,9 +25,14 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import socket
 import time
 from urllib.parse import urljoin, urlparse
+
+from ruamel.yaml import YAML
+
+from utils import ROOT_YAML_KEY, is_secret_key, update_nested_yaml_value
 
 DOCS_SITE_ROOT = "https://springfall2008.github.io/batpred/"
 DOCS_INDEX_URL = DOCS_SITE_ROOT + "search/search_index.json"
@@ -85,6 +93,33 @@ CHAT_TOOL_DEFS = [
         "description": "Fetch a web page as text. Only a small allowlist of hosts is reachable - the Predbat documentation site and GitHub.",
         "parameters": {"type": "object", "properties": {"url": {"type": "string", "description": "The https URL to fetch"}}, "required": ["url"]},
         "writes": False,
+        "chat_omit_properties": [],
+    },
+    # set_apps_config is deliberately declared here, in CHAT_TOOL_DEFS, and NOT in agent_tools.py's
+    # TOOL_DEFS - even though its read counterpart, get_apps_config, lives in TOOL_DEFS and is
+    # offered over MCP too. That asymmetry is intentional, not an oversight to "fix" for symmetry:
+    # the write-confirmation gate (a human must approve, unless chat_confirm_writes is switched
+    # off) lives in chat.py's _run_one_tool and only ever runs for a turn driven through the chat
+    # agent. MCP has no equivalent gate at all - MCPServerWrapper dispatches a TOOL_DEFS tool
+    # straight through PredbatTools.execute() the moment a client calls it. Putting an apps.yaml
+    # writer in TOOL_DEFS would therefore let any MCP client rewrite a user's inverter wiring,
+    # tariff configuration or (were the credential refusal ever weakened) API keys with nobody in
+    # the loop. Keeping it chat-only means every write to apps.yaml through this feature has a
+    # human looking at the confirmation card first. See test_chat_tools.py's
+    # test_chat_tool_defs_shape and test_chat.py's test_set_apps_config_confirmation_gate_and_card
+    # for the tests that would fail if this were ever moved.
+    {
+        "name": "set_apps_config",
+        "description": "Change one apps.yaml key to a new value. Only an existing key can be changed - this cannot add configuration - and credential-like keys are refused. Read the current value with get_apps_config first. Saving restarts Predbat.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "The apps.yaml key to change - must already exist"},
+                "value": {"description": "The new value - a string, number, boolean, or list, matching the shape apps.yaml already expects for this key"},
+            },
+            "required": ["key", "value"],
+        },
+        "writes": True,
         "chat_omit_properties": [],
     },
 ]
@@ -428,3 +463,149 @@ async def fetch_url(url, allowlist=None, resolver=None):
         return {"success": False, "error": "Refused: {}".format(error), "data": None}
     except (aiohttp.ClientError, asyncio.TimeoutError) as error:
         return {"success": False, "error": "Could not fetch '{}': {}".format(target, error), "data": None}
+
+
+# apps.yaml write. This is the one tool in this module that changes Predbat's own configuration -
+# see set_apps_config()'s docstring for the safety checks, and CHAT_TOOL_DEFS' set_apps_config
+# entry below for why it lives here and not in agent_tools.py's TOOL_DEFS.
+APPS_YAML_PATH = "apps.yaml"
+APPS_YAML_BACKUP_PATH = "apps.yaml.backup"
+
+# Shown in the confirmation card before a human approves the change (chat.py's _run_one_tool adds
+# it there) and repeated in this tool's own success result, so the model can tell the user what to
+# expect too. Accurate rather than alarming: conversations are persisted to storage, so the thread
+# itself is not lost - only this turn ends abruptly, when the restart drops the chat's live
+# connection (#4768 follow-up).
+APPS_YAML_RESTART_WARNING = "Saving this restarts Predbat to apply the change. The chat connection will drop and this turn will end abruptly when it does, but the conversation is saved and will still be here once Predbat has reconnected."
+
+# Maps an APPS_SCHEMA "type" token to a check on the *shape* of a JSON-decoded tool argument -
+# not Predbat's fuller semantic rules (entry counts against num_inverters, an "allowed" list, a
+# live sensor actually existing), which is validate_config()'s job against the running config, not
+# a single hypothetical key write. That function also calls self.get_arg(), which can query live
+# Home Assistant state for a sensor-typed field - not something changing one apps.yaml key should
+# trigger as a side effect. This exists only to catch the kind of mismatch that stops Predbat
+# parsing its own config next start-up: an object where a list was wanted, a string where a
+# boolean was wanted, and so on (#4768).
+APPS_SCHEMA_TYPE_CHECKS = {
+    "boolean": lambda value: isinstance(value, bool),
+    "boolean_list": lambda value: isinstance(value, list) and all(isinstance(item, bool) for item in value),
+    "integer": lambda value: isinstance(value, int) and not isinstance(value, bool),
+    "integer_list": lambda value: isinstance(value, list) and all(isinstance(item, int) and not isinstance(item, bool) for item in value),
+    "float": lambda value: isinstance(value, (int, float)) and not isinstance(value, bool),
+    "float_list": lambda value: isinstance(value, list) and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value),
+    "string": lambda value: isinstance(value, str),
+    "string_list": lambda value: isinstance(value, list) and all(isinstance(item, str) for item in value),
+    "dict": lambda value: isinstance(value, dict),
+    "dict_list": lambda value: isinstance(value, list) and all(isinstance(item, dict) for item in value),
+    "int_float_dict": lambda value: isinstance(value, dict),
+    # A sensor entry is normally an entity id string, but APPS_SCHEMA also allows a literal scalar
+    # override for some fields (a fixed number, string or boolean instead of a sensor to read) -
+    # see predbat.py's validate_config(). Checking that precisely needs the live Home Assistant
+    # state this function deliberately does not query, so this only rejects shapes that are never
+    # valid for a sensor field either way: a dict or a nested list.
+    "sensor": lambda value: not isinstance(value, (dict, list)),
+    "sensor_list": lambda value: isinstance(value, list) and all(not isinstance(item, (dict, list)) for item in value),
+}
+
+
+def validate_apps_schema_type(key, value):
+    """Return an error string if value's shape does not match key's APPS_SCHEMA type, else None.
+
+    APPS_SCHEMA is imported here rather than at module level - config.py imports from predbat.py
+    (for THIS_VERSION) and predbat.py imports config.py back (for APPS_SCHEMA and CONFIG_ITEMS), a
+    circular pair that already exists in the codebase and only resolves because predbat.py is
+    always the first of the two actually imported. This module currently has no Predbat-internal
+    imports at module level, so it can be imported before predbat.py (as a standalone test does),
+    which a module-level 'from config import APPS_SCHEMA' here would break. By the time this
+    function actually runs, predbat.py is always already imported - set_apps_config() only ever
+    runs against a live Predbat instance - so the deferred import is never on a hot path, only on
+    the very first call.
+    """
+    from config import APPS_SCHEMA
+
+    spec = APPS_SCHEMA.get(key)
+    if not spec:
+        return None
+    expected_types = str(spec.get("type", "")).split("|")
+    checks = [APPS_SCHEMA_TYPE_CHECKS[name] for name in expected_types if name in APPS_SCHEMA_TYPE_CHECKS]
+    if not checks or any(check(value) for check in checks):
+        return None
+    return "'{}' expects apps.yaml type '{}', but the new value is a {}".format(key, spec.get("type"), type(value).__name__)
+
+
+def set_apps_config(base, key, value, apps_yaml_path=APPS_YAML_PATH, backup_path=APPS_YAML_BACKUP_PATH):
+    """Change one apps.yaml key and mirror it into the running config.
+
+    Reuses the same mechanism as the web apps.yaml editor's batch save (WebInterface.html_apps_post
+    in web.py): ruamel.yaml with preserve_quotes so comments and formatting survive, the same
+    ROOT_YAML_KEY section, and update_nested_yaml_value() (utils.py) - including that function's
+    "the key must already exist" rule, enforced here the same way html_apps_post enforces it for a
+    top-level key: this is a tool for changing configuration, not inventing it. Unlike that
+    endpoint this always takes an apps.yaml.backup copy first, matching the raw whole-file editor
+    (WebInterface.html_apps_editor_post) instead - a model choosing this key's new value deserves
+    the same safety net a human editing the file by hand already gets.
+
+    Two checks run before the file is even touched: is_secret_key() refuses any key that looks
+    like a credential outright, so neither the model nor an injected instruction it read can swap
+    an API key or token; and validate_apps_schema_type() checks the new value's shape against
+    APPS_SCHEMA, where the key has an entry, so a type that would stop Predbat parsing its own
+    config next start-up is refused now instead of discovered after a restart.
+
+    apps_yaml_path/backup_path default to the real files (relative to the working directory, like
+    every other apps.yaml access in web.py) but can be pointed at a temporary file in a test - this
+    tool must never be exercised against a developer's real apps.yaml.
+    """
+    if not key or not isinstance(key, str):
+        return {"success": False, "error": "'key' must be a non-empty string", "data": None}
+    if is_secret_key(key):
+        return {"success": False, "error": "'{}' looks like a credential (matches Predbat's secret-key heuristic) and cannot be changed through chat. Edit apps.yaml directly if it needs to change.".format(key), "data": None}
+
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    try:
+        with open(apps_yaml_path, "r") as handle:
+            data = yaml.load(handle)
+    except OSError as error:
+        return {"success": False, "error": "Could not read apps.yaml: {}".format(error), "data": None}
+
+    if not data or ROOT_YAML_KEY not in data:
+        return {"success": False, "error": "'{}' section not found in apps.yaml".format(ROOT_YAML_KEY), "data": None}
+    section = data[ROOT_YAML_KEY]
+
+    try:
+        key_exists = key in section
+    except TypeError:
+        key_exists = False
+    if not key_exists:
+        return {"success": False, "error": "'{}' was not found in apps.yaml. This tool can only change a key that already exists, not add new configuration.".format(key), "data": None}
+    previous_value = section[key]
+
+    type_error = validate_apps_schema_type(key, value)
+    if type_error:
+        return {"success": False, "error": type_error, "data": None}
+
+    try:
+        shutil.copy2(apps_yaml_path, backup_path)
+    except OSError as error:
+        return {"success": False, "error": "Could not back up apps.yaml before saving: {}".format(error), "data": None}
+
+    try:
+        update_nested_yaml_value(section, key, value)
+    except (KeyError, TypeError) as error:
+        return {"success": False, "error": "Could not update '{}': {}".format(key, error), "data": None}
+
+    try:
+        with open(apps_yaml_path, "w") as handle:
+            yaml.dump(data, handle)
+    except OSError as error:
+        return {"success": False, "error": "Could not write apps.yaml: {}".format(error), "data": None}
+
+    base.args[key] = value
+
+    description = "Changed apps.yaml key '{}' from {!r} to {!r}. {}".format(key, previous_value, value, APPS_YAML_RESTART_WARNING)
+    return {
+        "success": True,
+        "error": None,
+        "data": {"key": key, "previous_value": previous_value, "new_value": value, "backup": backup_path},
+        "description": description,
+    }

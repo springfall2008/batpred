@@ -37,6 +37,22 @@
       "name": "get_apps"
     },
     {
+      "description": "Get the current value of one apps.yaml key, with a credential-like value redacted. Use before set_apps_config to read the value you are about to change.",
+      "inputSchema": {
+        "properties": {
+          "key": {
+            "description": "The apps.yaml key name to read",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
+      "name": "get_apps_config"
+    },
+    {
       "description": "Get Predbat's internal state variables - the same data a debug yaml carries, one key at a time. Called with no arguments it returns every small variable and describes the large ones (per-minute series) without returning them.",
       "inputSchema": {
         "properties": {

@@ -9,11 +9,17 @@
 # pylint: disable=attribute-defined-outside-init
 #
 
-"""Tests for the chat agent's own tools: documentation search, source access and URL fetch.
+"""Tests for the chat agent's own tools: documentation search, source access, URL fetch and the
+apps.yaml write.
 
-The source and fetch guards are the security surface of the whole feature - the source tools are
-what stop a model reading apps.yaml off disk, and the fetch allowlist is what stops it posting
-what it read to an address of its choosing. Those tests are the point of this file.
+The source and fetch guards are the security surface of most of this feature - the source tools
+are what stop a model reading apps.yaml off disk, and the fetch allowlist is what stops it posting
+what it read to an address of its choosing. set_apps_config is the other side of that same
+surface: it is the one tool here that is allowed to touch apps.yaml, so its tests are the ones that
+prove it can only ever change a key that already exists, can never touch a credential, and leaves
+comments and formatting alone - see
+test_set_apps_config_success_preserves_formatting_backs_up_and_mirrors_args, which is the whole
+reason this tool uses ruamel.yaml rather than a plain YAML dump.
 """
 
 import asyncio
@@ -24,6 +30,7 @@ import tempfile
 import chat_tools
 from chat_tools import CHAT_TOOL_DEFS, score_documents, search_docs, read_source, search_source, resolve_source_path, SourceAccessError
 from chat_tools import DEFAULT_FETCH_ALLOWLIST, FetchRefusedError, host_allowed, html_to_text, validate_fetch_target
+from chat_tools import APPS_YAML_RESTART_WARNING, set_apps_config, validate_apps_schema_type
 from agent_tools import openai_tool_list
 
 SAMPLE_DOCS = [
@@ -51,19 +58,27 @@ class FakeCachedStorage:
 
 
 def test_chat_tool_defs_shape(my_predbat):
-    """CHAT_TOOL_DEFS holds the five chat-only tools, none of them flagged as Predbat writes."""
+    """CHAT_TOOL_DEFS holds the six chat-only tools, only set_apps_config flagged as a write.
+
+    set_apps_config is the one deliberate exception to "none of these are Predbat writes": it is
+    the only tool in this module that changes apps.yaml, so it is the only one that must hit
+    chat.py's confirmation gate (definition.get("writes") in _run_one_tool). Everything else here
+    only reads the conversation, Predbat's documentation, its own source, or an allowlisted URL.
+    """
     failed = False
     print("**** Testing CHAT_TOOL_DEFS shape ****")
     names = [entry["name"] for entry in CHAT_TOOL_DEFS]
-    expected = ["set_chat_title", "search_docs", "search_source", "read_source", "fetch_url"]
+    expected = ["set_chat_title", "search_docs", "search_source", "read_source", "fetch_url", "set_apps_config"]
     if names != expected:
         print("ERROR: CHAT_TOOL_DEFS names are {}, expected {}".format(names, expected))
         failed = True
 
+    writers = {entry["name"] for entry in CHAT_TOOL_DEFS if entry.get("writes")}
+    if writers != {"set_apps_config"}:
+        print("ERROR: CHAT_TOOL_DEFS writes flags are {}, expected only set_apps_config".format(sorted(writers)))
+        failed = True
+
     for entry in CHAT_TOOL_DEFS:
-        if entry.get("writes"):
-            print("ERROR: {} is flagged as a Predbat write, so it would hit the confirmation gate".format(entry["name"]))
-            failed = True
         for field in ("name", "description", "parameters"):
             if field not in entry:
                 print("ERROR: {} is missing '{}'".format(entry.get("name"), field))
@@ -701,6 +716,234 @@ def test_fetch_url_malformed_inputs_return_results(my_predbat):
     return failed
 
 
+# The fixture apps.yaml used by every set_apps_config test below. Deliberately carries a header
+# comment block, a blank line, an inline comment directly above a value, and a quoted string - the
+# things a plain yaml.safe_dump would silently destroy on a round trip, which is exactly what
+# test_set_apps_config_success_preserves_formatting_backs_up_and_mirrors_args checks line-by-line.
+FIXTURE_APPS_YAML = """##########################################
+# Predbat test fixture apps.yaml
+##########################################
+pred_bat:
+  # A comment above a boolean
+  carbon_automatic: false
+
+  # num_inverters comment
+  num_inverters: 1
+  ha_key: "should-never-change"
+  my_custom_note: "leave me alone"
+"""
+
+
+def _apps_yaml_fixture(root):
+    """Write FIXTURE_APPS_YAML into a temporary directory and return its path."""
+    path = os.path.join(root, "apps.yaml")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(FIXTURE_APPS_YAML)
+    return path
+
+
+def test_set_apps_config_requires_a_key(my_predbat):
+    """A missing or non-string key is refused before apps.yaml is ever opened.
+
+    Points both paths at a directory with no apps.yaml at all - if the key check were skipped and
+    the file open attempted anyway, this would fail with a file-not-found error instead of the
+    expected key-validation error, so this test also proves the check runs first.
+    """
+    failed = False
+    print("**** Testing set_apps_config requires a key ****")
+    for bad_key in (None, "", 42):
+        result = set_apps_config(my_predbat, bad_key, "value", apps_yaml_path="/nonexistent/apps.yaml", backup_path="/nonexistent/apps.yaml.backup")
+        if result.get("success"):
+            print("ERROR: {!r} was accepted as a key".format(bad_key))
+            failed = True
+        if "key" not in str(result.get("error", "")).lower():
+            print("ERROR: bad key {!r} was not refused with a message naming 'key': {}".format(bad_key, result))
+            failed = True
+    return failed
+
+
+def test_set_apps_config_refuses_credential_key(my_predbat):
+    """A key matching the secret heuristic is refused outright, and the file is never touched.
+
+    Mutation check: commenting out the is_secret_key() guard in set_apps_config() (chat_tools.py)
+    makes this test fail on both assertions - the call succeeds, and ha_key's line in apps.yaml
+    changes - confirmed by hand while writing this test, then restored.
+    """
+    failed = False
+    print("**** Testing set_apps_config refuses a credential key ****")
+    root = tempfile.mkdtemp(prefix="predbat_apps_")
+    try:
+        apps_path = _apps_yaml_fixture(root)
+        backup_path = apps_path + ".backup"
+        original = open(apps_path, "r", encoding="utf-8").read()
+
+        result = set_apps_config(my_predbat, "ha_key", "sk-new-secret", apps_yaml_path=apps_path, backup_path=backup_path)
+
+        if result.get("success"):
+            print("ERROR: a credential key was accepted: {}".format(result))
+            failed = True
+        if "credential" not in str(result.get("error", "")).lower():
+            print("ERROR: the refusal did not explain why: {}".format(result))
+            failed = True
+        if open(apps_path, "r", encoding="utf-8").read() != original:
+            print("ERROR: apps.yaml was modified despite the credential refusal")
+            failed = True
+        if os.path.exists(backup_path):
+            print("ERROR: a backup was created for a refused credential write")
+            failed = True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    return failed
+
+
+def test_set_apps_config_refuses_unknown_key(my_predbat):
+    """A key not already present in apps.yaml is refused, and the file is never touched.
+
+    This is not a tool for inventing configuration - it can only change a key that is already
+    there, exactly like the web UI's own apps.yaml batch editor (WebInterface.html_apps_post).
+    """
+    failed = False
+    print("**** Testing set_apps_config refuses an unknown key ****")
+    root = tempfile.mkdtemp(prefix="predbat_apps_")
+    try:
+        apps_path = _apps_yaml_fixture(root)
+        backup_path = apps_path + ".backup"
+        original = open(apps_path, "r", encoding="utf-8").read()
+
+        result = set_apps_config(my_predbat, "not_a_real_apps_yaml_config_item", "value", apps_yaml_path=apps_path, backup_path=backup_path)
+
+        if result.get("success"):
+            print("ERROR: an unknown key was accepted: {}".format(result))
+            failed = True
+        if "not found" not in str(result.get("error", "")).lower():
+            print("ERROR: the refusal did not explain why: {}".format(result))
+            failed = True
+        if open(apps_path, "r", encoding="utf-8").read() != original:
+            print("ERROR: apps.yaml was modified despite the unknown-key refusal")
+            failed = True
+        if os.path.exists(backup_path):
+            print("ERROR: a backup was created for a refused unknown-key write")
+            failed = True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    return failed
+
+
+def test_set_apps_config_refuses_a_schema_type_mismatch(my_predbat):
+    """A value whose shape does not match the key's APPS_SCHEMA type is refused before writing."""
+    failed = False
+    print("**** Testing set_apps_config refuses a schema type mismatch ****")
+    root = tempfile.mkdtemp(prefix="predbat_apps_")
+    try:
+        apps_path = _apps_yaml_fixture(root)
+        backup_path = apps_path + ".backup"
+        original = open(apps_path, "r", encoding="utf-8").read()
+
+        # num_inverters is APPS_SCHEMA {"type": "integer", ...} - a string is the wrong shape.
+        result = set_apps_config(my_predbat, "num_inverters", "two", apps_yaml_path=apps_path, backup_path=backup_path)
+
+        if result.get("success"):
+            print("ERROR: a type-mismatched value was accepted: {}".format(result))
+            failed = True
+        if "type" not in str(result.get("error", "")).lower():
+            print("ERROR: the refusal did not explain why: {}".format(result))
+            failed = True
+        if open(apps_path, "r", encoding="utf-8").read() != original:
+            print("ERROR: apps.yaml was modified despite the type-mismatch refusal")
+            failed = True
+        if os.path.exists(backup_path):
+            print("ERROR: a backup was created for a refused type mismatch")
+            failed = True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    return failed
+
+
+def test_set_apps_config_success_preserves_formatting_backs_up_and_mirrors_args(my_predbat):
+    """A valid change to an existing, non-secret key writes the file, keeping every other line
+    byte-identical, takes a backup of the original first, mirrors the change into base.args, and
+    repeats the restart warning in its own success result.
+
+    The line-by-line comparison against the original is the entire reason set_apps_config uses
+    ruamel.yaml with preserve_quotes rather than a plain yaml.safe_dump - a plain dump would still
+    round-trip the new value correctly but would silently drop every comment and blank line in the
+    fixture, and only this check would notice.
+    """
+    failed = False
+    print("**** Testing set_apps_config succeeds, preserves formatting, and backs up ****")
+    root = tempfile.mkdtemp(prefix="predbat_apps_")
+    original_args_value = my_predbat.args.get("num_inverters")
+    try:
+        apps_path = _apps_yaml_fixture(root)
+        backup_path = apps_path + ".backup"
+        original_lines = open(apps_path, "r", encoding="utf-8").read().splitlines()
+        my_predbat.args["num_inverters"] = 1
+
+        result = set_apps_config(my_predbat, "num_inverters", 2, apps_yaml_path=apps_path, backup_path=backup_path)
+
+        if not result.get("success"):
+            print("ERROR: a valid change was refused: {}".format(result))
+            return True
+        if APPS_YAML_RESTART_WARNING not in str(result.get("description", "")):
+            print("ERROR: the success result did not repeat the restart warning: {}".format(result))
+            failed = True
+        data = result.get("data") or {}
+        if data.get("previous_value") != 1 or data.get("new_value") != 2:
+            print("ERROR: the result did not report the previous and new values correctly: {}".format(data))
+            failed = True
+
+        if not os.path.exists(backup_path):
+            print("ERROR: no backup was created before saving")
+            failed = True
+        elif open(backup_path, "r", encoding="utf-8").read().splitlines() != original_lines:
+            print("ERROR: the backup does not match the original file")
+            failed = True
+
+        new_lines = open(apps_path, "r", encoding="utf-8").read().splitlines()
+        if len(new_lines) != len(original_lines):
+            print("ERROR: the line count changed - formatting was not preserved: {} vs {}".format(len(original_lines), len(new_lines)))
+            failed = True
+        else:
+            diffs = [(i, a, b) for i, (a, b) in enumerate(zip(original_lines, new_lines)) if a != b]
+            if len(diffs) != 1:
+                print("ERROR: more than the changed line differs - comments/formatting were not preserved: {}".format(diffs))
+                failed = True
+            elif "num_inverters: 2" not in diffs[0][2]:
+                print("ERROR: the one changed line is not the expected num_inverters update: {}".format(diffs[0]))
+                failed = True
+
+        if my_predbat.args.get("num_inverters") != 2:
+            print("ERROR: the running config (base.args) was not updated: {}".format(my_predbat.args.get("num_inverters")))
+            failed = True
+    finally:
+        my_predbat.args["num_inverters"] = original_args_value
+        shutil.rmtree(root, ignore_errors=True)
+    return failed
+
+
+def test_validate_apps_schema_type(my_predbat):
+    """validate_apps_schema_type checks a value's shape against APPS_SCHEMA, permissively for a
+    key with no schema entry at all - not every apps.yaml key is declared there."""
+    failed = False
+    print("**** Testing validate_apps_schema_type ****")
+    cases = [
+        ("num_inverters", 2, True),  # integer type, valid
+        ("num_inverters", "2", False),  # integer type, wrong shape
+        ("carbon_automatic", True, True),  # boolean type, valid
+        ("carbon_automatic", "true", False),  # boolean type, wrong shape (a real bool is wanted)
+        ("ha_url", "http://homeassistant.local:8123", True),  # string type, valid
+        ("ha_url", 123, False),  # string type, wrong shape
+        ("this_key_has_no_schema_entry", {"anything": "goes"}, True),  # no schema entry - always accepted
+    ]
+    for key, value, expect_ok in cases:
+        error = validate_apps_schema_type(key, value)
+        ok = error is None
+        if ok != expect_ok:
+            print("ERROR: validate_apps_schema_type({!r}, {!r}) returned {!r}, expected {}".format(key, value, error, "no error" if expect_ok else "an error"))
+            failed = True
+    return failed
+
+
 def run_chat_tools_tests(my_predbat):
     """Run every chat-only tool test, returning True if any of them failed."""
     failed = False
@@ -720,4 +963,10 @@ def run_chat_tools_tests(my_predbat):
     failed |= test_validate_fetch_target_checks_every_resolved_address(my_predbat)
     failed |= test_fetch_url_revalidates_every_redirect_hop(my_predbat)
     failed |= test_fetch_url_malformed_inputs_return_results(my_predbat)
+    failed |= test_set_apps_config_requires_a_key(my_predbat)
+    failed |= test_set_apps_config_refuses_credential_key(my_predbat)
+    failed |= test_set_apps_config_refuses_unknown_key(my_predbat)
+    failed |= test_set_apps_config_refuses_a_schema_type_mismatch(my_predbat)
+    failed |= test_set_apps_config_success_preserves_formatting_backs_up_and_mirrors_args(my_predbat)
+    failed |= test_validate_apps_schema_type(my_predbat)
     return failed
