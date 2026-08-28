@@ -274,7 +274,7 @@ CONFIG_ITEMS = [
         "name": "car_charging_rate",
         "friendly_name": "Car charging rate (Car 0)",
         "type": "input_number",
-        "min": 1,
+        "min": 0.1,
         "max": 24,
         "step": 0.10,
         "unit": "kW",
@@ -287,7 +287,7 @@ CONFIG_ITEMS = [
         "name": "car_charging_rate_1",
         "friendly_name": "Car charging rate (Car 1)",
         "type": "input_number",
-        "min": 1,
+        "min": 0.1,
         "max": 24,
         "step": 0.10,
         "unit": "kW",
@@ -300,7 +300,7 @@ CONFIG_ITEMS = [
         "name": "car_charging_rate_2",
         "friendly_name": "Car charging rate (Car 2)",
         "type": "input_number",
-        "min": 1,
+        "min": 0.1,
         "max": 24,
         "step": 0.10,
         "unit": "kW",
@@ -313,7 +313,7 @@ CONFIG_ITEMS = [
         "name": "car_charging_rate_3",
         "friendly_name": "Car charging rate (Car 3)",
         "type": "input_number",
-        "min": 1,
+        "min": 0.1,
         "max": 24,
         "step": 0.10,
         "unit": "kW",
@@ -326,7 +326,7 @@ CONFIG_ITEMS = [
         "name": "car_charging_rate_4",
         "friendly_name": "Car charging rate (Car 4)",
         "type": "input_number",
-        "min": 1,
+        "min": 0.1,
         "max": 24,
         "step": 0.10,
         "unit": "kW",
@@ -339,7 +339,7 @@ CONFIG_ITEMS = [
         "name": "car_charging_rate_5",
         "friendly_name": "Car charging rate (Car 5)",
         "type": "input_number",
-        "min": 1,
+        "min": 0.1,
         "max": 24,
         "step": 0.10,
         "unit": "kW",
@@ -352,7 +352,7 @@ CONFIG_ITEMS = [
         "name": "car_charging_rate_6",
         "friendly_name": "Car charging rate (Car 6)",
         "type": "input_number",
-        "min": 1,
+        "min": 0.1,
         "max": 24,
         "step": 0.10,
         "unit": "kW",
@@ -365,7 +365,7 @@ CONFIG_ITEMS = [
         "name": "car_charging_rate_7",
         "friendly_name": "Car charging rate (Car 7)",
         "type": "input_number",
-        "min": 1,
+        "min": 0.1,
         "max": 24,
         "step": 0.10,
         "unit": "kW",
@@ -1042,6 +1042,14 @@ CONFIG_ITEMS = [
         "reset_inverter": True,
     },
     {
+        "name": "set_charge_freeze_only",
+        "friendly_name": "Set Charge Freeze Only",
+        "type": "switch",
+        "enable": "expert_mode",
+        "default": False,
+        "reset_inverter": True,
+    },
+    {
         "name": "set_charge_low_power",
         "friendly_name": "Set Charge Low Power Mode",
         "type": "switch",
@@ -1638,6 +1646,17 @@ CONFIG_ITEMS = [
         "restore": False,
     },
     {
+        "name": "holiday_load_scaling",
+        "friendly_name": "Holiday load scaling",
+        "type": "input_number",
+        "min": 0.1,
+        "max": 1.0,
+        "step": 0.05,
+        "unit": "*",
+        "icon": "mdi:multiplication",
+        "default": 0.7,
+    },
+    {
         "name": "forecast_plan_hours",
         "friendly_name": "Plan forecast hours",
         "type": "input_number",
@@ -2105,10 +2124,11 @@ INVERTER_DEF = {
         "support_charge_freeze": True,
         # "Feed-in first"/freeze export mode does not hold SoC flat on FoxESS - PV above the
         # export limit still charges the battery instead of being clipped (#4207). That's now
-        # correctly modelled (prediction.py's freeze branch, gated on
-        # inverter_can_charge_during_export) rather than treated as a reason to disable freeze
-        # outright, so this can stay True - see FoxCloud's entry below for the same hardware via
-        # a different connection method.
+        # correctly modelled (prediction.py's freeze branch, gated on support_feedin_first)
+        # rather than treated as a reason to disable freeze outright, so support_discharge_freeze
+        # can stay True - see FoxCloud's entry below for the same hardware via a different
+        # connection method.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": True,
@@ -2139,6 +2159,7 @@ INVERTER_DEF = {
         "has_time_window": False,
         "support_charge_freeze": True,
         # See FoxESS's entry above - same hardware, correctly modelled rather than disabled (#4207).
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
@@ -2226,6 +2247,10 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
+        # Freeze Export selects SELLING_FIRST (deye.py) - the same Deye firmware behaviour the
+        # Sunsynk cloud drives through the same registers, so PV goes to load, then grid, then
+        # the battery.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
@@ -2255,6 +2280,10 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
+        # Freeze Export selects Selling First with the per-slot sell flag on (sunsynk.py), which
+        # runs PV -> load -> grid ahead of the battery. Confirmed on live hardware that the
+        # alternative (Limited to Home) fills the battery first, which is why the mode is changed.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
@@ -2322,6 +2351,9 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
+        # Freeze Export selects SolaX's "feedin" work mode (solax.py), which exports the surplus
+        # ahead of charging the battery rather than just disabling the charge.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": True,
@@ -2351,6 +2383,10 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
+        # Freeze Export drops the charge current to 0A, which the SolisCloud component turns into
+        # "Feed-in priority" storage mode (solis.py, "Decide if Solar charges the battery or
+        # exports") - PV serves load, then exports, and only what the grid cannot take charges.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
@@ -2485,6 +2521,8 @@ APPS_SCHEMA = {
     "ge_cloud_direct": {"type": "boolean"},
     "ge_cloud_automatic": {"type": "boolean"},
     "ge_cloud_load_today_ignore": {"type": "boolean"},
+    "ge_cloud_automatic_evc": {"type": "boolean"},
+    "ge_cloud_evc_control": {"type": "boolean"},
     "ge_cloud_automatic_shared_ct": {"type": "boolean"},
     "ge_cloud_automatic_split_ct": {"type": "boolean"},
     "ge_cloud_automatic_split_pv": {"type": "boolean"},
@@ -2542,7 +2580,8 @@ APPS_SCHEMA = {
     "pv_forecast_tomorrow": {"type": "sensor", "sensor_type": "float"},
     "pv_forecast_d3": {"type": "sensor", "sensor_type": "float"},
     "pv_forecast_d4": {"type": "sensor", "sensor_type": "float"},
-    "car_charging_energy": {"type": "sensor", "sensor_type": "float"},
+    "car_charging_energy": {"type": "sensor", "sensor_type": "float", "transient_ok": True},
+    "car_charging_power": {"type": "sensor|sensor_list", "sensor_type": "float", "transient_ok": True},
     "num_cars": {"type": "integer", "zero": True},
     "car_charging_planned": {"type": "sensor|sensor_list", "sensor_type": "string|boolean", "entries": "num_cars"},
     "car_charging_planned_response": {"type": "string_list"},
@@ -2654,6 +2693,7 @@ APPS_SCHEMA = {
     "octopus_saving_session_min_octopoints_per_kwh": {"type": "float"},
     "octopus_saving_session_rate": {"type": "float"},
     "octopus_free_url": {"type": "string", "empty": False},
+    "octopus_night_times": {"type": "dict_list"},
     "metric_octopus_import": {"type": "sensor", "sensor_type": "float"},
     "metric_octopus_export": {"type": "sensor", "sensor_type": "float"},
     "octopus_api_key": {"type": "string", "empty": False},

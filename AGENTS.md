@@ -45,6 +45,21 @@ source setup.csh
 
 The `run_all` script is a thin wrapper; you can run `unit_test.py` directly from the `coverage/` directory (it needs to be the working directory so relative paths resolve).
 
+### Replaying a debug dump
+
+`predbat_debug_*.yaml` is a full state dump, written to `debug/` when `switch.predbat_debug_enable` is on and normally what users attach to bug reports. Replay one against the current tree with:
+
+```bash
+cd coverage
+./run_all --debug_file <path-to-predbat_debug.yaml>
+```
+
+It lists every config item that differs from its default, recalculates the plan, and writes `plan_orig.html` / `plan_final.json` into `coverage/`. Add `--redo` to recompute rates, load model and Octopus slots instead of reusing the ones in the dump. Committed examples live in `coverage/cases/*.yaml` and run as golden regressions under `./run_all --test debug_cases`.
+
+### Debugging notes
+
+`.claude/skills/issue-triage/references/debug-journal.md` records what past investigations found: per-integration API quirks, symptom-to-module pointers, and traps such as stale kernel binaries and test-order pollution. Read it before debugging an integration or a "the plan is wrong" report, and add to it when you learn something a future session would want.
+
 ## Code Quality
 
 All checks are enforced via pre-commit and must pass before merging:

@@ -38,6 +38,110 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         battery_rate_max_charge=0.0,
         assert_battery_cycle=0.0,
     )
+    # Freeze Export must still let the battery discharge to cover a genuine load shortfall
+    # (customisation.md "Freeze Export during Demand": "allows battery discharge, but not
+    # battery charging") - distinct from the residual-leak path above, which only fires when
+    # nothing else already moved the battery. No PV, no residual-discharge config: before the
+    # #4676 fix this stayed flat (battery_draw pinned at 0) and billed the whole load as import.
+    failed |= simple_scenario(
+        "freeze_export_ac_flow_shortfall_discharges",
+        my_predbat,
+        1.0,
+        0,
+        assert_final_metric=0.0,
+        assert_final_soc=9.0,
+        battery_size=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        inverter_freeze_export_discharge_rate=0.0,
+        battery_rate_max_charge=1.0,
+        assert_battery_cycle=1.0,
+    )
+    # battery_draw is DC but the shortfall from get_diff is AC, so it has to be grossed up
+    # through the inverter the same way the ECO branch does - otherwise the battery only
+    # covers inverter_loss of the load and the remainder is billed as a phantom import.
+    # Rates here are deliberately non-binding so the loss factor is the only thing in play:
+    # 1kWh of AC load over the hour needs 1/0.9 = 1.111kWh out of the battery.
+    failed |= simple_scenario(
+        "freeze_export_shortfall_grosses_up_inverter_loss",
+        my_predbat,
+        1.0,
+        0,
+        assert_final_metric=0.0,
+        assert_final_soc=8.89,
+        battery_size=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        inverter_limit=5.0,
+        inverter_loss=0.9,
+        inverter_freeze_export_discharge_rate=0.0,
+        battery_rate_max_charge=2.0,
+        assert_battery_cycle=1.1111,
+    )
+    # Solar only pays the inverter loss on a hybrid (inverter_loss_ac is 1.0 otherwise, see
+    # prediction.py), but the battery always sits behind the inverter, so the DC gross-up on the
+    # shortfall discharge applies to both topologies. These four must pair up exactly: Freeze
+    # Export is ECO with charging disabled, and in a shortfall slot no charging could happen
+    # anyway, so freeze and ECO cannot legitimately differ here.
+    # Non-hybrid: pv_ac = 0.4 (no solar loss), shortfall 0.6 AC, battery draw 0.6/0.9 = 0.6667 DC.
+    # Hybrid:     pv_ac = 0.36 (solar loss),   shortfall 0.64 AC, battery draw 0.64/0.9 = 0.7111 DC.
+    for freeze_label, freeze_limit in (("eco", 100), ("freeze_export", 99)):
+        failed |= simple_scenario(
+            "{}_shortfall_with_pv_ac_coupled".format(freeze_label),
+            my_predbat,
+            1.0,
+            0.4,
+            assert_final_metric=0.0,
+            assert_final_soc=9.3333,
+            battery_size=10.0,
+            battery_soc=10.0,
+            hybrid=False,
+            discharge=freeze_limit,
+            end_record=60,
+            inverter_limit=5.0,
+            inverter_loss=0.9,
+            battery_rate_max_charge=2.0,
+            assert_battery_cycle=0.6667,
+        )
+        failed |= simple_scenario(
+            "{}_shortfall_with_pv_hybrid".format(freeze_label),
+            my_predbat,
+            1.0,
+            0.4,
+            assert_final_metric=0.0,
+            assert_final_soc=9.2889,
+            battery_size=10.0,
+            battery_soc=10.0,
+            hybrid=True,
+            discharge=freeze_limit,
+            end_record=60,
+            inverter_limit=5.0,
+            inverter_loss=0.9,
+            battery_rate_max_charge=2.0,
+            assert_battery_cycle=0.7111,
+        )
+    # When inverter_freeze_export_discharge_rate is configured the user is telling Predbat
+    # their inverter does NOT cover house load during Freeze Export - it only leaks this fixed
+    # rate. So the configured rate wins over the shortfall discharge above. Same scenario as
+    # freeze_export_ac_flow_240w_one_hour but with a realistic (non-zero) battery discharge
+    # rate, which is what a real AlphaESS install has.
+    failed |= simple_scenario(
+        "freeze_export_residual_rate_overrides_shortfall_discharge",
+        my_predbat,
+        1.0,
+        0,
+        assert_final_metric=7.6,
+        assert_final_soc=9.76,
+        battery_size=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        inverter_freeze_export_discharge_rate=240.0,
+        battery_rate_max_charge=1.0,
+        assert_battery_cycle=0.24,
+    )
     failed |= simple_scenario(
         "freeze_export_ac_flow_240w_one_hour",
         my_predbat,
@@ -131,6 +235,118 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         inverter_freeze_export_discharge_rate=240.0,
         battery_rate_max_charge=0.0,
         assert_battery_cycle=0.1,
+    )
+    # Freeze Export PV recapture (#4207) is only real on inverters whose freeze mode is a genuine
+    # "Feed-in First" (load, then export, then battery) - FoxESS. Everything else just disables
+    # charging, so PV above the export limit really is clipped. inverter_support_feedin_first is
+    # what separates the two, and these pairs differ in nothing else.
+    #
+    # 2kW PV, no load, 0.5kW export limit: 1.5kW of PV has nowhere to go. With Feed-in First the
+    # battery takes exactly that overflow (1.5kWh over the hour) and nothing is clipped; without
+    # it the battery holds and the same 1.5kWh is clipped. Either way 0.5kWh is exported, so the
+    # bill is identical and only the SoC/clipping tell the two models apart.
+    # assert_clipped is the only figure here that is not bounded by end_record - it is a running
+    # total over the whole 24 hour horizon, so 1.5kW of clipping reads as 0.125 * 287 steps.
+    for feedin_first, expect_soc, expect_cycle, expect_clipped in ((True, 11.5, 1.5, 0), (False, 10.0, 0.0, 35.875)):
+        failed |= simple_scenario(
+            "freeze_export_feedin_first_{}".format(feedin_first),
+            my_predbat,
+            0,
+            2.0,
+            assert_final_metric=-export_rate * 0.5,
+            assert_final_soc=expect_soc,
+            battery_soc=10.0,
+            discharge=99,
+            end_record=60,
+            export_limit=0.5,
+            inverter_limit=10.0,
+            battery_rate_max_charge=5.0,
+            inverter_support_feedin_first=feedin_first,
+            assert_battery_cycle=expect_cycle,
+            assert_clipped=expect_clipped,
+        )
+    # Same contrast on a hybrid with a lossy inverter, where the recapture happens on the DC side.
+    # pv_ac = 2 * 0.8 = 1.6kW, so the AC overflow past the 0.5kW export limit is 1.1kW; charging it
+    # DC-side costs the loss reciprocal, 1.1 / 0.8 = 1.375kW (1.375kWh over the hour). Without
+    # Feed-in First that 1.1kWh of AC PV is clipped instead.
+    for feedin_first, expect_soc, expect_cycle, expect_clipped in ((True, 11.375, 1.375, 0), (False, 10.0, 0.0, 26.308)):
+        failed |= simple_scenario(
+            "freeze_export_feedin_first_hybrid_{}".format(feedin_first),
+            my_predbat,
+            0,
+            2.0,
+            assert_final_metric=-export_rate * 0.5,
+            assert_final_soc=expect_soc,
+            battery_soc=10.0,
+            hybrid=True,
+            inverter_loss=0.8,
+            discharge=99,
+            end_record=60,
+            export_limit=0.5,
+            inverter_limit=10.0,
+            battery_rate_max_charge=5.0,
+            inverter_support_feedin_first=feedin_first,
+            assert_battery_cycle=expect_cycle,
+            assert_clipped=expect_clipped,
+        )
+    # inverter_can_charge_during_export still vetoes the recapture on a Feed-in First inverter -
+    # a user who has told Predbat the battery cannot charge while exporting is believed either way.
+    failed |= simple_scenario(
+        "freeze_export_feedin_first_no_charge_during_export",
+        my_predbat,
+        0,
+        2.0,
+        assert_final_metric=-export_rate * 0.5,
+        assert_final_soc=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        export_limit=0.5,
+        inverter_limit=10.0,
+        battery_rate_max_charge=5.0,
+        inverter_support_feedin_first=True,
+        inverter_can_charge_during_export=False,
+        assert_battery_cycle=0.0,
+        assert_clipped=35.875,
+    )
+    # PV surplus the export limit can absorb on its own must leave SoC flat even with Feed-in
+    # First - freeze is still a freeze, only genuine overflow moves the battery. 2kW PV against a
+    # 5kW export limit is all exportable, so nothing is recaptured and nothing is clipped.
+    failed |= simple_scenario(
+        "freeze_export_feedin_first_within_export_limit",
+        my_predbat,
+        0,
+        2.0,
+        assert_final_metric=-export_rate * 2.0,
+        assert_final_soc=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        export_limit=5.0,
+        inverter_limit=10.0,
+        battery_rate_max_charge=5.0,
+        inverter_support_feedin_first=True,
+        assert_battery_cycle=0.0,
+        assert_clipped=0,
+    )
+    # A full battery has no headroom to recapture into, so the overflow is clipped regardless of
+    # Feed-in First - battery_to_max, not the charge rate, is the binding clamp here.
+    failed |= simple_scenario(
+        "freeze_export_feedin_first_full_battery",
+        my_predbat,
+        0,
+        2.0,
+        assert_final_metric=-export_rate * 0.5,
+        assert_final_soc=100.0,
+        battery_soc=100.0,
+        discharge=99,
+        end_record=60,
+        export_limit=0.5,
+        inverter_limit=10.0,
+        battery_rate_max_charge=5.0,
+        inverter_support_feedin_first=True,
+        assert_battery_cycle=0.0,
+        assert_clipped=35.875,
     )
     if failed:
         return failed

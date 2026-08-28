@@ -12,6 +12,7 @@ This prediction is based on historical load patterns, time-of-day patterns, day-
 - [Setup Instructions](#setup-instructions)
 - [Understanding the Model](#understanding-the-model)
 - [Monitoring and Troubleshooting](#monitoring-and-troubleshooting)
+- [Rollout Accuracy](#rollout-accuracy)
 - [Model Persistence](#model-persistence)
 - [Advanced Training Options](#advanced-training-options)
 
@@ -98,6 +99,14 @@ The model uses an autoregressive approach:
 5. Continues for 576 steps to cover 48 hours
 
 To prevent drift in long-range predictions, the model blends autoregressive predictions with historical daily patterns. The blending uses **day-of-week-aware patterns**: separate average profiles are maintained for each of the 7 days of the week (Monday–Sunday), so the weekend fallback differs from weekday. If a particular day of the week has insufficient data (fewer than 2 complete observations per slot), the global all-days average is used instead.
+
+The model leads at the start of the rollout and its weight decays linearly to 50% at the 48-hour horizon. Whether that hand-over is fast enough for your data is reported rather than adjusted automatically - see [Rollout Accuracy](#rollout-accuracy).
+
+### Forward Rate and Temperature Data
+
+Rates and temperature make up 3 of the 5 input channels (864 of the 1446 features). Normally both are supplied across the whole rollout: rates are extended by `rate_replicate()` and published out past the forecast horizon, and the temperature forecast comes from the Temperature component. Where a forward value is missing anyway - before the first plan cycle has published the rates entity, or after a failed rate fetch - the last known value is carried forward, keeping those inputs in the range the model was trained on. Filling them with zero would feed 0 p/kWh and 0 °C into the network and badly distort the forecast. PV is the exception and is left at zero past the end of the solar forecast, since there is no generation to assume.
+
+If you see `Forward temperature/rate forecast ran out for N of 576 rollout steps` in the log, that is this fallback engaging. A small N at the tail is unremarkable; a large N means your rate or temperature data is not reaching the model, which is worth investigating in its own right.
 
 ### Training Process
 
@@ -439,6 +448,22 @@ View model status in Predbat logs:
 ```text
 ML Component: Model status: active, last trained: 2024-02-07 10:30:00
 ML Component: Validation MAE: 0.3245 kWh
+```
+
+### Rollout Accuracy
+
+`sensor.predbat_load_ml_stats` publishes three error figures, and they measure different things:
+
+| Attribute | What it measures |
+|-----------|------------------|
+| `mae_kwh` | Teacher-forced, one step ahead with real data in the lookback. Stays small even when the long-range forecast is useless, so do not read it as overall accuracy. |
+| `rollout_mae_kwh` | Full autoregressive rollout across the holdout, feeding each prediction back in. This is the number that reflects what you see on the 8-hour chart trace. |
+| `pattern_mae_kwh` | The day-of-week daily-pattern baseline over the same holdout, for comparison. |
+
+If `pattern_mae_kwh` is lower than `rollout_mae_kwh`, the network is not beating a simple historical average at range, and the long-range part of the forecast is worth treating with suspicion. Both figures are reported only; neither changes the forecast. The same comparison is logged after each training run:
+
+```text
+ML Predictor: Holdout rollout vs daily-pattern baseline: rollout_mae=0.0050 kWh pattern_mae=0.0715 kWh -> long-range forecast led by model
 ```
 
 ### Tracking Normalisation Drift

@@ -34,11 +34,59 @@ import time
 PLAN_PASS_WINDOW_BUDGET = 8
 
 
+def available_cpu_count():
+    """Return how many CPUs this process may actually use.
+
+    cpu_count() reports the machine's cores, which is the wrong number inside a container. A Docker
+    --cpus or a Kubernetes CPU limit is a cgroup bandwidth quota, and the host's full core count
+    stays visible through both cpu_count() and sched_getaffinity() - so 'auto' sizes the pool to the
+    host and the CFS scheduler then throttles it. Measured on a Kubernetes pod with a 4-core limit on
+    a 12-core node: cpu_count() reports 12, cpu.max reports "400000 100000", and the pod sat pegged
+    at its quota with twelve lanes contending for four cores.
+
+    Falls back to cpu_count() on bare metal, in a container with no limit set, and on any platform
+    without cgroups, so behaviour outside a constrained container is unchanged.
+    """
+    quota = None
+
+    # cgroup v2: "$MAX $PERIOD", where $MAX is the string "max" when unlimited.
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as handle:
+            field_max, field_period = handle.read().split()
+        if field_max != "max":
+            period = int(field_period)
+            if period > 0:
+                quota = int(field_max) / period
+    except (OSError, ValueError):
+        pass
+
+    # cgroup v1: a quota of -1 means unlimited.
+    if quota is None:
+        try:
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as handle:
+                cfs_quota = int(handle.read())
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as handle:
+                cfs_period = int(handle.read())
+            if cfs_quota > 0 and cfs_period > 0:
+                quota = cfs_quota / cfs_period
+        except (OSError, ValueError):
+            pass
+
+    host_count = max(cpu_count() or 1, 1)
+    if quota is None:
+        return host_count
+
+    # Round down - a 3.5-core quota sustains three fully-busy lanes - but never below one, and never
+    # above what the host actually has.
+    return max(1, min(host_count, int(quota)))
+
+
 def resolve_batch_threads(threads, cpu_count_value):
     """Map the threads setting onto how many kernel lanes one batch may use.
 
-    'auto' takes the core count and is deliberately not capped. On a fast machine the curve is very
-    flat and peaks slightly below the core count - measured on the 20-scenario benchmark, best of 3:
+    'auto' takes the usable core count - see available_cpu_count(), which is the host's cores except
+    inside a container with a CPU limit - and is deliberately not capped beyond that. On a fast
+    machine the curve is very flat and peaks slightly below the core count - measured on the 20-scenario benchmark, best of 3:
     serial 26.33s, 4 threads 24.89s, 6 threads 24.71s, 8 threads 24.91s, 16 threads 25.04s - so a cap
     looks attractive. But re-running with each job made eight times dearer, which is how a machine
     where the kernel dominates behaves, the curve stops turning over entirely: 48.92s serial, 32.03s
@@ -182,6 +230,37 @@ class Plan:
                         self.log("Dynamic load adjust sees car {} charging now slot {}-{}, previous car slot {}".format(car_n, slot["start"], slot["end"], self.load_last_car_slot))
         self.load_last_car_slot = load_car_slot
         self.dynamic_load_baseline = {}
+
+        # Dynamic load baselines are stored as kWh per PREDICT_STEP. When the car is inside the
+        # inverter CT clamp, remove its measured energy from the most recent load period before
+        # carrying a high-load observation into the next plan slot. The car-energy sensor is an
+        # incrementing kWh series, so sum its per-minute increments over the same period as
+        # load_last_period. If the sensor has no current increment, retain the planned-slot fallback
+        # below for a charger whose energy sensor is lagging.
+        load_last_period_energy = self.load_last_period / 60 * PREDICT_STEP
+        # Planned car energy is also an upper-bound estimate for a sensor that has not caught up
+        # yet. Calculate it over the same trailing period as load_last_period, including partial
+        # slot overlaps, then convert the per-minute kW values to kWh.
+        car_load_planned = 0.0
+        if self.car_energy_reported_load:
+            for minute in range(self.minutes_now - PREDICT_STEP, self.minutes_now):
+                car_load_planned += sum(in_car_slot(minute, self.num_cars, self.car_charging_slots)[0]) / 60
+
+        car_energy_sensor_used = False
+        if self.car_energy_reported_load and self.car_charging_hold and self.car_charging_energy:
+            car_energy_last_period = sum(self.get_from_incrementing(self.car_charging_energy, minute) for minute in range(PREDICT_STEP))
+            if car_energy_last_period > 0:
+                car_energy_to_exclude = max(car_energy_last_period, car_load_planned)
+                load_last_period_energy = max(load_last_period_energy - car_energy_to_exclude, 0)
+                car_energy_sensor_used = True
+                self.log("Dynamic load adjust excluded {:.2f}kWh car energy from the last {} minutes".format(car_energy_last_period, PREDICT_STEP))
+                if car_load_planned > car_energy_last_period:
+                    self.log("Dynamic load adjust used planned car energy {:.2f}kWh because the sensor reported only {:.2f}kWh".format(car_load_planned, car_energy_last_period))
+
+        # If measured car energy was unavailable, use the planned trailing-period energy as a fallback.
+        if self.car_energy_reported_load and not car_energy_sensor_used:
+            load_last_period_energy = max(load_last_period_energy - car_load_planned, 0)
+
         if self.metric_dynamic_load_adjust:
             minutes_now = self.minutes_now
             minutes_end_slot = int((self.minutes_now + self.plan_interval_minutes) / self.plan_interval_minutes) * self.plan_interval_minutes
@@ -207,19 +286,13 @@ class Plan:
                     # Load has been high for two consecutive checks, so also predict it will continue
                     # into the following slot to keep the plan up to date across the slot boundary
                     minutes_end_baseline = minutes_end_slot + self.plan_interval_minutes
+                load_baseline = load_last_period_energy
                 for minute_absolute in range(minutes_now, minutes_end_baseline, PREDICT_STEP):
-                    if not self.car_energy_reported_load:
-                        # If car energy is not reported as load then we should not attempt to adjust the load prediction based on car load.
-                        car_load = 0
-                    else:
-                        car_load = sum(in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)[0])
-                    load_last_period = self.load_last_period / 60 * PREDICT_STEP
-                    load_last_period = max(load_last_period - car_load, 0)
-                    if load_last_period > 0:
+                    if load_baseline > 0:
                         if not have_printed:
-                            self.log("Dynamic load adjust is setting load minimum {:.2f}kW at {}".format(load_last_period, self.time_abs_str(minute_absolute)))
+                            self.log("Dynamic load adjust is setting load minimum {:.2f}kWh at {}".format(load_baseline, self.time_abs_str(minute_absolute)))
                             have_printed = True
-                        self.dynamic_load_baseline[minute_absolute] = load_last_period
+                        self.dynamic_load_baseline[minute_absolute] = load_baseline
             if prev_last_load_status != self.load_last_status:
                 self.log("Dynamic load status changed from {} to {}".format(prev_last_load_status, self.load_last_status))
                 return True
@@ -394,7 +467,16 @@ class Plan:
                 window_n = window_index[key]["id"]
                 typ = window_index[key]["type"]
                 if typ in ["c", "cf"]:
-                    if region_start and (charge_window[window_n]["start"] >= region_end or charge_window[window_n]["end"] < region_start):
+                    if self.set_charge_freeze_only and typ != "cf":
+                        # Grid charging is forbidden, so a window's plain charge entry is not a
+                        # candidate - only its freeze entry is. Dropping it here rather than letting
+                        # the sweep below simulate it and the levelling pass flatten it back to a
+                        # freeze keeps the search from spending simulations on, and picking its price
+                        # level from, plans that can never run. With set_charge_freeze off there are
+                        # no "cf" entries either, so no charge window is selected at all - correct,
+                        # as neither charge mode is usable then.
+                        pass
+                    elif region_start and (charge_window[window_n]["start"] >= region_end or charge_window[window_n]["end"] < region_start):
                         pass
                     elif charge_window[window_n]["start"] in self.manual_all_times:
                         pass
@@ -542,7 +624,14 @@ class Plan:
                     export_slot_choices = slots_around(best_max_export_slots, FINE_SLOT_LENGTHS)
 
                 pred_table = []
-                charge_freeze_options = [True, False] if (self.set_charge_freeze and not coarse) else [False]
+                if self.set_charge_freeze_only:
+                    # Only freeze entries survive the price_set_charge filter above, and allow_freeze
+                    # False would discard every one of them - so freeze is the option in each pass,
+                    # coarse included. "No charge windows" is still covered by charge_slot_choices,
+                    # which includes 0.
+                    charge_freeze_options = [True]
+                else:
+                    charge_freeze_options = [True, False] if (self.set_charge_freeze and not coarse) else [False]
                 export_freeze_options = [True, False] if (self.set_export_freeze and not coarse) else [False]
 
                 for max_charge_slots in charge_slot_choices:
@@ -846,7 +935,6 @@ class Plan:
             soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
             soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
             soc_percent_max = max(soc_percent, soc_percent_end)
-            soc_percent_min = min(soc_percent, soc_percent_end)
 
             if charge_window_n >= 0 and export_window_n >= 0:
                 value = "Chrg/Exp"
@@ -1303,7 +1391,7 @@ class Plan:
                 self.export_window_best = clone_windows(self.export_window)
 
             # Pre-fill best charge limit with the current charge limit
-            self.charge_limit_best = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window_best))]
+            self.prefill_charge_limit_best()
 
             # Pre-fill best export enable with Off
             self.export_limits_best = [EXPORT_LIMIT_IDLE for i in range(len(self.export_window_best))]
@@ -1406,7 +1494,7 @@ class Plan:
         # The kernel spreads one batched fan-out across threads with the GIL released for the whole
         # call, so these are real cores - unlike a Python ThreadPool, which peaked at 1.15x on two
         # threads and then degraded below serial (perf/threadpool-prototype).
-        self.prediction.batch_threads = resolve_batch_threads(self.get_arg("threads", "auto"), cpu_count())
+        self.prediction.batch_threads = resolve_batch_threads(self.get_arg("threads", "auto"), available_cpu_count())
         self.log("Prediction batch using {} kernel thread(s)".format(self.prediction.batch_threads))
         kernel_message, kernel_is_warning = kernel_status_summary(self.prediction)
         self.log("{}Prediction kernel: {}".format("Warn: " if kernel_is_warning else "", kernel_message))
@@ -1799,6 +1887,11 @@ class Plan:
         if not self.set_charge_freeze:
             allow_freeze = False
 
+        # set_charge_freeze_only forbids charging the battery from the grid, so the only candidates
+        # left are off and - when freeze is enabled - a freeze at the reserve. This is the charge
+        # side equivalent of optimise_export restricting loop_options under set_export_freeze_only.
+        charge_freeze_only = self.set_charge_freeze_only
+
         if all_n:
             window_n = all_n[0]
 
@@ -1817,7 +1910,7 @@ class Plan:
 
         # Create min/max SoC to avoid simulating SoC that are not going have any impact
         # Can't do this for anything but a single window as the winder SoC impact isn't known
-        if not all_n and not freeze_only:
+        if not all_n and not freeze_only and not charge_freeze_only:
             hans = []
             all_max_soc = 0
             all_min_soc = self.soc_max
@@ -1945,14 +2038,15 @@ class Plan:
                     ]
                 id += 1
 
-        # Assemble list of SoC's to try
-        try_socs = [loop_soc]
+        # Assemble list of SoC's to try - starting from a full charge, unless grid charging is
+        # forbidden in which case best_soc_min_setting below becomes the first (baseline) candidate
+        try_socs = [] if charge_freeze_only else [loop_soc]
         loop_step = max(best_soc_step, 0.1)
         best_soc_min_setting = self.best_soc_min
         if best_soc_min_setting > 0:
             best_soc_min_setting = max(self.reserve, best_soc_min_setting)
 
-        while loop_soc > self.reserve and not freeze_only:
+        while loop_soc > self.reserve and not freeze_only and not charge_freeze_only:
             skip = False
             try_soc = max(best_soc_min, loop_soc)
             try_soc = dp2(min(try_soc, self.soc_max))
@@ -1983,6 +2077,20 @@ class Plan:
                 try_socs.append(self.reserve)
             if not allow_freeze and (self.reserve in try_socs):
                 try_socs.remove(self.reserve)
+
+        if charge_freeze_only:
+            # Grid charging is forbidden, so the window has exactly two permitted outcomes: off, and
+            # a freeze at the reserve. Build them rather than filter the candidates assembled above,
+            # because those can be forbidden in two different ways - best_soc_min_setting is
+            # max(reserve, best_soc_min) and so is a real charge target whenever best_soc_min is
+            # above the reserve, and the freeze_only branch seeds the list with the window's existing
+            # limit, which a plan built before the switch was turned on can leave as a grid charge.
+            # Filtering those out alone would leave the freeze as the only candidate whenever
+            # best_soc_min is set, making the search a foregone conclusion. Off goes first to keep
+            # the priority the branches above give it.
+            try_socs = [0.0]
+            if allow_freeze and self.reserve not in try_socs:
+                try_socs.append(self.reserve)
 
         # Run the simulations in parallel
         results = []
@@ -2870,7 +2978,13 @@ class Plan:
                     # model whether the nominal plan changes without the slot, which subsumes the old
                     # never-reaches-limit and freeze-at-100% removal branches. What is left here narrows the
                     # limit to what the window can actually achieve, so adjacent windows share a limit and merge.
-                    if soc_max < (limit - charge_step):
+                    if self.set_charge_freeze_only:
+                        # Each branch below raises the limit to a full charge, which is exactly what
+                        # set_charge_freeze_only forbids - including turning a freeze into a charge
+                        # at 100% SoC, which imports nothing but still publishes a grid charge that
+                        # execute_plan's safeguard would immediately clamp back to a freeze.
+                        pass
+                    elif soc_max < (limit - charge_step):
                         # Work out what can be achieved in the window and set the target to match that
                         window["target"] = soc_max
                         charge_limit_best[window_n] = self.soc_max
@@ -3372,7 +3486,6 @@ class Plan:
                         window_start_orig = self.export_window_best[window_n].get("start_orig", window_start)
                         window_start_from_now = max(window_start, self.minutes_now)
                         window_length = self.export_window_best[window_n]["end"] - window_start_from_now
-                        window_length_orig = self.export_window_best[window_n]["end"] - window_start_orig
                         export_limit = self.export_limits_best[window_n]
                         window_day = self.export_window_best[window_n]["start"] // 1440
 
@@ -4024,7 +4137,6 @@ class Plan:
             self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows], calculate_import_low_export=self.calculate_import_low_export, calculate_export_high_import=self.calculate_export_high_import
         )
 
-        best_soc = self.soc_max
         best_cost = best_metric
         best_keep = metric_keep
         best_cycle = 0
@@ -4234,7 +4346,18 @@ class Plan:
                 elif self.charge_window_best[window_n]["start"] in self.manual_freeze_export_times:
                     self.charge_limit_best[window_n] = 0
                 elif self.charge_window_best[window_n]["start"] in self.manual_charge_times:
-                    self.charge_limit_best[window_n] = self.soc_max
+                    if self.set_charge_freeze_only:
+                        # A manual "charge now" request can't be honoured as a grid charge when the
+                        # user has said Predbat may only ever freeze charge - optimise_charge_limit's
+                        # own search already respects this, so a manual override doing otherwise
+                        # would be the one path where the plan assumes an import that execution
+                        # refuses to perform. Clamp to freeze charge, the closest available
+                        # approximation of "charge/hold what you can right now", rather than dropping
+                        # the override entirely (mirrors the manual export clamp for #4690).
+                        self.log("Warn: Manual charge time {} clamped to freeze charge as set_charge_freeze_only is enabled".format(self.time_abs_str(self.charge_window_best[window_n]["start"])))
+                        self.charge_limit_best[window_n] = self.reserve
+                    else:
+                        self.charge_limit_best[window_n] = self.soc_max
                 elif self.charge_window_best[window_n]["start"] in self.manual_freeze_charge_times:
                     self.charge_limit_best[window_n] = self.reserve
 
@@ -4243,9 +4366,35 @@ class Plan:
                 if self.export_window_best[window_n]["start"] in self.manual_demand_times:
                     self.export_limits_best[window_n] = EXPORT_LIMIT_IDLE
                 elif self.export_window_best[window_n]["start"] in self.manual_export_times:
-                    self.export_limits_best[window_n] = 0.0
+                    if self.set_export_freeze_only:
+                        # A manual "export now" request can't be honoured as an active export when
+                        # the user has said Predbat may only ever freeze export, never force it - the
+                        # optimiser's own search already respects this (optimise_export's loop_options
+                        # excludes every active target when set_export_freeze_only is set), so a
+                        # manual override doing the same silently was the one path where the plan
+                        # ended up assuming charging was disabled (Freeze Export) while execution left
+                        # it enabled (Hold Export) - see #4690. Clamp to freeze instead of dropping the
+                        # override entirely, since freeze is the closest available approximation of
+                        # "export what you can right now".
+                        self.log("Warn: Manual export time {} clamped to freeze export as set_export_freeze_only is enabled".format(self.time_abs_str(self.export_window_best[window_n]["start"])))
+                        self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
+                    else:
+                        self.export_limits_best[window_n] = 0.0
                 elif self.export_window_best[window_n]["start"] in self.manual_freeze_export_times:
                     self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
+
+    def prefill_charge_limit_best(self):
+        """
+        Pre-fill the best charge limits from the inverter's current charge limit, one per charge
+        window. This is what the plan uses for any window Predbat is not optimising itself, so with
+        set_charge_freeze_only on the limit is clamped to a freeze here too - otherwise the plan and
+        the prediction would assume a grid charge that execute_plan's safeguard then refuses to
+        perform, and the plan would be scored against an import that never happens.
+        """
+        charge_limit = self.current_charge_limit * self.soc_max / 100.0
+        if self.set_charge_freeze_only:
+            charge_limit = min(charge_limit, self.reserve)
+        self.charge_limit_best = [charge_limit for i in range(len(self.charge_window_best))]
 
     def optimise_charge_windows_reset(self, reset_all):
         """
@@ -4264,7 +4413,10 @@ class Plan:
                     if reset_all:
                         self.charge_limit_best[window_n] = 0.0
                 else:
-                    self.charge_limit_best[window_n] = self.soc_max
+                    # Windows beyond the record window are parked at a full charge on the assumption
+                    # that Predbat can always charge later - which it can't when grid charging is
+                    # forbidden, so park them at a freeze instead
+                    self.charge_limit_best[window_n] = self.reserve if self.set_charge_freeze_only else self.soc_max
 
         if self.export_window_best and self.calculate_best_export:
             # Set all to max

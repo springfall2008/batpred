@@ -26,10 +26,9 @@ def test_foxess_support_discharge_freeze_matches_foxcloud():
     FoxESS (modbus) and FoxCloud are the same hardware via two different connection methods - "feed-in
     first"/freeze export does not hold SoC flat on either, PV above the export limit still charges the
     battery instead of being clipped (#4207). Both are now True: that spillover-charges-the-battery
-    behaviour is correctly modelled (prediction.py's freeze branch, gated on
-    inverter_can_charge_during_export) rather than being a reason to disable freeze outright for this
-    hardware - see test_freeze_export_recapture_beyond_limit in test_optimise_solar.py for the modelling
-    itself.
+    behaviour is correctly modelled (prediction.py's freeze branch, gated on support_feedin_first)
+    rather than being a reason to disable freeze outright for this hardware - see
+    test_freeze_export_recapture_beyond_limit in test_optimise_solar.py for the modelling itself.
     """
     failed = False
     if INVERTER_DEF["FoxESS"]["support_discharge_freeze"] is not True:
@@ -37,6 +36,40 @@ def test_foxess_support_discharge_freeze_matches_foxcloud():
         failed = True
     if INVERTER_DEF["FoxESS"]["support_discharge_freeze"] != INVERTER_DEF["FoxCloud"]["support_discharge_freeze"]:
         print("ERROR: FoxESS support_discharge_freeze ({}) should match FoxCloud ({}) - same hardware, different connection method".format(INVERTER_DEF["FoxESS"]["support_discharge_freeze"], INVERTER_DEF["FoxCloud"]["support_discharge_freeze"]))
+        failed = True
+    return failed
+
+
+def test_support_feedin_first_is_opt_in():
+    """
+    support_feedin_first says the inverter's Freeze Export really is a "Feed-in First" mode (load,
+    then export, then battery), so PV past the export limit charges the battery instead of being
+    clipped. Only types whose component actually selects such a mode may opt in - the Fox hardware,
+    plus the four clouds that switch work mode for the freeze: SolisCloud ("Feed-in priority",
+    solis.py), SolaxCloud ("feedin", solax.py), SunsynkCloud and DeyeCloud (Selling First,
+    sunsynk.py/deye.py). Every other type must default off, because modelling recapture on an
+    inverter that merely disables charging invents energy that never reaches the battery.
+    """
+    failed = False
+    expect_feedin_first = {"FoxESS", "FoxCloud", "SolisCloud", "SolaxCloud", "SunsynkCloud", "DeyeCloud"}
+
+    for inverter_type in expect_feedin_first:
+        if INVERTER_DEF[inverter_type].get("support_feedin_first", False) is not True:
+            print("ERROR: {} support_feedin_first should be True, got {}".format(inverter_type, INVERTER_DEF[inverter_type].get("support_feedin_first", False)))
+            failed = True
+
+    for inverter_type, definition in INVERTER_DEF.items():
+        if inverter_type in expect_feedin_first:
+            continue
+        if definition.get("support_feedin_first", False):
+            print("ERROR: {} declares support_feedin_first - only inverters with a genuine Feed-in First freeze mode may opt in".format(inverter_type))
+            failed = True
+
+    # The Inverter object reads it through .get(), so a type that never mentions the key at all must
+    # still end up with a usable False rather than a KeyError.
+    missing = [inverter_type for inverter_type, definition in INVERTER_DEF.items() if "support_feedin_first" not in definition]
+    if not missing:
+        print("ERROR: every inverter type declares support_feedin_first - the .get() default in inverter.py is no longer covered")
         failed = True
     return failed
 
@@ -1084,6 +1117,11 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
     ha.service_store_enable = True
     if clear:
         ha.service_store = []
+        # Also drop the charge-domain dedup memory so this call is judged fresh rather than against
+        # whatever the previous sub-test happened to send - mirrors the discharge-domain reset in
+        # test_call_adjust_export_immediate(), and is needed now the freeze fallback collapses onto
+        # the same charge_stop call other sub-tests make (batpred#4424/#4432).
+        my_predbat.last_service_hash.pop("charge", None)
 
     print("**** Running Test: {} ****".format(test_name))
 
@@ -1113,10 +1151,20 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
 
     if repeat:
         pass
-    elif soc == inv.soc_percent or freeze:
+    elif freeze:
         if stop_discharge:
             expected.append(["discharge_stop", {"device_id": "DID0"}])
-        expected.append(["charge_freeze", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
+        if no_freeze:
+            # An explicit freeze with no charge_freeze_service configured must fall back to a plain
+            # charge stop, never a real charge_start_service (batpred#4424/#4432)
+            expected.append(["charge_stop", {"device_id": "DID0"}])
+        else:
+            expected.append(["charge_freeze", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
+    elif soc == inv.soc_percent:
+        if stop_discharge:
+            expected.append(["discharge_stop", {"device_id": "DID0"}])
+        # Reaching the target without an explicit freeze request keeps its existing behaviour
+        expected.append(["charge_freeze" if not no_freeze else "charge_start", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
     elif soc > 0 and (inv.has_target_soc or soc > inv.soc_percent):
         if stop_discharge:
             expected.append(["discharge_stop", {"device_id": "DID0"}])
@@ -1176,7 +1224,12 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     elif freeze:
         if charge_stop:
             expected.append(["charge_stop", {"device_id": "DID0"}])
-        expected.append(["discharge_freeze", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
+        if no_freeze:
+            # An explicit freeze with no discharge_freeze_service configured must fall back to a
+            # plain discharge stop, never a real discharge_start_service (batpred#4424/#4432)
+            expected.append(["discharge_stop", {"device_id": "DID0"}])
+        else:
+            expected.append(["discharge_freeze", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
     elif soc < inv.soc_percent:
         if charge_stop:
             expected.append(["charge_stop", {"device_id": "DID0"}])
@@ -1488,6 +1541,136 @@ def test_charge_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
     return failed
 
 
+def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat, dummy_items):
+    """
+    The export window must tolerate a configured-but-empty source exactly as the charge window does.
+
+    The charge window gained that tolerance, but the export window a hundred lines below kept a bare
+    `raise ValueError`. Both read from the same cloud fetch, so on a GE Cloud failure the charge
+    window sets safe defaults and retries and then the export window kills the update loop on the
+    very same cycle - the charge-side fix never gets a chance to take effect. Seen live: a GivEnergy
+    instance logging "GE Cloud returned no data ... will retry next update" immediately followed by
+    the export window raising, every cycle, for two weeks.
+
+    The bare raise also carried no message, so predbat.status read "Error: Exception raised " with
+    nothing after it, telling support nothing at all.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    inv = Inverter(my_predbat, 0)
+    inv.sleep = dummy_sleep
+    inv.inv_has_charge_enable_time = True
+    inv.rest_api = None
+    inv.rest_data = None
+
+    # Drop both windows' args: ge_cloud_direct configures neither, so this is what a cloud-backed
+    # instance actually looks like when the fetch has come back empty.
+    original_charge_start_time = my_predbat.args.pop("charge_start_time", None)
+    original_charge_end_time = my_predbat.args.pop("charge_end_time", None)
+    original_discharge_start_time = my_predbat.args.pop("discharge_start_time", None)
+    original_discharge_end_time = my_predbat.args.pop("discharge_end_time", None)
+    original_ge_cloud_direct = my_predbat.args.get("ge_cloud_direct", None)
+    my_predbat.args["ge_cloud_direct"] = True
+    dummy_items["switch.scheduled_charge_enable"] = "on"
+
+    def restore():
+        """Restore the config this test mutated so later tests are unaffected."""
+        if original_charge_start_time is not None:
+            my_predbat.args["charge_start_time"] = original_charge_start_time
+        if original_charge_end_time is not None:
+            my_predbat.args["charge_end_time"] = original_charge_end_time
+        if original_discharge_start_time is not None:
+            my_predbat.args["discharge_start_time"] = original_discharge_start_time
+        if original_discharge_end_time is not None:
+            my_predbat.args["discharge_end_time"] = original_discharge_end_time
+        if original_ge_cloud_direct is None:
+            my_predbat.args.pop("ge_cloud_direct", None)
+        else:
+            my_predbat.args["ge_cloud_direct"] = original_ge_cloud_direct
+
+    try:
+        inv.update_status(my_predbat.minutes_now)
+    except ValueError as e:
+        print(f"ERROR: {test_name} - update_status should not raise while a configured GE Cloud source just hasn't returned data yet, got ValueError({e})")
+        restore()
+        return True
+
+    # Same safe defaults the discharge_start-is-None path already sets
+    if inv.discharge_enable_time != False:
+        print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
+        failed = True
+    # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
+    if inv.discharge_start_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_start_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_start_time_minutes}")
+        failed = True
+    if inv.discharge_end_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_end_time_minutes should be {my_predbat.forecast_minutes}, got {inv.discharge_end_time_minutes}")
+        failed = True
+
+    # The retry warning is what a user actually sees for this failure, so it must name GE Cloud
+    # rather than sending them to apps.yaml - the same misdirection the charge window fixed.
+    if "GE Cloud" not in my_predbat.current_status:
+        print(f"ERROR: {test_name} - status should name GE Cloud as the source that returned no data, got: {my_predbat.current_status}")
+        failed = True
+
+    restore()
+    return failed
+
+
+def test_export_window_no_source_configured_raises(test_name, my_predbat, dummy_items):
+    """With no source configured at all this is a real apps.yaml gap and must still raise.
+
+    The transient branch must not swallow a genuine setup gap - an instance that can never
+    produce an export window should say so, not retry silently forever.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    inv = Inverter(my_predbat, 0)
+    inv.sleep = dummy_sleep
+    inv.inv_has_charge_enable_time = True
+    inv.rest_api = None
+    inv.rest_data = None
+
+    original_charge_start_time = my_predbat.args.pop("charge_start_time", None)
+    original_charge_end_time = my_predbat.args.pop("charge_end_time", None)
+    original_discharge_start_time = my_predbat.args.pop("discharge_start_time", None)
+    original_discharge_end_time = my_predbat.args.pop("discharge_end_time", None)
+    original_ge_cloud_direct = my_predbat.args.pop("ge_cloud_direct", None)
+    dummy_items["switch.scheduled_charge_enable"] = "on"
+
+    def restore():
+        """Restore the config this test mutated so later tests are unaffected."""
+        for key, value in (
+            ("charge_start_time", original_charge_start_time),
+            ("charge_end_time", original_charge_end_time),
+            ("discharge_start_time", original_discharge_start_time),
+            ("discharge_end_time", original_discharge_end_time),
+            ("ge_cloud_direct", original_ge_cloud_direct),
+        ):
+            if value is not None:
+                my_predbat.args[key] = value
+
+    raised = False
+    try:
+        inv.update_status(my_predbat.minutes_now)
+    except ValueError as e:
+        raised = True
+        # The bare `raise ValueError` this replaces produced "Error: Exception raised " with
+        # nothing after it, which told support nothing at all.
+        if not str(e):
+            print(f"ERROR: {test_name} - the raise must carry a message, got an empty ValueError")
+            failed = True
+
+    if not raised:
+        print(f"ERROR: {test_name} - no source configured is a permanent setup gap and must raise")
+        failed = True
+
+    restore()
+    return failed
+
+
 def test_discharge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     """
     Test discharge window handling when time is illegal (e.g., 'unknown')
@@ -1512,11 +1695,12 @@ def test_discharge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     if inv.discharge_enable_time != False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
-    if inv.discharge_start_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_start_time_minutes should be 0, got {inv.discharge_start_time_minutes}")
+    # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
+    if inv.discharge_start_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_start_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_start_time_minutes}")
         failed = True
-    if inv.discharge_end_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_end_time_minutes should be 0, got {inv.discharge_end_time_minutes}")
+    if inv.discharge_end_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_end_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_end_time_minutes}")
         failed = True
     if inv.track_discharge_start != "00:00:00":
         print(f"ERROR: {test_name} - track_discharge_start should be '00:00:00', got {inv.track_discharge_start}")
@@ -1591,11 +1775,12 @@ def test_discharge_window_invalid_format_time(test_name, my_predbat, dummy_items
     if inv.discharge_enable_time != False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
-    if inv.discharge_start_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_start_time_minutes should be 0, got {inv.discharge_start_time_minutes}")
+    # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
+    if inv.discharge_start_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_start_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_start_time_minutes}")
         failed = True
-    if inv.discharge_end_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_end_time_minutes should be 0, got {inv.discharge_end_time_minutes}")
+    if inv.discharge_end_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_end_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_end_time_minutes}")
         failed = True
     if inv.track_discharge_start != "00:00:00":
         print(f"ERROR: {test_name} - track_discharge_start should be '00:00:00', got {inv.track_discharge_start}")
@@ -1632,11 +1817,12 @@ def test_discharge_window_none_value(test_name, my_predbat, dummy_items):
     if inv.discharge_enable_time != False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
-    if inv.discharge_start_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_start_time_minutes should be 0, got {inv.discharge_start_time_minutes}")
+    # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
+    if inv.discharge_start_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_start_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_start_time_minutes}")
         failed = True
-    if inv.discharge_end_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_end_time_minutes should be 0, got {inv.discharge_end_time_minutes}")
+    if inv.discharge_end_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_end_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_end_time_minutes}")
         failed = True
     if inv.track_discharge_start != "00:00:00":
         print(f"ERROR: {test_name} - track_discharge_start should be '00:00:00', got {inv.track_discharge_start}")
@@ -2481,6 +2667,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed = False
     print("**** Running Inverter tests ****")
     failed |= test_foxess_support_discharge_freeze_matches_foxcloud()
+    failed |= test_support_feedin_first_is_opt_in()
     ha = my_predbat.ha_interface
 
     time_now = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -3072,6 +3259,16 @@ charge_start_service:
     failed |= test_call_adjust_export_immediate("export_immediate7", my_predbat, ha, inv, dummy_items, 50, freeze=True)
     failed |= test_call_adjust_export_immediate("export_immediate8", my_predbat, ha, inv, dummy_items, 50, freeze=False, no_freeze=True)
     failed |= test_call_adjust_export_immediate("export_immediate9", my_predbat, ha, inv, dummy_items, 30.0)
+    # batpred#4424/#4432: an explicit freeze request must never degrade into a real charge/export
+    # when the corresponding freeze service isn't configured - it must fall back to a plain stop.
+    # Kept at the end of this group: the fallback emits charge_stop/discharge_stop, which would
+    # otherwise be deduplicated against the identical calls the earlier sub-tests expect to make.
+    # The freeze branch ignores target_soc, so each second call takes the same path and is
+    # deduplicated as a repeat - confirming the fallback isn't re-issued every cycle.
+    failed |= test_call_adjust_charge_immediate("charge_immediate_freeze_no_service", my_predbat, ha, inv, dummy_items, 50, freeze=True, no_freeze=True, clear=True, stop_discharge=True)
+    failed |= test_call_adjust_charge_immediate("charge_immediate_freeze_no_service_repeat", my_predbat, ha, inv, dummy_items, 75, freeze=True, no_freeze=True, repeat=True)
+    failed |= test_call_adjust_export_immediate("export_immediate_freeze_no_service", my_predbat, ha, inv, dummy_items, 50, freeze=True, no_freeze=True, clear=True)
+    failed |= test_call_adjust_export_immediate("export_immediate_freeze_no_service_repeat", my_predbat, ha, inv, dummy_items, 30, freeze=True, no_freeze=True, repeat=True)
     if failed:
         return failed
 
@@ -3214,6 +3411,8 @@ charge_start_service:
     # charge_start_time in self.base.args, before any Inverter is constructed.
 
     failed |= test_charge_window_ge_cloud_configured_but_no_data_yet("charge_window_ge_cloud_configured_but_no_data_yet", my_predbat, dummy_items)
+    failed |= test_export_window_ge_cloud_configured_but_no_data_yet("export_window_ge_cloud_configured_but_no_data_yet", my_predbat, dummy_items)
+    failed |= test_export_window_no_source_configured_raises("export_window_no_source_configured_raises", my_predbat, dummy_items)
     if failed:
         return failed
 

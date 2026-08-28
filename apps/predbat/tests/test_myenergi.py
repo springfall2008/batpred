@@ -974,6 +974,39 @@ def test_control_window_parsing():
     print("  ✓ Planned car charging windows are parsed and matched against the clock")
 
 
+def test_control_windows_across_new_year():
+    """A window spanning New Year is still matched, read from either side of midnight.
+
+    The plan carries no year, so a window read just after midnight on 1 January parses
+    its 31 December start as this year - eleven months in the future - unless the year is
+    rebuilt around the clock. Getting this wrong stops a car mid-charge once a year.
+    """
+    crossing = _plan_window(datetime.datetime(2026, 12, 31, 23, 0), datetime.datetime(2027, 1, 1, 5, 0))
+    component = _control_component(plans={0: [crossing]})
+
+    before_midnight = CONTROL_TZ.localize(datetime.datetime(2026, 12, 31, 23, 30))
+    assert component.refresh_car_windows(before_midnight) is True
+    assert component.should_charge_now(0, before_midnight) is True, "The window is active before midnight"
+
+    after_midnight = CONTROL_TZ.localize(datetime.datetime(2027, 1, 1, 0, 30))
+    assert component.refresh_car_windows(after_midnight) is True
+    assert component.should_charge_now(0, after_midnight) is True, "The same window is still active after midnight"
+
+    ended = CONTROL_TZ.localize(datetime.datetime(2027, 1, 1, 6, 0))
+    assert component.refresh_car_windows(ended) is True
+    assert component.should_charge_now(0, ended) is False, "The window has ended by 06:00"
+
+    # A window genuinely far ahead must not be dragged back a year by the rebuild - the
+    # plan reaches 48 hours, well beyond the 23 hour margin the first version allowed
+    ahead = _plan_window(datetime.datetime(2026, 8, 23, 20, 0), datetime.datetime(2026, 8, 24, 2, 0))
+    component = _control_component(plans={0: [ahead]})
+    now = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 10, 0))
+    assert component.refresh_car_windows(now) is True
+    assert component.should_charge_now(0, now) is False, "A window 34 hours ahead has not started"
+    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 21, 0))) is True, "...and is active once it arrives"
+    print("  ✓ Windows spanning New Year are matched from both sides of midnight")
+
+
 def test_control_windows_are_per_car():
     """Each car's own slot sensor drives its own Zappi, so car 1 does not follow car 0."""
     car0 = _plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
@@ -1547,6 +1580,37 @@ def test_automatic_config():
     # 11112222 sorts before 87654321, so it must be the one picked as "the first Eddi"
     assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_11112222_session_energy"
     print("  ✓ Automatic configuration wires both energy inputs, deterministically by serial")
+
+
+def test_automatic_config_wires_car_charging_power():
+    """Zappi live power sensors wire into car_charging_power in the same serial order.
+
+    The power sensors are display-only (the plan runs off car_charging_energy), but they have to
+    line up with the energy list so both describe the same chargers.
+    """
+    component = _make_component()
+    second_zappi = dict(MOCK_DIRECT_ZAPPI, sno=22223333)
+    component.devices = {
+        "Z22223333": normalise_direct_device(second_zappi, DEVICE_KIND_ZAPPI),
+        "E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI),
+        "Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
+    }
+    component.automatic_config()
+
+    assert component.base.args["car_charging_power"] == [
+        "sensor.predbat_myenergi_zappi_12345678_power",
+        "sensor.predbat_myenergi_zappi_22223333_power",
+    ], component.base.args["car_charging_power"]
+    print("  ✓ Automatic configuration wires the Zappi power sensors for the flow diagram")
+
+
+def test_automatic_config_eddi_only_leaves_car_charging_power_alone():
+    """An Eddi is not a car charger, so it must not appear as car charging power."""
+    component = _make_component()
+    component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
+    component.automatic_config()
+    assert "car_charging_power" not in component.base.args
+    print("  ✓ Eddi-only site leaves car_charging_power unset")
 
 
 def test_automatic_config_single_zappi_is_still_a_list():
@@ -2350,6 +2414,7 @@ def test_myenergi(my_predbat=None):
     test_cloud_one_bad_device_does_not_lose_the_others()
     test_cloud_auth_error_still_aborts_the_poll()
     test_control_window_parsing()
+    test_control_windows_across_new_year()
     test_control_windows_are_per_car()
     test_control_windows_tolerate_a_bad_entry_and_a_missing_plan()
     test_control_windows_cross_the_year_boundary()
@@ -2382,6 +2447,8 @@ def test_myenergi(my_predbat=None):
     test_component_direct_auth_error_never_refreshes()
     test_component_registration()
     test_automatic_config()
+    test_automatic_config_wires_car_charging_power()
+    test_automatic_config_eddi_only_leaves_car_charging_power_alone()
     test_automatic_config_single_zappi_is_still_a_list()
     test_automatic_config_eddi_only()
     test_automatic_config_uses_set_arg_auto()

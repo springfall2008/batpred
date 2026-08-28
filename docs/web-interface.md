@@ -37,6 +37,10 @@ The initial view is the Dash view which gives a summary of Predbat's status and 
 
 ![image](images/web-interface-dash-view.png)
 
+The power flow diagram shows the PV, battery, grid and house, with animated arrows whose speed reflects how much power is flowing.
+A car is also shown if you have set [car_charging_power](car-charging.md#configure-appsyaml-for-your-car-charging) in `apps.yaml` (this is automatic for the supported charger integrations);
+the car charging power is then subtracted from the House figure so that it shows the rest of your household load rather than counting the car twice.
+
 The Debug panel provides easy access to a number of files that are useful in diagnosing a problem and are usually required if you raise a [Predbat GitHub issue](https://github.com/springfall2008/batpred/issues):
 
 - **Download apps.yaml** - provides a link to download your [apps.yaml file](apps-yaml.md). This is useful to identify issues with your Predbat configuration
@@ -158,6 +162,11 @@ The Apps view allows you to look at your `apps.yaml` configuration and to modify
 Click the edit button to change a value, when all the edits are complete hit save to save the `apps.yaml` and Predbat will automatically be restarted with the new configuration.
 
 <img alt="image of Predbat apps view" src="https://github.com/user-attachments/assets/f9aacd17-f25b-45d6-95fe-229431a1f4d6" />
+
+Alongside the edit button, each entry of a list and each setting within it can be removed with the **Delete** button, and new ones created with the
+**Add item** and **Add setting** buttons at the end of each group. This is how you add, change or remove a [tariff to compare](compare.md) without hand-editing
+the YAML - **Add item** against `compare_list` asks for the new tariff as one `setting: value` per line, starting from a template of the required `name` and `id`.
+Deletions and additions are only pending until you hit save, so they can be undone first with the **Undo**, **Remove** and **Discard Changes** buttons.
 
 Predbat validates your `apps.yaml` every time it runs and if there are any configuration issues it displays a count of those errors and highlights the items in error in red:
 
