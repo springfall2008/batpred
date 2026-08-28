@@ -1874,6 +1874,9 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
+        # Script-driven "power" mode, no REST/native register to persist the computed
+        # charge/discharge rate - the originating case for this flag (#3311).
+        "has_charge_rate_entity": True,
     },
     "SF": {
         "name": "Sofar HYD",
