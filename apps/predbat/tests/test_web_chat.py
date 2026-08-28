@@ -232,6 +232,14 @@ def test_send_is_busy_and_unknown_is_404(my_predbat):
     elif "why is it charging at 3am" not in response.text:
         print("ERROR: the 409 body does not name the busy conversation: {}".format(response.text))
         failed = True
+    else:
+        # The client's Stop button needs this to wire itself up on the send-into-busy path -
+        # without it, sending into an already-busy conversation shows a Stop button with no
+        # turn_id to post, and can clobber a good one a prior SSE 'busy' event had already set.
+        body_json = json.loads(response.text)
+        if body_json.get("turn_id") != 3:
+            print("ERROR: the 409 body does not carry the active turn's id, got {}".format(body_json))
+            failed = True
 
     for handler, payload in [(page.html_chat_send, {"conversation": "ffffffffffffffff", "message": "x"}), (page.html_chat_delete, {"id": "ffffffffffffffff"}), (page.html_chat_rename, {"id": "ffffffffffffffff", "title": "x"})]:
         result = asyncio.run(handler(FakeRequest(body=payload)))
@@ -1014,20 +1022,46 @@ def test_stop_button_wired_to_cancel_with_turn_id(my_predbat):
         print("ERROR: stopTurn() does not post the currently running turn's id from state.busy: {!r}".format(stop_body))
         failed = True
 
-    # setBusy must be the one place turn_id enters state.busy, and both callers (the SSE 'busy'
-    # event and the active-turn restore on history reload) must supply it - a caller that dropped
-    # the argument would silently disable Stop on that path (the button would show, but stopTurn()
-    # would have no turn_id to post) rather than fail loudly.
+    # setBusy must be the one place turn_id enters state.busy, and EVERY caller must supply it - a
+    # caller that dropped the argument would silently disable Stop on that path (the button would
+    # show, but stopTurn() would have no turn_id to post), or worse, overwrite a good turn_id a
+    # different caller had already set with 'undefined'. There are three callers: the SSE 'busy'
+    # event, the active-turn restore on history reload, and doSend()'s handling of a 409 when
+    # sending into an already-busy conversation - the last of these was missed in an earlier pass
+    # (setBusy gained a third parameter and only two of its three call sites were updated).
     busy_body = _extract_function_body(script, "setBusy")
     if busy_body is None or "turn_id:turnId" not in busy_body.replace(" ", ""):
         print("ERROR: setBusy() does not record turnId onto state.busy: {!r}".format(busy_body))
         failed = True
+
+    calls = re.findall(r"setBusy\(([^)]*)\)", script)
+    if len(calls) < 3:
+        print("ERROR: expected at least 3 setBusy() call sites (SSE busy, history restore, send-into-busy 409), found {}: {}".format(len(calls), calls))
+        failed = True
+    for args in calls:
+        parts = [part.strip() for part in args.split(",")]
+        if len(parts) != 3 or not parts[2]:
+            print("ERROR: a setBusy() call site does not pass a third (turn id) argument: setBusy({})".format(args))
+            failed = True
+
     if "setBusy(data.conversation_id,data.title,data.turn_id)" not in script.replace(" ", ""):
         print("ERROR: the SSE 'busy' handler does not pass the event's turn_id through to setBusy()")
         failed = True
     if "setBusy(payload.active.conversation_id,payload.active.title,payload.active.turn_id)" not in script.replace(" ", "").replace("\n", ""):
         print("ERROR: restoring an in-flight turn on history reload does not pass its turn_id through to setBusy()")
         failed = True
+
+    # doSend()'s 409 handler: sending into an already-busy conversation must not leave the Stop
+    # button wired to an undefined turn_id, and must not clobber a turn_id a genuine SSE 'busy'
+    # event had already set with one that is missing.
+    send_body = _extract_function_body(script, "doSend")
+    if send_body is None:
+        print("ERROR: could not find doSend() to inspect")
+        failed = True
+    else:
+        if "setBusy(payload.conversation_id,payload.title,payload.turn_id)" not in send_body.replace(" ", ""):
+            print("ERROR: doSend()'s 409 handler does not pass the busy response's turn_id through to setBusy(): {!r}".format(send_body))
+            failed = True
 
     idle_body = _extract_function_body(script, "setIdle")
     if idle_body is None or "chat-stop" not in idle_body:

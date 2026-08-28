@@ -183,8 +183,13 @@ class WebChat:
         try:
             turn_id = agent.submit_turn(cid, message)
         except ChatBusyError:
+            # turn_id must travel with this 409 the same way it does on the SSE 'busy' event and
+            # the active-turn restore on history reload - the client's setBusy() needs it to wire
+            # up the Stop button. Without it here, sending into an already-busy conversation shows
+            # a Stop button that silently does nothing (state.busy.turn_id is undefined), and
+            # worse, overwrites a turn_id a genuine 'busy' event had already set.
             active = agent.active or {}
-            return web.json_response({"error": "busy", "conversation_id": active.get("conversation_id"), "title": active.get("title")}, status=409)
+            return web.json_response({"error": "busy", "conversation_id": active.get("conversation_id"), "title": active.get("title"), "turn_id": active.get("turn_id")}, status=409)
         except AgentNotReadyError:
             return web.json_response({"error": "The chat component is still starting"}, status=503)
         except KeyError:
@@ -1513,7 +1518,7 @@ function doSend(conversationId, text) {
         .then(function (response) {
             if (response.status === 409) {
                 return response.json().then(function (payload) {
-                    setBusy(payload.conversation_id, payload.title);
+                    setBusy(payload.conversation_id, payload.title, payload.turn_id);
                     throw new Error('busy');
                 });
             }

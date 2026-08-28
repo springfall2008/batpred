@@ -652,8 +652,16 @@ class ChatAgent(ComponentBase):
         """Wait for a confirmation answer, polling rather than blocking on a primitive.
 
         Polling keeps this free of loop-bound objects, so the turn runs correctly on whichever
-        event loop invoked it. The time spent parked is added back to the turn deadline: a user
-        who steps away should not turn their own approval into a timeout.
+        event loop invoked it. The time spent parked is added back to two separate clocks, not
+        just one: self.deadline (the turn's own timeout, checked in _turn_loop) - a user who steps
+        away should not turn their own approval into a timeout - and active["started"] (the
+        stale-turn clock _release_stale_turn measures against). _release_stale_turn's own guard
+        only protects this turn while its entry is still in pending_confirm; that entry is popped
+        by _run_one_tool right after this returns, so a wait long enough to push the extended
+        deadline past started + turn_timeout + STALE_TURN_GRACE_SECONDS would otherwise have its
+        live slot released on the very next housekeeping tick after the user finally answers -
+        displacing the original during-the-wait hazard to just-after-the-answer instead of closing
+        it. Advancing both clocks together closes it in both places.
         """
         started = time.monotonic()
         while time.monotonic() - started < CONFIRM_TIMEOUT_SECONDS:
@@ -662,8 +670,15 @@ class ChatAgent(ComponentBase):
                 if pending is None:
                     break
                 if pending.get("approved") is not None:
-                    self.deadline += time.monotonic() - started
+                    elapsed = time.monotonic() - started
+                    self.deadline += elapsed
+                    if self.active is not None:
+                        self.active["started"] += elapsed
                     return bool(pending["approved"])
             await asyncio.sleep(CONFIRM_POLL_SECONDS)
-        self.deadline += time.monotonic() - started
+        elapsed = time.monotonic() - started
+        self.deadline += elapsed
+        with self.lock:
+            if self.active is not None:
+                self.active["started"] += elapsed
         return False

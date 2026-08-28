@@ -372,6 +372,10 @@ def test_release_stale_turn_keeps_a_slot_parked_in_confirmation(my_predbat):
     prompt should get its own generous window rather than the turn's own budget for talking to
     the model. Without this guard, a user taking four minutes to answer has their live slot
     freed while await_confirmation is still polling for the answer.
+
+    The final case drives the real await_confirmation() end to end and checks the slot survives
+    even after the answer lands and pending_confirm is popped - not just while it is pending. See
+    the comment at that case for why the earlier cases alone do not cover that.
     """
     failed = False
     print("**** Testing that a turn parked in confirmation keeps its slot past the stale threshold ****")
@@ -402,6 +406,57 @@ def test_release_stale_turn_keeps_a_slot_parked_in_confirmation(my_predbat):
     if agent.active is not None:
         print("ERROR: a confirmation belonging to a different turn protected this one from release")
         failed = True
+
+    # A confirmation that gets ANSWERED - not merely pending - must also extend the stale clock,
+    # not only the turn's own deadline. The guard above only protects a turn WHILE its entry is
+    # still in pending_confirm; _run_one_tool pops that entry immediately after
+    # await_confirmation() returns. active["started"] is set once in claim_turn and never
+    # otherwise advances, so a wait long enough to push self.deadline (which IS extended, at both
+    # "self.deadline += elapsed" sites in await_confirmation) past started + turn_timeout +
+    # STALE_TURN_GRACE_SECONDS would - without also advancing started - have its live slot
+    # released on the very next housekeeping tick right after the user finally answers: the same
+    # hazard as the original bug, displaced from during the wait to just after the answer.
+    #
+    # STALE_TURN_GRACE_SECONDS is patched down to keep this fast and deterministic without a real
+    # multi-minute wait - the same trick test_write_confirmation_timeout uses on
+    # CONFIRM_TIMEOUT_SECONDS below. This never touches time.monotonic() itself, so asyncio's own
+    # scheduling (which reads it via loop.time()) is unaffected.
+    confirm_agent = _make_agent(my_predbat, turn_timeout=0.05)
+    original_grace = chat.STALE_TURN_GRACE_SECONDS
+    chat.STALE_TURN_GRACE_SECONDS = 0.05
+    try:
+        answer_started = time.monotonic()
+        confirm_agent.active = {"turn_id": 9, "started": answer_started}
+        confirm_agent.deadline = answer_started + confirm_agent.turn_timeout
+        confirm_agent.pending_confirm = {"call_9": {"conversation_id": "c1", "turn_id": 9, "approved": None}}
+        old_threshold = confirm_agent.turn_timeout + chat.STALE_TURN_GRACE_SECONDS
+
+        def answer_after_the_old_threshold():
+            """Answer the confirmation only once the pre-fix release threshold has passed."""
+            time.sleep(old_threshold + 0.3)
+            confirm_agent.confirm("call_9", "c1", True)
+
+        answer_thread = threading.Thread(target=answer_after_the_old_threshold, daemon=True)
+        answer_thread.start()
+        approved = asyncio.run(confirm_agent.await_confirmation("call_9"))
+        answer_thread.join(timeout=5)
+
+        if not approved:
+            print("ERROR: the confirmation was not reported approved")
+            failed = True
+        elif confirm_agent.active["started"] <= answer_started + old_threshold - 0.01:
+            print("ERROR: active['started'] was not advanced by the real wait - started at {}, still {}".format(answer_started, confirm_agent.active["started"]))
+            failed = True
+        else:
+            # _run_one_tool pops the entry immediately after await_confirmation() returns -
+            # simulate that here, so the release check below sees exactly what a real turn would.
+            confirm_agent.pending_confirm.pop("call_9", None)
+            confirm_agent._release_stale_turn()
+            if confirm_agent.active is None:
+                print("ERROR: the slot was released just after the user answered a long-pending confirmation - the stale clock was not extended along with the turn deadline")
+                failed = True
+    finally:
+        chat.STALE_TURN_GRACE_SECONDS = original_grace
 
     return failed
 
