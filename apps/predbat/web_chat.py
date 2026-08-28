@@ -35,7 +35,7 @@ SSE_HEARTBEAT_SECONDS = 15
 CHAT_STATUS_SWITCHES = {
     "chat_confirm_writes": True,
     "chat_web_search": False,
-    "ai_ha_state_enable": False,
+    "ai_ha_state_enable": True,
 }
 
 
@@ -1020,6 +1020,10 @@ body.dark-mode {
     padding-top: 12px;
 }
 
+.chat-toggle-cost {
+    color: var(--chat-text-muted);
+}
+
 .chat-toggle {
     display: inline-flex;
     align-items: center;
@@ -1107,11 +1111,11 @@ def get_chat_body():
                     <input type="checkbox" id="chat-confirm-writes-toggle" data-switch="chat_confirm_writes">
                     Confirm writes
                 </label>
-                <label class="chat-toggle" for="chat-web-search-toggle" title="Lets the model search the web through OpenRouter. Billed per request on top of the model's own cost. Off by default.">
+                <label class="chat-toggle" for="chat-web-search-toggle" title="Costs extra: billed per request through OpenRouter, on top of the model's own cost. Off by default. Predbat's own documentation search does not need this and always works.">
                     <input type="checkbox" id="chat-web-search-toggle" data-switch="chat_web_search">
-                    Web search
+                    Web search <span class="chat-toggle-cost">(costs extra)</span>
                 </label>
-                <label class="chat-toggle" for="chat-ha-state-toggle" title="Lets the model read arbitrary Home Assistant entities and history, not just Predbat's own. Off by default; also controls the MCP server.">
+                <label class="chat-toggle" for="chat-ha-state-toggle" title="Lets the model read arbitrary Home Assistant entities and history, not just Predbat's own. On by default; also controls the MCP server, so turning it off closes those tools there too.">
                     <input type="checkbox" id="chat-ha-state-toggle" data-switch="ai_ha_state_enable">
                     HA state access
                 </label>

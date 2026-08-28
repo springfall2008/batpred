@@ -330,8 +330,9 @@ caution about exposing the web/MCP port outside your home network applies here, 
   is deliberate, not a limitation to work around.
 - `search_entities`, `get_entity_state` and `get_entity_history` can read **any** Home Assistant
   entity, not just Predbat's own - see [Reading Home Assistant state](#reading-home-assistant-state-mcp)
-  above. They are off by default, behind `switch.predbat_ai_ha_state_enable`, because that is a
-  materially larger disclosure than everything else on this page.
+  above. They sit behind `switch.predbat_ai_ha_state_enable`, which is on by default. That is a
+  materially larger disclosure than everything else on this page, so if you would rather the model
+  saw only Predbat's own data, this is the switch to turn off.
 
 #### Configuration Options (chat)
 
@@ -356,8 +357,8 @@ mind about a permission without leaving the conversation:
 | Entity | Default | Description |
 | ------ | ------- | ----------- |
 | `switch.predbat_chat_confirm_writes` | On | Hold every `set_config`, `set_plan_override` and `set_apps_config` call for your Approve/Reject before it runs |
-| `switch.predbat_chat_web_search` | Off | Let the model search the web through OpenRouter's plugin - costs money per request, see above |
-| `switch.predbat_ai_ha_state_enable` | Off | Let `search_entities`, `get_entity_state` and `get_entity_history` read Home Assistant state - see [Reading Home Assistant state](#reading-home-assistant-state-mcp) above. Unlike the other two, this is `ai_`-prefixed rather than `chat_`-prefixed: it also gates the MCP server, not just this tab |
+| `switch.predbat_chat_web_search` | Off | Let the model search the wider web through OpenRouter's plugin - costs money per request, see above. The only one of the three that costs anything, and the only one off by default. Predbat's own `search_docs` does not go through it |
+| `switch.predbat_ai_ha_state_enable` | On | Let `search_entities`, `get_entity_state` and `get_entity_history` read Home Assistant state - see [Reading Home Assistant state](#reading-home-assistant-state-mcp) above. Unlike the other two, this is `ai_`-prefixed rather than `chat_`-prefixed: it also gates the MCP server, not just this tab |
 
 #### Available tools (chat)
 

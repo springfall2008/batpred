@@ -2026,6 +2026,60 @@ def test_thinking_bubble_moves_to_the_end(my_predbat):
     return failed
 
 
+def test_chat_switch_defaults_and_mirror(my_predbat):
+    """The three chat switches default on, and CHAT_STATUS_SWITCHES agrees with CONFIG_ITEMS.
+
+    Two separate things, both previously unpinned.
+
+    The defaults: confirm-writes on so a write always stops for approval, HA state access on so
+    the agent is useful out of the box, and web search OFF because it is the only one that costs
+    money per request. Predbat's own search_docs does not go through it - that reads the published
+    documentation index directly - so leaving it off costs no capability the user is likely to
+    miss. Nothing asserted these, so the gate tests, which set each switch explicitly, would pass
+    whichever way round the defaults were.
+
+    The mirror: web_chat.CHAT_STATUS_SWITCHES carries its own copy of the defaults, used by
+    /chat/status when get_ha_config falls back. A comment says it must match config.py, but a
+    comment cannot fail. If it drifts, the footer shows a state the gate itself disagrees with
+    until the first write lands - a toggle that reads "off" while the tool it gates is running.
+
+    Mutation checks: flipping any default in config.py, or any value in CHAT_STATUS_SWITCHES,
+    fails this.
+    """
+    failed = False
+    print("**** Testing chat switch defaults and the CHAT_STATUS_SWITCHES mirror ****")
+
+    from config import CONFIG_ITEMS
+
+    expected = {"chat_confirm_writes": True, "chat_web_search": False, "ai_ha_state_enable": True}
+    by_name = {item.get("name"): item for item in CONFIG_ITEMS}
+
+    for name, wanted in expected.items():
+        item = by_name.get(name)
+        if item is None:
+            print("ERROR: {} is not in CONFIG_ITEMS at all".format(name))
+            failed = True
+            continue
+        if item.get("type") != "switch":
+            print("ERROR: {} is not a switch, it is a {}".format(name, item.get("type")))
+            failed = True
+        if item.get("default") is not wanted:
+            print("ERROR: {} defaults to {}, expected {}".format(name, item.get("default"), wanted))
+            failed = True
+
+    mirror = web_chat.CHAT_STATUS_SWITCHES
+    if set(mirror) != set(expected):
+        print("ERROR: CHAT_STATUS_SWITCHES covers {}, expected {}".format(sorted(mirror), sorted(expected)))
+        failed = True
+    for name, value in mirror.items():
+        item = by_name.get(name)
+        if item is not None and item.get("default") is not value:
+            print("ERROR: CHAT_STATUS_SWITCHES has {}={} but CONFIG_ITEMS defaults it to {} - the footer would show a state the gate disagrees with".format(name, value, item.get("default")))
+            failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -2056,6 +2110,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_model_picker_script_wires_routes_and_persists_selection(my_predbat)
     failed |= test_chat_page_height_is_measured_not_hardcoded(my_predbat)
     failed |= test_thinking_bubble_moves_to_the_end(my_predbat)
+    failed |= test_chat_switch_defaults_and_mirror(my_predbat)
     failed |= test_context_counter_uses_the_last_turns_prompt_tokens_not_cumulative(my_predbat)
     failed |= test_stop_button_wired_to_cancel_with_turn_id(my_predbat)
     failed |= test_html_chat_cancel_requires_the_running_turn_id(my_predbat)

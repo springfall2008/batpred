@@ -1324,7 +1324,7 @@ TOOL_DEFS = [
     },
     # search_entities/get_entity_state/get_entity_history: unlike every other tool above, these
     # read arbitrary Home Assistant state - not just Predbat's own entities - so they are gated
-    # behind switch.predbat_ai_ha_state_enable (off by default) rather than always available. The
+    # behind switch.predbat_ai_ha_state_enable (on by default, but a switch) rather than unconditional. The
     # gate is enforced inside each handler, not by omitting these from TOOL_DEFS, so a model that
     # calls one while the switch is off is told which switch to enable rather than finding the
     # tool silently missing.
