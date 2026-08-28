@@ -2505,6 +2505,80 @@ def test_no_thinking_counter_while_an_approval_is_outstanding(my_predbat):
     return failed
 
 
+def test_model_picker_free_only_filter(my_predbat):
+    """The picker filters to free models by default, and the filter can be turned off.
+
+    The live catalogue is 388 models of which 21 are free, so the default keeps the list
+    browsable and keeps a user from picking something billable by accident. Unticking shows
+    everything.
+
+    "Free" means the catalogue quotes zero both ways. The routing models quote -1, because their
+    cost depends on where they route - they must not be offered as free.
+
+    Mutation checks: defaulting the filter off, dropping the current-model exemption, or letting
+    a non-free model through, each fails below.
+    """
+    failed = False
+    print("**** Testing the model picker's free-only filter ****")
+    script = web_chat.get_chat_script()
+    styles = web_chat.get_chat_styles()
+
+    free_check = _extract_function_body(script, "isFreeModel")
+    if free_check is None:
+        print("ERROR: there is no isFreeModel() to filter on")
+        return True
+    # Anchored to the formatter, so "varies" (the -1 routing models) can never read as free.
+    if "formatModelPrice" not in free_check or "'free'" not in free_check:
+        print("ERROR: isFreeModel() does not decide from the formatted price: {!r}".format(free_check))
+        failed = True
+
+    default_read = _extract_function_body(script, "readFreeOnly")
+    if default_read is None:
+        print("ERROR: there is no readFreeOnly() to seed the filter")
+        return True
+    # Default ON: the stored value is only consulted to turn it off.
+    if "!== '0'" not in default_read:
+        print("ERROR: the filter does not default to on: {!r}".format(default_read))
+        failed = True
+    if "catch" not in default_read:
+        print("ERROR: readFreeOnly() does not survive blocked site data: {!r}".format(default_read))
+        failed = True
+
+    # Anchored to the filter expression itself. Loose checks for "state.freeOnly" or
+    # "effectiveModel()" pass on other uses in the same function - the empty-state message and the
+    # current-row highlight - so deleting the filter left them green.
+    render = _extract_function_body(script, "renderModelResults")
+    if render is None or "!isFreeModel(model)" not in render:
+        print("ERROR: the result list does not filter out paid models: {!r}".format(render))
+        failed = True
+    # The model in use must stay listed, or the picker looks as though it lost its own setting.
+    if render and "model.id !== effectiveModel()" not in render:
+        print("ERROR: the current model is not exempt from the filter: {!r}".format(render))
+        failed = True
+
+    row = _extract_function_body(script, "appendFreeOnlyRow")
+    if row is None:
+        print("ERROR: there is no checkbox to turn the filter off")
+        return True
+    if "checkbox" not in row:
+        print("ERROR: the filter control is not a checkbox: {!r}".format(row))
+        failed = True
+    # mousedown, like the result rows: a click would blur the search box and close the list first.
+    # Anchored to this listener specifically - "mousedown" alone appears elsewhere in the picker.
+    if "label.addEventListener('mousedown'" not in script or "preventDefault" not in row:
+        print("ERROR: the checkbox is wired on click, so the list closes before it registers: {!r}".format(row))
+        failed = True
+    if "localStorage" not in row:
+        print("ERROR: the choice is not remembered: {!r}".format(row))
+        failed = True
+
+    if ".chat-model-free-only" not in styles:
+        print("ERROR: the filter row has no styling")
+        failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -2540,6 +2614,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_thinking_bubble_moves_to_the_end(my_predbat)
     failed |= test_chat_switch_defaults_and_mirror(my_predbat)
     failed |= test_model_picker_shows_prices(my_predbat)
+    failed |= test_model_picker_free_only_filter(my_predbat)
     failed |= test_busy_banner_is_reconciled_against_the_server(my_predbat)
     failed |= test_context_counter_uses_the_last_turns_prompt_tokens_not_cumulative(my_predbat)
     failed |= test_stop_button_wired_to_cancel_with_turn_id(my_predbat)

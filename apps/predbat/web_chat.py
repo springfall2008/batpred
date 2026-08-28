@@ -1082,6 +1082,20 @@ body {
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 
+.chat-model-free-only {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 1px solid var(--chat-border);
+    position: sticky;
+    top: 0;
+    background: var(--chat-input-bg);
+    color: var(--chat-text-muted);
+}
+
 .chat-model-option {
     display: flex;
     justify-content: space-between;
@@ -1521,7 +1535,7 @@ function setTitleText(node, title) {
 // the server's only shared state is the single active turn, broadcast via the busy/idle events.
 // ---------------------------------------------------------------------------------------------
 
-var state = { conversation: localStorage.getItem('predbatChatConversation'), cursor: 0, source: null, busy: null, models: [], defaultModel: '', selectedModel: '', currentModel: null, catalogueAvailable: true };
+var state = { freeOnly: readFreeOnly(), conversation: localStorage.getItem('predbatChatConversation'), cursor: 0, source: null, busy: null, models: [], defaultModel: '', selectedModel: '', currentModel: null, catalogueAvailable: true };
 var toolRows = {};
 // Per tool call, keyed by call id: the summary element (so an approval badge can be attached),
 // and the status marker. Declared here beside toolRows rather than next to the functions that
@@ -1548,6 +1562,17 @@ var thinkingStartedAtMs = 0;
 // attempt) and must be started/stopped independently, or clearing one would silently leak the
 // other. See stopRetryCountdown() for why this must always be nulled out after clearing.
 var retryCountdownTimer = null;
+
+function readFreeOnly() {
+    // Defaults to on: the free models are the ones a user can experiment with at no cost, and the
+    // full catalogue runs to several hundred entries where the paid ones dominate. Remembered per
+    // browser, and any storage failure just means the default applies again next time.
+    try {
+        return localStorage.getItem('predbatChatFreeOnly') !== '0';
+    } catch (error) {
+        return true;
+    }
+}
 
 function byId(id) {
     return document.getElementById(id);
@@ -1682,11 +1707,50 @@ function updateModelNote() {
     }
 }
 
+function isFreeModel(model) {
+    // Free means the catalogue quotes zero for both directions, which is what formatModelPrice
+    // already reduces to. The routing models, which quote -1 because their cost depends on where
+    // they route, are not free and must not be offered as if they were.
+    return formatModelPrice(model) === 'free';
+}
+
+function appendFreeOnlyRow(list) {
+    var label = document.createElement('label');
+    label.className = 'chat-model-free-only';
+    var box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = state.freeOnly;
+    label.appendChild(box);
+    label.appendChild(document.createTextNode('Show only free models'));
+    // mousedown, and preventDefault, for the same reason the result rows use it: clicking here
+    // would otherwise blur the search box, whose blur handler closes the list before the click
+    // lands. preventDefault also stops the browser toggling the box itself, so the state is
+    // flipped here and the list re-rendered from it.
+    label.addEventListener('mousedown', function (event) {
+        event.preventDefault();
+        state.freeOnly = !state.freeOnly;
+        try {
+            localStorage.setItem('predbatChatFreeOnly', state.freeOnly ? '1' : '0');
+        } catch (error) {
+            // A browser with site data blocked still gets a working filter, just not a
+            // remembered one.
+        }
+        renderModelResults(byId('chat-model').value);
+    });
+    list.appendChild(label);
+}
+
 function renderModelResults(filter) {
     var list = byId('chat-model-list');
     list.innerHTML = '';
+    appendFreeOnlyRow(list);
     var needle = (filter || '').toLowerCase();
     var matches = (state.models || []).filter(function (model) {
+        // The model in use stays listed whatever the filter says, so the picker never looks as
+        // though it has lost the thing it is currently set to.
+        if (state.freeOnly && !isFreeModel(model) && model.id !== effectiveModel()) {
+            return false;
+        }
         if (!needle) {
             return true;
         }
@@ -1694,6 +1758,8 @@ function renderModelResults(filter) {
     });
 
     if (state.defaultModel && !needle) {
+        // Always offered: it is the apps.yaml setting rather than a catalogue entry, so the price
+        // filter has nothing to say about it.
         matches = [{ id: '', name: 'Default (' + state.defaultModel + ')' }].concat(matches);
     }
 
@@ -1736,7 +1802,9 @@ function renderModelResults(filter) {
     if (!shown.length) {
         var empty = document.createElement('div');
         empty.className = 'chat-model-empty';
-        empty.textContent = 'No model matches "' + filter + '"';
+        // Naming the filter matters here: with it on, a search for a paid model returns nothing
+        // and the reason is a checkbox the user may have forgotten is ticked.
+        empty.textContent = state.freeOnly ? 'No free model matches "' + filter + '" - untick "Show only free models" to search them all' : 'No model matches "' + filter + '"';
         list.appendChild(empty);
     } else if (matches.length > shown.length) {
         var more = document.createElement('div');
@@ -1749,7 +1817,8 @@ function renderModelResults(filter) {
 function openModelList() {
     var input = byId('chat-model');
     input.value = '';
-    input.placeholder = 'Search ' + ((state.models || []).length) + ' models...';
+    var offered = (state.models || []).filter(function (model) { return !state.freeOnly || isFreeModel(model); });
+    input.placeholder = 'Search ' + offered.length + (state.freeOnly ? ' free' : '') + ' models...';
     byId('chat-model-list').style.display = 'block';
     renderModelResults('');
 }

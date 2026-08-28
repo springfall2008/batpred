@@ -27,7 +27,12 @@ import aiohttp
 import chat
 from chat import (
     COMPLETION_MAX_ATTEMPTS,
-    COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS,
+    COMPLETION_RATE_LIMIT_DELAYS_SECONDS,
+    COMPLETION_RATE_LIMIT_MAX_ATTEMPTS,
+    max_attempts_for,
+    parse_retry_after,
+    retry_delay_for,
+    RETRY_AFTER_MAX_SECONDS,
     COMPLETION_RETRY_DELAYS_SECONDS,
     EVENT_BUFFER_MAX,
     PRIMER,
@@ -2411,25 +2416,123 @@ def test_mid_stream_provider_overload_retries_and_recovers(my_predbat):
     return failed
 
 
-def test_rate_limited_retry_uses_the_longer_first_delay(my_predbat):
-    """A 429 is retried, but with COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS rather than the plain
-    first backoff - a provider's rate-limit window is unlikely to have cleared inside one second.
+def test_rate_limited_retry_is_patient(my_predbat):
+    """A 429 gets its own, much longer budget than a provider error.
+
+    A 429 is not a fault - the request was refused because a quota window is full, and only time
+    fixes it. Sharing the three-attempt provider-error budget meant a user saw "Rate limited by
+    OpenRouter, gave up after 3 attempts" within about six seconds and had to retype the question,
+    which is exactly what free-tier models do constantly.
+
+    The schedule starts short in case the window has already rolled, then settles: a window that
+    has not cleared in ten seconds will not clear in eleven, and polling harder only spends the
+    quota being waited for. The final delay repeats for every attempt past the list, which is what
+    lets 20 attempts run on a four-entry schedule.
+
+    Mutation checks: sharing the provider-error cap, or indexing the schedule without the repeat,
+    each fails below.
     """
     failed = False
-    print("**** Testing a 429 retries with the longer rate-limit backoff ****")
+    print("**** Testing a 429 retries patiently ****")
+
+    if COMPLETION_RATE_LIMIT_MAX_ATTEMPTS <= COMPLETION_MAX_ATTEMPTS:
+        print("ERROR: a rate limit gets no more attempts than a provider error ({} vs {})".format(COMPLETION_RATE_LIMIT_MAX_ATTEMPTS, COMPLETION_MAX_ATTEMPTS))
+        failed = True
+
+    # The schedule itself, including the repeat past its end.
+    expected = [1, 5, 10, 30, 30, 30]
+    actual = [retry_delay_for(attempt, True) for attempt in range(1, 7)]
+    if actual != expected:
+        print("ERROR: the rate-limit backoff schedule is {}, expected {}".format(actual, expected))
+        failed = True
+    # A provider error keeps its own, shorter schedule.
+    if retry_delay_for(1, False) != COMPLETION_RETRY_DELAYS_SECONDS[0]:
+        print("ERROR: a provider error no longer uses its own backoff")
+        failed = True
+    if max_attempts_for(True) != COMPLETION_RATE_LIMIT_MAX_ATTEMPTS or max_attempts_for(False) != COMPLETION_MAX_ATTEMPTS:
+        print("ERROR: max_attempts_for does not distinguish the two kinds of failure")
+        failed = True
+
+    # And end to end: a 429 that clears on the second attempt waits the first scheduled delay.
     agent = _agent_with_fake(my_predbat, ChatRequestError(429, "slow down"), _text_response("ok now"))
     cid = asyncio.run(agent.store.create())
-
     asyncio.run(agent.run_turn(cid, "hello"))
 
-    if agent.retry_sleeps != [COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS]:
-        print("ERROR: expected the rate-limit backoff {}, agent requested {}".format(COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS, agent.retry_sleeps))
+    if agent.retry_sleeps != [COMPLETION_RATE_LIMIT_DELAYS_SECONDS[0]]:
+        print("ERROR: expected the first rate-limit backoff {}, agent requested {}".format(COMPLETION_RATE_LIMIT_DELAYS_SECONDS[0], agent.retry_sleeps))
         failed = True
 
     events = agent.events_since(0, cid)[0]
     retries = [event for event in events if event["type"] == "retry"]
-    if not retries or retries[0]["data"].get("delay") != COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS:
+    if not retries or retries[0]["data"].get("delay") != COMPLETION_RATE_LIMIT_DELAYS_SECONDS[0]:
         print("ERROR: the retry event does not carry the rate-limit delay: {}".format(retries))
+        failed = True
+    # The count shown to the user must be the rate-limit budget, not the provider-error one.
+    if retries and retries[0]["data"].get("of") != COMPLETION_RATE_LIMIT_MAX_ATTEMPTS:
+        print("ERROR: the retry event reports {} attempts, expected the rate-limit budget {}".format(retries[0]["data"].get("of"), COMPLETION_RATE_LIMIT_MAX_ATTEMPTS))
+        failed = True
+
+    # A run of 429s must exhaust the longer budget, not the short one.
+    failures = [ChatRequestError(429, "slow down") for _ in range(COMPLETION_RATE_LIMIT_MAX_ATTEMPTS)]
+    # A realistic turn budget: the deadline guard correctly refuses a 30s backoff that would
+    # not fit, so a short-budget fixture would stop after three and prove nothing about the cap.
+    agent = _agent_with_fake(my_predbat, *failures, turn_timeout=3600)
+    cid = asyncio.run(agent.store.create())
+    asyncio.run(agent.run_turn(cid, "hello"))
+    if len(agent.retry_sleeps) != COMPLETION_RATE_LIMIT_MAX_ATTEMPTS - 1:
+        print("ERROR: a run of 429s backed off {} times, expected {}".format(len(agent.retry_sleeps), COMPLETION_RATE_LIMIT_MAX_ATTEMPTS - 1))
+        failed = True
+
+    return failed
+
+
+def test_retry_after_header_is_honoured(my_predbat):
+    """A Retry-After from the provider overrides the schedule, within a ceiling.
+
+    OpenRouter sends Retry-After with a 429 saying how long the quota window has left. That is the
+    one number that actually knows when the limit clears, so it wins over any fixed schedule - but
+    it is bounded, because a header asking for ten minutes would park the turn until its own
+    deadline killed it with nothing to show for the wait.
+
+    Only the numeric form is honoured. The header may also carry an HTTP date, which needs the
+    server's clock to agree with ours; guessing wrong there means either hammering a limit that
+    has not cleared or idling long past one that has.
+
+    Mutation checks: ignoring retry_after, or dropping the ceiling, each fails below.
+    """
+    failed = False
+    print("**** Testing the Retry-After header is honoured ****")
+
+    for header, expected in (("7", 7), ("0", 0), (None, None), ("", None), ("Wed, 21 Oct 2026 07:28:00 GMT", None), ("-3", None), ("2.5", None)):
+        if parse_retry_after(header) != expected:
+            print("ERROR: parse_retry_after({!r}) returned {!r}, expected {!r}".format(header, parse_retry_after(header), expected))
+            failed = True
+
+    # A header longer than the first scheduled delay is used instead of it.
+    error = ChatRequestError(429, "slow down", retry_after=12)
+    agent = _agent_with_fake(my_predbat, error, _text_response("ok now"), turn_timeout=3600)
+    cid = asyncio.run(agent.store.create())
+    asyncio.run(agent.run_turn(cid, "hello"))
+    if agent.retry_sleeps != [12]:
+        print("ERROR: the Retry-After header was not honoured, agent slept {}".format(agent.retry_sleeps))
+        failed = True
+
+    # And one beyond the ceiling is capped rather than obeyed.
+    error = ChatRequestError(429, "slow down", retry_after=RETRY_AFTER_MAX_SECONDS + 600)
+    agent = _agent_with_fake(my_predbat, error, _text_response("ok now"), turn_timeout=3600)
+    cid = asyncio.run(agent.store.create())
+    asyncio.run(agent.run_turn(cid, "hello"))
+    if agent.retry_sleeps != [RETRY_AFTER_MAX_SECONDS]:
+        print("ERROR: an over-long Retry-After was not capped, agent slept {}".format(agent.retry_sleeps))
+        failed = True
+
+    # A header shorter than the schedule does not make the backoff more aggressive than intended.
+    error = ChatRequestError(429, "slow down", retry_after=0)
+    agent = _agent_with_fake(my_predbat, error, _text_response("ok now"), turn_timeout=3600)
+    cid = asyncio.run(agent.store.create())
+    asyncio.run(agent.run_turn(cid, "hello"))
+    if agent.retry_sleeps != [COMPLETION_RATE_LIMIT_DELAYS_SECONDS[0]]:
+        print("ERROR: a zero Retry-After undercut the schedule, agent slept {}".format(agent.retry_sleeps))
         failed = True
 
     return failed
@@ -3108,7 +3211,8 @@ def run_chat_tests(my_predbat):
     failed |= test_is_empty_completion(my_predbat)
     failed |= test_non_retryable_statuses_fail_on_the_first_attempt(my_predbat)
     failed |= test_mid_stream_provider_overload_retries_and_recovers(my_predbat)
-    failed |= test_rate_limited_retry_uses_the_longer_first_delay(my_predbat)
+    failed |= test_rate_limited_retry_is_patient(my_predbat)
+    failed |= test_retry_after_header_is_honoured(my_predbat)
     failed |= test_retry_backoff_sequence_is_one_then_three_seconds(my_predbat)
     failed |= test_retry_never_sleeps_past_the_turn_deadline(my_predbat)
     failed |= test_retried_attempt_does_not_duplicate_the_failed_attempts_partial_content(my_predbat)

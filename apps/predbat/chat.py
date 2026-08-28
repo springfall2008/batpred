@@ -82,9 +82,24 @@ CONFIRM_POLL_SECONDS = 0.2
 COMPLETION_MAX_ATTEMPTS = 3
 COMPLETION_RETRY_DELAYS_SECONDS = (1, 3)
 
-# A 429 (rate limited) is retried too, but with a longer wait than the plain backoff above - a
-# provider's rate-limit window is unlikely to have cleared inside a single second.
-COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS = 5
+# A 429 is treated quite differently from a provider error. It is not a fault: the request was
+# refused because a quota window is full, and the only thing that fixes it is waiting - which the
+# free-tier models this is most often pointed at do constantly. Giving up after three attempts
+# meant a user hit "Rate limited by OpenRouter, gave up after 3 attempts" within about six
+# seconds and had to retype the question.
+#
+# So rate limits get their own budget: 20 attempts on a schedule that starts short, in case the
+# window has already rolled, and settles at 30s - a rate-limit window that has not cleared in ten
+# seconds will not clear in eleven, and polling harder only spends the quota being waited for.
+# The last delay repeats for every attempt beyond the list, so the full run is roughly eight
+# minutes, comfortably inside the 1800s turn budget that bounds it either way.
+# Ceiling on an honoured Retry-After. A provider asking for longer than this gets waited on for
+# this instead: parking a turn for ten minutes on one header, only for the turn deadline to kill
+# it with nothing to show, is worse than trying again sooner and failing honestly.
+RETRY_AFTER_MAX_SECONDS = 60
+
+COMPLETION_RATE_LIMIT_MAX_ATTEMPTS = 20
+COMPLETION_RATE_LIMIT_DELAYS_SECONDS = (1, 5, 10, 30)
 
 # error.code / error.metadata.error_type values that mark a mid-stream "error" chunk as the
 # provider's own trouble rather than something wrong with the request itself - see
@@ -126,7 +141,7 @@ class ChatRequestError(RuntimeError):
     through friendly() instead of being forced through the status-code branches below.
     """
 
-    def __init__(self, status, body, provider_message=None, error_type=None, final_message=None):
+    def __init__(self, status, body, provider_message=None, error_type=None, final_message=None, retry_after=None):
         """Keep the status and body so the message can name what actually went wrong.
 
         error_type is error.metadata.error_type from a mid-stream error chunk, when the provider
@@ -142,6 +157,8 @@ class ChatRequestError(RuntimeError):
         self.provider_message = provider_message
         self.error_type = error_type
         self.final_message = final_message
+        # Seconds the provider asked us to wait, from the Retry-After header, or None.
+        self.retry_after = retry_after
 
     def detail(self):
         """Return the provider's own error payload, for the transcript and the saved conversation.
@@ -169,6 +186,10 @@ class ChatRequestError(RuntimeError):
             if isinstance(metadata, dict):
                 if metadata.get("provider_name"):
                     parts.append("provider {}".format(metadata["provider_name"]))
+                # OpenRouter documents provider_code as the original upstream error code, which is
+                # often the only thing that distinguishes two failures sharing one HTTP status.
+                if metadata.get("provider_code"):
+                    parts.append("provider code {}".format(metadata["provider_code"]))
                 # The provider's own words, which is the part worth reading.
                 provider_raw = metadata.get("raw")
                 if provider_raw:
@@ -305,6 +326,39 @@ def snapshot_inverter_types(base):
                 unique.append(str(entry))
         return ", ".join(unique) if unique else "unknown"
     return str(configured) if configured else "unknown"
+
+
+def parse_retry_after(value):
+    """Return a Retry-After header as seconds, or None if it is absent or not a plain number.
+
+    The header is defined as either a delay in seconds or an HTTP date. Only the numeric form is
+    honoured: the date form needs the server's clock to agree with ours, and a wrong answer here
+    means either hammering a limit that has not cleared or idling long past one that has. Falling
+    back to the schedule is the safer of the two.
+    """
+    if value is None:
+        return None
+    try:
+        seconds = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def max_attempts_for(rate_limited):
+    """Return how many attempts a failure of this kind gets."""
+    return COMPLETION_RATE_LIMIT_MAX_ATTEMPTS if rate_limited else COMPLETION_MAX_ATTEMPTS
+
+
+def retry_delay_for(attempt, rate_limited):
+    """Return the backoff before the next attempt, in seconds.
+
+    attempt is 1-based and counts attempts already made, so attempt 1 picks the first delay. Past
+    the end of the schedule the last value repeats rather than the list being indexed off the end
+    - which is what lets the rate-limit budget run to 20 attempts on a four-entry schedule.
+    """
+    delays = COMPLETION_RATE_LIMIT_DELAYS_SECONDS if rate_limited else COMPLETION_RETRY_DELAYS_SECONDS
+    return delays[min(attempt, len(delays)) - 1]
 
 
 def build_snapshot(base):
@@ -792,7 +846,10 @@ class ChatAgent(ComponentBase):
             async with session.post("{}/chat/completions".format(self.base_url), headers=headers, json=payload) as response:
                 if response.status != 200:
                     body = await response.text()
-                    raise ChatRequestError(response.status, body)
+                    # OpenRouter sends Retry-After with a 429 saying how long the quota window has
+                    # left. Honouring it beats any fixed schedule: it is the one number that
+                    # actually knows when the limit clears.
+                    raise ChatRequestError(response.status, body, retry_after=parse_retry_after(response.headers.get("Retry-After")))
                 async for raw in response.content:
                     line = raw.decode("utf-8", errors="replace").strip()
                     if not line.startswith("data:"):
@@ -966,11 +1023,12 @@ class ChatAgent(ComponentBase):
                 error, empty_message = None, message
                 reason, rate_limited = EMPTY_COMPLETION_RETRY_REASON, False
 
-            if attempt >= COMPLETION_MAX_ATTEMPTS or not await self._wait_before_retrying(conversation_id, attempt, rate_limited, reason):
+            retry_after = getattr(error, "retry_after", None)
+            if attempt >= max_attempts_for(rate_limited) or not await self._wait_before_retrying(conversation_id, attempt, rate_limited, reason, retry_after):
                 raise self._give_up_error(error, empty_message, attempt)
             attempt += 1
 
-    async def _wait_before_retrying(self, conversation_id, attempt, rate_limited, reason):
+    async def _wait_before_retrying(self, conversation_id, attempt, rate_limited, reason, retry_after=None):
         """Emit a 'retry' event and back off before the next completion attempt.
 
         Returns False, without sleeping, when the turn's own deadline does not leave room for the
@@ -978,11 +1036,16 @@ class ChatAgent(ComponentBase):
         provider-side failure for a self-inflicted timeout. The caller treats that exactly like
         running out of attempts: give up now, with the failure already in hand.
         """
-        delay = COMPLETION_RATE_LIMIT_RETRY_DELAY_SECONDS if rate_limited else COMPLETION_RETRY_DELAYS_SECONDS[attempt - 1]
+        delay = retry_delay_for(attempt, rate_limited)
+        # A Retry-After from the provider wins over the schedule - it is the only number that
+        # knows when the window actually clears. Bounded, because a header asking for an hour
+        # would otherwise park the turn until its own deadline killed it with no explanation.
+        if retry_after is not None:
+            delay = min(max(retry_after, delay), RETRY_AFTER_MAX_SECONDS)
         remaining = self.deadline - time.monotonic()
         if remaining < delay:
             return False
-        self.emit(conversation_id, "retry", {"attempt": attempt + 1, "of": COMPLETION_MAX_ATTEMPTS, "reason": reason, "delay": delay})
+        self.emit(conversation_id, "retry", {"attempt": attempt + 1, "of": max_attempts_for(rate_limited), "reason": reason, "delay": delay})
         await self._retry_sleep(delay)
         return True
 
