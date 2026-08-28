@@ -26,6 +26,18 @@ from chat import AgentNotReadyError, ChatBusyError
 SSE_POLL_SECONDS = 0.1
 SSE_HEARTBEAT_SECONDS = 15
 
+# The switches the Chat tab footer shows and may toggle, mapped to the default get_ha_config falls
+# back to. This doubles as the allowlist for the POST half of /chat/status: an unlisted name is
+# rejected rather than interpolated into an entity id, so the route cannot be used to flip
+# arbitrary Predbat switches. Defaults must match the CONFIG_ITEMS entries in config.py - a
+# mismatch would make the footer show a state the gate itself disagrees with before the first
+# write lands.
+CHAT_STATUS_SWITCHES = {
+    "chat_confirm_writes": True,
+    "chat_web_search": False,
+    "ai_ha_state_enable": False,
+}
+
 
 def format_sse_event(event):
     """Render one buffered event as an SSE frame."""
@@ -331,37 +343,48 @@ class WebChat:
         return web.json_response({"ok": True})
 
     async def html_chat_status(self, request):
-        """Return AI-surface status flags the Chat tab footer shows live.
+        """Return the AI-surface switch states the Chat tab footer shows live.
 
-        Currently just ai_ha_state_enable, read the same way the tool gate itself reads it
-        (base.get_ha_config, not cached) so the footer control can never show something the gate
-        would disagree with.
+        Every switch in CHAT_STATUS_SWITCHES is read the same way its own gate reads it
+        (base.get_ha_config, not cached) so a footer control can never show something the gate
+        would disagree with. Keyed by the real switch name rather than a prettified label: the
+        POST below takes the same names back, so one spelling covers both directions.
         """
         agent = self.agent
         if agent is None:
             return web.json_response({"error": "Chat is not configured"}, status=404)
-        enabled, _ = self.base.get_ha_config("ai_ha_state_enable", False)
-        return web.json_response({"ai_ha_state_enabled": bool(enabled)})
+        switches = {}
+        for name, default in CHAT_STATUS_SWITCHES.items():
+            enabled, _ = self.base.get_ha_config(name, default)
+            switches[name] = bool(enabled)
+        return web.json_response({"switches": switches})
 
     async def html_chat_status_post(self, request):
-        """Toggle switch.predbat_ai_ha_state_enable from the Chat tab footer control.
+        """Toggle one of the Chat tab's footer switches.
 
         Writes through ha_interface.set_state_external(), the same mechanism the dashboard's own
         switch toggles (html_dash_post) and the set_config tool both use: it is dispatched as a
         real turn_on/turn_off service call against the matching CONFIG_ITEMS entry, not a raw
         state overwrite. /api/state - the JSON API other switch-like external clients use - only
         writes the raw HA entity state and never updates the matching CONFIG_ITEMS value, so it
-        would silently fail to change what get_ha_config('ai_ha_state_enable', ...) actually
-        returns; set_state_external is what genuinely flips the switch.
+        would silently fail to change what get_ha_config(name, ...) actually returns;
+        set_state_external is what genuinely flips the switch.
+
+        `name` is checked against CHAT_STATUS_SWITCHES before it is interpolated into an entity
+        id. Without that check this route would toggle ANY Predbat switch whose name a caller
+        could guess - the footer needs three, so it is allowed exactly three.
         """
         agent = self.agent
         if agent is None:
             return web.json_response({"error": "Chat is not configured"}, status=404)
         body = await request.json()
-        enabled = bool(body.get("ai_ha_state_enable"))
-        entity_id = "switch.{}_ai_ha_state_enable".format(self.base.prefix)
+        name = body.get("name")
+        if name not in CHAT_STATUS_SWITCHES:
+            return web.json_response({"error": "Unknown switch"}, status=400)
+        enabled = bool(body.get("enabled"))
+        entity_id = "switch.{}_{}".format(self.base.prefix, name)
         await self.base.ha_interface.set_state_external(entity_id, enabled)
-        return web.json_response({"ok": True, "ai_ha_state_enabled": enabled})
+        return web.json_response({"ok": True, "name": name, "enabled": enabled})
 
 
 def get_chat_styles():
@@ -898,12 +921,23 @@ body.dark-mode {
     font-style: italic;
 }
 
-#chat-ha-state-wrap {
+/* The three permission toggles share a wrap so they stay together as one group when the footer's
+   space-between pushes the usage and cost readouts to the right. flex-wrap lets them fold onto a
+   second line on a narrow window rather than squeezing the model picker. */
+#chat-toggles {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+}
+
+.chat-toggle {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     cursor: pointer;
     user-select: none;
+    white-space: nowrap;
 }
 </style>
 """
@@ -940,10 +974,20 @@ def get_chat_body():
                 <select id="chat-model"><option value="">Default model</option></select>
                 <span id="chat-model-note"></span>
             </span>
-            <label id="chat-ha-state-wrap" for="chat-ha-state-toggle" title="Lets the model read arbitrary Home Assistant entities and history, not just Predbat's own. Off by default; also controls the MCP server.">
-                <input type="checkbox" id="chat-ha-state-toggle">
-                HA state access
-            </label>
+            <span id="chat-toggles">
+                <label class="chat-toggle" for="chat-confirm-writes-toggle" title="Ask before the model changes any Predbat setting or apps.yaml key. Turning this off lets it write without stopping to ask you.">
+                    <input type="checkbox" id="chat-confirm-writes-toggle" data-switch="chat_confirm_writes">
+                    Confirm writes
+                </label>
+                <label class="chat-toggle" for="chat-web-search-toggle" title="Lets the model search the web through OpenRouter. Billed per request on top of the model's own cost. Off by default.">
+                    <input type="checkbox" id="chat-web-search-toggle" data-switch="chat_web_search">
+                    Web search
+                </label>
+                <label class="chat-toggle" for="chat-ha-state-toggle" title="Lets the model read arbitrary Home Assistant entities and history, not just Predbat's own. Off by default; also controls the MCP server.">
+                    <input type="checkbox" id="chat-ha-state-toggle" data-switch="ai_ha_state_enable">
+                    HA state access
+                </label>
+            </span>
             <span id="chat-turn-usage"></span>
             <span id="chat-context-usage"></span>
             <span id="chat-total-cost"></span>
@@ -1283,33 +1327,55 @@ function changeModel() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// HA state access toggle. Reads and writes switch.predbat_ai_ha_state_enable, which gates
-// search_entities/get_entity_state/get_entity_history for every AI surface (chat and MCP alike),
-// not just this tab - the footer control is just the one place a user is looking at while
-// asking the model something and wondering why it can't see a light switch. loadHaStateStatus()
-// is the source of truth for the checkbox on every load/reconnect, so the control never drifts
-// from what the gate itself is actually enforcing.
+// The three permission toggles. Each carries its switch name in data-switch and shares one
+// handler, so adding a fourth is a markup change plus a CHAT_STATUS_SWITCHES entry.
+//
+// None of these gate only this tab: chat_confirm_writes decides whether a write pauses for
+// approval, chat_web_search bills per request through OpenRouter, and ai_ha_state_enable gates
+// search_entities/get_entity_state/get_entity_history for every AI surface, MCP included. The
+// footer is simply where a user is looking while wondering why the model can't see a light
+// switch, or why it just changed a setting without asking. loadHaStateStatus() is the source of
+// truth on every load and reconnect, so a control never drifts from what its gate enforces.
 // ---------------------------------------------------------------------------------------------
+
+function chatToggles() {
+    return Array.prototype.slice.call(document.querySelectorAll('#chat-toggles input[data-switch]'));
+}
 
 function loadHaStateStatus() {
     return fetch('./chat/status')
         .then(function (response) { return response.json(); })
-        .then(function (payload) { byId('chat-ha-state-toggle').checked = !!payload.ai_ha_state_enabled; })
-        .catch(function (error) { console.error('Failed to load HA state access status', error); });
+        .then(function (payload) {
+            var switches = payload.switches || {};
+            chatToggles().forEach(function (toggle) {
+                toggle.checked = !!switches[toggle.getAttribute('data-switch')];
+            });
+        })
+        .catch(function (error) { console.error('Failed to load chat switch status', error); });
 }
 
-function changeHaStateAccess() {
-    var toggle = byId('chat-ha-state-toggle');
+function changeChatSwitch(event) {
+    var toggle = event.target;
+    var name = toggle.getAttribute('data-switch');
     var desired = toggle.checked;
     fetch('./chat/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ai_ha_state_enable: desired })
+        body: JSON.stringify({ name: name, enabled: desired })
     })
         .then(function (response) { return response.json(); })
-        .then(function (payload) { toggle.checked = !!payload.ai_ha_state_enabled; })
+        .then(function (payload) {
+            // A rejected name still parses as JSON, so trust the echoed value rather than the
+            // request: on an error response there is no 'enabled' field and the box reverts.
+            if (payload && payload.ok) {
+                toggle.checked = !!payload.enabled;
+            } else {
+                console.error('Failed to set ' + name, payload);
+                toggle.checked = !desired;
+            }
+        })
         .catch(function (error) {
-            console.error('Failed to set HA state access', error);
+            console.error('Failed to set ' + name, error);
             // Revert the checkbox rather than leave it showing a state the write never reached.
             toggle.checked = !desired;
         });
@@ -2295,7 +2361,7 @@ document.addEventListener('DOMContentLoaded', function () {
     byId('chat-send').addEventListener('click', sendMessage);
     byId('chat-stop').addEventListener('click', stopTurn);
     byId('chat-model').addEventListener('change', changeModel);
-    byId('chat-ha-state-toggle').addEventListener('change', changeHaStateAccess);
+    chatToggles().forEach(function (toggle) { toggle.addEventListener('change', changeChatSwitch); });
     byId('chat-input').addEventListener('keydown', function (event) {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();

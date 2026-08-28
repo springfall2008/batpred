@@ -347,8 +347,9 @@ caution about exposing the web/MCP port outside your home network applies here, 
 | `request_timeout` | Integer | No | 300 | `chat_request_timeout` | Seconds a single completion request is allowed to run before it is treated as hung. Bounds one request, not the whole turn - see `turn_timeout` above |
 | `fetch_allowlist` | List | No | `springfall2008.github.io`, `github.com`, `raw.githubusercontent.com` | `chat_fetch_allowlist` | Hosts `fetch_url` is allowed to reach. Replaces the default list rather than adding to it |
 
-Three switches also control the chat agent, all found under [Config](web-interface.md#config-view)
-(and, for the last one, in the Chat tab's own footer too):
+Three switches also control the chat agent. All three appear both under
+[Config](web-interface.md#config-view) and in the Chat tab's own footer, so you can change your
+mind about a permission without leaving the conversation:
 
 | Entity | Default | Description |
 | ------ | ------- | ----------- |

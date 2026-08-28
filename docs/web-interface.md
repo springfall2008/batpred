@@ -162,9 +162,18 @@ overriding the `openrouter_model` configured in `apps.yaml`; leaving it on "Defa
 the configured one. If OpenRouter's model catalogue cannot be fetched, only the configured model
 is offered.
 
-Beside the model picker, Predbat shows the token usage and cost of the turn that just completed,
-and the running total cost for the whole conversation - both come from OpenRouter's own reported
-pricing for the model in use.
+Next to it are the agent's three permission toggles - **Confirm writes**, **Web search** and **HA
+state access** - so you can grant or withdraw a permission without leaving the conversation. They
+are the same switches as `switch.predbat_chat_confirm_writes`,
+`switch.predbat_chat_web_search` and `switch.predbat_ai_ha_state_enable` under
+[Config](#config-view), not a per-tab copy of them: a change here takes effect everywhere, which
+for HA state access includes the MCP server. See the
+[chat component's switch table](components.md#ai-chat-agent-chat) for what each one allows.
+
+Beside those, Predbat shows the token usage and cost of the turn that just completed, the
+conversation's context size against the selected model's limit, and the running total cost for
+the whole conversation - the costs come from OpenRouter's own reported pricing for the model in
+use.
 
 ### Log View
 

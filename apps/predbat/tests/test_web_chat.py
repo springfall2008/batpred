@@ -1435,19 +1435,25 @@ class _SwitchEventComponents:
 
 
 def test_chat_status_route(my_predbat):
-    """/chat/status reads and writes switch.predbat_ai_ha_state_enable for the footer control:
-    404s like every other chat route when chat is not configured, reports the switch's live
-    value on GET, and on POST writes through set_state_external() - the real mechanism the
-    dashboard's own switches and the set_config tool both use - rather than a raw state
-    overwrite that would leave get_ha_config() disagreeing with what the footer shows.
+    """/chat/status reads and writes the three footer permission switches: 404s like every other
+    chat route when chat is not configured, reports each switch's live value on GET, and on POST
+    writes through set_state_external() - the real mechanism the dashboard's own switches and the
+    set_config tool both use - rather than a raw state overwrite that would leave get_ha_config()
+    disagreeing with what the footer shows.
+
+    The POST half also refuses a name outside CHAT_STATUS_SWITCHES without writing anything. That
+    check is what stops the route being a toggle for any Predbat switch a caller can name, so it
+    asserts on the absence of a set_state_external call, not merely on the 400.
     """
     failed = False
     print("**** Testing /chat/status route ****")
 
-    original_value = my_predbat.config_index["ai_ha_state_enable"].get("value")
+    switches = ["chat_confirm_writes", "chat_web_search", "ai_ha_state_enable"]
+    original_values = {name: my_predbat.config_index[name].get("value") for name in switches}
     original_components = my_predbat.components
     try:
-        my_predbat.config_index["ai_ha_state_enable"]["value"] = False
+        for name in switches:
+            my_predbat.config_index[name]["value"] = False
 
         # Not configured: 404, the same as every other chat route.
         interface = _make_web(my_predbat, agent=None)
@@ -1456,12 +1462,12 @@ def test_chat_status_route(my_predbat):
             print("ERROR: expected 404 with no chat component, got {}".format(response.status))
             failed = True
 
-        # Configured, switch off: reports False.
+        # Configured, all three off: every switch reported, every one False.
         interface = _make_web(my_predbat, agent=object())
         response = asyncio.run(interface.chat_page.html_chat_status(FakeRequest()))
         payload = json.loads(response.text)
-        if payload.get("ai_ha_state_enabled") is not False:
-            print("ERROR: expected ai_ha_state_enabled: false while the switch is off, got {}".format(payload))
+        if payload.get("switches") != {name: False for name in switches}:
+            print("ERROR: expected all three switches reported false, got {}".format(payload))
             failed = True
 
         # set_state_external() routes a CONFIG_ITEMS change through switch_event(), which always
@@ -1479,25 +1485,37 @@ def test_chat_status_route(my_predbat):
 
         my_predbat.ha_interface.set_state_external = spy_set_state_external
         try:
-            response = asyncio.run(interface.chat_page.html_chat_status_post(FakeRequest(body={"ai_ha_state_enable": True})))
+            # Each switch toggles independently, through its own entity id.
+            for name in switches:
+                del calls[:]
+                response = asyncio.run(interface.chat_page.html_chat_status_post(FakeRequest(body={"name": name, "enabled": True})))
+                payload = json.loads(response.text)
+                if not payload.get("ok") or payload.get("enabled") is not True or payload.get("name") != name:
+                    print("ERROR: unexpected response from the status POST for {}: {}".format(name, payload))
+                    failed = True
+                expected_entity = "switch.{}_{}".format(my_predbat.prefix, name)
+                if calls != [(expected_entity, True)]:
+                    print("ERROR: expected exactly one set_state_external({}, True) call, got {}".format(expected_entity, calls))
+                    failed = True
+                value, _ = my_predbat.get_ha_config(name, False)
+                if value is not True:
+                    print("ERROR: expected {} to actually be on after the POST, got {}".format(name, value))
+                    failed = True
+
+            # An unlisted name is refused, and - the point of the allowlist - nothing is written.
+            del calls[:]
+            response = asyncio.run(interface.chat_page.html_chat_status_post(FakeRequest(body={"name": "expert_mode", "enabled": True})))
+            if response.status != 400:
+                print("ERROR: expected 400 for a switch outside the allowlist, got {}".format(response.status))
+                failed = True
+            if calls:
+                print("ERROR: a rejected switch name still wrote to HA: {}".format(calls))
+                failed = True
         finally:
             my_predbat.ha_interface.set_state_external = original_set_state_external
-
-        payload = json.loads(response.text)
-        if not payload.get("ok") or payload.get("ai_ha_state_enabled") is not True:
-            print("ERROR: unexpected response from the status POST: {}".format(payload))
-            failed = True
-        expected_entity = "switch.{}_ai_ha_state_enable".format(my_predbat.prefix)
-        if calls != [(expected_entity, True)]:
-            print("ERROR: expected exactly one set_state_external({}, True) call, got {}".format(expected_entity, calls))
-            failed = True
-
-        value, _ = my_predbat.get_ha_config("ai_ha_state_enable", False)
-        if value is not True:
-            print("ERROR: expected the switch to actually be on after the POST, got {}".format(value))
-            failed = True
     finally:
-        my_predbat.config_index["ai_ha_state_enable"]["value"] = original_value
+        for name in switches:
+            my_predbat.config_index[name]["value"] = original_values[name]
         my_predbat.components = original_components
 
     return failed
