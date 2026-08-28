@@ -111,9 +111,28 @@ class AdditionalLoad:
         """
         value = load_item.get(key, default)
         value = self.resolve_arg(key, value, default)
-        if isinstance(value, str):
-            return value.lower() in ["on", "true", "yes", "enable", "enabled", "1"]
-        return bool(value)
+        return self.get_arg_bool(value)
+
+    def additional_load_duration_minutes(self, duration):
+        """
+        Convert an hours duration to the nearest whole minute.
+        """
+        try:
+            return max(0, int(round(float(duration) * 60)))
+        except (TypeError, ValueError):
+            return 0
+
+    def additional_load_parse_datetime(self, value):
+        """
+        Parse an aware ISO timestamp, rejecting ambiguous naive values.
+        """
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed
 
     def additional_load_entity_name(self, name):
         """
@@ -143,7 +162,9 @@ class AdditionalLoad:
         """
         marker = "_load_forecast_delta_"
         if entity_id and marker in entity_id:
-            safe_name = entity_id.split(marker, 1)[1].replace("_delete", "")
+            safe_name = entity_id.split(marker, 1)[1]
+            if entity_id.startswith("button.") and safe_name.endswith("_delete"):
+                safe_name = safe_name[: -len("_delete")]
             for name in list(getattr(self, "house_load_additional_forecasts", {}).keys()) + list(getattr(self, "house_load_additional_forecast_overrides", {}).keys()):
                 if self.additional_load_safe_name(name) == safe_name:
                     return str(name)
@@ -189,11 +210,19 @@ class AdditionalLoad:
         """
         Convert a durable timestamp string into forecast minutes from the current midnight.
         """
-        try:
-            stamp_datetime = datetime.fromtimestamp(int(stamp), tz=self.midnight_utc.tzinfo) if str(stamp).isdigit() else datetime.fromisoformat(str(stamp))
-        except (ValueError, TypeError):
+        if str(stamp).isdigit():
+            try:
+                stamp_datetime = datetime.fromtimestamp(int(stamp), tz=self.midnight_utc.tzinfo)
+            except (ValueError, TypeError, OverflowError):
+                return None
+        else:
+            stamp_datetime = self.additional_load_parse_datetime(stamp)
+        if stamp_datetime is None:
             return None
-        return int((stamp_datetime - self.midnight_utc).total_seconds() / 60)
+        try:
+            return int((stamp_datetime - self.midnight_utc).total_seconds() / 60)
+        except TypeError:
+            return None
 
     def additional_load_minutes_to_iso(self, minutes):
         """
@@ -297,6 +326,18 @@ class AdditionalLoad:
             args.setdefault(key, metadata_value)
         return self.additional_load_build_api_command(name, args)
 
+    def remove_additional_load_runtime_override(self, name):
+        """
+        Remove runtime metadata for a forecast name or HA-safe equivalent.
+        """
+        safe_name = self.additional_load_safe_name(name)
+        removed = False
+        for override_name in list(self.house_load_additional_forecast_overrides):
+            if str(override_name) == str(name) or self.additional_load_safe_name(override_name) == safe_name:
+                self.house_load_additional_forecast_overrides.pop(override_name, None)
+                removed = True
+        return removed
+
     def update_additional_load_api_command_metadata(self, name, metadata):
         """
         Persist one-shot runtime metadata into the stored API selector command.
@@ -348,7 +389,7 @@ class AdditionalLoad:
             self.log("Warn: Ignoring delete for inactive additional load forecast {}".format(name))
             self.unpublish_additional_load_name(name)
             return False
-        self.house_load_additional_forecast_overrides.pop(name, None)
+        self.remove_additional_load_runtime_override(name)
         self.remove_additional_load_api_command(name)
         self.refresh_additional_load_forecast_api()
         return True
@@ -415,9 +456,10 @@ class AdditionalLoad:
         """
         Return start/end minutes for fixed or flexible additional load scheduling.
         """
-        start_minutes = self.get_additional_load_time_minutes(load_item, "start_time") if "start_time" in load_item else load_item.get("_requested_start_minutes", None)
+        explicit_start = "start_time" in load_item
+        start_minutes = self.get_additional_load_time_minutes(load_item, "start_time") if explicit_start else load_item.get("_requested_start_minutes", None)
         end_minutes = self.get_additional_load_time_minutes(load_item, "end_time") if "end_time" in load_item else None
-        duration_minutes = int(duration * 60)
+        duration_minutes = self.additional_load_duration_minutes(duration)
 
         if mode == "flexible":
             if start_minutes is None and end_minutes is None:
@@ -427,20 +469,26 @@ class AdditionalLoad:
             if end_minutes is None:
                 end_minutes = start_minutes + self.forecast_minutes
 
+            if not explicit_start:
+                usable_start = max(start_minutes, minutes_now_slot)
+                while end_minutes <= start_minutes or usable_start + duration_minutes > end_minutes:
+                    end_minutes += 24 * 60
+                if usable_start < minutes_now_slot + self.forecast_minutes:
+                    return usable_start, end_minutes
+                return None, None
+
             windows = []
-            for day_offset in [0, 24 * 60]:
+            for day_offset in [-24 * 60, 0, 24 * 60, 2 * 24 * 60]:
                 window_start = start_minutes + day_offset
                 window_end = end_minutes + day_offset
                 if window_end <= window_start:
                     window_end += 24 * 60
                 windows.append((window_start, window_end))
-                if end_minutes <= start_minutes:
-                    windows.append((window_start - 24 * 60, window_end - 24 * 60))
 
             for window_start, window_end in sorted(windows):
+                if window_end <= minutes_now_slot:
+                    continue
                 usable_start = max(window_start, minutes_now_slot)
-                if usable_start + duration_minutes > window_end:
-                    window_end += 24 * 60
                 if usable_start + duration_minutes <= window_end and usable_start < minutes_now_slot + self.forecast_minutes:
                     return usable_start, window_end
             return None, None
@@ -448,7 +496,7 @@ class AdditionalLoad:
         if start_minutes is None:
             return None, end_minutes
         if end_minutes is None:
-            end_minutes = start_minutes + int(duration * 60)
+            end_minutes = start_minutes + duration_minutes
         elif end_minutes <= start_minutes:
             end_minutes += 24 * 60
 
@@ -527,7 +575,7 @@ class AdditionalLoad:
                 expired_names.append(name)
         for name in set(expired_names):
             self.log("Expired additional load forecast {}".format(name))
-            self.house_load_additional_forecast_overrides.pop(name, None)
+            self.remove_additional_load_runtime_override(name)
             self.remove_additional_load_api_command(name)
         if expired_names:
             self.publish_additional_load_history()
@@ -568,12 +616,14 @@ class AdditionalLoad:
         """
         Return record start/end minutes relative to the current midnight.
         """
-        try:
-            start = datetime.fromisoformat(record.get("start"))
-            end = datetime.fromisoformat(record.get("end"))
-        except (TypeError, ValueError):
+        start = self.additional_load_parse_datetime(record.get("start"))
+        end = self.additional_load_parse_datetime(record.get("end"))
+        if start is None or end is None:
             return None, None
-        return int((start - self.midnight_utc).total_seconds() / 60), int((end - self.midnight_utc).total_seconds() / 60)
+        try:
+            return int((start - self.midnight_utc).total_seconds() / 60), int((end - self.midnight_utc).total_seconds() / 60)
+        except TypeError:
+            return None, None
 
     def load_additional_load_history(self):
         """
@@ -621,9 +671,8 @@ class AdditionalLoad:
             if not record_id or record_id in seen:
                 continue
             seen.add(record_id)
-            try:
-                end = datetime.fromisoformat(record.get("end"))
-            except (TypeError, ValueError):
+            end = self.additional_load_parse_datetime(record.get("end"))
+            if end is None:
                 continue
             if end >= keep_after:
                 pruned.append(record)
@@ -707,7 +756,7 @@ class AdditionalLoad:
         if end_minutes is None:
             end_minutes = self.get_additional_load_time_minutes(load_item, "end_time") if "end_time" in load_item else None
         if end_minutes is None:
-            end_minutes = start_minutes + int(duration * 60)
+            end_minutes = start_minutes + self.additional_load_duration_minutes(duration)
         end_minutes = int(end_minutes)
         if end_minutes <= start_minutes:
             end_minutes += 24 * 60
@@ -715,7 +764,8 @@ class AdditionalLoad:
             duration = (end_minutes - start_minutes) / 60.0
         if duration <= 0:
             return False
-        periods = int((int(duration * 60) + plan_interval - 1) / plan_interval)
+        duration_minutes = self.additional_load_duration_minutes(duration)
+        periods = (duration_minutes + plan_interval - 1) // plan_interval
         weights = self.parse_additional_load_weighting(self.resolve_arg("weighting", load_item.get("weighting", None), None), periods)
         weight_total = sum(weights)
         source = load_item.get("_source", "yaml")
@@ -849,7 +899,8 @@ class AdditionalLoad:
             requested_end_minutes = end_minutes
             if mode == "fixed" and duration <= 0 and not duration_configured and start_minutes is not None and end_minutes is not None:
                 duration = (end_minutes - start_minutes) / 60.0
-            periods = int((int(duration * 60) + plan_interval - 1) / plan_interval) if duration > 0 else 0
+            duration_minutes = self.additional_load_duration_minutes(duration)
+            periods = (duration_minutes + plan_interval - 1) // plan_interval if duration_minutes > 0 else 0
             weights = self.parse_additional_load_weighting(weighting, periods)
             weight_total = sum(weights)
 
@@ -859,7 +910,7 @@ class AdditionalLoad:
                 start_minutes = int(selected_start_minutes)
                 if requested_start_minutes is not None and start_minutes < requested_start_minutes:
                     start_minutes = requested_start_minutes
-                end_minutes = start_minutes + int(duration * 60)
+                end_minutes = start_minutes + duration_minutes
                 selection_locked = mode == "flexible" and minutes_now_slot >= start_minutes and minutes_now_slot < end_minutes
                 if auto_expire:
                     expires_minutes = end_minutes
@@ -1025,7 +1076,7 @@ class AdditionalLoad:
         Build absolute-minute adjustment and target metadata for one flexible load candidate.
         """
         plan_interval = forecast.get("plan_interval_minutes", self.plan_interval_minutes)
-        duration_minutes = int(forecast.get("duration", 0.0) * 60)
+        duration_minutes = self.additional_load_duration_minutes(forecast.get("duration", 0.0))
         end_minutes = start_minutes + duration_minutes
         periods = forecast.get("_periods", 0)
         weights = forecast.get("_weights", [])
@@ -1081,6 +1132,7 @@ class AdditionalLoad:
         selected_flexible = {}
         working_load_step = load_minutes_step
         working_load_step10 = load_minutes_step10
+        kernel_static_cache = {}
 
         # Cap how far ahead a flexible load may be searched/placed, defaults to the forecast horizon (typically 48 hours).
         # Lowering this in apps.yaml bounds the number of prediction passes for deadline-less flexible loads.
@@ -1090,7 +1142,7 @@ class AdditionalLoad:
         for name, forecast in flexible_forecasts.items():
             start_minutes = forecast.get("_requested_start_minutes", None)
             end_minutes = forecast.get("_requested_end_minutes", None)
-            duration_minutes = int(forecast.get("duration", 0.0) * 60)
+            duration_minutes = self.additional_load_duration_minutes(forecast.get("duration", 0.0))
             plan_interval = forecast.get("plan_interval_minutes", self.plan_interval_minutes)
             if start_minutes is None or end_minutes is None or duration_minutes <= 0:
                 continue
@@ -1101,7 +1153,7 @@ class AdditionalLoad:
             if latest_start < candidate:
                 continue
 
-            baseline_prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, working_load_step, working_load_step10)
+            baseline_prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, working_load_step, working_load_step10, kernel_static_cache=kernel_static_cache)
             baseline_metric = self.score_flexible_additional_load_prediction(baseline_prediction)
             best_start = None
             best_metric = None
@@ -1111,7 +1163,7 @@ class AdditionalLoad:
                 candidate_adjust, _, _ = self.additional_load_candidate_profile(forecast, candidate)
                 candidate_load_step = self.add_additional_load_to_step_data(working_load_step, candidate_adjust)
                 candidate_load_step10 = self.add_additional_load_to_step_data(working_load_step10, candidate_adjust)
-                candidate_prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, candidate_load_step, candidate_load_step10)
+                candidate_prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, candidate_load_step, candidate_load_step10, kernel_static_cache=kernel_static_cache)
                 candidate_metric = self.score_flexible_additional_load_prediction(candidate_prediction)
                 candidate_count += 1
                 if best_metric is None or candidate_metric < best_metric:
@@ -1245,7 +1297,8 @@ class AdditionalLoad:
                 total_energy = forecast.get("energy", 0.0)
                 if not total_energy:
                     plan_interval = forecast.get("plan_interval_minutes", self.plan_interval_minutes)
-                    periods = int((int(forecast.get("duration", 0.0) * 60) + plan_interval - 1) / plan_interval) if plan_interval > 0 else 0
+                    duration_minutes = self.additional_load_duration_minutes(forecast.get("duration", 0.0))
+                    periods = (duration_minutes + plan_interval - 1) // plan_interval if plan_interval > 0 else 0
                     total_energy = forecast.get("slot_energy", 0.0) * periods
                 status = "suggested"
                 text = "{} is suggested from {} to {} using {:.2f} kWh".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)) if start and end and total_energy > 0 else None
