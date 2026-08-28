@@ -332,6 +332,66 @@ def format_plan_time(value):
         return value
 
 
+# What each plan field is measured in, as a legend rather than a per-row annotation - stating a
+# unit once costs a few dozen tokens, repeating it across ~96 rows would undo the slimming above.
+# {minor} and {major} are filled from the plan's own currency_symbols, so a non-GBP install reads
+# correctly. Every entry here was taken from the web plan table's own column headers
+# (web_helper.py) or the code that builds the value (output.py) - notably cost_change and
+# total_cost are divided by 100 before publishing, so they are in the MAJOR unit while the rates
+# beside them are in the minor one, which is exactly the sort of thing a model assumes wrongly.
+PLAN_UNITS = {
+    "time": "local time, weekday and 24-hour clock",
+    "slot_minute": "minutes from the plan start given by the top-level 'time'",
+    "import_rate": "{minor}/kWh",
+    "export_rate": "{minor}/kWh",
+    "import_rate_adjusted": "{minor}/kWh including battery and inverter losses",
+    "export_rate_adjusted": "{minor}/kWh including battery and inverter losses",
+    "state_target": "% target state of charge for this slot",
+    "show_limit": "% charge or export limit shown for this slot",
+    "pv_forecast": "kWh generated in this slot",
+    "pv_forecast10": "kWh generated in this slot, 10% (pessimistic) forecast",
+    "pv_forecast_total": "kWh generated cumulatively to the end of this slot",
+    "load_forecast": "kWh consumed in this slot",
+    "load_forecast10": "kWh consumed in this slot, 10% (pessimistic) forecast",
+    "load_forecast_total": "kWh consumed cumulatively to the end of this slot",
+    "clipped": "kWh of solar lost to inverter clipping in this slot",
+    "extra_load": "kWh of additional forecast load in this slot",
+    "extra_load_total": "kWh of additional forecast load, cumulative",
+    "car_charging": "kWh delivered to the car in this slot",
+    "iboost": "kWh diverted to iBoost cumulatively",
+    "iboost_change": "kWh diverted to iBoost in this slot",
+    "soc_percent": "% battery state of charge at the end of this slot",
+    "soc_change": "kWh the battery gains (positive) or loses (negative) in this slot",
+    "cost_change": "{major} added to or removed from the running cost by this slot",
+    "total_cost": "{major} running total cost at this slot",
+    "co2_rate": "gCO2/kWh of grid electricity in this slot",
+    "co2_total": "kgCO2 cumulative",
+}
+
+
+def plan_units(plan):
+    """Return the unit legend for the fields a given plan actually contains.
+
+    Filtered to what is present so the legend never describes a column this install does not have
+    - a system with no car or no iBoost should not be told what those columns mean.
+    """
+    symbols = plan.get("currency_symbols") if isinstance(plan, dict) else None
+    major, minor = "GBP", "p"
+    if isinstance(symbols, (list, tuple)) and len(symbols) >= 2:
+        major, minor = str(symbols[0]), str(symbols[1])
+
+    present = set()
+    for row in (plan.get("rows") or []) if isinstance(plan, dict) else []:
+        if isinstance(row, dict):
+            present.update(row.keys())
+
+    units = {}
+    for key, text in PLAN_UNITS.items():
+        if key in present:
+            units[key] = text.format(major=major, minor=minor)
+    return units
+
+
 def slim_plan(plan):
     """Project the web plan structure down to what an AI model can actually use.
 
@@ -360,6 +420,13 @@ def slim_plan(plan):
             slimmed[key] = rows
         else:
             slimmed[key] = value
+
+    # Built from the slimmed rows rather than the originals. Belt and braces today - PLAN_UNITS
+    # names no field that slimming strips, so both sources give the same answer - but it stays
+    # correct if PLAN_UNITS ever grows an entry for something presentational.
+    units = plan_units(slimmed)
+    if units:
+        slimmed["units"] = units
     return slimmed
 
 

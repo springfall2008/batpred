@@ -909,7 +909,14 @@ def test_get_plan_is_slimmed(my_predbat):
         "clipped": 0,
         "car_charging": 0.0,
         "car_rate": None,
+        "import_rate": 30.26,
+        "export_rate": 12.0,
+        "pv_forecast": 0.28,
+        "load_forecast": 0.2,
         "soc_percent": 85,
+        "soc_change": -1.41,
+        "cost_change": -0.01,
+        "total_cost": 1.4,
         "state_color": "#AAAAAA",
         "rate_color_import": "#F18261",
         "cost_color": "#3AEE85",
@@ -971,6 +978,43 @@ def test_get_plan_is_slimmed(my_predbat):
         print("ERROR: slim_plan mutated the caller's plan: {}".format(row))
         failed = True
 
+    # A unit legend, stated once rather than per row - annotating ~96 rows would undo the
+    # slimming. The units themselves come from the web table's own headers and from output.py.
+    units = slimmed.get("units") or {}
+    if units.get("pv_forecast", "")[:3] != "kWh":
+        print("ERROR: pv_forecast is not documented as kWh - the model cannot tell it from watts: {}".format(units))
+        failed = True
+    if units.get("soc_change", "")[:3] != "kWh":
+        print("ERROR: soc_change is not documented as kWh: {}".format(units))
+        failed = True
+    if "%" not in units.get("soc_percent", ""):
+        print("ERROR: soc_percent is not documented as a percentage: {}".format(units))
+        failed = True
+
+    # The trap this exists for: output.py divides cost by 100 before publishing, so cost is in the
+    # MAJOR currency unit while the rates beside it are in the minor one. A model that assumes
+    # both are pence is out by a factor of 100 on every cost it quotes.
+    plan_with_currency = dict(plan, currency_symbols=["\u00a3", "p"])
+    money = slim_plan(plan_with_currency).get("units") or {}
+    if not money.get("total_cost", "").startswith("\u00a3"):
+        print("ERROR: total_cost is not documented in the major currency unit: {}".format(money))
+        failed = True
+    if not money.get("import_rate", "").startswith("p/kWh"):
+        print("ERROR: import_rate is not documented in the minor currency unit per kWh: {}".format(money))
+        failed = True
+
+    # Symbols come from the plan, so a non-GBP install is not told everything is in pounds.
+    euros = slim_plan(dict(plan, currency_symbols=["\u20ac", "c"])).get("units") or {}
+    if not euros.get("total_cost", "").startswith("\u20ac") or not euros.get("import_rate", "").startswith("c/kWh"):
+        print("ERROR: the legend ignored the plan's own currency symbols: {}".format(euros))
+        failed = True
+
+    # It must describe only what is there. This plan has no car, iBoost or carbon columns, and a
+    # legend for absent columns would invite the model to ask about data that does not exist.
+    for absent in ("iboost", "co2_rate", "co2_total"):
+        if absent in units:
+            print("ERROR: the legend documents {}, which this plan does not contain: {}".format(absent, units))
+            failed = True
     # An unparseable time is passed through rather than guessed at.
     passthrough = slim_plan({"rows": [{"time": "not a timestamp", "state": "Demand"}]})
     if passthrough["rows"][0]["time"] != "not a timestamp":
