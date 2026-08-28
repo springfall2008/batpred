@@ -107,7 +107,7 @@ COMPONENT_LIST = {
         "phase": 1,
         "args": {
             "api_key": {"required": True, "config": "openrouter_api_key"},
-            "model": {"required": True, "config": "openrouter_model"},
+            "model": {"required": False, "config": "openrouter_default_model"},
             "base_url": {"required": False, "config": "openrouter_base_url", "default": "https://openrouter.ai/api/v1"},
             "max_tokens": {"required": False, "config": "openrouter_max_tokens", "default": 0},
             "max_tool_rounds": {"required": False, "config": "chat_max_tool_rounds", "default": 32},

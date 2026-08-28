@@ -626,9 +626,54 @@ def test_add_usage_tracks_last_prompt_tokens_not_cumulative(my_predbat):
     return failed
 
 
+def test_selected_model_persists(my_predbat):
+    """The picked model is written with the index and read back on the next load.
+
+    openrouter_default_model is optional, so on an install that has never set it the user's pick
+    is the only model there is. If it lived in memory only, every Predbat restart would drop them
+    back to "no model chosen" with a conversation history that plainly used one.
+
+    Mutation check: dropping "selected_model" from the _save_index payload fails the reload
+    assertion below.
+    """
+    failed = False
+    print("**** Testing the selected model survives a reload ****")
+
+    storage = FakeStorage()
+    store = ConversationStore(storage, my_predbat.log)
+    asyncio.run(store.load_index())
+
+    if store.get_selected_model() is not None:
+        print("ERROR: a fresh store already has a model selected: {}".format(store.get_selected_model()))
+        failed = True
+
+    cid = asyncio.run(store.create())
+    store.set_selected_model("anthropic/claude-sonnet-5")
+    asyncio.run(store.flush(cid))
+
+    # A second store over the same storage is what a restart looks like.
+    reloaded = ConversationStore(storage, my_predbat.log)
+    asyncio.run(reloaded.load_index())
+    if reloaded.get_selected_model() != "anthropic/claude-sonnet-5":
+        print("ERROR: the selected model did not survive a reload, got {}".format(reloaded.get_selected_model()))
+        failed = True
+
+    # Clearing it back to nothing must also persist, rather than leaving the old pin in place.
+    reloaded.set_selected_model(None)
+    asyncio.run(reloaded.flush(cid))
+    again = ConversationStore(storage, my_predbat.log)
+    asyncio.run(again.load_index())
+    if again.get_selected_model() is not None:
+        print("ERROR: clearing the selected model did not persist, got {}".format(again.get_selected_model()))
+        failed = True
+
+    return failed
+
+
 def run_chat_store_tests(my_predbat):
     """Run every conversation store test, returning True if any of them failed."""
     failed = False
+    failed |= test_selected_model_persists(my_predbat)
     failed |= test_create_and_list(my_predbat)
     failed |= test_expiry_is_rolling(my_predbat)
     failed |= test_delete_is_a_flag(my_predbat)

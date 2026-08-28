@@ -75,7 +75,13 @@ def _make_agent(my_predbat, **overrides):
 
 
 def test_component_gating(my_predbat):
-    """The chat component is gated on the API key and the model being present."""
+    """The chat component is gated on the API key alone; the model is optional.
+
+    openrouter_default_model being optional is the point: a user who has only pasted an API key
+    gets a working Chat tab and picks a model from the search box, which is then remembered. If
+    'model' were required again, that install would silently have no Chat tab at all and nothing
+    would say why.
+    """
     failed = False
     print("**** Testing chat component gating ****")
     entry = COMPONENT_LIST.get("chat")
@@ -83,15 +89,14 @@ def test_component_gating(my_predbat):
         print("ERROR: 'chat' is not registered in COMPONENT_LIST")
         return True
 
-    for name in ("api_key", "model"):
-        if not entry["args"].get(name, {}).get("required"):
-            print("ERROR: '{}' is not required, so the component would start unconfigured".format(name))
-            failed = True
-    for name in ("base_url", "max_tool_rounds", "max_history", "max_conversations", "expiry_days", "turn_timeout", "request_timeout", "fetch_allowlist", "max_tokens"):
+    if not entry["args"].get("api_key", {}).get("required"):
+        print("ERROR: 'api_key' is not required, so the component would start unconfigured")
+        failed = True
+    for name in ("model", "base_url", "max_tool_rounds", "max_history", "max_conversations", "expiry_days", "turn_timeout", "request_timeout", "fetch_allowlist", "max_tokens"):
         if entry["args"].get(name, {}).get("required"):
             print("ERROR: '{}' is required, which would stop the component starting on a default install".format(name))
             failed = True
-    if entry["args"]["api_key"]["config"] != "openrouter_api_key" or entry["args"]["model"]["config"] != "openrouter_model":
+    if entry["args"]["api_key"]["config"] != "openrouter_api_key" or entry["args"]["model"]["config"] != "openrouter_default_model":
         print("ERROR: the gating args are not bound to the documented apps.yaml keys")
         failed = True
     if not entry.get("can_restart"):
@@ -139,7 +144,7 @@ def test_component_gating_end_to_end(my_predbat):
 
     test_component_gating only inspects the static COMPONENT_LIST entry; it cannot fail if the
     gating mechanism itself is broken. This drives the real Components.initialize() against a
-    stub base for all three configuration states it can be in.
+    stub base for each configuration state it can be in.
     """
     failed = False
     print("**** Testing chat gating via Components.initialize() ****")
@@ -154,21 +159,28 @@ def test_component_gating_end_to_end(my_predbat):
         print("ERROR: an unconfigured install should stay quiet, got: {}".format(base.logged))
         failed = True
 
+    # The API key on its own is now enough. The model is chosen in the UI and remembered, so
+    # requiring it here would leave a user who has pasted only their key with no Chat tab.
     base = _FakeBase({"openrouter_api_key": "sk-test"})
     comps = Components(base)
     comps.initialize(only="chat", phase=1)
-    if comps.components.get("chat") is not None:
-        print("ERROR: chat component was constructed with only the API key configured")
-        failed = True
-    if not any("openrouter_model" in line for line in base.logged):
-        print("ERROR: the partial-configuration warning did not name the missing openrouter_model key, got: {}".format(base.logged))
+    if comps.components.get("chat") is None:
+        print("ERROR: chat component was not constructed with just the API key configured")
         failed = True
 
-    base = _FakeBase({"openrouter_api_key": "sk-test", "openrouter_model": "test/model"})
+    base = _FakeBase({"openrouter_api_key": "sk-test", "openrouter_default_model": "test/model"})
     comps = Components(base)
     comps.initialize(only="chat", phase=1)
     if comps.components.get("chat") is None:
         print("ERROR: chat component was not constructed with both keys configured")
+        failed = True
+
+    # A model with no key is still nothing: the key is what the component cannot run without.
+    base = _FakeBase({"openrouter_default_model": "test/model"})
+    comps = Components(base)
+    comps.initialize(only="chat", phase=1)
+    if comps.components.get("chat") is not None:
+        print("ERROR: chat component was constructed with a model but no API key")
         failed = True
 
     return failed
@@ -2578,10 +2590,64 @@ def test_empty_completion_is_retried_and_recovers(my_predbat):
     return failed
 
 
+def test_model_resolution_order(my_predbat):
+    """A turn picks the conversation's model, then the remembered pick, then the apps.yaml default.
+
+    With openrouter_default_model optional, all three can be empty - a fresh install where the
+    user has pasted only an API key. That is not a misconfiguration, so the turn must say what to
+    do rather than posting a request with model=None and surfacing whatever the API says about it.
+
+    Mutation check: deleting the "if not model" guard in _turn_loop makes the no-model case send
+    a request instead of emitting the message, failing the last block below.
+    """
+    failed = False
+    print("**** Testing model resolution order ****")
+
+    agent = _agent_with_fake(my_predbat, _text_response("hello"), model=None)
+    cid = asyncio.run(agent.store.create())
+
+    # Nothing anywhere: refuse, and name the picker.
+    asyncio.run(agent.run_turn(cid, "hello"))
+    events = agent.events_since(0, cid)[0]
+    errors = [event for event in events if event["type"] == "error"]
+    if not errors or "model" not in str(errors[0]["data"].get("message", "")).lower():
+        print("ERROR: a turn with no model available did not report it: {}".format(errors))
+        failed = True
+    if [event for event in events if event["type"] == "assistant"]:
+        print("ERROR: a turn with no model still produced an assistant message")
+        failed = True
+
+    # The remembered pick is used when the conversation has none of its own.
+    agent.store.set_selected_model("remembered/model")
+    if agent.resolve_model(cid) != "remembered/model":
+        print("ERROR: the remembered model was not used, got {}".format(agent.resolve_model(cid)))
+        failed = True
+
+    # The apps.yaml default is the last resort, below the remembered pick.
+    agent.default_model = "apps/default"
+    if agent.resolve_model(cid) != "remembered/model":
+        print("ERROR: the apps.yaml default outranked the user's remembered pick")
+        failed = True
+    agent.store.set_selected_model(None)
+    if agent.resolve_model(cid) != "apps/default":
+        print("ERROR: the apps.yaml default was not used once nothing was remembered")
+        failed = True
+
+    # The conversation's own model outranks everything.
+    agent.store.set_model(cid, "conversation/model")
+    agent.store.set_selected_model("remembered/model")
+    if agent.resolve_model(cid) != "conversation/model":
+        print("ERROR: the conversation's own model did not win, got {}".format(agent.resolve_model(cid)))
+        failed = True
+
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
     failed |= test_component_gating(my_predbat)
+    failed |= test_model_resolution_order(my_predbat)
     failed |= test_component_gating_end_to_end(my_predbat)
     failed |= test_build_snapshot(my_predbat)
     failed |= test_build_system_prompt(my_predbat)

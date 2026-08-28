@@ -70,10 +70,19 @@ class WebChat:
         return meta, None
 
     async def html_chat(self, request):
-        """Render the Chat tab."""
+        """Render the Chat tab, or the setup page when the component is not configured.
+
+        The tab is always in the nav now, so this is the page a user lands on before they have an
+        API key. A JSON 404 is the right answer for the data routes the script calls, but a
+        person typing /chat into a browser should be told what to do about it, not shown a error.
+        """
         agent = self.agent
         if agent is None:
-            return web.json_response({"error": "Chat is not configured"}, status=404)
+            text = self.web.get_header("Predbat Chat")
+            text += get_chat_styles()
+            text += get_chat_setup_body()
+            text += "</body></html>"
+            return web.Response(content_type="text/html", text=text)
         text = self.web.get_header("Predbat Chat")
         text += get_chat_styles()
         text += get_chat_body()
@@ -327,7 +336,7 @@ class WebChat:
             models = await agent.run_on_agent_loop(agent.list_models())
         except AgentNotReadyError:
             return web.json_response({"error": "The chat component is still starting"}, status=503)
-        return web.json_response({"models": models, "default_model": agent.default_model, "catalogue_available": len(models) > 1})
+        return web.json_response({"models": models, "default_model": agent.default_model, "selected_model": agent.store.get_selected_model(), "catalogue_available": len(models) > 1})
 
     async def html_chat_model(self, request):
         """Set the model for one conversation."""
@@ -338,7 +347,13 @@ class WebChat:
         meta, error = self._conversation_or_404(agent, body.get("conversation"))
         if error:
             return error
-        agent.store.set_model(body.get("conversation"), body.get("id") or None)
+        model_id = body.get("id") or None
+        agent.store.set_model(body.get("conversation"), model_id)
+        # Also remembered as the global choice, so the next new conversation starts on it and it
+        # survives a restart. Only a real selection is remembered - clearing back to the default
+        # should not pin whatever the default happened to be at that moment.
+        if model_id:
+            agent.store.set_selected_model(model_id)
         await agent.run_on_agent_loop(agent.store.flush(body.get("conversation")))
         return web.json_response({"ok": True})
 
@@ -916,6 +931,53 @@ body.dark-mode {
     color: var(--chat-text);
 }
 
+#chat-model-wrap {
+    position: relative;
+}
+
+#chat-model-list {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    z-index: 20;
+    min-width: 320px;
+    max-height: 320px;
+    overflow-y: auto;
+    background: var(--chat-input-bg);
+    border: 1px solid var(--chat-border);
+    border-radius: 4px;
+    margin-bottom: 4px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.chat-model-option {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.chat-model-option:hover {
+    background: var(--chat-border);
+}
+
+.chat-model-current .chat-model-name {
+    font-weight: 600;
+}
+
+.chat-model-meta {
+    color: var(--chat-text-muted);
+}
+
+.chat-model-empty {
+    padding: 5px 10px;
+    color: var(--chat-text-muted);
+    font-style: italic;
+}
+
 #chat-model-note {
     margin-left: 6px;
     font-style: italic;
@@ -931,6 +993,28 @@ body.dark-mode {
     gap: 4px 12px;
 }
 
+#chat-setup {
+    max-width: 680px;
+    margin: 24px auto;
+    padding: 0 16px;
+    line-height: 1.5;
+}
+
+#chat-setup pre {
+    background: var(--chat-input-bg);
+    border: 1px solid var(--chat-border);
+    border-radius: 4px;
+    padding: 10px 12px;
+    overflow-x: auto;
+}
+
+#chat-setup .chat-setup-note {
+    color: var(--chat-text-muted);
+    font-size: 13px;
+    border-top: 1px solid var(--chat-border);
+    padding-top: 12px;
+}
+
 .chat-toggle {
     display: inline-flex;
     align-items: center;
@@ -940,6 +1024,44 @@ body.dark-mode {
     white-space: nowrap;
 }
 </style>
+"""
+
+
+def get_chat_setup_body():
+    """Return the Chat tab's setup page, shown when the component is not configured.
+
+    Deliberately concrete: the exact key, an example value, and where the file lives, because a
+    user who reaches this page has no other clue what is missing. The model is described as
+    optional because it genuinely is - the picker can set it once the key is in place.
+    """
+    return """
+<div id="chat-page">
+    <div id="chat-setup">
+        <h2>Chat is not set up yet</h2>
+        <p>
+            The Chat tab needs an <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a>
+            API key. Add one to the <code>pred_bat:</code> section of your <code>apps.yaml</code>:
+        </p>
+        <pre><code>pred_bat:
+  openrouter_api_key: 'sk-or-v1-...'</code></pre>
+        <p>
+            Predbat restarts automatically when <code>apps.yaml</code> is saved, and the Chat tab
+            becomes usable once it has. You can edit the file from the
+            <a href="./apps">apps.yaml</a> tab.
+        </p>
+        <p>
+            You do not need to choose a model here. Once the key is set you can pick one from the
+            search box below the message box, and Predbat remembers it. To pin a default instead,
+            set <code>openrouter_default_model</code> (for example
+            <code>openai/gpt-4o-mini</code>) alongside the key.
+        </p>
+        <p class="chat-setup-note">
+            Chat sends tool results - including log lines and configuration - to OpenRouter and on
+            to the provider behind the model you choose. Credentials in <code>apps.yaml</code> are
+            redacted before they leave Predbat.
+        </p>
+    </div>
+</div>
 """
 
 
@@ -971,7 +1093,8 @@ def get_chat_body():
         </div>
         <div id="chat-footer">
             <span id="chat-model-wrap">
-                <select id="chat-model"><option value="">Default model</option></select>
+                <input type="text" id="chat-model" autocomplete="off" spellcheck="false" placeholder="Choose a model">
+                <div id="chat-model-list"></div>
                 <span id="chat-model-note"></span>
             </span>
             <span id="chat-toggles">
@@ -1209,7 +1332,7 @@ function setTitleText(node, title) {
 // the server's only shared state is the single active turn, broadcast via the busy/idle events.
 // ---------------------------------------------------------------------------------------------
 
-var state = { conversation: localStorage.getItem('predbatChatConversation'), cursor: 0, source: null, busy: null, models: [], defaultModel: '', currentModel: null, catalogueAvailable: true };
+var state = { conversation: localStorage.getItem('predbatChatConversation'), cursor: 0, source: null, busy: null, models: [], defaultModel: '', selectedModel: '', currentModel: null, catalogueAvailable: true };
 var toolRows = {};
 var confirmCards = {};
 var pendingBubble = null;
@@ -1280,24 +1403,136 @@ function formatCost(cost) {
 // rather than freezing the conversation on today's default.
 // ---------------------------------------------------------------------------------------------
 
-function populateModelPicker(models, selectedId) {
-    var select = byId('chat-model');
-    select.innerHTML = '';
-    var defaultOption = document.createElement('option');
-    defaultOption.value = '';
-    defaultOption.textContent = 'Use default' + (state.defaultModel ? ' (' + state.defaultModel + ')' : '');
-    select.appendChild(defaultOption);
-    (models || []).forEach(function (model) {
-        var option = document.createElement('option');
-        option.value = model.id;
-        option.textContent = model.name || model.id;
-        select.appendChild(option);
-    });
-    select.value = selectedId || '';
+// The model picker is a filter box over a list, not a <select>. OpenRouter's tool-capable
+// catalogue runs to several hundred entries, which a native dropdown renders as one enormous
+// scrolling column with no way to search it beyond type-ahead on the first character.
+//
+// The input shows the model in force when idle and becomes a search box on focus. state.models is
+// the catalogue; the list is rebuilt from it on every keystroke, capped at MODEL_RESULTS_MAX so a
+// cleared box does not lay out hundreds of rows.
+// ---------------------------------------------------------------------------------------------
+
+var MODEL_RESULTS_MAX = 60;
+
+function modelLabel(id) {
+    if (!id) {
+        return state.defaultModel ? 'Default (' + state.defaultModel + ')' : 'Choose a model';
+    }
+    var match = (state.models || []).filter(function (model) { return model.id === id; })[0];
+    return match ? (match.name || match.id) : id;
+}
+
+function effectiveModel() {
+    return state.currentModel || state.selectedModel || state.defaultModel || '';
 }
 
 function updateModelNote() {
-    byId('chat-model-note').textContent = state.catalogueAvailable ? '' : '(catalogue unavailable - only the configured model is offered)';
+    var note = byId('chat-model-note');
+    if (!state.catalogueAvailable) {
+        note.textContent = '(catalogue unavailable - only the configured model is offered)';
+    } else if (!effectiveModel()) {
+        note.textContent = 'Pick a model to start';
+    } else {
+        note.textContent = '';
+    }
+}
+
+function renderModelResults(filter) {
+    var list = byId('chat-model-list');
+    list.innerHTML = '';
+    var needle = (filter || '').toLowerCase();
+    var matches = (state.models || []).filter(function (model) {
+        if (!needle) {
+            return true;
+        }
+        return (model.id || '').toLowerCase().indexOf(needle) !== -1 || (model.name || '').toLowerCase().indexOf(needle) !== -1;
+    });
+
+    if (state.defaultModel && !needle) {
+        matches = [{ id: '', name: 'Default (' + state.defaultModel + ')' }].concat(matches);
+    }
+
+    var shown = matches.slice(0, MODEL_RESULTS_MAX);
+    shown.forEach(function (model) {
+        var row = document.createElement('div');
+        row.className = 'chat-model-option';
+        row.setAttribute('data-id', model.id);
+        if (model.id === effectiveModel()) {
+            row.className += ' chat-model-current';
+        }
+        var name = document.createElement('span');
+        name.className = 'chat-model-name';
+        name.textContent = model.name || model.id;
+        row.appendChild(name);
+        if (model.context_length) {
+            var meta = document.createElement('span');
+            meta.className = 'chat-model-meta';
+            meta.textContent = Math.round(model.context_length / 1000) + 'k';
+            row.appendChild(meta);
+        }
+        row.addEventListener('mousedown', function (event) {
+            // mousedown, not click: blur fires first on click and would close the list before the
+            // selection was read.
+            event.preventDefault();
+            selectModel(model.id);
+        });
+        list.appendChild(row);
+    });
+
+    if (!shown.length) {
+        var empty = document.createElement('div');
+        empty.className = 'chat-model-empty';
+        empty.textContent = 'No model matches "' + filter + '"';
+        list.appendChild(empty);
+    } else if (matches.length > shown.length) {
+        var more = document.createElement('div');
+        more.className = 'chat-model-empty';
+        more.textContent = 'and ' + (matches.length - shown.length) + ' more - keep typing to narrow';
+        list.appendChild(more);
+    }
+}
+
+function openModelList() {
+    var input = byId('chat-model');
+    input.value = '';
+    input.placeholder = 'Search ' + ((state.models || []).length) + ' models...';
+    byId('chat-model-list').style.display = 'block';
+    renderModelResults('');
+}
+
+function closeModelList() {
+    byId('chat-model-list').style.display = 'none';
+    var input = byId('chat-model');
+    input.value = modelLabel(effectiveModel());
+    input.placeholder = '';
+}
+
+function selectModel(id) {
+    state.currentModel = id || null;
+    closeModelList();
+    updateModelNote();
+    if (!state.conversation) {
+        return;
+    }
+    fetch('./chat/model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation: state.conversation, id: id || null })
+    })
+        .then(function () {
+            // The server remembers a real selection as the global default, so mirror that here
+            // rather than re-fetching the catalogue just to learn what we already know.
+            if (id) {
+                state.selectedModel = id;
+            }
+        })
+        .catch(function (error) { console.error('Failed to set chat model', error); });
+}
+
+function populateModelPicker(models, selectedId) {
+    state.currentModel = selectedId || state.currentModel;
+    closeModelList();
+    updateModelNote();
 }
 
 function loadModels() {
@@ -1306,24 +1541,11 @@ function loadModels() {
         .then(function (payload) {
             state.models = payload.models || [];
             state.defaultModel = payload.default_model || '';
+            state.selectedModel = payload.selected_model || '';
             state.catalogueAvailable = payload.catalogue_available !== false;
             populateModelPicker(state.models, state.currentModel);
-            updateModelNote();
         })
         .catch(function (error) { console.error('Failed to load chat models', error); });
-}
-
-function changeModel() {
-    var id = byId('chat-model').value || null;
-    state.currentModel = id;
-    if (!state.conversation) {
-        return;
-    }
-    fetch('./chat/model', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversation: state.conversation, id: id })
-    }).catch(function (error) { console.error('Failed to set chat model', error); });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2360,7 +2582,17 @@ document.addEventListener('DOMContentLoaded', function () {
     byId('chat-new').addEventListener('click', createConversation);
     byId('chat-send').addEventListener('click', sendMessage);
     byId('chat-stop').addEventListener('click', stopTurn);
-    byId('chat-model').addEventListener('change', changeModel);
+    byId('chat-model').addEventListener('focus', openModelList);
+    byId('chat-model').addEventListener('input', function (event) { renderModelResults(event.target.value); });
+    byId('chat-model').addEventListener('blur', function () {
+        // Deferred: a mousedown on a result must be allowed to run before the list is hidden.
+        setTimeout(closeModelList, 150);
+    });
+    byId('chat-model').addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') {
+            event.target.blur();
+        }
+    });
     chatToggles().forEach(function (toggle) { toggle.addEventListener('change', changeChatSwitch); });
     byId('chat-input').addEventListener('keydown', function (event) {
         if (event.key === 'Enter' && !event.shiftKey) {

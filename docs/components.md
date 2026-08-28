@@ -337,8 +337,8 @@ caution about exposing the web/MCP port outside your home network applies here, 
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
-| `api_key` | String | Yes | - | `openrouter_api_key` | Your OpenRouter API key. Together with `openrouter_model`, this is what enables the component - there is no separate `chat_enable` setting |
-| `model` | String | Yes | - | `openrouter_model` | The OpenRouter model id to use by default, e.g. `openai/gpt-4o-mini` |
+| `api_key` | String | Yes | - | `openrouter_api_key` | Your OpenRouter API key. This alone is what enables the component - there is no separate `chat_enable` setting |
+| `model` | String | No | - | `openrouter_default_model` | Optional. The model id new conversations start on, e.g. `openai/gpt-4o-mini`. With none set, pick one from the Chat tab's model search box; Predbat remembers the choice across restarts |
 | `base_url` | String | No | `https://openrouter.ai/api/v1` | `openrouter_base_url` | Chat-completions endpoint. Point it at another OpenAI-compatible endpoint if you want one, but doing so disables the OpenRouter-only web search plugin |
 | `max_tokens` | Integer | No | 0 | `openrouter_max_tokens` | Maximum tokens per completion; `0` leaves it to the model/provider's own default |
 | `max_tool_rounds` | Integer | No | 32 | `chat_max_tool_rounds` | Maximum model round trips (completions) allowed within one turn before Predbat stops and asks you to continue. Every tool call the model makes inside one round trip still runs - this bounds round trips, not tool calls |

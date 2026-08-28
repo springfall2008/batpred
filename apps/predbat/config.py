@@ -2516,7 +2516,7 @@ APPS_SCHEMA = {
     "load_filter_threshold": {"type": "integer"},
     "web_port": {"type": "integer"},
     "openrouter_api_key": {"type": "string", "empty": False},
-    "openrouter_model": {"type": "string", "empty": False},
+    "openrouter_default_model": {"type": "string", "empty": False},
     "openrouter_base_url": {"type": "string", "empty": False},
     "openrouter_max_tokens": {"type": "integer"},
     "chat_max_tool_rounds": {"type": "integer"},

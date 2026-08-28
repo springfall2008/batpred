@@ -129,9 +129,10 @@ The Compare View provides access to Predbat's [Compare Energy Tariff feature](co
 
 ### Chat View
 
-The Chat tab only appears once the [AI Chat Agent component](components.md#ai-chat-agent-chat) is
-configured with an `openrouter_api_key` and `openrouter_model`. It gives you a conversational way
-to ask about your Predbat setup, backed by a large language model served through OpenRouter.
+The Chat tab gives you a conversational way to ask about your Predbat setup, backed by a large
+language model served through OpenRouter. It needs an `openrouter_api_key` in `apps.yaml`; until
+that is set the tab is still there, showing a short page telling you which key to add rather than
+vanishing without explanation.
 
 A banner across the top of the page is a standing reminder that tool results - including log
 lines and configuration - are sent to OpenRouter and on to whichever provider serves the selected
@@ -157,10 +158,13 @@ confirmation card appears in the transcript showing the tool name and the exact 
 to call it with, and the turn waits for you to **Approve** or **Reject** it. Turn the switch off
 if you would rather the agent act without asking first.
 
-A model picker under the message box lets you choose a different model for that one conversation,
-overriding the `openrouter_model` configured in `apps.yaml`; leaving it on "Default model" uses
-the configured one. If OpenRouter's model catalogue cannot be fetched, only the configured model
-is offered.
+A model search box under the message box lets you choose a different model for that one
+conversation. Click it and type to filter - OpenRouter offers several hundred tool-capable models,
+so it filters on both id and name rather than being a plain dropdown. Your choice is remembered as
+the starting point for new conversations and survives a restart, so setting
+`openrouter_default_model` in `apps.yaml` is optional; if you do set it, it is what new
+conversations use until you pick something else. If OpenRouter's catalogue cannot be fetched, only
+the configured model is offered.
 
 Next to it are the agent's three permission toggles - **Confirm writes**, **Web search** and **HA
 state access** - so you can grant or withdraw a permission without leaving the conversation. They

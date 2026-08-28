@@ -43,6 +43,11 @@ from component_base import ComponentBase
 from chat_store import ConversationStore, NEW_CONVERSATION_TITLE, derive_title, extract_cached_tokens, trim_history
 from chat_tools import APPS_YAML_RESTART_WARNING, CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_source, search_docs, search_source, set_apps_config
 
+# Shown when a turn is attempted with no model chosen anywhere. openrouter_default_model is
+# optional, so this is the ordinary state of a fresh install rather than a misconfiguration - the
+# wording points at the picker, which is where the user can fix it without touching apps.yaml.
+NO_MODEL_MESSAGE = "No model has been selected. Choose one from the model picker below the message box, or set 'openrouter_default_model' in apps.yaml."
+
 EVENT_BUFFER_MAX = 2000
 
 # How long a fetched model catalogue is trusted before list_models() refreshes it. list_models()
@@ -595,7 +600,7 @@ class ChatAgent(ComponentBase):
             pricing = entry.get("pricing") or {}
             models.append({"id": entry.get("id"), "name": entry.get("name") or entry.get("id"), "prompt_price": pricing.get("prompt"), "completion_price": pricing.get("completion"), "context_length": entry.get("context_length")})
         models.sort(key=lambda entry: str(entry.get("id")))
-        if self.default_model not in [entry["id"] for entry in models]:
+        if self.default_model and self.default_model not in [entry["id"] for entry in models]:
             models.insert(0, {"id": self.default_model, "name": "{} (from apps.yaml)".format(self.default_model), "prompt_price": None, "completion_price": None, "context_length": None})
         return models
 
@@ -981,7 +986,10 @@ class ChatAgent(ComponentBase):
         check alone leaves a gap wide enough for one round, on its own, to run far past the
         deadline.
         """
-        model = (self.store.get_meta(conversation_id) or {}).get("model") or self.default_model
+        model = self.resolve_model(conversation_id)
+        if not model:
+            self.emit(conversation_id, "error", {"message": NO_MODEL_MESSAGE})
+            return
         for iteration in range(self.max_tool_rounds + 1):
             if time.monotonic() > self.deadline:
                 self.emit(conversation_id, "error", {"message": "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)})
@@ -1059,6 +1067,17 @@ class ChatAgent(ComponentBase):
             return arguments
         key = arguments.get("key")
         return {"key": key, "current_value": self.base.args.get(key), "proposed_value": arguments.get("value"), "warning": APPS_YAML_RESTART_WARNING}
+
+    def resolve_model(self, conversation_id):
+        """Return the model this conversation should use, or None if nothing has been chosen.
+
+        Three sources, most specific first: the model set on this conversation, the model the
+        user last picked in the UI (remembered across restarts by the store), then
+        openrouter_default_model from apps.yaml. That last one is optional, so all three can be
+        empty on a fresh install - which is not an error, just a user who has not chosen yet.
+        """
+        conversation_model = (self.store.get_meta(conversation_id) or {}).get("model")
+        return conversation_model or self.store.get_selected_model() or self.default_model or None
 
     async def _refuse_remaining_calls(self, conversation_id, calls, reason):
         """Answer tool calls the turn is abandoning, so the stored conversation stays well-formed.

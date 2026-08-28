@@ -43,6 +43,22 @@ class FakeRequest:
         return self._body
 
 
+class _StubSelectionStore:
+    """The slice of ConversationStore the /chat/models route touches."""
+
+    def __init__(self, selected=None):
+        """Start with nothing selected unless a test says otherwise."""
+        self.selected = selected
+
+    def get_selected_model(self):
+        """Return the remembered model choice."""
+        return self.selected
+
+    def set_selected_model(self, model_id):
+        """Remember a model choice."""
+        self.selected = model_id or None
+
+
 def _make_web(my_predbat, agent=None):
     """Build a WebInterface bound to my_predbat without standing up the aiohttp app."""
     interface = WebInterface.__new__(WebInterface)
@@ -50,6 +66,10 @@ def _make_web(my_predbat, agent=None):
     interface.log = my_predbat.log
     interface.prefix = my_predbat.prefix
     interface.registered_endpoints = []
+    # get_header() reaches for default_page. Needed since /chat renders the setup page rather
+    # than 404ing when chat is unconfigured, so the header is built on that path too. arg_errors
+    # is a read-only property proxying my_predbat's, so it needs nothing here.
+    interface.default_page = "./dash"
     interface.chat_page = WebChat(interface)
     interface.chat_page.agent_override = agent
     return interface
@@ -98,10 +118,15 @@ def test_routes_always_registered_handlers_404_unconfigured(my_predbat):
                 print("ERROR: route {} was not registered with no chat component present, got {}".format(expected, sorted(paths)))
                 failed = True
 
-        # Every handler must refuse with 404 rather than error out, since nothing is wired up yet.
+        # /chat is the exception to the 404 rule: a person typing it into a browser gets the
+        # setup page telling them which apps.yaml key to set. The JSON data routes below still
+        # 404, because their caller is the page's own script rather than a human.
         response = asyncio.run(interface.chat_page.html_chat(FakeRequest()))
-        if response.status != 404:
-            print("ERROR: html_chat returned {} with no chat component, expected 404".format(response.status))
+        if response.status != 200:
+            print("ERROR: html_chat returned {} with no chat component, expected the setup page".format(response.status))
+            failed = True
+        if "openrouter_api_key" not in getattr(response, "text", ""):
+            print("ERROR: the unconfigured chat page does not name the key to set")
             failed = True
 
         my_predbat.components = WithChat()
@@ -163,14 +188,16 @@ def test_chat_routes_survive_the_real_phase_order(my_predbat):
         if interface.chat_enabled():
             print("ERROR: chat reported enabled before the chat component exists")
             failed = True
+        # /chat serves the setup page rather than 404ing, so a user who lands here before the
+        # component exists is told which apps.yaml key to set instead of seeing an error.
         response = asyncio.run(interface.chat_page.html_chat(FakeRequest()))
-        if response.status != 404:
-            print("ERROR: /chat answered {} before phase 1, expected 404".format(response.status))
+        if response.status != 200 or "openrouter_api_key" not in getattr(response, "text", ""):
+            print("ERROR: /chat did not serve the setup page before phase 1, got {}".format(response.status))
             failed = True
 
         # Phase 1: construct the real ChatAgent.
         my_predbat.args["openrouter_api_key"] = "sk-test"
-        my_predbat.args["openrouter_model"] = "test/model"
+        my_predbat.args["openrouter_default_model"] = "test/model"
         comps.initialize(only="chat", phase=1)
         if comps.get_component("chat") is None:
             print("ERROR: chat component did not construct in phase 1")
@@ -1091,6 +1118,8 @@ def test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_pred
         """An agent stand-in whose list_models() is only reachable via run_on_agent_loop."""
 
         default_model = "configured/model"
+        # /chat/models reports the remembered selection alongside the catalogue.
+        store = _StubSelectionStore()
 
         @staticmethod
         async def list_models():
@@ -1147,6 +1176,7 @@ def test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_pred
         """An agent stand-in whose catalogue degraded to just the configured model."""
 
         default_model = "configured/model"
+        store = _StubSelectionStore()
 
         @staticmethod
         async def list_models():
@@ -1169,7 +1199,7 @@ def test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_pred
 
 
 def test_model_picker_script_wires_routes_and_persists_selection(my_predbat):
-    """The model picker is built with createElement/textContent and persists per conversation.
+    """The model picker filters safely and persists per conversation.
 
     Static checks on the client script's source text, in the same spirit as
     test_stream_cursor_advances_from_every_event: there is no JavaScript runtime in this suite, so
@@ -1187,50 +1217,62 @@ def test_model_picker_script_wires_routes_and_persists_selection(my_predbat):
         print("ERROR: the client script never calls POST /chat/model to persist a selection")
         failed = True
 
-    populate_body = _extract_function_body(script, "populateModelPicker")
-    if populate_body is None:
-        print("ERROR: could not find a populateModelPicker() function to inspect")
+    # The picker is a filter box over a rendered list rather than a <select>, because the
+    # tool-capable catalogue runs to several hundred entries. renderModelResults() is where
+    # catalogue text reaches the DOM, so it carries the same createElement/textContent
+    # requirement the <option> construction used to.
+    render_body = _extract_function_body(script, "renderModelResults")
+    if render_body is None:
+        print("ERROR: could not find a renderModelResults() function to inspect")
         failed = True
     else:
-        if "createElement" not in populate_body:
-            print("ERROR: populateModelPicker() does not build options with createElement")
+        if "createElement" not in render_body:
+            print("ERROR: renderModelResults() does not build rows with createElement")
             failed = True
         # Reuses the same sink audit as test_inner_html_sinks_only_ever_receive_escaped_content,
         # rather than a fresh regex, because a naive `\.innerHTML\s*=\s*(?!'')` check backtracks
         # around the whitespace before the quotes and silently stops catching anything - the
         # allow-listed helper already gets this right and is exercised elsewhere in this suite.
-        for rhs in _extract_inner_html_assignments(populate_body):
+        for rhs in _extract_inner_html_assignments(render_body):
             if not _inner_html_rhs_is_safe(rhs):
-                print("ERROR: populateModelPicker() assigns catalogue content straight into innerHTML: {!r}".format(rhs.strip()))
+                print("ERROR: renderModelResults() assigns catalogue content straight into innerHTML: {!r}".format(rhs.strip()))
                 failed = True
-        if ".textContent" not in populate_body:
-            print("ERROR: populateModelPicker() does not set option labels via textContent")
+        if ".textContent" not in render_body:
+            print("ERROR: renderModelResults() does not set row labels via textContent")
             failed = True
-        # Anchored to the actual option construction (an empty .value immediately followed by a
-        # 'Use default' .textContent), not a bare "''" substring check - select.innerHTML = '';
-        # a few lines above already contains that same substring, so a loose check would still
-        # pass even with the option itself deleted.
-        if re.search(r"\.value\s*=\s*(?:''|\"\")\s*;[\s\S]{0,200}?\.textContent\s*=\s*['\"]Use default", populate_body) is None:
-            print("ERROR: populateModelPicker() does not build an empty-value 'Use default' option: {!r}".format(populate_body))
+        # A model id or name is attacker-influenced only in the weak sense that it comes from
+        # OpenRouter, but it is third-party text rendered into Predbat's page either way.
+        if "innerHTML" in render_body and "innerHTML = ''" not in render_body.replace('innerHTML = ""', "innerHTML = ''"):
+            print("ERROR: renderModelResults() uses innerHTML for something other than clearing: {!r}".format(render_body))
+            failed = True
+        if "toLowerCase" not in render_body or "indexOf" not in render_body:
+            print("ERROR: renderModelResults() does not filter the catalogue case-insensitively: {!r}".format(render_body))
             failed = True
 
-    # The picker's change handler must send both the conversation id and the chosen model id to
-    # POST /chat/model - persistence is per-conversation, not global. Anchored to the handler's own
-    # body (found by brace-counting, not a proximity regex) so it fails if the post is moved
-    # somewhere that no longer carries the conversation id, or dropped altogether.
-    change_body = _extract_function_body(script, "changeModel")
+    # Selecting a model must send both the conversation id and the chosen model id to
+    # POST /chat/model. Anchored to the handler's own body (found by brace-counting, not a
+    # proximity regex) so it fails if the post is moved somewhere that no longer carries the
+    # conversation id, or dropped altogether.
+    change_body = _extract_function_body(script, "selectModel")
     if change_body is None:
-        print("ERROR: could not find a changeModel() handler for the picker's change event")
+        print("ERROR: could not find a selectModel() handler for the picker")
         failed = True
     else:
         if "state.conversation" not in change_body or "/chat/model" not in change_body:
-            print("ERROR: changeModel() does not post to /chat/model with the conversation id: {!r}".format(change_body))
+            print("ERROR: selectModel() does not post to /chat/model with the conversation id: {!r}".format(change_body))
             failed = True
         if "conversation:" not in change_body or ("id:" not in change_body):
-            print("ERROR: changeModel() does not post both conversation and id: {!r}".format(change_body))
+            print("ERROR: selectModel() does not post both conversation and id: {!r}".format(change_body))
             failed = True
-    if "addEventListener('change', changeModel)" not in script and 'addEventListener("change", changeModel)' not in script:
-        print("ERROR: changeModel() is never wired to #chat-model's change event")
+    # The list opens on focus and filters as you type - without both, it is a dropdown again.
+    for wiring in ("addEventListener('focus', openModelList)", "addEventListener('input'"):
+        if wiring not in script:
+            print("ERROR: the picker is not wired for search: missing {}".format(wiring))
+            failed = True
+    # mousedown, not click: blur fires first on click and closes the list before the selection is
+    # read, so a click-wired list silently never selects anything.
+    if "mousedown" not in script:
+        print("ERROR: the result rows are not wired on mousedown, so blur would close the list first")
         failed = True
 
     # Reloading a conversation must restore its own stored model, not silently keep showing

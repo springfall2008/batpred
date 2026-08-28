@@ -101,6 +101,10 @@ class ConversationStore:
         # _cache_body()) so a lookup never has to ask "loaded, but is the prompt?" separately.
         self.system_prompts = OrderedDict()
         self.dirty = set()
+        # The model the user last chose in the picker, remembered across restarts so a install
+        # with no openrouter_default_model does not ask again on every boot. Guarded by the same
+        # lock as the index it is stored beside; None means nothing has been chosen yet.
+        self.selected_model = None
         self.lock = threading.Lock()
         self.loaded = False
 
@@ -116,14 +120,17 @@ class ConversationStore:
         """Load the conversation index, dropping entries whose body has expired or vanished."""
         payload = await self.storage.load(STORAGE_MODULE, INDEX_FILENAME) if self.storage else None
         entries = []
+        selected_model = None
         if isinstance(payload, dict):
             if payload.get("version") != CONVERSATION_VERSION:
                 self.log("Warn: chat index version {} is not {}, discarding it".format(payload.get("version"), CONVERSATION_VERSION))
             else:
                 entries = payload.get("conversations") or []
+                selected_model = payload.get("selected_model") or None
 
         healed = False
         with self.lock:
+            self.selected_model = selected_model
             self.index = OrderedDict()
             for entry in entries:
                 cid = entry.get("id")
@@ -378,12 +385,22 @@ class ConversationStore:
             self.log("Info: chat conversation '{}' ({}) pruned past the {} conversation limit; its stored copy expires in {} days".format(entry.get("title"), entry["id"], self.max_conversations, self.expiry_days))
         await self._save_index()
 
+    def get_selected_model(self):
+        """Return the model the user last chose in the picker, or None."""
+        with self.lock:
+            return self.selected_model
+
+    def set_selected_model(self, model_id):
+        """Remember the model the user chose, to be written on the next index flush."""
+        with self.lock:
+            self.selected_model = model_id or None
+
     async def _save_index(self):
         """Write the conversation index with a renewed expiry."""
         if not self.storage:
             return False
         with self.lock:
-            payload = {"version": CONVERSATION_VERSION, "conversations": [dict(entry) for entry in self.index.values()]}
+            payload = {"version": CONVERSATION_VERSION, "conversations": [dict(entry) for entry in self.index.values()], "selected_model": self.selected_model}
         return await self.storage.save(STORAGE_MODULE, INDEX_FILENAME, payload, format="json", expiry=self._expiry())
 
     async def _save_body(self, cid, messages=None, system_prompt=_UNSET, system_prompt_at=_UNSET, evicted=False):
