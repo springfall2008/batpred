@@ -18,7 +18,7 @@ import json
 import os
 import time
 
-from agent_tools import TOOL_DEFS, PredbatTools, mcp_tool_list, openai_tool_list, compile_filter_argument, MCPArgumentError, FILTER_PATTERN_MAX
+from agent_tools import TOOL_DEFS, PredbatTools, mcp_tool_list, openai_tool_list, slim_plan, compile_filter_argument, MCPArgumentError, FILTER_PATTERN_MAX
 from utils import mask_secret_args
 from web_mcp import MCPServerWrapper
 
@@ -885,6 +885,101 @@ def test_get_apps_config_paths(my_predbat):
     return failed
 
 
+def test_get_plan_is_slimmed(my_predbat):
+    """get_plan strips presentation fields, drops empties, and gives times a weekday.
+
+    The plan structure is built for the web table, so about half of it by volume is styling that
+    means nothing to a model: twelve colour fields, HTML cell fragments, and the rowspan/skip
+    bookkeeping that merges cells - all repeated on every one of ~96 rows. Measured on a real
+    captured plan this halves the response.
+
+    Mutation checks: removing the "color" test, the PLAN_DROP_KEYS test, the empty test, or the
+    format_plan_time call each fails an assertion below.
+    """
+    failed = False
+    print("**** Testing get_plan slimming ****")
+
+    row = {
+        "time": "2026-08-28T09:00:00+0100",
+        "slot_minute": 540,
+        "state": "FrzExp",
+        "state_target": "",
+        "show_limit": "4",
+        "reasons": [{"code": "freeze_export", "params": {}}],
+        "clipped": 0,
+        "car_charging": 0.0,
+        "car_rate": None,
+        "soc_percent": 85,
+        "state_color": "#AAAAAA",
+        "rate_color_import": "#F18261",
+        "cost_color": "#3AEE85",
+        "state_html": "FrzExp&rarr;",
+        "state_text": "FrzExp&rarr;",
+        "soc_sym": "&rarr;",
+        "rowspan_state": 16,
+        "skip_state_cell": False,
+        "split": False,
+    }
+    plan = {"rows": [row], "soc": 8.09, "soc_max": 9.52, "mode": "Control charge & discharge", "iboost_enable": None}
+
+    slimmed = slim_plan(plan)
+    out = slimmed["rows"][0]
+
+    # Weekday plus clock, not a raw ISO stamp.
+    if out.get("time") != "Fri 09:00":
+        print("ERROR: the row time was not rendered as weekday + clock: {}".format(out.get("time")))
+        failed = True
+
+    # Every colour field goes - including the ones not suffixed "_color".
+    for gone in ("state_color", "rate_color_import", "cost_color"):
+        if gone in out:
+            print("ERROR: colour field {} survived: {}".format(gone, out))
+            failed = True
+
+    # HTML and table-layout bookkeeping goes.
+    for gone in ("state_html", "state_text", "soc_sym", "rowspan_state", "skip_state_cell", "split"):
+        if gone in out:
+            print("ERROR: presentation field {} survived: {}".format(gone, out))
+            failed = True
+
+    # Empties go, at both levels.
+    if "state_target" in out or "car_rate" in out:
+        print("ERROR: an empty or null field survived: {}".format(out))
+        failed = True
+    if "iboost_enable" in slimmed:
+        print("ERROR: a null survived at the top level: {}".format(slimmed))
+        failed = True
+
+    # Numeric zero is data, not an empty - dropping it would hide "none" behind "not reported".
+    for kept, value in (("clipped", 0), ("car_charging", 0.0)):
+        if out.get(kept) != value:
+            print("ERROR: numeric zero {} was dropped: {}".format(kept, out))
+            failed = True
+
+    # The semantic content survives untouched.
+    for kept in ("state", "reasons", "show_limit", "slot_minute", "soc_percent"):
+        if kept not in out:
+            print("ERROR: meaningful field {} was dropped: {}".format(kept, out))
+            failed = True
+    if slimmed.get("soc") != 8.09 or slimmed.get("mode") != "Control charge & discharge":
+        print("ERROR: top-level plan fields were damaged: {}".format(slimmed))
+        failed = True
+
+    # The plan handed in is Predbat's live published state - slimming it in place would empty the
+    # web plan table for every viewer.
+    if "state_color" not in row or row["time"] != "2026-08-28T09:00:00+0100":
+        print("ERROR: slim_plan mutated the caller's plan: {}".format(row))
+        failed = True
+
+    # An unparseable time is passed through rather than guessed at.
+    passthrough = slim_plan({"rows": [{"time": "not a timestamp", "state": "Demand"}]})
+    if passthrough["rows"][0]["time"] != "not a timestamp":
+        print("ERROR: an unparseable time was not passed through: {}".format(passthrough))
+        failed = True
+
+    return failed
+
+
 def run_agent_tools_tests(my_predbat):
     """Run every shared tool layer test, returning True if any of them failed."""
     failed = False
@@ -905,6 +1000,7 @@ def run_agent_tools_tests(my_predbat):
     failed |= test_get_entity_history_lookback_clamp(my_predbat)
     failed |= test_nested_credentials_are_redacted(my_predbat)
     failed |= test_get_apps_config_paths(my_predbat)
+    failed |= test_get_plan_is_slimmed(my_predbat)
     failed |= test_pathological_regex_arguments_are_rejected(my_predbat)
     failed |= test_get_entity_history_does_not_block_the_event_loop(my_predbat)
     return failed

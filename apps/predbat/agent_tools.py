@@ -277,6 +277,92 @@ def parse_bool_argument(value, default=False):
     return str(value).strip().lower() not in ("false", "0", "no", "off", "")
 
 
+# Presentation-only keys in a plan row. The plan structure is built for the web table, so roughly
+# a third of every row is styling: twelve colour fields, the HTML fragments the table cells are
+# made of, and the rowspan/skip bookkeeping that merges cells vertically. None of it means
+# anything to a model, and a 96-row plan repeats all of it 96 times - it was the single largest
+# part of a get_plan response. The semantic content is kept: state, state_target, show_limit and
+# reasons all survive, and reasons is the field that actually explains a slot.
+PLAN_DROP_KEYS = frozenset(
+    {
+        "state_html",
+        "state_text",
+        "state2_text",
+        "soc_sym",
+        "rowspan_state",
+        "skip_state_cell",
+        "rowspan_limit",
+        "skip_limit_cell",
+        "split",
+        "rate_split",
+    }
+)
+
+
+def slim_plan_value(key, value):
+    """Return True if a plan field is worth sending to a model.
+
+    None and "" are both dropped - an absent key says "no target for this slot" exactly as well as
+    an empty one, across ~96 rows. Numeric zero is kept: a clipped of 0 or a car_charging of 0.0 is
+    a real measurement, and dropping it would leave a model unable to tell "none" from "not
+    reported".
+    """
+    if value is None or value == "":
+        return False
+    if key in PLAN_DROP_KEYS:
+        return False
+    # Catches state_color and rate_color_import alike - the colour keys are not consistently
+    # suffixed, so a substring test is what covers all twelve of them.
+    return "color" not in key
+
+
+def format_plan_time(value):
+    """Render a plan row's ISO timestamp as a short weekday and clock time, e.g. "Fri 09:00".
+
+    A plan spans 48 hours, so a weekday and a time identify a slot unambiguously while costing a
+    fraction of a full ISO timestamp repeated across ~96 rows. Nothing is lost: each row keeps its
+    slot_minute, and the plan's own top-level "time" field carries the date the plan starts from.
+    Anything unparseable is passed through untouched rather than guessed at.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        return datetime.fromisoformat(value).strftime("%a %H:%M")
+    except ValueError:
+        return value
+
+
+def slim_plan(plan):
+    """Project the web plan structure down to what an AI model can actually use.
+
+    Copies rather than mutates - the plan handed in is Predbat's live published state, and
+    stripping it in place would empty the web plan table.
+    """
+    if not isinstance(plan, dict):
+        return plan
+
+    slimmed = {}
+    for key, value in plan.items():
+        if not slim_plan_value(key, value):
+            continue
+        if key == "rows" and isinstance(value, list):
+            rows = []
+            for row in value:
+                if not isinstance(row, dict):
+                    rows.append(row)
+                    continue
+                slim_row = {}
+                for row_key, row_value in row.items():
+                    if not slim_plan_value(row_key, row_value):
+                        continue
+                    slim_row[row_key] = format_plan_time(row_value) if row_key == "time" else row_value
+                rows.append(slim_row)
+            slimmed[key] = rows
+        else:
+            slimmed[key] = value
+    return slimmed
+
+
 class PredbatTools:
     """The Predbat tool implementations, shared by the MCP server and the chat agent.
 
@@ -318,8 +404,15 @@ class PredbatTools:
             if not raw_plan:
                 return {"success": False, "error": "No plan data available", "data": None}
 
-            # Return the complete plan data
-            return {"success": True, "error": None, "data": raw_plan, "timestamp": datetime.now().isoformat(), "description": "Current Predbat battery plan including forecasts, costs, and operational states"}
+            # Slimmed rather than returned verbatim: the raw structure is built for the web table
+            # and carries its styling with it, which is pure cost in a model's context.
+            return {
+                "success": True,
+                "error": None,
+                "data": slim_plan(raw_plan),
+                "timestamp": datetime.now().isoformat(),
+                "description": "Current Predbat battery plan including forecasts, costs, and operational states. Row times are local, as weekday and clock time; each row's slot_minute is minutes from the plan start given by the top-level 'time'.",
+            }
         except Exception as e:
             return {"success": False, "error": f"Error retrieving plan data: {str(e)}", "data": None}
 

@@ -36,7 +36,7 @@ import functools
 import json
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from agent_tools import TOOL_DEFS, PredbatTools, openai_tool_list
 from component_base import ComponentBase
@@ -151,6 +151,114 @@ class ChatRequestError(RuntimeError):
         return "OpenRouter returned HTTP {}: {}".format(self.status, self.body[:200])
 
 
+# Window dict keys whose value is minutes since local midnight rather than a quantity. Rendered as
+# a weekday and clock time in the snapshot: a charge window at "start: 1590" is 26.5 hours after
+# midnight, i.e. half past two tomorrow morning, which no reader works out from the number - and a
+# model that does not work it out either will happily tell a user their battery charges at 15:90.
+WINDOW_MINUTE_KEYS = ("start", "end", "start_orig", "end_orig")
+
+
+def format_clock(minutes, midnight):
+    """Render minutes-since-midnight as a short weekday and time, e.g. "Sat 02:30".
+
+    Falls back to the raw value whenever the conversion cannot be made - a base that has not
+    finished starting has no midnight, and a window key can hold None. A snapshot line that says
+    something slightly less useful is always better than one that raises and takes the whole
+    system prompt with it.
+    """
+    if midnight is None or isinstance(minutes, bool) or not isinstance(minutes, (int, float)):
+        return str(minutes)
+    try:
+        return (midnight + timedelta(minutes=int(minutes))).strftime("%a %H:%M")
+    except (ValueError, OverflowError, TypeError):
+        return str(minutes)
+
+
+def format_window(window, midnight):
+    """Render a charge or export window with clock times instead of raw minute counts.
+
+    Every key the window carries is kept - the extras (average, target, set) are what the model
+    reasons about - but the minute-valued ones become times. Written generically rather than
+    naming the fields, so a window that gains a key still renders rather than silently dropping it.
+    """
+    if not isinstance(window, dict):
+        return str(window)
+    span = "{} to {}".format(format_clock(window.get("start"), midnight), format_clock(window.get("end"), midnight))
+    extras = []
+    for key, value in window.items():
+        if key in ("start", "end"):
+            continue
+        extras.append("{} {}".format(key, format_clock(value, midnight) if key in WINDOW_MINUTE_KEYS else value))
+    return "{} ({})".format(span, ", ".join(extras)) if extras else span
+
+
+def format_percent_of(value, total):
+    """Render " (N%)" for a value against a total, or "" when that cannot be worked out.
+
+    kWh on its own does not tell a reader whether a battery is nearly full without them dividing
+    by a capacity that appears elsewhere in the line, and a reserve in kWh is close to meaningless
+    without it. Returns a fragment to append rather than a number, so a caller never has to decide
+    what to do about an unknown.
+    """
+    try:
+        if not total or isinstance(value, bool) or isinstance(total, bool):
+            return ""
+        return " ({:.0f}%)".format(float(value) / float(total) * 100.0)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return ""
+
+
+def snapshot_version(base):
+    """Return Predbat's version string for the snapshot.
+
+    There is no instance attribute for this - the version is the module-level THIS_VERSION_DISPLAY
+    in predbat.py, which is what web.py renders in its header - so reading base.this_version, as
+    this used to, reported "unknown" on every real install. Imported inside the function because
+    predbat.py and config.py are a circular pair that only resolves because predbat.py is imported
+    first; by the time a snapshot is built it always has been.
+    """
+    version = getattr(base, "this_version", None)
+    if version:
+        return version
+    try:
+        from predbat import THIS_VERSION_DISPLAY
+
+        return THIS_VERSION_DISPLAY or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def snapshot_inverter_types(base):
+    """Return the inverter type(s) in use, as a readable string.
+
+    inverter_type is a string_list in APPS_SCHEMA with one entry per inverter, read as
+    get_arg("inverter_type", index=<n>) - so the unindexed read this used to do never resolved and
+    always fell back to "unknown". The live Inverter objects each carry the type they actually
+    resolved to, which is also what a mixed-inverter install needs: reporting one type for a system
+    running two different ones would be worse than reporting none.
+    """
+    types = []
+    for inverter in getattr(base, "inverters", None) or []:
+        found = getattr(inverter, "inverter_type", None)
+        if found and found not in types:
+            types.append(str(found))
+    if types:
+        return ", ".join(types)
+
+    # Before the inverters are built, fall back to what apps.yaml asked for.
+    try:
+        configured = base.get_arg("inverter_type", None, indirect=False)
+    except Exception:
+        configured = None
+    if isinstance(configured, list):
+        unique = []
+        for entry in configured:
+            if entry and str(entry) not in unique:
+                unique.append(str(entry))
+        return ", ".join(unique) if unique else "unknown"
+    return str(configured) if configured else "unknown"
+
+
 def build_snapshot(base):
     """Render a compact description of the live system for the system prompt.
 
@@ -174,13 +282,24 @@ def build_snapshot(base):
         """Read one attribute off the base instance."""
         return getattr(base, name, default)
 
+    # Despite the name, now_utc/midnight_utc are local time carrying a tz offset (predbat.py sets
+    # them from datetime.now(local_tz)), so a clock time derived from them is the wall clock a
+    # user reads off, not UTC.
+    now = state("now_utc", None) or datetime.now()
+    midnight = state("midnight_utc", None)
+
     lines = ["Predbat state as it was when this conversation started:"]
-    lines.append("- Conversation started at: {}".format(state("now_utc", datetime.now())))
-    lines.append("- Predbat version: {}".format(state("this_version", "unknown")))
+    # The weekday matters more than it looks: window minutes routinely run past 1440 into
+    # tomorrow, so without a day the model cannot tell today's 02:30 from tomorrow's.
+    lines.append("- Conversation started at: {}".format(now.strftime("%a %Y-%m-%d %H:%M:%S%z") if isinstance(now, datetime) else now))
+    lines.append("- Predbat version: {}".format(snapshot_version(base)))
     lines.append("- Status: {}".format(state("current_status", "unknown")))
     lines.append("- Mode: {}".format(arg("mode", "unknown")))
-    lines.append("- SOC: {} kWh of {} kWh, reserve {}".format(state("soc_kw", "unknown"), state("soc_max", "unknown"), state("reserve", "unknown")))
-    lines.append("- Inverters: {} of type {}".format(state("num_inverters", "unknown"), arg("inverter_type", "unknown")))
+    soc_kw = state("soc_kw", "unknown")
+    soc_max = state("soc_max", "unknown")
+    reserve = state("reserve", "unknown")
+    lines.append("- SOC: {} kWh of {} kWh{}, reserve {} kWh{}".format(soc_kw, soc_max, format_percent_of(soc_kw, soc_max), reserve, format_percent_of(reserve, soc_max)))
+    lines.append("- Inverters: {} of type {}".format(state("num_inverters", "unknown"), snapshot_inverter_types(base)))
     lines.append("- Cars configured: {}".format(state("num_cars", 0)))
     lines.append("- Currency: {}".format(state("currency_symbols", ["p", "£"])))
     lines.append("- Errors seen this run: {}".format(bool(state("had_errors", False))))
@@ -195,10 +314,10 @@ def build_snapshot(base):
 
     windows = state("charge_window_best", []) or []
     if windows:
-        lines.append("- Next planned charge window: {}".format(windows[0]))
+        lines.append("- Next planned charge window: {}".format(format_window(windows[0], midnight)))
     exports = state("export_window_best", []) or []
     if exports:
-        lines.append("- Next planned export window: {}".format(exports[0]))
+        lines.append("- Next planned export window: {}".format(format_window(exports[0], midnight)))
 
     return "\n".join(lines)
 

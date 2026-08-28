@@ -2643,6 +2643,141 @@ def test_model_resolution_order(my_predbat):
     return failed
 
 
+def test_snapshot_formats_times_and_percentages(my_predbat):
+    """The snapshot renders window minutes as weekday + clock, and kWh figures with a percentage.
+
+    Raw minutes-since-midnight are the worst of the lot: a charge window at "start: 1590" is
+    26.5 hours after midnight - half past two TOMORROW - and neither a reader nor a model reliably
+    works that out. A model that does not is liable to tell a user their battery charges at 15:90.
+    The weekday is what disambiguates it, which is also why the captured timestamp carries one.
+
+    Mutation checks: reverting any of format_window, format_clock or format_percent_of to the raw
+    value fails one of the assertions below.
+    """
+    failed = False
+    print("**** Testing snapshot time and percentage formatting ****")
+
+    tz = timezone(timedelta(hours=1))
+
+    class Base:
+        """A base carrying exactly the state the snapshot formats."""
+
+        now_utc = datetime(2026, 8, 28, 17, 0, 0, tzinfo=tz)
+        midnight_utc = datetime(2026, 8, 28, 0, 0, 0, tzinfo=tz)
+        soc_kw = 6.76
+        soc_max = 9.52
+        reserve = 0.381
+        minutes_now = 1020
+        rate_import = {1020: 30.26}
+        rate_export = {1020: 12.0}
+        charge_window_best = [{"start": 1590, "end": 1860, "average": 6.9, "target": 9.52}]
+        export_window_best = [{"start": 1255, "end": 1320, "average": 12.0, "set": 11.0, "start_orig": 1230, "target": 4}]
+
+        def get_arg(self, name, default=None, **kwargs):
+            """Return the default for every argument."""
+            return default
+
+    snapshot = build_snapshot(Base())
+
+    # The captured timestamp carries a short weekday.
+    if "Fri 2026-08-28" not in snapshot:
+        print("ERROR: the captured timestamp has no short weekday: {}".format(snapshot))
+        failed = True
+
+    # 1590 minutes is 02:30 the NEXT day - the weekday is the whole point.
+    if "Sat 02:30 to Sat 07:00" not in snapshot:
+        print("ERROR: the charge window was not rendered as weekday + clock: {}".format(snapshot))
+        failed = True
+    if "1590" in snapshot or "1860" in snapshot:
+        print("ERROR: raw minute counts are still in the snapshot: {}".format(snapshot))
+        failed = True
+
+    # An export window inside today, with its extra minute-valued key also converted.
+    if "Fri 20:55 to Fri 22:00" not in snapshot:
+        print("ERROR: the export window was not rendered as weekday + clock: {}".format(snapshot))
+        failed = True
+    if "start_orig Fri 20:30" not in snapshot:
+        print("ERROR: start_orig was left as raw minutes: {}".format(snapshot))
+        failed = True
+
+    # Non-time keys must survive untouched - they are what the model actually reasons about.
+    for kept in ("average 6.9", "target 9.52", "set 11.0"):
+        if kept not in snapshot:
+            print("ERROR: window field {!r} was dropped: {}".format(kept, snapshot))
+            failed = True
+
+    # kWh alone does not say whether the battery is nearly full.
+    if "6.76 kWh of 9.52 kWh (71%)" not in snapshot:
+        print("ERROR: SOC has no percentage: {}".format(snapshot))
+        failed = True
+    if "reserve 0.381 kWh (4%)" not in snapshot:
+        print("ERROR: reserve has no unit and percentage: {}".format(snapshot))
+        failed = True
+
+    # Version and inverter type both used to read attributes that do not exist, so every real
+    # install reported "unknown" for both. The version is a module constant in predbat.py, and the
+    # type lives on each built Inverter (inverter_type is a per-inverter string_list in
+    # APPS_SCHEMA, so an unindexed get_arg never resolves it).
+    class WithInverters(Base):
+        """A base with inverters built, as a running Predbat has."""
+
+        inverters = [type("FakeInverter", (), {"inverter_type": "GE"})(), type("FakeInverter", (), {"inverter_type": "SOLIS"})()]
+        num_inverters = 2
+
+    detailed = build_snapshot(WithInverters())
+    if "Predbat version: unknown" in detailed:
+        print("ERROR: the snapshot still reports an unknown version: {}".format(detailed))
+        failed = True
+    # A mixed install must name both, not pick one and imply the other does not exist.
+    if "GE, SOLIS" not in detailed:
+        print("ERROR: the snapshot did not name both inverter types: {}".format(detailed))
+        failed = True
+
+    # With no inverters built yet, fall back to what apps.yaml asked for rather than "unknown".
+    class Configured(Base):
+        """A base before the inverters are constructed."""
+
+        def get_arg(self, name, default=None, **kwargs):
+            """Report the apps.yaml inverter_type list."""
+            return ["GE"] if name == "inverter_type" else default
+
+    if "of type GE" not in build_snapshot(Configured()):
+        print("ERROR: the snapshot did not fall back to the configured inverter type: {}".format(build_snapshot(Configured())))
+        failed = True
+
+    # A base with no midnight (half-started) must degrade rather than raise.
+    class NoMidnight(Base):
+        """Predbat before midnight_utc has been worked out."""
+
+        midnight_utc = None
+
+    try:
+        degraded = build_snapshot(NoMidnight())
+    except Exception as error:
+        print("ERROR: build_snapshot raised with no midnight: {}".format(error))
+        return True
+    if "1590" not in degraded:
+        print("ERROR: with no midnight the window should fall back to raw minutes: {}".format(degraded))
+        failed = True
+
+    # A zero capacity must not produce a division error or a nonsense percentage.
+    class ZeroMax(Base):
+        """An inverter reporting no capacity at all."""
+
+        soc_max = 0
+
+    try:
+        zeroed = build_snapshot(ZeroMax())
+    except Exception as error:
+        print("ERROR: build_snapshot raised with soc_max of 0: {}".format(error))
+        return True
+    if "%" in zeroed.split("Inverters")[0].split("SOC")[-1]:
+        print("ERROR: a zero capacity still produced a percentage: {}".format(zeroed))
+        failed = True
+
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
@@ -2650,6 +2785,7 @@ def run_chat_tests(my_predbat):
     failed |= test_model_resolution_order(my_predbat)
     failed |= test_component_gating_end_to_end(my_predbat)
     failed |= test_build_snapshot(my_predbat)
+    failed |= test_snapshot_formats_times_and_percentages(my_predbat)
     failed |= test_build_system_prompt(my_predbat)
     failed |= test_primer_says_when_not_to_call_a_tool(my_predbat)
     failed |= test_event_buffer(my_predbat)
