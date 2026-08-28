@@ -355,6 +355,7 @@ def test_find_charge_window(my_predbat):
 
     failed |= test_calc_dawn(my_predbat)
     failed |= test_calc_pv_light_dark(my_predbat)
+    failed |= test_fetch_pv_forecast_and_dawn(my_predbat)
     return failed
 
 
@@ -564,4 +565,80 @@ def test_calc_pv_light_dark(my_predbat):
     my_predbat.plan_interval_minutes = old_plan_interval
     my_predbat.combine_charge_slots = old_combine_charge
     my_predbat.set_charge_low_power = old_low_power
+    return failed
+
+
+def test_fetch_pv_forecast_and_dawn(my_predbat):
+    """
+    Regression test for #4699: calc_pv_light_dark() must see the freshly-fetched PV forecast, not
+    the empty dict fetch_sensor_data() resets pv_forecast_minute to at the top of each cycle. The
+    original bug was an ordering mistake between two separate lines in fetch_sensor_data() - the
+    forecast was fetched further down, after the dawn split had already run against the stale
+    reset. fetch_pv_forecast_and_dawn() now does both as one call, so this test exercises that real
+    method (mocking only fetch_pv_forecast, its one external dependency) rather than reimplementing
+    the sequence by hand, which would not have caught the original ordering bug.
+    """
+    failed = 0
+    old_pv_forecast_minute = my_predbat.pv_forecast_minute
+    old_pv_forecast_minute10 = my_predbat.pv_forecast_minute10
+    old_pv_forecast_minute90 = my_predbat.pv_forecast_minute90
+    old_plan_interval = my_predbat.plan_interval_minutes
+    old_combine_charge = my_predbat.combine_charge_slots
+    old_minutes_now = my_predbat.minutes_now
+    old_fetch_pv_forecast = my_predbat.fetch_pv_forecast
+
+    my_predbat.plan_interval_minutes = 30
+    my_predbat.combine_charge_slots = True
+    my_predbat.minutes_now = 30
+    # Simulate the state fetch_sensor_data() resets to at the top of each cycle, before this call
+    my_predbat.pv_forecast_minute = {}
+
+    fetched_forecast = {}
+    for m in range(0, 30, 5):
+        fetched_forecast[m] = 0.0  # dark
+    for m in range(30, 60, 5):
+        fetched_forecast[m] = 1.0  # light, well past the low_power_pv_threshold_w threshold
+
+    def mock_fetch_pv_forecast():
+        return dict(fetched_forecast), {"mock10": True}, {"mock90": True}
+
+    my_predbat.fetch_pv_forecast = mock_fetch_pv_forecast
+
+    print("Test fetch_pv_forecast_and_dawn: forecast is fetched before the dawn split reads it")
+    result = my_predbat.fetch_pv_forecast_and_dawn()
+
+    if my_predbat.pv_forecast_minute != fetched_forecast:
+        print("ERROR: fetch_pv_forecast_and_dawn: pv_forecast_minute was not populated from fetch_pv_forecast()")
+        failed = 1
+    if my_predbat.pv_forecast_minute10 != {"mock10": True} or my_predbat.pv_forecast_minute90 != {"mock90": True}:
+        print("ERROR: fetch_pv_forecast_and_dawn: pv_forecast_minute10/90 were not populated from fetch_pv_forecast()")
+        failed = 1
+    if result.get(0) != 0 or result.get(30) != 1:
+        print("ERROR: fetch_pv_forecast_and_dawn: expected a dark->light split at minute 30 (the #4699 regression - an empty forecast at this point would give {{}}), got {}".format(result))
+        failed = 1
+    if my_predbat.pv_light_dark != result:
+        print("ERROR: fetch_pv_forecast_and_dawn: self.pv_light_dark was not set to the returned result")
+        failed = 1
+
+    dawn_state = my_predbat.get_state_wrapper("binary_sensor." + my_predbat.prefix + "_dawn")
+    if dawn_state != "on":
+        print("ERROR: fetch_pv_forecast_and_dawn: expected the dawn binary_sensor to be published 'on' at minute 30 (past dawn), got {}".format(dawn_state))
+        failed = 1
+
+    print("Test fetch_pv_forecast_and_dawn: dawn sensor still published when minutes_now is before dawn")
+    my_predbat.minutes_now = 0
+    my_predbat.pv_forecast_minute = {}
+    my_predbat.fetch_pv_forecast_and_dawn()
+    dawn_state = my_predbat.get_state_wrapper("binary_sensor." + my_predbat.prefix + "_dawn")
+    if dawn_state != "off":
+        print("ERROR: fetch_pv_forecast_and_dawn: expected the dawn binary_sensor to be published 'off' before dawn, got {}".format(dawn_state))
+        failed = 1
+
+    my_predbat.pv_forecast_minute = old_pv_forecast_minute
+    my_predbat.pv_forecast_minute10 = old_pv_forecast_minute10
+    my_predbat.pv_forecast_minute90 = old_pv_forecast_minute90
+    my_predbat.plan_interval_minutes = old_plan_interval
+    my_predbat.combine_charge_slots = old_combine_charge
+    my_predbat.minutes_now = old_minutes_now
+    my_predbat.fetch_pv_forecast = old_fetch_pv_forecast
     return failed

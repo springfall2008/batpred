@@ -1084,7 +1084,6 @@ CONFIG_ITEMS = [
         "step": 10,
         "unit": "W",
         "icon": "mdi:weather-sunny",
-        "enable": "set_charge_low_power",
         "default": 150,
     },
     {

@@ -1403,7 +1403,7 @@ def find_charge_rate(
         # at max rate instead - a throttled rate would cap the PV going into the battery, exporting the
         # surplus and importing to make the target up later
         low_power_pv_threshold_kwh = (low_power_pv_threshold_w / MINUTE_WATT) * max(abs_minutes_left, 0)
-        if pv_window_kwh > low_power_pv_threshold_kwh:
+        if pv_window_kwh > 0 and pv_window_kwh >= low_power_pv_threshold_kwh:
             if log_to:
                 log_to("Low power mode: PV forecast in window {}kWh > {}kWh ({}W over {} minutes), default to max rate".format(dp2(pv_window_kwh), dp2(low_power_pv_threshold_kwh), low_power_pv_threshold_w, abs_minutes_left))
             return max_rate, max_rate_real

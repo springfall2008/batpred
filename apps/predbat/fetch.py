@@ -745,6 +745,31 @@ class Fetch:
             load_minutes = MinuteArray(load_minutes, size)
         return load_minutes, age_days
 
+    def fetch_pv_forecast_and_dawn(self):
+        """
+        Fetch the PV forecast, compute the dawn light/dark split from it, and publish the dawn
+        binary_sensor - as one call so the ordering that #4699 regressed on (the split must be
+        computed from a freshly-fetched forecast, not the empty dict fetch_sensor_data() resets it
+        to at the top of each cycle) can't drift apart again. Published unconditionally regardless
+        of whether import rates currently exist, so the sensor never goes stale.
+
+        Returns:
+            pv_light_dark: dict as returned by calc_pv_light_dark(), also stored on self.pv_light_dark.
+        """
+        self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
+
+        # Stored on self, not just local, so it can be used elsewhere rather than only by the
+        # window split below.
+        pv_light_dark = self.pv_light_dark = self.calc_pv_light_dark()
+        # "on" past dawn, "off" before it or when unclassified (combine_charge_slots off, or no
+        # PV forecast) - not the same as PV actually producing right now, see calc_dawn's docstring
+        self.dashboard_item(
+            "binary_sensor." + self.prefix + "_dawn",
+            state="on" if pv_light_dark.get(self.minutes_now) == 1 else "off",
+            attributes={"friendly_name": "Predbat is past dawn (light, not dark, in the low-power charge window split)", "icon": "mdi:weather-sunset-up"},
+        )
+        return pv_light_dark
+
     def fetch_sensor_data(self, save=True):
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
@@ -1066,12 +1091,11 @@ class Fetch:
         if self.rate_import or self.rate_export:
             self.set_rate_thresholds()
 
-        # Fetch PV forecast if enabled, today must be enabled, other days are optional. Needed here,
-        # ahead of "Find charging windows" below, because calc_pv_light_dark() reads
+        # Needed here, ahead of "Find charging windows" below, because calc_pv_light_dark() reads
         # self.pv_forecast_minute to locate dawn - it was previously fetched further down in this
         # function, after the dawn calculation had already run against the freshly-reset empty dict
         # from the top of fetch_sensor_data(), so the dawn split could never actually trigger (#4699).
-        self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
+        pv_light_dark = self.fetch_pv_forecast_and_dawn()
 
         # Find discharging windows
         if self.rate_export:
@@ -1083,17 +1107,6 @@ class Fetch:
 
         # Find charging windows
         if self.rate_import:
-            # Stored on self, not just local, so it can be published below rather than only used
-            # internally by the window split.
-            pv_light_dark = self.pv_light_dark = self.calc_pv_light_dark()
-            # "on" past dawn, "off" before it or when unclassified (combine_charge_slots off, or no
-            # PV forecast) - not the same as PV actually producing right now, see calc_dawn's docstring
-            self.dashboard_item(
-                "binary_sensor." + self.prefix + "_dawn",
-                state="on" if pv_light_dark.get(self.minutes_now) == 1 else "off",
-                attributes={"friendly_name": "Predbat is past dawn (light, not dark, in the low-power charge window split)", "icon": "mdi:weather-sunset-up"},
-            )
-
             # Find charging window
             self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=self.rate_export, pv_light_dark=pv_light_dark)
             self.log("Low Import rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
