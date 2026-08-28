@@ -480,6 +480,46 @@ def test_hainterface_set_state_db_primary(my_predbat=None):
     return failed
 
 
+def test_hainterface_delete_state_db_primary(my_predbat=None):
+    """Test delete_state() prevents a DB-primary state from being restored."""
+    print("\n=== Testing HAInterface delete_state() DB primary ===")
+    failed = 0
+
+    mock_base = MockBase()
+    mock_db = MockDatabaseManager()
+    mock_db.state_data["sensor.battery"] = {"state": "90", "attributes": {}, "last_changed": "2025-12-25T10:00:00Z"}
+
+    ha_interface = create_ha_interface(mock_base, ha_key=None, db_enable=True, db_mirror_ha=False, db_primary=True)
+    ha_interface.db_manager = mock_db
+    ha_interface.state_data = {"sensor.battery": {"state": "90", "attributes": {}}}
+    ha_interface.db_mirror_list = {"Sensor.Battery": True, "sensor.battery": True}
+
+    result = ha_interface.delete_state("Sensor.Battery")
+    ha_interface.update_states()
+
+    if result is not True:
+        print("ERROR: Successful state deletion should return True")
+        failed += 1
+    if mock_db.delete_state_calls != ["sensor.battery"]:
+        print("ERROR: DatabaseManager delete_state_db should receive the canonical entity ID")
+        failed += 1
+    if "sensor.battery" in mock_db.state_data or "sensor.battery" in ha_interface.state_data:
+        print("ERROR: Deleted DB-primary state should not be restored")
+        failed += 1
+    if ha_interface.db_mirror_list:
+        print("ERROR: Delete should clear mixed-case and canonical mirror tracking")
+        failed += 1
+    ha_interface.db_manager.delete_state_db = lambda entity_id: None
+    if ha_interface.delete_state("sensor.missing"):
+        print("ERROR: Failed persistent deletion should return False")
+        failed += 1
+    ha_interface.db_manager = None
+    if ha_interface.delete_state("sensor.missing"):
+        print("ERROR: Missing enabled DatabaseManager should return False")
+        failed += 1
+    return failed
+
+
 def test_hainterface_db_mirror_list_tracking(my_predbat=None):
     """Test db_mirror_list is tracked across operations"""
     print("\n=== Testing HAInterface db_mirror_list tracking ===")
@@ -559,6 +599,7 @@ def run_hainterface_state_tests(my_predbat):
     failed += test_hainterface_set_state_basic(my_predbat)
     failed += test_hainterface_set_state_db_mirror(my_predbat)
     failed += test_hainterface_set_state_db_primary(my_predbat)
+    failed += test_hainterface_delete_state_db_primary(my_predbat)
 
     # db_mirror_list tracking
     failed += test_hainterface_db_mirror_list_tracking(my_predbat)

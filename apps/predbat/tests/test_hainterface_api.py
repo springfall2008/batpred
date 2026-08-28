@@ -92,6 +92,40 @@ def test_hainterface_api_call_post(my_predbat=None):
     return failed
 
 
+def test_hainterface_delete_state_api(my_predbat=None):
+    """Test delete_state() uses HTTP DELETE and reports request failures."""
+    print("\n=== Testing HAInterface delete_state() API ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+    response = create_mock_requests_response(200, {})
+    response.text = ""
+
+    with patch("ha.requests.delete") as mock_delete:
+        mock_delete.return_value = response
+        if ha_interface.delete_state("Sensor.Battery") is not True:
+            print("ERROR: Successful HTTP state deletion should return True")
+            failed += 1
+        elif "/api/states/sensor.battery" not in mock_delete.call_args[0][0]:
+            print("ERROR: HTTP DELETE should use the canonical entity ID")
+            failed += 1
+
+        mock_delete.side_effect = requests.Timeout("Mocked timeout")
+        if ha_interface.delete_state("sensor.battery") is not False:
+            print("ERROR: Failed HTTP state deletion should return False")
+            failed += 1
+
+        mock_delete.side_effect = None
+        failed_response = create_mock_requests_response(500, {"message": "failed"})
+        failed_response.text = '{"message": "failed"}'
+        mock_delete.return_value = failed_response
+        if ha_interface.delete_state("sensor.battery") is not False:
+            print("ERROR: Non-2xx HTTP state deletion should return False")
+            failed += 1
+    return failed
+
+
 def test_hainterface_api_call_no_key(my_predbat=None):
     """Test api_call() returns None when no API key"""
     print("\n=== Testing HAInterface api_call() no key ===")
@@ -553,6 +587,7 @@ def run_hainterface_api_tests(my_predbat):
     failed = 0
     failed += test_hainterface_api_call_get(my_predbat)
     failed += test_hainterface_api_call_post(my_predbat)
+    failed += test_hainterface_delete_state_api(my_predbat)
     failed += test_hainterface_api_call_no_key(my_predbat)
     failed += test_hainterface_api_call_supervisor(my_predbat)
     failed += test_hainterface_api_call_json_decode_error(my_predbat)

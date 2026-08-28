@@ -110,11 +110,22 @@ class DatabaseEngine:
 
     def _get_all_entities_db(self):
         """
-        Get all entity names from the SQLLite database
+        Get all entity names with a current state from the SQLLite database
         """
-        self.db_cursor.execute("SELECT entity_name FROM entities")
+        self.db_cursor.execute("SELECT entities.entity_name FROM entities INNER JOIN latest ON latest.entity_index = entities.entity_index")
         rows = self.db_cursor.fetchall()
         return [row[0] for row in rows]
+
+    def _delete_state_db(self, entity_id):
+        """
+        Delete the current state for an entity while retaining its history.
+        """
+        entity_id = entity_id.lower()
+        entity_index = self._get_entity_index_db(entity_id)
+        if entity_index is None:
+            return False
+        self.db_cursor.execute("DELETE FROM latest WHERE entity_index = ?", (entity_index,))
+        return self.db_cursor.rowcount > 0
 
     def _commit_db(self):
         """

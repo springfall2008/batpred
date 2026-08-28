@@ -134,7 +134,6 @@ deadband
 deadbeefdeadbeef
 dedup
 dedupe
-delayedstart
 dend
 denorm
 derate

@@ -30,8 +30,8 @@ class DatabaseManager(ComponentBase):
     """Async database manager with IPC queue.
 
     Wraps DatabaseEngine in thread-bridged IPC for async-safe database
-    operations. Processes get_history, set_state, get_all_entities, and
-    get_state commands from the queue.
+    operations. Processes get_history, set_state, delete_state,
+    get_all_entities, and get_state commands from the queue.
     """
 
     def initialize(self, db_enable, db_days):
@@ -88,6 +88,12 @@ class DatabaseManager(ComponentBase):
                     self.return_event.set()  # Notify that the result is ready
                 elif command == "set_state":
                     self.db_engine._set_state_db(info["entity_id"], info["state"], info["attributes"], timestamp=info["timestamp"])
+                elif command == "delete_state":
+                    deleted = self.db_engine._delete_state_db(info["entity_id"])
+                    self.db_engine._commit_db()
+                    self.last_commit_time = datetime.now(timezone.utc)
+                    self.queue_results[queue_id] = deleted
+                    self.return_event.set()  # Notify that the result is ready
                 elif command == "get_all_entities":
                     entities = self.db_engine._get_all_entities_db()
                     self.queue_results[queue_id] = entities
@@ -169,6 +175,12 @@ class DatabaseManager(ComponentBase):
 
         result = self.send_via_ipc("get_all_entities", {}, expect_response=True)
         return result
+
+    def delete_state_db(self, entity_id):
+        """
+        Delete an entity's current state through the DB thread.
+        """
+        return self.send_via_ipc("delete_state", {"entity_id": entity_id}, expect_response=True)
 
     def set_state_db(self, entity_id, state, attributes, timestamp=None):
         if timestamp is not None:
