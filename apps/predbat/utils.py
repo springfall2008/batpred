@@ -148,14 +148,33 @@ def is_secret_key(key):
     return any(substring in key_lower for substring in SECRET_KEY_SUBSTRINGS)
 
 
+def _mask_secrets_in_place(value):
+    """
+    Redact credential-like keys anywhere inside an already-copied structure, in place.
+    """
+    if isinstance(value, dict):
+        for key in value:
+            if is_secret_key(key):
+                value[key] = "xxx"
+            else:
+                _mask_secrets_in_place(value[key])
+    elif isinstance(value, list):
+        for entry in value:
+            _mask_secrets_in_place(entry)
+
+
 def mask_secret_args(args):
     """
     Return a deep copy of an apps.yaml-style args dict with credential-like keys redacted.
+
+    Recurses through nested dicts and lists rather than checking only top-level names. apps.yaml
+    routinely nests credentials one level down - the shipped template documents
+    forecast_solar as a list of dicts each carrying its own api_key - and 'forecast_solar'
+    matches none of SECRET_KEY_SUBSTRINGS, so a top-level-only pass hands that key over intact.
+    That matters because everything this redacts is on its way to a third-party model.
     """
     masked = copy.deepcopy(args)
-    for key in masked:
-        if is_secret_key(key):
-            masked[key] = "xxx"
+    _mask_secrets_in_place(masked)
     return masked
 
 

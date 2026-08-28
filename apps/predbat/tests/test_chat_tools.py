@@ -28,7 +28,7 @@ import shutil
 import tempfile
 
 import chat_tools
-from chat_tools import CHAT_TOOL_DEFS, score_documents, search_docs, read_source, search_source, resolve_source_path, SourceAccessError
+from chat_tools import CHAT_TOOL_DEFS, score_documents, search_docs, read_source, search_source, resolve_source_path, SourceAccessError, is_endpoint_key
 from chat_tools import DEFAULT_FETCH_ALLOWLIST, FetchRefusedError, host_allowed, html_to_text, validate_fetch_target
 from chat_tools import APPS_YAML_RESTART_WARNING, set_apps_config, validate_apps_schema_type
 from agent_tools import openai_tool_list
@@ -944,6 +944,62 @@ def test_validate_apps_schema_type(my_predbat):
     return failed
 
 
+def test_set_apps_config_refuses_endpoint_keys(my_predbat):
+    """A key that decides where an existing credential is sent is refused, file untouched.
+
+    Guarding credential values alone is not enough: ha_key never changes, but repointing ha_url
+    sends that unchanged token to whichever host the new value names, and openrouter_base_url
+    does the same for openrouter_api_key. Neither matches is_secret_key, so before
+    is_endpoint_key() both were accepted.
+
+    Mutation check: removing the is_endpoint_key() guard in set_apps_config() makes this fail on
+    both keys - the call succeeds and the url line in apps.yaml changes.
+    """
+    failed = False
+    print("**** Testing set_apps_config refuses endpoint redirection keys ****")
+    # A fixture that actually CONTAINS the endpoint keys. With the shared fixture, which does
+    # not, set_apps_config refuses them as "not found in apps.yaml" and this test would pass
+    # whether or not the endpoint guard existed - caught by mutation-testing the guard away.
+    endpoint_yaml = FIXTURE_APPS_YAML.rstrip("\n") + '\n  ha_url: "http://homeassistant.local:8123"\n  openrouter_base_url: "https://openrouter.ai/api/v1"\n'
+
+    for key, value in (("ha_url", "http://attacker.example:8123"), ("openrouter_base_url", "http://attacker.example/v1")):
+        root = tempfile.mkdtemp(prefix="predbat_apps_")
+        try:
+            apps_path = os.path.join(root, "apps.yaml")
+            with open(apps_path, "w", encoding="utf-8") as handle:
+                handle.write(endpoint_yaml)
+            backup_path = apps_path + ".backup"
+            original = open(apps_path, "r", encoding="utf-8").read()
+
+            result = set_apps_config(my_predbat, key, value, apps_yaml_path=apps_path, backup_path=backup_path)
+
+            if result.get("success"):
+                print("ERROR: endpoint key {} was accepted: {}".format(key, result))
+                failed = True
+            if "credentials" not in str(result.get("error", "")).lower():
+                print("ERROR: {} was refused for the wrong reason: {}".format(key, result))
+                failed = True
+            if open(apps_path, "r", encoding="utf-8").read() != original:
+                print("ERROR: apps.yaml was modified despite refusing {}".format(key))
+                failed = True
+            if os.path.exists(backup_path):
+                print("ERROR: a backup was created for a refused write of {}".format(key))
+                failed = True
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    # The suffix rule must not swallow ordinary keys that happen to be near-misses.
+    for benign in ("battery_size", "inverter_type", "urls_per_day"):
+        if is_endpoint_key(benign):
+            print("ERROR: is_endpoint_key({}) is True, which would block a legitimate change".format(benign))
+            failed = True
+    for endpoint in ("ha_url", "openrouter_base_url", "givtcp_host", "some_new_endpoint"):
+        if not is_endpoint_key(endpoint):
+            print("ERROR: is_endpoint_key({}) is False, leaving a redirection key changeable".format(endpoint))
+            failed = True
+    return failed
+
+
 def run_chat_tools_tests(my_predbat):
     """Run every chat-only tool test, returning True if any of them failed."""
     failed = False
@@ -965,6 +1021,7 @@ def run_chat_tools_tests(my_predbat):
     failed |= test_fetch_url_malformed_inputs_return_results(my_predbat)
     failed |= test_set_apps_config_requires_a_key(my_predbat)
     failed |= test_set_apps_config_refuses_credential_key(my_predbat)
+    failed |= test_set_apps_config_refuses_endpoint_keys(my_predbat)
     failed |= test_set_apps_config_refuses_unknown_key(my_predbat)
     failed |= test_set_apps_config_refuses_a_schema_type_mismatch(my_predbat)
     failed |= test_set_apps_config_success_preserves_formatting_backs_up_and_mirrors_args(my_predbat)

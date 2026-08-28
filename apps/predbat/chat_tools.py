@@ -199,6 +199,26 @@ SOURCE_MAX_LINES = 400
 SOURCE_MAX_BYTES = 65536
 SOURCE_MATCH_LINE_MAX = 300
 SOURCE_PATTERN_MAX = 200
+
+# Keys that name where Predbat sends an existing credential. Refusing to change a credential's
+# value is not enough on its own: repointing ha_url sends the unchanged ha_key to whichever host
+# the new value names, and openrouter_base_url does the same for openrouter_api_key. The
+# credential never moves, so is_secret_key sees nothing wrong, but it ends up at an attacker's
+# endpoint just the same - a live route given that fetch_url can carry an injected instruction
+# and confirm_writes is a one-click toggle. The suffix rule covers keys added later; the
+# explicit names cover the two that match no suffix rule worth writing.
+ENDPOINT_KEY_NAMES = ("ha_url", "openrouter_base_url")
+ENDPOINT_KEY_SUFFIXES = ("_url", "_host", "_endpoint", "_base_url")
+
+
+def is_endpoint_key(key):
+    """
+    Return True if an apps.yaml key decides where Predbat sends its credentials.
+    """
+    key_lower = str(key).lower()
+    return key_lower in ENDPOINT_KEY_NAMES or key_lower.endswith(ENDPOINT_KEY_SUFFIXES)
+
+
 SOURCE_SCAN_SECONDS = 5.0
 SOURCE_SCAN_CHECK_LINES = 500  # how often the per-line loop re-checks the scan budget, in lines
 
@@ -545,11 +565,14 @@ def set_apps_config(base, key, value, apps_yaml_path=APPS_YAML_PATH, backup_path
     (WebInterface.html_apps_editor_post) instead - a model choosing this key's new value deserves
     the same safety net a human editing the file by hand already gets.
 
-    Two checks run before the file is even touched: is_secret_key() refuses any key that looks
+    Three checks run before the file is even touched. is_secret_key() refuses any key that looks
     like a credential outright, so neither the model nor an injected instruction it read can swap
-    an API key or token; and validate_apps_schema_type() checks the new value's shape against
-    APPS_SCHEMA, where the key has an entry, so a type that would stop Predbat parsing its own
-    config next start-up is refused now instead of discovered after a restart.
+    an API key or token. is_endpoint_key() refuses the keys that decide where an existing
+    credential is *sent* - guarding the value alone leaves the credential intact while
+    redirecting it somewhere else, which is the same compromise by a different route. And
+    validate_apps_schema_type() checks the new value's shape against APPS_SCHEMA, where the key
+    has an entry, so a type that would stop Predbat parsing its own config next start-up is
+    refused now instead of discovered after a restart.
 
     apps_yaml_path/backup_path default to the real files (relative to the working directory, like
     every other apps.yaml access in web.py) but can be pointed at a temporary file in a test - this
@@ -559,6 +582,8 @@ def set_apps_config(base, key, value, apps_yaml_path=APPS_YAML_PATH, backup_path
         return {"success": False, "error": "'key' must be a non-empty string", "data": None}
     if is_secret_key(key):
         return {"success": False, "error": "'{}' looks like a credential (matches Predbat's secret-key heuristic) and cannot be changed through chat. Edit apps.yaml directly if it needs to change.".format(key), "data": None}
+    if is_endpoint_key(key):
+        return {"success": False, "error": "'{}' decides where Predbat sends its credentials, so it cannot be changed through chat. Edit apps.yaml directly if it needs to change.".format(key), "data": None}
 
     yaml = YAML()
     yaml.preserve_quotes = True

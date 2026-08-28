@@ -16,8 +16,10 @@ before and after the extraction, or an MCP client's tool set changed without any
 import asyncio
 import json
 import os
+import time
 
-from agent_tools import TOOL_DEFS, PredbatTools, mcp_tool_list, openai_tool_list
+from agent_tools import TOOL_DEFS, PredbatTools, mcp_tool_list, openai_tool_list, compile_filter_argument, MCPArgumentError, FILTER_PATTERN_MAX
+from utils import mask_secret_args
 from web_mcp import MCPServerWrapper
 
 GOLDEN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_tools_golden.json")
@@ -621,6 +623,173 @@ def test_get_entity_history_lookback_clamp(my_predbat):
     return failed
 
 
+def test_nested_credentials_are_redacted(my_predbat):
+    """A credential nested inside a non-credential key is redacted, not returned in the clear.
+
+    mask_secret_args used to walk only top-level key names. The shipped apps.yaml template
+    documents forecast_solar as a list of dicts each carrying its own api_key, and
+    'forecast_solar' matches none of SECRET_KEY_SUBSTRINGS - so that key was handed to whichever
+    third-party model asked, through get_apps, get_apps_config and get_state alike.
+
+    Mutation check: reverting mask_secret_args to its top-level-only loop fails this on every
+    assertion below.
+    """
+    failed = False
+    print("**** Testing nested credentials are redacted ****")
+
+    original_args = my_predbat.args
+    try:
+        my_predbat.args = {
+            "forecast_solar": [{"postcode": "SW1A 1AA", "kwp": 4.0, "api_key": "REAL-FORECAST-SOLAR-KEY"}],
+            "inverters": [{"name": "one", "nested": {"password": "REAL-PASSWORD"}}],
+            "battery_size": 9.5,
+            "ha_key": "REAL-HA-TOKEN",
+        }
+
+        masked = mask_secret_args(my_predbat.args)
+        if masked["forecast_solar"][0]["api_key"] != "xxx":
+            print("ERROR: nested api_key was not redacted: {}".format(masked["forecast_solar"]))
+            failed = True
+        if masked["inverters"][0]["nested"]["password"] != "xxx":
+            print("ERROR: a credential two levels down was not redacted: {}".format(masked["inverters"]))
+            failed = True
+        if masked["ha_key"] != "xxx":
+            print("ERROR: a top-level credential stopped being redacted: {}".format(masked))
+            failed = True
+        if masked["battery_size"] != 9.5 or masked["forecast_solar"][0]["postcode"] != "SW1A 1AA":
+            print("ERROR: redaction damaged non-credential values: {}".format(masked))
+            failed = True
+        if my_predbat.args["forecast_solar"][0]["api_key"] != "REAL-FORECAST-SOLAR-KEY":
+            print("ERROR: mask_secret_args mutated the live args rather than a copy")
+            failed = True
+
+        # And through the tool the model actually calls.
+        tools = PredbatTools(my_predbat)
+        result = asyncio.run(tools.execute("get_apps_config", {"key": "forecast_solar"}))
+        if "REAL-FORECAST-SOLAR-KEY" in json.dumps(result):
+            print("ERROR: get_apps_config returned a nested credential: {}".format(result))
+            failed = True
+        result = asyncio.run(tools.execute("get_apps", {}))
+        if "REAL-FORECAST-SOLAR-KEY" in json.dumps(result):
+            print("ERROR: get_apps returned a nested credential: {}".format(result))
+            failed = True
+    finally:
+        my_predbat.args = original_args
+    return failed
+
+
+def test_pathological_regex_arguments_are_rejected(my_predbat):
+    """A nested-quantifier regex is refused before it can be compiled and run.
+
+    search_entities runs a model-supplied regex over every entity id on the component's only
+    event loop, with no await in the loop - the exact hazard search_source is offloaded to a
+    worker thread to avoid. Python's re backtracks with no timeout, so '(.+)+@' against a typical
+    40-character entity id does not finish in any practical time, and the loop it is running on
+    serves every other chat and MCP request. Guarding at compile_filter_argument covers
+    search_entities and the 'filter' arguments on get_state, get_apps and get_config at once.
+
+    Mutation check: removing the reject_pathological_pattern() call from compile_filter_argument
+    makes the refusal assertions below fail.
+    """
+    failed = False
+    print("**** Testing pathological regex arguments are rejected ****")
+
+    for pattern in ("(.+)+@", "(a+)+$", "(x*)*y", "([a-z]+)+#", "(ab|a)+{2,}"):
+        try:
+            compile_filter_argument(pattern, "pattern")
+            print("ERROR: pathological pattern {!r} was accepted".format(pattern))
+            failed = True
+        except MCPArgumentError:
+            pass
+
+    if len("a" * (FILTER_PATTERN_MAX + 1)) <= FILTER_PATTERN_MAX:
+        print("ERROR: test constructed a pattern that is not actually over the cap")
+        failed = True
+    try:
+        compile_filter_argument("a" * (FILTER_PATTERN_MAX + 1), "pattern")
+        print("ERROR: an over-long pattern was accepted")
+        failed = True
+    except MCPArgumentError:
+        pass
+
+    # Legitimate searches must still work - a guard that blocks ordinary use is its own bug.
+    for pattern in ("sensor.predbat_.*", "(sensor|switch)\\..*battery", ".*(soc|charge).*", "(\\d+)", "^binary_sensor\\."):
+        try:
+            if compile_filter_argument(pattern, "pattern") is None:
+                print("ERROR: legitimate pattern {!r} compiled to None".format(pattern))
+                failed = True
+        except MCPArgumentError as error:
+            print("ERROR: legitimate pattern {!r} was rejected: {}".format(pattern, error))
+            failed = True
+
+    # And the refusal reaches the caller as a tool result, not a traceback.
+    tools = PredbatTools(my_predbat)
+    result = asyncio.run(tools.execute("search_entities", {"pattern": "(.+)+@"}))
+    if result.get("success"):
+        print("ERROR: search_entities accepted a pathological pattern: {}".format(result))
+        failed = True
+    return failed
+
+
+def test_get_entity_history_does_not_block_the_event_loop(my_predbat):
+    """The history fetch is offloaded, so the component's event loop keeps running during it.
+
+    get_history_wrapper reaches HAInterface.get_history, which chunks the window at
+    HISTORY_CHUNK_DAYS and issues one synchronous requests.get per chunk with a 300s timeout
+    each - up to 11 sequential blocking fetches for a 30-day window, none of them cached because
+    tracked=False. Run on the event loop, that freezes the chat component and every request
+    awaiting run_on_agent_loop with it: /chat/history, /chat/models, the conversation list.
+
+    A heartbeat task on the same loop is the assertion. If the fetch blocks, it cannot tick.
+
+    Mutation check: replacing the run_in_executor call with the plain synchronous call makes
+    ticks 0 and this test fails.
+    """
+    failed = False
+    print("**** Testing get_entity_history does not block the event loop ****")
+
+    my_predbat.config_index["ai_ha_state_enable"]["value"] = True
+    records = [{"last_updated": "2026-08-27T10:00:00+00:00", "state": "1.0"}]
+
+    def _blocking_stub(entity_id, days=30, required=True, tracked=True):
+        """Stand in for the real chunked, synchronous HTTP fetch."""
+        time.sleep(0.3)
+        return [records]
+
+    original = my_predbat.get_history_wrapper
+    my_predbat.get_history_wrapper = _blocking_stub
+    try:
+        tools = PredbatTools(my_predbat)
+
+        async def drive():
+            """Run the tool while a heartbeat ticks on the same loop."""
+            ticks = []
+
+            async def heartbeat():
+                """Tick every 20ms for as long as the loop is free to run us."""
+                try:
+                    while True:
+                        await asyncio.sleep(0.02)
+                        ticks.append(1)
+                except asyncio.CancelledError:
+                    return
+
+            beat = asyncio.ensure_future(heartbeat())
+            await tools.execute("get_entity_history", {"entity_id": "sensor.test", "start": "2026-08-27T10:00:00+00:00", "end": "2026-08-27T12:00:00+00:00"})
+            beat.cancel()
+            await asyncio.gather(beat, return_exceptions=True)
+            return len(ticks)
+
+        ticks = asyncio.run(drive())
+        # A 0.3s fetch leaves room for ~15 ticks; anything above a couple proves the loop ran.
+        if ticks < 3:
+            print("ERROR: the event loop was blocked during the history fetch - only {} heartbeat ticks".format(ticks))
+            failed = True
+    finally:
+        my_predbat.get_history_wrapper = original
+    return failed
+
+
 def run_agent_tools_tests(my_predbat):
     """Run every shared tool layer test, returning True if any of them failed."""
     failed = False
@@ -639,4 +808,7 @@ def run_agent_tools_tests(my_predbat):
     failed |= test_get_entity_history_attribute_text(my_predbat)
     failed |= test_get_entity_history_bucket_cap(my_predbat)
     failed |= test_get_entity_history_lookback_clamp(my_predbat)
+    failed |= test_nested_credentials_are_redacted(my_predbat)
+    failed |= test_pathological_regex_arguments_are_rejected(my_predbat)
+    failed |= test_get_entity_history_does_not_block_the_event_loop(my_predbat)
     return failed

@@ -15,6 +15,7 @@ projections over one list is what stops the two surfaces drifting apart as tools
 """
 
 import asyncio
+import functools
 import json
 import math
 import re
@@ -172,17 +173,55 @@ def parse_number_argument(value, name, default, minimum=None, maximum=None, as_f
     return value
 
 
+# The longest regex a tool argument may carry, and a detector for the nested-quantifier shape
+# that causes exponential backtracking. Matches SOURCE_PATTERN_MAX in chat_tools.py, which
+# guards search_source's pattern for the same reason.
+FILTER_PATTERN_MAX = 200
+
+# A quantified group that itself contains a quantifier: (a+)+, (.*)*, (x+){2,}. This is the
+# classic catastrophic-backtracking shape - the outer quantifier re-partitions what the inner
+# one already matched, so the engine explores exponentially many splits before failing. Plain
+# groups like (sensor|switch) and unquantified inner quantifiers like (\d+) are untouched: the
+# outer quantifier is what turns the inner one into a blowup.
+NESTED_QUANTIFIER_RE = re.compile(r"\([^()]*[*+][^()]*\)\s*[*+{]")
+
+
+def reject_pathological_pattern(value, name="filter"):
+    """
+    Raise MCPArgumentError if a model-supplied regex is too long or backtracks catastrophically.
+
+    A heuristic, not a proof: it catches the nested-quantifier shape that causes exponential
+    blowup, which is what a pattern arriving through an injected instruction would use. It does
+    not make every accepted pattern fast, so callers doing unbounded work should still bound it.
+    Rejecting is safe for legitimate use - entity and config searches do not need a quantified
+    group wrapped around another quantifier.
+    """
+    if len(value) > FILTER_PATTERN_MAX:
+        raise MCPArgumentError("'{}' is longer than {} characters".format(name, FILTER_PATTERN_MAX))
+    if NESTED_QUANTIFIER_RE.search(value):
+        raise MCPArgumentError("'{}' contains a quantifier applied to a group that already contains one (such as '(a+)+'), which can take effectively forever to match; rewrite it without the nested quantifier".format(name))
+
+
 def compile_filter_argument(value, name="filter"):
     """
     Compile a regex tool argument, or return None when no filter was given.
 
     Compiling up front turns an invalid pattern into a named argument error instead of a bare
     Python traceback, and avoids re-compiling it for every entry the caller filters over.
+
+    The pattern comes from the model, and Python's re backtracks with no timeout, so a
+    catastrophic pattern would run to the heat death of the universe on whichever thread called
+    it - for search_entities that is the component's only event loop, which would hang every
+    other chat and MCP request until Predbat restarted. reject_pathological_pattern() bounds
+    what can be compiled here; every regex tool argument goes through this one function, so the
+    same guard covers search_entities and the 'filter' arguments on get_state, get_apps and
+    get_config alike.
     """
     if value is None or value == "":
         return None
     if not isinstance(value, str):
         raise MCPArgumentError("'{}' must be a string regular expression, got {!r}".format(name, value))
+    reject_pathological_pattern(value, name)
     try:
         return re.compile(value)
     except re.error as error:
@@ -428,6 +467,11 @@ class PredbatTools:
             masked = is_secret_key(key)
             if masked:
                 value = "xxx"
+            else:
+                # The key's own name is not credential-like, but the value may still nest one -
+                # forecast_solar is a list of dicts each holding an api_key. mask_secret_args
+                # walks the whole structure, so wrap and unwrap to reuse it for a single key.
+                value = mask_secret_args({key: value})[key]
 
             description = "The current value of apps.yaml key '{}'".format(key)
             if masked:
@@ -865,7 +909,15 @@ class PredbatTools:
             # question - the web /entity page's own arbitrary-entity history fetch
             # (get_history_with_now in web.py) makes the same tracked=False choice for the same
             # reason: a one-off browse of any HA entity must not become a permanent subscription.
-            history = self.base.get_history_wrapper(entity_id, days=days_needed, required=False, tracked=False)
+            # Offloaded for the same reason get_log is: get_history_wrapper reaches
+            # HAInterface.get_history, which chunks the window at HISTORY_CHUNK_DAYS and issues
+            # one synchronous requests.get per chunk, each with TIMEOUT (300s) to spare. A 30-day
+            # window is up to 11 sequential blocking fetches of potentially tens of megabytes,
+            # and tracked=False means none of it is cached, so every call refetches. Run on the
+            # event loop that would freeze the component - and with it every chat and MCP request
+            # awaiting run_on_agent_loop - for the whole fetch.
+            loop = asyncio.get_running_loop()
+            history = await loop.run_in_executor(None, functools.partial(self.base.get_history_wrapper, entity_id, days=days_needed, required=False, tracked=False))
             records = history[0] if history and history[0] else []
 
             windowed_records = []

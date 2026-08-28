@@ -986,6 +986,59 @@ def test_deadline_checked_between_tool_calls_within_a_round(my_predbat):
         print("ERROR: the turn slot was not released after the mid-round deadline stop")
         failed = True
 
+    # The 17 calls that never ran must still have been answered. An assistant message carrying
+    # tool_calls with no matching tool reply is rejected by the API with a 400 on the NEXT turn,
+    # and with max_history now defaulting to 0 the broken pair is replayed forever rather than
+    # ageing out - so this assertion, not the event counts above, is what stops a stopped turn
+    # bricking the conversation.
+    messages = asyncio.run(agent.store.get_messages(cid))
+    problems = _dangling_tool_calls(messages)
+    if problems:
+        print("ERROR: the mid-round deadline stop left tool_calls with no tool reply: {}".format(problems))
+        failed = True
+
+    return failed
+
+
+def test_stop_button_leaves_history_well_formed(my_predbat):
+    """Pressing Stop during a single in-flight tool call leaves a conversation that can still be replayed.
+
+    The Stop button (POST /chat/cancel) zeroes agent.deadline, so it lands on the same mid-round
+    check as a genuine timeout - but it is the path a user takes deliberately, and with one tool
+    call in the round rather than twenty. That is the shape most likely to occur in practice and
+    the one that used to store an assistant tool_calls message with no reply at all.
+    """
+    failed = False
+    print("**** Testing Stop during a tool call leaves history well-formed ****")
+
+    # Two calls, stopped after the first: one call alone would run to completion before the loop
+    # ended, never reaching the mid-round check this is about.
+    agent = _agent_with_fake(my_predbat, _many_tool_calls_response("get_status", {}, 2), _text_response("stopped"))
+    cid = asyncio.run(agent.store.create())
+
+    executed = []
+    real_run_one_tool = agent._run_one_tool
+
+    async def spy_run_one_tool(conversation_id, turn_id, call):
+        """Run the first call, then zero the deadline the way POST /chat/cancel does."""
+        executed.append(call.get("id"))
+        result = await real_run_one_tool(conversation_id, turn_id, call)
+        agent.deadline = 0
+        return result
+
+    agent._run_one_tool = spy_run_one_tool
+    asyncio.run(agent.run_turn(cid, "do something then get stopped"))
+
+    if len(executed) != 1:
+        print("ERROR: expected Stop to halt after the first of the two calls, got {}: {}".format(len(executed), executed))
+        failed = True
+
+    messages = asyncio.run(agent.store.get_messages(cid))
+    problems = _dangling_tool_calls(messages)
+    if problems:
+        print("ERROR: Stop left tool_calls with no tool reply: {}".format(problems))
+        failed = True
+
     return failed
 
 

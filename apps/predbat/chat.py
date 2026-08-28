@@ -1015,20 +1015,9 @@ class ChatAgent(ComponentBase):
             if not calls:
                 return
             if iteration >= self.max_tool_rounds:
-                # Answer the calls we are refusing to run. Leaving an assistant message that
-                # carries tool_calls with no matching tool replies is exactly the shape
-                # trim_history exists to avoid: the next turn sends the pair back, the API
-                # rejects the whole request with a 400, and the conversation stays broken until
-                # the pair ages out of the trim window. Deliberately no tool_start/tool_end
-                # events - nothing ran, and the transcript should not suggest otherwise.
-                for call in calls:
-                    refused = {"success": False, "error": "Not run: the {} tool round limit for one turn was reached".format(self.max_tool_rounds), "data": None}
-                    # call["id"] is guaranteed by _run_completion's normalisation - every stored
-                    # tool_calls entry carries one, real or synthetic - so no turn-wide fallback
-                    # is needed (and one would collide two id-less calls in the same message).
-                    await self.store.append(conversation_id, {"role": "tool", "tool_call_id": call.get("id"), "name": (call.get("function") or {}).get("name") or "", "content": json.dumps(refused)})
+                await self._refuse_remaining_calls(conversation_id, calls, "Not run: the {} tool round limit for one turn was reached".format(self.max_tool_rounds))
                 break
-            for call in calls:
+            for index, call in enumerate(calls):
                 # Checked before every individual tool call, not only once at the top of the
                 # round: the per-round check above only runs before the completion that requested
                 # these calls, and a model can put an unbounded number of tool calls in one
@@ -1036,7 +1025,13 @@ class ChatAgent(ComponentBase):
                 # itself for roughly a hundred seconds with no deadline check in between - this is
                 # what closes that gap, ending the turn the same way the per-round check does
                 # rather than letting every remaining call in the round still run.
+                #
+                # Every call from this one on must still be answered before returning, for the
+                # reason _refuse_remaining_calls sets out - this path is reached by the Stop
+                # button (which zeroes the deadline) as much as by a genuine timeout, so it is
+                # the one a user hits deliberately and often.
                 if time.monotonic() > self.deadline:
+                    await self._refuse_remaining_calls(conversation_id, calls[index:], "Not run: the turn was stopped before this tool ran")
                     self.emit(conversation_id, "error", {"message": "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)})
                     return
                 await self._run_one_tool(conversation_id, turn_id, call)
@@ -1064,6 +1059,29 @@ class ChatAgent(ComponentBase):
             return arguments
         key = arguments.get("key")
         return {"key": key, "current_value": self.base.args.get(key), "proposed_value": arguments.get("value"), "warning": APPS_YAML_RESTART_WARNING}
+
+    async def _refuse_remaining_calls(self, conversation_id, calls, reason):
+        """Answer tool calls the turn is abandoning, so the stored conversation stays well-formed.
+
+        Every early exit out of the tool loop must come through here. An assistant message that
+        carries tool_calls with no matching tool replies is rejected by the OpenAI-compatible API
+        with a 400 - and not on the turn that created it, but on the next one, which makes the
+        damage look unrelated to its cause. classify_completion_failure treats 400 as
+        non-retryable, so that conversation then fails on every subsequent turn.
+
+        This used to heal itself: trim_history cut at a user-message boundary, so a broken pair
+        eventually aged out of the window. With max_history now defaulting to 0 (no trimming) the
+        whole conversation is replayed every turn, so a single orphaned pair breaks it for good.
+
+        Deliberately no tool_start/tool_end events - nothing ran, and the transcript should not
+        suggest otherwise.
+        """
+        for call in calls:
+            refused = {"success": False, "error": reason, "data": None}
+            # call["id"] is guaranteed by _run_completion's normalisation - every stored
+            # tool_calls entry carries one, real or synthetic - so no turn-wide fallback
+            # is needed (and one would collide two id-less calls in the same message).
+            await self.store.append(conversation_id, {"role": "tool", "tool_call_id": call.get("id"), "name": (call.get("function") or {}).get("name") or "", "content": json.dumps(refused)})
 
     async def _run_one_tool(self, conversation_id, turn_id, call):
         """Execute one tool call and append its result as a tool message."""
