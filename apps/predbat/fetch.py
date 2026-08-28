@@ -1326,7 +1326,7 @@ class Fetch:
                     self.octopus_slots[car_n] = self.add_now_to_octopus_slot(car_n, self.octopus_slots[car_n], self.now_utc)
                     if not entity_id_list[car_n]:
                         continue
-                    if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]:
+                    if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
                         self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
                         if self.car_charging_slots[car_n]:
                             self.log(
