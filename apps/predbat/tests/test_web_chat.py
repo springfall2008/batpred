@@ -1941,6 +1941,50 @@ def test_retry_status_element_takes_its_colour_from_theme_variables(my_predbat):
     return failed
 
 
+def test_chat_page_height_is_measured_not_hardcoded(my_predbat):
+    """The chat page sizes itself from a measurement, not a hardcoded header height.
+
+    A CSS calc() has to assume the header's height, and the header is not fixed: an apps.yaml
+    error banner adds a line and the version string wraps on a narrow window. Guessing too small
+    pushes the page past the viewport, so the whole document scrolls and the nav goes off the top
+    - which is the bug this fixes. The stylesheet keeps a calc() as the pre-JS fallback, so the
+    presence of that rule is not itself evidence of anything; what matters is that JS overrides it.
+
+    Static checks on the script source, as elsewhere in this suite - there is no JS runtime here.
+
+    Mutation checks: dropping the resize listener, or the overflow-correction pass, each fails an
+    assertion below.
+    """
+    failed = False
+    print("**** Testing the chat page height is measured ****")
+    script = web_chat.get_chat_script()
+
+    body = _extract_function_body(script, "sizeChatPage")
+    if body is None:
+        print("ERROR: there is no sizeChatPage() to size the page from a measurement")
+        return True
+
+    # It must measure the page's own top rather than assume a header height.
+    if "getBoundingClientRect" not in body or "innerHeight" not in body:
+        print("ERROR: sizeChatPage() does not measure against the viewport: {!r}".format(body))
+        failed = True
+    # And correct for whatever still overflows below it.
+    if "scrollHeight" not in body:
+        print("ERROR: sizeChatPage() does not correct for remaining document overflow: {!r}".format(body))
+        failed = True
+    # The correction must be bounded - a loop could not converge against the min-height floor.
+    if "while" in body:
+        print("ERROR: sizeChatPage() loops, which cannot converge against the min-height floor: {!r}".format(body))
+        failed = True
+
+    for wiring in ("addEventListener('resize', sizeChatPage)", "addEventListener('load', sizeChatPage)"):
+        if wiring not in script:
+            print("ERROR: sizeChatPage() is not wired: missing {}".format(wiring))
+            failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -1969,6 +2013,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_model_catalogue(my_predbat)
     failed |= test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_predbat)
     failed |= test_model_picker_script_wires_routes_and_persists_selection(my_predbat)
+    failed |= test_chat_page_height_is_measured_not_hardcoded(my_predbat)
     failed |= test_context_counter_uses_the_last_turns_prompt_tokens_not_cumulative(my_predbat)
     failed |= test_stop_button_wired_to_cancel_with_turn_id(my_predbat)
     failed |= test_html_chat_cancel_requires_the_running_turn_id(my_predbat)

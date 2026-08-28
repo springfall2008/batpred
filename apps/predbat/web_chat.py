@@ -453,6 +453,11 @@ body.dark-mode {
     display: grid;
     grid-template-columns: 260px minmax(0, 1fr);
     gap: 14px;
+    /* A pre-JS fallback only. sizeChatPage() replaces this with a measured height as soon as the
+       script runs: the 130px here is a guess at the header, and the header is not a fixed height -
+       an apps.yaml error banner adds a line, and the version string wraps on a narrow window. Too
+       small and the page grows past the viewport, so the whole document scrolls and the nav
+       disappears off the top. */
     height: calc(100vh - 130px);
     min-height: 420px;
     color: var(--chat-text);
@@ -1560,6 +1565,38 @@ function loadModels() {
 // truth on every load and reconnect, so a control never drifts from what its gate enforces.
 // ---------------------------------------------------------------------------------------------
 
+// Sizing the chat page to the space actually left below the header.
+//
+// A CSS calc() cannot do this: it would have to hardcode the header's height, and the header
+// grows a line when apps.yaml has errors and wraps on a narrow window. Getting it wrong pushes
+// the page past the viewport, so the document scrolls and the nav scrolls out of sight - which
+// is what the fixed 130px fallback in the stylesheet does on a taller header.
+//
+// Measured instead: the distance from the page's own top to the bottom of the viewport. The
+// second pass then subtracts any remaining document overflow, which catches whatever sits below
+// the page - body margin, a footer - without this needing to know what that is.
+// ---------------------------------------------------------------------------------------------
+
+var CHAT_PAGE_MIN_HEIGHT = 420;
+
+function sizeChatPage() {
+    var page = byId('chat-page');
+    if (!page) {
+        return;
+    }
+    var top = page.getBoundingClientRect().top + (window.scrollY || 0);
+    var height = Math.max(CHAT_PAGE_MIN_HEIGHT, window.innerHeight - top);
+    page.style.height = height + 'px';
+
+    // Anything still overflowing is below the page, so take it off and settle. Bounded to one
+    // correction: the min-height floor means a very short window cannot converge, and looping
+    // would spin.
+    var overflow = document.documentElement.scrollHeight - window.innerHeight;
+    if (overflow > 0) {
+        page.style.height = Math.max(CHAT_PAGE_MIN_HEIGHT, height - overflow) + 'px';
+    }
+}
+
 function chatToggles() {
     return Array.prototype.slice.call(document.querySelectorAll('#chat-toggles input[data-switch]'));
 }
@@ -2594,6 +2631,12 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
     chatToggles().forEach(function (toggle) { toggle.addEventListener('change', changeChatSwitch); });
+
+    // Sized once now and again on resize. The load handler re-runs it because web fonts and the
+    // banner can settle after this point, which moves the page's top.
+    sizeChatPage();
+    window.addEventListener('resize', sizeChatPage);
+    window.addEventListener('load', sizeChatPage);
     byId('chat-input').addEventListener('keydown', function (event) {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
