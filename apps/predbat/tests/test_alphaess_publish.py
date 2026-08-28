@@ -319,6 +319,35 @@ def test_alphaess_car_charging_energy_unmapped_without_a_charger():
     assert not failed, "test_alphaess_car_charging_energy_unmapped_without_a_charger"
 
 
+def test_alphaess_car_charging_power_mapped_for_serials_with_a_charger():
+    """The live EV power sensor follows the same charger detection as the energy one.
+
+    car_charging_power is display-only - it drives the web power flow diagram and the
+    predbat.car_charging_power sensor - so it must cover exactly the serials that actually
+    have a charger, never the permanent zero a charger-less system reports."""
+    failed = False
+    client = _ready_client()
+    for sn in client.device_list:
+        client.device_energy[sn]["ev_energy_today"] = 4.2
+    client._ev_present = {client.device_list[0]: True, client.device_list[1]: False}
+    run_async_local(client.automatic_config())
+    mapped = client.base.args.get("car_charging_power")
+    expected = [f"sensor.predbat_alphaess_{client.device_list[0].lower()}_ev_power"]
+    if mapped != expected:
+        print(f"ERROR: car_charging_power {mapped} != {expected}")
+        failed = True
+
+    no_charger = _ready_client()
+    for sn in no_charger.device_list:
+        no_charger._ev_present[sn] = False
+        no_charger.device_energy[sn]["ev_energy_today"] = 0.0
+    run_async_local(no_charger.automatic_config())
+    if "car_charging_power" in no_charger.base.args:
+        print(f"ERROR: car_charging_power mapped with no charger: {no_charger.base.args.get('car_charging_power')}")
+        failed = True
+    assert not failed, "test_alphaess_car_charging_power_mapped_for_serials_with_a_charger"
+
+
 def test_alphaess_ev_sensors_are_published():
     """ev_power (W) and ev_energy_today (kWh) both reach the dashboard."""
     failed = False
@@ -353,6 +382,7 @@ def run_alphaess_publish_tests(my_predbat):
         ("ev_charger_detection", test_alphaess_ev_charger_detected_from_pev_detail),
         ("car_charging_energy_mapping", test_alphaess_car_charging_energy_mapped_only_for_serials_with_a_charger),
         ("car_charging_energy_unmapped", test_alphaess_car_charging_energy_unmapped_without_a_charger),
+        ("car_charging_power_mapping", test_alphaess_car_charging_power_mapped_for_serials_with_a_charger),
         ("ev_sensors_published", test_alphaess_ev_sensors_are_published),
     ]:
         try:

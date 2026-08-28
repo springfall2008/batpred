@@ -73,7 +73,7 @@ class Compare:
         if "rates_import_octopus_url" in tariff:
             # Fixed URL for rate import
             import_url = pb.resolve_arg("rates_import_octopus_url", tariff["rates_import_octopus_url"], indirect=False)
-            pb.rate_import = pb.download_octopus_rates(pb.resolve_arg("rates_import_octopus_url", tariff["rates_import_octopus_url"], indirect=False))
+            pb.rate_import = pb.download_octopus_rates(import_url)
         elif "metric_octopus_import" in tariff:
             # Octopus import rates
             entity_id = pb.resolve_arg("metric_octopus_import", tariff["metric_octopus_import"], indirect=False)

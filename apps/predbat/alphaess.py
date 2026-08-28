@@ -62,6 +62,8 @@ from alphaess_const import (
     ALPHAESS_TIME_DISABLED,
     ALPHAESS_TIME_MAX,
     ALPHAESS_SETTLE_POLLS,
+    ALPHAESS_WRITE_SETTLE_SECONDS,
+    ALPHAESS_WRITE_BURST_MAX,
     ALPHAESS_STORAGE_MODULE,
     ALPHAESS_CACHE_STATIC,
     ALPHAESS_CACHE_CONFIG,
@@ -121,6 +123,14 @@ class AlphaESSAPI(ComponentBase):
         self.applied_payload = {}
         self.last_write_time = {}
         self.settle_count = {}
+        # Start time, and write count, of the current settle burst per (sn, direction) - the
+        # short grace after a successful write in which a correction to the payload just sent
+        # is still allowed through the pacing gate. Deliberately NOT persisted by
+        # save_control(): a restart with no burst state falls back to full pacing, which is
+        # the safe direction, whereas restoring one would hand a restart loop a fresh
+        # allowance every time.
+        self.write_burst_start = {}
+        self.write_burst_writes = {}
         # Serials Predbat has actually been asked to drive, i.e. ones whose write button has
         # been pressed at least once. The reconcile loop only re-applies for these, so a
         # startup cycle can never clobber an inverter before there is a plan to apply.
@@ -794,6 +804,9 @@ class AlphaESSAPI(ComponentBase):
         if ev_devices:
             self.set_arg_auto("car_charging_energy", [self._sensor_name(sn, "ev_energy_today") for sn in ev_devices])
             self.log("Info: AlphaESS mapped car_charging_energy to the EV charger energy of {} inverter(s): {}. It only affects the plan once car_charging_hold is enabled.".format(len(ev_devices), ev_devices))
+            # The live power reading of the same chargers. Display only - it feeds the web power
+            # flow diagram and the predbat.car_charging_power sensor, never the plan.
+            self.set_arg_auto("car_charging_power", [self._sensor_name(sn, "ev_power") for sn in ev_devices])
         else:
             self.log("Info: AlphaESS found no EV charger on any inverter, so car_charging_energy is left unset")
 
@@ -1361,19 +1374,57 @@ class AlphaESSAPI(ComponentBase):
         """Return True when Predbat is in read-only mode and must not write to the inverter."""
         return self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
 
+    def _write_settle_seconds(self):
+        """Seconds after a successful write in which a correction is still the same update.
+
+        Never longer than the user's own pacing interval, so shortening
+        alphaess_min_write_interval shortens the grace with it rather than leaving a fixed
+        60s window that a 30s pacer would sit entirely inside.
+        """
+        return min(ALPHAESS_WRITE_SETTLE_SECONDS, self.min_write_interval)
+
     def _write_allowed(self, sn, direction, force=False):
         """Return True when a write for one serial and direction may go out now.
 
         The minimum interval treats the documented 24-hour write limit as a real budget.
         A change arriving inside the window is HELD, not dropped: apply_settings leaves the
         applied-payload cache untouched, so the next eligible tick rebuilds and sends it.
+
+        The single exemption is a correction landing within ALPHAESS_WRITE_SETTLE_SECONDS of
+        a SUCCESSFUL write. Predbat commits a schedule in stages and presses the write button
+        after each one, so the first commit of a cycle can carry a target SoC it has not
+        written yet; holding the correction strands the inverter on a schedule Predbat has
+        already superseded (GH#4769). The burst is capped at ALPHAESS_WRITE_BURST_MAX so the
+        exemption cannot become a write loop that escapes pacing, and only successful writes
+        open one - a rejected write applied nothing, so there is nothing to correct and the
+        retry stays paced exactly as before.
         """
         if force or not self.min_write_interval:
             return True
-        last = self.last_write_time.get((sn, direction))
+        key = (sn, direction)
+        last = self.last_write_time.get(key)
         if last is None:
             return True
-        return (time.time() - last) >= self.min_write_interval
+        now = time.time()
+        if (now - last) >= self.min_write_interval:
+            return True
+        burst_start = self.write_burst_start.get(key)
+        if burst_start is not None and (now - burst_start) < self._write_settle_seconds() and self.write_burst_writes.get(key, 0) < ALPHAESS_WRITE_BURST_MAX:
+            return True
+        return False
+
+    def _note_burst_write(self, key, now):
+        """Count one successful write against the settle burst governing corrections.
+
+        A write landing outside the previous burst's settle window starts a fresh burst, so
+        the ALPHAESS_WRITE_BURST_MAX allowance is per schedule update rather than cumulative.
+        """
+        burst_start = self.write_burst_start.get(key)
+        if burst_start is None or (now - burst_start) >= self._write_settle_seconds():
+            self.write_burst_start[key] = now
+            self.write_burst_writes[key] = 1
+        else:
+            self.write_burst_writes[key] = self.write_burst_writes.get(key, 0) + 1
 
     async def _write_payload(self, sn, direction, endpoint_key, payload, force=False):
         """Send one payload if it differs from the last applied one and pacing allows.
@@ -1398,7 +1449,8 @@ class AlphaESSAPI(ComponentBase):
         # re-POSTs it every single tick forever, burning the documented 24-hour write budget
         # while doing it. The write is deliberately NOT cached as applied below on any
         # failure path, so it keeps retrying - just paced, not hammering.
-        self.last_write_time[(sn, direction)] = time.time()
+        now = time.time()
+        self.last_write_time[(sn, direction)] = now
         if code != ALPHAESS_CODE_OK:
             if code == ALPHAESS_CODE_TOO_FAST:
                 # A pacing signal, not a broken component.
@@ -1412,6 +1464,7 @@ class AlphaESSAPI(ComponentBase):
             return False
         cache[direction] = payload
         self.settle_count[(sn, direction)] = 0
+        self._note_burst_write((sn, direction), now)
         self.log("Info: AlphaESS wrote {} settings for {}".format(direction, sn))
         # Saved inline (not only at shutdown) so a container kill or crash right after a
         # successful write does not lose the applied-payload cache or the write timestamp -

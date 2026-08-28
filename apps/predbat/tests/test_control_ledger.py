@@ -25,6 +25,7 @@ from control_ledger import (
     SETTLING,
     EXTERNAL,
     UNAVAILABLE,
+    PENDING,
 )
 from const import INVERTER_MAX_RETRY
 
@@ -460,8 +461,11 @@ class _RecordingLedger:
     def note_write_attempt(self, entity_id):
         self.calls.append(("note_write_attempt", entity_id))
 
-    def record_write(self, entity_id, control, read_back, fuzzy=0, now=0.0, generation=None):
+    def record_write(self, entity_id, control, read_back, fuzzy=0, now=0.0, generation=None, confirmed_by="write"):
         self.calls.append(("record_write", entity_id, control, read_back))
+
+    def record_ownership_from_read(self, entity_id, control, read_back, fuzzy=0, now=0.0, generation=None):
+        self.calls.append(("record_ownership_from_read", entity_id, control, read_back))
 
     def clear(self, entity_id=None):
         self.calls.append(("clear", entity_id))
@@ -550,7 +554,7 @@ def _stub_inverter(state_sequence, ledger=None, generation=1000.0):
 
 
 def test_wiring_no_write_needed_skips_note_and_record():
-    """A read that already matches must not be treated as a write attempt.
+    """A read that already matches must not be treated as a write attempt - but must re-arm.
 
     This is the property that matters most: if note_write_attempt fired here with no matching
     record_write, the control would be stuck reporting SETTLING forever (correction 2 in the
@@ -564,7 +568,7 @@ def test_wiring_no_write_needed_skips_note_and_record():
     if not stub.write_and_poll_switch("enable", "switch.charge_enable", True):
         print("ERROR: write_and_poll_switch should report success with nothing to do")
         failed = True
-    if ledger.calls != [("observe", "switch.charge_enable", "enable", True)]:
+    if ledger.calls != [("observe", "switch.charge_enable", "enable", True), ("record_ownership_from_read", "switch.charge_enable", "enable", True)]:
         print(f"ERROR: write_and_poll_switch no-write-needed call list was {ledger.calls}")
         failed = True
 
@@ -573,7 +577,7 @@ def test_wiring_no_write_needed_skips_note_and_record():
     if not stub.write_and_poll_value("charge_limit", "number.charge_limit", 50.0, fuzzy=0):
         print("ERROR: write_and_poll_value should report success with nothing to do")
         failed = True
-    if ledger.calls != [("observe", "number.charge_limit", "charge_limit", 50.0)]:
+    if ledger.calls != [("observe", "number.charge_limit", "charge_limit", 50.0), ("record_ownership_from_read", "number.charge_limit", "charge_limit", 50.0)]:
         print(f"ERROR: write_and_poll_value no-write-needed call list was {ledger.calls}")
         failed = True
 
@@ -1094,6 +1098,31 @@ def test_sustained_lists_repeat_offenders():
     if sustained != ["charge_start_time"]:
         print(f"ERROR: expected only charge_start_time sustained, got {sustained}")
         failed = True
+
+    # ...on ONE control, meaning one ENTITY. On a three-inverter site, one single external change
+    # to each inverter's own charge window is three events all named "charge_start_time", which is
+    # three controls touched once each - not the repeated tug-of-war the threshold exists to find.
+    ledger = ControlLedger()
+    ledger.events = [{"at": 1000.0 + n, "control": "charge_start_time", "entity_id": f"select.inverter{n}_charge_start", "we_set": "23:30", "now_reads": "19:42", "confirmed_at": 900.0} for n in range(3)]
+    sustained = ledger.sustained_controls(ledger.recent_events(now=1100.0), threshold=3)
+    if sustained:
+        print(f"ERROR: one change per inverter was reported as a sustained control: {sustained}")
+        failed = True
+
+    # An event restored from a version that did not record entity_id still counts, keyed by name,
+    # rather than being silently dropped.
+    ledger = ControlLedger()
+    ledger.events = [{"at": 1000.0 + n, "control": "reserve"} for n in range(3)]
+    if ledger.sustained_controls(ledger.recent_events(now=1100.0), threshold=3) != ["reserve"]:
+        print("ERROR: legacy events with no entity_id were dropped instead of counted by name")
+        failed = True
+
+    # A control name is reported once however many of its entities are sustained.
+    ledger = ControlLedger()
+    ledger.events = [{"at": 1000.0 + n, "control": "reserve", "entity_id": f"number.inverter{n // 3}_reserve"} for n in range(6)]
+    if ledger.sustained_controls(ledger.recent_events(now=1100.0), threshold=3) != ["reserve"]:
+        print(f"ERROR: a control sustained on two entities was not reported once: {ledger.sustained_controls(ledger.recent_events(now=1100.0))}")
+        failed = True
     assert not failed, "test_sustained_lists_repeat_offenders"
 
 
@@ -1362,31 +1391,59 @@ def test_steady_control_stays_owned_indefinitely():
     assert not failed, "test_steady_control_stays_owned_indefinitely"
 
 
-def test_prune_keeps_future_dated_events():
-    """prune() maintains the DURABLE store, so it must not delete what it merely cannot judge.
+def test_prune_clamps_future_dated_events():
+    """prune() maintains the DURABLE store, so it must neither delete nor immortalise.
 
-    The publisher writes the pruned list back to the entity attribute restore() reads, so
-    anything prune() drops is gone for good. A pod that starts before NTP sync with a slow clock
-    makes every restored event compute as future-dated - pruning on that basis deletes a real 24
-    hours of history irrecoverably on the very first publish. The clock corrects; the events have
-    to still be there when it does.
+    The publisher writes the pruned list back to the attribute restore() reads, so anything
+    prune() drops is gone for good - a pod starting before NTP sync with a slow clock makes every
+    restored event compute as future-dated, and deleting on that basis loses a real 24 hours of
+    history on the first publish.
+
+    But KEEPING them beyond judgement was its own trap in the other clock direction: a pod that boots
+    with its clock ahead stamps events in the future, and once the clock steps back those events
+    can never age out, because not ageing out is precisely what "keep future-dated events" means.
+    They then squat every publish slot for the life of the process. The timestamp was wrong; the
+    detection was real. So the timestamp is clamped, which keeps the event and lets it age out.
     """
     failed = False
+
+    # Clock AHEAD: events stamped in the future must be clamped, not immortal.
+    ledger = ControlLedger()
+    ledger.restore([{"at": 9_000_000.0, "control": "reserve", "entity_id": "e1"}, {"at": 950.0, "control": "reserve", "entity_id": "e2"}])
+    ledger.prune(now=1000.0)
+    if len(ledger.events) != 2:
+        print(f"ERROR: prune() deleted a future-dated event instead of clamping it: {ledger.events}")
+        failed = True
+    if any(event["at"] > 1000.0 for event in ledger.events):
+        print(f"ERROR: a future-dated event was not clamped: {[e['at'] for e in ledger.events]}")
+        failed = True
+    if len(ledger.recent_events(now=1000.0)) != 2:
+        print("ERROR: a clamped event still cannot be judged, so it can never age out")
+        failed = True
+    # And having been clamped it ages out on schedule rather than living for ever.
+    ledger.prune(now=1000.0 + 2 * 86400.0)
+    if ledger.events:
+        print(f"ERROR: a clamped event did not age out: {ledger.events}")
+        failed = True
+
+    # Clock BEHIND: restored history must survive, and can be judged straight away.
     ledger = ControlLedger()
     ledger.restore([{"at": 5000.0, "control": "reserve"}, {"at": 5100.0, "control": "reserve"}])
-    # A clock ten minutes slow makes both look future-dated.
     slow_clock = 4400.0
     ledger.prune(now=slow_clock)
     if len(ledger.events) != 2:
         print(f"ERROR: prune() on a slow clock deleted real history: {ledger.events}")
         failed = True
-    # They are still not COUNTED while they cannot be judged - the count is a claim, the store is not.
-    if ledger.recent_events(now=slow_clock):
-        print("ERROR: future-dated events were counted as if they could be judged")
+    if len(ledger.recent_events(now=slow_clock)) != 2:
+        print("ERROR: clamping did not bring slow-clock history back into the window")
         failed = True
-    # Once the clock corrects they come back.
-    if len(ledger.recent_events(now=5200.0)) != 2:
-        print("ERROR: events were not judged again once the clock corrected")
+
+    # Ordinary forward jitter is inside the allowance, so it is left exactly as it was.
+    ledger = ControlLedger()
+    ledger.events = [{"at": 1030.0, "control": "reserve"}]
+    ledger.prune(now=1000.0)
+    if [event["at"] for event in ledger.events] != [1030.0]:
+        print(f"ERROR: prune() clamped ordinary clock jitter: {ledger.events}")
         failed = True
 
     # What HAS genuinely aged out still goes, or the list grows without bound.
@@ -1404,7 +1461,7 @@ def test_prune_keeps_future_dated_events():
     if [event["at"] for event in ledger.events] != [950.0]:
         print(f"ERROR: prune() kept unparseable events: {ledger.events}")
         failed = True
-    assert not failed, "test_prune_keeps_future_dated_events"
+    assert not failed, "test_prune_clamps_future_dated_events"
 
 
 def test_minute_control_rejects_a_wall_clock_on_an_integer_entity():
@@ -1579,6 +1636,242 @@ def test_begin_cycle_precedes_every_inverter_read():
     assert not failed, "test_begin_cycle_precedes_every_inverter_read"
 
 
+def test_newest_events_honours_its_contract():
+    """The publish cap must be oldest-first, and must respect a zero cap.
+
+    Two defects in one method. The "session events alone exceed the cap" branch returned
+    self.session_events[-limit:] unsorted, breaking the oldest-first contract it documents - and
+    reading a different list from the `mine` it had just computed. And newest_events(0) returned
+    EVERYTHING, because [-0:] is the whole list, not the empty one.
+    """
+    failed = False
+
+    def _detect(ledger, at, entity_id):
+        """Drive a real detection, so events are shaped the way production shapes them."""
+        ledger.begin_cycle()
+        ledger.record_write(entity_id, "reserve", 4.0, now=at - 1.0, generation=at - 1.0)
+        ledger.begin_cycle()
+        ledger.observe(entity_id, "reserve", 50.0, now=at, generation=at)
+
+    # More session events than the cap: keep the most recently DETECTED, output oldest-first.
+    ledger = ControlLedger()
+    for n in range(5):
+        _detect(ledger, 1000.0 - n, f"number.e{n}")  # detected in DESCENDING time order
+    published = ledger.newest_events(3)
+    if len(published) != 3:
+        print(f"ERROR: expected 3 published events, got {len(published)}")
+        failed = True
+    if [event["at"] for event in published] != sorted(event["at"] for event in published):
+        print(f"ERROR: published events are not oldest-first: {[e['at'] for e in published]}")
+        failed = True
+    if {event["entity_id"] for event in published} != {"number.e2", "number.e3", "number.e4"}:
+        print(f"ERROR: the most recently detected events were not the ones kept: {[e['entity_id'] for e in published]}")
+        failed = True
+
+    for limit in (0, -1):
+        if ledger.newest_events(limit) != []:
+            print(f"ERROR: newest_events({limit}) published {len(ledger.newest_events(limit))} events instead of none")
+            failed = True
+
+    # Under the cap, everything, still oldest-first.
+    ledger = ControlLedger()
+    _detect(ledger, 1000.0, "number.only")
+    ledger.restore([{"at": 900.0, "control": "reserve", "entity_id": "history"}])
+    published = ledger.newest_events(20)
+    if [event["entity_id"] for event in published] != ["history", "number.only"]:
+        print(f"ERROR: an under-cap publish was not the whole store oldest-first: {[e['entity_id'] for e in published]}")
+        failed = True
+
+    # And a just-detected event still beats restored history when the cap bites, even though its
+    # small timestamp makes it look like the oldest thing in the store.
+    ledger = ControlLedger()
+    _detect(ledger, 1000.0, "number.detected_now")
+    ledger.restore([{"at": 5000.0 + n, "control": "reserve", "entity_id": f"h{n}"} for n in range(25)])
+    published = ledger.newest_events(20)
+    if not any(event["entity_id"] == "number.detected_now" for event in published):
+        print("ERROR: the just-detected event was dropped by the publish cap")
+        failed = True
+    assert not failed, "test_newest_events_honours_its_contract"
+
+
+def test_ownership_re_arms_when_no_write_is_needed():
+    """A control already at Predbat's target must not stay unwatched once ownership is dropped.
+
+    read-only and calibration clear the ledger, and an EXTERNAL event pops one record. When
+    Predbat resumes, any control already sitting at its target takes write_and_poll_*'s
+    no-write-needed early return, so record_write() is never reached and that control is silently
+    unwatched for the rest of the process. A read that already holds what Predbat wanted is weaker
+    evidence than a verified write - nobody watched it being set - but it is evidence of
+    agreement, and the alternative is permanent blindness.
+    """
+    failed = False
+    ledger = ControlLedger()
+    ledger.begin_cycle()
+    stub = _stub_inverter([2000.0, 2950.0], ledger=ledger, generation=1000.0)
+    stub.write_and_poll_value("charge_rate", "number.charge_rate", 3000, fuzzy=130)
+    ledger.clear()  # read-only or calibration
+
+    ledger.begin_cycle()
+    stub = _stub_inverter([2950.0], ledger=ledger, generation=2000.0)  # already at target, no write
+    stub.write_and_poll_value("charge_rate", "number.charge_rate", 3000, fuzzy=130)
+    if not ledger.owns("number.charge_rate"):
+        print("ERROR: a control already at target was never re-armed after a clear")
+        failed = True
+    elif ledger.records["number.charge_rate"]["confirmed_by"] != "read":
+        print("ERROR: re-armed ownership was not marked as the weaker read-confirmed evidence")
+        failed = True
+
+    # Having re-armed, a genuine later change reports.
+    ledger.begin_cycle()
+    stub = _stub_inverter([500.0, 2950.0], ledger=ledger, generation=3000.0)
+    stub.write_and_poll_value("charge_rate", "number.charge_rate", 3000, fuzzy=130)
+    if len(ledger.events) != 1:
+        print(f"ERROR: a change after re-arming produced {len(ledger.events)} events, expected 1")
+        failed = True
+
+    # The same for a switch already in position.
+    ledger = ControlLedger()
+    ledger.begin_cycle()
+    stub = _stub_inverter(["on"], ledger=ledger, generation=1000.0)
+    stub.write_and_poll_switch("enable", "switch.charge_enable", True)
+    if not ledger.owns("switch.charge_enable"):
+        print("ERROR: a switch already at target was never armed")
+        failed = True
+
+    # write_and_poll_option needs no such path: it always issues at least one write and confirms
+    # from the read-back, so record_write() is reached even when the value already matched.
+    ledger = ControlLedger()
+    ledger.begin_cycle()
+    stub = _stub_inverter(["Eco"], ledger=ledger, generation=1000.0)
+    stub.write_and_poll_option("inverter_mode", "select.inverter_mode", "Eco")
+    if not ledger.owns("select.inverter_mode"):
+        print("ERROR: write_and_poll_option did not confer ownership on an already-matching value")
+        failed = True
+
+    # And re-arming must NEVER touch a live record - that is how the ownership age-out crept in.
+    ledger = ControlLedger()
+    ledger.begin_cycle()
+    stub = _stub_inverter([2000.0, 2950.0], ledger=ledger, generation=1000.0)
+    stub.write_and_poll_value("charge_rate", "number.charge_rate", 3000, fuzzy=130)
+    before = dict(ledger.records["number.charge_rate"])
+    ledger.begin_cycle()
+    stub = _stub_inverter([2950.0], ledger=ledger, generation=9999.0)
+    stub.write_and_poll_value("charge_rate", "number.charge_rate", 3000, fuzzy=130)
+    after = ledger.records["number.charge_rate"]
+    if after["confirmed_cycle"] != before["confirmed_cycle"] or after["confirmed_generation"] != before["confirmed_generation"] or after["confirmed_by"] != "write":
+        print(f"ERROR: a no-write-needed read modified a live record: {before} -> {after}")
+        failed = True
+    assert not failed, "test_ownership_re_arms_when_no_write_is_needed"
+
+
+def test_divergence_without_timing_metadata_must_repeat():
+    """The freshness gate FAILS OPEN, so without it a divergence has to prove itself by repeating.
+
+    Where either side has no generation the gate is skipped entirely - so a timestamp-less entity
+    plus a vendor serving a cached read of the pre-write value walks straight to EXTERNAL, the
+    exact false accusation the gate exists to prevent. With no timing metadata to trust, trust
+    repetition: a cached read resolves on the next poll, somebody holding the control at another
+    value does not.
+    """
+    failed = False
+    for label, confirmed_generation, read_generation in (
+        ("neither side has a generation", None, None),
+        ("the record has none", None, 400.0),
+        ("the read has none", 100.0, None),
+    ):
+        ledger = ControlLedger()
+        ledger.begin_cycle()
+        ledger.record_write("number.reserve", "reserve", 4.0, now=100.0, generation=confirmed_generation)
+        ledger.begin_cycle()
+        if ledger.observe("number.reserve", "reserve", 50.0, now=200.0, generation=read_generation) != PENDING:
+            print(f"ERROR: a first divergence with no gate ({label}) was not held pending")
+            failed = True
+        if ledger.events:
+            print(f"ERROR: a first divergence with no gate ({label}) was reported: {ledger.events}")
+            failed = True
+        # A second look in the SAME cycle is the same possibly-cached read, so it proves nothing.
+        if ledger.observe("number.reserve", "reserve", 50.0, now=210.0, generation=read_generation) != PENDING:
+            print(f"ERROR: a repeat within one cycle ({label}) was treated as persistence")
+            failed = True
+        # A distinct cycle does.
+        ledger.begin_cycle()
+        if ledger.observe("number.reserve", "reserve", 50.0, now=300.0, generation=read_generation) != EXTERNAL:
+            print(f"ERROR: a divergence persisting across cycles ({label}) was not reported")
+            failed = True
+        if len(ledger.events) != 1:
+            print(f"ERROR: expected exactly one event for {label}, got {len(ledger.events)}")
+            failed = True
+
+    # A divergence that resolves on its own is a cached read, and must not count toward the next.
+    ledger = ControlLedger()
+    ledger.begin_cycle()
+    ledger.record_write("number.reserve", "reserve", 4.0, now=100.0, generation=None)
+    ledger.begin_cycle()
+    ledger.observe("number.reserve", "reserve", 50.0, now=200.0, generation=None)  # pending
+    ledger.begin_cycle()
+    if ledger.observe("number.reserve", "reserve", 4.0, now=300.0, generation=None) != OWNED:
+        print("ERROR: the value coming back was not treated as agreement")
+        failed = True
+    ledger.begin_cycle()
+    if ledger.observe("number.reserve", "reserve", 50.0, now=400.0, generation=None) != PENDING:
+        print("ERROR: a stale pending divergence survived the value coming back")
+        failed = True
+    if ledger.events:
+        print(f"ERROR: a resolved-then-new divergence was reported immediately: {ledger.events}")
+        failed = True
+
+    # With generation on BOTH sides the gate does its job and behaviour is unchanged.
+    ledger = ControlLedger()
+    ledger.begin_cycle()
+    ledger.record_write("number.reserve", "reserve", 4.0, now=100.0, generation=100.0)
+    ledger.begin_cycle()
+    if ledger.observe("number.reserve", "reserve", 50.0, now=200.0, generation=200.0) != EXTERNAL:
+        print("ERROR: a divergence with a working freshness gate was delayed")
+        failed = True
+    assert not failed, "test_divergence_without_timing_metadata_must_repeat"
+
+
+def test_every_entry_point_opens_its_own_cycle():
+    """Anything that can observe or confirm needs its own cycle number.
+
+    quick_inverter_data_update() runs every 120s and reaches update_status(), which writes
+    scheduled_charge_enable through write_and_poll_switch - so it both observes and confirms.
+    Without advancing the cycle its observations were unconditionally STALE and its confirmations
+    collided with the plan run's.
+    """
+    failed = False
+    from execute import Execute
+
+    stub = Execute.__new__(Execute)
+    ledger = ControlLedger()
+    stub.control_ledger = ledger
+    stub.inverters = []
+    stub.fetch_inverter_data = lambda create=True: False
+    before = ledger.cycle
+    stub.quick_inverter_data_update()
+    if ledger.cycle != before + 1:
+        print(f"ERROR: quick_inverter_data_update did not open a cycle ({before} -> {ledger.cycle})")
+        failed = True
+
+    # No inverters at all cannot observe or confirm, so it must not burn a cycle.
+    stub.inverters = None
+    before = ledger.cycle
+    stub.quick_inverter_data_update()
+    if ledger.cycle != before:
+        print("ERROR: quick_inverter_data_update opened a cycle with no inverters to read")
+        failed = True
+
+    # A missing ledger must not take the path out.
+    stub.inverters = []
+    stub.control_ledger = None
+    try:
+        stub.quick_inverter_data_update()
+    except Exception as e:
+        print(f"ERROR: quick_inverter_data_update raised with no ledger configured: {e}")
+        failed = True
+    assert not failed, "test_every_entry_point_opens_its_own_cycle"
+
+
 def run_control_ledger_tests(my_predbat):
     """Run all control ledger tests."""
     failed = False
@@ -1620,6 +1913,10 @@ def run_control_ledger_tests(my_predbat):
         ("restore_rehydrates", test_restore_rehydrates_and_filters),
         ("restore_ignores_non_list", test_restore_ignores_non_list_attribute),
         ("sustained_controls", test_sustained_lists_repeat_offenders),
+        ("newest_events_contract", test_newest_events_honours_its_contract),
+        ("cycle_per_entry_point", test_every_entry_point_opens_its_own_cycle),
+        ("re_arms_no_write_needed", test_ownership_re_arms_when_no_write_is_needed),
+        ("divergence_must_repeat", test_divergence_without_timing_metadata_must_repeat),
         ("restore_string_at_safe", test_restored_event_with_string_at_does_not_raise),
         ("sustained_survives_missing_control", test_sustained_controls_survives_event_missing_control_key),
         ("future_dated_events_not_counted", test_future_dated_events_are_not_counted),
@@ -1627,7 +1924,7 @@ def run_control_ledger_tests(my_predbat):
         ("is_plausible_hour_minute", test_is_plausible_validates_hour_and_minute_components),
         ("implausible_hour_logged", test_implausible_hour_read_is_suppressed_and_logged),
         ("steady_control_stays_owned", test_steady_control_stays_owned_indefinitely),
-        ("prune_keeps_future_events", test_prune_keeps_future_dated_events),
+        ("prune_clamps_future_events", test_prune_clamps_future_dated_events),
         ("minute_rejects_wall_clock", test_minute_control_rejects_a_wall_clock_on_an_integer_entity),
         ("plausibility_both_directions", test_plausibility_is_owned_aware_in_both_directions),
         ("publish_cap_keeps_detected", test_publish_cap_never_drops_an_event_we_just_detected),

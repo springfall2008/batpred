@@ -423,6 +423,77 @@ def run_multi_car_shared_charger_exclusive_test(testname, my_predbat):
     return failed
 
 
+def run_multi_car_iog_adhoc_dispatch_test(testname, my_predbat):
+    """
+    Regression test: with octopus_intelligent_ignore_unplugged on, an ad-hoc/short-notice
+    Octopus dispatch (e.g. the user forcing a charge by editing the car's target in the Octopus
+    app) can be actively charging (car_charging_now True) while car_charging_planned is still
+    False - it hasn't yet had a cycle where load_octopus_slots() saw a matching dispatch and
+    flipped it. Before the fix, fetch_sensor_data_cars()'s gate at fetch.py only checked
+    car_charging_planned, so load_octopus_slots() was never called and car_charging_slots stayed
+    empty - the plan/history "car" column silently showed nothing despite the car genuinely
+    charging on a real (if ad-hoc) dispatch. This exercises the real fetch_sensor_data_cars() and
+    checks car_charging_slots gets populated purely off car_charging_now.
+    """
+    failed = False
+    print("**** Running Test: multi_car_iog {} ****".format(testname))
+
+    my_predbat.num_cars = 1
+    my_predbat.car_charging_planned = [False]  # not yet recognised as planned
+    my_predbat.car_charging_now = [True]  # but it is actively charging right now
+    my_predbat.car_charging_plan_smart = [False]
+    my_predbat.car_charging_plan_max_price = [0]
+    my_predbat.car_charging_plan_time = ["07:00:00"]
+    my_predbat.car_charging_battery_size = [100.0]
+    my_predbat.car_charging_limit = [100.0]
+    my_predbat.car_charging_rate = [7.4]
+    my_predbat.car_charging_slots = [[]]
+    my_predbat.car_charging_exclusive = [False]
+    my_predbat.car_charging_manual_soc = [False]
+    my_predbat.octopus_intelligent_charging = True
+    my_predbat.octopus_intelligent_ignore_unplugged = True  # the setting that gates on car_charging_planned
+    my_predbat.octopus_intelligent_consider_full = False
+    my_predbat.octopus_slots = [[]]
+
+    now = datetime.now(tz=timezone.utc)
+    my_predbat.now_utc = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = 0
+
+    my_predbat.args["car_charging_loss"] = 0.0
+    my_predbat.args["car_charging_soc"] = [50.0]
+    my_predbat.args["car_charging_limit"] = [100.0]
+    my_predbat.args["octopus_intelligent_slot"] = ["binary_sensor.octopus_energy_intelligent_dispatching_adhoc"]
+
+    # Ad-hoc dispatch covering right now - as if the user just forced it via the Octopus app
+    slot_start = (my_predbat.now_utc - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    slot_end = (my_predbat.now_utc + timedelta(minutes=50)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    my_predbat.ha_interface.set_state(
+        "binary_sensor.octopus_energy_intelligent_dispatching_adhoc",
+        "on",
+        attributes={
+            "completed_dispatches": [],
+            "planned_dispatches": [{"start": slot_start, "end": slot_end, "charge_in_kwh": 3.0, "source": "smart-charge", "location": "AT_HOME"}],
+            "vehicle_battery_size_in_kwh": 100.0,
+            "charge_point_power_in_kw": 7.4,
+        },
+    )
+
+    my_predbat.fetch_sensor_data_cars()
+
+    if not my_predbat.car_charging_slots[0]:
+        print("ERROR: car_charging_slots[0] is empty - the ignore_unplugged gate blocked load_octopus_slots() despite car_charging_now being True")
+        failed = True
+    else:
+        print("OK: car_charging_slots[0] populated from car_charging_now alone: {}".format(my_predbat.car_charging_slots[0]))
+
+    if failed:
+        print("Test: {} FAILED".format(testname))
+    else:
+        print("Test: {} PASSED".format(testname))
+
+    return failed
+
+
 def run_multi_car_iog_tests(my_predbat):
     """
     Run all multi-car IOG tests
@@ -432,4 +503,5 @@ def run_multi_car_iog_tests(my_predbat):
     failed |= run_multi_car_iog_load_slots_test("multi_car_iog_load_slots_regression", my_predbat)
     failed |= run_multi_car_iog_unplugged_car_test("multi_car_iog_unplugged_car_3592", my_predbat)
     failed |= run_multi_car_shared_charger_exclusive_test("multi_car_shared_charger_exclusive_4305", my_predbat)
+    failed |= run_multi_car_iog_adhoc_dispatch_test("multi_car_iog_adhoc_dispatch_car_charging_now", my_predbat)
     return failed

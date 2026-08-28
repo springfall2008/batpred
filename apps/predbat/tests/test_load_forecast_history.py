@@ -35,8 +35,8 @@ def build_load_minutes(day_rates, extra_minutes=10):
     return MinuteArray(data, size)
 
 
-def expected_day_weight(now_utc, day, holiday_factor=1.0):
-    """Re-implement the static weekday*age weighting (holiday applied separately) to validate the forecast."""
+def expected_day_weight(now_utc, day):
+    """Re-implement the static weekday*age weighting (holiday matching applied separately) to validate the forecast."""
     today_dow = now_utc.weekday()
     hist_dow = (now_utc - timedelta(days=day)).weekday()
     if hist_dow == today_dow:
@@ -46,7 +46,7 @@ def expected_day_weight(now_utc, day, holiday_factor=1.0):
     else:
         weekday_factor = 0.5
     age_factor = max(0.1, 0.9 - (day - 1) * 0.03)
-    return weekday_factor * holiday_factor * age_factor
+    return weekday_factor * age_factor
 
 
 def step_energy_at(load_forecast, minute_absolute):
@@ -94,7 +94,7 @@ def test_load_forecast_history(my_predbat):
     my_predbat.load_minutes = build_load_minutes(day_rates)
     my_predbat.load_minutes_age = num_days
 
-    my_predbat.get_holiday_minutes = lambda now, n: None  # no holiday history -> neutral holiday factor (1.0)
+    my_predbat.get_holiday_minutes = lambda now, n: None  # no holiday history -> every sample treated as not on holiday
 
     forecast = my_predbat.compute_load_forecast_history(now_utc)
 
@@ -125,7 +125,7 @@ def test_load_forecast_history(my_predbat):
     day_rates = {1: 0.002, 2: 0.0, 3: 0.004}  # day 2 entirely missing/zero
     my_predbat.load_minutes = build_load_minutes(day_rates)
     my_predbat.load_minutes_age = 3
-    my_predbat.get_holiday_minutes = lambda now, n: None  # neutral holiday factor
+    my_predbat.get_holiday_minutes = lambda now, n: None  # no holiday history
 
     forecast = my_predbat.compute_load_forecast_history(now_utc)
 
@@ -249,7 +249,7 @@ def test_load_forecast_history(my_predbat):
         print("ERROR: empty history should return None")
         failed = True
     else:
-        print("Empty history returns None (neutral holiday factor)")
+        print("Empty history returns None (samples then treated as not on holiday)")
     my_predbat.get_history_wrapper = original_history
     my_predbat.holiday_days_left = 0
 
@@ -263,8 +263,8 @@ def test_load_forecast_history(my_predbat):
     toggle_minutes = {ma: (3.0 if 1 <= ma <= 720 else 0.0) for ma in range(3 * 24 * 60)}
 
     # End-to-end: yesterday (d=1) had a holiday toggle mid-day; today is not on holiday.
-    # Morning buckets match today's state (factor 1.0), afternoon buckets do not (factor 0.5),
-    # so a morning slot and an afternoon slot must produce different weighted averages.
+    # Morning buckets match today's state and are averaged in, afternoon buckets do not and are
+    # excluded outright, so a morning slot and an afternoon slot must produce different averages.
     setup_predbat(my_predbat, now_utc)
     my_predbat.forecast_minutes = 24 * 60  # cover a full day so afternoon slots map within yesterday
     day_rates = {1: 0.002, 2: 0.004}  # distinct so the holiday weight shift is observable
@@ -275,13 +275,14 @@ def test_load_forecast_history(my_predbat):
     forecast = my_predbat.compute_load_forecast_history(now_utc)
 
     def expected_with_holiday(slot_minute):
+        """Weighted mean of the buckets whose holiday state matches today's; mismatched ones are excluded."""
         num = 0.0
         den = 0.0
         for d in (1, 2):
             minute_previous = 24 * 60 - slot_minute + 24 * 60 * (d - 1)
-            holiday_active = toggle_minutes.get(minute_previous, 0) > 0
-            holiday_factor = 1.0 if (holiday_active == False) else 0.5  # today_holiday is False
-            w = expected_day_weight(now_utc, d, holiday_factor=holiday_factor)
+            if toggle_minutes.get(minute_previous, 0) > 0:
+                continue  # today is not on holiday, so a holiday bucket carries no weight at all
+            w = expected_day_weight(now_utc, d)
             num += 5 * day_rates[d] * w
             den += w
         return num / den
@@ -404,6 +405,114 @@ def test_load_forecast_history(my_predbat):
         failed = True
     else:
         print("Tomorrow slot matches same-time-of-day today (constant rate): {:.5f}".format(energy_tomorrow))
+
+    # ---------------------------------------------------------------
+    # Test 9: fetch_ml_load_forecast_history time-shifts load_today_h1 history (batpred#4750)
+    # ---------------------------------------------------------------
+    print("Test 9: fetch_ml_load_forecast_history time-shifts load_today_h1 history by its 60-minute lead")
+    setup_predbat(my_predbat, now_utc)
+    my_predbat.prefix = "predbat"
+    my_predbat.forecast_days = 2
+    my_predbat.midnight_utc = now_utc  # now_utc is exactly local midnight in this test file
+    original_get_history_wrapper = my_predbat.get_history_wrapper
+
+    try:
+        # A reading recorded yesterday at 23:30 predicts (via load_today_h1) the cumulative load at
+        # 00:30 today; a reading recorded today at 09:00 predicts the cumulative load at 10:00 today.
+        # A third, later reading (09:30) follows so 10:00 is an interior point of the reconstructed
+        # series rather than its tail - minute_data's smoothing tail-fill only settles on a point's
+        # true value once a later reading exists to interpolate towards, which is always the case in
+        # real usage since Load ML's most recent reading always predicts 60 minutes into the future.
+        yesterday_2330 = (now_utc - timedelta(minutes=30)).isoformat()
+        today_0900 = (now_utc + timedelta(hours=9)).isoformat()
+        today_0930 = (now_utc + timedelta(hours=9, minutes=30)).isoformat()
+        history_records = [
+            {"attributes": {"load_today_h1": 10.0}, "last_updated": yesterday_2330},
+            {"attributes": {"load_today_h1": 25.0}, "last_updated": today_0900},
+            {"attributes": {"load_today_h1": 26.0}, "last_updated": today_0930},
+        ]
+        captured_history_call = {}
+
+        def fake_get_history_wrapper(entity_id, days=30, required=True, tracked=True):
+            """Record the entity/days requested and return the fixed history_records."""
+            captured_history_call["entity_id"] = entity_id
+            captured_history_call["days"] = days
+            return [history_records]
+
+        my_predbat.get_history_wrapper = fake_get_history_wrapper
+
+        forecast = my_predbat.fetch_ml_load_forecast_history(now_utc)
+
+        if captured_history_call.get("entity_id") != "sensor.predbat_load_ml_stats":
+            print("ERROR: fetched history for wrong entity: {}".format(captured_history_call.get("entity_id")))
+            failed = True
+        elif captured_history_call.get("days", 0) < 2:
+            print("ERROR: history lookback should cover at least 2 days to include yesterday, got {}".format(captured_history_call.get("days")))
+            failed = True
+        elif abs(forecast.get(30, -1) - 10.0) > 1e-6:
+            print("ERROR: minute 30 (00:30 today, from yesterday 23:30 reading) expected 10.0, got {}".format(forecast.get(30)))
+            failed = True
+        elif abs(forecast.get(600, -1) - 25.0) > 1e-6:
+            print("ERROR: minute 600 (10:00 today, from today 09:00 reading) expected 25.0, got {}".format(forecast.get(600)))
+            failed = True
+        else:
+            print("PASS: past load_today_h1 readings correctly time-shifted onto their target minute ({} at 00:30, {} at 10:00)".format(forecast.get(30), forecast.get(600)))
+
+        # No history at all -> empty dict, not an error
+        my_predbat.get_history_wrapper = lambda entity_id, days=30, required=True, tracked=True: None
+        if my_predbat.fetch_ml_load_forecast_history(now_utc) != {}:
+            print("ERROR: missing history should return an empty forecast")
+            failed = True
+        else:
+            print("PASS: missing history returns an empty forecast rather than raising")
+    finally:
+        my_predbat.get_history_wrapper = original_get_history_wrapper
+
+    # ---------------------------------------------------------------
+    # Test 10: apply_load_ml_forecast_history gates on the ml_forecast passed in (batpred#4750, #4762)
+    # ---------------------------------------------------------------
+    print("Test 10: apply_load_ml_forecast_history overrides elapsed minutes only when Load ML is genuinely active")
+    my_predbat.minutes_now = 600
+    original_fetch_ml_load_forecast_history = my_predbat.fetch_ml_load_forecast_history
+    original_load_forecast = my_predbat.load_forecast
+
+    try:
+        # Case A: Load ML not active this cycle (e.g. running in the background but not selected as
+        # the forecast source, so fetch_sensor_data's own load_ml_forecast stayed empty) - must NOT
+        # touch self.load_forecast even if h1 history exists.
+        my_predbat.load_forecast = {300: 1.0, 600: 20.0}
+        my_predbat.fetch_ml_load_forecast_history = lambda now_utc: {300: 99.0}  # should be ignored entirely
+        my_predbat.apply_load_ml_forecast_history(now_utc, {})
+        if my_predbat.load_forecast != {300: 1.0, 600: 20.0}:
+            print("ERROR: load_forecast should be untouched when no ML forecast was fetched this cycle, got {}".format(my_predbat.load_forecast))
+            failed = True
+        else:
+            print("PASS: inactive Load ML leaves load_forecast untouched (falls through to the weighted-bucket baseline)")
+
+        # Case A2: the gate is a required precondition, not something a caller can skip by omitting
+        # the argument - the default must be inert rather than "assume ML was active".
+        my_predbat.load_forecast = {300: 1.0, 600: 20.0}
+        my_predbat.apply_load_ml_forecast_history(now_utc)
+        if my_predbat.load_forecast != {300: 1.0, 600: 20.0}:
+            print("ERROR: load_forecast should be untouched when ml_forecast is omitted, got {}".format(my_predbat.load_forecast))
+            failed = True
+        else:
+            print("PASS: omitted ml_forecast defaults to inactive rather than backfilling")
+
+        # Case B: Load ML active - overrides the weighted-bucket baseline for elapsed minutes only,
+        # leaves future (>= minutes_now) minutes from the live ML forecast untouched.
+        my_predbat.load_forecast = {300: 1.0, 600: 20.0, 900: 30.0}  # 300 = weighted-bucket baseline; 600/900 = live ML
+        my_predbat.fetch_ml_load_forecast_history = lambda now_utc: {300: 9.5, 900: 999.0}  # 900 is future, must not apply
+        my_predbat.apply_load_ml_forecast_history(now_utc, {600: 20.0, 900: 30.0})  # this cycle's live ML forecast
+        expected = {300: 9.5, 600: 20.0, 900: 30.0}
+        if my_predbat.load_forecast != expected:
+            print("ERROR: expected {} got {}".format(expected, my_predbat.load_forecast))
+            failed = True
+        else:
+            print("PASS: active Load ML overrides only elapsed minutes with genuine past forecasts ({})".format(my_predbat.load_forecast))
+    finally:
+        my_predbat.fetch_ml_load_forecast_history = original_fetch_ml_load_forecast_history
+        my_predbat.load_forecast = original_load_forecast
 
     # ---------------------------------------------------------------
     # Restore mocks/state

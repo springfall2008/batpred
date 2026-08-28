@@ -182,12 +182,54 @@ Example usage in VSCode
 
 #### Available commands (mcp)
 
-- Get current system status
-- View and update configuration settings
-- Browse all entities
-- Retrieve battery plan data
-- Override plan for specific time periods
-- Access apps.yaml configuration
+| Tool | What it returns or does |
+| ---- | ----------------------- |
+| `get_status` | Current system status - mode, SoC, live power figures |
+| `get_plan` | The current battery plan, with forecasts and costs |
+| `get_config` | Every Predbat setting, with its current value and its default |
+| `get_apps` | Your `apps.yaml` configuration, with credentials redacted |
+| `get_log` | Lines from `predbat.log`, filtered by level, search term and age |
+| `get_state` | Predbat's internal state variables - the same data a debug yaml carries |
+| `get_entities` | All Predbat entities and their states |
+| `set_config` | Change a Predbat setting |
+| `set_plan_override` | Override the plan for one 30 minute period |
+
+#### Asking an AI assistant to review your setup (mcp)
+
+`get_config`, `get_apps` and `get_log` together give an assistant everything a bug report
+normally has to carry, so you can ask it to look over your setup without opening an issue -
+for example *"compare my Predbat settings against their defaults and tell me which changes
+look wrong"*, or *"find the warnings in the last 24 hours of my log and explain them"*.
+
+`get_log` takes optional arguments:
+
+| Argument | Description |
+| -------- | ----------- |
+| `filter` | `all`, `info`, `warnings` (the default) or `errors` |
+| `search` | Only return lines containing this text, case-insensitive |
+| `hours` | Only return lines written in the last N hours |
+| `max_lines` | How many lines to return - the most recent matches are the ones kept, but they come back oldest-first (default 500, maximum 5000) |
+
+`get_state` exposes the same internal state a `predbat_debug.yaml` carries, but a variable at a
+time rather than as a 5MB file. Called with no arguments it returns every variable small enough
+to be worth reading - a few hundred of them, together well under a page - and *describes* the
+handful of large ones (the per-minute series such as `load_minutes`, `rate_import` and
+`pv_today`) in an `omitted` section giving each one's type, length and value range. Ask for one
+of those by name with `keys`, narrow by name with `filter`, or raise the per-variable budget
+with `max_bytes`.
+
+| Argument | Description |
+| -------- | ----------- |
+| `keys` | Specific variable names to return (omit for every small variable) |
+| `filter` | Only return variables whose name matches this Python regex |
+| `max_bytes` | Per-variable size budget before a value is described instead of returned (default 2048, maximum 262144) |
+
+`get_state` and `get_apps` both redact credentials. `get_apps` replaces credential-like values
+(anything whose name contains `_key`, `password`, `secret` or `token`) with `xxx`, so your API
+keys are not sent to your AI provider; pass `masked: false` if you deliberately want the raw
+values. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
+return anything a debug dump would not - credentials, the Home Assistant interface, loaded
+secrets and the URL caches are not reachable through it at all.
 
 ---
 
@@ -218,10 +260,80 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `ge_cloud_direct` | Boolean | Yes | - | `ge_cloud_direct` | Set to `true` to enable GivEnergy Cloud control |
 | `api_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key |
 | `automatic` | Boolean | No | false | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
+| `automatic_evc` | Boolean | No | false | `ge_cloud_automatic_evc` | Set to `true` to wire your GivEnergy EV chargers into `car_charging_energy`, `car_charging_planned` and `num_cars` — see [EV chargers](#ev-chargers-gecloud). Separate from `ge_cloud_automatic` because it registers a car |
+| `evc_control` | Boolean | No | false | `ge_cloud_evc_control` | Set to `true` to let Predbat start and stop your EV charger from its car charging plan — see [Charger control](#charger-control-gecloud). Needs `ge_cloud_automatic_evc` |
 | `load_today_ignore` | Boolean | No | false | `ge_cloud_load_today_ignore` | Set to `true` to ignore GE Cloud load_today data and use the `load_today` sensor from `apps.yaml` instead |
 | `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 | `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
+
+#### EV chargers (gecloud)
+
+Every GivEnergy EV charger on the account is polled alongside the inverters and publishes
+its meter readings as `sensor.predbat_gecloud_<serial>_evc_*` entities, plus two entities
+describing the charger itself:
+
+| Entity | Description |
+| ------ | ----------- |
+| `sensor.predbat_gecloud_<serial>_evc_status` | The charger's status as GivEnergy reports it, e.g. `charging`, `idle`, `offline` |
+| `binary_sensor.predbat_gecloud_<serial>_evc_car_connected` | `on` while a car is plugged in, from the status above |
+
+Those two entities are published whatever your settings say — they are new entities and
+change nothing that already exists.
+
+Setting `ge_cloud_automatic_evc` to `true` additionally wires the chargers into Predbat's
+car planning, in serial order so charger N is car N:
+
+- **car_charging_energy** — each charger's `_evc_energy_active_import_register`, so
+  `car_charging_hold` subtracts the car charging from house load precisely instead of
+  falling back to the `car_charging_threshold` heuristic
+- **car_charging_planned** — each charger's `_evc_car_connected`, so Predbat only plans
+  car charging when there is actually a car on the cable
+- **num_cars** — raised to the number of chargers if it is currently lower, never reduced,
+  since another component may have registered cars of its own
+
+This is deliberately a separate setting from `ge_cloud_automatic` rather than part of it:
+it registers a car and moves `num_cars`, which would change the plan for existing users
+who had only ever asked for their inverter to be configured. It runs whether or not a
+GivEnergy battery is present, so a GivEnergy charger alongside another manufacturer's
+battery is configured too. Everything else about the car —
+**car_charging_battery_size**, **car_charging_limit** and **car_charging_soc** — still
+comes from `apps.yaml` as usual.
+
+`car_charging_planned` is wired to a binary sensor rather than to the status sensor on
+purpose: it answers `on`, which the default **car_charging_planned_response** already
+matches, so this works without you having to add GivEnergy's status words to that list.
+If your charger reports a status Predbat does not recognise it is treated as no car
+connected and logged once, so please report the value from the log so it can be added.
+
+#### Charger control (gecloud)
+
+With `ge_cloud_evc_control` set to `true`, Predbat drives each charger from its own car's
+plan: `start-charge` inside a planned charging window, `stop-charge` outside one. Charger N
+follows car N, in the same serial order the automatic configuration uses, so the two cannot
+disagree about which charger is which car.
+
+`ge_cloud_automatic_evc` must also be on, since it is that configuration which establishes
+the charger to car mapping. Predbat says so in the log and leaves control off rather than
+guessing if you enable control without it.
+
+- A command is only sent when the wanted state actually changes, so a charger already
+  charging inside a window is left alone rather than commanded every minute
+- A charger with no car plugged in is never commanded — Predbat waits for
+  `_evc_car_connected` to go `on`
+- Nothing is commanded until Predbat has published a car plan, so a restart cannot stop a
+  charge that is already running
+
+A `switch.predbat_gecloud_evc_control` entity appears when control is enabled, on by
+default, so you can hand the charger back without editing `apps.yaml`. Turning it off — or
+putting Predbat into read only mode — **releases** rather than just going quiet: if Predbat
+had stopped the charger it sends `start-charge` once on the way out, so a car is never left
+stranded by a charger Predbat walked away from. The switch state is saved, so an off
+survives a restart.
+
+Unlike a Zappi, there is no previous mode to restore on release: `start-charge` and
+`stop-charge` are commands rather than modes, so your charger's own mode (Grid, Hybrid,
+Solar) still decides what happens once Predbat lets go.
 
 #### How to get your API key (gecloud)
 
@@ -543,7 +655,7 @@ Predbat supports both of myenergi's APIs:
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `auth_method` | String | No | `direct` | `myenergi_auth_method` | `direct` (local digest API) or `oauth` (official cloud API) |
-| `hub_serial` | String | No | - | `myenergi_hub_serial` | Hub serial number — required when `auth_method` is `direct` |
+| `hub_serial` | String | No | - | `myenergi_hub_serial` | Hub serial number — required when `auth_method` is `direct`. It is the API login rather than a device filter, so it cannot default to all devices; one serial reads every device on the account. With no hub, use the serial the API key was generated against |
 | `api_key` | String | No | - | `myenergi_api_key` | API key generated at myaccount.myenergi.com — required when `auth_method` is `direct` |
 | `key` | String | No | - | `myenergi_key` | OAuth access token, cloud transport |
 | `token_hash` | String | No | - | `myenergi_token_hash` | OAuth refresh token hash, used to refresh `key` automatically. At least one of `key` or `token_hash` is required when `auth_method` is `oauth` |
@@ -570,7 +682,9 @@ myenergi_api_key: !secret myenergi_api_key
 1. Sign in at <https://myaccount.myenergi.com>.
 2. Open **Advanced** then **API Key**.
 3. Generate a key for your hub and copy it.
-4. Your hub serial number is printed on the hub and shown in the myenergi app.
+4. Your hub serial number is printed on the hub and shown in the myenergi app. If you have no hub, use the serial of the device
+   acting as one — the Zappi or Eddi you generated the key against. Either way a single serial is enough, because it is the
+   login for the account rather than a choice of which device to read: Predbat discovers every Zappi and Eddi behind it.
 
 #### Published entities (myenergi)
 
@@ -1012,7 +1126,7 @@ Integrates with AlphaESS SMILE/Storion hybrid inverters via the AlphaESS Open AP
 
 - **EXPERIMENTAL:** nobody on the Predbat project has AlphaESS hardware, so behaviour is inferred from AlphaESS's published Open API documentation and the Home Assistant AlphaESS integration rather than confirmed against real inverters. Every request and response is traced to the log (`api_debug`, on by default) with credentials redacted, so a tester can capture evidence for an issue report. Run the [diagnostics CLI](inverter-setup.md#alphaess-cloud) against your own system before trusting Predbat with control
 - **Control is on by default**, the same as `sunsynk_control_enable`. Set `alphaess_control_enable: false` for monitoring only. `switch.predbat_set_read_only` additionally holds back Predbat's own automatic writes, including its periodic re-apply
-- **Both write endpoints are documented as writable once per 24 hours.** Predbat therefore only writes when the payload actually changes, gates charge and discharge independently so one does not consume the other's budget, and paces writes with `alphaess_min_write_interval`
+- **Both write endpoints are documented as writable once per 24 hours.** Predbat therefore only writes when the payload actually changes, gates charge and discharge independently so one does not consume the other's budget, and paces writes with `alphaess_min_write_interval`. A schedule is committed in stages (window, then enable, then target SoC), so a small, capped number of corrections is allowed through within 60 seconds of a successful write - without it the inverter would run a schedule Predbat had already superseded until the interval expired
 - Predbat's controls map straight onto the schedule fields and the inverter does the timing. `batUseCap` carries the export target while an export window is programmed and the reserve otherwise, because the API has only one field for the discharge floor. A **zero** charge or discharge rate is how Predbat signals a freeze, since AlphaESS has no pause endpoint
 - Times sit on a **15-minute grid** (`00:00` to `23:45`). Off-grid values are accepted by the API and then silently ignored by the inverter, so Predbat snaps windows inward and disables any window that snapping collapses
 - Newer systems may be entitled to the periodic scheduling API (six windows a day, with a power setpoint per window). Predbat probes this once per system; a `6017` response means the account or hardware is not entitled and Predbat falls back to the universally available two-window endpoints. On that legacy path a non-zero charge rate is not honoured by the hardware

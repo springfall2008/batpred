@@ -141,6 +141,16 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "ge_cloud_automatic",
             },
+            "automatic_evc": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_automatic_evc",
+            },
+            "evc_control": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_evc_control",
+            },
         },
         "phase": 1,
     },
@@ -670,6 +680,8 @@ class Components:
                 continue
 
             have_all_args = True
+            missing_config = []
+            required_or_config = []
             self.components[component_name] = None
             self.component_tasks[component_name] = None
 
@@ -687,8 +699,10 @@ class Components:
                     continue
                 elif required_true and not self.base.get_arg(arg_info["config"], False, indirect=False):
                     have_all_args = False
+                    missing_config.append(f"{arg_info['config']} (must be true)")
                 elif required and self.base.get_arg(arg_info["config"], None, indirect=False) is None:
                     have_all_args = False
+                    missing_config.append(arg_info["config"])
                 else:
                     arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=indirect)
             required_or = component_info.get("required_or", [])
@@ -696,9 +710,22 @@ class Components:
             if required_or:
                 if not any(arg_dict.get(arg, None) for arg in required_or):
                     have_all_args = False
+                    required_or_config = [component_info["args"][arg]["config"] for arg in required_or]
             if have_all_args:
                 self.log(f"Initialising {component_info['name']} interface")
                 self.components[component_name] = component_info["class"](self.base, **arg_dict)
+            else:
+                configured_args = getattr(self.base, "args_from_apps_yaml", None)
+                if configured_args is None:
+                    configured_args = self.base.args
+                component_configured = any(configured_args.get(arg_info["config"]) for arg_info in component_info["args"].values())
+                if component_configured:
+                    reasons = []
+                    if missing_config:
+                        reasons.append(f"missing required configuration: {', '.join(missing_config)}")
+                    if required_or_config:
+                        reasons.append(f"needs at least one of: {', '.join(required_or_config)}")
+                    self.log(f"Warn: Skipping {component_info['name']} interface, {'; '.join(reasons)}")
 
     def start(self, only=None, phase=0):
         """Start all initialised components"""

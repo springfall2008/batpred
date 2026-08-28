@@ -25,7 +25,6 @@ can configure today, and a bearer-token transport for the official 3rd party API
 
 import argparse
 import asyncio
-import datetime
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -37,6 +36,7 @@ from component_base import ComponentBase
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from predbat_metrics import record_api_call
+from utils import parse_car_plan_windows, in_car_plan_window
 
 MYENERGI_DIRECTOR_URL = "https://director.myenergi.net"
 MYENERGI_CLOUD_URL = "https://api.s18.myenergi.net"
@@ -111,10 +111,6 @@ BOOST_MINUTES_MAX = 240
 
 # Boosting a Zappi is only accepted while it is in one of the green-energy modes.
 ZAPPI_BOOSTABLE_MODES = ("Eco", "Eco+")
-
-# How output.py formats the start/end of each planned car charging window. It carries no
-# year, so a parsed window has to be rebuilt around the current time.
-PLAN_TIME_FORMAT = "%m-%d %H:%M:%S"
 
 # The two modes Predbat-led charge control drives a Zappi between, and the mode a
 # released Zappi falls back to when nothing was saved to restore.
@@ -839,14 +835,19 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         An intervening zero reading does not rescue it, because the dip is smoothed away
         first. That loss is in the shared cumulative series, so it affects
         car_charging_energy and iboost_today alike. Documented in docs/components.md.
+
+        The Zappi live power sensors go to car_charging_power, which is display-only: it feeds
+        the web power flow diagram and the predbat.car_charging_power sensor, never the plan.
         """
         zappi_energy_entities = []
+        zappi_power_entities = []
         zappi_plug_entities = []
         eddi_entity = None
         for device in sorted(self.devices.values(), key=lambda item: item.serial):
             prefix = self.entity_prefix(device)
             if device.kind == DEVICE_KIND_ZAPPI:
                 zappi_energy_entities.append("sensor.{}_session_energy".format(prefix))
+                zappi_power_entities.append("sensor.{}_power".format(prefix))
                 zappi_plug_entities.append("sensor.{}_plug_status".format(prefix))
             elif device.kind == DEVICE_KIND_EDDI and eddi_entity is None:
                 eddi_entity = "sensor.{}_session_energy".format(prefix)
@@ -856,6 +857,8 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
             self.set_arg_auto("car_charging_energy", zappi_energy_entities)
             self.log("Info: myenergi: setting car_charging_planned to {}".format(zappi_plug_entities))
             self.set_arg_auto("car_charging_planned", zappi_plug_entities)
+            self.log("Info: myenergi: setting car_charging_power to {}".format(zappi_power_entities))
+            self.set_arg_auto("car_charging_power", zappi_power_entities)
         if eddi_entity:
             self.log("Info: myenergi: setting iboost_energy_today to {}".format(eddi_entity))
             self.set_arg_auto("iboost_energy_today", eddi_entity)
@@ -884,26 +887,11 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
 
     def _parse_plan_windows(self, planned, now):
         """Turn one car's published plan into a list of localised (start, end) pairs."""
-        parsed = []
-        for window in planned:
-            try:
-                start = self.local_tz.localize(datetime.datetime.strptime(window["start"], PLAN_TIME_FORMAT).replace(year=now.year))
-                end = self.local_tz.localize(datetime.datetime.strptime(window["end"], PLAN_TIME_FORMAT).replace(year=now.year))
-            except (KeyError, TypeError, ValueError):
-                # One malformed entry must not cost the rest of the plan
-                continue
-            # The plan carries no year, so rebuild it around now for windows crossing New Year
-            if start < now - datetime.timedelta(hours=23):
-                start = start.replace(year=start.year + 1)
-                end = end.replace(year=end.year + 1)
-            elif end < start:
-                end = end.replace(year=end.year + 1)
-            parsed.append((start, end))
-        return parsed
+        return parse_car_plan_windows(planned, now, self.local_tz)
 
     def should_charge_now(self, car_n, now):
         """Is now inside one of the planned charging windows for this car."""
-        return any(start <= now < end for start, end in self.control_windows.get(car_n, []))
+        return in_car_plan_window(self.control_windows.get(car_n, []), now)
 
     def enable_control(self):
         """Decide whether Predbat-led Zappi control should run, and say why when it will not.
@@ -1225,6 +1213,37 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
                     self.dashboard_item("sensor.{}_temp_2".format(prefix), state=device.temp_2, attributes=myenergi_attribute_table["temp_2"], app="myenergi")
 
 
+# myenergi accepts a command before the device reports it, so a read-back fired straight
+# after one still shows the old state. Long enough for the change to land, short enough
+# that a boost/cancel test is not a chore to sit through.
+COMMAND_SETTLE_SECONDS = 8
+
+
+def print_device_table(devices):  # pragma: no cover
+    """Print the device summary table, for the poll and for a command read-back alike."""
+    print("{:<12} {:<10} {:<16} {:<10} {:>10} {:>12}".format("DEVICE", "KIND", "STATUS", "MODE", "POWER W", "SESSION kWh"))
+    for device in devices:
+        print("{:<12} {:<10} {:<16} {:<10} {:>10.0f} {:>12.2f}".format(device.device_id, device.kind, device.status, device.mode, device.power_w, device.session_energy_kwh))
+
+
+async def confirm_command(component, device_id):  # pragma: no cover
+    """Re-poll after a command and show the device's new state, so one run proves the effect.
+
+    Reads through the transport rather than run(), which would republish every entity and
+    bury the two lines that matter.
+    """
+    print("\nWaiting {}s for the device to report the change...".format(COMMAND_SETTLE_SECONDS))
+    await asyncio.sleep(COMMAND_SETTLE_SECONDS)
+    devices = await component.transport.fetch_devices()
+    device = next((item for item in devices if item.device_id == device_id), None)
+    if not device:
+        print("{} is no longer in the poll response".format(device_id))
+        return
+    print_device_table([device])
+    remaining = ", {} minutes remaining".format(device.boost_remaining_mins) if device.boost_remaining_mins else ""
+    print("Boost active: {}{}".format(device.boost_active, remaining))
+
+
 async def run_myenergi_cli(args):  # pragma: no cover
     """Run one myenergi poll, and optionally a boost command, against the live API."""
     mock_base = MockBase()
@@ -1234,7 +1253,10 @@ async def run_myenergi_cli(args):  # pragma: no cover
         "api_key": args.api_key,
         "key": args.token,
         "token_hash": args.token_hash,
-        "automatic": False,
+        # On by default, as it is in apps.yaml, so a harness run shows the car_charging_energy,
+        # car_charging_planned and iboost_energy_today wiring a real run would set up - that
+        # mapping is most of what there is to check before trusting the component with a car.
+        "automatic": not args.no_automatic,
         "enable_controls": True,
     }
     component = MyEnergiAPI(mock_base, **arg_dict)
@@ -1244,18 +1266,27 @@ async def run_myenergi_cli(args):  # pragma: no cover
 
     print("Connecting with the {} transport...".format(component.auth_method_config))
     await component.transport.connect()
-    devices = await component.transport.fetch_devices()
+
+    # One whole component cycle, as the other harnesses do, rather than a bare
+    # fetch_devices(): publishing is part of run(), so a raw fetch shows the readings but
+    # none of the sensors, switches and numbers a real run creates - which is exactly what
+    # this harness is used to check before wiring the component into apps.yaml.
+    print("Running one poll cycle...")
+    if not await component.run(0, True):
+        print("The poll cycle failed - see the messages above")
+        return
+    devices = sorted(component.devices.values(), key=lambda item: item.serial)
     if not devices:
         print("No Zappi or Eddi devices found")
         return
+
+    print("")
 
     if args.raw:
         for device in devices:
             print(device)
     else:
-        print("{:<12} {:<10} {:<16} {:<10} {:>10} {:>12}".format("DEVICE", "KIND", "STATUS", "MODE", "POWER W", "SESSION kWh"))
-        for device in devices:
-            print("{:<12} {:<10} {:<16} {:<10} {:>10.0f} {:>12.2f}".format(device.device_id, device.kind, device.status, device.mode, device.power_w, device.session_energy_kwh))
+        print_device_table(devices)
 
     # The three supply modes Predbat-led charge control drives a Zappi between, so the
     # same commands the component issues can be exercised by hand against a live charger.
@@ -1271,9 +1302,9 @@ async def run_myenergi_cli(args):  # pragma: no cover
         if not zappi:
             print("No Zappi found to control")
             return
-        print("Setting {} to {}...".format(zappi.name, mode))
+        print("\nSetting {} to {}...".format(zappi.name, mode))
         await component.transport.set_mode(zappi, mode)
-        print("Done - run again with no action to see the new mode")
+        await confirm_command(component, zappi.device_id)
         return
 
     target_kind = args.boost or args.cancel_boost
@@ -1283,12 +1314,12 @@ async def run_myenergi_cli(args):  # pragma: no cover
             print("No {} device found to control".format(target_kind))
             return
         if args.boost:
-            print("Boosting {} by {}...".format(device.name, args.amount))
+            print("\nBoosting {} by {}...".format(device.name, args.amount))
             await component.transport.send_boost(device, args.amount)
         else:
-            print("Cancelling boost on {}...".format(device.name))
+            print("\nCancelling boost on {}...".format(device.name))
             await component.transport.cancel_boost(device)
-        print("Done")
+        await confirm_command(component, device.device_id)
 
 
 def main():  # pragma: no cover
@@ -1307,6 +1338,7 @@ def main():  # pragma: no cover
     charge_group.add_argument("--start-charge", action="store_true", help="Put the first Zappi in {} to charge now, as a planned window does".format(ZAPPI_MODE_CHARGING))
     charge_group.add_argument("--stop-charge", action="store_true", help="Put the first Zappi in {}, as being outside a planned window does".format(ZAPPI_MODE_STOPPED))
     charge_group.add_argument("--release", action="store_true", help="Put the first Zappi back in {}, as releasing it does".format(ZAPPI_MODE_RELEASE))
+    parser.add_argument("--no-automatic", action="store_true", help="Skip the automatic configuration of car_charging_energy, car_charging_planned and iboost_energy_today")
     parser.add_argument("--raw", action="store_true", help="Print the full normalised device records")
 
     args = parser.parse_args()

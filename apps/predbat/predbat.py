@@ -22,7 +22,6 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 import traceback
-import sys
 import gc
 import random
 import time
@@ -35,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.52.0"
+THIS_VERSION = "v8.53.5"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -448,6 +447,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_power = 0
         self.battery_power = 0
         self.grid_power = 0
+        self.car_charging_power = 0
+        self.car_charging_power_configured = False
         self.io_adjusted = {}
         self.current_charge_limit = 0.0
         self.current_charge_limit_kwh = 0.0
@@ -510,9 +511,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.balance_inverters_threshold_charge = 1.0
         self.balance_inverters_threshold_discharge = 1.0
         self.load_inday_adjustment = 1.0
+        self.holiday_load_scaling = 0.7
         self.set_read_only = True
         self.set_read_only_axle = False
         self.set_reserve_enable = False
+        self.set_charge_freeze_only = False
         self.metric_cloud_coverage = 0.0
         self.future_energy_rates_import = {}
         self.future_energy_rates_export = {}
@@ -605,6 +608,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.set_export_low_power = False
         self.config_root = "./"
         self.inverter_can_charge_during_export = True
+        self.inverter_support_feedin_first = False
         self.octopus_last_joined_try = None
         # None = not yet confirmed, True = the current Power Down join service is confirmed registered.
         # Deliberately never set to False - a failed probe still re-tries every join rather than being
@@ -1118,10 +1122,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 "state_class": "measurement",
                 "unit_of_measurement": "changes",
                 "icon": "mdi:account-alert",
-                # Newest 20 BY TIME. The stored list is sorted by restore(), so on a pod whose clock
-                # is behind, this run's real event carries a small "at", sorts to index 0, and a
-                # plain [-20:] tail discarded the very event just detected - from the attribute that
-                # IS the durable store.
+                # Newest 20, but explicitly NOT purely by time - see newest_events(). This
+                # attribute is the durable store restore() reads back, and on a pod whose clock is
+                # behind, the event just detected carries a small "at" and looks like the oldest
+                # thing here, so any by-time cap would discard exactly the one that cannot be
+                # recovered from anywhere else.
                 "events": self.control_ledger.newest_events(20),
                 "sustained": sustained,
             },
@@ -1601,7 +1606,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 if "float" in sensor_types and self.validate_is_float(sensor) and not spec.get("modify", False):
                                     # Allow fixed float values
                                     continue
-                                if "string" in sensor_types and isinstance(sensor, str) and not spec.get("modify", False) and not "." in sensor:
+                                if "string" in sensor_types and isinstance(sensor, str) and not spec.get("modify", False) and "." not in sensor:
                                     # Allow fixed string values
                                     continue
 
@@ -1639,6 +1644,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                         self.arg_errors[name] = "Invalid value None in element {}".format(sensor)
                                         errors += 1
                                         break
+
+                                if spec.get("transient_ok", False) and isinstance(state, str) and state.strip().lower() in ["unavailable", "unknown", "none", ""]:
+                                    # Home Assistant reports these while an entity is offline or has
+                                    # not produced a reading yet. For a sensor that legitimately drops
+                                    # out - an EV charger with nothing plugged into it - that is normal
+                                    # rather than a misconfiguration, and flagging it leaves the whole
+                                    # run reporting errors. A missing entity is still an error above,
+                                    # so a typo in the name is still caught.
+                                    continue
 
                                 validated = False
                                 if "float" in sensor_types and self.validate_is_float(state):

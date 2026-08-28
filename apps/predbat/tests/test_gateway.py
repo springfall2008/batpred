@@ -4178,6 +4178,8 @@ class TestEvAutoConfig:
         gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.68)  # 32A * 240V / 1000
         # Session energy sensor for subtracting EV load from history
         assert gw._args["car_charging_energy"] == "sensor.predbat_gateway_ev_cp1_session_energy"
+        # Live charge power, display-only: drives the web power flow diagram
+        assert gw._args["car_charging_power"] == "sensor.predbat_gateway_ev_cp1_power"
         # Battery size and target limit are left to the existing car_charging_* settings
         assert "car_charging_battery_size" not in gw._args
         assert "car_charging_limit" not in gw._args

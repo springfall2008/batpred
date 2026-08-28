@@ -23,8 +23,7 @@ from dataclasses import dataclass
 import datetime
 import aiohttp
 import time
-from dataclasses import dataclass
-from typing import Any, Dict, List, Union
+from typing import Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA
 from component_base import ComponentBase
@@ -61,6 +60,7 @@ ohme_attribute_table = {
 # Delivered-energy sensor built by OhmeAPI.update_energy_today() - see that method for why
 # Ohme's own energy figure cannot be used for this
 ENERGY_TODAY_ENTITY = "sensor.predbat_ohme_energy_today"
+POWER_WATTS_ENTITY = "sensor.predbat_ohme_power_watts"
 
 # How often the Predbat-led control loop re-evaluates the plan. The plan is minute-granular so a
 # finer cadence buys nothing, and this matches the gateway EV charger control loop
@@ -475,9 +475,20 @@ class OhmeAPI(ComponentBase):
         # before auto_config(final=True), so an unmatched regex from the apps.yaml default is
         # still present as its literal "re:" string rather than having been removed yet - treat
         # that as unconfigured, but leave a real charger (Zappi, Wallbox, hand-set sensor) alone.
+        # A list of one is how several components hand over a single entity, so unwrap it before
+        # comparing - otherwise an explicit ["sensor.predbat_ohme_energy_today"] looks third-party
         existing = self.get_arg("car_charging_energy", default=None, indirect=False)
-        if (not existing) or (isinstance(existing, str) and existing.startswith("re:")):
+        if isinstance(existing, list) and len(existing) == 1:
+            existing = existing[0]
+        # Ohme already owns the energy figure when the entity configured is its own, whether that
+        # was set here on a previous run or written into apps.yaml by hand (#4715 review)
+        if (not existing) or (isinstance(existing, str) and existing.startswith("re:")) or existing == ENERGY_TODAY_ENTITY:
             self.set_arg_auto("car_charging_energy", ENERGY_TODAY_ENTITY)
+            # Live charge power, for the web power flow diagram and the predbat.car_charging_power
+            # sensor. Deliberately tied to the same decision as the energy sensor above: the two
+            # have to describe the same charger, so when another charger owns the energy figure
+            # Ohme's own power reading is left out rather than reported beside it.
+            self.set_arg_auto("car_charging_power", POWER_WATTS_ENTITY)
         else:
             self.log("Info: Ohme API: Leaving car_charging_energy set to {} rather than using {}".format(existing, ENERGY_TODAY_ENTITY))
 
@@ -607,7 +618,7 @@ class OhmeAPI(ComponentBase):
 
         # Publish power data
         if power:
-            self.dashboard_item(entity_name_sensor + "_power_watts", state=power.watts, attributes=ohme_attribute_table.get("power_watts", {}), app="ohme")
+            self.dashboard_item(POWER_WATTS_ENTITY, state=power.watts, attributes=ohme_attribute_table.get("power_watts", {}), app="ohme")
             self.dashboard_item(entity_name_sensor + "_power_amps", state=power.amps, attributes=ohme_attribute_table.get("power_amps", {}), app="ohme")
             self.dashboard_item(entity_name_sensor + "_power_volts", state=power.volts, attributes=ohme_attribute_table.get("power_volts", {}), app="ohme")
             # self.dashboard_item(entity_name_sensor + "_ct_amps", state=power.ct_amps, attributes=ohme_attribute_table.get("ct_amps", {}), app="ohme")
@@ -642,7 +653,6 @@ class OhmeAPI(ComponentBase):
         self.dashboard_item(entity_name_number + "_preconditioning", state=preconditioning, attributes=ohme_attribute_table.get("preconditioning", {}), app="ohme")
 
         # Publish slot information
-        num_slots = len(slots) if slots else 0
         slot_attributes = ohme_attribute_table.get("slots", {}).copy()
 
         planned_dispatches = []
@@ -694,7 +704,7 @@ class OhmeAPI(ComponentBase):
         if entity_id.endswith("_target_time"):
             if value in OPTIONS_TIME:
                 hour, minute = map(int, value.split(":"))
-                await self.client.async_apply_session_rule(target_time=(hour, minute))
+                await self.client.async_set_target(target_time=(hour, minute))
                 self.log(f"Info: Ohme API: Set target time to {hour:02d}:{minute:02d}")
             else:
                 self.log(f"Warn: Ohme API: Invalid target time value: {value}")
@@ -707,7 +717,7 @@ class OhmeAPI(ComponentBase):
         # which is also what ohme_automatic_octopus_intelligent binds octopus_charge_limit to
         if entity_id.endswith("_target_percent"):
             if (isinstance(value, float) or isinstance(value, int)) and 0 <= value <= 100:
-                await self.client.async_apply_session_rule(target_percent=int(value))
+                await self.client.async_set_target(target_percent=int(value))
             else:
                 self.log(f"Warn: Ohme API: Invalid target SoC value: {value}")
         elif entity_id.endswith("_preconditioning"):
@@ -718,10 +728,10 @@ class OhmeAPI(ComponentBase):
                 return
             if value == 0:
                 self.log(f"Info: Ohme API: Set preconditioning to off")
-                await self.client.async_apply_session_rule(pre_condition=True)
+                await self.client.async_set_target(pre_condition_length=0)
             else:
                 self.log(f"Info: Ohme API: Set preconditioning length to {int(value)} mins")
-                await self.client.async_apply_session_rule(pre_condition=True, pre_condition_length=int(value))
+                await self.client.async_set_target(pre_condition_length=int(value))
 
     async def switch_event_handler(self, entity_id, service):
         """
@@ -878,7 +888,7 @@ class OhmeApiClient:
                 async with self._session.request(
                     method=method,
                     url=f"https://api.ohme.io{url}",
-                    data=json.dumps(data) if data and method in {"PUT", "POST"} else data,
+                    data=json.dumps(data) if data and method in {"PUT", "POST", "PATCH"} else data,
                     headers={
                         "Authorization": f"Firebase {self._token}",
                         "Content-Type": "application/json",
@@ -1052,7 +1062,7 @@ class OhmeApiClient:
         """Enable max charge"""
         result = await self._make_request(
             "PUT",
-            f"/v1/chargeSessions/{self.serial}/rule?maxCharge=" + str(state).lower(),
+            f"/v2/charge-devices/{self.serial}/charge-sessions/active/{self.serial}/max-charge?enabled=" + str(state).lower(),
         )
         return bool(result)
 
@@ -1067,48 +1077,6 @@ class OhmeApiClient:
             await self.async_max_charge(False)
         elif mode is ChargerMode.PAUSED:
             await self.async_pause_charge()
-
-    async def async_apply_session_rule(
-        self,
-        max_price: Optional[float] = None,
-        target_time: Optional[tuple[int, int]] = None,
-        target_percent: Optional[int] = None,
-        pre_condition: Optional[bool] = None,
-        pre_condition_length: Optional[int] = None,
-    ) -> bool:
-        """Apply rule to ongoing charge/stop max charge."""
-        # Check every property. If we've provided it, use that. If not, use the existing.
-        if max_price is None:
-            if "settings" in self._last_rule and self._last_rule["settings"] is not None and len(self._last_rule["settings"]) > 1:
-                max_price = self._last_rule["settings"][0]["enabled"]
-            else:
-                max_price = False
-
-        if target_percent is None:
-            target_percent = self._last_rule["targetPercent"] if "targetPercent" in self._last_rule else 80
-
-        if pre_condition is None:
-            pre_condition = self._last_rule["preconditioningEnabled"] if "preconditioningEnabled" in self._last_rule else False
-
-        if not pre_condition_length:
-            pre_condition_length = self._last_rule["preconditionLengthMins"] if ("preconditionLengthMins" in self._last_rule and self._last_rule["preconditionLengthMins"] is not None) else 30
-
-        if target_time is None:
-            # Default to 9am
-            target_time_cache = self._last_rule["targetTime"] if "targetTime" in self._last_rule else 32400
-            target_time = (target_time_cache // 3600, (target_time_cache % 3600) // 60)
-
-        target_ts = int(time_next_occurs(target_time[0], target_time[1]).timestamp() * 1000)
-
-        # Convert these to string form
-        max_price_str = "true" if max_price else "false"
-        pre_condition_str = "true" if pre_condition else "false"
-
-        result = await self._make_request(
-            "PUT",
-            f"/v1/chargeSessions/{self.serial}/rule?enableMaxPrice={max_price_str}&targetTs={target_ts}&enablePreconditioning={pre_condition_str}&toPercent={target_percent}&preconditionLengthMins={pre_condition_length}",
-        )
-        return bool(result)
 
     async def async_change_price_cap(self, enabled: Optional[bool] = None, cap: Optional[float] = None) -> bool:
         """Change price cap settings."""
@@ -1157,25 +1125,39 @@ class OhmeApiClient:
         target_time: Optional[tuple[int, int]] = None,
         pre_condition_length: Optional[int] = None,
     ) -> bool:
-        """Set a target time/percentage."""
-        pre_condition: Optional[bool] = None
-        if pre_condition_length is not None:
-            pre_condition = bool(pre_condition_length)
+        """Set a target time/percentage/preconditioning on the applicable rule.
 
-        if self._charge_in_progress():
-            await self.async_apply_session_rule(
-                target_time=target_time,
-                target_percent=target_percent,
-                pre_condition=pre_condition,
-                pre_condition_length=pre_condition_length,
-            )
-        else:
-            await self.async_update_schedule(
-                target_time=target_time,
-                target_percent=target_percent,
-                pre_condition=pre_condition,
-                pre_condition_length=pre_condition_length,
-            )
+        Upstream moved this from a PUT against the now-dead /v1/chargeSessions/{id}/rule (which
+        served both an in-progress session and the next scheduled one, chosen by
+        _charge_in_progress()) to a single PATCH against /v2/users/me/charge-rules/{id} that works
+        for either case - the id itself already resolves to whichever rule is live (issue #4719).
+        async_update_schedule (PUT /v1/chargeRules/{id}) is untouched upstream and still used for
+        the next-session case elsewhere, so it is kept as-is alongside this.
+        """
+        data: dict = {}
+
+        if target_percent is not None:
+            data["targetPercent"] = target_percent
+
+        if target_time is not None:
+            data["targetTime"] = (target_time[0] * 3600) + (target_time[1] * 60)
+
+        if pre_condition_length is not None:
+            data["preconditioning"] = {
+                "enabled": pre_condition_length > 0,
+                "lengthMins": pre_condition_length or 15,
+                "temperature": None,
+            }
+
+        session_id = self._last_rule.get("id")
+        if session_id is None:
+            session_id = self._next_session.get("id")
+
+        await self._make_request(
+            "PATCH",
+            f"/v2/users/me/charge-rules/{session_id}?persist=true&recalculateSession=true",
+            data=data,
+        )
         return True
 
     async def async_set_configuration_value(self, values: Mapping[str, bool]) -> bool:
@@ -1189,7 +1171,7 @@ class OhmeApiClient:
         """Set the vehicle to be charged."""
         for vehicle in self._cars:
             if vehicle_to_name(vehicle) == selected_name:
-                result = await self._make_request("PUT", f"/v1/car/{vehicle['id']}/select")
+                await self._make_request("PUT", f"/v1/car/{vehicle['id']}/select")
 
                 return True
         return False
@@ -1244,7 +1226,7 @@ class OhmeApiClient:
 
         try:
             self.cap_enabled = resp["userSettings"]["chargeSettings"][0]["enabled"]
-        except:
+        except Exception:
             pass
 
         device = resp["chargeDevices"][0]

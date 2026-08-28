@@ -69,7 +69,7 @@ from web_helper import (
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args
+from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, read_predbat_log, classify_log_line, log_line_included
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
@@ -564,6 +564,24 @@ class WebInterface(ComponentBase):
             icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
         return icon
 
+    def get_battery_icon(self, soc_percent, charging):
+        """
+        Pick the Material Design Icon showing how full the battery is and whether it is charging
+
+        The charging variants carry the same three levels plus a bolt, so the level survives in
+        both directions. battery-plus and battery-minus exist but have no level in them, so they
+        would trade the state of charge away for the sign.
+        """
+        if soc_percent < 30:
+            level = 0
+        elif soc_percent < 70:
+            level = 1
+        else:
+            level = 2
+        if charging:
+            return ["&#xF12A4;", "&#xF12A5;", "&#xF12A6;"][level]  # battery-charging low/medium/high
+        return ["&#xF12A1;", "&#xF12A2;", "&#xF12A3;"][level]  # battery low/medium/high
+
     def get_power_flow_diagram(self):
         """
         Generate a graphical power flow diagram showing energy movement between grid, battery, PV, and house load
@@ -583,14 +601,25 @@ class WebInterface(ComponentBase):
         pv_power = self.base.pv_power
         load_power = self.base.load_power
 
-        # Determine flow directions
-        grid_importing = grid_power <= -10  # Grid is importing power (negative value)
-        grid_exporting = grid_power >= 10  # Grid is exporting power (positive value)
+        # Car charging only appears when a car_charging_power sensor is configured (execute.py
+        # update_car_charging_power). The charger sits on the house side of the meter, so its power
+        # is already inside load_power - subtract it so the House circle reads as the rest of the
+        # house rather than counting the car twice. Clamped at zero because the two readings come
+        # from different meters and a slow-updating load sensor can briefly read below the car.
+        car_configured = self.base.car_charging_power_configured
+        car_power = self.base.car_charging_power
+        house_power = max(0, load_power - car_power) if car_configured else load_power
 
-        battery_charging = battery_power >= 10  # Battery is charging (positive value)
-        battery_discharging = battery_power <= -10  # Battery is discharging (negative value)
+        # Determine flow directions. battery_power is positive when the battery is DISCHARGING
+        # (gateway.py negates the firmware's sign for exactly this reason) and grid_power is
+        # negative when importing, so the reading and the arrow run opposite ways round.
+        grid_importing = grid_power <= -10  # Grid is importing power (negative value)
+
+        battery_to_house = battery_power >= 10  # Battery is discharging into the house
+        battery_charging = battery_power <= -10  # Power is flowing into the battery
 
         pv_generating = pv_power > 0  # PV is generating power
+        battery_icon = self.get_battery_icon(self.base.soc_percent, battery_charging)
         html = ""
 
         html += """
@@ -598,40 +627,89 @@ class WebInterface(ComponentBase):
             <svg width="600" height="400" viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
 
                 <!-- Grid Circle -->
-                <circle cx="450" cy="300" r="50" fill="#4CAF50" />
-                <text x="450" y="300" text-anchor="middle" dy=".3em" fill="#fff">Grid</text>
+                <circle cx="450" cy="300" r="50" fill="#757575"><title>Grid</title></circle>
+                <text x="450" y="300" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF0D3E;</text>
 
                 <!-- Battery Circle -->
-                <circle cx="150" cy="300" r="50" fill="#FF9800" />
-                <text x="150" y="300" text-anchor="middle" dy=".3em" fill="#fff">Battery</text>
+                <circle cx="150" cy="300" r="50" fill="#43A047"><title>Battery</title></circle>
+                <text x="150" y="300" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">{}</text>
 
                 <!-- PV Circle -->
-                <circle cx="150" cy="100" r="50" fill="#2196F3" />
-                <text x="150" y="100" text-anchor="middle" dy=".3em" fill="#fff">PV</text>
+                <circle cx="150" cy="100" r="50" fill="#FDD835"><title>PV</title></circle>
+                <text x="150" y="100" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF0D9B;</text>
 
                 <!-- House Circle -->
-                <circle cx="300" cy="200" r="50" fill="#9C27B0" />
-                <text x="300" y="190" text-anchor="middle" dy=".3em" fill="#fff">House</text>
+                <circle cx="300" cy="200" r="50" fill="#6D4C41"><title>House</title></circle>
+                <text x="300" y="186" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="34" fill="#fff">&#xF02DC;</text>
                 <text x="300" y="215" text-anchor="middle" dy=".3em" fill="#fff">{} W</text>
 
                 <!-- Define animation paths -->
                 <defs>
                     <!-- PV to House path -->
-                    <path id="pv-house-path" d="M200,100 L250,150" stroke="transparent" fill="none" />
+                    <path id="pv-house-path" d="M192,128 L241,161" stroke="transparent" fill="none" />
                     <!-- House to PV path -->
-                    <path id="house-pv-path" d="M250,150 L200,100" stroke="transparent" fill="none" />
+                    <path id="house-pv-path" d="M241,161 L192,128" stroke="transparent" fill="none" />
                     <!-- Battery to House path -->
-                    <path id="battery-house-path" d="M200,300 L250,250" stroke="transparent" fill="none" />
+                    <path id="battery-house-path" d="M192,272 L241,239" stroke="transparent" fill="none" />
                     <!-- House to Battery path -->
-                    <path id="house-battery-path" d="M265,235 L215,275" stroke="transparent" fill="none" />
+                    <path id="house-battery-path" d="M258,228 L209,261" stroke="transparent" fill="none" />
                     <!-- Grid to House path -->
-                    <path id="grid-house-path" d="M410,290 L355,240" stroke="transparent" fill="none" />
+                    <path id="grid-house-path" d="M408,272 L359,239" stroke="transparent" fill="none" />
                     <!-- House to Grid path -->
-                    <path id="house-grid-path" d="M340,230 L390,270" stroke="transparent" fill="none" />
+                    <path id="house-grid-path" d="M342,228 L391,261" stroke="transparent" fill="none" />
                 </defs>
         """.format(
-            dp0(load_power)
+            battery_icon, dp0(house_power)
         )
+
+        # Car charging arm - drawn top right, the corner left free by PV/battery/grid
+        if car_configured:
+            car_charging = car_power >= 10
+            html += """
+                <!-- Car Circle -->
+                <circle cx="450" cy="100" r="50" fill="#E53935"><title>Car</title></circle>
+                <text x="450" y="100" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF010B;</text>
+
+                <defs>
+                    <!-- House to Car path -->
+                    <path id="house-car-path" d="M342,172 L391,139" stroke="transparent" fill="none" />
+                    <marker id="car-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#E53935"/>
+                    </marker>
+                </defs>
+            """
+            if car_charging:
+                # Calculate animation speed based on power flow - faster for higher power
+                car_speed = max(0.5, min(3.0, 2.0 - (abs(car_power) / 3000)))
+
+                html += """
+                <!-- House to Car Arrow -->
+                <line x1="342" y1="172" x2="391" y2="139" stroke="#E53935" stroke-width="2" marker-end="url(#car-arrow)" />
+                <text x="356" y="122" text-anchor="middle" fill="#E53935">{} W</text>
+
+                <!-- Moving dots for House to Car -->
+                <circle r="4" fill="#E53935" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,172 L391,139" />
+                </circle>
+                <circle r="3" fill="#E53935" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,172 L391,139" />
+                </circle>
+                <circle r="2" fill="#E53935" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,172 L391,139" />
+                </circle>
+                """.format(
+                    dp0(car_power), car_speed, car_speed, car_speed
+                )
+            else:
+                html += """
+                <!-- House to Car Arrow (dashed) -->
+                <line x1="342" y1="172" x2="391" y2="139" stroke="#E53935" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
+                <text x="356" y="122" text-anchor="middle" fill="#E53935">{} W</text>
+                <!-- No moving dot when the car is not charging -->
+                """.format(
+                    dp0(car_power)
+                )
+
         # Draw arrows and labels
         if pv_generating:
             # Calculate animation speed based on power flow - faster for higher power
@@ -639,18 +717,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- PV to House Arrow -->
-                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" marker-end="url(#pv-arrow)" />
-                <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
+                <line x1="192" y1="128" x2="241" y2="161" stroke="#F9A825" stroke-width="2" marker-end="url(#pv-arrow)" />
+                <text x="244" y="122" text-anchor="middle" fill="#F9A825">{} W</text>
 
                 <!-- Moving dots for PV to House -->
-                <circle r="4" fill="#2196F3" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M200,100 L250,150" />
+                <circle r="4" fill="#F9A825" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M192,128 L241,161" />
                 </circle>
-                <circle r="3" fill="#2196F3" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M200,100 L250,150" />
+                <circle r="3" fill="#F9A825" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M192,128 L241,161" />
                 </circle>
-                <circle r="2" fill="#2196F3" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,100 L250,150" />
+                <circle r="2" fill="#F9A825" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M192,128 L241,161" />
                 </circle>
             """.format(
                 dp0(pv_power), pv_speed, pv_speed, pv_speed
@@ -659,30 +737,30 @@ class WebInterface(ComponentBase):
             # Make the PV to House line dashed if not generating
             html += """
                 <!-- PV to House Arrow (dashed) -->
-                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
-                <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
+                <line x1="192" y1="128" x2="241" y2="161" stroke="#F9A825" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
+                <text x="244" y="122" text-anchor="middle" fill="#F9A825">{} W</text>
                 <!-- No moving dot when PV is not generating -->
             """.format(
                 dp0(pv_power)
             )
-        if battery_charging:
+        if battery_to_house:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
 
             html += """
                 <!-- Battery to House Arrow -->
-                <line x1="200" y1="300" x2="250" y2="250" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
-                <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
+                <line x1="192" y1="272" x2="241" y2="239" stroke="#43A047" stroke-width="2" marker-end="url(#battery-arrow)" />
+                <text x="244" y="278" text-anchor="middle" fill="#43A047">{} W</text>
 
                 <!-- Moving dots for Battery to House -->
-                <circle r="4" fill="#FF9800" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M200,300 L250,250" />
+                <circle r="4" fill="#43A047" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M192,272 L241,239" />
                 </circle>
-                <circle r="3" fill="#FF9800" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M200,300 L250,250" />
+                <circle r="3" fill="#43A047" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M192,272 L241,239" />
                 </circle>
-                <circle r="2" fill="#FF9800" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,300 L250,250" />
+                <circle r="2" fill="#43A047" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M192,272 L241,239" />
                 </circle>
             """.format(
                 dp0(battery_power), battery_speed, battery_speed, battery_speed
@@ -693,18 +771,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- House to Battery Arrow -->
-                <line x1="265" y1="235" x2="215" y2="275" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
-                <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
+                <line x1="258" y1="228" x2="209" y2="261" stroke="#43A047" stroke-width="2" marker-end="url(#battery-arrow)" />
+                <text x="244" y="278" text-anchor="middle" fill="#43A047">{} W</text>
 
                 <!-- Moving dots for House to Battery -->
-                <circle r="4" fill="#FF9800" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M265,235 L215,275" />
+                <circle r="4" fill="#43A047" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M258,228 L209,261" />
                 </circle>
-                <circle r="3" fill="#FF9800" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M265,235 L215,275" />
+                <circle r="3" fill="#43A047" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M258,228 L209,261" />
                 </circle>
-                <circle r="2" fill="#FF9800" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M265,235 L215,275" />
+                <circle r="2" fill="#43A047" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M258,228 L209,261" />
                 </circle>
             """.format(
                 dp0(battery_power), battery_speed, battery_speed, battery_speed
@@ -716,18 +794,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- Grid to House Arrow -->
-                <line x1="410" y1="290" x2="355" y2="240" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
-                <text x="350" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                <line x1="408" y1="272" x2="359" y2="239" stroke="#757575" stroke-width="2" marker-end="url(#grid-arrow)" />
+                <text x="356" y="278" text-anchor="middle" fill="#757575">{} W</text>
 
                 <!-- Moving dots for Grid to House -->
-                <circle r="4" fill="#4CAF50" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M410,290 L355,240" />
+                <circle r="4" fill="#757575" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M408,272 L359,239" />
                 </circle>
-                <circle r="3" fill="#4CAF50" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M410,290 L355,240" />
+                <circle r="3" fill="#757575" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M408,272 L359,239" />
                 </circle>
-                <circle r="2" fill="#4CAF50" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M410,290 L355,240" />
+                <circle r="2" fill="#757575" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M408,272 L359,239" />
                 </circle>
             """.format(
                 dp0(grid_power), grid_speed, grid_speed, grid_speed
@@ -738,18 +816,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- House to Grid Arrow -->
-                <line x1="340" y1="230" x2="390" y2="270" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
-                <text x="340" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                <line x1="342" y1="228" x2="391" y2="261" stroke="#757575" stroke-width="2" marker-end="url(#grid-arrow)" />
+                <text x="356" y="278" text-anchor="middle" fill="#757575">{} W</text>
 
                 <!-- Moving dots for House to Grid -->
-                <circle r="4" fill="#4CAF50" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M340,230 L390,270" />
+                <circle r="4" fill="#757575" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,228 L391,261" />
                 </circle>
-                <circle r="3" fill="#4CAF50" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M340,230 L390,270" />
+                <circle r="3" fill="#757575" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,228 L391,261" />
                 </circle>
-                <circle r="2" fill="#4CAF50" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M340,230 L390,270" />
+                <circle r="2" fill="#757575" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,228 L391,261" />
                 </circle>
             """.format(
                 dp0(grid_power), grid_speed, grid_speed, grid_speed
@@ -758,13 +836,13 @@ class WebInterface(ComponentBase):
                 <!-- Arrowhead Marker -->
                 <defs>
                     <marker id="pv-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#2196F3"/>
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#F9A825"/>
                     </marker>
                     <marker id="battery-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#FF9800"/>
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#43A047"/>
                     </marker>
                     <marker id="grid-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#4CAF50"/>
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#757575"/>
                     </marker>
                 </defs>
             </svg>
@@ -2189,16 +2267,7 @@ chart.render();
             return "".join(result_parts)
 
         try:
-            logfile = "predbat.log"
-            logfile_1 = "predbat.1.log"
-            logdata = ""
-
-            if os.path.exists(logfile):
-                with open(logfile, "r") as f:
-                    logdata = f.read()
-            if os.path.exists(logfile_1):
-                with open(logfile_1, "r") as f:
-                    logdata = f.read() + "\n" + logdata
+            logdata = read_predbat_log()
 
             # Get query parameters
             args = request.query
@@ -2226,22 +2295,10 @@ chart.render();
                     lineno -= 1
                     continue
 
-                # Apply log level filtering first
-                include_line = False
-                line_type = "log"
-
-                if "error" in line_lower:  # any error log lines will appear on all, info, warning and error tabs
-                    line_type = "error"
-                    include_line = True
-                elif "warn" in line_lower:  # warning log lines appear on all and warning tabs
-                    line_type = "warning"
-                    include_line = filter_type in ["all", "warnings"]
-                elif "info" in line_lower:  # info log lines appear on all and info tabs
-                    line_type = "info"
-                    include_line = filter_type in ["all", "info"]
-                else:  # all other log lines appear on just the all tab
-                    line_type = "log"
-                    include_line = filter_type == "all"
+                # Apply log level filtering first - shared with the get_log MCP tool so the
+                # two views of the same log can't drift apart (#4768)
+                line_type = classify_log_line(line)
+                include_line = log_line_included(line_type, filter_type)
 
                 # Apply search filter if search term is provided
                 if include_line and search_term:
@@ -2667,6 +2724,23 @@ chart.render();
 
         raise web.HTTPFound("./config")
 
+    def render_delete_button(self, nested_row_id):
+        """
+        Render the delete button shown against a nested list item or dictionary key
+        """
+        return f'<button class="delete-button" id="delete_button_{nested_row_id}" onclick="deleteNestedValue({nested_row_id})">Delete</button>'
+
+    def render_add_row(self, function, js_args, label, row_counter):
+        """
+        Render the trailing table row holding an add button, which doubles as the anchor new rows are inserted before
+        """
+        if row_counter is None:
+            return ""
+        row_counter[0] += 1
+        anchor_id = row_counter[0]
+        args = ", ".join(["'{}'".format(html_module.escape(str(item), quote=True)) for item in js_args] + [str(anchor_id)])
+        return f"<tr id='add_anchor_{anchor_id}'><td colspan='2'></td><td><button class=\"add-button\" onclick=\"{function}({args})\">{label}</button></td></tr>\n"
+
     def render_type(self, arg, value, parent_path="", row_counter=None):
         """
         Render a value based on its type with support for nested editing.
@@ -2684,67 +2758,81 @@ chart.render();
         """
         text = ""
         if isinstance(value, list):
+            list_path = parent_path if parent_path else arg
             text += "<table>"
             for idx, item in enumerate(value):
-                nested_path = f"{parent_path}[{idx}]" if parent_path else f"{arg}[{idx}]"
+                nested_path = f"{list_path}[{idx}]"
 
                 # Check if this list item is editable
                 can_edit = self.is_editable_value(item)
                 actions_cell = ""
+                nested_row_id = None
 
-                if can_edit and row_counter is not None:
+                if row_counter is not None:
                     row_counter[0] += 1
                     nested_row_id = row_counter[0]
 
-                    if isinstance(item, bool):
-                        toggle_class = "toggle-button active" if item else "toggle-button"
-                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
-                    else:
-                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                    if can_edit:
+                        if isinstance(item, bool):
+                            toggle_class = "toggle-button active" if item else "toggle-button"
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
+                        else:
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
 
-                    # Store the nested value info for later processing
-                    if not hasattr(self, "_nested_values"):
-                        self._nested_values = {}
-                    self._nested_values[nested_row_id] = {"path": nested_path, "value": item}
+                        # Store the nested value info for later processing
+                        if not hasattr(self, "_nested_values"):
+                            self._nested_values = {}
+                        self._nested_values[nested_row_id] = {"path": nested_path, "value": item}
+
+                    # Every list item can be removed, whether or not its value itself is editable
+                    actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(arg, item)
 
-                if actions_cell:
-                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                if nested_row_id is not None:
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{nested_row_id}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item, nested_path, row_counter))
+            text += self.render_add_row("addListItem", [list_path, arg], "Add item", row_counter)
             text += "</table>"
         elif isinstance(value, dict):
+            dict_path = parent_path if parent_path else arg
             text += "<table>"
             for key in value:
-                nested_path = f"{parent_path}.{key}" if parent_path else f"{arg}.{key}"
+                nested_path = f"{dict_path}.{key}"
                 nested_value = value[key]
 
                 # Check if this nested value is editable
                 can_edit = self.is_editable_value(nested_value)
                 actions_cell = ""
+                nested_row_id = None
 
-                if can_edit and row_counter is not None:
+                if row_counter is not None:
                     row_counter[0] += 1
                     nested_row_id = row_counter[0]
 
-                    if isinstance(nested_value, bool):
-                        toggle_class = "toggle-button active" if nested_value else "toggle-button"
-                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
-                    else:
-                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                    if can_edit:
+                        if isinstance(nested_value, bool):
+                            toggle_class = "toggle-button active" if nested_value else "toggle-button"
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
+                        else:
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
 
-                    # Store the nested value info for later processing
-                    if not hasattr(self, "_nested_values"):
-                        self._nested_values = {}
-                    self._nested_values[nested_row_id] = {"path": nested_path, "value": nested_value}
+                        # Store the nested value info for later processing
+                        if not hasattr(self, "_nested_values"):
+                            self._nested_values = {}
+                        self._nested_values[nested_row_id] = {"path": nested_path, "value": nested_value}
+
+                    # Every setting can be removed, whether or not its value itself is editable
+                    actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(key, nested_value)
 
-                if actions_cell:
-                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                if nested_row_id is not None:
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
+            text += self.render_add_row("addDictKey", [dict_path], "Add setting", row_counter)
             text += "</table>"
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z_]+\.\S+", value)
@@ -3582,30 +3670,38 @@ chart.render();
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
-    def _update_nested_yaml_value(self, data, path, value):
+    def _split_yaml_path(self, path):
         """
-        Update a nested value in YAML data using a dot-notation path
+        Split a dot-notation path into keys, with each list index as its own '[n]' key
         """
-        pre_keys = path.split(".")
         keys = []
-        # Split out set of square brackets into a different key
-        for key in pre_keys:
-            if "[" in key and "]" in key:
-                # Handle keys with square brackets, e.g., "battery_charge_low[0]"
-                base_key, index = key.split("[")
-                index = index.rstrip("]")
-                keys.append(base_key)
-                keys.append(f"[{index}]")
-            else:
-                keys.append(key)
+        # Split out every set of square brackets into its own key, e.g. "battery_charge_low[0]"
+        # into "battery_charge_low", "[0]", and a directly nested list's "foo[0][1]" into
+        # "foo", "[0]", "[1]"
+        for component in path.split("."):
+            for token in re.split(r"(\[[^\[\]]*\])", component):
+                if token:
+                    keys.append(token)
+        return keys
 
+    def _yaml_path_index(self, key, path):
+        """
+        Return the integer index held by a '[n]' path key, raising KeyError if it is not one
+        """
+        index = key[1:-1]
+        if not index.isdigit():
+            raise KeyError(f"Invalid list index '{key}' in path '{path}'")
+        return int(index)
+
+    def _navigate_yaml_path(self, data, keys, path):
+        """
+        Walk YAML data along all but the last key and return the container holding the final key
+        """
         current = data
-
-        # Navigate to the parent of the target value
         for key in keys[:-1]:
             if key.startswith("[") and key.endswith("]"):
                 # Handle numerical index in square brackets
-                index = int(key[1:-1])
+                index = self._yaml_path_index(key, path)
                 if not isinstance(current, list) or index >= len(current):
                     raise KeyError(f"Index '{index}' out of range in path '{path}'")
                 current = current[index]
@@ -3613,12 +3709,83 @@ chart.render();
                 current = current[key]
             else:
                 raise KeyError(f"Key '{key}' not found in path '{path}'")
+        return current
+
+    def _yaml_path_sort_key(self, path):
+        """
+        Return a sort key for a path so that deeper paths and higher list indices sort last
+        """
+        sort_key = []
+        for key in self._split_yaml_path(path):
+            if key.startswith("[") and key.endswith("]") and key[1:-1].isdigit():
+                sort_key.append((0, int(key[1:-1]), ""))
+            else:
+                sort_key.append((1, 0, str(key)))
+        return sort_key
+
+    def _parse_yaml_fragment(self, text):
+        """
+        Parse a user supplied YAML fragment (a scalar, or a block of key: value lines) into a value
+        """
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        value = yaml.load(text)
+        if value is None:
+            raise ValueError("value is empty")
+        return value
+
+    def _delete_nested_yaml_value(self, data, path):
+        """
+        Delete a nested list item or dictionary key from YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
+
+        key = keys[-1]
+        if key.startswith("[") and key.endswith("]"):
+            # Handle numerical index in square brackets
+            index = self._yaml_path_index(key, path)
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(f"Index '{index}' out of range in path '{path}'")
+            del current[index]
+        elif isinstance(current, dict) and key in current:
+            del current[key]
+        else:
+            raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+    def _add_nested_yaml_value(self, data, path, value):
+        """
+        Add a new list item (path ending in '[]') or dictionary key to YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
+
+        key = keys[-1]
+        if key == "[]":
+            if not isinstance(current, list):
+                raise KeyError(f"Path '{path}' does not refer to a list")
+            current.append(value)
+        elif key.startswith("[") and key.endswith("]"):
+            raise KeyError(f"Cannot add at an existing list index, use [] to append in path '{path}'")
+        elif not isinstance(current, dict):
+            raise KeyError(f"Path '{path}' does not refer to a dictionary")
+        elif key in current:
+            raise KeyError(f"Key '{key}' already exists in path '{path}'")
+        else:
+            current[key] = value
+
+    def _update_nested_yaml_value(self, data, path, value):
+        """
+        Update a nested value in YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
 
         # Set the final value
         key = keys[-1]
         if key.startswith("[") and key.endswith("]"):
             # Handle numerical index in square brackets
-            index = int(key[1:-1])
+            index = self._yaml_path_index(key, path)
             if not isinstance(current, list) or index >= len(current):
                 raise KeyError(f"Index '{index}' out of range in path '{path}'")
             current[index] = value
@@ -3634,6 +3801,27 @@ chart.render();
                     current[key] = value
             else:
                 raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+    def _validate_compare_list(self, compare_list):
+        """
+        Check every compare_list profile still has the unique id and non-empty name that
+        compare.py indexes results by, raising ValueError if a batch has left one without
+        """
+        if not compare_list:
+            return
+
+        seen_ids = set()
+        for entry in compare_list:
+            if not isinstance(entry, dict):
+                raise ValueError("Each compare_list entry must be a dictionary with an id and a name")
+            entry_id = entry.get("id")
+            if not entry_id:
+                raise ValueError("Each compare_list entry requires a non-empty 'id'")
+            if entry_id in seen_ids:
+                raise ValueError(f"Duplicate compare_list id '{entry_id}'")
+            seen_ids.add(entry_id)
+            if not entry.get("name"):
+                raise ValueError(f"compare_list entry '{entry_id}' requires a non-empty 'name'")
 
     async def html_apps_post(self, request):
         """
@@ -3670,12 +3858,47 @@ chart.render();
             if ROOT_YAML_KEY not in data:
                 return web.json_response({"success": False, "message": "pred_bat section not found in apps.yaml"})
 
-            # Process each change
+            # Process each change - additions and updates are applied first, then deletions, as
+            # deleting a list item shifts the indices every other path was rendered against.
+            # Every mutation lands on live_args, a copy of self.args, rather than self.args
+            # itself - a batch that fails partway, or whose file write fails, must never leave
+            # self.args (which is the same object as self.base.args) reflecting only some of it
             updated_args = []
+            deleted_paths = []
+            live_args = copy.deepcopy(self.args)
             for path_or_arg, change_info in changes.items():
-                new_value = change_info["newValue"]
                 change_type = change_info.get("type", "numerical")
                 is_nested = change_info.get("isNested", False)
+                # Adds are keyed uniquely by the browser so several can target one list, so the
+                # path is taken from the change itself rather than from the key
+                path_or_arg = change_info.get("path", path_or_arg) if is_nested else path_or_arg
+
+                if change_type in ("add", "delete"):
+                    # Determine nesting from the parsed path itself, not the client-supplied
+                    # isNested flag, so a delete posted with isNested spoofed true still cannot
+                    # reach a bare top-level key
+                    if len(self._split_yaml_path(path_or_arg)) < 2:
+                        return web.json_response({"success": False, "message": f"Only nested values can be added or deleted, not {path_or_arg}"})
+
+                if change_type == "delete":
+                    deleted_paths.append(path_or_arg)
+                    continue
+
+                new_value = change_info["newValue"]
+
+                if change_type == "add":
+                    # Added values are entered as YAML so a whole new list entry can be created at once
+                    try:
+                        added_value = self._parse_yaml_fragment(new_value)
+                    except Exception as e:
+                        return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {str(e)}"})
+                    try:
+                        self._add_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, added_value)
+                        self._add_nested_yaml_value(live_args, path_or_arg, copy.deepcopy(added_value))
+                    except (KeyError, TypeError) as e:
+                        return web.json_response({"success": False, "message": f"Could not add {path_or_arg}: {str(e)}"})
+                    updated_args.append(f"added {path_or_arg}")
+                    continue
 
                 # Convert the new value to appropriate type
                 try:
@@ -3698,7 +3921,7 @@ chart.render();
                     # Handle nested paths like "battery_charge_low.normal"
                     try:
                         self._update_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, converted_value)
-                        self._update_nested_yaml_value(self.args, path_or_arg, converted_value)
+                        self._update_nested_yaml_value(live_args, path_or_arg, converted_value)
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     except (KeyError, TypeError) as e:
                         return web.json_response({"success": False, "message": f"Path {path_or_arg} not found or invalid: {str(e)}"})
@@ -3706,15 +3929,38 @@ chart.render();
                     # Handle top-level arguments
                     if path_or_arg in data[ROOT_YAML_KEY]:
                         data[ROOT_YAML_KEY][path_or_arg] = converted_value
-                        self.args[path_or_arg] = converted_value  # Update the base args as well
+                        live_args[path_or_arg] = converted_value
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     else:
                         return web.json_response({"success": False, "message": f"Argument {path_or_arg} not found in apps.yaml"})
+
+            # Deletions run last, deepest path and highest list index first, so that one deletion
+            # never shifts the index another one still refers to
+            for path in sorted(deleted_paths, key=self._yaml_path_sort_key, reverse=True):
+                try:
+                    self._delete_nested_yaml_value(data[ROOT_YAML_KEY], path)
+                    self._delete_nested_yaml_value(live_args, path)
+                except (KeyError, TypeError) as e:
+                    return web.json_response({"success": False, "message": f"Could not delete {path}: {str(e)}"})
+                updated_args.append(f"deleted {path}")
+
+            # Compare profiles are indexed by id elsewhere (e.g. compare.py), so a batch that
+            # leaves one without an id or name, or with a duplicate id, must be refused
+            try:
+                self._validate_compare_list(data[ROOT_YAML_KEY].get("compare_list"))
+            except ValueError as e:
+                return web.json_response({"success": False, "message": str(e)})
 
             # Write back to the file, preserving comments and formatting
             try:
                 with open(apps_yaml_path, "w") as f:
                     yaml.dump(data, f)
+
+                # Only now that the whole batch has validated and the file write has succeeded is
+                # the live config published - in place, so self.args (the same object as
+                # self.base.args) never reflects a partially applied batch
+                self.args.clear()
+                self.args.update(live_args)
 
                 change_count = len(updated_args)
                 self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")
@@ -4566,7 +4812,6 @@ chart.render();
             from components import COMPONENT_LIST
 
             component_info = COMPONENT_LIST.get(component_name, {})
-            component = self.base.components.get_component(component_name)
             is_alive = self.base.components.is_alive(component_name)
             can_restart = self.base.components.can_restart(component_name)
             is_active = component_name in active_components
@@ -5534,13 +5779,13 @@ document.addEventListener('DOMContentLoaded', function() {
                                     import linecache
 
                                     line_code = linecache.getline(code.co_filename, line_no).strip()
-                                except:
+                                except Exception:
                                     line_code = ""
 
                                 stack.append({"file": code.co_filename, "line": line_no, "name": code.co_name, "code": line_code})
 
                             task_info["stack"] = stack
-                except Exception as e:
+                except Exception:
                     # If we can't get the coroutine stack, just skip it
                     pass
 
@@ -5713,7 +5958,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 except Exception as e:
                     try:
                         yaml_key = str(key)
-                    except:
+                    except Exception:
                         yaml_key = f"<unprintable_key_{hash(key)}>"
                     result[yaml_key] = f"<error: {type(e).__name__}>"
             # Remove from visited after processing to allow same object in different branches
@@ -5744,7 +5989,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if len(str_value) > 200:
                 return str_value[:200] + "..."
             return str_value
-        except:
+        except Exception:
             return f"<{type(obj).__name__}>"
 
     def _get_object_members(self, obj, path):
@@ -5849,7 +6094,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     display_value = str_value[:100] + "..."
                 else:
                     display_value = str_value
-            except:
+            except Exception:
                 display_value = f"<{value_type}>"
 
         # Build the full path for this item using :: as separator
