@@ -2176,6 +2176,56 @@ def test_model_picker_shows_prices(my_predbat):
     return failed
 
 
+def test_busy_banner_is_reconciled_against_the_server(my_predbat):
+    """The "Replying in ..." banner is corrected from /chat/conversations, not just SSE events.
+
+    /chat/conversations has always returned `active` - the server's own view of which turn is
+    running - and the client threw it away, reading only the conversation list. state.busy was
+    therefore cleared solely by the 'idle' SSE event. Miss that once, which a dropped connection
+    or a sleeping tab will do, and the banner stays up forever offering to switch to a
+    conversation that finished long ago, with the composer locked behind it.
+
+    Reconciled on every list refresh and on stream open, the latter being exactly when events go
+    missing: EventSource resumes by itself after a drop and an 'idle' that arrived meanwhile is
+    simply gone.
+
+    Mutation checks: dropping the reconcileBusy() call from refreshConversations, or the open
+    listener, each fails below.
+    """
+    failed = False
+    print("**** Testing the busy banner is reconciled against the server ****")
+    script = web_chat.get_chat_script()
+
+    body = _extract_function_body(script, "reconcileBusy")
+    if body is None:
+        print("ERROR: there is no reconcileBusy() to correct a stale banner")
+        return True
+    # Both directions: adopt a running turn, and clear one that has finished.
+    if "setBusy" not in body:
+        print("ERROR: reconcileBusy() never adopts a running turn: {!r}".format(body))
+        failed = True
+    if "setIdle" not in body:
+        print("ERROR: reconcileBusy() never clears a finished turn, which is the stuck-banner case: {!r}".format(body))
+        failed = True
+
+    refresh = _extract_function_body(script, "refreshConversations")
+    if refresh is None or "reconcileBusy" not in refresh:
+        print("ERROR: refreshConversations() still discards payload.active: {!r}".format(refresh))
+        failed = True
+
+    # Reconnect is the case that matters most, since that is when an idle event is lost.
+    if "addEventListener('open'" not in script:
+        print("ERROR: the stream does not reconcile on open, so a missed idle is never corrected")
+        failed = True
+
+    # And the route has to keep sending it.
+    if '"active": agent.active' not in web_chat.__file__ and "active" not in script:
+        print("ERROR: nothing reads an active turn from the conversations payload")
+        failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -2208,6 +2258,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_thinking_bubble_moves_to_the_end(my_predbat)
     failed |= test_chat_switch_defaults_and_mirror(my_predbat)
     failed |= test_model_picker_shows_prices(my_predbat)
+    failed |= test_busy_banner_is_reconciled_against_the_server(my_predbat)
     failed |= test_context_counter_uses_the_last_turns_prompt_tokens_not_cumulative(my_predbat)
     failed |= test_stop_button_wired_to_cancel_with_turn_id(my_predbat)
     failed |= test_html_chat_cancel_requires_the_running_turn_id(my_predbat)

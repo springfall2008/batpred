@@ -2448,6 +2448,14 @@ function openStream() {
         return;
     }
     var source = new EventSource('./chat/stream?conversation=' + encodeURIComponent(state.conversation) + '&cursor=' + state.cursor);
+    source.addEventListener('open', function () {
+        // A reconnect is exactly when events go missing - EventSource resumes on its own after a
+        // drop, and an 'idle' that arrived while disconnected is simply gone. Re-reading the
+        // server's view here is what stops a missed idle leaving the banner up permanently. This
+        // also fires on the first connection, where it costs one request and confirms the state
+        // the page was rendered with.
+        refreshConversations();
+    });
     on(source, 'user', handleUser);
     on(source, 'delta', handleDelta);
     on(source, 'assistant', handleAssistant);
@@ -2615,8 +2623,24 @@ function renderConversationList(conversations) {
 function refreshConversations() {
     fetch('./chat/conversations')
         .then(function (response) { return response.json(); })
-        .then(function (payload) { renderConversationList(payload.conversations || []); })
+        .then(function (payload) {
+            renderConversationList(payload.conversations || []);
+            reconcileBusy(payload.active);
+        })
         .catch(function (error) { console.error('Failed to load conversations', error); });
+}
+
+function reconcileBusy(active) {
+    // The server's own view of which turn is running, and the only thing that corrects a stale
+    // banner. state.busy was otherwise cleared solely by the 'idle' SSE event: miss that once -
+    // a dropped connection, a sleeping tab, a reconnect past the cursor - and the "Replying in
+    // ..." banner stays up forever, offering to switch to a conversation that finished long ago,
+    // with the composer locked behind it. This response is a live read, so it is authoritative.
+    if (active && active.conversation_id) {
+        setBusy(active.conversation_id, active.title, active.turn_id);
+    } else if (state.busy) {
+        setIdle();
+    }
 }
 
 function createConversation() {
