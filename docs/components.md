@@ -192,6 +192,9 @@ Example usage in VSCode
 | `get_log` | Lines from `predbat.log`, filtered by level, search term and age |
 | `get_state` | Predbat's internal state variables - the same data a debug yaml carries |
 | `get_entities` | All Predbat entities and their states |
+| `search_entities` | Search *every* Home Assistant entity id with a regular expression, not just Predbat's own - requires `switch.predbat_ai_ha_state_enable` |
+| `get_entity_state` | The current state (and optionally attributes) of one Home Assistant entity - requires `switch.predbat_ai_ha_state_enable` |
+| `get_entity_history` | One Home Assistant entity's history over a time window, bucketed into fixed-width time slots - requires `switch.predbat_ai_ha_state_enable` |
 | `set_config` | Change a Predbat setting |
 | `set_plan_override` | Override the plan for one 30 minute period |
 
@@ -231,6 +234,33 @@ keys are not sent to your AI provider; pass `masked: false` if you deliberately 
 values. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
 return anything a debug dump would not - credentials, the Home Assistant interface, loaded
 secrets and the URL caches are not reachable through it at all.
+
+#### Reading Home Assistant state (mcp)
+
+Every other tool above reads *Predbat's own* entities and configuration. `search_entities`,
+`get_entity_state` and `get_entity_history` are different: they can read **any** entity in your
+Home Assistant install - presence sensors, device names, anything else in the state machine -
+not just the ones Predbat publishes itself. That is a materially larger disclosure to whichever
+third-party model is asking than everything else on this page, so all three are off by default
+and gated behind `switch.predbat_ai_ha_state_enable`. With the switch off, each tool still
+appears in the tool list but returns a clean failure naming the switch, rather than vanishing -
+so an assistant can tell you which switch to turn on instead of just failing silently. The
+switch is prefixed `ai_`, not `chat_`: it controls this for MCP as well as the Chat tab, since an
+MCP client is no less a third party than a chat model is.
+
+`search_entities` returns only `entity_id`, `state` and `last_changed` - never attributes, which
+can be bulky on a large install - capped at `limit` matches (default 50, maximum 200) with the
+true match count reported separately so a capped result is visibly capped.
+
+`get_entity_history` fetches one entity's history between `start` and `end` (ISO-8601
+timestamps, assumed UTC if no offset is given) and aggregates it into `bucket_minutes`-wide
+buckets (default 30). The lookback is capped at 30 days before `end`, and the bucket count is
+capped at 500 by pulling `end` in rather than widening the buckets - both are reported in the
+response (`lookback_clamped`, `range_truncated`) when they bite. Pass `attribute` to bucket a
+named attribute instead of the entity's state. Numeric data (including `on`/`off`/`true`/`false`,
+which map to 1/0) is bucketed as `min`/`max`/`mean`/`count`/`unavailable`; anything else is
+bucketed as `first`/`last`/`changes`, since a most-common value would hide a sensor that flipped
+once and stayed there. Which mode applies is decided once per request and reported as `mode`.
 
 ---
 
@@ -275,6 +305,10 @@ caution about exposing the web/MCP port outside your home network applies here, 
   once.
 - `fetch_url` can only reach a small allowlist of hosts (the Predbat docs site and GitHub). This
   is deliberate, not a limitation to work around.
+- `search_entities`, `get_entity_state` and `get_entity_history` can read **any** Home Assistant
+  entity, not just Predbat's own - see [Reading Home Assistant state](#reading-home-assistant-state-mcp)
+  above. They are off by default, behind `switch.predbat_ai_ha_state_enable`, because that is a
+  materially larger disclosure than everything else on this page.
 
 #### Configuration Options (chat)
 
@@ -291,20 +325,28 @@ caution about exposing the web/MCP port outside your home network applies here, 
 | `turn_timeout` | Integer | No | 300 | `chat_turn_timeout` | Seconds a single reply is allowed to run before Predbat stops it |
 | `fetch_allowlist` | List | No | `springfall2008.github.io`, `github.com`, `raw.githubusercontent.com` | `chat_fetch_allowlist` | Hosts `fetch_url` is allowed to reach. Replaces the default list rather than adding to it |
 
-Two switches also control the chat agent, both found under [Config](web-interface.md#config-view):
+Three switches also control the chat agent, all found under [Config](web-interface.md#config-view)
+(and, for the last one, in the Chat tab's own footer too):
 
 | Entity | Default | Description |
 | ------ | ------- | ----------- |
 | `switch.predbat_chat_confirm_writes` | On | Hold every `set_config` and `set_plan_override` call for your Approve/Reject before it runs |
 | `switch.predbat_chat_web_search` | Off | Let the model search the web through OpenRouter's plugin - costs money per request, see above |
+| `switch.predbat_ai_ha_state_enable` | Off | Let `search_entities`, `get_entity_state` and `get_entity_history` read Home Assistant state - see [Reading Home Assistant state](#reading-home-assistant-state-mcp) above. Unlike the other two, this is `ai_`-prefixed rather than `chat_`-prefixed: it also gates the MCP server, not just this tab |
 
 #### Available tools (chat)
 
-Nine tools are shared with the [MCP server](#mcp-server-mcp) - see
+Twelve tools are shared with the [MCP server](#mcp-server-mcp) - see
 [its tool table](#available-commands-mcp) above for what each one returns or does:
 
 `get_status`, `get_plan`, `get_config`, `get_apps`, `get_log`, `get_state`, `get_entities`,
-`set_config`, `set_plan_override`
+`search_entities`, `get_entity_state`, `get_entity_history`, `set_config`, `set_plan_override`
+
+`search_entities`, `get_entity_state` and `get_entity_history` are the three that read arbitrary
+Home Assistant state rather than just Predbat's own, and are off by default behind
+`switch.predbat_ai_ha_state_enable` - see the Security note above and
+[Reading Home Assistant state](#reading-home-assistant-state-mcp) in the MCP section. The Chat
+tab's footer carries a live toggle for this switch, next to the model picker.
 
 `set_config` and `set_plan_override` are the two that write. With `switch.predbat_chat_confirm_writes`
 on (the default), each one pauses in the transcript for your Approve or Reject before it runs,

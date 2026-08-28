@@ -296,6 +296,39 @@ class WebChat:
         await agent.run_on_agent_loop(agent.store.flush(body.get("conversation")))
         return web.json_response({"ok": True})
 
+    async def html_chat_status(self, request):
+        """Return AI-surface status flags the Chat tab footer shows live.
+
+        Currently just ai_ha_state_enable, read the same way the tool gate itself reads it
+        (base.get_ha_config, not cached) so the footer control can never show something the gate
+        would disagree with.
+        """
+        agent = self.agent
+        if agent is None:
+            return web.json_response({"error": "Chat is not configured"}, status=404)
+        enabled, _ = self.base.get_ha_config("ai_ha_state_enable", False)
+        return web.json_response({"ai_ha_state_enabled": bool(enabled)})
+
+    async def html_chat_status_post(self, request):
+        """Toggle switch.predbat_ai_ha_state_enable from the Chat tab footer control.
+
+        Writes through ha_interface.set_state_external(), the same mechanism the dashboard's own
+        switch toggles (html_dash_post) and the set_config tool both use: it is dispatched as a
+        real turn_on/turn_off service call against the matching CONFIG_ITEMS entry, not a raw
+        state overwrite. /api/state - the JSON API other switch-like external clients use - only
+        writes the raw HA entity state and never updates the matching CONFIG_ITEMS value, so it
+        would silently fail to change what get_ha_config('ai_ha_state_enable', ...) actually
+        returns; set_state_external is what genuinely flips the switch.
+        """
+        agent = self.agent
+        if agent is None:
+            return web.json_response({"error": "Chat is not configured"}, status=404)
+        body = await request.json()
+        enabled = bool(body.get("ai_ha_state_enable"))
+        entity_id = "switch.{}_ai_ha_state_enable".format(self.base.prefix)
+        await self.base.ha_interface.set_state_external(entity_id, enabled)
+        return web.json_response({"ok": True, "ai_ha_state_enabled": enabled})
+
 
 def get_chat_styles():
     """Return the Chat tab's CSS.
@@ -710,6 +743,14 @@ body.dark-mode {
     margin-left: 6px;
     font-style: italic;
 }
+
+#chat-ha-state-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    user-select: none;
+}
 </style>
 """
 
@@ -745,6 +786,10 @@ def get_chat_body():
                 <select id="chat-model"><option value="">Default model</option></select>
                 <span id="chat-model-note"></span>
             </span>
+            <label id="chat-ha-state-wrap" for="chat-ha-state-toggle" title="Lets the model read arbitrary Home Assistant entities and history, not just Predbat's own. Off by default; also controls the MCP server.">
+                <input type="checkbox" id="chat-ha-state-toggle">
+                HA state access
+            </label>
             <span id="chat-turn-usage"></span>
             <span id="chat-total-cost"></span>
         </div>
@@ -894,6 +939,39 @@ function changeModel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ conversation: state.conversation, id: id })
     }).catch(function (error) { console.error('Failed to set chat model', error); });
+}
+
+// ---------------------------------------------------------------------------------------------
+// HA state access toggle. Reads and writes switch.predbat_ai_ha_state_enable, which gates
+// search_entities/get_entity_state/get_entity_history for every AI surface (chat and MCP alike),
+// not just this tab - the footer control is just the one place a user is looking at while
+// asking the model something and wondering why it can't see a light switch. loadHaStateStatus()
+// is the source of truth for the checkbox on every load/reconnect, so the control never drifts
+// from what the gate itself is actually enforcing.
+// ---------------------------------------------------------------------------------------------
+
+function loadHaStateStatus() {
+    return fetch('./chat/status')
+        .then(function (response) { return response.json(); })
+        .then(function (payload) { byId('chat-ha-state-toggle').checked = !!payload.ai_ha_state_enabled; })
+        .catch(function (error) { console.error('Failed to load HA state access status', error); });
+}
+
+function changeHaStateAccess() {
+    var toggle = byId('chat-ha-state-toggle');
+    var desired = toggle.checked;
+    fetch('./chat/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ai_ha_state_enable: desired })
+    })
+        .then(function (response) { return response.json(); })
+        .then(function (payload) { toggle.checked = !!payload.ai_ha_state_enabled; })
+        .catch(function (error) {
+            console.error('Failed to set HA state access', error);
+            // Revert the checkbox rather than leave it showing a state the write never reached.
+            toggle.checked = !desired;
+        });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1569,6 +1647,7 @@ document.addEventListener('DOMContentLoaded', function () {
     byId('chat-send').addEventListener('click', sendMessage);
     byId('chat-stop').addEventListener('click', stopTurn);
     byId('chat-model').addEventListener('change', changeModel);
+    byId('chat-ha-state-toggle').addEventListener('change', changeHaStateAccess);
     byId('chat-input').addEventListener('keydown', function (event) {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
@@ -1594,6 +1673,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     loadModels();
+    loadHaStateStatus();
     refreshConversations();
     if (state.conversation) {
         selectConversation(state.conversation);

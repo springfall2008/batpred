@@ -1152,6 +1152,12 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
+        "name": "ai_ha_state_enable",
+        "friendly_name": "AI: allow reading Home Assistant state",
+        "type": "switch",
+        "default": False,
+    },
+    {
         "name": "balance_inverters_enable",
         "friendly_name": "Balance Inverters Enable (Beta)",
         "type": "switch",

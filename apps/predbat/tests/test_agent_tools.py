@@ -180,6 +180,447 @@ def test_handler_crash_sets_is_error(my_predbat):
     return failed
 
 
+def _set_ha_state_switch(my_predbat, value):
+    """Set ai_ha_state_enable's config value directly, returning the previous value to restore."""
+    original = my_predbat.config_index["ai_ha_state_enable"].get("value")
+    my_predbat.config_index["ai_ha_state_enable"]["value"] = value
+    return original
+
+
+def _restore_history_wrapper(my_predbat):
+    """Undo a get_history_wrapper monkey-patch, restoring the class method rather than leaving an
+    instance-level override behind for later tests to inherit (get_history_wrapper has no
+    instance attribute of its own outside a test, so reassigning the captured bound method back
+    would itself leave a permanent shadow - deleting the instance override is what actually
+    restores it, matching test_calculate_yesterday.py's own restore helper)."""
+    if hasattr(my_predbat.__class__, "get_history_wrapper"):
+        try:
+            del my_predbat.get_history_wrapper
+        except AttributeError:
+            pass
+
+
+def _restore_get_state(my_predbat):
+    """Undo a ha_interface.get_state monkey-patch, restoring the class method the same way
+    _restore_history_wrapper does for get_history_wrapper."""
+    if hasattr(my_predbat.ha_interface.__class__, "get_state"):
+        try:
+            del my_predbat.ha_interface.get_state
+        except AttributeError:
+            pass
+
+
+def _make_history_stub(calls, records):
+    """Return a get_history_wrapper stand-in that records each call's arguments and hands back
+    a fixed set of history records, in the [[record, ...]] shape get_history_wrapper returns."""
+
+    def _stub(entity_id, days=30, required=True, tracked=True):
+        """Record this call's arguments and return the fixed records."""
+        calls.append({"entity_id": entity_id, "days": days, "required": required, "tracked": tracked})
+        return [records]
+
+    return _stub
+
+
+def test_ha_state_tools_gate(my_predbat):
+    """search_entities/get_entity_state/get_entity_history refuse cleanly, naming the switch, when
+    ai_ha_state_enable is off - and, unlike a test that only checks the error string, this also
+    proves each tool never touched its data source at all rather than running and discarding the
+    result. The reverse direction (switch on -> the tool actually reaches its data source) is
+    checked too, so a gate that accidentally denies everything permanently would also be caught.
+    """
+    failed = False
+    print("**** Testing ai_ha_state_enable gate ****")
+    tools = PredbatTools(my_predbat, log_func=my_predbat.log)
+
+    original_value = _set_ha_state_switch(my_predbat, False)
+    get_state_calls = []
+    get_history_calls = []
+    original_get_state = my_predbat.ha_interface.get_state
+    history_args = {"entity_id": "sensor.does_not_matter", "start": "2026-07-23T00:00:00+00:00", "end": "2026-07-23T01:00:00+00:00"}
+
+    def spy_get_state(*args, **kwargs):
+        """Record that get_state was reached, then behave exactly as normal."""
+        get_state_calls.append((args, kwargs))
+        return original_get_state(*args, **kwargs)
+
+    my_predbat.ha_interface.get_state = spy_get_state
+    my_predbat.get_history_wrapper = _make_history_stub(get_history_calls, [])
+
+    try:
+        for name, arguments in (("search_entities", {"pattern": ".*"}), ("get_entity_state", {"entity_id": "sensor.does_not_matter"}), ("get_entity_history", history_args)):
+            result = asyncio.run(tools.execute(name, arguments))
+            if result.get("success"):
+                print("ERROR: {} succeeded while ai_ha_state_enable is off".format(name))
+                failed = True
+            if "switch.predbat_ai_ha_state_enable" not in str(result.get("error")):
+                print("ERROR: {} did not name the switch in its refusal: {}".format(name, result))
+                failed = True
+
+        if get_state_calls:
+            print("ERROR: the HA interface was queried even though the switch is off: {}".format(get_state_calls))
+            failed = True
+        if get_history_calls:
+            print("ERROR: get_history_wrapper was called even though the switch is off: {}".format(get_history_calls))
+            failed = True
+
+        # Reverse direction: with the switch on, each tool actually reaches its data source.
+        _set_ha_state_switch(my_predbat, True)
+        result = asyncio.run(tools.execute("search_entities", {"pattern": ".*"}))
+        if not result.get("success") or not get_state_calls:
+            print("ERROR: search_entities did not reach the HA interface once the switch is on: {}".format(result))
+            failed = True
+        asyncio.run(tools.execute("get_entity_history", history_args))
+        if not get_history_calls:
+            print("ERROR: get_entity_history did not reach get_history_wrapper once the switch is on")
+            failed = True
+    finally:
+        _restore_get_state(my_predbat)
+        _restore_history_wrapper(my_predbat)
+        _set_ha_state_switch(my_predbat, original_value)
+
+    return failed
+
+
+def test_search_entities(my_predbat):
+    """search_entities regex-matches every HA entity id, caps results at 'limit', reports
+    total_matches separately so a truncated result is visibly truncated, and never returns
+    attribute dicts - that split is what get_entity_state is for.
+    """
+    failed = False
+    print("**** Testing search_entities ****")
+    tools = PredbatTools(my_predbat, log_func=my_predbat.log)
+
+    original_value = _set_ha_state_switch(my_predbat, True)
+    probe_ids = ["binary_sensor.agent_tools_probe_door_1", "binary_sensor.agent_tools_probe_door_2", "binary_sensor.agent_tools_probe_door_3"]
+
+    try:
+        for index, entity_id in enumerate(probe_ids):
+            my_predbat.ha_interface.dummy_items[entity_id] = {"state": "on" if index % 2 == 0 else "off", "friendly_name": "Probe door {}".format(index), "last_changed": "2026-07-23T10:00:00+00:00"}
+
+        result = asyncio.run(tools.execute("search_entities", {"pattern": "agent_tools_probe_door", "limit": 2}))
+        if not result.get("success"):
+            print("ERROR: search_entities failed: {}".format(result))
+            failed = True
+        data = result.get("data") or {}
+        if data.get("total_matches") != 3:
+            print("ERROR: expected total_matches=3, got {}".format(data.get("total_matches")))
+            failed = True
+        entities = data.get("entities") or []
+        if len(entities) != 2:
+            print("ERROR: expected limit=2 to cap the returned entities at 2, got {}".format(len(entities)))
+            failed = True
+        for entry in entities:
+            if set(entry.keys()) != {"entity_id", "state", "last_changed"}:
+                print("ERROR: search_entities returned attribute data - get_entity_state exists to keep that separate: {}".format(entry))
+                failed = True
+
+        # A pattern that matches nothing is a clean, empty result, not an error
+        result = asyncio.run(tools.execute("search_entities", {"pattern": "no_such_entity_will_ever_match_this"}))
+        if not result.get("success") or (result.get("data") or {}).get("total_matches") != 0:
+            print("ERROR: a non-matching pattern should succeed with zero matches: {}".format(result))
+            failed = True
+
+        # A bad regex is a clean argument error, not an exception
+        result = asyncio.run(tools.execute("search_entities", {"pattern": "("}))
+        if result.get("success") or "pattern" not in str(result.get("error")):
+            print("ERROR: a bad regex should be reported as a named argument error: {}".format(result))
+            failed = True
+    finally:
+        for entity_id in probe_ids:
+            my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+        _set_ha_state_switch(my_predbat, original_value)
+
+    return failed
+
+
+def test_get_entity_state(my_predbat):
+    """get_entity_state returns one entity's state, includes attributes only when asked (kept
+    separate because attribute dicts are bulky), and reports an unknown entity as a clean failure
+    rather than raising.
+    """
+    failed = False
+    print("**** Testing get_entity_state ****")
+    tools = PredbatTools(my_predbat, log_func=my_predbat.log)
+
+    original_value = _set_ha_state_switch(my_predbat, True)
+    entity_id = "sensor.agent_tools_probe_temperature"
+
+    try:
+        my_predbat.ha_interface.dummy_items[entity_id] = {"state": "21.5", "unit_of_measurement": "C", "friendly_name": "Probe temperature", "last_changed": "2026-07-23T10:00:00+00:00"}
+
+        result = asyncio.run(tools.execute("get_entity_state", {"entity_id": entity_id}))
+        if not result.get("success"):
+            print("ERROR: get_entity_state failed for a known entity: {}".format(result))
+            failed = True
+        data = result.get("data") or {}
+        if data.get("state") != "21.5" or "attributes" in data:
+            print("ERROR: expected state only (no attributes) by default: {}".format(data))
+            failed = True
+
+        result = asyncio.run(tools.execute("get_entity_state", {"entity_id": entity_id, "attributes": True}))
+        data = result.get("data") or {}
+        if data.get("attributes", {}).get("unit_of_measurement") != "C":
+            print("ERROR: expected attributes to be included when asked: {}".format(data))
+            failed = True
+
+        result = asyncio.run(tools.execute("get_entity_state", {"entity_id": "sensor.this_entity_does_not_exist_anywhere"}))
+        if result.get("success") or not result.get("error"):
+            print("ERROR: an unknown entity should report success: False with an error message, got {}".format(result))
+            failed = True
+    finally:
+        my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+        _set_ha_state_switch(my_predbat, original_value)
+
+    return failed
+
+
+def test_get_entity_history_numeric(my_predbat):
+    """Numeric-mode buckets report min/max/mean/count, and unavailable readings are skipped from
+    the statistics while still being counted. The first bucket holds three distinct real readings
+    (not just one), so min, max and mean cannot be confused with each other by coincidence.
+    """
+    failed = False
+    print("**** Testing get_entity_history (numeric mode) ****")
+    tools = PredbatTools(my_predbat, log_func=my_predbat.log)
+    original_value = _set_ha_state_switch(my_predbat, True)
+
+    records = [
+        {"last_updated": "2026-07-23T10:05:00+00:00", "state": "10"},
+        {"last_updated": "2026-07-23T10:10:00+00:00", "state": "20"},
+        {"last_updated": "2026-07-23T10:15:00+00:00", "state": "unavailable"},
+        {"last_updated": "2026-07-23T10:35:00+00:00", "state": "30"},
+    ]
+    calls = []
+    my_predbat.get_history_wrapper = _make_history_stub(calls, records)
+
+    try:
+        arguments = {"entity_id": "sensor.agent_tools_probe_power", "start": "2026-07-23T10:00:00+00:00", "end": "2026-07-23T11:00:00+00:00", "bucket_minutes": 30}
+        result = asyncio.run(tools.execute("get_entity_history", arguments))
+        if not result.get("success"):
+            print("ERROR: get_entity_history failed: {}".format(result))
+            failed = True
+        data = result.get("data") or {}
+        if data.get("mode") != "numeric":
+            print("ERROR: expected numeric mode, got {}".format(data.get("mode")))
+            failed = True
+        buckets = data.get("buckets") or []
+        if len(buckets) != 2:
+            print("ERROR: expected 2 buckets, got {}".format(len(buckets)))
+            failed = True
+        else:
+            first, second = buckets
+            if (first.get("min"), first.get("max"), first.get("mean"), first.get("count"), first.get("unavailable")) != (10, 20, 15, 2, 1):
+                print("ERROR: unexpected first bucket stats: {}".format(first))
+                failed = True
+            if (second.get("min"), second.get("max"), second.get("mean"), second.get("count"), second.get("unavailable")) != (30, 30, 30, 1, 0):
+                print("ERROR: unexpected second bucket stats: {}".format(second))
+                failed = True
+        if not calls or calls[0]["tracked"] is not False:
+            print("ERROR: expected get_history_wrapper to be called with tracked=False (an ad hoc lookup, not one of Predbat's own tracked series), got {}".format(calls))
+            failed = True
+    finally:
+        _restore_history_wrapper(my_predbat)
+        _set_ha_state_switch(my_predbat, original_value)
+
+    return failed
+
+
+def test_get_entity_history_text(my_predbat):
+    """Text-mode buckets report first/last/changes rather than a most-common value, so a sensor
+    that flaps is visible as having flapped. An 'unknown' reading in the middle of the window is
+    excluded from first/last/changes entirely, rather than being treated as a real value.
+    """
+    failed = False
+    print("**** Testing get_entity_history (text mode) ****")
+    tools = PredbatTools(my_predbat, log_func=my_predbat.log)
+    original_value = _set_ha_state_switch(my_predbat, True)
+
+    records = [
+        {"last_updated": "2026-07-23T10:05:00+00:00", "state": "Idle"},
+        {"last_updated": "2026-07-23T10:07:00+00:00", "state": "unknown"},
+        {"last_updated": "2026-07-23T10:10:00+00:00", "state": "Idle"},
+        {"last_updated": "2026-07-23T10:15:00+00:00", "state": "Charging"},
+        {"last_updated": "2026-07-23T10:20:00+00:00", "state": "Charging"},
+        {"last_updated": "2026-07-23T10:25:00+00:00", "state": "Idle"},
+    ]
+    calls = []
+    my_predbat.get_history_wrapper = _make_history_stub(calls, records)
+
+    try:
+        arguments = {"entity_id": "predbat.status", "start": "2026-07-23T10:00:00+00:00", "end": "2026-07-23T10:30:00+00:00", "bucket_minutes": 30}
+        result = asyncio.run(tools.execute("get_entity_history", arguments))
+        data = result.get("data") or {}
+        if data.get("mode") != "text":
+            print("ERROR: expected text mode, got {}".format(data.get("mode")))
+            failed = True
+        buckets = data.get("buckets") or []
+        if len(buckets) != 1:
+            print("ERROR: expected 1 bucket, got {}".format(len(buckets)))
+            failed = True
+        else:
+            bucket = buckets[0]
+            if (bucket.get("first"), bucket.get("last"), bucket.get("changes")) != ("Idle", "Idle", 2):
+                print("ERROR: unexpected text bucket, expected first=Idle last=Idle changes=2 (the 'unknown' reading excluded): {}".format(bucket))
+                failed = True
+            if "unavailable" in bucket or "min" in bucket:
+                print("ERROR: a text-mode bucket should not carry numeric-mode keys: {}".format(bucket))
+                failed = True
+    finally:
+        _restore_history_wrapper(my_predbat)
+        _set_ha_state_switch(my_predbat, original_value)
+
+    return failed
+
+
+def test_get_entity_history_attribute_numeric(my_predbat):
+    """get_entity_history(attribute=...) buckets the named attribute, not the state. The fixture's
+    state ('Idle', non-numeric) and attribute ('power', numeric) deliberately differ, so a
+    regression that silently read the state instead of the attribute would fail this test rather
+    than coincidentally passing it.
+
+    Mutation-checked: making _bucket_entity_history read record["state"] regardless of 'attribute'
+    turns 'power' ('100'/'300', numeric) into 'Idle' (non-numeric) for every record, which drops
+    every value out as unavailable and fails the min/max/mean/count assertions below - confirmed
+    by hand while writing this test, then reverted.
+    """
+    failed = False
+    print("**** Testing get_entity_history(attribute=...) numeric case ****")
+    tools = PredbatTools(my_predbat, log_func=my_predbat.log)
+    original_value = _set_ha_state_switch(my_predbat, True)
+
+    records = [
+        {"last_updated": "2026-07-23T10:05:00+00:00", "state": "Idle", "attributes": {"power": "100"}},
+        {"last_updated": "2026-07-23T10:15:00+00:00", "state": "Idle", "attributes": {"power": "300"}},
+    ]
+    calls = []
+    my_predbat.get_history_wrapper = _make_history_stub(calls, records)
+
+    try:
+        arguments = {"entity_id": "sensor.agent_tools_probe_charger", "start": "2026-07-23T10:00:00+00:00", "end": "2026-07-23T10:30:00+00:00", "bucket_minutes": 30, "attribute": "power"}
+        result = asyncio.run(tools.execute("get_entity_history", arguments))
+        data = result.get("data") or {}
+        if data.get("attribute") != "power":
+            print("ERROR: expected the response to name the attribute it bucketed: {}".format(data))
+            failed = True
+        if data.get("mode") != "numeric":
+            print("ERROR: expected numeric mode from the attribute values, got {}".format(data.get("mode")))
+            failed = True
+        buckets = data.get("buckets") or []
+        bucket = buckets[0] if buckets else {}
+        if (bucket.get("min"), bucket.get("max"), bucket.get("mean"), bucket.get("count"), bucket.get("unavailable")) != (100, 300, 200, 2, 0):
+            print("ERROR: expected stats from the 'power' attribute (100/300), not the 'Idle' state: {}".format(bucket))
+            failed = True
+    finally:
+        _restore_history_wrapper(my_predbat)
+        _set_ha_state_switch(my_predbat, original_value)
+
+    return failed
+
+
+def test_get_entity_history_attribute_text(my_predbat):
+    """get_entity_history(attribute=...) also takes the first/last/changes shape when the named
+    attribute is text, exactly as the state case does.
+    """
+    failed = False
+    print("**** Testing get_entity_history(attribute=...) text case ****")
+    tools = PredbatTools(my_predbat, log_func=my_predbat.log)
+    original_value = _set_ha_state_switch(my_predbat, True)
+
+    records = [
+        {"last_updated": "2026-07-23T10:05:00+00:00", "state": "50", "attributes": {"mode": "Idle"}},
+        {"last_updated": "2026-07-23T10:15:00+00:00", "state": "60", "attributes": {"mode": "Charging"}},
+        {"last_updated": "2026-07-23T10:20:00+00:00", "state": "70", "attributes": {"mode": "Charging"}},
+    ]
+    calls = []
+    my_predbat.get_history_wrapper = _make_history_stub(calls, records)
+
+    try:
+        arguments = {"entity_id": "sensor.agent_tools_probe_charger", "start": "2026-07-23T10:00:00+00:00", "end": "2026-07-23T10:30:00+00:00", "bucket_minutes": 30, "attribute": "mode"}
+        result = asyncio.run(tools.execute("get_entity_history", arguments))
+        data = result.get("data") or {}
+        if data.get("mode") != "text":
+            print("ERROR: expected text mode from the 'mode' attribute's values, got {}".format(data.get("mode")))
+            failed = True
+        buckets = data.get("buckets") or []
+        bucket = buckets[0] if buckets else {}
+        if (bucket.get("first"), bucket.get("last"), bucket.get("changes")) != ("Idle", "Charging", 1):
+            print("ERROR: unexpected text bucket for the 'mode' attribute: {}".format(bucket))
+            failed = True
+    finally:
+        _restore_history_wrapper(my_predbat)
+        _set_ha_state_switch(my_predbat, original_value)
+
+    return failed
+
+
+def test_get_entity_history_bucket_cap(my_predbat):
+    """The bucket count is capped at 500 by pulling 'end' in, not by widening the buckets - a
+    caller that asked for 1-minute buckets over a whole day gets 500 of them and a truncation
+    flag, not 1440 fine buckets merged into something coarser than it asked for.
+    """
+    failed = False
+    print("**** Testing get_entity_history bucket cap ****")
+    tools = PredbatTools(my_predbat, log_func=my_predbat.log)
+    original_value = _set_ha_state_switch(my_predbat, True)
+    my_predbat.get_history_wrapper = _make_history_stub([], [])
+
+    try:
+        arguments = {"entity_id": "sensor.agent_tools_probe_cap", "start": "2026-07-23T00:00:00+00:00", "end": "2026-07-24T00:00:00+00:00", "bucket_minutes": 1}
+        result = asyncio.run(tools.execute("get_entity_history", arguments))
+        data = result.get("data") or {}
+        if data.get("bucket_count") != 500 or len(data.get("buckets") or []) != 500:
+            print("ERROR: expected the bucket count capped at 500, got {}".format(data.get("bucket_count")))
+            failed = True
+        if not data.get("range_truncated"):
+            print("ERROR: expected range_truncated to be reported when the cap bites")
+            failed = True
+        if data.get("end") != "2026-07-23T08:20:00+00:00":
+            print("ERROR: expected 'end' pulled in to start + 500 minutes, got {}".format(data.get("end")))
+            failed = True
+    finally:
+        _restore_history_wrapper(my_predbat)
+        _set_ha_state_switch(my_predbat, original_value)
+
+    return failed
+
+
+def test_get_entity_history_lookback_clamp(my_predbat):
+    """A window starting more than 30 days before 'end' is clamped to the 30-day maximum
+    lookback, and the response says so - this bounds the fetch, distinct from the bucket cap
+    above, which bounds the response. bucket_minutes is set generously (1 day) so the 500-bucket
+    cap cannot also fire and confound which guard actually clamped the result.
+    """
+    failed = False
+    print("**** Testing get_entity_history lookback clamp ****")
+    tools = PredbatTools(my_predbat, log_func=my_predbat.log)
+    original_value = _set_ha_state_switch(my_predbat, True)
+    calls = []
+    my_predbat.get_history_wrapper = _make_history_stub(calls, [])
+
+    try:
+        arguments = {"entity_id": "sensor.agent_tools_probe_lookback", "start": "2026-06-01T00:00:00+00:00", "end": "2026-08-01T00:00:00+00:00", "bucket_minutes": 1440}
+        result = asyncio.run(tools.execute("get_entity_history", arguments))
+        data = result.get("data") or {}
+        if not data.get("lookback_clamped"):
+            print("ERROR: expected lookback_clamped when 'start' is over 30 days before 'end'")
+            failed = True
+        if data.get("range_truncated"):
+            print("ERROR: expected the bucket cap not to fire in this test - bucket_minutes was chosen to avoid it: {}".format(data))
+            failed = True
+        if data.get("start") != "2026-07-02T00:00:00+00:00":
+            print("ERROR: expected 'start' clamped to 30 days before 'end', got {}".format(data.get("start")))
+            failed = True
+        if not calls or calls[0]["days"] > 32:
+            print("ERROR: expected the fetch itself to be bounded by the clamp, not the original 61-day request: {}".format(calls))
+            failed = True
+    finally:
+        _restore_history_wrapper(my_predbat)
+        _set_ha_state_switch(my_predbat, original_value)
+
+    return failed
+
+
 def run_agent_tools_tests(my_predbat):
     """Run every shared tool layer test, returning True if any of them failed."""
     failed = False
@@ -189,4 +630,13 @@ def run_agent_tools_tests(my_predbat):
     failed |= test_execute_dispatch(my_predbat)
     failed |= test_mcp_wrapper_still_inherits(my_predbat)
     failed |= test_handler_crash_sets_is_error(my_predbat)
+    failed |= test_ha_state_tools_gate(my_predbat)
+    failed |= test_search_entities(my_predbat)
+    failed |= test_get_entity_state(my_predbat)
+    failed |= test_get_entity_history_numeric(my_predbat)
+    failed |= test_get_entity_history_text(my_predbat)
+    failed |= test_get_entity_history_attribute_numeric(my_predbat)
+    failed |= test_get_entity_history_attribute_text(my_predbat)
+    failed |= test_get_entity_history_bucket_cap(my_predbat)
+    failed |= test_get_entity_history_lookback_clamp(my_predbat)
     return failed

@@ -91,7 +91,7 @@ def test_routes_always_registered_handlers_404_unconfigured(my_predbat):
         app = aiohttp_web.Application()
         interface._register_chat_routes(app)
         paths = {str(route.resource.canonical) for route in app.router.routes()}
-        expected_routes = ["/chat", "/chat/conversations", "/chat/history", "/chat/send", "/chat/stream", "/chat/confirm", "/chat/cancel", "/chat/delete", "/chat/rename", "/chat/models", "/chat/model"]
+        expected_routes = ["/chat", "/chat/conversations", "/chat/history", "/chat/send", "/chat/stream", "/chat/confirm", "/chat/cancel", "/chat/delete", "/chat/rename", "/chat/models", "/chat/model", "/chat/status"]
         for expected in expected_routes:
             if expected not in paths:
                 print("ERROR: route {} was not registered with no chat component present, got {}".format(expected, sorted(paths)))
@@ -1114,6 +1114,84 @@ def test_html_chat_cancel_requires_the_running_turn_id(my_predbat):
     return failed
 
 
+class _SwitchEventComponents:
+    """Minimal component-registry stand-in so switch_event's real dispatch can run in a test,
+    matching test_predheat.py's own FakeComponents for the same purpose."""
+
+    async def switch_event(self, entity_id, service):
+        """Swallow the component-level switch routing, which is not under test here."""
+        return None
+
+
+def test_chat_status_route(my_predbat):
+    """/chat/status reads and writes switch.predbat_ai_ha_state_enable for the footer control:
+    404s like every other chat route when chat is not configured, reports the switch's live
+    value on GET, and on POST writes through set_state_external() - the real mechanism the
+    dashboard's own switches and the set_config tool both use - rather than a raw state
+    overwrite that would leave get_ha_config() disagreeing with what the footer shows.
+    """
+    failed = False
+    print("**** Testing /chat/status route ****")
+
+    original_value = my_predbat.config_index["ai_ha_state_enable"].get("value")
+    original_components = my_predbat.components
+    try:
+        my_predbat.config_index["ai_ha_state_enable"]["value"] = False
+
+        # Not configured: 404, the same as every other chat route.
+        interface = _make_web(my_predbat, agent=None)
+        response = asyncio.run(interface.chat_page.html_chat_status(FakeRequest()))
+        if response.status != 404:
+            print("ERROR: expected 404 with no chat component, got {}".format(response.status))
+            failed = True
+
+        # Configured, switch off: reports False.
+        interface = _make_web(my_predbat, agent=object())
+        response = asyncio.run(interface.chat_page.html_chat_status(FakeRequest()))
+        payload = json.loads(response.text)
+        if payload.get("ai_ha_state_enabled") is not False:
+            print("ERROR: expected ai_ha_state_enabled: false while the switch is off, got {}".format(payload))
+            failed = True
+
+        # set_state_external() routes a CONFIG_ITEMS change through switch_event(), which always
+        # notifies self.components first - a real Components registry outside the scope of this
+        # route test, so it is stood in for the same way test_predheat.py stands it in.
+        my_predbat.components = _SwitchEventComponents()
+
+        calls = []
+        original_set_state_external = my_predbat.ha_interface.set_state_external
+
+        async def spy_set_state_external(entity_id, state, attributes=None):
+            """Record this call's arguments, then behave exactly as normal."""
+            calls.append((entity_id, state))
+            return await original_set_state_external(entity_id, state, attributes or {})
+
+        my_predbat.ha_interface.set_state_external = spy_set_state_external
+        try:
+            response = asyncio.run(interface.chat_page.html_chat_status_post(FakeRequest(body={"ai_ha_state_enable": True})))
+        finally:
+            my_predbat.ha_interface.set_state_external = original_set_state_external
+
+        payload = json.loads(response.text)
+        if not payload.get("ok") or payload.get("ai_ha_state_enabled") is not True:
+            print("ERROR: unexpected response from the status POST: {}".format(payload))
+            failed = True
+        expected_entity = "switch.{}_ai_ha_state_enable".format(my_predbat.prefix)
+        if calls != [(expected_entity, True)]:
+            print("ERROR: expected exactly one set_state_external({}, True) call, got {}".format(expected_entity, calls))
+            failed = True
+
+        value, _ = my_predbat.get_ha_config("ai_ha_state_enable", False)
+        if value is not True:
+            print("ERROR: expected the switch to actually be on after the POST, got {}".format(value))
+            failed = True
+    finally:
+        my_predbat.config_index["ai_ha_state_enable"]["value"] = original_value
+        my_predbat.components = original_components
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -1137,4 +1215,5 @@ def run_web_chat_tests(my_predbat):
     failed |= test_model_picker_script_wires_routes_and_persists_selection(my_predbat)
     failed |= test_stop_button_wired_to_cancel_with_turn_id(my_predbat)
     failed |= test_html_chat_cancel_requires_the_running_turn_id(my_predbat)
+    failed |= test_chat_status_route(my_predbat)
     return failed

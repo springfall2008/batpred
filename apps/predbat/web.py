@@ -70,6 +70,7 @@ from web_helper import (
 )
 
 from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, read_predbat_log, classify_log_line, log_line_included
+from utils import is_data_numerical  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
@@ -183,46 +184,6 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch):
         entity_filled_5min.append(state_as_of_slots(records, all_display_slots_5min))
 
     return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
-
-
-def is_data_numerical(history, attribute=None):
-    """
-    Check if history data is numerical (supports both state and attribute checking)
-    Returns True if at least 10% of values are numeric or boolean
-    """
-    count_nums = 0
-    count_total = 0
-
-    if history and len(history) >= 1:
-        for item in history[0]:
-            if attribute:
-                # Check attribute value
-                attr_value = item.get("attributes", {}).get(attribute, None)
-                if attr_value is None:
-                    continue
-                value = str(attr_value)
-            else:
-                # Check state value
-                value = item.get("state", None)
-                if value is None:
-                    continue
-                value = str(value)
-
-            if value.lower() in ["on", "off", "true", "false"]:
-                count_nums += 1
-            else:
-                try:
-                    float(value)
-                    count_nums += 1
-                except (ValueError, TypeError):
-                    pass
-            count_total += 1
-
-    if count_total > 0 and (count_nums / count_total) >= 0.1:
-        return True
-    elif count_total == 0:
-        return True
-    return False
 
 
 def split_entities_for_charting(entities, entity_data_fetch):
@@ -463,6 +424,8 @@ class WebInterface(ComponentBase):
         app.router.add_post("/chat/cancel", self.chat_page.html_chat_cancel)
         app.router.add_get("/chat/models", self.chat_page.html_chat_models)
         app.router.add_post("/chat/model", self.chat_page.html_chat_model)
+        app.router.add_get("/chat/status", self.chat_page.html_chat_status)
+        app.router.add_post("/chat/status", self.chat_page.html_chat_status_post)
 
     async def start(self):
         # Start the web server

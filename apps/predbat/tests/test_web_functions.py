@@ -11,7 +11,7 @@
 import asyncio
 import os
 
-from web import WebInterface
+from web import WebInterface, is_data_numerical
 from web_helper import get_plan_renderer_js
 
 
@@ -225,7 +225,71 @@ def run_web_functions_tests(my_predbat):
 
     failed += run_plan_empty_state_tests(my_predbat, web)
 
+    # -------------------------------------------------------------------------
+    # is_data_numerical() moved from web.py to utils.py (re-exported here) for the AI HA-state
+    # tools (#4768 follow-up), which need it and must not import from web.py.
+    failed += run_is_data_numerical_tests(my_predbat)
+
     print("**** Web functions tests completed ****")
+    return failed
+
+
+def run_is_data_numerical_tests(my_predbat):
+    """Unit tests for is_data_numerical() (moved from web.py to utils.py, re-exported from web).
+
+    Guards the three deliberately subtle rules the move must not disturb: on/off/true/false count
+    as numeric, the threshold is 10% of values rather than a majority, and empty history is
+    treated as numeric. web_chart_grouping's own tests only exercise clear-cut all-numeric and
+    all-text fixtures (100% or 0% either way), so they cannot tell a 10% threshold apart from a
+    50% one - these can, by bracketing the boundary on both sides.
+    """
+    failed = 0
+    print("**** Running is_data_numerical() tests ****")
+
+    def history_of(states):
+        """Wrap a list of state values in the [[record, ...]] shape is_data_numerical() expects."""
+        return [[{"last_updated": "2026-07-23T10:00:00+00:00", "state": state} for state in states]]
+
+    # -------------------------------------------------------------------------
+    print("Test: on/off/true/false count as numeric, because booleans plot as 0/1")
+    if not is_data_numerical(history_of(["on", "off", "true", "false"])):
+        print("  ERROR: expected boolean-only history to be treated as numeric")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the threshold is 10% of values, not a majority")
+    # 1 numeric reading among 9 non-numeric, non-unavailable text values = exactly 10%
+    at_threshold = history_of(["42"] + ["Idle"] * 9)
+    if not is_data_numerical(at_threshold):
+        print("  ERROR: expected a 10% numeric ratio to be treated as numeric")
+        failed += 1
+    # 1 numeric reading among 10 non-numeric text values is just under 10% and must not pass
+    below_threshold = history_of(["42"] + ["Idle"] * 10)
+    if is_data_numerical(below_threshold):
+        print("  ERROR: expected a ratio just under 10% to be treated as non-numeric")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: mostly-unavailable history is still numeric if the readings that exist are numeric")
+    mostly_unavailable = history_of(["unavailable"] * 9 + ["21.5"])
+    if not is_data_numerical(mostly_unavailable):
+        print("  ERROR: expected a sensor unavailable 90% of the time to still be numeric")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: empty history returns True")
+    if not is_data_numerical([[]]):
+        print("  ERROR: expected empty history to be treated as numeric")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: attribute mode classifies on the named attribute, not the state")
+    attr_history = [[{"last_updated": "2026-07-23T10:00:00+00:00", "state": "Idle", "attributes": {"level": "50"}}]]
+    if not is_data_numerical(attr_history, attribute="level"):
+        print("  ERROR: expected attribute mode to classify on the attribute value, not the (non-numeric) state")
+        failed += 1
+
+    print("**** is_data_numerical() tests completed ****")
     return failed
 
 

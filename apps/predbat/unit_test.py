@@ -363,6 +363,7 @@ def create_predbat():
     my_predbat.reset()
     my_predbat.update_time()
     my_predbat.ha_interface = TestHAInterface()
+    my_predbat.ha_interface.base = my_predbat
     my_predbat.ha_interface.history_enable = False
     my_predbat.auto_config()
     my_predbat.load_user_config()

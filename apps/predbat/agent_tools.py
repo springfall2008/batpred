@@ -16,10 +16,11 @@ projections over one list is what stops the two surfaces drifting apart as tools
 
 import asyncio
 import json
+import math
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
-from utils import calc_percent_limit, get_override_time_from_string, mask_secret_args, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp, is_debug_excluded_key
+from utils import calc_percent_limit, get_override_time_from_string, mask_secret_args, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp, is_debug_excluded_key, is_data_numerical, str2time
 
 
 # Log filter levels accepted by the get_log tool, matching the web log view's tabs
@@ -45,6 +46,26 @@ MCP_STATE_LARGE_COLLECTION = 200
 
 # How many entries of a large collection to show in its summary
 MCP_STATE_SAMPLE_ENTRIES = 3
+
+# search_entities size guards - a large install can carry several thousand entities, so a search
+# with no limit (or a badly-chosen pattern matching almost everything) is capped the same way
+# get_log's max_lines is: a small default for a normal answer, a hard ceiling so a client asking
+# for "everything" cannot flood the response.
+MCP_ENTITY_SEARCH_DEFAULT_LIMIT = 50
+MCP_ENTITY_SEARCH_MAX_LIMIT = 200
+
+# get_entity_history guards (#4768 follow-up: HA state access). The lookback cap bounds the
+# *fetch* - how far back get_history_wrapper is asked to go - which matters even before any
+# bucketing happens, since a careless request could otherwise ask the recorder for years of a
+# per-minute sensor. 30 days matches get_history_wrapper's own default and HAHistory's default
+# retention window, so a request within it never asks Predbat for more than Predbat already
+# tracks about itself. The bucket cap is a separate guard on the *response*: it protects the
+# reply from a small bucket_minutes over a long window (e.g. 1-minute buckets over 30 days would
+# be 43200 buckets) by shrinking the window rather than the bucket width, since a caller that
+# asked for fine-grained buckets presumably wants them fine, not merged.
+MCP_HISTORY_MAX_LOOKBACK_DAYS = 30
+MCP_HISTORY_DEFAULT_BUCKET_MINUTES = 30
+MCP_HISTORY_MAX_BUCKETS = 500
 
 
 def json_safe_value(value, depth=0):
@@ -166,6 +187,27 @@ def compile_filter_argument(value, name="filter"):
         return re.compile(value)
     except re.error as error:
         raise MCPArgumentError("'{}' is not a valid regular expression: {}".format(name, error))
+
+
+def parse_iso_argument(value, name):
+    """
+    Parse an ISO-8601 tool argument into a timezone-aware datetime.
+
+    A timestamp with no offset is assumed to be UTC rather than rejected: the caller is an AI
+    model with no way to know Predbat's local timezone, and every history record it will be
+    compared against is timezone-aware (str2time never returns a naive datetime), so accepting
+    only offset-qualified strings would make the common case - a model asking about "yesterday
+    16:00" - fail every time instead of just some of the time.
+    """
+    if not value or not isinstance(value, str):
+        raise MCPArgumentError("'{}' must be an ISO-8601 timestamp, got {!r}".format(name, value))
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        raise MCPArgumentError("'{}' is not a valid ISO-8601 timestamp: {!r}".format(name, value))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def parse_bool_argument(value, default=False):
@@ -580,6 +622,265 @@ class PredbatTools:
         except Exception as e:
             return {"success": False, "error": f"Error setting configuration: {str(e)}", "data": None}
 
+    def _ha_state_access_enabled(self):
+        """
+        Return whether switch.predbat_ai_ha_state_enable currently allows the HA-state tools to run.
+
+        Read at the moment each tool is called, not cached, so toggling the switch takes effect on
+        the very next call - the same reasoning ChatAgent.confirm_writes_enabled() gives for
+        chat_confirm_writes. Unlike that switch, this one is prefixed 'ai_', not 'chat_': it gates
+        every AI surface (MCP included), not just the Chat tab, because reading arbitrary Home
+        Assistant state - not just Predbat's own entities - is a materially larger disclosure to
+        whichever third-party model is asking, and MCP clients are no less a third party than chat.
+        """
+        value, _ = self.base.get_ha_config("ai_ha_state_enable", False)
+        return bool(value)
+
+    def _ha_state_access_denied(self):
+        """
+        Return the standard denial result for an HA-state tool when its switch is off.
+
+        Names the switch rather than just saying "disabled": a model that can tell the user which
+        switch to turn on is more useful than one whose tool has silently vanished from its list -
+        which is also why these tools stay in TOOL_DEFS unconditionally rather than being filtered
+        out when the switch is off.
+        """
+        return {"success": False, "error": "Home Assistant state access is disabled. Enable switch.predbat_ai_ha_state_enable to allow it.", "data": None}
+
+    async def _execute_search_entities(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the search_entities tool"""
+        try:
+            if not self._ha_state_access_enabled():
+                return self._ha_state_access_denied()
+
+            pattern = compile_filter_argument(arguments.get("pattern", None), name="pattern")
+            if pattern is None:
+                raise MCPArgumentError("'pattern' is required")
+            limit = parse_number_argument(arguments.get("limit", None), "limit", MCP_ENTITY_SEARCH_DEFAULT_LIMIT, minimum=1, maximum=MCP_ENTITY_SEARCH_MAX_LIMIT)
+
+            # No attributes in the result - a real install can carry thousands of entities, and
+            # their attribute dicts are the bulky part. get_entity_state exists precisely so a
+            # caller that has found the one entity it cares about can ask for those separately.
+            all_state = self.base.ha_interface.get_state() or {}
+            matches = []
+            total_matches = 0
+            for entity_id, item in all_state.items():
+                if not pattern.search(entity_id):
+                    continue
+                total_matches += 1
+                if len(matches) < limit:
+                    matches.append({"entity_id": entity_id, "state": item.get("state"), "last_changed": item.get("last_changed")})
+
+            data = {"entities": matches, "total_matches": total_matches, "returned": len(matches), "limit": limit}
+            description = "{} of {} matching Home Assistant entities returned".format(len(matches), total_matches)
+            if total_matches > len(matches):
+                description += " - truncated to 'limit'; raise it or narrow 'pattern' to see the rest"
+            return {"success": True, "error": None, "data": data, "timestamp": datetime.now().isoformat(), "description": description}
+
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
+        except Exception as e:
+            return {"success": False, "error": f"Error searching entities: {str(e)}", "data": None}
+
+    async def _execute_get_entity_state(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the get_entity_state tool"""
+        try:
+            if not self._ha_state_access_enabled():
+                return self._ha_state_access_denied()
+
+            entity_id = arguments.get("entity_id", None)
+            if not entity_id or not isinstance(entity_id, str):
+                raise MCPArgumentError("'entity_id' must be a non-empty string, got {!r}".format(entity_id))
+            include_attributes = parse_bool_argument(arguments.get("attributes", False), default=False)
+
+            all_state = self.base.ha_interface.get_state() or {}
+            item = all_state.get(entity_id)
+            if item is None:
+                # A clean result, not an exception - an unknown entity id is a normal wrong guess
+                # for a model exploring an install it cannot see the entity registry of directly.
+                return {"success": False, "error": "Unknown entity: {}".format(entity_id), "data": None}
+
+            data = {"entity_id": entity_id, "state": item.get("state"), "last_changed": item.get("last_changed")}
+            if include_attributes:
+                data["attributes"] = item.get("attributes", {})
+            return {"success": True, "error": None, "data": data, "timestamp": datetime.now().isoformat(), "description": "Current state of {}".format(entity_id)}
+
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
+        except Exception as e:
+            return {"success": False, "error": f"Error retrieving entity state: {str(e)}", "data": None}
+
+    def _bucket_entity_history(self, windowed_records, start_dt, bucket_minutes, bucket_count, attribute, numeric):
+        """
+        Aggregate (timestamp, record) pairs already sorted and filtered to the request window into
+        fixed-width time buckets.
+
+        The mode (numeric vs text) is decided once by the caller, over the whole window, and passed
+        in rather than re-derived per record or per bucket - so every bucket in the response has the
+        same shape and a consumer never has to detect a format change partway down the list.
+
+        Numeric buckets report min/max/mean/count plus how many samples were unavailable, so "the
+        mean looks fine but the sensor was dead for half the window" stays visible instead of being
+        silently averaged away. Text buckets deliberately do not report a most-common value: a
+        sensor that sat on 'off' for 28 of 30 minutes then flipped to 'on' would report as 'off' and
+        lose the one thing that mattered - so they report first/last/changes instead, which is what
+        it was, what it became, and whether it flapped in between.
+        """
+        buckets = [{"start": (start_dt + timedelta(minutes=index * bucket_minutes)).isoformat()} for index in range(bucket_count)]
+        if numeric:
+            for bucket in buckets:
+                bucket.update({"min": None, "max": None, "mean": None, "count": 0, "unavailable": 0})
+            sums = [0.0] * bucket_count
+        else:
+            for bucket in buckets:
+                bucket.update({"first": None, "last": None, "changes": 0})
+
+        bucket_seconds = bucket_minutes * 60
+        for record_time, record in windowed_records:
+            index = int((record_time - start_dt).total_seconds() // bucket_seconds)
+            if index < 0 or index >= bucket_count:
+                continue
+            bucket = buckets[index]
+
+            raw_value = record.get("attributes", {}).get(attribute) if attribute else record.get("state")
+            if raw_value is None:
+                if numeric:
+                    bucket["unavailable"] += 1
+                continue
+            text_value = str(raw_value)
+            low_value = text_value.strip().lower()
+            if low_value in ("unavailable", "unknown"):
+                if numeric:
+                    bucket["unavailable"] += 1
+                continue
+
+            if numeric:
+                if low_value in ("on", "true"):
+                    numeric_value = 1.0
+                elif low_value in ("off", "false"):
+                    numeric_value = 0.0
+                else:
+                    try:
+                        numeric_value = float(raw_value)
+                    except (TypeError, ValueError):
+                        bucket["unavailable"] += 1
+                        continue
+                sums[index] += numeric_value
+                bucket["count"] += 1
+                bucket["min"] = numeric_value if bucket["min"] is None else min(bucket["min"], numeric_value)
+                bucket["max"] = numeric_value if bucket["max"] is None else max(bucket["max"], numeric_value)
+            else:
+                if bucket["first"] is None:
+                    bucket["first"] = text_value
+                elif text_value != bucket["last"]:
+                    bucket["changes"] += 1
+                bucket["last"] = text_value
+
+        if numeric:
+            for index, bucket in enumerate(buckets):
+                if bucket["count"]:
+                    bucket["mean"] = sums[index] / bucket["count"]
+
+        return buckets
+
+    async def _execute_get_entity_history(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the get_entity_history tool"""
+        try:
+            if not self._ha_state_access_enabled():
+                return self._ha_state_access_denied()
+
+            entity_id = arguments.get("entity_id", None)
+            if not entity_id or not isinstance(entity_id, str):
+                raise MCPArgumentError("'entity_id' must be a non-empty string, got {!r}".format(entity_id))
+
+            attribute = arguments.get("attribute", None)
+            if attribute is not None and not isinstance(attribute, str):
+                raise MCPArgumentError("'attribute' must be a string, got {!r}".format(attribute))
+
+            start_dt = parse_iso_argument(arguments.get("start", None), "start")
+            end_dt = parse_iso_argument(arguments.get("end", None), "end")
+            if end_dt <= start_dt:
+                raise MCPArgumentError("'end' must be after 'start'")
+
+            bucket_minutes = parse_number_argument(arguments.get("bucket_minutes", None), "bucket_minutes", MCP_HISTORY_DEFAULT_BUCKET_MINUTES, minimum=1)
+
+            # Cap the lookback before the fetch - this bounds what get_history_wrapper is asked
+            # for, distinct from the bucket cap below, which bounds what this tool hands back.
+            lookback_clamped = False
+            earliest_allowed = end_dt - timedelta(days=MCP_HISTORY_MAX_LOOKBACK_DAYS)
+            if start_dt < earliest_allowed:
+                start_dt = earliest_allowed
+                lookback_clamped = True
+
+            # Cap the bucket count by shrinking the window rather than widening the buckets - a
+            # caller that asked for fine-grained buckets over too long a window presumably wants
+            # fewer, fine buckets, not the same count merged into coarser ones.
+            range_truncated = False
+            total_minutes = (end_dt - start_dt).total_seconds() / 60
+            bucket_count = max(1, math.ceil(total_minutes / bucket_minutes))
+            if bucket_count > MCP_HISTORY_MAX_BUCKETS:
+                end_dt = start_dt + timedelta(minutes=MCP_HISTORY_MAX_BUCKETS * bucket_minutes)
+                bucket_count = MCP_HISTORY_MAX_BUCKETS
+                range_truncated = True
+
+            now_reference = getattr(self.base, "now_utc", None) or datetime.now(timezone.utc)
+            days_needed = max(1, min((now_reference - start_dt).days + 2, MCP_HISTORY_MAX_LOOKBACK_DAYS + 2))
+
+            # tracked=False: an ad hoc lookup of whatever entity the caller names, not one of
+            # Predbat's own tracked series. tracked=True would register it in HAHistory's
+            # history_entities and have Predbat re-fetch and cache it forever after a single
+            # question - the web /entity page's own arbitrary-entity history fetch
+            # (get_history_with_now in web.py) makes the same tracked=False choice for the same
+            # reason: a one-off browse of any HA entity must not become a permanent subscription.
+            history = self.base.get_history_wrapper(entity_id, days=days_needed, required=False, tracked=False)
+            records = history[0] if history and history[0] else []
+
+            windowed_records = []
+            for record in records:
+                stamp = record.get("last_updated")
+                if not stamp:
+                    continue
+                try:
+                    record_time = str2time(stamp) if isinstance(stamp, str) else stamp
+                except (ValueError, TypeError):
+                    continue
+                if record_time < start_dt or record_time > end_dt:
+                    continue
+                windowed_records.append((record_time, record))
+            windowed_records.sort(key=lambda pair: pair[0])
+
+            # Classified once, over the whole filtered window, so a consumer never sees the
+            # bucket shape change partway down the response.
+            numeric = is_data_numerical([[record for _, record in windowed_records]], attribute=attribute)
+            mode = "numeric" if numeric else "text"
+
+            buckets = self._bucket_entity_history(windowed_records, start_dt, bucket_minutes, bucket_count, attribute, numeric)
+
+            data = {
+                "entity_id": entity_id,
+                "attribute": attribute,
+                "mode": mode,
+                "start": start_dt.isoformat(),
+                "end": end_dt.isoformat(),
+                "bucket_minutes": bucket_minutes,
+                "bucket_count": len(buckets),
+                "record_count": len(windowed_records),
+                "buckets": buckets,
+                "lookback_clamped": lookback_clamped,
+                "range_truncated": range_truncated,
+            }
+            description = "{} history for {} bucketed into {} x {}-minute {} buckets".format(attribute or "state", entity_id, len(buckets), bucket_minutes, mode)
+            if lookback_clamped:
+                description += "; 'start' was clamped to the {}-day maximum lookback".format(MCP_HISTORY_MAX_LOOKBACK_DAYS)
+            if range_truncated:
+                description += "; 'end' was pulled in to keep the bucket count at or under {}".format(MCP_HISTORY_MAX_BUCKETS)
+            return {"success": True, "error": None, "data": data, "timestamp": datetime.now().isoformat(), "description": description}
+
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
+        except Exception as e:
+            return {"success": False, "error": f"Error retrieving entity history: {str(e)}", "data": None}
+
 
 TOOL_DEFS = [
     {"name": "get_plan", "description": "Get the current Predbat battery plan data including forecast, costs, and state information", "parameters": {"type": "object", "properties": {}, "required": []}, "writes": False, "chat_omit_properties": []},
@@ -671,6 +972,60 @@ TOOL_DEFS = [
             "required": ["action", "time"],
         },
         "writes": True,
+        "chat_omit_properties": [],
+    },
+    # search_entities/get_entity_state/get_entity_history: unlike every other tool above, these
+    # read arbitrary Home Assistant state - not just Predbat's own entities - so they are gated
+    # behind switch.predbat_ai_ha_state_enable (off by default) rather than always available. The
+    # gate is enforced inside each handler, not by omitting these from TOOL_DEFS, so a model that
+    # calls one while the switch is off is told which switch to enable rather than finding the
+    # tool silently missing.
+    {
+        "name": "search_entities",
+        "description": "Search every Home Assistant entity id with a regular expression - not just Predbat's own. Requires switch.predbat_ai_ha_state_enable.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Python regular expression matched against entity ids"},
+                "limit": {"type": "integer", "description": "Maximum number of matches to return (default {}, maximum {})".format(MCP_ENTITY_SEARCH_DEFAULT_LIMIT, MCP_ENTITY_SEARCH_MAX_LIMIT)},
+            },
+            "required": ["pattern"],
+        },
+        "writes": False,
+        "chat_omit_properties": [],
+    },
+    {
+        "name": "get_entity_state",
+        "description": "Get one Home Assistant entity's current state - not just Predbat's own. Requires switch.predbat_ai_ha_state_enable.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "description": "The entity id to look up, e.g. binary_sensor.front_door"},
+                "attributes": {"type": "boolean", "description": "Include the entity's attribute dict as well as its state (default false) - kept separate from search_entities because attribute dicts are bulky"},
+            },
+            "required": ["entity_id"],
+        },
+        "writes": False,
+        "chat_omit_properties": [],
+    },
+    {
+        "name": "get_entity_history",
+        "description": "Get one Home Assistant entity's history over a time window, bucketed into fixed-width time slots - not just Predbat's own. Requires switch.predbat_ai_ha_state_enable.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "description": "The entity id to fetch history for"},
+                "start": {"type": "string", "description": "Start of the window, an ISO-8601 timestamp (assumed UTC if it carries no offset). Clamped to at most {} days before 'end'".format(MCP_HISTORY_MAX_LOOKBACK_DAYS)},
+                "end": {"type": "string", "description": "End of the window, an ISO-8601 timestamp (assumed UTC if it carries no offset)"},
+                "bucket_minutes": {
+                    "type": "integer",
+                    "description": "Width of each bucket in minutes (default {}). The window is pulled in, not the bucket width, if this would exceed {} buckets".format(MCP_HISTORY_DEFAULT_BUCKET_MINUTES, MCP_HISTORY_MAX_BUCKETS),
+                },
+                "attribute": {"type": "string", "description": "Bucket this attribute's value instead of the entity's state (optional - defaults to the entity's state)"},
+            },
+            "required": ["entity_id", "start", "end"],
+        },
+        "writes": False,
         "chat_omit_properties": [],
     },
 ]
