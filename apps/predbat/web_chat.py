@@ -1914,9 +1914,12 @@ function ensureThinkingBubble() {
 
 function showThinkingBubble() {
     var bubble = ensureThinkingBubble();
-    if (!bubble.parentNode) {
-        byId('chat-transcript').appendChild(bubble);
-    }
+    // Appended every time, not only when it has no parent. hideThinkingBubble() just adds a
+    // class - the element stays in the transcript where it was - so everything appended since
+    // then, including the user's next message, lands after it. Re-appending moves it back to the
+    // end, which is where "waiting for a response" belongs. appendChild moves an element that is
+    // already in the DOM rather than duplicating it, so there is nothing to remove first.
+    byId('chat-transcript').appendChild(bubble);
     bubble.classList.remove('chat-thinking-hidden');
     scrollTranscriptToBottom();
 }

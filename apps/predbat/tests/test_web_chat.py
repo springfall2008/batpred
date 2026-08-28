@@ -1985,6 +1985,47 @@ def test_chat_page_height_is_measured_not_hardcoded(my_predbat):
     return failed
 
 
+def test_thinking_bubble_moves_to_the_end(my_predbat):
+    """The waiting indicator is re-appended each time, so it sits below the newest message.
+
+    hideThinkingBubble() only adds a CSS class - the element stays in the transcript where it was.
+    So if showThinkingBubble() appends only when the bubble has no parent, it is placed correctly
+    on the first turn and never again: everything appended afterwards, including the user's next
+    message, lands below the stranded bubble, and "thinking" appears above the message it is
+    waiting on.
+
+    appendChild moves an element already in the DOM rather than duplicating it, so an
+    unconditional append is both the fix and safe to repeat.
+
+    Mutation check: restoring the "if (!bubble.parentNode)" guard fails this.
+    """
+    failed = False
+    print("**** Testing the thinking bubble is moved to the end ****")
+    script = web_chat.get_chat_script()
+
+    body = _extract_function_body(script, "showThinkingBubble")
+    if body is None:
+        print("ERROR: there is no showThinkingBubble() to inspect")
+        return True
+
+    if "appendChild" not in body:
+        print("ERROR: showThinkingBubble() never appends the bubble: {!r}".format(body))
+        failed = True
+    # The guard is the bug: it makes the append happen once and only once.
+    if "parentNode" in body:
+        print("ERROR: showThinkingBubble() still guards the append on parentNode, so the bubble is stranded above later messages: {!r}".format(body))
+        failed = True
+
+    # And the reason the guard breaks it: hiding does not remove the element.
+    hide_body = _extract_function_body(script, "hideThinkingBubble")
+    if hide_body is not None and "removeChild" not in hide_body and "remove()" not in hide_body:
+        if "classList" not in hide_body:
+            print("ERROR: hideThinkingBubble() neither removes the element nor hides it by class: {!r}".format(hide_body))
+            failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -2014,6 +2055,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_predbat)
     failed |= test_model_picker_script_wires_routes_and_persists_selection(my_predbat)
     failed |= test_chat_page_height_is_measured_not_hardcoded(my_predbat)
+    failed |= test_thinking_bubble_moves_to_the_end(my_predbat)
     failed |= test_context_counter_uses_the_last_turns_prompt_tokens_not_cumulative(my_predbat)
     failed |= test_stop_button_wired_to_cancel_with_turn_id(my_predbat)
     failed |= test_html_chat_cancel_requires_the_running_turn_id(my_predbat)
