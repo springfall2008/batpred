@@ -1172,6 +1172,327 @@ def test_web_search_switch(my_predbat):
     return failed
 
 
+def _mid_stream_error_response():
+    """Build a chunk list reproducing OpenRouter's documented mid-stream error shape exactly.
+
+    content is "" (falsy), not omitted or truthy - the live bug depended on the original code's
+    `if delta.get("content")` treating an empty string as nothing to append, so a fixture using a
+    truthy content string would not reproduce the failure this guards against.
+    """
+    return [
+        {
+            "id": "cmpl-abc123",
+            "object": "chat.completion.chunk",
+            "model": "openai/gpt-4o",
+            "error": {"code": "server_error", "message": "Provider disconnected unexpectedly"},
+            "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "error"}],
+        }
+    ]
+
+
+def test_mid_stream_error_chunk_fails_the_turn_and_stores_nothing(my_predbat):
+    """A mid-stream OpenRouter error chunk surfaces the provider's own message and stores nothing.
+
+    Reproduces the live failure this task started from: a turn that produced no response at all,
+    stored as an assistant message with content: null and no tool_calls. The documented OpenRouter
+    shape carries delta.content: "" (falsy) alongside a top-level "error" object - the original
+    code's `if delta.get("content")` silently skipped the empty string, never looked at
+    chunk["error"] at all, and finished the turn with nothing to show, which got stored and
+    replayed to the model as junk history on every subsequent turn.
+    """
+    failed = False
+    print("**** Testing a mid-stream OpenRouter error chunk fails the turn loudly ****")
+    agent = _agent_with_fake(my_predbat, _mid_stream_error_response())
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "what mode am I in?"))
+
+    events = agent.events_since(0, cid)[0]
+    errors = [event for event in events if event["type"] == "error"]
+    if not errors:
+        print("ERROR: no error event was emitted for the mid-stream error chunk")
+        return True
+    if "Provider disconnected unexpectedly" not in errors[0]["data"].get("message", ""):
+        print("ERROR: the error event did not carry the provider's own message: {}".format(errors[0]["data"]))
+        failed = True
+
+    # Assert on the stored conversation itself, not just the emitted events - the original bug's
+    # damage was the persisted junk message, which would be invisible to an events-only check.
+    messages = asyncio.run(agent.store.get_messages(cid))
+    if any(message.get("role") == "assistant" for message in messages):
+        print("ERROR: an assistant message was stored despite the mid-stream error: {}".format(messages))
+        failed = True
+    if agent.active is not None:
+        print("ERROR: the turn slot was not released after the mid-stream error")
+        failed = True
+
+    return failed
+
+
+def _length_truncated_response(text="partial answer that got cut off"):
+    """Build a chunk list ending with finish_reason 'length' - an openrouter_max_tokens cutoff."""
+    chunks = [{"choices": [{"delta": {"content": piece + " "}}]} for piece in text.split(" ")]
+    chunks.append({"choices": [{"delta": {}, "finish_reason": "length"}], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.0002}})
+    return chunks
+
+
+def test_finish_reason_length_keeps_partial_content_with_a_truncation_note(my_predbat):
+    """A completion cut off by the token limit keeps its partial text plus a visible note.
+
+    finish_reason 'length' means openrouter_max_tokens cut the reply short mid-thought. Discarding
+    the partial content would be worse than a truncated answer, but showing it with no indication
+    it was cut short would let a user mistake a half-answer for a whole one.
+    """
+    failed = False
+    print("**** Testing a length-truncated completion keeps its content and says so ****")
+    agent = _agent_with_fake(my_predbat, _length_truncated_response())
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "explain everything"))
+
+    messages = asyncio.run(agent.store.get_messages(cid))
+    assistant = [message for message in messages if message.get("role") == "assistant"]
+    if not assistant:
+        print("ERROR: no assistant message was stored for a truncated completion")
+        return True
+    content = assistant[0].get("content") or ""
+    if "partial answer that got cut off" not in content:
+        print("ERROR: the truncated completion lost its partial content: {!r}".format(content))
+        failed = True
+    if "cut short" not in content.lower() and "truncated" not in content.lower():
+        print("ERROR: the truncated completion carries no visible note that it was cut short: {!r}".format(content))
+        failed = True
+
+    errors = [event for event in agent.events_since(0, cid)[0] if event["type"] == "error"]
+    if errors:
+        print("ERROR: a length-truncated completion should not be treated as an error: {}".format(errors))
+        failed = True
+
+    return failed
+
+
+def _reasoning_only_response():
+    """Build a chunk list matching a real captured OpenRouter reasoning-model run: content empty
+    on every chunk, reasoning_details fragments streamed across it, no tool_calls at all - the
+    exact shape that produces a stored {"content": null, no tool_calls} message if nothing catches
+    it, per the live captured example that showed a reasoning model can finish a completion having
+    put everything into reasoning and nothing into a visible answer or a tool call.
+    """
+    return [
+        {"choices": [{"delta": {"content": "", "role": "assistant", "reasoning": "The", "reasoning_details": [{"type": "reasoning.text", "text": "The", "format": "unknown", "index": 0}]}}]},
+        {"choices": [{"delta": {"content": "", "role": "assistant", "reasoning": " user asks", "reasoning_details": [{"type": "reasoning.text", "text": " user asks", "format": "unknown", "index": 0}]}}]},
+        {"choices": [{"delta": {"content": "", "role": "assistant", "reasoning": " a question.", "reasoning_details": [{"type": "reasoning.text", "text": " a question.", "format": "unknown", "index": 0}]}}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 30, "completion_tokens": 12, "cost": 0.0006}},
+    ]
+
+
+def test_reasoning_only_completion_is_not_stored_and_names_the_cause(my_predbat):
+    """A completion with no content and no tool calls is reported as an anomaly, never stored.
+
+    This is the live bug this task started from, reproduced with the shape a real reasoning-model
+    run actually showed: reasoning fragments on nearly every chunk, content "" throughout, no
+    tool_calls, and nothing else to fall back on. Storing the resulting content-less message
+    anyway is how it silently replayed as junk history forever after; this checks the message is
+    never stored and that the error names reasoning as the likely cause, not a generic failure.
+    """
+    failed = False
+    print("**** Testing a reasoning-only completion is reported, not silently stored ****")
+    agent = _agent_with_fake(my_predbat, _reasoning_only_response())
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "why is it charging?"))
+
+    events = agent.events_since(0, cid)[0]
+    errors = [event for event in events if event["type"] == "error"]
+    if not errors:
+        print("ERROR: no error event was emitted for a reasoning-only completion")
+        return True
+    if "reasoning" not in errors[0]["data"].get("message", "").lower():
+        print("ERROR: the error did not name reasoning as the likely cause: {}".format(errors[0]["data"]))
+        failed = True
+
+    messages = asyncio.run(agent.store.get_messages(cid))
+    if any(message.get("role") == "assistant" for message in messages):
+        print("ERROR: a content-less, tool-call-less assistant message was stored: {}".format(messages))
+        failed = True
+    if any(event["type"] == "assistant" for event in events):
+        print("ERROR: an 'assistant' event was emitted for a completion with nothing to show")
+        failed = True
+    if agent.active is not None:
+        print("ERROR: the turn slot was not released after a reasoning-only completion")
+        failed = True
+
+    return failed
+
+
+def _reasoning_tool_call_response(call_name="get_status", call_args=None):
+    """Build a chunk list carrying one reasoning block streamed across three fragments - all
+    sharing index 0, mirroring a real captured OpenRouter run word-for-word - followed by a tool
+    call.
+    """
+    encoded = json.dumps(call_args if call_args is not None else {})
+    return [
+        {"choices": [{"delta": {"content": "", "reasoning": "The", "reasoning_details": [{"type": "reasoning.text", "text": "The", "format": "unknown", "index": 0}]}}]},
+        {"choices": [{"delta": {"content": "", "reasoning": " user asks", "reasoning_details": [{"type": "reasoning.text", "text": " user asks", "format": "unknown", "index": 0}]}}]},
+        {"choices": [{"delta": {"content": "", "reasoning": ': "What is', "reasoning_details": [{"type": "reasoning.text", "text": ': "What is', "format": "unknown", "index": 0}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_r1", "type": "function", "function": {"name": call_name, "arguments": encoded}}]}}]},
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 20, "completion_tokens": 8, "cost": 0.0004}},
+    ]
+
+
+def test_reasoning_details_fragments_merge_by_index_not_appended(my_predbat):
+    """Three reasoning_details fragments sharing an index become one merged block, not three.
+
+    Uses the exact fragment shape a real OpenRouter reasoning-model stream produced: three chunks,
+    each carrying {"type": "reasoning.text", "text": <piece>, "format": "unknown", "index": 0}.
+    OpenRouter's own replay contract requires "the entire sequence of consecutive reasoning blocks
+    must match the outputs generated by the model during the original request" - three separately
+    appended entries where the model emitted one block would violate that the moment it round-
+    trips. Mutation-checked by hand: switching the merge to a naive per-fragment append makes this
+    fail with 3 entries instead of 1 (see the task report for that check, done and reverted).
+    """
+    failed = False
+    print("**** Testing reasoning_details fragments merge onto one block by index ****")
+    agent = _agent_with_fake(my_predbat, _reasoning_tool_call_response(), _text_response("done"))
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "why charging?"))
+
+    messages = asyncio.run(agent.store.get_messages(cid))
+    with_reasoning = [message for message in messages if message.get("role") == "assistant" and message.get("reasoning_details")]
+    if not with_reasoning:
+        print("ERROR: no assistant message carries reasoning_details: {}".format(messages))
+        return True
+    details = with_reasoning[0]["reasoning_details"]
+    if len(details) != 1:
+        print("ERROR: expected one merged reasoning block, got {}: {}".format(len(details), details))
+        failed = True
+    elif details[0].get("text") != 'The user asks: "What is':
+        print("ERROR: the merged block's text is not the in-order concatenation of its fragments: {!r}".format(details[0].get("text")))
+        failed = True
+    if details and details[0].get("type") != "reasoning.text":
+        print("ERROR: the merged block lost its type field: {}".format(details[0]))
+        failed = True
+
+    return failed
+
+
+def test_reasoning_details_round_trip_to_the_next_request_in_order(my_predbat):
+    """reasoning_details assembled from turn 1 reach turn 2's request messages, unchanged and in order.
+
+    OpenRouter's documentation requires the whole reasoning_details array to be sent back verbatim
+    on the next request ("preserve the complete reasoning_details when passing back"), so this
+    checks the actual bytes sent on the SECOND round trip, not merely that the field survived
+    storage. Asserting only "non-empty" would prove nothing about ordering; this compares the full
+    assembled list against what the second request's payload actually carries.
+    """
+    failed = False
+    print("**** Testing reasoning_details round-trips into the next request in order ****")
+    agent = _agent_with_fake(my_predbat, _reasoning_tool_call_response(), _text_response("done"))
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "why charging?"))
+
+    if len(agent.fake.payloads) != 2:
+        print("ERROR: expected two round trips, got {}".format(len(agent.fake.payloads)))
+        return True
+    first_stored = [message for message in asyncio.run(agent.store.get_messages(cid)) if message.get("role") == "assistant" and message.get("reasoning_details")]
+    if not first_stored:
+        print("ERROR: nothing stored a reasoning_details block to round-trip")
+        return True
+    expected = first_stored[0]["reasoning_details"]
+
+    replayed = [message for message in agent.fake.payloads[1]["messages"] if message.get("role") == "assistant" and message.get("reasoning_details")]
+    if not replayed:
+        print("ERROR: the second request never replayed reasoning_details back to the model")
+        failed = True
+    elif replayed[0]["reasoning_details"] != expected:
+        print("ERROR: the replayed reasoning_details do not match what was stored, in order: {} != {}".format(replayed[0]["reasoning_details"], expected))
+        failed = True
+
+    return failed
+
+
+def _reasoning_no_index_response(call_name="get_status"):
+    """Build a chunk list with two reasoning_details fragments that carry neither index nor id -
+    the task's explicit fallback case: "if they do not [carry an index or id], append in order"
+    rather than merge.
+    """
+    return [
+        {"choices": [{"delta": {"reasoning_details": [{"type": "reasoning.text", "text": "First block."}]}}]},
+        {"choices": [{"delta": {"reasoning_details": [{"type": "reasoning.text", "text": "Second block."}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_x", "type": "function", "function": {"name": call_name, "arguments": "{}"}}]}}]},
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 5, "completion_tokens": 2, "cost": 0.0001}},
+    ]
+
+
+def test_reasoning_details_fragments_without_index_or_id_are_appended_not_merged(my_predbat):
+    """Fragments carrying neither an index nor an id are kept as separate blocks, in order.
+
+    The merge-by-index/id rule (see test_reasoning_details_fragments_merge_by_index_not_appended)
+    only applies when a fragment actually carries something to merge on. Real OpenRouter fragments
+    always carry an index, but the task's own fallback rule for the case where they do not is
+    explicit: "if they do not, append in order" - collapsing two unrelated blocks onto the same
+    entry just because both happened to lack an index would be exactly as wrong as merging blocks
+    that do carry one.
+    """
+    failed = False
+    print("**** Testing reasoning_details fragments without index or id are appended, not merged ****")
+    agent = _agent_with_fake(my_predbat, _reasoning_no_index_response(), _text_response("done"))
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "why?"))
+
+    messages = asyncio.run(agent.store.get_messages(cid))
+    with_reasoning = [message for message in messages if message.get("role") == "assistant" and message.get("reasoning_details")]
+    if not with_reasoning:
+        print("ERROR: no assistant message carries reasoning_details: {}".format(messages))
+        return True
+    details = with_reasoning[0]["reasoning_details"]
+    texts = [entry.get("text") for entry in details]
+    if texts != ["First block.", "Second block."]:
+        print("ERROR: expected two separate, in-order blocks, got {}".format(texts))
+        failed = True
+
+    return failed
+
+
+def _plain_reasoning_fallback_response(text="thinking without structured details"):
+    """Build a chunk list carrying only delta.reasoning strings, no reasoning_details at all."""
+    words = text.split(" ")
+    chunks = [{"choices": [{"delta": {"reasoning": word + " "}}]} for word in words]
+    chunks[-1]["choices"][0]["delta"]["content"] = "answer"
+    chunks.append({"choices": [{"delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 4, "cost": 0.0001}})
+    return chunks
+
+
+def test_plain_reasoning_string_is_captured_as_a_fallback(my_predbat):
+    """delta.reasoning is captured as message['reasoning'] when reasoning_details is absent."""
+    failed = False
+    print("**** Testing the plain delta.reasoning fallback is captured ****")
+    agent = _agent_with_fake(my_predbat, _plain_reasoning_fallback_response())
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "why?"))
+
+    messages = asyncio.run(agent.store.get_messages(cid))
+    assistant = [message for message in messages if message.get("role") == "assistant"]
+    if not assistant:
+        print("ERROR: no assistant message was stored")
+        return True
+    if "thinking without structured details" not in (assistant[0].get("reasoning") or ""):
+        print("ERROR: the plain reasoning fallback was not captured: {!r}".format(assistant[0].get("reasoning")))
+        failed = True
+    if assistant[0].get("reasoning_details"):
+        print("ERROR: reasoning_details was populated despite no structured fragments being sent: {}".format(assistant[0].get("reasoning_details")))
+        failed = True
+    if assistant[0].get("content") != "answer":
+        print("ERROR: ordinary content alongside the reasoning fallback was lost: {!r}".format(assistant[0].get("content")))
+        failed = True
+
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
@@ -1200,4 +1521,11 @@ def run_chat_tests(my_predbat):
     failed |= test_write_confirmation_timeout(my_predbat)
     failed |= test_write_without_confirmation(my_predbat)
     failed |= test_web_search_switch(my_predbat)
+    failed |= test_mid_stream_error_chunk_fails_the_turn_and_stores_nothing(my_predbat)
+    failed |= test_finish_reason_length_keeps_partial_content_with_a_truncation_note(my_predbat)
+    failed |= test_reasoning_only_completion_is_not_stored_and_names_the_cause(my_predbat)
+    failed |= test_reasoning_details_fragments_merge_by_index_not_appended(my_predbat)
+    failed |= test_reasoning_details_round_trip_to_the_next_request_in_order(my_predbat)
+    failed |= test_reasoning_details_fragments_without_index_or_id_are_appended_not_merged(my_predbat)
+    failed |= test_plain_reasoning_string_is_captured_as_a_fallback(my_predbat)
     return failed

@@ -17,6 +17,7 @@ import asyncio
 import json
 import re
 import threading
+import time
 
 from aiohttp import web as aiohttp_web
 from aiohttp.test_utils import make_mocked_request
@@ -1192,6 +1193,238 @@ def test_chat_status_route(my_predbat):
     return failed
 
 
+def test_chat_history_reports_elapsed_seconds_for_an_active_turn(my_predbat):
+    """/chat/history's active payload carries elapsed_seconds, computed fresh at request time.
+
+    A browser calling this route mid-turn - a fresh page load, or a reload - has no idea when the
+    turn it is about to show as busy actually started: the SSE 'busy' event that announced it may
+    have fired long before this request, or (a plain page load) never reached this browser's
+    JavaScript at all, since the event buffer is only replayed to an already-open EventSource.
+    elapsed_seconds is what lets the client offset its own "thinking..." counter to the turn's
+    true total instead of restarting it at 0 - see the client-side half of this in
+    test_thinking_bubble_shown_on_busy_and_hidden_on_first_delta.
+    """
+    failed = False
+    print("**** Testing /chat/history reports elapsed_seconds for the active turn ****")
+    agent = _make_agent(my_predbat, turn_timeout=30)
+    cid = asyncio.run(agent.store.create())
+
+    # A real background loop, the same pattern test_history_snapshot_and_cursor_do_not_lose_a_
+    # concurrent_message uses just above, so run_on_agent_loop's cross-thread handoff is genuine.
+    # Both requests below must run while this loop is still alive - a second run_on_agent_loop()
+    # call made after it has been stopped would schedule its coroutine via call_soon_threadsafe()
+    # onto a loop that is no longer turning, and the awaited future would then never resolve.
+    loop = asyncio.new_event_loop()
+    loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
+    loop_thread.start()
+    agent.loop = loop
+    agent.active = {"conversation_id": cid, "turn_id": 1, "title": "t", "started": time.monotonic() - 7.5}
+
+    page = _make_web(my_predbat, agent=agent).chat_page
+    try:
+        response = asyncio.run(page.html_chat_history(FakeRequest(query={"conversation": cid})))
+        agent.active = None
+        response2 = asyncio.run(page.html_chat_history(FakeRequest(query={"conversation": cid})))
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        loop_thread.join(timeout=5)
+
+    if response.status != 200:
+        print("ERROR: history returned {}, expected 200".format(response.status))
+        return True
+    body = json.loads(response.text)
+    active = body.get("active")
+    if not active or "elapsed_seconds" not in active:
+        print("ERROR: the active payload does not carry elapsed_seconds: {}".format(active))
+        return True
+    elapsed = active["elapsed_seconds"]
+    if not (7.0 <= elapsed <= 30.0):
+        print("ERROR: elapsed_seconds is {}, expected close to the 7.5s the turn has actually been running".format(elapsed))
+        failed = True
+
+    if response2.status != 200:
+        print("ERROR: the second history request returned {}, expected 200".format(response2.status))
+        return True
+    body2 = json.loads(response2.text)
+    if body2.get("active") is not None:
+        print("ERROR: active should be None with no running turn, got {}".format(body2.get("active")))
+        failed = True
+
+    return failed
+
+
+def _extract_on_handler_body(script, event_name):
+    """Return the body of the inline handler passed to on(source, '<event_name>', function ...).
+
+    Mirrors _extract_function_body's brace-counting approach, but anchored to the on() call site
+    rather than a top-level named function declaration - openStream() wires several SSE events
+    (busy, idle) with an inline anonymous function rather than a named one.
+    """
+    match = re.search(r"on\(source,\s*'{}'\s*,\s*function\s*\([^)]*\)\s*\{{".format(re.escape(event_name)), script)
+    if not match:
+        return None
+    depth = 1
+    index = match.end()
+    start = index
+    while index < len(script) and depth > 0:
+        if script[index] == "{":
+            depth += 1
+        elif script[index] == "}":
+            depth -= 1
+        index += 1
+    return script[start : index - 1]
+
+
+def test_thinking_bubble_shown_on_busy_and_hidden_on_first_delta(my_predbat):
+    """The ghost 'thinking...' bubble starts with the turn, hides on the first delta, and shows
+    again after each tool_end while the model works on its next step; done/error/idle clear it.
+
+    Static source checks, like the rest of this file's client-script tests - there is no
+    JavaScript runtime in this test infrastructure (see test_stream_cursor_advances_from_every_
+    event for the same constraint). Each assertion is anchored to the specific handler's own body,
+    not a whole-file substring scan, so it fails the moment one handler stops wiring the call
+    rather than merely if the call disappears from the file entirely.
+    """
+    failed = False
+    print("**** Testing the thinking bubble's busy/delta/tool_end/done/error/idle wiring ****")
+    script = web_chat.get_chat_script()
+
+    busy_body = _extract_on_handler_body(script, "busy")
+    if busy_body is None:
+        print("ERROR: could not find the SSE 'busy' handler to inspect")
+        return True
+    if "startThinkingTimer(" not in busy_body or "showThinkingBubble()" not in busy_body:
+        print("ERROR: the 'busy' handler does not start/show the thinking bubble: {!r}".format(busy_body))
+        failed = True
+
+    delta_body = _extract_function_body(script, "handleDelta")
+    if delta_body is None or "hideThinkingBubble()" not in delta_body:
+        print("ERROR: handleDelta() does not hide the thinking bubble on the first delta: {!r}".format(delta_body))
+        failed = True
+
+    if "on(source, 'tool_end', handleToolEnd)" not in script.replace("\n", " "):
+        print("ERROR: the SSE 'tool_end' event is not wired to handleToolEnd()")
+        failed = True
+    tool_end_body = _extract_function_body(script, "handleToolEnd")
+    if tool_end_body is None or "showThinkingBubble()" not in tool_end_body:
+        print("ERROR: handleToolEnd() does not show the thinking bubble again for the model's next step: {!r}".format(tool_end_body))
+        failed = True
+
+    for name in ("handleDone", "handleError"):
+        body = _extract_function_body(script, name)
+        if body is None or "clearThinkingBubble()" not in body:
+            print("ERROR: {}() does not clear the thinking bubble: {!r}".format(name, body))
+            failed = True
+
+    idle_body = _extract_on_handler_body(script, "idle")
+    if idle_body is None or "clearThinkingBubble()" not in idle_body:
+        print("ERROR: the 'idle' handler does not clear the thinking bubble: {!r}".format(idle_body))
+        failed = True
+
+    return failed
+
+
+def test_thinking_bubble_element_is_reused_not_recreated(my_predbat):
+    """ensureThinkingBubble() reuses the one #chat-thinking element rather than creating a new one.
+
+    Creating a fresh element on every show() would jitter the transcript with insert/remove churn
+    across a multi-tool-call turn instead of the intended single steady placeholder - the task's
+    own requirement is "reuse one #chat-thinking element rather than creating one per wait".
+    """
+    failed = False
+    print("**** Testing the thinking bubble element is reused, not recreated per wait ****")
+    script = web_chat.get_chat_script()
+    body = _extract_function_body(script, "ensureThinkingBubble")
+    if body is None:
+        print("ERROR: could not find ensureThinkingBubble() to inspect")
+        return True
+    guard_index = body.find("byId('chat-thinking')")
+    create_index = body.find("createElement")
+    if guard_index == -1 or create_index == -1 or guard_index > create_index:
+        print("ERROR: ensureThinkingBubble() does not look up the existing element before creating a new one: {!r}".format(body))
+        failed = True
+    before_create = body.split("createElement", 1)[0] if "createElement" in body else body
+    if "return bubble" not in before_create:
+        print("ERROR: ensureThinkingBubble() does not return early when the element already exists - it would create and append a duplicate every time it is called: {!r}".format(body))
+        failed = True
+
+    show_body = _extract_function_body(script, "showThinkingBubble")
+    if show_body is None or "ensureThinkingBubble()" not in show_body:
+        print("ERROR: showThinkingBubble() does not go through ensureThinkingBubble(): {!r}".format(show_body))
+        failed = True
+
+    return failed
+
+
+def test_thinking_timer_interval_is_genuinely_cleared_not_merely_clearable(my_predbat):
+    """stopThinkingTimer() calls clearInterval() on the real handle, AND the conversation-switch
+    path (loadConversationData) actually calls it before rebuilding the transcript.
+
+    Two checks, not one, because a stopThinkingTimer() that genuinely clears its interval but that
+    nothing switching conversations ever calls would still leak exactly the interval this task
+    named: "switching away mid-turn leaks a setInterval ticking against a detached element". A
+    test that only checked the clearing function's existence would pass even with that call site
+    missing - which is precisely the trap the task warned this test must not fall into.
+    """
+    failed = False
+    print("**** Testing the thinking timer interval is actually cleared, not just clearable ****")
+    script = web_chat.get_chat_script()
+
+    stop_body = _extract_function_body(script, "stopThinkingTimer")
+    if stop_body is None:
+        print("ERROR: could not find stopThinkingTimer() to inspect")
+        return True
+    if "clearInterval(thinkingTimer)" not in stop_body.replace(" ", ""):
+        print("ERROR: stopThinkingTimer() does not call clearInterval() on the real timer handle: {!r}".format(stop_body))
+        failed = True
+    if "thinkingTimer=null" not in stop_body.replace(" ", ""):
+        print("ERROR: stopThinkingTimer() does not null out the handle after clearing it: {!r}".format(stop_body))
+        failed = True
+
+    load_body = _extract_function_body(script, "loadConversationData")
+    if load_body is None:
+        print("ERROR: could not find loadConversationData() to inspect")
+        return True
+    if "clearThinkingBubble()" not in load_body:
+        print("ERROR: loadConversationData() (the conversation-switch path) never clears the thinking timer - switching away mid-turn would leak the interval against a detached #chat-thinking element")
+        failed = True
+    elif "renderHistory(payload)" in load_body and load_body.find("clearThinkingBubble()") > load_body.find("renderHistory(payload)"):
+        # renderHistory() wipes #chat-transcript's innerHTML - clearing after that point still
+        # leaves the interval ticking against the (by then detached) previous element for however
+        # long it takes this function to get around to clearing it.
+        print("ERROR: loadConversationData() clears the thinking timer after rebuilding the transcript, not before - leaves a window where the old interval targets a detached element")
+        failed = True
+
+    return failed
+
+
+def test_thinking_bubble_css_respects_theme_vars_and_reduced_motion(my_predbat):
+    """The thinking bubble's styling uses --chat-* custom properties, not a hardcoded colour, and
+    its caret sits steady under prefers-reduced-motion rather than always blinking.
+
+    Both constraints were dark-mode/accessibility findings on an earlier banner in this same file
+    (see get_chat_styles()'s docstring); this pins them against the same mistake recurring here.
+    """
+    failed = False
+    print("**** Testing the thinking bubble's CSS uses theme variables and respects reduced motion ****")
+    styles = web_chat.get_chat_styles()
+    if ".chat-bubble-thinking" not in styles:
+        print("ERROR: no .chat-bubble-thinking rule found")
+        return True
+    thinking_block_match = re.search(r"\.chat-bubble-thinking\s*\{([^}]*)\}", styles)
+    if not thinking_block_match or "var(--chat-" not in thinking_block_match.group(1):
+        print("ERROR: .chat-bubble-thinking does not take its colour from a --chat-* custom property: {!r}".format(thinking_block_match.group(1) if thinking_block_match else None))
+        failed = True
+    if "prefers-reduced-motion" not in styles:
+        print("ERROR: no prefers-reduced-motion media query found")
+        failed = True
+    elif "chat-thinking-caret" not in styles.split("prefers-reduced-motion", 1)[-1]:
+        print("ERROR: the caret animation is not disabled under prefers-reduced-motion")
+        failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -1216,4 +1449,9 @@ def run_web_chat_tests(my_predbat):
     failed |= test_stop_button_wired_to_cancel_with_turn_id(my_predbat)
     failed |= test_html_chat_cancel_requires_the_running_turn_id(my_predbat)
     failed |= test_chat_status_route(my_predbat)
+    failed |= test_chat_history_reports_elapsed_seconds_for_an_active_turn(my_predbat)
+    failed |= test_thinking_bubble_shown_on_busy_and_hidden_on_first_delta(my_predbat)
+    failed |= test_thinking_bubble_element_is_reused_not_recreated(my_predbat)
+    failed |= test_thinking_timer_interval_is_genuinely_cleared_not_merely_clearable(my_predbat)
+    failed |= test_thinking_bubble_css_respects_theme_vars_and_reduced_motion(my_predbat)
     return failed

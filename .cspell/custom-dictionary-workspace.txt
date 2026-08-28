@@ -80,6 +80,7 @@ CHECKCODE
 Chrg
 citem
 cloudfront
+cmpl
 cobat
 codepoint
 codepoints

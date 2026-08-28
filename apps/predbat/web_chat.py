@@ -17,6 +17,7 @@ what lets a user read another conversation while a turn runs.
 
 import asyncio
 import json
+import time
 
 from aiohttp import web
 
@@ -149,7 +150,26 @@ class WebChat:
         # can run on the agent's loop between two synchronous statements in the same coroutine, so
         # combining them closes that window.
         messages, cursor = await agent.run_on_agent_loop(self._snapshot_and_cursor(agent, cid))
-        return web.json_response({"id": cid, "title": meta.get("title"), "model": meta.get("model"), "usage_total": meta.get("usage_total"), "messages": messages or [], "cursor": cursor, "active": agent.active})
+        return web.json_response({"id": cid, "title": meta.get("title"), "model": meta.get("model"), "usage_total": meta.get("usage_total"), "messages": messages or [], "cursor": cursor, "active": self._active_with_elapsed(agent)})
+
+    @staticmethod
+    def _active_with_elapsed(agent):
+        """Return agent.active with elapsed_seconds added, computed now from the turn's own clock.
+
+        A browser calling this route mid-turn - a fresh page load, or a reload - has no idea when
+        the turn actually started: the 'busy' SSE event that announced it may have fired long
+        before this request, or (a plain page load) never reached this browser's JavaScript at
+        all, since the event buffer is only replayed to an already-open EventSource. started is a
+        time.monotonic() value recorded once in claim_turn, so elapsed wall-clock time since then
+        is computed fresh on every call here rather than trusted from anything the client already
+        believes - which is what lets the client offset its own "thinking..." timer correctly
+        instead of reading it as having just started.
+        """
+        active = agent.active
+        if not active:
+            return None
+        elapsed = max(0.0, time.monotonic() - active.get("started", time.monotonic()))
+        return dict(active, elapsed_seconds=round(elapsed, 1))
 
     @staticmethod
     async def _snapshot_and_cursor(agent, conversation_id):
@@ -560,6 +580,37 @@ body.dark-mode {
     background: var(--chat-error-bubble);
 }
 
+.chat-bubble-thinking {
+    margin-right: auto;
+    color: var(--chat-text-muted);
+    font-style: italic;
+}
+
+.chat-thinking-hidden {
+    display: none;
+}
+
+.chat-thinking-caret {
+    display: inline-block;
+    width: 0.5em;
+    margin-left: 2px;
+    border-right: 2px solid var(--chat-text-muted);
+    animation: chat-thinking-caret-blink 1s steps(1) infinite;
+}
+
+@keyframes chat-thinking-caret-blink {
+    50% {
+        border-color: transparent;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .chat-thinking-caret {
+        animation: none;
+    }
+}
+
+
 .chat-bubble pre,
 .chat-tool-row pre,
 .chat-confirm-card pre {
@@ -842,6 +893,14 @@ var toolRows = {};
 var confirmCards = {};
 var pendingBubble = null;
 var pendingText = '';
+// The "thinking..." ghost bubble's own state, kept apart from pendingBubble: pendingBubble is the
+// real (eventually-rendered) assistant reply, while this is a placeholder shown only while there is
+// nothing to render yet - before the first delta, and again between a tool_end and the model's next
+// step. thinkingTimer is a setInterval id and must always be cleared through stopThinkingTimer(),
+// never left running - see that function for why a leaked interval against a detached element is
+// exactly the failure mode this exists to avoid.
+var thinkingTimer = null;
+var thinkingStartedAtMs = 0;
 
 function byId(id) {
     return document.getElementById(id);
@@ -1202,11 +1261,107 @@ function clearPendingBubble() {
     pendingText = '';
 }
 
+// ---------------------------------------------------------------------------------------------
+// "thinking..." ghost bubble. Reuses one #chat-thinking element for the whole page - never one
+// per wait - so repeatedly showing and hiding it across a multi-tool-call turn does not jitter
+// the transcript by inserting and removing nodes. The element itself is only ever built with
+// createElement/textContent/appendChild, so it never needs auditing as an innerHTML sink.
+// ---------------------------------------------------------------------------------------------
+
+function ensureThinkingBubble() {
+    var bubble = byId('chat-thinking');
+    if (bubble) {
+        return bubble;
+    }
+    bubble = document.createElement('div');
+    bubble.id = 'chat-thinking';
+    bubble.className = 'chat-bubble chat-bubble-assistant chat-bubble-thinking chat-thinking-hidden';
+    bubble.appendChild(document.createTextNode('thinking'));
+    var caret = document.createElement('span');
+    caret.className = 'chat-thinking-caret';
+    bubble.appendChild(caret);
+    var counter = document.createElement('span');
+    counter.className = 'chat-thinking-counter';
+    bubble.appendChild(counter);
+    return bubble;
+}
+
+function showThinkingBubble() {
+    var bubble = ensureThinkingBubble();
+    if (!bubble.parentNode) {
+        byId('chat-transcript').appendChild(bubble);
+    }
+    bubble.classList.remove('chat-thinking-hidden');
+    scrollTranscriptToBottom();
+}
+
+function hideThinkingBubble() {
+    var bubble = byId('chat-thinking');
+    if (bubble) {
+        bubble.classList.add('chat-thinking-hidden');
+    }
+}
+
+function formatThinkingElapsed(totalSeconds) {
+    var seconds = Math.max(0, Math.floor(totalSeconds));
+    if (seconds < 60) {
+        return seconds + 's';
+    }
+    var minutes = Math.floor(seconds / 60);
+    var remainderSeconds = seconds % 60;
+    return minutes + 'm ' + remainderSeconds + 's';
+}
+
+function tickThinkingTimer() {
+    var bubble = byId('chat-thinking');
+    var counter = bubble ? bubble.querySelector('.chat-thinking-counter') : null;
+    if (!counter) {
+        return;
+    }
+    // Set with textContent, never innerHTML - this value is rebuilt every second, and the sink
+    // audit (test_inner_html_sinks_only_ever_receive_escaped_content) allow-lists innerHTML
+    // right-hand sides, not this element, so a plain text write is what keeps this out of scope
+    // for that audit entirely.
+    counter.textContent = ' ' + formatThinkingElapsed((Date.now() - thinkingStartedAtMs) / 1000);
+}
+
+// started_at_ms is the wall-clock instant the turn itself began - Date.now() for a turn that just
+// started in this browser, or Date.now() minus a server-computed elapsed_seconds offset for one
+// resumed from /chat/history after a reload. Either way the counter reads the turn's true total
+// elapsed time, never resetting between tool calls - see stopThinkingTimer for why this is the one
+// function allowed to start a fresh interval.
+function startThinkingTimer(startedAtMs) {
+    stopThinkingTimer();
+    thinkingStartedAtMs = startedAtMs;
+    tickThinkingTimer();
+    thinkingTimer = setInterval(tickThinkingTimer, 1000);
+}
+
+// The only place that clears thinkingTimer. Must run on every path that stops the counter
+// mattering - turn end (done/idle/error) and switching away from the conversation showing it -
+// or the interval keeps firing forever against an element that conversation switching has since
+// removed from the document (renderHistory() rebuilds #chat-transcript from scratch), ticking
+// against nothing for as long as the tab stays open. clearThinkingBubble() below is the usual
+// caller; this is exported separately because loadConversationData needs to stop a stale timer
+// before it knows yet whether the freshly loaded conversation needs a new one.
+function stopThinkingTimer() {
+    if (thinkingTimer) {
+        clearInterval(thinkingTimer);
+        thinkingTimer = null;
+    }
+}
+
+function clearThinkingBubble() {
+    stopThinkingTimer();
+    hideThinkingBubble();
+}
+
 function handleUser(data) {
     appendBubble('user', data.text || '');
 }
 
 function handleDelta(data) {
+    hideThinkingBubble();
     if (!pendingBubble) {
         pendingBubble = appendBubble('assistant', '');
         pendingText = '';
@@ -1217,6 +1372,7 @@ function handleDelta(data) {
 }
 
 function handleAssistant(data) {
+    hideThinkingBubble();
     var text = data.text || '';
     if (!pendingBubble) {
         if (!text && !(data.sources && data.sources.length)) {
@@ -1231,13 +1387,23 @@ function handleAssistant(data) {
     scrollTranscriptToBottom();
 }
 
+function handleToolEnd(data) {
+    appendToolEnd(data);
+    // The model still has to look at this result and decide what to do next - show the ghost
+    // bubble again so that wait is not silent, exactly like the wait before this tool call was
+    // even chosen. If the next thing that arrives is a delta, handleDelta hides it again at once.
+    showThinkingBubble();
+}
+
 function handleError(data) {
     clearPendingBubble();
+    clearThinkingBubble();
     appendBubble('error', data.message || 'Something went wrong');
 }
 
 function handleDone() {
     clearPendingBubble();
+    clearThinkingBubble();
 }
 
 function findConversationRow(id) {
@@ -1400,14 +1566,28 @@ function openStream() {
     on(source, 'delta', handleDelta);
     on(source, 'assistant', handleAssistant);
     on(source, 'tool_start', appendToolStart);
-    on(source, 'tool_end', appendToolEnd);
+    on(source, 'tool_end', handleToolEnd);
     on(source, 'confirm', appendConfirmCard);
     on(source, 'confirm_result', resolveConfirmCard);
     on(source, 'usage', renderUsageEvent);
     on(source, 'title', handleTitle);
     on(source, 'done', handleDone);
-    on(source, 'busy', function (data) { setBusy(data.conversation_id, data.title, data.turn_id); });
-    on(source, 'idle', function () { setIdle(); });
+    on(source, 'busy', function (data) {
+        setBusy(data.conversation_id, data.title, data.turn_id);
+        // busy is global - every browser gets it whatever conversation it is looking at - but the
+        // ghost bubble belongs in a transcript, so only start/show it when this is the transcript
+        // currently on screen. tool_end and delta need no such check: unlike busy/idle, the server
+        // already scopes those to this EventSource's own ?conversation= (events_since filters on
+        // conversation_id), so they can only ever arrive here for the conversation being viewed.
+        if (state.conversation && data.conversation_id === state.conversation) {
+            startThinkingTimer(Date.now());
+            showThinkingBubble();
+        }
+    });
+    on(source, 'idle', function () {
+        setIdle();
+        clearThinkingBubble();
+    });
     on(source, 'reload', function () { handleReload(); });
     attachConnectionHandling(source);
     state.source = source;
@@ -1422,12 +1602,27 @@ function loadConversationData(id) {
             return response.json();
         })
         .then(function (payload) {
+            // Stop whatever the previously viewed conversation's timer was doing before rebuilding
+            // the transcript below. renderHistory() wipes #chat-transcript's innerHTML, which
+            // detaches any #chat-thinking element still in it - an interval left running past that
+            // point ticks forever against a node no longer in the document. This is the one place
+            // a plain conversation switch (as opposed to done/idle/error ending the turn itself)
+            // needs to stop it explicitly.
+            clearThinkingBubble();
             renderHistory(payload);
             state.cursor = payload.cursor || 0;
             state.currentModel = payload.model || null;
             populateModelPicker(state.models, state.currentModel);
             if (payload.active) {
                 setBusy(payload.active.conversation_id, payload.active.title, payload.active.turn_id);
+                // Only the conversation actually mid-turn gets the ghost bubble in its own
+                // transcript. elapsed_seconds is computed server-side at request time from the
+                // turn's real start, which is what lets a reload mid-turn resume the counter at its
+                // true total instead of restarting it at 0.
+                if (payload.active.conversation_id === id) {
+                    startThinkingTimer(Date.now() - (Number(payload.active.elapsed_seconds) || 0) * 1000);
+                    showThinkingBubble();
+                }
             } else {
                 setIdle();
             }
@@ -1573,6 +1768,7 @@ function deleteConversation(id) {
                 } catch (error) {
                     // Storage unavailable - nothing to clean up.
                 }
+                clearThinkingBubble();
                 byId('chat-transcript').innerHTML = '';
                 if (state.source) {
                     state.source.close();
