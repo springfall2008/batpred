@@ -283,7 +283,17 @@ class Hass:
 
         for t in self.threads:
             t.join(5 * 60)
-        self.logfile.close()
+
+        # Only close the logfile once nothing is left that might still write to it. The join above
+        # gives up after five minutes and a thread can easily outlive that - an ML training run is
+        # tens of minutes - and closing underneath one leaves it writing to a closed handle for the
+        # rest of its life. Nothing is leaked by skipping it: the process is on its way out and the
+        # OS closes every descriptor regardless.
+        if not any(t.is_alive() for t in self.threads):
+            self.logfile.close()
+        else:
+            alive = [t.name for t in self.threads if t.is_alive()]
+            self.log("Warn: leaving the logfile open, {} still running after the join timeout: {}".format(len(alive), ", ".join(alive)), quiet=False)
 
     def load_secrets(self):
         """
