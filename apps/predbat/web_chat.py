@@ -639,6 +639,10 @@ body {
 #chat-transcript {
     flex: 1 1 auto;
     overflow-y: auto;
+    /* The transcript scrolls vertically only. Anything genuinely too wide - a code block, a wide
+       table - now scrolls within itself, so a horizontal bar out here means something escaped its
+       box rather than that the user needs to pan the conversation. */
+    overflow-x: hidden;
     border: 1px solid var(--chat-border);
     border-radius: 6px;
     padding: 12px;
@@ -646,11 +650,18 @@ body {
 }
 
 .chat-bubble {
-    max-width: 80%;
+    /* 92%, not 80%: the model's answers are full of long identifiers and the narrower bubble left
+       a third of the window empty while its own text needed the space. Safe only now that the
+       rules below actually keep content inside the box. */
+    max-width: 92%;
     margin: 6px 0;
     padding: 8px 12px;
     border-radius: 8px;
     line-height: 1.4;
+    /* anywhere, not break-word: break-word will not break a token that is the sole content of a
+       line, which is exactly the case here - "my_predbat.car_charging_planned[car_n]" and the
+       like have no spaces to break at, so they ran straight out of the bubble. */
+    overflow-wrap: anywhere;
     word-wrap: break-word;
 }
 
@@ -726,6 +737,10 @@ body {
     padding: 8px;
     border-radius: 4px;
     overflow-x: auto;
+    /* Without the cap, overflow-x: auto never engages: the pre simply grows to fit its longest
+       line and pushes the bubble out with it, which is what put a horizontal scrollbar across
+       the whole transcript instead of inside the code block where it belongs. */
+    max-width: 100%;
     margin: 6px 0 0 0;
 }
 
@@ -733,6 +748,7 @@ body {
     background: var(--chat-code-bg);
     padding: 1px 4px;
     border-radius: 3px;
+    overflow-wrap: anywhere;
 }
 
 .chat-bubble p {
@@ -791,6 +807,11 @@ body {
 
 .chat-bubble table {
     border-collapse: collapse;
+    /* display: block is what lets a table scroll: as a table it sizes to its content and drags
+       the bubble wider however narrow the window gets. */
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
 }
 
 .chat-bubble th,

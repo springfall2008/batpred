@@ -2307,6 +2307,63 @@ def test_busy_banner_is_reconciled_against_the_server(my_predbat):
     return failed
 
 
+def test_bubble_content_stays_inside_its_bubble(my_predbat):
+    """Long identifiers and wide blocks stay within the bubble instead of overflowing it.
+
+    The model's answers are full of tokens like "my_predbat.car_charging_planned[car_n]" - no
+    spaces to break at - and word-wrap: break-word does not break a token that is the sole content
+    of its line. They ran straight out of the grey bubble and put a horizontal scrollbar across
+    the whole transcript.
+
+    Wide children were the other half: a pre or a table with overflow-x set still sizes to its
+    content unless capped, so instead of scrolling internally it widened the bubble and pushed the
+    scrollbar outward.
+
+    Mutation checks: removing overflow-wrap: anywhere, either max-width: 100% cap, or the
+    transcript's overflow-x: hidden, each fails an assertion below.
+    """
+    failed = False
+    print("**** Testing bubble content stays inside the bubble ****")
+    styles = web_chat.get_chat_styles()
+
+    bubble = _extract_css_rule(styles, ".chat-bubble")
+    if bubble is None:
+        print("ERROR: there is no .chat-bubble rule")
+        return True
+    if "overflow-wrap: anywhere" not in bubble:
+        print("ERROR: .chat-bubble cannot break an unbroken identifier: {!r}".format(bubble))
+        failed = True
+
+    code = _extract_css_rule(styles, ".chat-bubble code")
+    if code is None or "overflow-wrap: anywhere" not in code:
+        print("ERROR: inline code, where the unbreakable tokens live, still cannot wrap: {!r}".format(code))
+        failed = True
+
+    # A block that scrolls internally must not be able to widen its bubble instead.
+    pre = _extract_css_rule(styles, ".chat-bubble pre,\n.chat-tool-row pre,\n.chat-confirm-card pre")
+    if pre is None:
+        # The grouped selector may be normalised differently; fall back to a targeted search.
+        pre = styles[styles.find(".chat-bubble pre") : styles.find(".chat-bubble code")]
+    if "max-width: 100%" not in (pre or ""):
+        print("ERROR: a pre block is uncapped, so overflow-x never engages and it widens the bubble: {!r}".format(pre))
+        failed = True
+
+    table = _extract_css_rule(styles, ".chat-bubble table")
+    if table is None or "max-width: 100%" not in table or "overflow-x: auto" not in table:
+        print("ERROR: a wide table can still drag the bubble wider than the window: {!r}".format(table))
+        failed = True
+
+    transcript = _extract_css_rule(styles, "#chat-transcript")
+    if transcript is None or "overflow-x: hidden" not in transcript:
+        print("ERROR: the transcript still scrolls horizontally, which is the symptom this fixes: {!r}".format(transcript))
+        failed = True
+    if transcript and "overflow-y: auto" not in transcript:
+        print("ERROR: the transcript no longer scrolls vertically: {!r}".format(transcript))
+        failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -2336,6 +2393,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_predbat)
     failed |= test_model_picker_script_wires_routes_and_persists_selection(my_predbat)
     failed |= test_chat_page_fills_the_window_without_an_outer_scrollbar(my_predbat)
+    failed |= test_bubble_content_stays_inside_its_bubble(my_predbat)
     failed |= test_thinking_bubble_moves_to_the_end(my_predbat)
     failed |= test_chat_switch_defaults_and_mirror(my_predbat)
     failed |= test_model_picker_shows_prices(my_predbat)
