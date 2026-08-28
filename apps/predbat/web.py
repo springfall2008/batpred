@@ -611,9 +611,9 @@ class WebInterface(ComponentBase):
         house_power = max(0, load_power - car_power) if car_configured else load_power
 
         # Determine flow directions. battery_power is positive when the battery is DISCHARGING
-        # (gateway.py negates the firmware's sign for exactly this reason) and grid_power is
-        # negative when importing, so the reading and the arrow run opposite ways round.
-        grid_importing = grid_power <= -10  # Grid is importing power (negative value)
+        # (gateway.py negates the firmware's sign for exactly this reason). grid_power is positive
+        # for import and negative for export (predbat_metrics.py), the same way round as battery_power.
+        grid_importing = grid_power >= 10  # Grid is importing power (positive value)
 
         battery_to_house = battery_power >= 10  # Battery is discharging into the house
         battery_charging = battery_power <= -10  # Power is flowing into the battery
@@ -4440,9 +4440,9 @@ chart.render();
 
         power = self.base.grid_power
         if power >= 10:
-            icon_text = "transmission-tower-export"
-        elif power <= -10:
             icon_text = "transmission-tower-import"
+        elif power <= -10:
+            icon_text = "transmission-tower-export"
         else:
             icon_text = "transmission-tower-outline"
 

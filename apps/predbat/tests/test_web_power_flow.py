@@ -272,6 +272,47 @@ def run_power_flow_colour_tests(my_predbat, web):
     return failed
 
 
+def run_grid_power_sign_tests(my_predbat, web):
+    """The grid arrow and icon follow the documented grid_power sign convention.
+
+    grid_power is positive while importing and negative while exporting (predbat_metrics.py:101),
+    the same way round as battery_power (positive while discharging). Getting this backwards drew
+    the grid arrow, and picked the grid icon, the wrong way round for every import/export state (#4797).
+    """
+    failed = 0
+    print("Test: the grid arrow and icon follow the documented grid_power sign convention")
+
+    saved = (my_predbat.grid_power, my_predbat.dashboard_index)
+    my_predbat.dashboard_index = ["dummy"]
+
+    cases = [
+        (1500, "Grid", "transmission-tower-import", "importing"),
+        (-1500, "House", "transmission-tower-export", "exporting"),
+    ]
+    for grid_power, expected_tail, icon_name, description in cases:
+        my_predbat.grid_power = grid_power
+        html = web.get_power_flow_diagram()
+        grid_lines = [line for colour, line in arrow_lines(html) if colour == "#757575"]
+        if not grid_lines:
+            print(f"  ERROR: no grid arm drawn while {description} (grid_power={grid_power})")
+            failed += 1
+            continue
+        x1, y1, x2, y2 = grid_lines[0]
+        tail_at_grid = distance((x1, y1), NODE_BY_COLOUR["#757575"][1]) < distance((x1, y1), HOUSE_CENTRE)
+        actual_tail = "Grid" if tail_at_grid else "House"
+        if actual_tail != expected_tail:
+            print(f"  ERROR: while {description} (grid_power={grid_power}) the grid arm starts at {actual_tail}, expected {expected_tail}")
+            failed += 1
+
+        icon_html = web.get_grid_power_icon()
+        if f"mdi-{icon_name}" not in icon_html:
+            print(f"  ERROR: while {description} (grid_power={grid_power}) expected the {icon_name} icon, got: {icon_html}")
+            failed += 1
+
+    (my_predbat.grid_power, my_predbat.dashboard_index) = saved
+    return failed
+
+
 def run_power_flow_geometry_tests(my_predbat, web):
     """The arms line up with the circles they join, in every flow direction."""
     failed = 0
@@ -281,11 +322,13 @@ def run_power_flow_geometry_tests(my_predbat, web):
 
     my_predbat.car_charging_power_configured = True
 
-    # Importing, battery discharging, PV generating, car charging
+    # Importing, battery discharging, PV generating, car charging. grid_power is positive while
+    # importing and negative while exporting (predbat_metrics.py), the same way round as
+    # battery_power, which is positive while discharging.
     my_predbat.pv_power = 2000
     my_predbat.load_power = 4000
     my_predbat.battery_power = 1500
-    my_predbat.grid_power = -1000
+    my_predbat.grid_power = 1000
     my_predbat.car_charging_power = 2000
     html = web.get_power_flow_diagram()
     failed += check_arm_geometry(html, "importing, battery discharging")
@@ -294,7 +337,7 @@ def run_power_flow_geometry_tests(my_predbat, web):
     # The opposite of every branch: exporting, battery charging, PV idle, car idle
     my_predbat.pv_power = 0
     my_predbat.battery_power = -1500
-    my_predbat.grid_power = 1000
+    my_predbat.grid_power = -1000
     my_predbat.car_charging_power = 0
     html = web.get_power_flow_diagram()
     failed += check_arm_geometry(html, "exporting, battery charging")
@@ -543,6 +586,7 @@ def run_web_power_flow_tests(my_predbat):
     failed += run_power_flow_icon_tests(my_predbat, web)
     failed += run_power_flow_colour_tests(my_predbat, web)
     failed += run_battery_icon_tests(my_predbat, web)
+    failed += run_grid_power_sign_tests(my_predbat, web)
     failed += run_power_flow_geometry_tests(my_predbat, web)
 
     my_predbat.args = original_args
