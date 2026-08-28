@@ -1991,57 +1991,93 @@ def test_retry_status_element_takes_its_colour_from_theme_variables(my_predbat):
     return failed
 
 
-def test_chat_page_height_is_measured_not_hardcoded(my_predbat):
-    """The chat page sizes itself from a measurement, not a hardcoded header height.
+def test_chat_page_fills_the_window_without_an_outer_scrollbar(my_predbat):
+    """The Chat tab fills the window exactly; only the transcript scrolls.
 
-    A CSS calc() has to assume the header's height, and the header is not fixed: an apps.yaml
-    error banner adds a line and the version string wraps on a narrow window. Guessing too small
-    pushes the page past the viewport, so the whole document scrolls and the nav goes off the top
-    - which is the bug this fixes. The stylesheet keeps a calc() as the pre-JS fallback, so the
-    presence of that rule is not itself evidence of anything; what matters is that JS overrides it.
+    Two earlier attempts got this wrong in opposite directions, both because they needed to know
+    the header's height, which is not fixed - an apps.yaml error banner adds a line and the
+    version string wraps on a narrow window. A hardcoded calc() guessed too small and the document
+    scrolled, taking the nav off the top. A JS measurement then read the page's DOCUMENT-relative
+    top and subtracted it from the viewport height, which is only correct while the document
+    has not been scrolled; once it had scrolled at all the height came out short, leaving dead space under
+    the footer.
 
-    Static checks on the script source, as elsewhere in this suite - there is no JS runtime here.
+    Flex needs neither. body is a column, #chat-page takes the remainder, and the browser
+    recomputes it on every reflow.
 
-    Mutation checks: dropping the resize listener, or the overflow-correction pass, each fails an
-    assertion below.
+    Mutation checks: removing min-height: 0, body's overflow: hidden, or the flex rule on
+    #chat-page each fails an assertion below.
     """
     failed = False
-    print("**** Testing the chat page height is measured ****")
+    print("**** Testing the chat page fills the window without an outer scrollbar ****")
+    styles = web_chat.get_chat_styles()
     script = web_chat.get_chat_script()
 
-    body = _extract_function_body(script, "sizeChatPage")
-    if body is None:
-        print("ERROR: there is no sizeChatPage() to size the page from a measurement")
+    # No JS sizing at all - that approach is what produced the dead space.
+    if "sizeChatPage" in script:
+        print("ERROR: the page is being sized from JavaScript again, which drifts once the document scrolls")
+        failed = True
+
+    body_rule = _extract_css_rule(styles, "body")
+    if body_rule is None:
+        print("ERROR: the chat stylesheet does not size body at all")
         return True
-
-    # It must measure the page's own top rather than assume a header height.
-    if "getBoundingClientRect" not in body or "innerHeight" not in body:
-        print("ERROR: sizeChatPage() does not measure against the viewport: {!r}".format(body))
+    if "flex" not in body_rule or "column" not in body_rule:
+        print("ERROR: body is not a flex column, so #chat-page cannot take the remaining height: {!r}".format(body_rule))
         failed = True
-    # Deliberately NOT a document-overflow correction. An earlier version subtracted any leftover
-    # scrollHeight overflow, assuming it sat below the page; when that assumption was wrong the
-    # page was shrunk by the difference, leaving dead space under the footer while the document
-    # still scrolled. The space below the page is removed in CSS instead.
-    if "scrollHeight" in body:
-        print("ERROR: sizeChatPage() is compensating for document overflow again, which leaves dead space: {!r}".format(body))
+    if "overflow: hidden" not in body_rule:
+        print("ERROR: body still scrolls, so the outer scrollbar remains: {!r}".format(body_rule))
         failed = True
-    if "while" in body:
-        print("ERROR: sizeChatPage() loops, which cannot converge against the min-height floor: {!r}".format(body))
+    # body carries a 5px margin from the global stylesheet, top and bottom. Without allowing for
+    # it the page is exactly one margin too tall and the document scrolls by that much.
+    if "100vh - 10px" not in body_rule:
+        print("ERROR: body's height does not allow for its own margins: {!r}".format(body_rule))
         failed = True
 
-    # The cause, removed at source: nothing below the chat page may add height, or the document
-    # scrolls by exactly that much and takes the nav bar off the top.
-    styles = web_chat.get_chat_styles()
-    if "padding-bottom: 0" not in styles or "margin-bottom: 0" not in styles:
-        print("ERROR: the stylesheet does not zero the space below the chat page")
+    page_rule = _extract_css_rule(styles, "#chat-page")
+    if page_rule is None:
+        print("ERROR: there is no #chat-page rule")
+        return True
+    if "flex: 1" not in page_rule:
+        print("ERROR: #chat-page does not take the remaining height: {!r}".format(page_rule))
+        failed = True
+    # A flex item defaults to min-height auto and refuses to shrink below its content, which would
+    # push the page past the viewport and bring the outer scrollbar back.
+    if "min-height: 0" not in page_rule:
+        print("ERROR: #chat-page has no min-height: 0, so its content can push it past the viewport: {!r}".format(page_rule))
+        failed = True
+    if "height: calc(100vh" in page_rule:
+        print("ERROR: #chat-page is back to guessing the header height: {!r}".format(page_rule))
         failed = True
 
-    for wiring in ("addEventListener('resize', sizeChatPage)", "addEventListener('load', sizeChatPage)"):
-        if wiring not in script:
-            print("ERROR: sizeChatPage() is not wired: missing {}".format(wiring))
-            failed = True
+    # The transcript must remain the one thing that scrolls, and every ancestor between it and the
+    # page needs min-height: 0 or the chain breaks silently.
+    transcript_rule = _extract_css_rule(styles, "#chat-transcript")
+    if transcript_rule is None or "overflow-y: auto" not in transcript_rule:
+        print("ERROR: the transcript is not the inner scroller: {!r}".format(transcript_rule))
+        failed = True
+    main_rule = _extract_css_rule(styles, "#chat-main")
+    if main_rule is None or "min-height: 0" not in main_rule:
+        print("ERROR: #chat-main has no min-height: 0, which breaks the scroll chain: {!r}".format(main_rule))
+        failed = True
 
     return failed
+
+
+def _extract_css_rule(styles, selector):
+    """Return the declarations of the first rule for an exact selector, or None.
+
+    Comments are stripped first: the rules under test carry long explanatory comments directly
+    above them, which would otherwise be read as part of the selector and match nothing.
+    """
+    stripped = re.sub(r"/\*.*?\*/", "", styles, flags=re.S)
+    for block in stripped.split("}"):
+        if "{" not in block:
+            continue
+        head, _, body = block.partition("{")
+        if head.strip() == selector:
+            return body.strip()
+    return None
 
 
 def test_thinking_bubble_moves_to_the_end(my_predbat):
@@ -2073,6 +2109,26 @@ def test_thinking_bubble_moves_to_the_end(my_predbat):
     # The guard is the bug: it makes the append happen once and only once.
     if "parentNode" in body:
         print("ERROR: showThinkingBubble() still guards the append on parentNode, so the bubble is stranded above later messages: {!r}".format(body))
+        failed = True
+
+    # Showing it last is not enough on its own. The user's own message arrives as an SSE event
+    # AFTER the indicator goes up, and tool blocks arrive after that, so each would land below
+    # "thinking" and leave it hanging above the message it is waiting on - which is exactly what
+    # was seen: the indicator sat above the prompt, then jumped below the first tool call. Every
+    # transcript append therefore reasserts the indicator's position.
+    append_body = _extract_function_body(script, "appendToTranscript")
+    if append_body is None:
+        print("ERROR: there is no appendToTranscript() to keep the waiting indicator last")
+        failed = True
+    elif "chat-thinking" not in append_body:
+        print("ERROR: appendToTranscript() does not reassert the waiting indicator's position: {!r}".format(append_body))
+        failed = True
+
+    # And nothing may bypass it. The indicator's own append is the single exception - routing that
+    # through the helper would have it try to reorder itself.
+    direct = script.count("chat-transcript').appendChild")
+    if direct > 1:
+        print("ERROR: {} transcript appends bypass appendToTranscript(), so the indicator can be stranded again".format(direct))
         failed = True
 
     # And the reason the guard breaks it: hiding does not remove the element.
@@ -2279,7 +2335,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_model_catalogue(my_predbat)
     failed |= test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_predbat)
     failed |= test_model_picker_script_wires_routes_and_persists_selection(my_predbat)
-    failed |= test_chat_page_height_is_measured_not_hardcoded(my_predbat)
+    failed |= test_chat_page_fills_the_window_without_an_outer_scrollbar(my_predbat)
     failed |= test_thinking_bubble_moves_to_the_end(my_predbat)
     failed |= test_chat_switch_defaults_and_mirror(my_predbat)
     failed |= test_model_picker_shows_prices(my_predbat)

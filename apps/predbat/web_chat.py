@@ -461,26 +461,37 @@ body.dark-mode {
     --chat-error-text: #ff6b6b;
 }
 
-/* Scoped to the Chat tab: get_chat_styles() is only emitted on this page. The chat view is sized
-   to the viewport, so anything below it is dead space - and any bottom margin here would make the
-   document scroll by exactly that much, taking the nav bar off the top. */
+/* The Chat tab is an app-like view: it fills the window exactly, the document itself never
+   scrolls, and the only thing that scrolls is the transcript. Scoped safely to this page because
+   get_chat_styles() is only emitted here.
+
+   Done with flex rather than a measured or calculated height. Both of those need to know how tall
+   the header is, and it is not a fixed height - an apps.yaml error banner adds a line, and the
+   version string wraps on a narrow window. Every attempt to guess or measure it got this wrong in
+   one direction or the other: too small left dead space under the footer, too large pushed the
+   page past the viewport so the document scrolled and the nav went off the top. Making body a
+   flex column and letting #chat-page take the remainder means nothing has to know, and the
+   browser recomputes it on every reflow for free.
+
+   The 10px is body's own 5px margin, top and bottom, from the global stylesheet - without it the
+   page is exactly one margin too tall and the document scrolls by that much. */
 body {
-    margin-bottom: 0;
-    padding-bottom: 0;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 10px);
+    overflow: hidden;
 }
 
 #chat-page {
-    margin-bottom: 0;
     display: grid;
     grid-template-columns: 260px minmax(0, 1fr);
     gap: 14px;
-    /* A pre-JS fallback only. sizeChatPage() replaces this with a measured height as soon as the
-       script runs: the 130px here is a guess at the header, and the header is not a fixed height -
-       an apps.yaml error banner adds a line, and the version string wraps on a narrow window. Too
-       small and the page grows past the viewport, so the whole document scrolls and the nav
-       disappears off the top. */
-    height: calc(100vh - 130px);
-    min-height: 420px;
+    /* Takes whatever the header leaves. min-height: 0 is load-bearing, not tidiness: a flex item
+       defaults to min-height auto, which refuses to shrink below its content, so without it the
+       grid's own content would push the page past the viewport and reintroduce the outer
+       scrollbar this whole rule exists to remove. */
+    flex: 1 1 auto;
+    min-height: 0;
     color: var(--chat-text);
     background: var(--chat-bg);
 }
@@ -1700,33 +1711,6 @@ function loadModels() {
 // truth on every load and reconnect, so a control never drifts from what its gate enforces.
 // ---------------------------------------------------------------------------------------------
 
-// Sizing the chat page to the space actually left below the header.
-//
-// A CSS calc() cannot do this: it would have to hardcode the header's height, and the header
-// grows a line when apps.yaml has errors and wraps on a narrow window. Getting it wrong pushes
-// the page past the viewport, so the document scrolls and the nav scrolls out of sight - which
-// is what the fixed 130px fallback in the stylesheet does on a taller header.
-//
-// Measured instead: the page's own top to the bottom of the viewport, and nothing else. An
-// earlier version also subtracted any leftover document overflow, on the assumption that
-// whatever overflowed sat below the page. That is not a safe assumption - a document scrolls for
-// other reasons, a wide element among them - and when it was wrong the page was shrunk by the
-// difference, leaving dead space under the footer while the document still scrolled. The space
-// below the page is removed in CSS instead (#chat-page's margin, and body's bottom padding),
-// which fixes the cause rather than compensating for it.
-// ---------------------------------------------------------------------------------------------
-
-var CHAT_PAGE_MIN_HEIGHT = 420;
-
-function sizeChatPage() {
-    var page = byId('chat-page');
-    if (!page) {
-        return;
-    }
-    var top = page.getBoundingClientRect().top + (window.scrollY || 0);
-    page.style.height = Math.max(CHAT_PAGE_MIN_HEIGHT, window.innerHeight - top) + 'px';
-}
-
 function chatToggles() {
     return Array.prototype.slice.call(document.querySelectorAll('#chat-toggles input[data-switch]'));
 }
@@ -1841,11 +1825,25 @@ function stopTurn() {
 // are built with createElement/textContent instead, which cannot be interpreted as markup.
 // ---------------------------------------------------------------------------------------------
 
+function appendToTranscript(node) {
+    // Every transcript append goes through here so the waiting indicator stays last. Showing it
+    // is not enough on its own: the user's own message arrives as an SSE event AFTER the
+    // indicator goes up, and tool blocks arrive after that, so each of them would otherwise land
+    // below "thinking" and leave it hanging above the message it is waiting on.
+    var transcript = byId('chat-transcript');
+    transcript.appendChild(node);
+    var thinking = byId('chat-thinking');
+    if (thinking && thinking.parentNode === transcript && !thinking.classList.contains('chat-thinking-hidden')) {
+        // appendChild moves it rather than copying, so this is a reorder, not a duplicate.
+        transcript.appendChild(thinking);
+    }
+}
+
 function appendBubble(role, text) {
     var bubble = document.createElement('div');
     bubble.className = 'chat-bubble chat-bubble-' + role;
     bubble.innerHTML = renderMarkdown(text || '');
-    byId('chat-transcript').appendChild(bubble);
+    appendToTranscript(bubble);
     scrollTranscriptToBottom();
     return bubble;
 }
@@ -1903,7 +1901,7 @@ function appendToolStart(data) {
     details.appendChild(resultHolder);
 
     container.appendChild(details);
-    byId('chat-transcript').appendChild(container);
+    appendToTranscript(container);
     toolRows[data.call_id] = resultHolder;
     toolSummaries[data.call_id] = summary;
     // A write may already have been approved before its tool block was drawn - on a history
@@ -1984,7 +1982,7 @@ function appendConfirmCard(data) {
     actions.appendChild(rejectButton);
     card.appendChild(actions);
 
-    byId('chat-transcript').appendChild(card);
+    appendToTranscript(card);
     confirmCards[data.call_id] = card;
     scrollTranscriptToBottom();
 }
@@ -2211,12 +2209,10 @@ function handleRetry(data) {
     // discardPendingBubble() removes it unconditionally, content or not, unlike clearPendingBubble
     // (used when a turn ends outright, where real partial content is worth keeping on screen).
     discardPendingBubble();
-    var bubble = ensureThinkingBubble();
-    if (!bubble.parentNode) {
-        byId('chat-transcript').appendChild(bubble);
-    }
-    bubble.classList.remove('chat-thinking-hidden');
-    scrollTranscriptToBottom();
+    // Via showThinkingBubble() rather than appending here: this carried its own copy of the
+    // parentNode guard, which is the bug that left the indicator stranded above later messages.
+    // One path, one behaviour.
+    showThinkingBubble();
     startRetryCountdown(data);
 }
 
@@ -2288,7 +2284,7 @@ function appendApprovalRecord(entry) {
         pre.textContent = JSON.stringify(entry.arguments, null, 2);
         wrap.appendChild(pre);
     }
-    byId('chat-transcript').appendChild(wrap);
+    appendToTranscript(wrap);
 }
 
 function appendErrorDetail(bubble, detail) {
@@ -2887,11 +2883,6 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     chatToggles().forEach(function (toggle) { toggle.addEventListener('change', changeChatSwitch); });
 
-    // Sized once now and again on resize. The load handler re-runs it because web fonts and the
-    // banner can settle after this point, which moves the page's top.
-    sizeChatPage();
-    window.addEventListener('resize', sizeChatPage);
-    window.addEventListener('load', sizeChatPage);
     byId('chat-input').addEventListener('keydown', function (event) {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
