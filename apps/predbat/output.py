@@ -3026,7 +3026,7 @@ class Output:
         # day of predbat.carbon_today history has accumulated for it to read back.
         carbon_today_data = self.get_history_wrapper(entity_id=self.prefix + ".carbon_today", days=2, required=False) if self.carbon_enable else None
         if self.carbon_enable and not carbon_today_data:
-            self.log("Warn: Calculate yesterday: No history for {}.carbon_today yet, carbon_yesterday and carbon_total will read 0 until a day of history has built up".format(self.prefix))
+            self.log("Warn: Calculate yesterday: No history for {}.carbon_today yet, carbon_yesterday will read 0 and carbon_total can't increment until a day of history has built up".format(self.prefix))
 
         self.log("Calculating data from yesterday for savings calculation")
 
