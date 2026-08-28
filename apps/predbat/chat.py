@@ -42,7 +42,7 @@ from datetime import datetime, timedelta
 from agent_tools import TOOL_DEFS, PredbatTools, openai_tool_list
 from component_base import ComponentBase
 from chat_store import APPROVAL_APPROVED, APPROVAL_REJECTED, ConversationStore, NEW_CONVERSATION_TITLE, derive_title, extract_cached_tokens, trim_history
-from chat_tools import APPS_YAML_RESTART_WARNING, CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_source, search_docs, search_source, set_apps_config
+from chat_tools import APPS_YAML_RESTART_WARNING, CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_docs, read_source, search_docs, search_source, set_apps_config
 from utils import SECRET_MASK, is_secret_key, parse_yaml_path, resolve_nested_yaml_value
 
 # Shown when a turn is attempted with no model chosen anywhere. openrouter_default_model is
@@ -121,7 +121,7 @@ PRIMER = """You are an assistant built into Predbat, a home battery optimisation
 
 Answer concisely and quote the user's real values rather than generalities. Call a tool rather than guessing: the tools read this specific installation. Never invent an entity name; look it up with get_entities or get_config.
 
-Do not answer configuration questions from memory. Predbat changes continuously - settings are added, renamed and removed between releases - so whatever you learned during training describes some older version and may name settings that no longer exist, or miss ones that do. Anything you recall is a hint about where to look, never an answer. Check before you answer: search_docs for how to configure something, and search_source then read_source for what the code actually does. Both read the exact version running here, so they are the only authority on it. If the documentation and your recollection disagree, the documentation is right.
+Do not answer configuration questions from memory. Predbat changes continuously - settings are added, renamed and removed between releases - so whatever you learned during training describes some older version and may name settings that no longer exist, or miss ones that do. Anything you recall is a hint about where to look, never an answer. Check before you answer: search_docs then read_docs for how to configure something, and search_source then read_source for what the code actually does. Use read_docs rather than fetch_url for documentation - it returns the one section you asked for, where fetching the page returns all of it. Both read the exact version running here, so they are the only authority on it. If the documentation and your recollection disagree, the documentation is right.
 
 Predbat has two separate kinds of setting, and they are changed by different tools. Getting this wrong silently does nothing:
 
@@ -1109,6 +1109,8 @@ class ChatAgent(ComponentBase):
             return {"success": True, "error": None, "data": {"title": title}}
         if name == "search_docs":
             return await search_docs(self.storage, arguments.get("query"), max_results=arguments.get("max_results", 5))
+        if name == "read_docs":
+            return await read_docs(self.storage, arguments.get("section"), offset=arguments.get("offset", 0))
         # read_source is bounded work on this loop, which is fine: the component loop's only
         # other job is a five-second tick, and the web server is a different loop in a different
         # thread. search_source is different - it runs a MODEL-SUPPLIED regular expression, and

@@ -42,6 +42,19 @@ DOCS_TITLE_WEIGHT = 5
 DOCS_EXCERPT_RADIUS = 150
 DOCS_MAX_RESULTS = 10
 
+# Index locations to keep out of documentation search. The published site includes this project's
+# own design specs and implementation plans under docs/superpowers/ - 694 of the index's 1445
+# records and 3.7MB of its text - which are notes about building Predbat, not instructions for
+# using it. Left in, a search for "how do I configure car charging" can rank a design document
+# above the page that answers the question.
+DOCS_EXCLUDED_PREFIXES = ("superpowers/",)
+
+# How much of a section read_docs returns at once. Section records are small - the median is 641
+# characters and the 90th percentile 3247 - so this returns 96% of them whole while bounding the
+# 1% that run past 34000. Anything longer is paged with an explicit offset rather than truncated
+# silently.
+DOCS_READ_MAX_CHARS = 8000
+
 
 CHAT_TOOL_DEFS = [
     {
@@ -53,8 +66,22 @@ CHAT_TOOL_DEFS = [
     },
     {
         "name": "search_docs",
-        "description": "Search the Predbat documentation and return matching pages with links and excerpts. Use this to answer questions about how to configure Predbat.",
-        "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to search for"}, "max_results": {"type": "integer", "description": "Maximum pages to return (default 5, maximum 10)"}}, "required": ["query"]},
+        "description": "Search the Predbat documentation. Returns matching sections with an excerpt, a 'section' id and its length. Use this first for any question about how to configure Predbat, then read_docs with the 'section' id when the excerpt is not enough.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to search for"}, "max_results": {"type": "integer", "description": "Maximum sections to return (default 5, maximum 10)"}}, "required": ["query"]},
+        "writes": False,
+        "chat_omit_properties": [],
+    },
+    {
+        "name": "read_docs",
+        "description": "Read one documentation section in full, using the 'section' id from a search_docs result. Prefer this over fetch_url for documentation: it returns just the section rather than an entire page of navigation and unrelated content.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "section": {"type": "string", "description": "The 'section' id from a search_docs result, used exactly as given (e.g. 'apps-yaml/#car-charging')"},
+                "offset": {"type": "integer", "description": "Character offset to read from, for a section too long to return at once (default 0)"},
+            },
+            "required": ["section"],
+        },
         "writes": False,
         "chat_omit_properties": [],
     },
@@ -148,6 +175,11 @@ def _excerpt(text, terms):
     return ("..." if start > 0 else "") + text[start:end].strip() + ("..." if end < len(text) else "")
 
 
+def is_excluded_doc(location):
+    """Return True if an index record is internal project documentation rather than user docs."""
+    return str(location or "").startswith(DOCS_EXCLUDED_PREFIXES)
+
+
 def score_documents(documents, query, max_results=5):
     """Rank MkDocs index records against a query by term overlap, title matches weighted."""
     terms = _query_terms(query)
@@ -155,6 +187,9 @@ def score_documents(documents, query, max_results=5):
         return []
     scored = []
     for document in documents or []:
+        location = str(document.get("location") or "")
+        if is_excluded_doc(location):
+            continue
         title = str(document.get("title") or "")
         text = str(document.get("text") or "")
         haystack = text.lower()
@@ -164,11 +199,91 @@ def score_documents(documents, query, max_results=5):
             score += haystack.count(term)
             score += title_lower.count(term) * DOCS_TITLE_WEIGHT
         if score:
-            scored.append({"score": score, "title": title, "url": urljoin(DOCS_SITE_ROOT, str(document.get("location") or "")), "excerpt": _excerpt(text, terms)})
+            # 'section' is the handle read_docs takes, and 'length' says what reading it will
+            # cost, so the model can choose between the excerpt it already has and a full read
+            # rather than fetching blind.
+            scored.append({"score": score, "title": title, "section": location, "url": urljoin(DOCS_SITE_ROOT, location), "length": len(text), "excerpt": _excerpt(text, terms)})
     scored.sort(key=lambda entry: entry["score"], reverse=True)
+    scored = _prefer_sections(scored)
     for entry in scored:
         entry.pop("score", None)
     return scored[: max(1, min(int(max_results or 5), DOCS_MAX_RESULTS))]
+
+
+def _prefer_sections(scored):
+    """Drop a page-level hit when one of that page's own sections also matched.
+
+    The index carries a record per page AND a record per section within it, and the page record
+    holds every section's text - so it always outscores the sections it contains and would win
+    every search, pointing the model at 137000 characters when a 2000-character section answers
+    the question.
+
+    Dropped only when a section of the same page matched, not unconditionally: a page record also
+    carries the intro before its first heading, which belongs to no section, so removing them all
+    would make that text unsearchable.
+    """
+    matched_pages = {entry["section"].split("#")[0] for entry in scored if "#" in entry["section"]}
+    return [entry for entry in scored if "#" in entry["section"] or entry["section"].split("#")[0] not in matched_pages]
+
+
+async def read_docs(storage, section, offset=0, max_chars=DOCS_READ_MAX_CHARS):
+    """Return one documentation section's text, from the same cached index search_docs uses.
+
+    Served entirely from the cache: the index carries every page's text, so reading a section
+    needs no network call, no HTML fetch and no markup stripping. That matters because the
+    alternative - fetch_url on a docs page - returns the whole page including navigation and
+    every unrelated section: measured on the apps.yaml page that is 141000 characters, roughly
+    35000 tokens, for a question a single section answers in a few hundred.
+
+    Paged with an explicit offset rather than truncated silently, so a model told there is more
+    can actually go and get it.
+    """
+    payload = None
+    if storage:
+        payload = await storage.fetch_cached("chat", "docs_index", _fetch_docs_index, fresh_minutes=DOCS_CACHE_MINUTES, stale_minutes=DOCS_CACHE_MINUTES + 60, format="json")
+    if not isinstance(payload, dict) or not payload.get("docs"):
+        return {"success": False, "error": "Documentation index unavailable", "data": None}
+
+    if not section or not isinstance(section, str):
+        return {"success": False, "error": "'section' must be the section id from a search_docs result", "data": None}
+    if is_excluded_doc(section):
+        return {"success": False, "error": "'{}' is internal project documentation, not user documentation".format(section), "data": None}
+
+    wanted = section.strip()
+    match = None
+    for document in payload.get("docs") or []:
+        if str(document.get("location") or "") == wanted:
+            match = document
+            break
+    if match is None:
+        return {"success": False, "error": "'{}' was not found. Use the 'section' value from a search_docs result exactly as given.".format(wanted), "data": None}
+
+    text = str(match.get("text") or "")
+    try:
+        offset = max(0, int(offset or 0))
+    except (TypeError, ValueError):
+        return {"success": False, "error": "'offset' must be a whole number of characters", "data": None}
+    try:
+        limit = max(1, min(int(max_chars or DOCS_READ_MAX_CHARS), DOCS_READ_MAX_CHARS))
+    except (TypeError, ValueError):
+        limit = DOCS_READ_MAX_CHARS
+
+    chunk = text[offset : offset + limit]
+    next_offset = offset + len(chunk)
+    data = {
+        "section": wanted,
+        "title": match.get("title"),
+        "url": urljoin(DOCS_SITE_ROOT, wanted),
+        "text": chunk,
+        "offset": offset,
+        "length": len(text),
+    }
+    if next_offset < len(text):
+        data["next_offset"] = next_offset
+        description = "Documentation section '{}', characters {}-{} of {}. Call read_docs again with offset {} for the rest.".format(wanted, offset, next_offset, len(text), next_offset)
+    else:
+        description = "Documentation section '{}' ({} characters)".format(wanted, len(text))
+    return {"success": True, "error": None, "data": data, "description": description}
 
 
 async def _fetch_docs_index():

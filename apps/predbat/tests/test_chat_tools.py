@@ -29,7 +29,7 @@ import tempfile
 
 import chat_tools
 from utils import mask_secret_args, parse_yaml_path
-from chat_tools import CHAT_TOOL_DEFS, score_documents, search_docs, read_source, search_source, resolve_source_path, SourceAccessError, is_endpoint_key
+from chat_tools import CHAT_TOOL_DEFS, DOCS_READ_MAX_CHARS, read_docs, score_documents, search_docs, read_source, search_source, resolve_source_path, SourceAccessError, is_endpoint_key
 from chat_tools import DEFAULT_FETCH_ALLOWLIST, FetchRefusedError, host_allowed, html_to_text, validate_fetch_target
 from chat_tools import APPS_YAML_RESTART_WARNING, set_apps_config, validate_apps_schema_type
 from agent_tools import openai_tool_list
@@ -69,7 +69,7 @@ def test_chat_tool_defs_shape(my_predbat):
     failed = False
     print("**** Testing CHAT_TOOL_DEFS shape ****")
     names = [entry["name"] for entry in CHAT_TOOL_DEFS]
-    expected = ["set_chat_title", "search_docs", "search_source", "read_source", "fetch_url", "set_apps_config"]
+    expected = ["set_chat_title", "search_docs", "read_docs", "search_source", "read_source", "fetch_url", "set_apps_config"]
     if names != expected:
         print("ERROR: CHAT_TOOL_DEFS names are {}, expected {}".format(names, expected))
         failed = True
@@ -1205,12 +1205,142 @@ def test_yaml_path_splitter_handles_nested_indices(my_predbat):
     return failed
 
 
+DOCS_FIXTURE = {
+    "docs": [
+        {"location": "apps-yaml/", "title": "apps.yaml settings", "text": "intro about apps yaml " + ("solcast " * 40)},
+        {"location": "apps-yaml/#solcast", "title": "Solcast", "text": "solcast api key goes here " * 5},
+        {"location": "apps-yaml/#cars", "title": "Cars", "text": "car charging settings " * 5},
+        {"location": "faq/", "title": "FAQ", "text": "a page with no matching section, solcast mentioned once"},
+        {"location": "superpowers/plans/whatever/", "title": "Internal plan", "text": "solcast " * 200},
+        # Numbered so a chunk read at an offset is distinguishable from the first one - all-identical
+        # filler would make the offset assertion pass whether or not the offset was honoured.
+        {"location": "long/#big", "title": "Big", "text": "".join("[{}]".format(n % 10) for n in range(DOCS_READ_MAX_CHARS))},
+    ]
+}
+
+
+class _DocsCache:
+    """Stands in for Storage, always returning the fixture index."""
+
+    async def fetch_cached(self, *args, **kwargs):
+        """Return the fixture rather than fetching anything."""
+        return DOCS_FIXTURE
+
+
+def test_search_docs_prefers_sections_and_hides_internal_docs(my_predbat):
+    """Search returns precise sections, never internal design docs, and says what a read costs.
+
+    Three things the index makes necessary. It carries a record per page AND per section, and the
+    page record holds every section's text - so it outscores the sections it contains and would
+    win every search, pointing the model at 137000 characters when a 2000-character section
+    answers the question. It also publishes this project's own design specs under superpowers/,
+    which are notes about building Predbat rather than instructions for using it. And a result is
+    only actionable if it carries the handle read_docs takes.
+
+    A page record is dropped only when one of its own sections matched, not unconditionally: the
+    page record also holds the intro before the first heading, which belongs to no section.
+
+    Mutation checks: removing the exclusion, the section preference, or the section/length fields,
+    each fails below.
+    """
+    failed = False
+    print("**** Testing search_docs prefers sections and hides internal docs ****")
+
+    hits = score_documents(DOCS_FIXTURE["docs"], "solcast api key", max_results=10)
+    sections = [hit["section"] for hit in hits]
+
+    if any(section.startswith("superpowers/") for section in sections):
+        print("ERROR: internal design docs are searchable: {}".format(sections))
+        failed = True
+    # The page record loses to its own sections.
+    if "apps-yaml/" in sections:
+        print("ERROR: the page record outranked its own sections: {}".format(sections))
+        failed = True
+    if "apps-yaml/#solcast" not in sections:
+        print("ERROR: the matching section is missing: {}".format(sections))
+        failed = True
+    # But a page whose sections did not match keeps its page record, or its intro text becomes
+    # unsearchable.
+    if "faq/" not in sections:
+        print("ERROR: a page with no matching section was dropped too: {}".format(sections))
+        failed = True
+
+    for hit in hits:
+        if "section" not in hit or "length" not in hit:
+            print("ERROR: a result carries no section handle or length: {}".format(hit))
+            failed = True
+
+    return failed
+
+
+def test_read_docs_returns_one_section_and_pages(my_predbat):
+    """read_docs serves a single section from the cache, paging anything oversized.
+
+    Served from the index rather than the web: the index already carries every page's text, so
+    this needs no network call and no HTML stripping. The alternative - fetch_url on a docs page -
+    returns navigation and every unrelated section too: measured on the apps.yaml page that is
+    141000 characters, about 35000 tokens, for a question one section answers in a few hundred.
+
+    Mutation checks: dropping the length cap, or the next_offset, each fails below.
+    """
+    failed = False
+    print("**** Testing read_docs returns one section and pages ****")
+
+    result = asyncio.run(read_docs(_DocsCache(), "apps-yaml/#solcast"))
+    if not result.get("success"):
+        print("ERROR: a known section could not be read: {}".format(result))
+        return True
+    data = result["data"]
+    if "solcast api key" not in data["text"]:
+        print("ERROR: the section text is wrong: {}".format(data))
+        failed = True
+    if data.get("next_offset") is not None:
+        print("ERROR: a short section was paged: {}".format(data))
+        failed = True
+
+    # Oversized sections are capped and say where to continue, rather than truncated silently.
+    result = asyncio.run(read_docs(_DocsCache(), "long/#big"))
+    data = result["data"]
+    if len(data["text"]) != DOCS_READ_MAX_CHARS:
+        print("ERROR: the read was not capped at {}: got {}".format(DOCS_READ_MAX_CHARS, len(data["text"])))
+        failed = True
+    if data.get("next_offset") != DOCS_READ_MAX_CHARS:
+        print("ERROR: a capped read does not say where to continue: {}".format(data))
+        failed = True
+    if str(DOCS_READ_MAX_CHARS) not in str(result.get("description")):
+        print("ERROR: the description does not tell the model how to get the rest: {}".format(result.get("description")))
+        failed = True
+
+    # The offset actually moves.
+    result = asyncio.run(read_docs(_DocsCache(), "long/#big", offset=DOCS_READ_MAX_CHARS))
+    if result["data"]["offset"] != DOCS_READ_MAX_CHARS or result["data"]["text"] == data["text"]:
+        print("ERROR: reading from an offset returned the same chunk: {}".format(result["data"]["offset"]))
+        failed = True
+
+    # Internal docs are unreadable even when named directly - the search filter alone would leave
+    # them reachable by a model that guessed or remembered a path.
+    result = asyncio.run(read_docs(_DocsCache(), "superpowers/plans/whatever/"))
+    if result.get("success"):
+        print("ERROR: an internal design doc was readable by direct id: {}".format(result))
+        failed = True
+
+    # An unknown section fails with something the model can act on.
+    result = asyncio.run(read_docs(_DocsCache(), "no/such/#thing"))
+    if result.get("success") or "search_docs" not in str(result.get("error")):
+        print("ERROR: an unknown section did not point back at search_docs: {}".format(result))
+        failed = True
+
+    return failed
+
+
 def run_chat_tools_tests(my_predbat):
     """Run every chat-only tool test, returning True if any of them failed."""
     failed = False
     failed |= test_chat_tool_defs_shape(my_predbat)
     failed |= test_score_documents(my_predbat)
     failed |= test_search_docs_uses_the_cache(my_predbat)
+    failed |= test_search_docs_prefers_sections_and_hides_internal_docs(my_predbat)
+    failed |= test_read_docs_returns_one_section_and_pages(my_predbat)
     failed |= test_search_source(my_predbat)
     failed |= test_search_source_rejects_bad_patterns(my_predbat)
     failed |= test_read_source(my_predbat)

@@ -386,7 +386,8 @@ Six more tools only exist in chat:
 | Tool | What it returns or does |
 | ---- | ------------------------ |
 | `set_chat_title` | Sets the conversation's title - the agent calls this itself, early in a new conversation |
-| `search_docs` | Searches the published Predbat documentation, returning matching pages with links and excerpts (up to 10 results) |
+| `search_docs` | Searches the published Predbat documentation, returning matching **sections** with an excerpt, a section id and its length (up to 10 results). Internal design documents under `superpowers/` are excluded |
+| `read_docs` | Reads one documentation section in full by its section id, paged at 8,000 characters. Served from the cached search index, so it needs no network call - and returns just that section rather than a whole page of navigation and unrelated content |
 | `search_source` | Searches Predbat's own installed source code - the exact version that is running - with a Python regular expression. Covers `.py`, `.cpp`, `.h`, `.hpp`, `.proto`, `.sh` and `.md` files only (up to 100 matches, five-second scan budget) |
 | `read_source` | Reads a numbered slice of one source file found by `search_source` (up to 400 lines at a time) |
 | `fetch_url` | Fetches a web page as text, restricted to the hosts in `fetch_allowlist` |
