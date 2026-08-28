@@ -2577,6 +2577,72 @@ def test_force_export_enable_only_flip_skips_settle_sleep(test_name, ha, inv):
     return failed
 
 
+def test_force_export_off_does_not_press_every_cycle(test_name, ha, my_predbat):
+    """
+    Regression test for issue #2328: with no export scheduled the update button must not be pressed on
+    every cycle.
+
+    execute.py calls adjust_force_export(False) with no times whenever nothing is being exported. On an
+    inverter with has_discharge_enable_time set (GS_fb00, and the FoxCloud/TESLA/Enphase/Deye/Sunsynk/
+    AlphaESS cloud types) the midnight override is skipped, so new_start/new_end stay None while the
+    inverter still reports a real time - and None never compares equal, so every cycle looked like a
+    change and pressed the button. That is most of the day, not just export windows.
+
+    Plain GS takes the midnight-override path and is not affected by this None-comparison route, so it
+    is checked here too to pin the difference down. (GS was affected by a separate bug - #4711's
+    unconditional H M register rewrite, which GS also uses - but that is a different code path to the
+    one this test targets.)
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    # my_predbat/ha are shared across the whole test run - save everything this test touches so it
+    # can be restored exactly, rather than leaking a changed/missing arg or dummy entity value into
+    # later tests and making results order-dependent.
+    unset = object()
+    saved_args = {key: my_predbat.args.get(key, unset) for key in ("inverter_type", "discharge_start_time", "discharge_end_time", "scheduled_discharge_enable")}
+    saved_items = {key: ha.dummy_items.get(key, unset) for key in ("select.discharge_start_time", "select.discharge_end_time", "switch.scheduled_discharge_enable", "select.inverter_mode")}
+
+    try:
+        for inverter_type, expected_presses in (("GS_fb00", 1), ("GS", 1)):
+            my_predbat.args["inverter_type"] = [inverter_type]
+            inv = Inverter(my_predbat, 0, quiet=True)
+            inv.rest_data = None
+
+            ha.dummy_items["select.discharge_start_time"] = "00:00:00"
+            ha.dummy_items["select.discharge_end_time"] = "00:00:00"
+            ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
+            ha.dummy_items["select.inverter_mode"] = "Eco"
+            my_predbat.args["discharge_start_time"] = "select.discharge_start_time"
+            my_predbat.args["discharge_end_time"] = "select.discharge_end_time"
+            my_predbat.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+
+            presses = []
+            # Must report success, as a real press does - a falsy return means "not committed, retry"
+            inv.press_and_poll_button = lambda side="both", _p=presses: (_p.append(side), True)[1]
+
+            # Several cycles with nothing to export - the first may commit, the rest must be silent
+            for _ in range(4):
+                inv.adjust_force_export(False)
+
+            if len(presses) > expected_presses:
+                print(f"ERROR: {test_name}: {inverter_type} pressed the button {len(presses)} times over 4 idle cycles, expected at most {expected_presses}")
+                failed = True
+    finally:
+        for key, value in saved_args.items():
+            if value is unset:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+        for key, value in saved_items.items():
+            if value is unset:
+                ha.dummy_items.pop(key, None)
+            else:
+                ha.dummy_items[key] = value
+
+    return failed
+
+
 def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_start, new_end):
     """
     Test that when *_start_hour / *_end_hour args resolve to time.* entities the full
@@ -3713,6 +3779,9 @@ charge_start_service:
 
     # Regression test: an enable-only flip (times unchanged) must not trigger the GivTCP settle sleep
     failed |= test_force_export_enable_only_flip_skips_settle_sleep("force_export_enable_only_flip_skips_settle_sleep", ha, inv)
+
+    # Regression test for issue #2328: idle (non-export) cycles must not press the button every time
+    failed |= test_force_export_off_does_not_press_every_cycle("force_export_off_no_repeat_press", ha, my_predbat)
     if failed:
         return failed
 

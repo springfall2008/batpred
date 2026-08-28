@@ -2543,6 +2543,11 @@ class Inverter:
             self.log("Warn: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
             return False
 
+        # Whether the caller asked us to manage the export times at all this cycle. execute.py calls
+        # adjust_force_export(False) with no times whenever nothing is being exported, which is a
+        # different thing from the GE branch below deliberately clearing them.
+        times_supplied = (new_start_time is not None) or (new_end_time is not None)
+
         # Start time to correct format
         if new_start_time:
             new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
@@ -2707,12 +2712,18 @@ class Inverter:
         # press zeroes the timed current registers (#4709), and it also triggers the 30s GivTCP sleep in
         # adjust_inverter_mode. Tracking what we last committed keeps a stable window quiet while still
         # committing once after a restart, when nothing has been committed yet (#4000).
+        # When the caller supplied no times at all we are not managing the export window this cycle, so
+        # neither time can have "changed". Comparing None against the time the inverter still reports is
+        # never equal, which pressed the update button on every idle cycle for the rest of the day (#2328).
+        # A genuine transition out of export is still caught by force_export != old_discharge_enable below.
+        start_changed = times_supplied and new_start != old_start
+        end_changed = times_supplied and new_end != old_end
         export_schedule = (new_start, new_end, force_export)
         # Separately, whether the start/end times themselves actually moved - used below to gate the
         # GivTCP settle sleep, which exists for the window write specifically ("start/end of discharge
         # window was just adjusted"). schedule_changed alone is too broad for that: it also goes True on
         # a bare scheduled_discharge_enable flip with the window untouched, which doesn't need settling.
-        times_changed = (new_end != old_end) or (new_start != old_start)
+        times_changed = start_changed or end_changed
         schedule_changed = times_changed or (force_export != old_discharge_enable)
         if is_hm_format and export_schedule != self.last_export_schedule_committed:
             # Only the H M path rewrites unconditionally, so only it needs the extra commit-once-per-run
