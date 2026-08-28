@@ -93,7 +93,6 @@ def run_load_octopus_slots_tests(my_predbat):
         start_plus_15 = start + timedelta(minutes=15)
         start_minus_30 = start - timedelta(minutes=30)
         end = start + timedelta(minutes=60)
-        prev_soc = soc
         prev_soc2 = soc2
         soc += 5
         soc2 += 2.5

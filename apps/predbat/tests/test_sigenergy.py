@@ -650,8 +650,6 @@ def test_sigenergy_get_access_token_retry(my_predbat):
 
     call_log = []
 
-    original_class = __import__("sigenergy").aiohttp.ClientSession
-
     class SequencedSession:
         """Return failure sessions then success session."""
         def __init__(self, *args, **kwargs):
