@@ -1423,6 +1423,53 @@ function formatCost(cost) {
 
 var MODEL_RESULTS_MAX = 60;
 
+function trimTrailingZeros(text) {
+    // Only meaningful after a decimal point: stripping zeros from "10" would give "1".
+    if (text.indexOf('.') === -1) {
+        return text;
+    }
+    return text.replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function formatModelPrice(model) {
+    // OpenRouter quotes pricing as a string of US dollars PER TOKEN ("0.000002"), which is
+    // unreadable at that scale - every model would show as $0.00. Scaled to the per-million-token
+    // figure everyone actually quotes, so $2/$10 means $2 per million in, $10 per million out.
+    // Returns null when the catalogue gave no price, which is the case for the apps.yaml default
+    // entry when the catalogue could not be fetched.
+    if (model.prompt_price === null || model.prompt_price === undefined) {
+        return null;
+    }
+    var inPrice = Number(model.prompt_price) * 1000000;
+    var outPrice = Number(model.completion_price) * 1000000;
+    if (!isFinite(inPrice) || !isFinite(outPrice)) {
+        return null;
+    }
+    if (inPrice === 0 && outPrice === 0) {
+        return 'free';
+    }
+    // OpenRouter quotes -1 for its routing models (openrouter/auto, fusion, ...), where the price
+    // depends on whichever model the request is actually routed to and so is not known up front.
+    // Rendering the arithmetic gives "$-1000000", which is worse than saying nothing.
+    if (inPrice < 0 || outPrice < 0) {
+        return 'varies';
+    }
+    return '$' + formatPricePart(inPrice) + '/$' + formatPricePart(outPrice);
+}
+
+function formatPricePart(perMillion) {
+    // Enough precision to tell cheap models apart without four decimals on expensive ones: the
+    // catalogue spans $0.02 to $75 per million, so a fixed number of decimals reads badly at one
+    // end or the other.
+    if (perMillion >= 10) {
+        return perMillion.toFixed(0);
+    }
+    if (perMillion >= 1) {
+        return trimTrailingZeros(perMillion.toFixed(2));
+    }
+    return trimTrailingZeros(perMillion.toFixed(3));
+}
+
 function modelLabel(id) {
     if (!id) {
         return state.defaultModel ? 'Default (' + state.defaultModel + ')' : 'Choose a model';
@@ -1473,10 +1520,19 @@ function renderModelResults(filter) {
         name.className = 'chat-model-name';
         name.textContent = model.name || model.id;
         row.appendChild(name);
+        var meta = document.createElement('span');
+        meta.className = 'chat-model-meta';
+        var parts = [];
+        var price = formatModelPrice(model);
+        if (price) {
+            parts.push(price);
+        }
         if (model.context_length) {
-            var meta = document.createElement('span');
-            meta.className = 'chat-model-meta';
-            meta.textContent = Math.round(model.context_length / 1000) + 'k';
+            parts.push(Math.round(model.context_length / 1000) + 'k');
+        }
+        if (parts.length) {
+            meta.textContent = parts.join('  ');
+            meta.title = 'Input / output price in US dollars per million tokens, then the context window';
             row.appendChild(meta);
         }
         row.addEventListener('mousedown', function (event) {

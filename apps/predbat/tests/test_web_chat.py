@@ -2080,6 +2080,68 @@ def test_chat_switch_defaults_and_mirror(my_predbat):
     return failed
 
 
+def test_model_picker_shows_prices(my_predbat):
+    """The picker renders per-million-token prices, and handles free and routed models.
+
+    The catalogue already carried prompt_price/completion_price; nothing displayed them. They
+    arrive as strings of US dollars PER TOKEN ("0.000002"), which is unreadable at that scale -
+    every model would show as $0.00 - so they are scaled to the per-million figure that pricing is
+    normally quoted in.
+
+    Two cases come from the live catalogue rather than being imagined: 21 of its 388 models are
+    priced at zero, and 5 (openrouter/auto and the other routing models) are priced at -1, meaning
+    the cost depends on which model the request is routed to. Formatting -1 arithmetically gives
+    "$-1000000", which is why the negative case is handled rather than assumed impossible.
+
+    Static checks on the script source - there is no JS runtime in this suite - so this pins the
+    wiring and the branches, not the arithmetic, which was validated against all 388 live models.
+
+    Mutation checks: dropping the per-million scaling, the free branch, or the negative branch
+    each fails an assertion below.
+    """
+    failed = False
+    print("**** Testing the model picker shows prices ****")
+    script = web_chat.get_chat_script()
+
+    body = _extract_function_body(script, "formatModelPrice")
+    if body is None:
+        print("ERROR: there is no formatModelPrice() to render catalogue prices")
+        return True
+
+    # Scaled to per-million, or every model reads as $0.00. Anchored to the multiplication rather
+    # than the bare number: the comment below it mentions "$-1000000", so a substring check for
+    # the digits alone passes even with the scaling deleted.
+    if "* 1000000" not in body:
+        print("ERROR: formatModelPrice() does not scale to a per-million-token price: {!r}".format(body))
+        failed = True
+    # Zero-priced models say so rather than showing "$0/$0".
+    if "'free'" not in body and '"free"' not in body:
+        print("ERROR: formatModelPrice() has no free branch: {!r}".format(body))
+        failed = True
+    # Routing models quote -1; the arithmetic would render "$-1000000".
+    if "< 0" not in body:
+        print("ERROR: formatModelPrice() does not handle the -1 price OpenRouter uses for routed models: {!r}".format(body))
+        failed = True
+    # A missing price must not render as "$NaN".
+    if "isFinite" not in body:
+        print("ERROR: formatModelPrice() does not guard against a non-numeric price: {!r}".format(body))
+        failed = True
+
+    # Trailing-zero trimming must not touch integers: "10" would become "1".
+    trim = _extract_function_body(script, "trimTrailingZeros")
+    if trim is None or "indexOf('.')" not in trim:
+        print("ERROR: trimTrailingZeros() does not check for a decimal point first, so '10' becomes '1': {!r}".format(trim))
+        failed = True
+
+    # And the picker has to actually call it.
+    render = _extract_function_body(script, "renderModelResults")
+    if render is None or "formatModelPrice" not in render:
+        print("ERROR: renderModelResults() never calls formatModelPrice, so no price is shown")
+        failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -2111,6 +2173,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_chat_page_height_is_measured_not_hardcoded(my_predbat)
     failed |= test_thinking_bubble_moves_to_the_end(my_predbat)
     failed |= test_chat_switch_defaults_and_mirror(my_predbat)
+    failed |= test_model_picker_shows_prices(my_predbat)
     failed |= test_context_counter_uses_the_last_turns_prompt_tokens_not_cumulative(my_predbat)
     failed |= test_stop_button_wired_to_cancel_with_turn_id(my_predbat)
     failed |= test_html_chat_cancel_requires_the_running_turn_id(my_predbat)

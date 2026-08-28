@@ -159,7 +159,11 @@ to call it with, and the turn waits for you to **Approve** or **Reject** it. Tur
 if you would rather the agent act without asking first.
 
 A model search box under the message box lets you choose a different model for that one
-conversation. Click it and type to filter - OpenRouter offers several hundred tool-capable models,
+conversation. Each result shows its price and context window - the price is US dollars per
+million tokens, input then output, so `$2/$10  1000k` means $2 per million tokens in, $10 per
+million out, with a one-million-token context. Models that cost nothing show `free`, and
+OpenRouter's routing models (`openrouter/auto` and similar) show `varies`, because what they cost
+depends on which model they route your request to. Click it and type to filter - OpenRouter offers several hundred tool-capable models,
 so it filters on both id and name rather than being a plain dropdown. Your choice is remembered as
 the starting point for new conversations and survives a restart, so setting
 `openrouter_default_model` in `apps.yaml` is optional; if you do set it, it is what new
