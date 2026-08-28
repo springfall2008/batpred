@@ -11,6 +11,14 @@
 from datetime import datetime, timedelta
 from const import PREDBAT_MAX_CARS, MINUTE_WATT
 from prediction import Prediction
+import sys
+import matplotlib
+
+# Force the non-interactive Agg backend unless --plot was passed, otherwise merely importing
+# pyplot activates a GUI backend (bouncing the dock icon on macOS) even though plt.show() is
+# never called. Checked against sys.argv directly since this import runs before argparse.
+if "--plot" not in sys.argv:
+    matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 import asyncio
 import numpy as np
