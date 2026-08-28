@@ -124,6 +124,26 @@ def test_additional_load_enabled_false_profile(my_predbat):
     return failed
 
 
+def test_additional_load_enabled_string_profile(my_predbat):
+    """Test additional loads use the shared string-to-boolean conversion."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "disabled", "enabled": "false", "start_time": "20:00", "duration": 1.0, "energy": 0.5},
+        {"name": "numeric", "enabled": "1", "start_time": "21:00", "duration": 1.0, "energy": 0.5},
+        {"name": "connected", "enabled": "connected", "start_time": "22:00", "duration": 1.0, "energy": 0.5},
+    ]
+
+    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
+    if forecasts.get("disabled", {}).get("enabled") or load_adjust.get(20 * 60, 0.0):
+        print("ERROR: String false should disable an additional load")
+        failed = 1
+    if not forecasts.get("numeric", {}).get("enabled") or not forecasts.get("connected", {}).get("enabled"):
+        print("ERROR: Shared truthy string forms should enable additional loads")
+        failed = 1
+    return failed
+
+
 def test_additional_load_dishwasher_simple(my_predbat):
     """Test a simple dishwasher total energy forecast."""
     failed = 0
@@ -253,6 +273,33 @@ def test_additional_load_partial_duration_keeps_total_energy(my_predbat):
     return failed
 
 
+def test_additional_load_duration_rounding_keeps_final_slot(my_predbat):
+    """Test float round-off cannot remove the final scheduling slot."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.plan_interval_minutes = 5
+    my_predbat.args["plan_interval_minutes"] = 5
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "start_time": "12:00", "duration": 4.1, "slot_energy": 0.1},
+    ]
+
+    _, forecasts = my_predbat.fetch_additional_load_forecast()
+    forecast = forecasts.get("dishwasher", {})
+    target_times = forecast.get("target_times", [])
+    if forecast.get("slots") != 50 or forecast.get("total_energy") != 5.0:
+        print("ERROR: 4.1h at 5-minute intervals should keep 50 slots and 5.0kWh, got {}".format(forecast))
+        failed = 1
+    if not target_times or "T16:05:00" not in target_times[-1].get("start", "") or "T16:06:00" not in target_times[-1].get("end", ""):
+        print("ERROR: Duration rounding should retain the final one-minute slot, got {}".format(target_times[-1] if target_times else None))
+        failed = 1
+    my_predbat.archive_completed_additional_load_item(my_predbat.args["house_load_additional_forecast"][0], minutes_now_slot=17 * 60)
+    archived = my_predbat.house_load_additional_history
+    if len(archived) != 50 or "T16:06:00" not in archived[-1].get("end", ""):
+        print("ERROR: Duration rounding should retain the final archived slot, got {}".format(archived[-1] if archived else None))
+        failed = 1
+    return failed
+
+
 def test_additional_load_multiple_and_api_override(my_predbat):
     """Test multiple loads add together and API override updates one named load."""
     failed = 0
@@ -299,6 +346,36 @@ def test_additional_load_select_api_override(my_predbat):
 
     my_predbat.api_select("load_forecast_delta_api", "off")
     my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_api_removal_clears_runtime_metadata(my_predbat):
+    """Test bracket and off removal clear one-shot runtime metadata."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?start_time=18:00&duration=2.0&energy=1.2")
+    my_predbat.refresh_additional_load_forecast_api()
+    my_predbat.house_load_additional_forecast_overrides["dishwasher"]["_selected_start_minutes"] = 19 * 60
+    stored_command = my_predbat.api_select_update("load_forecast_delta_api")[0]
+
+    my_predbat.api_select("load_forecast_delta_api", "[{}]".format(stored_command))
+    my_predbat.refresh_additional_load_forecast_api()
+    if my_predbat.api_select_update("load_forecast_delta_api") or my_predbat.house_load_additional_forecast_overrides or my_predbat.house_load_additional_forecasts:
+        print(
+            "ERROR: Bracket removal should clear command, metadata, and forecast, got api {} metadata {} forecasts {}".format(
+                my_predbat.api_select_update("load_forecast_delta_api"), my_predbat.house_load_additional_forecast_overrides, my_predbat.house_load_additional_forecasts
+            )
+        )
+        failed = 1
+
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?start_time=20:00&duration=1.0&energy=0.4")
+    my_predbat.api_select("load_forecast_delta_api", "dryer?start_time=21:00&duration=1.0&energy=0.5")
+    my_predbat.refresh_additional_load_forecast_api()
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    if my_predbat.api_select_update("load_forecast_delta_api") or my_predbat.house_load_additional_forecast_overrides:
+        print("ERROR: Selecting off should clear every command and runtime override")
+        failed = 1
     return failed
 
 
@@ -383,6 +460,13 @@ def test_additional_load_delete_button_removes_api_forecast(my_predbat):
     if "button.predbat_load_forecast_delta_dishwasher_delete" in my_predbat.dashboard_values:
         print("ERROR: Delete button should remove dishwasher delete button")
         failed = 1
+    deleted_entities = {
+        "binary_sensor.predbat_load_forecast_delta_dishwasher",
+        "button.predbat_load_forecast_delta_dishwasher_delete",
+    }
+    if not deleted_entities.issubset(set(my_predbat.ha_interface.delete_state_calls)) or deleted_entities & set(my_predbat.ha_interface.dummy_items):
+        print("ERROR: Delete button should remove both entities from TestHAInterface")
+        failed = 1
 
     my_predbat.house_load_additional_forecast_overrides = {}
     return failed
@@ -409,6 +493,34 @@ def test_additional_load_delete_button_removes_sanitized_api_forecast(my_predbat
         print("ERROR: Sanitized delete button should be unpublished")
         failed = 1
 
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_delete_button_preserves_internal_delete_token(my_predbat):
+    """Test delete buttons strip only their terminal suffix from forecast names."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.api_select("load_forecast_delta_api", "auto_delete_timer?start_time=20:00&duration=1.0&energy=0.4")
+    my_predbat.api_select("load_forecast_delta_api", "auto_timer?start_time=21:00&duration=1.0&energy=0.5")
+    my_predbat.refresh_additional_load_forecast_api()
+
+    service_data = {
+        "domain": "button",
+        "service": "press",
+        "service_data": {"entity_id": "button.predbat_load_forecast_delta_auto_delete_timer_delete"},
+    }
+    run_async(my_predbat.trigger_callback(service_data))
+
+    remaining_names = {my_predbat.additional_load_command_name(command) for command in my_predbat.api_select_update("load_forecast_delta_api")}
+    if remaining_names != {"auto_timer"} or "auto_delete_timer" in my_predbat.house_load_additional_forecasts:
+        print("ERROR: Delete button should remove only auto_delete_timer, got names {} forecasts {}".format(remaining_names, my_predbat.house_load_additional_forecasts))
+        failed = 1
+    if "auto_timer" not in my_predbat.house_load_additional_forecasts:
+        print("ERROR: Delete button should preserve the separate auto_timer forecast")
+        failed = 1
+    my_predbat.api_select("load_forecast_delta_api", "off")
     my_predbat.house_load_additional_forecast_overrides = {}
     return failed
 
@@ -580,7 +692,7 @@ def test_additional_load_flexible_api_reselects_before_suggested_start(my_predba
     class FakePrediction:
         """Fake prediction scores 12:00 as cheapest regardless of the previous suggestion."""
 
-        def __init__(self, base, pv_step, pv10_step, load_step, load10_step):
+        def __init__(self, base, pv_step, pv10_step, load_step, load10_step, kernel_static_cache=None):
             """Store load step data."""
             self.load_step = load_step
 
@@ -880,6 +992,25 @@ def test_additional_load_flexible_done_by_next_reachable_deadline(my_predbat):
     return failed
 
 
+def test_additional_load_flexible_explicit_overnight_window(my_predbat):
+    """Test explicit overnight windows advance between real daily occurrences."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    load_item = {"start_time": "22:00", "end_time": "06:00"}
+    cases = [
+        (8 * 60 + 30, 22 * 60, 30 * 60),
+        (23 * 60, 23 * 60, 30 * 60),
+        (60, 60, 6 * 60),
+        (5 * 60, 22 * 60, 30 * 60),
+    ]
+    for minutes_now, expected_start, expected_end in cases:
+        start_minutes, end_minutes = my_predbat.get_additional_load_window(load_item, "flexible", 2.0, 30, minutes_now)
+        if (start_minutes, end_minutes) != (expected_start, expected_end):
+            print("ERROR: Overnight window at minute {} expected {}-{} got {}-{}".format(minutes_now, expected_start, expected_end, start_minutes, end_minutes))
+            failed = 1
+    return failed
+
+
 def test_additional_load_flexible_api_omitted_start_is_frozen(my_predbat):
     """Test API flexible forecasts without start_time keep their initial requested start."""
     failed = 0
@@ -952,7 +1083,7 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
     class FakePrediction:
         """Fake prediction makes raw cost prefer 00:00 while full metric prefers 01:00."""
 
-        def __init__(self, base, pv_step, pv10_step, load_step, load10_step):
+        def __init__(self, base, pv_step, pv10_step, load_step, load10_step, kernel_static_cache=None):
             """Store load step data."""
             self.load_step = load_step
 
@@ -1011,6 +1142,18 @@ def test_additional_load_flexible_candidate_energy_conserved(my_predbat):
     if total_energy != 0.15 or step_total != 0.15:
         print("ERROR: Flexible candidate should add exactly 0.15kWh, got profile {} step {} data {}".format(total_energy, step_total, load_step))
         failed = 1
+
+    my_predbat.plan_interval_minutes = 5
+    my_predbat.args["plan_interval_minutes"] = 5
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "mode": "flexible", "start_time": "10:15", "end_time": "15:00", "duration": 4.1, "energy": 5.0},
+    ]
+    _, forecasts = my_predbat.fetch_additional_load_forecast()
+    forecast = forecasts.get("dishwasher", {})
+    candidate_adjust, target_times, total_energy = my_predbat.additional_load_candidate_profile(forecast, 10 * 60 + 15)
+    if len(target_times) != 50 or total_energy != 5.0 or round(sum(my_predbat.add_additional_load_to_step_data({}, candidate_adjust).values()), 4) != 5.0 or "T14:21:00" not in target_times[-1].get("end", ""):
+        print("ERROR: Flexible 4.1h candidate should retain 50 slots through 14:21 and 5.0kWh, got slots {} energy {} last {}".format(len(target_times), total_energy, target_times[-1] if target_times else None))
+        failed = 1
     return failed
 
 
@@ -1033,12 +1176,14 @@ def test_additional_load_flexible_max_hours_caps_search(my_predbat):
 
     original_prediction = additional_load_module.Prediction
     original_compute_metric = my_predbat.compute_metric
+    prediction_caches = []
 
     class FakePrediction:
         """Trivial prediction returning a constant cost for every candidate."""
 
-        def __init__(self, base, pv_step, pv10_step, load_step, load10_step):
-            """Ignore inputs."""
+        def __init__(self, base, pv_step, pv10_step, load_step, load10_step, kernel_static_cache=None):
+            """Record the shared kernel static cache."""
+            prediction_caches.append(kernel_static_cache)
 
         def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record):
             """Return a constant zero-cost prediction tuple."""
@@ -1061,6 +1206,97 @@ def test_additional_load_flexible_max_hours_caps_search(my_predbat):
     forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
     if forecast.get("candidate_count") != 4:
         print("ERROR: flexible_max_hours=2 should bound the search to 4 candidates, got {}".format(forecast.get("candidate_count")))
+        failed = 1
+    if len(prediction_caches) != 5 or prediction_caches[0] is None or any(cache is not prediction_caches[0] for cache in prediction_caches):
+        print("ERROR: Flexible candidate predictions should share one kernel static cache, got {}".format(prediction_caches))
+        failed = 1
+    return failed
+
+
+def test_additional_load_flexible_selection_skips_fast_plan_cycle(my_predbat):
+    """Test non-recompute plan cycles do not run the flexible candidate search."""
+    from unit_test import create_predbat
+
+    failed = 0
+    test_predbat = create_predbat()
+    configure_additional_load_test(test_predbat)
+    test_predbat.args["threads"] = 0
+    test_predbat.calculate_best = True
+    test_predbat.plan_last_updated_minutes = test_predbat.minutes_now
+    selector_calls = []
+
+    def record_selector(load_step, load_step10, pv_step, pv_step10):
+        """Record an unexpected flexible candidate search."""
+        selector_calls.append(True)
+        return False, load_step, load_step10
+
+    test_predbat.select_flexible_additional_loads = record_selector
+    recomputed = test_predbat.calculate_plan(recompute=False, publish=False)
+    if recomputed or selector_calls:
+        print("ERROR: Fast plan cycle should not recompute or select flexible loads, got recompute {} calls {}".format(recomputed, len(selector_calls)))
+        failed = 1
+    return failed
+
+
+def test_additional_load_flexible_followup_retains_better_plan(my_predbat):
+    """Test flexible-load follow-up optimisation uses the normal plan-retention gate."""
+    from unit_test import create_predbat
+
+    failed = 0
+    test_predbat = create_predbat()
+    configure_additional_load_test(test_predbat)
+    test_predbat.args["threads"] = 0
+    test_predbat.calculate_best = True
+    test_predbat.plan_valid = False
+    test_predbat.metric_min_improvement_plan = 2.0
+    optimise_calls = []
+    metric_plans = []
+
+    plan_a = ([5.0], [{"start": 700, "end": 730, "average": 5.0}], [{"start": 800, "end": 830, "average": 20.0}], [100.0])
+    plan_b = ([6.0], [{"start": 710, "end": 740, "average": 5.0}], [{"start": 810, "end": 840, "average": 20.0}], [50.0])
+
+    def copy_plan(plan):
+        """Copy a four-part test plan including nested windows."""
+        return (plan[0].copy(), [window.copy() for window in plan[1]], [window.copy() for window in plan[2]], plan[3].copy())
+
+    def fake_run_prediction(*args, **kwargs):
+        """Return a deterministic valid prediction result."""
+        return (0.0,) * 11
+
+    def fake_optimise(metric, metric_keep, debug_mode):
+        """Install plan A first, then a slightly cheaper but less stable plan B."""
+        optimise_calls.append(True)
+        selected = plan_a if len(optimise_calls) == 1 else plan_b
+        test_predbat.charge_limit_best, test_predbat.charge_window_best, test_predbat.export_window_best, test_predbat.export_limits_best = copy_plan(selected)
+        return copy_plan(selected)
+
+    def fake_select(load_step, load_step10, pv_step, pv_step10):
+        """Simulate a changed flexible-load selection that requires a second optimisation."""
+        test_predbat.house_load_additional_flexible_selection_changed = True
+        test_predbat.house_load_additional_forecast_adjust = {900: 0.5}
+        return True, load_step, load_step10
+
+    def fake_run_prediction_metric(charge_limit, charge_window, export_window, export_limits, end_record=None):
+        """Score plan B one unit better, below the configured replacement threshold."""
+        metric_plans.append(copy_plan((charge_limit, charge_window, export_window, export_limits)))
+        metric = 99.0 if charge_limit == plan_b[0] else 100.0
+        return metric, 0.0, metric, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    test_predbat.run_prediction = fake_run_prediction
+    test_predbat.optimise_best_windows_once = fake_optimise
+    test_predbat.select_flexible_additional_loads = fake_select
+    test_predbat.run_prediction_metric = fake_run_prediction_metric
+    test_predbat.calculate_plan(recompute=True, publish=False)
+
+    final_plan = (test_predbat.charge_limit_best, test_predbat.charge_window_best, test_predbat.export_window_best, test_predbat.export_limits_best)
+    if len(optimise_calls) != 2:
+        print("ERROR: Flexible selection should trigger exactly two optimisation passes, got {}".format(len(optimise_calls)))
+        failed = 1
+    if final_plan != plan_a or test_predbat.plan_preclip != plan_a:
+        print("ERROR: Follow-up plan below the improvement threshold should restore plan A, got plan {} preclip {}".format(final_plan, test_predbat.plan_preclip))
+        failed = 1
+    if metric_plans != [plan_b, plan_a]:
+        print("ERROR: Follow-up retention should compare pre-clip plan B against plan A, got {}".format(metric_plans))
         failed = 1
     return failed
 
@@ -1087,7 +1323,7 @@ def test_additional_load_flexible_unchanged_selection_not_marked_changed(my_pred
     class FakePrediction:
         """Fake prediction scores the existing 01:00 selection as cheapest."""
 
-        def __init__(self, base, pv_step, pv10_step, load_step, load10_step):
+        def __init__(self, base, pv_step, pv10_step, load_step, load10_step, kernel_static_cache=None):
             """Store load step data."""
             self.load_step = load_step
 
@@ -1159,6 +1395,18 @@ def test_additional_load_textual_plan_summary(my_predbat):
             "suggested_start": "2026-05-07T21:00:00+02:00",
             "suggested_end": "2026-05-08T00:00:00+02:00",
         },
+        "heater": {
+            "enabled": True,
+            "mode": "flexible",
+            "energy": 0.0,
+            "slot_energy": 0.1,
+            "duration": 4.1,
+            "plan_interval_minutes": 5,
+            "target_times": [],
+            "total_energy": 0.0,
+            "suggested_start": "2026-05-07T12:00:00+02:00",
+            "suggested_end": "2026-05-07T16:06:00+02:00",
+        },
         "pending": {"enabled": True, "total_energy": 1.0, "target_times": []},
     }
 
@@ -1171,6 +1419,9 @@ def test_additional_load_textual_plan_summary(my_predbat):
         failed = 1
     if "dryer is running from 21:00 to 00:00 using 0.90 kWh" not in text:
         print("ERROR: Textual plan should include running dryer load, got {}".format(text))
+        failed = 1
+    if "heater is suggested from 12:00 to 16:06 using 5.00 kWh" not in text:
+        print("ERROR: Textual plan should retain the rounded heater duration, got {}".format(text))
         failed = 1
     if "pending" in text:
         print("ERROR: Textual plan should not include pending load, got {}".format(text))
@@ -1264,6 +1515,30 @@ def test_additional_load_history_prunes_old_records(my_predbat):
     return failed
 
 
+def test_additional_load_history_rejects_naive_timestamps(my_predbat):
+    """Test naive persisted timestamps are skipped instead of raising TypeError."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    recent_start = my_predbat.now_utc - timedelta(hours=1)
+    naive_start = recent_start.replace(tzinfo=None)
+    my_predbat.house_load_additional_history = [
+        {"id": "naive", "start": naive_start.isoformat(), "end": (naive_start + timedelta(minutes=30)).isoformat(), "energy": 0.3},
+        {"id": "aware", "start": recent_start.isoformat(), "end": (recent_start + timedelta(minutes=30)).isoformat(), "energy": 0.3},
+    ]
+
+    if my_predbat.additional_load_stamp_to_minutes(naive_start.isoformat()) is not None:
+        print("ERROR: Naive API metadata timestamp should be rejected")
+        failed = 1
+    if my_predbat.additional_load_history_record_minutes(my_predbat.house_load_additional_history[0]) != (None, None):
+        print("ERROR: Naive history timestamp should be rejected")
+        failed = 1
+    my_predbat.prune_additional_load_history()
+    if [record.get("id") for record in my_predbat.house_load_additional_history] != ["aware"]:
+        print("ERROR: History pruning should skip naive timestamps, got {}".format(my_predbat.house_load_additional_history))
+        failed = 1
+    return failed
+
+
 def test_additional_load_history_restores_from_storage(my_predbat):
     """Test additional load history is restored from persistent storage."""
     failed = 0
@@ -1308,18 +1583,22 @@ def run_additional_load_forecast_tests(my_predbat):
     print("Test additional load forecast")
     failed |= test_additional_load_disabled(my_predbat)
     failed |= test_additional_load_enabled_false_profile(my_predbat)
+    failed |= test_additional_load_enabled_string_profile(my_predbat)
     failed |= test_additional_load_dishwasher_simple(my_predbat)
     failed |= test_additional_load_end_time_without_duration(my_predbat)
     failed |= test_additional_load_slot_energy_weighting(my_predbat)
     failed |= test_additional_load_dishwasher_total_energy(my_predbat)
     failed |= test_additional_load_dishwasher_total_energy_weighting(my_predbat)
     failed |= test_additional_load_partial_duration_keeps_total_energy(my_predbat)
+    failed |= test_additional_load_duration_rounding_keeps_final_slot(my_predbat)
     failed |= test_additional_load_multiple_and_api_override(my_predbat)
     failed |= test_additional_load_select_api_override(my_predbat)
+    failed |= test_additional_load_api_removal_clears_runtime_metadata(my_predbat)
     failed |= test_additional_load_select_api_weighting(my_predbat)
     failed |= test_additional_load_select_event_updates_adjustment(my_predbat)
     failed |= test_additional_load_delete_button_removes_api_forecast(my_predbat)
     failed |= test_additional_load_delete_button_removes_sanitized_api_forecast(my_predbat)
+    failed |= test_additional_load_delete_button_preserves_internal_delete_token(my_predbat)
     failed |= test_additional_load_yaml_does_not_publish_delete_button(my_predbat)
     failed |= test_additional_load_api_forecast_auto_expires(my_predbat)
     failed |= test_additional_load_yaml_placeholder_not_published(my_predbat)
@@ -1334,11 +1613,14 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_flexible_pending_until_plan(my_predbat)
     failed |= test_additional_load_flexible_done_by_window(my_predbat)
     failed |= test_additional_load_flexible_done_by_next_reachable_deadline(my_predbat)
+    failed |= test_additional_load_flexible_explicit_overnight_window(my_predbat)
     failed |= test_additional_load_flexible_api_omitted_start_is_frozen(my_predbat)
     failed |= test_additional_load_flexible_yaml_omitted_start_rolls(my_predbat)
     failed |= test_additional_load_flexible_prediction_metric_selection(my_predbat)
     failed |= test_additional_load_flexible_candidate_energy_conserved(my_predbat)
     failed |= test_additional_load_flexible_max_hours_caps_search(my_predbat)
+    failed |= test_additional_load_flexible_selection_skips_fast_plan_cycle(my_predbat)
+    failed |= test_additional_load_flexible_followup_retains_better_plan(my_predbat)
     failed |= test_additional_load_flexible_unchanged_selection_not_marked_changed(my_predbat)
     failed |= test_additional_load_textual_plan_summary(my_predbat)
     failed |= test_additional_load_history_archives_expired_api(my_predbat)
@@ -1346,6 +1628,7 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_history_filters_historical_load(my_predbat)
     failed |= test_additional_load_history_does_not_archive_future_slots(my_predbat)
     failed |= test_additional_load_history_prunes_old_records(my_predbat)
+    failed |= test_additional_load_history_rejects_naive_timestamps(my_predbat)
     failed |= test_additional_load_history_restores_from_storage(my_predbat)
     failed |= test_additional_load_history_archives_end_time_without_duration(my_predbat)
     return failed
