@@ -404,7 +404,19 @@ It is deliberately narrow:
 - **It refuses any credential-like key outright** - anything matching the same `_key`, `password`,
   `secret` or `token` heuristic `get_apps` masks. Neither the model nor an instruction hidden in
   something it read (a fetched web page, a documentation search result) can use this tool to set
-  or swap an API key.
+  or swap an API key. The check runs on every part of a nested path, so
+  `forecast_solar[0].api_key` is refused just as `ha_key` is.
+- **It refuses the keys that decide where your credentials are sent** - `ha_url`,
+  `openrouter_base_url` and anything ending `_url`, `_host` or `_endpoint`. Guarding the
+  credential alone is not enough: repointing `ha_url` leaves `ha_key` untouched while sending it
+  to somewhere else entirely.
+- **It can change one value inside a nested structure**, using a path such as
+  `forecast_solar[0].azimuth` - the same dotted-path syntax the web editor uses. This is how you
+  change one roof's direction without rewriting the whole `forecast_solar` list. It matters for
+  more than convenience: credentials are masked when the model reads them, so if it wrote a whole
+  list back it would carry that mask into the file and overwrite the real key. Writing a
+  container whose credential has been replaced by the mask is refused for exactly that reason,
+  with an error pointing at the nested path instead.
 - **It checks the new value's type against `apps.yaml`'s schema** where the key has one, so a
   value that would stop Predbat parsing its own configuration next start-up is refused before it
   is written, not discovered after a restart.

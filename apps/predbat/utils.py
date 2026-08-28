@@ -41,6 +41,10 @@ SECRET_KEY_SUBSTRINGS = ("_key", "password", "secret", "token")
 # debugging "my cloud integration stopped working", so keep it readable.
 SECRET_KEY_EXEMPT_SUFFIXES = ("_expires_at", "_expires", "_expiry", "_expiration", "_birth")
 
+# What a redacted credential is replaced with. Named because find_redacted_secret_overwrite()
+# has to recognise it coming back in on a write, so the writer and the redactor must agree.
+SECRET_MASK = "xxx"
+
 # Use datetime.fromisoformat in str2time rather than strptime, set False to revert to strptime
 STR2TIME_USE_FROMISOFORMAT = True
 
@@ -155,7 +159,7 @@ def _mask_secrets_in_place(value):
     if isinstance(value, dict):
         for key in value:
             if is_secret_key(key):
-                value[key] = "xxx"
+                value[key] = SECRET_MASK
             else:
                 _mask_secrets_in_place(value[key])
     elif isinstance(value, list):
@@ -342,6 +346,82 @@ def is_data_numerical(history, attribute=None):
 ROOT_YAML_KEY = "pred_bat"
 
 
+def parse_yaml_path(path):
+    """
+    Split a dot-notation apps.yaml path into its segments, with "[n]" indexes as their own entry.
+
+    "forecast_solar[0].azimuth" becomes ["forecast_solar", "[0]", "azimuth"]. Shared by
+    update_nested_yaml_value(), resolve_nested_yaml_value() and set_apps_config()'s guards so all
+    three agree on what a path means - a second copy of this parsing would eventually disagree
+    with the writer about which segment is the leaf, which is the segment the credential checks
+    depend on.
+    """
+    keys = []
+    for key in path.split("."):
+        if "[" in key and "]" in key:
+            # Handle keys with square brackets, e.g., "battery_charge_low[0]"
+            base_key, index = key.split("[")
+            index = index.rstrip("]")
+            keys.append(base_key)
+            keys.append(f"[{index}]")
+        else:
+            keys.append(key)
+    return keys
+
+
+def resolve_nested_yaml_value(data, path):
+    """
+    Return the value a dot-notation path points at, raising KeyError if any segment is missing.
+
+    The read-only twin of update_nested_yaml_value(), so a caller can confirm a path exists and
+    read its current value *before* taking a backup and writing - update_nested_yaml_value raises
+    part-way through otherwise, after the caller has already committed to the write.
+    """
+    keys = parse_yaml_path(path)
+    current = data
+    for key in keys:
+        if key.startswith("[") and key.endswith("]"):
+            index = int(key[1:-1])
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError("Index '{}' out of range in path '{}'".format(index, path))
+            current = current[index]
+        else:
+            try:
+                contains = key in current
+            except TypeError:
+                contains = False
+            if not contains:
+                raise KeyError("Key '{}' not found in path '{}'".format(key, path))
+            current = current[key]
+    return current
+
+
+def find_redacted_secret_overwrite(previous_value, new_value):
+    """
+    Return the name of a credential a write would replace with the redaction placeholder.
+
+    get_apps_config redacts credentials to "xxx", so a model that reads a container, edits one
+    field and writes the whole thing back would store the literal "xxx" over a live key - the
+    read-modify-write round trip silently destroys the credential it was careful not to read.
+    Returns None when nothing is at risk, so the caller can refuse and point at the nested path
+    instead of the container.
+    """
+    if isinstance(new_value, dict) and isinstance(previous_value, dict):
+        for key, item in new_value.items():
+            if is_secret_key(key) and item == SECRET_MASK and previous_value.get(key) not in (None, SECRET_MASK):
+                return key
+            found = find_redacted_secret_overwrite(previous_value.get(key), item)
+            if found:
+                return found
+    elif isinstance(new_value, list) and isinstance(previous_value, list):
+        for index, item in enumerate(new_value):
+            if index < len(previous_value):
+                found = find_redacted_secret_overwrite(previous_value[index], item)
+                if found:
+                    return found
+    return None
+
+
 def update_nested_yaml_value(data, path, value):
     """
     Update a nested value in YAML data using a dot-notation path, e.g. "battery_charge_low.normal"
@@ -353,18 +433,7 @@ def update_nested_yaml_value(data, path, value):
     one - is not already present, which is what gives both callers their "a key must already exist
     to be changed" rule for free, rather than each having to check it separately.
     """
-    pre_keys = path.split(".")
-    keys = []
-    # Split out set of square brackets into a different key
-    for key in pre_keys:
-        if "[" in key and "]" in key:
-            # Handle keys with square brackets, e.g., "battery_charge_low[0]"
-            base_key, index = key.split("[")
-            index = index.rstrip("]")
-            keys.append(base_key)
-            keys.append(f"[{index}]")
-        else:
-            keys.append(key)
+    keys = parse_yaml_path(path)
 
     current = data
 

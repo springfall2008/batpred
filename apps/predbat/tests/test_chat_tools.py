@@ -28,6 +28,7 @@ import shutil
 import tempfile
 
 import chat_tools
+from utils import mask_secret_args
 from chat_tools import CHAT_TOOL_DEFS, score_documents, search_docs, read_source, search_source, resolve_source_path, SourceAccessError, is_endpoint_key
 from chat_tools import DEFAULT_FETCH_ALLOWLIST, FetchRefusedError, host_allowed, html_to_text, validate_fetch_target
 from chat_tools import APPS_YAML_RESTART_WARNING, set_apps_config, validate_apps_schema_type
@@ -1000,6 +1001,172 @@ def test_set_apps_config_refuses_endpoint_keys(my_predbat):
     return failed
 
 
+def test_set_apps_config_nested_paths(my_predbat):
+    """A nested path changes one value inside a structure without touching a sibling credential.
+
+    This is the whole point of accepting a path: forecast_solar is a list of dicts each holding
+    its own api_key, so before this the only way to change a roof's azimuth was to write the
+    entire list back - and since get_apps_config masks the key, that round trip stored the
+    literal 'xxx' over a live credential.
+
+    Mutation checks: reverting the existence check to 'key in section' makes the accepted path
+    below fail as "not found"; dropping the per-segment credential loop makes the api_key path
+    succeed; dropping find_redacted_secret_overwrite makes the container write succeed and
+    replace the key with 'xxx'.
+    """
+    failed = False
+    print("**** Testing set_apps_config nested paths ****")
+
+    # my_predbat is shared across the whole suite, so args must be restored however this exits -
+    # leaving a fixture's args in place breaks unrelated tests that run later, which is exactly
+    # what happened the first time this test was written.
+    saved_args = my_predbat.args
+    try:
+        failed = _nested_path_checks(my_predbat)
+    finally:
+        my_predbat.args = saved_args
+    return failed
+
+
+def _nested_path_checks(my_predbat):
+    """Body of test_set_apps_config_nested_paths, with my_predbat.args restored by its caller."""
+    failed = False
+
+    nested_yaml = """pred_bat:
+  num_inverters: 1
+  forecast_solar:
+  - postcode: 'SW1A 1AA'
+    azimuth: 180
+    api_key: REAL-FORECAST-SOLAR-KEY
+"""
+    real_key = "REAL-FORECAST-SOLAR-KEY"
+
+    def _fixture():
+        """Write the nested fixture to a fresh temp dir, returning (root, path)."""
+        root = tempfile.mkdtemp(prefix="predbat_apps_")
+        path = os.path.join(root, "apps.yaml")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(nested_yaml)
+        return root, path
+
+    def _live_args():
+        """The args dict Predbat would be holding for this fixture."""
+        return {"num_inverters": 1, "forecast_solar": [{"postcode": "SW1A 1AA", "azimuth": 180, "api_key": real_key}]}
+
+    # A nested path is accepted, changes only the value named, and leaves the key alone.
+    root, apps_path = _fixture()
+    try:
+        my_predbat.args = _live_args()
+        result = set_apps_config(my_predbat, "forecast_solar[0].azimuth", 90, apps_yaml_path=apps_path, backup_path=apps_path + ".backup")
+        if not result.get("success"):
+            print("ERROR: a nested path was refused: {}".format(result))
+            failed = True
+        written = open(apps_path, "r", encoding="utf-8").read()
+        if "azimuth: 90" not in written:
+            print("ERROR: the nested write did not change azimuth:\n{}".format(written))
+            failed = True
+        if real_key not in written:
+            print("ERROR: the nested write damaged the sibling api_key:\n{}".format(written))
+            failed = True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # A nested path whose leaf names a credential is refused.
+    root, apps_path = _fixture()
+    try:
+        my_predbat.args = _live_args()
+        original = open(apps_path, "r", encoding="utf-8").read()
+        result = set_apps_config(my_predbat, "forecast_solar[0].api_key", "stolen", apps_yaml_path=apps_path, backup_path=apps_path + ".backup")
+        if result.get("success"):
+            print("ERROR: a nested credential path was accepted: {}".format(result))
+            failed = True
+        if "credential" not in str(result.get("error", "")).lower():
+            print("ERROR: the nested credential refusal did not explain why: {}".format(result))
+            failed = True
+        if open(apps_path, "r", encoding="utf-8").read() != original:
+            print("ERROR: apps.yaml changed despite refusing the nested credential path")
+            failed = True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # Writing a whole container back, carrying the mask the model was shown, is refused.
+    root, apps_path = _fixture()
+    try:
+        my_predbat.args = _live_args()
+        original = open(apps_path, "r", encoding="utf-8").read()
+        as_the_model_saw_it = mask_secret_args({"forecast_solar": _live_args()["forecast_solar"]})["forecast_solar"]
+        as_the_model_saw_it[0]["azimuth"] = 90
+        result = set_apps_config(my_predbat, "forecast_solar", as_the_model_saw_it, apps_yaml_path=apps_path, backup_path=apps_path + ".backup")
+        if result.get("success"):
+            print("ERROR: a container write carrying the redaction placeholder was accepted: {}".format(result))
+            failed = True
+        if open(apps_path, "r", encoding="utf-8").read() != original:
+            print("ERROR: apps.yaml changed despite refusing the clobbering container write")
+            failed = True
+        if real_key not in open(apps_path, "r", encoding="utf-8").read():
+            print("ERROR: the real credential was destroyed by a refused write")
+            failed = True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # A container write that carries the credential through unchanged is still allowed - the
+    # guard must catch the mask, not block every list edit.
+    root, apps_path = _fixture()
+    try:
+        my_predbat.args = _live_args()
+        intact = [{"postcode": "SW1A 1AA", "azimuth": 90, "api_key": real_key}]
+        result = set_apps_config(my_predbat, "forecast_solar", intact, apps_yaml_path=apps_path, backup_path=apps_path + ".backup")
+        if not result.get("success"):
+            print("ERROR: a container write carrying the real credential was refused: {}".format(result))
+            failed = True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # A credential in a NON-leaf segment is refused. This is what the per-segment loop is for and
+    # a whole-path check cannot do: is_secret_key matches on substrings, so testing the joined
+    # path string catches "forecast_solar[0].api_key" by accident - but "password.token_expires"
+    # ends with the exempt suffix "_expires", so the joined string is judged safe while the
+    # segment "password" is plainly not.
+    secret_parent_yaml = """pred_bat:
+  num_inverters: 1
+  password:
+    token_expires: 100
+"""
+    root = tempfile.mkdtemp(prefix="predbat_apps_")
+    try:
+        apps_path = os.path.join(root, "apps.yaml")
+        with open(apps_path, "w", encoding="utf-8") as handle:
+            handle.write(secret_parent_yaml)
+        original = open(apps_path, "r", encoding="utf-8").read()
+        my_predbat.args = {"num_inverters": 1, "password": {"token_expires": 100}}
+        result = set_apps_config(my_predbat, "password.token_expires", 200, apps_yaml_path=apps_path, backup_path=apps_path + ".backup")
+        if result.get("success"):
+            print("ERROR: a path descending through a credential key was accepted: {}".format(result))
+            failed = True
+        if open(apps_path, "r", encoding="utf-8").read() != original:
+            print("ERROR: apps.yaml changed despite refusing a path through a credential key")
+            failed = True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # A path into something that does not exist is still refused, and refused before any backup.
+    root, apps_path = _fixture()
+    try:
+        my_predbat.args = _live_args()
+        for bad in ("forecast_solar[7].azimuth", "forecast_solar[0].no_such_field", "no_such_key.child"):
+            result = set_apps_config(my_predbat, bad, 1, apps_yaml_path=apps_path, backup_path=apps_path + ".backup")
+            if result.get("success"):
+                print("ERROR: nonexistent path {} was accepted".format(bad))
+                failed = True
+            if os.path.exists(apps_path + ".backup"):
+                print("ERROR: a backup was taken for the refused path {}".format(bad))
+                failed = True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    return failed
+
+
 def run_chat_tools_tests(my_predbat):
     """Run every chat-only tool test, returning True if any of them failed."""
     failed = False
@@ -1022,6 +1189,7 @@ def run_chat_tools_tests(my_predbat):
     failed |= test_set_apps_config_requires_a_key(my_predbat)
     failed |= test_set_apps_config_refuses_credential_key(my_predbat)
     failed |= test_set_apps_config_refuses_endpoint_keys(my_predbat)
+    failed |= test_set_apps_config_nested_paths(my_predbat)
     failed |= test_set_apps_config_refuses_unknown_key(my_predbat)
     failed |= test_set_apps_config_refuses_a_schema_type_mismatch(my_predbat)
     failed |= test_set_apps_config_success_preserves_formatting_backs_up_and_mirrors_args(my_predbat)

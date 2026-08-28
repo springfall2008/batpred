@@ -32,7 +32,7 @@ from urllib.parse import urljoin, urlparse
 
 from ruamel.yaml import YAML
 
-from utils import ROOT_YAML_KEY, is_secret_key, update_nested_yaml_value
+from utils import ROOT_YAML_KEY, SECRET_MASK, find_redacted_secret_overwrite, is_secret_key, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value
 
 DOCS_SITE_ROOT = "https://springfall2008.github.io/batpred/"
 DOCS_INDEX_URL = DOCS_SITE_ROOT + "search/search_index.json"
@@ -114,7 +114,10 @@ CHAT_TOOL_DEFS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "key": {"type": "string", "description": "The apps.yaml key to change - must already exist"},
+                "key": {
+                    "type": "string",
+                    "description": "The apps.yaml key to change - must already exist. Use a dotted path to change one value inside a nested structure, e.g. 'forecast_solar[0].azimuth' to change one roof's direction without rewriting the whole list. Prefer this over writing a whole list or dict back: credentials are masked when you read them, so writing a container back would overwrite the real one.",
+                },
                 "value": {"description": "The new value - a string, number, boolean, or list, matching the shape apps.yaml already expects for this key"},
             },
             "required": ["key", "value"],
@@ -580,10 +583,16 @@ def set_apps_config(base, key, value, apps_yaml_path=APPS_YAML_PATH, backup_path
     """
     if not key or not isinstance(key, str):
         return {"success": False, "error": "'key' must be a non-empty string", "data": None}
-    if is_secret_key(key):
-        return {"success": False, "error": "'{}' looks like a credential (matches Predbat's secret-key heuristic) and cannot be changed through chat. Edit apps.yaml directly if it needs to change.".format(key), "data": None}
-    if is_endpoint_key(key):
-        return {"success": False, "error": "'{}' decides where Predbat sends its credentials, so it cannot be changed through chat. Edit apps.yaml directly if it needs to change.".format(key), "data": None}
+    # Checked per path segment, not on the whole path string: for "forecast_solar[0].api_key" it
+    # is the leaf that names the credential, and a whole-path check would miss it. Index segments
+    # ("[0]") are skipped - they name a position, not a key.
+    for segment in parse_yaml_path(key):
+        if segment.startswith("[") and segment.endswith("]"):
+            continue
+        if is_secret_key(segment):
+            return {"success": False, "error": "'{}' looks like a credential (matches Predbat's secret-key heuristic) and cannot be changed through chat. Edit apps.yaml directly if it needs to change.".format(segment), "data": None}
+        if is_endpoint_key(segment):
+            return {"success": False, "error": "'{}' decides where Predbat sends its credentials, so it cannot be changed through chat. Edit apps.yaml directly if it needs to change.".format(segment), "data": None}
 
     yaml = YAML()
     yaml.preserve_quotes = True
@@ -597,17 +606,32 @@ def set_apps_config(base, key, value, apps_yaml_path=APPS_YAML_PATH, backup_path
         return {"success": False, "error": "'{}' section not found in apps.yaml".format(ROOT_YAML_KEY), "data": None}
     section = data[ROOT_YAML_KEY]
 
+    # Resolved read-only first so a bad path is reported before a backup is taken and the write
+    # begun - update_nested_yaml_value raises part-way through otherwise.
     try:
-        key_exists = key in section
-    except TypeError:
-        key_exists = False
-    if not key_exists:
+        previous_value = resolve_nested_yaml_value(section, key)
+    except (KeyError, ValueError):
         return {"success": False, "error": "'{}' was not found in apps.yaml. This tool can only change a key that already exists, not add new configuration.".format(key), "data": None}
-    previous_value = section[key]
 
+    # APPS_SCHEMA is keyed by top-level name, so a nested path finds no entry and skips the type
+    # check - the same as any key the schema does not describe.
     type_error = validate_apps_schema_type(key, value)
     if type_error:
         return {"success": False, "error": type_error, "data": None}
+
+    # get_apps_config hands back credentials as SECRET_MASK, so a model that reads a container,
+    # changes one field and writes the whole thing back would store "xxx" over a live key. Refuse
+    # and name the nested path, which changes the one field without carrying the credential
+    # through the model at all.
+    clobbered = find_redacted_secret_overwrite(previous_value, value)
+    if clobbered:
+        return {
+            "success": False,
+            "error": "This would overwrite '{}' with the redacted placeholder '{}', destroying the real credential - it was masked when you read it. Change the single value you mean to change instead, using a path such as '{}[0].some_setting'.".format(
+                clobbered, SECRET_MASK, key
+            ),
+            "data": None,
+        }
 
     try:
         shutil.copy2(apps_yaml_path, backup_path)
