@@ -844,7 +844,7 @@ keeps the existing test call site valid.
 | --------- | --------- |
 | 401 from OpenRouter | `error` event: "OpenRouter rejected the API key — check `openrouter_api_key`" |
 | 402 | Surfaced verbatim; it means the account is out of credit |
-| 429 | "Rate limited by OpenRouter, try again shortly"; the turn ends rather than retrying, so a user is never billed for a silent retry storm |
+| 429 | Retried with a longer first backoff, then reported. The original rule here ended the turn "so a user is never billed for a silent retry storm" - that reasoning was wrong: a 429 means the request was rejected, so no tokens were processed and nothing was billed. Retrying costs time, not money, and the three-attempt cap bounds it |
 | Timeout / connection error | `error` event naming the endpoint; `count_errors` incremented so the Components tab reflects it |
 | Model does not support tools | Detected at selection from the catalogue and refused with an explanation; if it slips through, the missing `tool_calls` simply yields a text answer |
 | Tool raises | Caught per call; the exception text becomes the tool result so the model can react |
