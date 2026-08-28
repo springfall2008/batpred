@@ -486,10 +486,30 @@ html {
 body {
     display: flex;
     flex-direction: column;
+    /* border-box is what makes this height correct. The menu bar is position: fixed, so the
+       global stylesheet gives body padding-top: 65px to clear it - and under the default
+       content-box that padding is ADDED to the height here, making the page 65px taller than the
+       window. That is what pushed the composer and Send button off the bottom, and no amount of
+       adjusting the number would have fixed it while the padding sat outside. The 10px is body's
+       own 5px margins, which stay outside the box either way. */
+    box-sizing: border-box;
     height: calc(100vh - 10px);
     /* Belt and braces alongside html above: this stops a stray wide child scrolling the page
        body, html stops it scrolling the document. */
     overflow: hidden;
+}
+
+/* Predbat's global stylesheet sets `p { white-space: nowrap }` for its data tables. That applies
+   to every paragraph in the app, including the ones the markdown renderer produces for chat
+   replies - and white-space: nowrap forbids wrapping outright, so no amount of overflow-wrap can
+   act on it. This is why the model's answers ran off the right of their bubble however the
+   bubbles were sized: the text was never allowed to wrap in the first place. Restored to normal
+   for chat content only, leaving the tables that rule exists for alone. */
+#chat-page p,
+#chat-page li,
+#chat-page td,
+#chat-page th {
+    white-space: normal;
 }
 
 #chat-page {

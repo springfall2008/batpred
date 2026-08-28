@@ -2041,6 +2041,12 @@ def test_chat_page_fills_the_window_without_an_outer_scrollbar(my_predbat):
     if "100vh - 10px" not in body_rule:
         print("ERROR: body's height does not allow for its own margins: {!r}".format(body_rule))
         failed = True
+    # The menu bar is position: fixed, so the global stylesheet gives body padding-top: 65px to
+    # clear it. Under the default content-box that padding is ADDED to the height above, making
+    # the page 65px taller than the window and pushing the composer off the bottom.
+    if "box-sizing: border-box" not in body_rule:
+        print("ERROR: body is not border-box, so the global 65px padding is added to its height: {!r}".format(body_rule))
+        failed = True
 
     page_rule = _extract_css_rule(styles, "#chat-page")
     if page_rule is None:
@@ -2345,6 +2351,17 @@ def test_bubble_content_stays_inside_its_bubble(my_predbat):
         failed = True
     if "overflow-wrap: anywhere" not in bubble:
         print("ERROR: .chat-bubble cannot break an unbroken identifier: {!r}".format(bubble))
+        failed = True
+
+    # Predbat's global stylesheet sets `p { white-space: nowrap }` for its data tables, which
+    # applies to every paragraph the markdown renderer produces. nowrap forbids wrapping outright,
+    # so overflow-wrap cannot act on it - this was the actual reason replies ran off the right of
+    # their bubble, whatever the bubbles were sized at.
+    nowrap_override = _extract_css_rule(styles, "#chat-page p,\n#chat-page li,\n#chat-page td,\n#chat-page th")
+    if nowrap_override is None:
+        nowrap_override = styles[styles.find("#chat-page p") : styles.find("#chat-page p") + 200]
+    if "white-space: normal" not in (nowrap_override or ""):
+        print("ERROR: the global p { white-space: nowrap } is not overridden, so chat text cannot wrap at all: {!r}".format(nowrap_override))
         failed = True
 
     code = _extract_css_rule(styles, ".chat-bubble code")
