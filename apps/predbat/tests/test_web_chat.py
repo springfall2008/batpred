@@ -488,6 +488,182 @@ def test_markdown_escapes_before_transforming(my_predbat):
     return failed
 
 
+def test_markdown_tables_render_as_real_tables_with_scroll_wrapper(my_predbat):
+    """A header row plus a valid GFM separator row becomes a real <table>, not raw pipe text.
+
+    Anchored to the exact tag sequence buildTableHtml is required to emit - a real <thead>/<tbody>
+    split, wrapped in a scroll container so a wide table cannot stretch the bubble - and to the
+    separator validator's alignment syntax, rather than a loose "table" substring check.
+    """
+    failed = False
+    print("**** Testing the client markdown renderer builds real tables ****")
+    script = web_chat.get_chat_script()
+    table_body = _extract_function_body(script, "buildTableHtml")
+    if table_body is None:
+        print("ERROR: no buildTableHtml function found - has table rendering been removed?")
+        return True
+    if "'<div class=\"chat-table-wrap\"><table><thead>'" not in table_body:
+        print("ERROR: buildTableHtml does not open a <table> inside a .chat-table-wrap scroll container: {!r}".format(table_body))
+        failed = True
+    if "'</thead><tbody>'" not in table_body:
+        print("ERROR: buildTableHtml does not separate <thead> from <tbody>: {!r}".format(table_body))
+        failed = True
+    if "'</tbody></table></div>'" not in table_body:
+        print("ERROR: buildTableHtml does not close table/tbody/wrapper: {!r}".format(table_body))
+        failed = True
+
+    row_body = _extract_function_body(script, "buildTableRowHtml")
+    if row_body is None or "'th'" not in table_body:
+        print("ERROR: buildTableHtml never passes the 'th' tag through to build the header row")
+        failed = True
+
+    separator_body = _extract_function_body(script, "tableSeparatorAlignments")
+    if separator_body is None:
+        print("ERROR: no tableSeparatorAlignments function found")
+        return True
+    if ":?-+:?" not in separator_body:
+        print("ERROR: tableSeparatorAlignments does not accept :--- / ---: / :---: alignment markers: {!r}".format(separator_body))
+        failed = True
+
+    # A pipe line is only ever promoted to a table when the guard below finds a valid separator
+    # on the following line - so a bare "| a | b |" paragraph line can never become one.
+    render_body = _extract_function_body(script, "renderMarkdown")
+    if "tableSeparatorAlignments(lines[index + 1])" not in render_body:
+        print("ERROR: renderMarkdown builds a table without checking the next line is a valid separator")
+        failed = True
+    return failed
+
+
+def test_markdown_lists_group_consecutive_items_into_one_list(my_predbat):
+    """Consecutive `- `/`* ` or `1. ` lines become one <ul>/<ol>, never one list per item.
+
+    Anchored to the exact join the renderer is required to use (`.join('')`, no separator between
+    <li> elements) and to <br> appearing nowhere in the list-building code - the bug this guards
+    against was every <li> getting wrapped in its own <ul>, then the blanket newline pass adding a
+    <br> on top, which is exactly what a per-item '<ul>...' template or a '<br>' join would
+    reintroduce.
+    """
+    failed = False
+    print("**** Testing the client markdown renderer groups list items into one list ****")
+    script = web_chat.get_chat_script()
+    render_body = _extract_function_body(script, "renderMarkdown")
+    if render_body is None:
+        print("ERROR: no renderMarkdown function found")
+        return True
+    if "'<ul>' + unorderedItems.join('') + '</ul>'" not in render_body:
+        print("ERROR: renderMarkdown does not wrap a whole run of bullet items in one <ul>: {!r}".format(render_body))
+        failed = True
+    if "'<ol>' + orderedItems.join('') + '</ol>'" not in render_body:
+        print("ERROR: numbered lists never produce <ol> - they would still render as bullets: {!r}".format(render_body))
+        failed = True
+    # A newline-to-<br> replace is legitimate exactly once in this function - inside the
+    # paragraph block's own join - so counting that exact call pins it as not also being used to
+    # separate list items (the list branches above join with '' instead, asserted above).
+    replace_br_count = render_body.count(".replace(/\\n/g, '<br>')")
+    if replace_br_count != 1:
+        print("ERROR: expected exactly one newline-to-<br> replace in renderMarkdown (the paragraph block), found {}: {!r}".format(replace_br_count, render_body))
+        failed = True
+    return failed
+
+
+def test_markdown_headings_render_h1_through_h6(my_predbat):
+    """`#` through `######` become <h1>-<h6>, which the previous renderer never supported."""
+    failed = False
+    print("**** Testing the client markdown renderer builds headings ****")
+    script = web_chat.get_chat_script()
+    heading_match_body = _extract_function_body(script, "matchHeadingLine")
+    if heading_match_body is None or "#{1,6}" not in heading_match_body:
+        print("ERROR: matchHeadingLine does not recognise one to six leading # characters: {!r}".format(heading_match_body))
+        failed = True
+    render_body = _extract_function_body(script, "renderMarkdown")
+    if render_body is None:
+        print("ERROR: no renderMarkdown function found")
+        return True
+    if "'<h' + level + '>'" not in render_body or "'</h' + level + '>'" not in render_body:
+        print("ERROR: renderMarkdown does not build a level-numbered heading tag: {!r}".format(render_body))
+        failed = True
+    if "heading[1].length" not in render_body:
+        print("ERROR: renderMarkdown does not derive the heading level from the number of # characters matched")
+        failed = True
+    return failed
+
+
+def test_markdown_fenced_code_skips_inline_and_line_rules(my_predbat):
+    """Fenced code content is literal - no inline rule, and no list/table/heading line rule, runs
+    on it, and its real newlines survive rather than being turned into <br>.
+    """
+    failed = False
+    print("**** Testing the client markdown renderer treats fenced code as literal ****")
+    script = web_chat.get_chat_script()
+    render_body = _extract_function_body(script, "renderMarkdown")
+    if render_body is None:
+        print("ERROR: no renderMarkdown function found")
+        return True
+    fence_start = render_body.find("if (isFenceLine(line)) {")
+    fence_end = render_body.find("var heading = matchHeadingLine(line);")
+    if fence_start < 0 or fence_end < 0 or fence_end <= fence_start:
+        print("ERROR: could not isolate the fenced-code branch inside renderMarkdown")
+        return True
+    fence_branch = render_body[fence_start:fence_end]
+    if "renderInline(" in fence_branch:
+        print("ERROR: the fenced-code branch calls renderInline - fenced content must stay literal: {!r}".format(fence_branch))
+        failed = True
+    if "codeLines.join('\\n')" not in fence_branch:
+        print("ERROR: fenced-code lines are not rejoined with real newlines: {!r}".format(fence_branch))
+        failed = True
+    if "<br>" in fence_branch:
+        print("ERROR: the fenced-code branch converts newlines to <br> - code content must stay literal: {!r}".format(fence_branch))
+        failed = True
+    return failed
+
+
+def test_markdown_paragraphs_join_with_br_only_inside_the_paragraph_block(my_predbat):
+    """Newlines become <br> only within a <p> block, not as a blanket pass over the whole string.
+
+    The previous implementation's very last statement was `return safe.replace(/\\n/g, '<br>')`,
+    a global pass that ran after every block tag had already been built - which is exactly what
+    let a <br> land between <li> elements and inside already-built table markup. This pins the
+    replacement to living inside the paragraph branch's own <p> template instead.
+    """
+    failed = False
+    print("**** Testing the client markdown renderer confines <br> to paragraph blocks ****")
+    script = web_chat.get_chat_script()
+    render_body = _extract_function_body(script, "renderMarkdown")
+    if render_body is None:
+        print("ERROR: no renderMarkdown function found")
+        return True
+    if "'<p>' + renderInline(paragraphLines.join('\\n')).replace(/\\n/g, '<br>') + '</p>'" not in render_body:
+        print("ERROR: paragraphs are not built by joining their own lines with <br> inside a <p> tag: {!r}".format(render_body))
+        failed = True
+    if re.search(r"return\s+safe\.replace\(/\\n/g,\s*'<br>'\)", script):
+        print("ERROR: a blanket newline-to-<br> pass over the whole string is back")
+        failed = True
+    return failed
+
+
+def test_markdown_table_and_heading_css_uses_theme_variables_and_scrolls(my_predbat):
+    """Table/heading CSS takes its colours from --chat-* custom properties, never a hardcoded
+    value - a hardcoded light-only colour was a previous review finding on this same page - and a
+    wide table scrolls inside its own container rather than stretching #chat-transcript's layout.
+    """
+    failed = False
+    print("**** Testing table/heading CSS is theme-aware and confines overflow to a scroll container ****")
+    styles = web_chat.get_chat_styles()
+    matches = list(re.finditer(r"([^{}]*\.chat-bubble\s+(?:h[1-6]|th|td|table)[^{}]*)\{([^}]*)\}", styles))
+    if not matches:
+        print("ERROR: no table/heading CSS rules found for .chat-bubble - has the CSS been removed?")
+        return True
+    for match in matches:
+        selector, block = match.group(1), match.group(2)
+        if re.search(r"#[0-9a-fA-F]{3,8}\b", block):
+            print("ERROR: {!r} sets a hardcoded hex colour instead of a --chat-* variable: {!r}".format(selector.strip(), block.strip()))
+            failed = True
+    if ".chat-table-wrap" not in styles or "overflow-x: auto" not in styles:
+        print("ERROR: no .chat-table-wrap rule with overflow-x: auto - a wide table would stretch the bubble")
+        failed = True
+    return failed
+
+
 def test_nav_link_visibility(my_predbat):
     """The Chat nav link is emitted only when chat is enabled."""
     failed = False
@@ -1582,6 +1758,12 @@ def run_web_chat_tests(my_predbat):
     failed |= test_history_snapshot_and_cursor_do_not_lose_a_concurrent_message(my_predbat)
     failed |= test_sse_framing(my_predbat)
     failed |= test_markdown_escapes_before_transforming(my_predbat)
+    failed |= test_markdown_tables_render_as_real_tables_with_scroll_wrapper(my_predbat)
+    failed |= test_markdown_lists_group_consecutive_items_into_one_list(my_predbat)
+    failed |= test_markdown_headings_render_h1_through_h6(my_predbat)
+    failed |= test_markdown_fenced_code_skips_inline_and_line_rules(my_predbat)
+    failed |= test_markdown_paragraphs_join_with_br_only_inside_the_paragraph_block(my_predbat)
+    failed |= test_markdown_table_and_heading_css_uses_theme_variables_and_scrolls(my_predbat)
     failed |= test_nav_link_visibility(my_predbat)
     failed |= test_client_script_contract(my_predbat)
     failed |= test_chat_page_assembles_real_content(my_predbat)

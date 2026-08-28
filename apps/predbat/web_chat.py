@@ -646,6 +646,76 @@ body.dark-mode {
     border-radius: 3px;
 }
 
+.chat-bubble p {
+    margin: 0 0 8px 0;
+}
+
+.chat-bubble p:last-child {
+    margin-bottom: 0;
+}
+
+.chat-bubble h1,
+.chat-bubble h2,
+.chat-bubble h3,
+.chat-bubble h4,
+.chat-bubble h5,
+.chat-bubble h6 {
+    margin: 10px 0 6px 0;
+    line-height: 1.25;
+    color: var(--chat-text);
+}
+
+.chat-bubble h1 {
+    font-size: 1.35em;
+}
+
+.chat-bubble h2 {
+    font-size: 1.2em;
+}
+
+.chat-bubble h3 {
+    font-size: 1.1em;
+}
+
+.chat-bubble h4,
+.chat-bubble h5,
+.chat-bubble h6 {
+    font-size: 1em;
+}
+
+.chat-bubble ul,
+.chat-bubble ol {
+    margin: 4px 0 8px 20px;
+    padding: 0;
+}
+
+.chat-bubble li {
+    margin: 2px 0;
+}
+
+/* Tables need their own horizontal scroll container - a wide table (many columns, long cell
+   text) must scroll within the bubble rather than stretching #chat-transcript's layout. */
+.chat-table-wrap {
+    overflow-x: auto;
+    margin: 6px 0 8px 0;
+}
+
+.chat-bubble table {
+    border-collapse: collapse;
+}
+
+.chat-bubble th,
+.chat-bubble td {
+    border: 1px solid var(--chat-border);
+    padding: 4px 8px;
+    text-align: left;
+}
+
+.chat-bubble thead th {
+    background: var(--chat-code-bg);
+    font-weight: 600;
+}
+
 .chat-sources {
     margin-top: 6px;
     font-size: 12px;
@@ -885,17 +955,190 @@ function escapeHtml(text) {
 // Escape first, then transform. Model output and conversation titles are both untrusted text -
 // a title is derived from whatever the user or the model wrote - so nothing reaches innerHTML
 // before it has been through escapeHtml.
-function renderMarkdown(text) {
-    var safe = escapeHtml(text);
-    safe = safe.replace(/```([\s\S]*?)```/g, function (match, code) { return '<pre><code>' + code + '</code></pre>'; });
+//
+// renderMarkdown itself is a line-based block parser: it walks the escaped text grouping
+// consecutive lines into blocks (fenced code, headings, tables, lists, paragraphs) before any
+// inline rule or newline-to-<br> conversion runs. That grouping is the point - a single blanket
+// "\n -> <br>" pass over the whole string (the previous implementation) cannot tell a blank line
+// between two list items from a blank line between two paragraphs, and cannot represent "these
+// three lines are one list" at all, so it fought every block-level construct it tried to render.
+// Each block below owns its own line-joining instead, and inline rules (renderInline) apply only
+// within a block's own content, never across a block boundary.
+function renderInline(text) {
+    var safe = text;
     safe = safe.replace(/`([^`\n]+)`/g, '<code>$1</code>');
     safe = safe.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
     safe = safe.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
     safe = safe.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-    safe = safe.replace(/^\s*[-*]\s+(.*)$/gm, '<li>$1</li>');
-    safe = safe.replace(/^\s*\d+\.\s+(.*)$/gm, '<li>$1</li>');
-    safe = safe.replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>');
-    return safe.replace(/\n/g, '<br>');
+    return safe;
+}
+
+function isFenceLine(line) {
+    return /^\s*```/.test(line);
+}
+
+function matchHeadingLine(line) {
+    return line.match(/^(#{1,6})\s+(.*)$/);
+}
+
+function matchUnorderedItem(line) {
+    return line.match(/^\s*[-*]\s+(.*)$/);
+}
+
+function matchOrderedItem(line) {
+    return line.match(/^\s*\d+\.\s+(.*)$/);
+}
+
+// Split one table row into its cell texts, stripping a single optional leading/trailing pipe -
+// the model's own tables carry both (`| Time | SOC |`), but a bare `a | b` row is honoured too.
+function splitTableRow(line) {
+    var trimmed = line.trim();
+    if (trimmed.charAt(0) === '|') {
+        trimmed = trimmed.slice(1);
+    }
+    if (trimmed.length && trimmed.charAt(trimmed.length - 1) === '|') {
+        trimmed = trimmed.slice(0, -1);
+    }
+    return trimmed.split('|');
+}
+
+// Whether `line` is a GFM table separator row (`|---|:---:|---:|`), returning one alignment per
+// cell ('', 'left', 'right' or 'center') or null if it is not a valid separator - which is also
+// how a pipe line that is *not* followed by one stays a paragraph instead of becoming a table.
+function tableSeparatorAlignments(line) {
+    if (line.indexOf('-') < 0) {
+        return null;
+    }
+    var cells = splitTableRow(line);
+    var alignments = [];
+    for (var i = 0; i < cells.length; i++) {
+        var cell = cells[i].trim();
+        if (!/^:?-+:?$/.test(cell)) {
+            return null;
+        }
+        var left = cell.charAt(0) === ':';
+        var right = cell.charAt(cell.length - 1) === ':';
+        alignments.push(left && right ? 'center' : right ? 'right' : left ? 'left' : '');
+    }
+    return alignments;
+}
+
+function tableCellStyle(alignment) {
+    return alignment ? ' style="text-align:' + alignment + '"' : '';
+}
+
+function buildTableRowHtml(cells, alignments, tag) {
+    var html = '<tr>';
+    for (var i = 0; i < cells.length; i++) {
+        html += '<' + tag + tableCellStyle(alignments[i]) + '>' + renderInline((cells[i] || '').trim()) + '</' + tag + '>';
+    }
+    return html + '</tr>';
+}
+
+function buildTableHtml(headerCells, alignments, bodyRows) {
+    var html = '<div class="chat-table-wrap"><table><thead>' + buildTableRowHtml(headerCells, alignments, 'th') + '</thead><tbody>';
+    for (var i = 0; i < bodyRows.length; i++) {
+        html += buildTableRowHtml(bodyRows[i], alignments, 'td');
+    }
+    return html + '</tbody></table></div>';
+}
+
+function renderMarkdown(text) {
+    var lines = escapeHtml(text).split('\n');
+    var html = '';
+    var index = 0;
+    while (index < lines.length) {
+        var line = lines[index];
+
+        // Fenced code: literal until the closing fence (or end of input) - no inline rule and no
+        // line-splitting runs inside it, so a table or **bold** marker inside a code block stays
+        // exactly as written.
+        if (isFenceLine(line)) {
+            var codeLines = [];
+            index += 1;
+            while (index < lines.length && !isFenceLine(lines[index])) {
+                codeLines.push(lines[index]);
+                index += 1;
+            }
+            if (index < lines.length) {
+                index += 1;
+            }
+            html += '<pre><code>' + codeLines.join('\n') + '</code></pre>';
+            continue;
+        }
+
+        var heading = matchHeadingLine(line);
+        if (heading) {
+            var level = heading[1].length;
+            html += '<h' + level + '>' + renderInline(heading[2]) + '</h' + level + '>';
+            index += 1;
+            continue;
+        }
+
+        // Table: a header row followed by a valid separator row. A pipe line with no valid
+        // separator underneath it falls through to the paragraph branch below unchanged.
+        if (line.indexOf('|') >= 0 && index + 1 < lines.length) {
+            var alignments = tableSeparatorAlignments(lines[index + 1]);
+            if (alignments) {
+                var headerCells = splitTableRow(line);
+                var bodyRows = [];
+                index += 2;
+                while (index < lines.length && lines[index].indexOf('|') >= 0) {
+                    bodyRows.push(splitTableRow(lines[index]));
+                    index += 1;
+                }
+                html += buildTableHtml(headerCells, alignments, bodyRows);
+                continue;
+            }
+        }
+
+        // Lists: every consecutive matching line joins the same <ul>/<ol> - never one list
+        // element per item - so there is no <br> and no per-item margin gap between bullets.
+        if (matchUnorderedItem(line)) {
+            var unorderedItems = [];
+            var unorderedMatch;
+            while (index < lines.length && (unorderedMatch = matchUnorderedItem(lines[index]))) {
+                unorderedItems.push('<li>' + renderInline(unorderedMatch[1]) + '</li>');
+                index += 1;
+            }
+            html += '<ul>' + unorderedItems.join('') + '</ul>';
+            continue;
+        }
+
+        if (matchOrderedItem(line)) {
+            var orderedItems = [];
+            var orderedMatch;
+            while (index < lines.length && (orderedMatch = matchOrderedItem(lines[index]))) {
+                orderedItems.push('<li>' + renderInline(orderedMatch[1]) + '</li>');
+                index += 1;
+            }
+            html += '<ol>' + orderedItems.join('') + '</ol>';
+            continue;
+        }
+
+        if (line.trim() === '') {
+            index += 1;
+            continue;
+        }
+
+        // Paragraph: everything else. Consecutive plain lines join with <br> - but only within
+        // this paragraph; the loop stops the moment the next line starts a different block, so
+        // <br> never leaks across a block boundary the way the old blanket newline pass did.
+        var paragraphLines = [];
+        while (index < lines.length) {
+            var current = lines[index];
+            if (current.trim() === '' || isFenceLine(current) || matchHeadingLine(current) || matchUnorderedItem(current) || matchOrderedItem(current)) {
+                break;
+            }
+            if (current.indexOf('|') >= 0 && index + 1 < lines.length && tableSeparatorAlignments(lines[index + 1])) {
+                break;
+            }
+            paragraphLines.push(current);
+            index += 1;
+        }
+        html += '<p>' + renderInline(paragraphLines.join('\n')).replace(/\n/g, '<br>') + '</p>';
+    }
+    return html;
 }
 
 function setTitleText(node, title) {
