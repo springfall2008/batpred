@@ -2588,13 +2588,20 @@ def test_force_export_off_does_not_press_every_cycle(test_name, ha, my_predbat):
     inverter still reports a real time - and None never compares equal, so every cycle looked like a
     change and pressed the button. That is most of the day, not just export windows.
 
-    Plain GS takes the midnight-override path and was never affected, so it is checked here too to pin
-    the difference down.
+    Plain GS takes the midnight-override path and is not affected by this None-comparison route, so it
+    is checked here too to pin the difference down. (GS was affected by a separate bug - #4711's
+    unconditional H M register rewrite, which GS also uses - but that is a different code path to the
+    one this test targets.)
     """
     failed = False
     print("Test: {}".format(test_name))
 
-    saved_type = my_predbat.args.get("inverter_type")
+    # my_predbat/ha are shared across the whole test run - save everything this test touches so it
+    # can be restored exactly, rather than leaking a changed/missing arg or dummy entity value into
+    # later tests and making results order-dependent.
+    unset = object()
+    saved_args = {key: my_predbat.args.get(key, unset) for key in ("inverter_type", "discharge_start_time", "discharge_end_time", "scheduled_discharge_enable")}
+    saved_items = {key: ha.dummy_items.get(key, unset) for key in ("select.discharge_start_time", "select.discharge_end_time", "switch.scheduled_discharge_enable", "select.inverter_mode")}
 
     try:
         for inverter_type, expected_presses in (("GS_fb00", 1), ("GS", 1)):
@@ -2622,10 +2629,16 @@ def test_force_export_off_does_not_press_every_cycle(test_name, ha, my_predbat):
                 print(f"ERROR: {test_name}: {inverter_type} pressed the button {len(presses)} times over 4 idle cycles, expected at most {expected_presses}")
                 failed = True
     finally:
-        if saved_type is None:
-            my_predbat.args.pop("inverter_type", None)
-        else:
-            my_predbat.args["inverter_type"] = saved_type
+        for key, value in saved_args.items():
+            if value is unset:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+        for key, value in saved_items.items():
+            if value is unset:
+                ha.dummy_items.pop(key, None)
+            else:
+                ha.dummy_items[key] = value
 
     return failed
 
