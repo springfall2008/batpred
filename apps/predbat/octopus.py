@@ -3141,7 +3141,16 @@ class Octopus:
                         # this" question above doesn't apply either - there's no car draw to need.
                         # octopus_slot_count_zero_kwh restores the old behaviour of counting every
                         # dispatch entry, zero-kWh or not, toward the cap like any other.
-                        zero_kwh_exempt = (kwh <= 0) and not self.octopus_slot_count_zero_kwh
+                        #
+                        # Scoped to source == "SMART" (#4483 review follow-up, Speshman): kwh only
+                        # ever reaches 0 either from a genuine zero-kWh entry or from
+                        # decode_octopus_slot() silently coercing malformed/unparseable input to
+                        # 0.0 - the two are indistinguishable by value alone. Requiring the source
+                        # this feature was actually built for narrows a parse failure exploiting the
+                        # exemption to the coincidence of also carrying source=="SMART", rather than
+                        # any garbage entry with any source bypassing both the cap and the
+                        # #4482 need-check.
+                        zero_kwh_exempt = (kwh <= 0) and (source == "SMART") and not self.octopus_slot_count_zero_kwh
 
                         # At the start of each 30-min slot, decide if we can add it
                         if minute % 30 == 0:
