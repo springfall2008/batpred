@@ -271,7 +271,7 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
     call_args = api6.async_graphql_query.call_args
     kwargs = call_args[1]
 
-    if "returns_data" not in kwargs or kwargs["returns_data"] != False:
+    if "returns_data" not in kwargs or kwargs["returns_data"] is not False:
         print(f"ERROR: Expected returns_data=False, got {kwargs}")
         failed = True
     else:
@@ -413,7 +413,7 @@ async def test_octopus_join_saving_session(my_predbat):
     call_args = api4.async_graphql_query.call_args
     kwargs = call_args[1]
 
-    if "returns_data" not in kwargs or kwargs["returns_data"] != False:
+    if "returns_data" not in kwargs or kwargs["returns_data"] is not False:
         print(f"ERROR: Expected returns_data=False, got {kwargs}")
         failed = True
     else:
@@ -536,7 +536,7 @@ async def test_octopus_get_saving_sessions(my_predbat):
         if context != "get-saving-sessions":
             print(f"ERROR: Expected context 'get-saving-sessions', got {context}")
             failed = True
-        elif "ignore_errors" not in kwargs or kwargs["ignore_errors"] != True:
+        elif "ignore_errors" not in kwargs or kwargs["ignore_errors"] is not True:
             print(f"ERROR: Expected ignore_errors=True, got {kwargs}")
             failed = True
         else:
@@ -643,7 +643,7 @@ async def test_octopus_get_saving_sessions(my_predbat):
     call_args = api6.async_graphql_query.call_args
     kwargs = call_args[1]
 
-    if "ignore_errors" not in kwargs or kwargs["ignore_errors"] != True:
+    if "ignore_errors" not in kwargs or kwargs["ignore_errors"] is not True:
         print(f"ERROR: Expected ignore_errors=True, got {kwargs}")
         failed = True
     else:
