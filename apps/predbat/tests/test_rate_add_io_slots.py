@@ -555,12 +555,15 @@ def run_rate_add_io_slots_tests(my_predbat):
     my_predbat.octopus_intelligent_limit_future_slots = False
     my_predbat.car_charging_slots[0] = saved_car_charging_slots
 
-    # Tests 27-29 (#4483 review follow-up): octopus_slot_count_zero_kwh - a zero-kWh dispatch
+    # Tests 27-30 (#4483 review follow-up): octopus_slot_count_zero_kwh - a zero-kWh dispatch
     # entry (e.g. a plug-independent SMART grid-flex event that delivers no energy to the car)
-    # is a real tariff discount, but not a car-charging dispatch. By default it's exempt from
-    # both the #4482 "does the car still need this" check and the octopus_slot_max cap.
+    # is a real tariff discount, but not a car-charging dispatch. Switching this off exempts it
+    # from both the #4482 "does the car still need this" check and the octopus_slot_max cap; the
+    # switch defaults on, so a household only gets that exemption if it opts in (#4483 review
+    # follow-up, Speshman - defaulting it off risked silently loosening the cap for everyone).
 
-    print("\n**** Test 27: Zero-kWh slot gets the low rate even when the car doesn't need it ****")
+    print("\n**** Test 27: Zero-kWh slot gets the low rate even when the car doesn't need it, once exempted ****")
+    my_predbat.octopus_slot_count_zero_kwh = False
     my_predbat.octopus_intelligent_limit_future_slots = True
     my_predbat.car_charging_slots[0] = []  # car doesn't need anything - would normally reject a future out-of-window slot
     slot_start_27 = midnight_utc + timedelta(hours=14)  # future, out-of-window
@@ -568,9 +571,9 @@ def run_rate_add_io_slots_tests(my_predbat):
     slots_27 = [{"start": slot_start_27.strftime(TIME_FORMAT), "end": slot_end_27.strftime(TIME_FORMAT), "charge_in_kwh": 0.0, "source": "SMART", "location": ""}]
     slot_start_minute_27 = int((slot_start_27 - midnight_utc).total_seconds() / 60)
     expected_rates_27 = {minute: 4.0 for minute in range(slot_start_minute_27, slot_start_minute_27 + 30)}
-    failed |= run_rate_add_io_slots_test("test27_zero_kwh_exempt_by_default", my_predbat, slots_27, True, 12, expected_rates_27)
+    failed |= run_rate_add_io_slots_test("test27_zero_kwh_exempt_when_switched_off", my_predbat, slots_27, True, 12, expected_rates_27)
 
-    print("\n**** Test 28: Zero-kWh slot does not consume octopus_slot_max budget ****")
+    print("\n**** Test 28: Zero-kWh slot does not consume octopus_slot_max budget, once exempted ****")
     my_predbat.octopus_intelligent_limit_future_slots = False
     slot_start_28a = midnight_utc + timedelta(hours=1)  # zero-kWh, first
     slot_end_28a = slot_start_28a + timedelta(minutes=30)
@@ -582,9 +585,9 @@ def run_rate_add_io_slots_tests(my_predbat):
     ]
     slot_start_minute_28a = int((slot_start_28a - midnight_utc).total_seconds() / 60)
     expected_rates_28 = {minute: 4.0 for minute in range(slot_start_minute_28a, slot_start_minute_28a + 60)}  # both slots cheap
-    failed |= run_rate_add_io_slots_test("test28_zero_kwh_does_not_spend_cap", my_predbat, slots_28, True, 1, expected_rates_28)
+    failed |= run_rate_add_io_slots_test("test28_zero_kwh_does_not_spend_cap_when_switched_off", my_predbat, slots_28, True, 1, expected_rates_28)
 
-    print("\n**** Test 29: Switch on makes zero-kWh slots count like any other ****")
+    print("\n**** Test 29: Default behaviour - zero-kWh slots count like any other ****")
     my_predbat.octopus_slot_count_zero_kwh = True
     my_predbat.octopus_intelligent_limit_future_slots = True
     my_predbat.car_charging_slots[0] = []  # car doesn't need anything
@@ -592,9 +595,9 @@ def run_rate_add_io_slots_tests(my_predbat):
     slot_end_29 = slot_start_29 + timedelta(minutes=30)
     slots_29 = [{"start": slot_start_29.strftime(TIME_FORMAT), "end": slot_end_29.strftime(TIME_FORMAT), "charge_in_kwh": 0.0, "source": "SMART", "location": ""}]
     slot_start_minute_29 = int((slot_start_29 - midnight_utc).total_seconds() / 60)
-    expected_rates_29 = {minute: 10.0 for minute in range(slot_start_minute_29, slot_start_minute_29 + 30)}  # rejected, not needed, and now counted
-    failed |= run_rate_add_io_slots_test("test29_switch_on_zero_kwh_subject_to_needed_gate", my_predbat, slots_29, True, 12, expected_rates_29)
-    my_predbat.octopus_slot_count_zero_kwh = False  # restore default
+    expected_rates_29 = {minute: 10.0 for minute in range(slot_start_minute_29, slot_start_minute_29 + 30)}  # rejected, not needed, and counted by default
+    failed |= run_rate_add_io_slots_test("test29_default_zero_kwh_subject_to_needed_gate", my_predbat, slots_29, True, 12, expected_rates_29)
+    my_predbat.octopus_slot_count_zero_kwh = False  # test30 exercises the exemption's source scoping, needs it switched off
 
     # Test 30 (#4483 review follow-up, Speshman): the zero-kWh exemption is scoped to
     # source == "SMART" - decode_octopus_slot() silently coerces malformed/unparseable
@@ -611,6 +614,7 @@ def run_rate_add_io_slots_tests(my_predbat):
     expected_rates_30 = {minute: 10.0 for minute in range(slot_start_minute_30, slot_start_minute_30 + 30)}  # rejected, not needed, not exempt
     failed |= run_rate_add_io_slots_test("test30_zero_kwh_non_smart_source_not_exempt", my_predbat, slots_30, True, 12, expected_rates_30)
 
+    my_predbat.octopus_slot_count_zero_kwh = True  # Restore default for any subsequent tests
     my_predbat.octopus_intelligent_limit_future_slots = False  # Restore default for any subsequent tests
     my_predbat.car_charging_slots[0] = saved_car_charging_slots
 

@@ -914,7 +914,7 @@ CONFIG_ITEMS = [
         "name": "octopus_slot_count_zero_kwh",
         "friendly_name": "Count zero-kWh Intelligent dispatch slots towards the daily octopus_slot_max cap",
         "type": "switch",
-        "default": False,
+        "default": True,
         "enable": "expert_mode",
     },
     {
