@@ -18,9 +18,11 @@ phase order. Routes HA events to components based on entity prefix filtering.
 """
 
 from storage import StorageComponent
+from alphaess import AlphaESSAPI
 from solcast import SolarAPI
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
+from myenergi import MyEnergiAPI
 from octopus import OctopusAPI
 from carbon import CarbonAPI
 from temperature import TemperatureAPI
@@ -138,6 +140,16 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "ge_cloud_automatic",
             },
+            "automatic_evc": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_automatic_evc",
+            },
+            "evc_control": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_evc_control",
+            },
         },
         "phase": 1,
     },
@@ -161,6 +173,11 @@ COMPONENT_LIST = {
                 "required": False,
                 "default": [7],
                 "config": "days_previous",
+                # days_previous is a global load-forecasting setting configured by virtually every
+                # installation regardless of inverter brand, so it must not count towards "did the
+                # user configure GE Cloud Data" - otherwise the missing ge_cloud_data/ge_cloud_key
+                # warning fires for everyone, not just people who tried to enable this component.
+                "shared_config": True,
             },
         },
         "phase": 1,
@@ -199,12 +216,52 @@ COMPONENT_LIST = {
                 "required": True,
                 "config": "ohme_password",
             },
+            "ohme_automatic": {
+                "required": False,
+                "default": False,
+                "config": "ohme_automatic",
+            },
+            "ohme_control": {
+                "required": False,
+                "default": False,
+                "config": "ohme_control",
+            },
+            # Deliberately has no default: unset means "auto-detect from the Octopus component",
+            # which is distinct from an explicit False meaning "never use Ohme for the car slots"
             "ohme_automatic_octopus_intelligent": {
                 "required": False,
                 "config": "ohme_automatic_octopus_intelligent",
             },
         },
         "phase": 1,
+    },
+    "myenergi": {
+        "class": MyEnergiAPI,
+        "name": "myenergi Zappi/Eddi",
+        "event_filter": "predbat_myenergi_",
+        "args": {
+            "auth_method": {"required": False, "config": "myenergi_auth_method", "default": "direct"},
+            "hub_serial": {"required": False, "config": "myenergi_hub_serial"},
+            "api_key": {"required": False, "config": "myenergi_api_key"},
+            "key": {"required": False, "config": "myenergi_key"},
+            "token_expires_at": {"required": False, "config": "myenergi_token_expires_at"},
+            "token_hash": {"required": False, "config": "myenergi_token_hash"},
+            "automatic": {"required": False, "config": "myenergi_automatic", "default": True},
+            "enable_controls": {"required": False, "config": "myenergi_enable_controls", "default": True},
+            "poll_seconds": {"required": False, "config": "myenergi_poll_seconds", "default": 60},
+            "zappi_control": {"required": False, "config": "myenergi_zappi_control", "default": False},
+        },
+        # Gate activation on having at least one auth path — api_key is the direct
+        # transport's local hub credential, key is the cloud transport's access token.
+        # Without this the component would start for every instance since all
+        # individual args are optional to allow either auth mode.
+        # api_key is the direct transport's credential; key (the OAuth access token) and
+        # token_hash (which the refresh chain exchanges for one) are the cloud transport's.
+        # token_hash has to be listed too: a refresh-only OAuth setup carries no key, and
+        # initialize() accepts that, so gating on key alone would never construct it.
+        "required_or": ["api_key", "key", "token_hash"],
+        "phase": 1,
+        "can_restart": True,
     },
     "fox": {
         "class": FoxAPI,
@@ -314,6 +371,33 @@ COMPONENT_LIST = {
         # instance, since all individual args are optional to allow either auth mode.
         "required_or": ["username", "key"],
         "phase": 1,
+    },
+    "alphaess": {
+        "class": AlphaESSAPI,
+        "name": "AlphaESS Cloud API",
+        "event_filter": "predbat_alphaess_",
+        "args": {
+            "app_id": {"required": False, "config": "alphaess_app_id"},
+            "app_secret": {"required": False, "config": "alphaess_app_secret"},
+            "inverter_sn": {"required": False, "config": "alphaess_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "alphaess_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "alphaess_automatic_ignore_pv"},
+            # On by default, matching sunsynk_control_enable: an inverter component that does
+            # not drive the inverter is not what a user configuring it expects. Set false for
+            # monitoring only. switch.predbat_set_read_only still gates every write.
+            "control_enable": {"required": False, "default": True, "config": "alphaess_control_enable"},
+            # The API reports no battery power limit and no pack current/voltage to derive
+            # one from, so it is estimated from poinv. This is the escape hatch for a user
+            # who knows their pack's real limit.
+            "battery_rate_max": {"required": False, "config": "alphaess_battery_rate_max"},
+            "api_delay": {"required": False, "default": 2, "config": "alphaess_api_delay"},
+            "min_write_interval": {"required": False, "default": 300, "config": "alphaess_min_write_interval"},
+        },
+        # Gate activation on having an AppID. Without this the component would start for
+        # every instance, since all individual args are optional.
+        "required_or": ["app_id"],
+        "phase": 1,
+        "can_restart": True,
     },
     "enphase": {
         "class": EnphaseAPI,
@@ -588,6 +672,8 @@ class Components:
                 continue
 
             have_all_args = True
+            missing_config = []
+            required_or_config = []
             self.components[component_name] = None
             self.component_tasks[component_name] = None
 
@@ -605,8 +691,10 @@ class Components:
                     continue
                 elif required_true and not self.base.get_arg(arg_info["config"], False, indirect=False):
                     have_all_args = False
+                    missing_config.append(f"{arg_info['config']} (must be true)")
                 elif required and self.base.get_arg(arg_info["config"], None, indirect=False) is None:
                     have_all_args = False
+                    missing_config.append(arg_info["config"])
                 else:
                     arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=indirect)
             required_or = component_info.get("required_or", [])
@@ -614,9 +702,22 @@ class Components:
             if required_or:
                 if not any(arg_dict.get(arg, None) for arg in required_or):
                     have_all_args = False
+                    required_or_config = [component_info["args"][arg]["config"] for arg in required_or]
             if have_all_args:
                 self.log(f"Initialising {component_info['name']} interface")
                 self.components[component_name] = component_info["class"](self.base, **arg_dict)
+            else:
+                configured_args = getattr(self.base, "args_from_apps_yaml", None)
+                if configured_args is None:
+                    configured_args = self.base.args
+                component_configured = any(configured_args.get(arg_info["config"]) for arg_info in component_info["args"].values() if not arg_info.get("shared_config", False))
+                if component_configured:
+                    reasons = []
+                    if missing_config:
+                        reasons.append(f"missing required configuration: {', '.join(missing_config)}")
+                    if required_or_config:
+                        reasons.append(f"needs at least one of: {', '.join(required_or_config)}")
+                    self.log(f"Warn: Skipping {component_info['name']} interface, {'; '.join(reasons)}")
 
     def start(self, only=None, phase=0):
         """Start all initialised components"""

@@ -498,7 +498,7 @@ class HAInterface(ComponentBase):
 
         # Create event and result holder for this request
         event = threading.Event()
-        result_holder = {"response": None, "success": None, "error": None}
+        result_holder = {"response": None, "success": None, "error": None, "ha_error": None}
 
         # Add to command queue
         with self.ws_pending_lock:
@@ -515,21 +515,27 @@ class HAInterface(ComponentBase):
             self.log("Warn: Service call {}/{} failed: {}".format(domain, service, result_holder["error"]))
             return None
 
-        # Check for timeout (neither success nor error was set)
+        # Check for timeout (neither success nor error was set). This is indistinguishable here from
+        # a call that actually succeeded but whose response arrived (or was processed) just after the
+        # 2 minute deadline - callers that treat a falsy return as "try a different service name"
+        # (e.g. octopus.py's join fallback) can in principle be tricked into a harmless-but-redundant
+        # duplicate call by this specific edge case. Not fully resolved - the timeout window is long
+        # enough that this should be rare in practice, and the alternative (a real explicit failure)
+        # is by far the more common falsy case.
         if result_holder.get("success") is None and not result_holder.get("error"):
             self.log("Warn: Service call {}/{} failed or timed out: result {}".format(domain, service, result_holder))
             return None
 
         success = result_holder.get("success", False)
         if not success:
-            self.log("Warn: Service call {}/{} data {} failed".format(domain, service, service_data))
+            self.log("Warn: Service call {}/{} data {} failed: {}".format(domain, service, service_data, result_holder.get("ha_error")))
             return None
 
         # Return response data if requested
         if return_response:
             return result_holder.get("response")
 
-        return None
+        return True
 
     async def socketLoop(self):
         """
@@ -625,9 +631,19 @@ class HAInterface(ComponentBase):
                                                     if result_id in self.ws_pending_requests:
                                                         request_info = self.ws_pending_requests.pop(result_id)
                                                         result_holder = request_info["result_holder"]
-                                                        result_holder["success"] = data.get("success", False)
+                                                        # #3460: .get()'s default only covers a *missing* key - some
+                                                        # services (observed for notify.notify) return a "result"
+                                                        # message with "success" explicitly present but null, which
+                                                        # .get("success", False) passes through as None rather than
+                                                        # False. That left success/error both None, indistinguishable
+                                                        # from a genuine 2-minute timeout to the caller and producing
+                                                        # a misleading "failed or timed out" warning immediately.
+                                                        result_holder["success"] = bool(data.get("success"))
                                                         result_holder["response"] = data.get("result", {}).get("response", None)
                                                         result_holder["error"] = None
+                                                        # HA's own reported reason when success is False (e.g. {"code": "not_found", "message": "..."})
+                                                        # - distinct from "error" above, which is reserved for a local send/transport failure.
+                                                        result_holder["ha_error"] = data.get("error")
                                                         request_info["event"].set()
 
                                             success = data.get("success", False)
@@ -679,7 +695,22 @@ class HAInterface(ComponentBase):
                                     if domain == "fire_event":
                                         await websocket.send_json({"id": sid, "type": domain, "event_type": service, "event_data": {"service": service_data["event_service"], "domain": service_data["event_domain"]}})
                                     else:
-                                        await websocket.send_json({"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
+                                        # HA's call_service command expects 'target' (entity_id/device_id/area_id
+                                        # addressing) as a sibling of service_data, not nested inside it - a
+                                        # nested target is rejected with invalid_format: extra keys not allowed
+                                        # @ data['target'] (#4662). Callers commonly configure services with a
+                                        # target: entity_id: ... block (the standard HA action syntax), which
+                                        # lands as a "target" key inside service_data, so it must be pulled out
+                                        # here. Pop from a copy, not service_data itself - the original dict is
+                                        # the same object async_call_service_websocket_command() logs on failure
+                                        # ("Warn: Service call ... data ... failed"), so mutating it in place
+                                        # would silently drop target from that diagnostic.
+                                        outgoing_data = dict(service_data) if isinstance(service_data, dict) else service_data
+                                        target = outgoing_data.pop("target", None) if isinstance(outgoing_data, dict) else None
+                                        call_frame = {"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": outgoing_data, "return_response": return_response}
+                                        if target:
+                                            call_frame["target"] = target
+                                        await websocket.send_json(call_frame)
 
                                     # Track pending request (only if send succeeded)
                                     with self.ws_pending_lock:

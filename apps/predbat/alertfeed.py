@@ -150,7 +150,6 @@ class AlertFeed(ComponentBase):
         """
         alert_active_keep = {}
         active_alert_text = ""
-        active_alert = False
 
         if alerts:
             for alert in alerts:
@@ -159,7 +158,6 @@ class AlertFeed(ComponentBase):
                 severity = alert.get("severity", "")
                 certainty = alert.get("certainty", "")
                 urgency = alert.get("urgency", "")
-                area = alert.get("areaDesc", "")
 
                 if onset and expires:
                     onset_minutes = int((onset - midnight_utc).total_seconds() / 60)
@@ -173,7 +171,6 @@ class AlertFeed(ComponentBase):
                                 alert_active_keep[minute] = max(alert_active_keep[minute], keep)
                             if minute == minutes_now:
                                 active_alert_text = alert.get("event") + " until " + str(expires)
-                                active_alert = True
 
         alert_keep = alert_active_keep.get(minutes_now, 0)
         alert_show = []

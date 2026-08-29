@@ -1,5 +1,5 @@
 aiofiles
-aiohttp
+aiohttp>=3.12
 aiomqtt
 coverage
 matplotlib

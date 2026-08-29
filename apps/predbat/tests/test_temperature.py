@@ -710,7 +710,7 @@ def _test_fetch_temperature_data_exponential_backoff(my_predbat):
 
         with patch('temperature.aiohttp.ClientSession', return_value=mock_session):
             with patch('temperature.asyncio.sleep', side_effect=mock_sleep):
-                result = await temp_component.fetch_temperature_data()
+                await temp_component.fetch_temperature_data()
 
                 # Should have 2 sleep calls (after 1st and 2nd attempts)
                 if len(sleep_times) != 2:
@@ -1008,7 +1008,7 @@ def _test_run_first_fresh_cache(my_predbat=None):
             with patch.object(temp_api, 'load_temperature_cache', side_effect=mock_load_cache):
                 with patch.object(temp_api, 'save_temperature_cache', new_callable=AsyncMock):
                     with patch.object(temp_api, 'fetch_temperature_data', side_effect=mock_fetch):
-                        result = await temp_api.run(seconds=0, first=True)
+                        await temp_api.run(seconds=0, first=True)
 
             if fetch_called[0]:
                 print("    ERROR: fetch_temperature_data should not be called (cache is 45 min old < 60)")
@@ -1052,7 +1052,7 @@ def _test_run_first_stale_cache(my_predbat=None):
             with patch.object(temp_api, 'load_temperature_cache', side_effect=mock_load_cache):
                 with patch.object(temp_api, 'save_temperature_cache', new_callable=AsyncMock) as mock_save:
                     with patch.object(temp_api, 'fetch_temperature_data', new_callable=AsyncMock, return_value=fresh_data):
-                        result = await temp_api.run(seconds=0, first=True)
+                        await temp_api.run(seconds=0, first=True)
 
             if temp_api.temperature_data != fresh_data:
                 print("    ERROR: temperature_data should be updated (cache was 90 min old >= 60)")

@@ -133,6 +133,14 @@ class PredbatMetrics:
         self.pv_scaling_best = _gauge("predbat_pv_scaling_best", "PV calibration best-day scaling factor")
         self.pv_scaling_total = _gauge("predbat_pv_scaling_total", "PV calibration total adjustment factor")
 
+        # -- Control ownership ledger -------------------------------------------
+        self.control_conflicts_24h = _gauge("predbat_control_conflicts_24h", "Control values changed outside Predbat in the last 24h")
+        self.control_conflicts_sustained_total = _gauge("predbat_control_conflicts_sustained_total", "Number of controls with repeated (sustained) external interference")
+        # Plain data, not a Prometheus metric - the dashboard needs the actual events and control
+        # names, not just a count, and Prometheus gauges cannot carry that shape.
+        self.control_conflicts_events = []
+        self.control_conflicts_sustained_controls = []
+
 
     def to_dict(self):
         """Return current metric values as a plain dict for the dashboard."""
@@ -230,6 +238,11 @@ class PredbatMetrics:
             "pv_scaling_worst": _val(self.pv_scaling_worst),
             "pv_scaling_best": _val(self.pv_scaling_best),
             "pv_scaling_total": _val(self.pv_scaling_total),
+            # Control ownership ledger
+            "control_conflicts_24h": _val(self.control_conflicts_24h),
+            "control_conflicts_sustained_total": _val(self.control_conflicts_sustained_total),
+            "control_conflicts_events": self.control_conflicts_events,
+            "control_conflicts_sustained_controls": self.control_conflicts_sustained_controls,
         }
 
 

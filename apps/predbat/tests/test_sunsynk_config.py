@@ -778,6 +778,34 @@ def test_export_limit_is_auto_mapped_from_the_export_cap():
     assert not failed, "test_export_limit_is_auto_mapped_from_the_export_cap"
 
 
+def test_sign_flags_are_claimed_not_inherited():
+    """Sunsynk owns the invert flags, so another component cannot flip its sign.
+
+    base.args is shared and NOT namespaced per inverter type. teslemetry and fox both set
+    grid_power_invert True for their own hardware, quite correctly - but that leaves the key
+    set for every inverter index, and a Sunsynk inverter that never claimed it inherited the
+    flip. inverter.py then negated an already-correct sensor, so an export read as an import
+    and the power-flow arrow pointed the wrong way on any install running both.
+
+    All three are False because publish_data already emits Predbat's conventions: grid
+    negative on import, battery positive on discharge, load positive.
+    """
+    failed = False
+    s = ConfigSunsynk()
+    s.device_list = ["INV1", "INV2"]
+    s.device_rated_power = {"INV1": 8000.0, "INV2": 8000.0}
+    with patch.object(s, "battery_capacity", return_value=10.0), patch.object(s, "battery_rate_max", return_value=3000.0), patch.object(s, "export_limit", return_value=7000.0):
+        run_async_local(s.automatic_config())
+    for flag in ("grid_power_invert", "battery_power_invert", "load_power_invert"):
+        if flag not in s.args_set:
+            print(f"ERROR: {flag} was never set, so it is inherited from whatever else configured the install")
+            failed = True
+        elif s.args_set[flag] != [False, False]:
+            print(f"ERROR: {flag} = {s.args_set[flag]}, expected [False, False] - one entry per inverter")
+            failed = True
+    assert not failed, "test_sign_flags_are_claimed_not_inherited"
+
+
 def run_sunsynk_config_tests(my_predbat):
     """Run all Sunsynk configuration tests."""
     failed = False
@@ -786,6 +814,7 @@ def run_sunsynk_config_tests(my_predbat):
         ("component_registered", test_component_registered),
         ("apps_schema", test_apps_schema_keys),
         ("automatic_config", test_automatic_config_maps_control_entities),
+        ("sign_flags_claimed", test_sign_flags_are_claimed_not_inherited),
         ("export_limit_mapped", test_export_limit_is_auto_mapped_from_the_export_cap),
         ("partial_capabilities", test_automatic_config_skips_partial_capabilities),
         ("ignore_pv", test_automatic_config_respects_ignore_pv),

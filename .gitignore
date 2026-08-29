@@ -87,6 +87,8 @@ plan_*.html
 
 # Generated PNG files
 *.png
+!apps/predbat/bat_logo_light.png
+!apps/predbat/bat_logo_dark.png
 
 # Build artifacts
 a.out
@@ -109,6 +111,9 @@ it
 
 # Runtime-generated manifest
 apps/predbat/manifest.yaml
+
+# Dev-deploy/standalone commit marker (see coverage/deploy, hass.py)
+apps/predbat/git_version.txt
 
 # Claude Code local worktrees
 .claude/worktrees/

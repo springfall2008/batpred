@@ -650,8 +650,6 @@ def test_sigenergy_get_access_token_retry(my_predbat):
 
     call_log = []
 
-    original_class = __import__("sigenergy").aiohttp.ClientSession
-
     class SequencedSession:
         """Return failure sessions then success session."""
         def __init__(self, *args, **kwargs):
@@ -1285,6 +1283,7 @@ def test_sigenergy_apply_controls_export_mode(my_predbat):
     bat_cmds = [c for c in commands_sent if c[0] == "battery_cmd"]
     assert len(bat_cmds) >= 1, "send_battery_command called for export"
     assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_DISCHARGE, "discharge mode sent for export"
+    assert bat_cmds[0][4] == 3.0, "configured export rate (3000W) sent as charging_power_kw, got {}".format(bat_cmds[0][4])
 
     return failed
 
@@ -1502,6 +1501,60 @@ def test_sigenergy_handle_mqtt_period_partial_update(my_predbat):
 
     status = api.system_status.get("SYS1", {})
     assert status["operationalMode"] == 6.0, "operationalMode retained from previous full message"
+
+    return failed
+
+
+def test_sigenergy_handle_mqtt_period_never_reported_field(my_predbat):
+    """Regression test for #4663: a field the broker has never sent must not zero the REST value.
+
+    The partial-update merge above only helps once a field has been seen at least once. A system
+    whose period messages carry just "PV power" leaves storageSOC% absent from the merged state
+    forever, and defaulting it to 0 overwrote the SoC the REST poll had already fetched.
+
+    Live effect: the reporter's battery read 30.84kWh/85% from REST, a period message arrived
+    carrying only PV, and Predbat immediately replanned against a 0% battery in the middle of an
+    export window.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+
+    # REST poll has populated a good, complete picture
+    api.energy_flow["SYS1"] = {
+        "batterySoc": 85.0,
+        "batteryPower": -4.127,
+        "pvPower": 4.42,
+        "gridPower": -0.27,
+        "loadPower": 3.857,
+        "evPower": 0.0,
+        "inverterPower": 2.5,
+    }
+
+    # The only period message this system ever sends carries PV power and nothing else
+    api._handle_mqtt_period("SYS1", {"PV power": "4420.0"})
+
+    flow = api.energy_flow.get("SYS1", {})
+    if abs(flow["batterySoc"] - 85.0) > 0.01:
+        print("ERROR: batterySoc should be retained from the REST poll, got {}".format(flow["batterySoc"]))
+        failed = True
+    if abs(flow["batteryPower"] - (-4.127)) > 0.001:
+        print("ERROR: batteryPower should be retained from the REST poll, got {}".format(flow["batteryPower"]))
+        failed = True
+    if abs(flow["gridPower"] - (-0.27)) > 0.001:
+        print("ERROR: gridPower should be retained from the REST poll, got {}".format(flow["gridPower"]))
+        failed = True
+    # The field the message did carry must still be applied
+    if abs(flow["pvPower"] - 4.42) > 0.001:
+        print("ERROR: pvPower should come from the period message, got {}".format(flow["pvPower"]))
+        failed = True
+
+    # With nothing previously known either, an absent field is still 0 rather than raising
+    api2 = MockSigenergyAPI()
+    api2._handle_mqtt_period("SYS2", {"PV power": "1000.0"})
+    flow2 = api2.energy_flow.get("SYS2", {})
+    if flow2["batterySoc"] != 0.0:
+        print("ERROR: batterySoc with no prior value should default to 0, got {}".format(flow2["batterySoc"]))
+        failed = True
 
     return failed
 
@@ -1809,6 +1862,54 @@ def test_sigenergy_fetch_inverter_realtime(my_predbat):
     # pvEnergyDaily should update daily_summary
     daily = api.daily_summary.get("SYS1", {})
     assert daily.get("dailyPowerGeneration") == 12.5, "daily PV yield updated from pvEnergyDaily"
+
+    return failed
+
+
+def test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback(my_predbat):
+    """Regression test for #4663: realtimeInfo spells PV power "pVPower" (capital V), not the
+    natural-looking "pvPower" read by the code before the fix - which silently defaulted PV to 0
+    forever. Covers the fallback chain pVPower -> pvTotalPower -> pvPower in priority order."""
+    failed = False
+
+    def _fetch_pv(realtime_info):
+        api = MockSigenergyAPI()
+        api.access_token = "fake_token"
+        api.token_expires_at = 9_999_999_999
+        api._last_request_time = 0
+        api.devices["SYS1"] = [{"deviceType": "Inverter", "serialNumber": "INV001"}]
+
+        fake_response = {
+            "code": 0,
+            "data": {
+                "systemId": "SYS1",
+                "serialNumber": "INV001",
+                "deviceType": "Inverter",
+                "realTimeInfo": realtime_info,
+            },
+        }
+        mock_response = _make_mock_response(status=200, json_data=fake_response)
+        mock_session = _make_mock_session(mock_response)
+        with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+            ok = run_async(api.fetch_inverter_realtime("SYS1"))
+        assert ok is True, "fetch_inverter_realtime should return True"
+        return api.energy_flow.get("SYS1", {}).get("pvPower")
+
+    # pVPower is primary - used even when the other two spellings are also present and disagree.
+    pv = _fetch_pv({"batSoc": 50.0, "pVPower": 4.66, "pvTotalPower": 4.38, "pvPower": 0.0})
+    assert pv == 4.66, "pVPower should be read as the primary PV key, got {}".format(pv)
+
+    # No pVPower - falls back to pvTotalPower.
+    pv = _fetch_pv({"batSoc": 50.0, "pvTotalPower": 4.38, "pvPower": 0.0})
+    assert pv == 4.38, "should fall back to pvTotalPower when pVPower is absent, got {}".format(pv)
+
+    # Neither pVPower nor pvTotalPower - falls back to pvPower.
+    pv = _fetch_pv({"batSoc": 50.0, "pvPower": 2.1})
+    assert pv == 2.1, "should fall back to pvPower when the other two are absent, got {}".format(pv)
+
+    # None of the three present - the #4663 regression case: silently stuck at 0, not an error.
+    pv = _fetch_pv({"batSoc": 50.0})
+    assert pv == 0.0, "should read 0.0, not error, when no PV key is present at all, got {}".format(pv)
 
     return failed
 
@@ -2951,11 +3052,13 @@ def run_sigenergy_tests(my_predbat):
         ("send_battery_command_no_token", test_sigenergy_send_battery_command_no_token),
         ("handle_mqtt_period", test_sigenergy_handle_mqtt_period),
         ("handle_mqtt_period_partial_update", test_sigenergy_handle_mqtt_period_partial_update),
+        ("handle_mqtt_period_never_reported_field", test_sigenergy_handle_mqtt_period_never_reported_field),
         ("handle_mqtt_change", test_sigenergy_handle_mqtt_change),
         ("handle_mqtt_alarm", test_sigenergy_handle_mqtt_alarm),
         ("mqtt_listener_loop", test_sigenergy_mqtt_listener_loop),
         ("mqtt_listener_loop_ignores_other_systems", test_sigenergy_mqtt_listener_loop_ignores_other_systems),
         ("fetch_inverter_realtime", test_sigenergy_fetch_inverter_realtime),
+        ("fetch_inverter_realtime_pv_power_key_fallback", test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback),
         ("fetch_energy_flow", test_sigenergy_fetch_energy_flow),
         ("fetch_inverter_realtime_no_inverter", test_sigenergy_fetch_inverter_realtime_no_inverter),
         ("get_inverter_serial", test_sigenergy_get_inverter_serial),

@@ -117,6 +117,10 @@ def build_summary(results, config):
         #
         # Copied, so a later edit to the live configuration cannot reach back and rewrite
         # what a stored run says it used.
+        # So the run selector and compare table can tell a fast run from a full one.
+        # Comparing the two is legitimate - that is the accuracy claim - but it must be
+        # visible, and a run that asked for fast mode but was given a full one reads False.
+        "fast_mode": bool(((results or {}).get("annual") or {}).get("fast_mode")),
         "tariff": copy.deepcopy((config or {}).get("tariff") or {}),
         # What the no-PV/battery scenario was priced on. Carried separately because it is
         # a genuinely different tariff to the one the modelled system runs on, and a

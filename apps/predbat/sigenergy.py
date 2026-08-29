@@ -692,7 +692,20 @@ class SigenergyAPI(ComponentBase):
         bat_soc = _safe_float(rt.get("batSoc", 0))
         # batPower: realtimeInfo convention is positive=discharging, negative=charging.
         bat_power_kw = _safe_float(rt.get("batPower", 0))
-        pv_power_kw = _safe_float(rt.get("pvPower", 0))
+        # PV power is "pVPower" on this endpoint - capital V, unlike every other pv* field beside it
+        # (pvEnergyDaily, pvTotalPower) and unlike the MQTT period topic's "PV power". Reading the
+        # natural-looking "pvPower" silently yielded 0 forever, which is #4663: PV showed a flat 0W
+        # while the native app showed live generation, and the power-flow diagram displayed an
+        # impossible balance (battery charging hard with nothing coming in).
+        #
+        # pvTotalPower is present too but lags - across consecutive samples it held 4.38 while the
+        # string data (pV1/pV2 voltage x current) rose 4.26 -> 4.33 -> 4.67kW and pVPower tracked it
+        # at 4.40 -> 4.66 -> 5.00kW. Fall back through the other spellings only if pVPower is absent.
+        pv_power_kw = 0.0
+        for pv_key in ("pVPower", "pvTotalPower", "pvPower"):
+            if pv_key in rt:
+                pv_power_kw = _safe_float(rt[pv_key])
+                break
         # activePower: positive=export (net generation to grid), negative=import.
         # Maps directly to gridPower in the Predbat convention (positive=export).
         grid_power_kw = _safe_float(rt.get("activePower", 0))
@@ -1200,8 +1213,10 @@ class SigenergyAPI(ComponentBase):
         last known value of every raw field) rather than used on its own —
         otherwise any field that hasn't changed recently would read back as 0.
         Recomputes and overwrites ``self.energy_flow[system_id]`` from that merged
-        state. The ``period`` message is broadcast every ~5 s by the broker and
-        carries inverter and storage power/SOC values.
+        state, except for fields this system has never reported at all, which keep
+        whatever the REST poll last put there (see #4663). The ``period`` message is
+        broadcast every ~5 s by the broker and carries inverter and storage
+        power/SOC values.
 
         Field sign convention matches Predbat's own battery_power/grid_power convention:
           batteryPower — positive = discharging, negative = charging
@@ -1246,31 +1261,46 @@ class SigenergyAPI(ComponentBase):
         raw = self.mqtt_period_raw.setdefault(system_id, {})
         raw.update(value_dict)
 
+        # A field the broker has *never* sent is still absent from the merged state, and defaulting
+        # it to 0 here would overwrite a good value the REST poll already put in energy_flow with a
+        # fabricated zero. Seen live in #4663: period messages carrying only "PV power" reset SoC to
+        # 0%, which made Predbat replan against an empty battery mid-export. Keep the last known
+        # value for anything this system has not actually reported yet.
+        previous_flow = self.energy_flow.get(system_id, {})
+        previous_status = self.system_status.get(system_id, {})
+
+        def _field(raw_key, previous, flow_key, scale=1.0, negate=False):
+            """Scaled value of raw_key, or the value already held for flow_key if never reported."""
+            if raw_key not in raw:
+                return previous.get(flow_key, 0.0)
+            value = _safe_float(raw[raw_key]) * scale
+            return -value if negate else value
+
         # Note: storageChargeDischargePowerW is negative when discharging, convert to Predbat
-        bat_power_kw = -_safe_float(raw.get("storageChargeDischargePowerW", 0)) / 1000.0
-        pv_power_kw = _safe_float(raw.get("PV power", 0)) / 1000.0
+        bat_power_kw = _field("storageChargeDischargePowerW", previous_flow, "batteryPower", scale=1 / 1000.0, negate=True)
+        pv_power_kw = _field("PV power", previous_flow, "pvPower", scale=1 / 1000.0)
         # Convert grid power, from positive=import to positive=export (same as Predbat)
-        grid_power_kw = -_safe_float(raw.get("gridActivePowerW", 0)) / 1000.0
+        grid_power_kw = _field("gridActivePowerW", previous_flow, "gridPower", scale=1 / 1000.0, negate=True)
         # Energy balance in Predbat convention (bat: +discharge/-charge, grid: +export/-import):
         # load = pv + battery_discharge - grid_export
         load_power_kw = pv_power_kw + bat_power_kw - grid_power_kw
 
         flow = {
-            "batterySoc": _safe_float(raw.get("storageSOC%", 0)),
+            "batterySoc": _field("storageSOC%", previous_flow, "batterySoc"),
             "batteryPower": bat_power_kw,
             "pvPower": pv_power_kw,
             "gridPower": grid_power_kw,
             "loadPower": max(0.0, load_power_kw),
             "evPower": 0.0,
-            "inverterPower": _safe_float(raw.get("inverterActivePowerW", 0)) / 1000.0,
+            "inverterPower": _field("inverterActivePowerW", previous_flow, "inverterPower", scale=1 / 1000.0),
         }
         flow_status = {
-            "chargeCapacity": _safe_float(raw.get("storageChargeCapacityWh", 0)) / 1000.0,
-            "dischargeCapacity": _safe_float(raw.get("storageDischargeCapacityWh", 0)) / 1000.0,
-            "ratedChargePower": _safe_float(raw.get("batteryMaxChargePowerW", 0)) / 1000.0,
-            "ratedDischargePower": _safe_float(raw.get("batteryMaxDischargePowerW", 0)) / 1000.0,
-            "operationalMode": _safe_float(raw.get("operationalMode", 0)),
-            "systemStatus": _safe_float(raw.get("systemStatus", 0)),
+            "chargeCapacity": _field("storageChargeCapacityWh", previous_status, "chargeCapacity", scale=1 / 1000.0),
+            "dischargeCapacity": _field("storageDischargeCapacityWh", previous_status, "dischargeCapacity", scale=1 / 1000.0),
+            "ratedChargePower": _field("batteryMaxChargePowerW", previous_status, "ratedChargePower", scale=1 / 1000.0),
+            "ratedDischargePower": _field("batteryMaxDischargePowerW", previous_status, "ratedDischargePower", scale=1 / 1000.0),
+            "operationalMode": _field("operationalMode", previous_status, "operationalMode"),
+            "systemStatus": _field("systemStatus", previous_status, "systemStatus"),
         }
         self.energy_flow[system_id] = flow
         self.system_status[system_id] = flow_status
@@ -2148,6 +2178,7 @@ class SigenergyAPI(ComponentBase):
                 new_mode = "export"
                 active_mode = SIGENERGY_ACTIVE_MODE_DISCHARGE
                 discharge_priority_type = "PV"
+                charge_power_kw = export_rate_w / 1000.0
         elif charge_window and charge_start_dt and charge_end_dt:
             duration_min = max(1, int((charge_end_dt - now).total_seconds() / 60))
             effective_target = max(charge_target_soc, reserve_soc)

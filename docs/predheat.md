@@ -29,6 +29,14 @@ Future versions will also offer Predbat to run in master mode, controlling your 
 
 Predheat is now part of Predbat, you will need to configure it using `apps.yaml` and then enable it by turning on **switch.predbat_predheat_enable**
 
+Configuring the `predheat` section of `apps.yaml` on its own only makes Predheat start up, it does not make it run.
+Until the switch is turned on you will see `Predheat: Startup` and `Predheat: Next run time will be ...` in the log
+followed by `Predheat: Disabled - turn on switch.predbat_predheat_enable to run it`, and no `predheat.*` entities
+will be created. Once the switch is on the log shows `Predheat: Enabled via switch.predbat_predheat_enable ...` and
+then a `Predheat: update at ...` line for each run. If you turn the switch on in Home Assistant but the log still
+says Predheat is disabled, then Predbat did not receive the switch change - toggle it from Predbat's own web
+interface instead and check the log for a `switch_event: switch.predbat_predheat_enable` line.
+
 ### Weather install
 
 You will need a weather forecast service available in Home Assistant for Predbat to be able to forecast heating demand based on the weather forecast.

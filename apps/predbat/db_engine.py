@@ -164,7 +164,6 @@ class DatabaseEngine:
             last_state = last_record[1]
             last_attributes = last_record[2]
             last_system = last_record[3]
-            last_keep = last_record[4]
             if last_state == state and last_attributes == attributes_record_json and last_system == system_json:
                 return
 

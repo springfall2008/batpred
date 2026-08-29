@@ -284,8 +284,6 @@ def test_hainterface_wait_api_started_timeout(my_predbat=None):
             return
 
     with patch("ha.time.sleep", side_effect=mock_sleep):
-        # Set max count to trigger timeout quickly
-        original_count = 0
         result = ha_interface.wait_api_started()
         # After 240 iterations without api_started, should return False
 

@@ -94,14 +94,56 @@ SUNSYNK_WORKMODE = {
 }
 
 # Per-slot field name templates, rendered with n = 1..TOU_SLOT_COUNT.
+# Per-slot fields Predbat writes. CONFIRMED live (2026-08-19) that all of "sell",
+# "grid_charge" and their siblings must be present in the payload together: with
+# sellTime{n}En absent, time{n}on was silently discarded on six consecutive writes across
+# every encoding tried, while every other field of the same write persisted. Including it
+# made time{n}on stick immediately. The API evidently validates the per-slot field set as a
+# whole and drops the flags if it is incomplete.
+#
+# The three flags are INDEPENDENT once all are present - proven by setting grid charge on a
+# slot whose sell flag is 0, and the sell flag on a slot whose grid charge is 0, in one
+# write: both landed exactly as sent.
 TOU_FIELD = {
     "time": "sellTime{n}",
     "power": "sellTime{n}Pac",
     "soc": "cap{n}",
     "grid_charge": "time{n}on",
+    "sell": "sellTime{n}En",
 }
 
+# NEVER write this. time{n}On (capital O) is server-derived: it changed from '0' to '65' on
+# a write that did not mention it at all, and writing '1' to it also produced '65'. It is
+# not the boolean it resembles, and the writable grid-charge flag is time{n}on (lower case).
+SUNSYNK_DERIVED_SLOT_FIELDS = tuple(f"time{n}On" for n in range(1, TOU_SLOT_COUNT + 1))
+
 SUNSYNK_DAY_FIELDS = ["mondayOn", "tuesdayOn", "wednesdayOn", "thursdayOn", "fridayOn", "saturdayOn", "sundayOn"]
+
+# The settings/set endpoint accepts ONLY the "System Mode" group of fields. CONFIRMED
+# live (inverter 2405116013, 2026-08-19): posting the full 350-key object returned
+# {"code":0,"msg":"Success","success":true} and changed NOTHING, twice, including a probe
+# that altered a single field and preserved every original string type. Posting just these
+# 53 keys with the same single change persisted immediately.
+#
+# So the whole-object read-modify-write this component originally used could never have
+# worked - every write was silently accepted and discarded. Predbat now sends this group
+# only, carrying through the fields inside it that it does not own (safetyType, battMode,
+# energyMode, zeroExportPower, solarMaxSellPower, pvMaxLimit, sellTime{n}Volt,
+# genTime{n}on). Everything outside the group - battery, grid, generator settings - is
+# never transmitted at all, so it cannot be disturbed.
+#
+# Field list taken from solarsynkv3's DetermineSettingCategory, which posts the same group.
+SUNSYNK_SYSTEM_MODE_FIELDS = frozenset(
+    ["sn", "safetyType", "battMode", "solarSell", "pvMaxLimit", "energyMode", "peakAndVallery", "sysWorkMode", "zeroExportPower", "solarMaxSellPower"]
+    + [f"sellTime{n}" for n in range(1, TOU_SLOT_COUNT + 1)]
+    + [f"sellTime{n}Pac" for n in range(1, TOU_SLOT_COUNT + 1)]
+    + [f"sellTime{n}Volt" for n in range(1, TOU_SLOT_COUNT + 1)]
+    + [f"sellTime{n}En" for n in range(1, TOU_SLOT_COUNT + 1)]
+    + [f"cap{n}" for n in range(1, TOU_SLOT_COUNT + 1)]
+    + ["mondayOn", "tuesdayOn", "wednesdayOn", "thursdayOn", "fridayOn", "saturdayOn", "sundayOn"]
+    + [f"time{n}on" for n in range(1, TOU_SLOT_COUNT + 1)]
+    + [f"genTime{n}on" for n in range(1, TOU_SLOT_COUNT + 1)]
+)
 
 # Top-level settings keys Predbat owns.
 SUNSYNK_WORKMODE_FIELD = "sysWorkMode"
@@ -109,10 +151,18 @@ SUNSYNK_SOLAR_SELL_FIELD = "solarSell"
 SUNSYNK_TOU_ENABLE_FIELD = "peakAndVallery"
 SUNSYNK_SERIAL_FIELD = "sn"
 
-# VERIFY@SPIKE — solarsynkv3 carries a ReplaceTRUE() helper that rewrites the string
-# "true" to a bare true before posting, which is strong evidence the API needs real
-# JSON booleans for the per-slot and day flags while numeric fields stay quoted
-# strings. Declared per field here rather than guessed at each call site.
+# CONFIRMED live (inverter 2405116013, 2026-08-19) that these flags must be sent as the
+# STRINGS "true"/"false", not as bare JSON booleans.
+#
+# A write carrying bare booleans was accepted and every other field of it persisted - slot
+# times, target SoCs and powers all landed - while time1on and time2on alone were silently
+# discarded and read back at their previous values. Sending them quoted, exactly as the read
+# returns them, makes them stick.
+#
+# This is the opposite of what solarsynkv3's ReplaceTRUE() helper implied. That was the
+# original basis for guessing bare booleans, and it was wrong.
+# sellTime{n}En is deliberately NOT here: it is written as the numeric string "1"/"0",
+# which is how the API returns it, unlike time{n}on which uses "true"/"false".
 SUNSYNK_BOOL_FIELDS = frozenset([TOU_FIELD["grid_charge"].format(n=n) for n in range(1, TOU_SLOT_COUNT + 1)] + SUNSYNK_DAY_FIELDS)
 
 # Values that mean False when Sunsynk hands a flag back as a string.
@@ -122,13 +172,14 @@ SUNSYNK_FALSE_STRINGS = frozenset(["false", "0", "", "none", "off", "no"])
 def encode_setting(name, value):
     """Serialise one settings value the way Sunsynk expects it on the wire.
 
-    Boolean fields (per-slot grid charge, day-of-week enables) go bare; every other
-    field is quoted, because Sunsynk returns and accepts its numerics as strings.
+    Everything is quoted. The boolean fields (per-slot grid charge, day-of-week enables)
+    become the strings "true"/"false" rather than bare JSON booleans: the API silently
+    discards a bare boolean while accepting the rest of the same write. See
+    SUNSYNK_BOOL_FIELDS.
     """
     if name in SUNSYNK_BOOL_FIELDS:
-        if isinstance(value, str):
-            return value.strip().lower() not in SUNSYNK_FALSE_STRINGS
-        return bool(value)
+        truthy = value.strip().lower() not in SUNSYNK_FALSE_STRINGS if isinstance(value, str) else bool(value)
+        return "true" if truthy else "false"
     return str(value)
 
 
@@ -160,15 +211,22 @@ SUNSYNK_ENERGY = {
 # battery -> house with PV at 0 W while the API reported power +484, so positive already
 # means discharging, matching DEYE and Predbat. No flip.
 #
-# grid_power's FIELD is confirmed - `pac` read 0 W at the same moment the app did, while
-# grid vip[0].power read -418 W and is evidently something else (a CT or per-phase sense,
-# not whole-house flow). Its SIGN is aligned with DEYE on the Deye-parity rule rather than
-# on direct evidence: every sample so far was at night with the grid idle, so 0 negates to
-# 0 and nothing distinguished the two. DEYE reports grid positive when importing and
-# negates to reach Predbat's negative-for-import convention, and Sunsynk is rebadged DEYE
-# hardware, so it is assumed to match. VERIFY@SPIKE - one daytime sample with real import
-# or export confirms or refutes it; if grid power comes back negative while importing,
-# remove "grid_power" here.
+# grid_power CONFIRMED live (inverter 2405116013, 2026-08-20 11:25) and negated, which
+# settles the VERIFY@SPIKE this line used to carry: Sunsynk reports `pac` NEGATIVE when
+# exporting, so it must be flipped to reach Predbat's negative-for-import convention. The
+# DEYE-parity guess was right after all.
+#
+# The sample that settles it, and the trap to avoid repeating: pac -1939 W at a moment when
+# PV 2708 W served a 117 W load and charged the battery at 544 W - a 2047 W surplus, whose
+# magnitude matches - with etodayFrom (import) sitting at 0.0 kWh for the whole day against
+# etodayTo (export) at 2.8 kWh and climbing. Only a sample with real power flowing can show
+# this. Two earlier readings taken near the balance point (pac +19 W and +20 W against a
+# computed surplus of ~0 W) look like the opposite conclusion and are pure noise; do not
+# re-decide this from a sample under a few hundred watts.
+#
+# `pac` is also the right FIELD: it read 0 W at the same moment the app did, while grid
+# vip[0].power read -418 W and is evidently something else (a CT or per-phase sense, not
+# whole-house flow).
 SUNSYNK_TELEMETRY_NEGATE = ("grid_power",)
 
 # Fields used to derive ratings rather than published directly.

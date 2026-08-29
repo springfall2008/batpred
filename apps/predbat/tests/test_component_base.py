@@ -13,6 +13,7 @@ Tests for ComponentBase start method and backoff behavior
 """
 
 import asyncio
+from types import SimpleNamespace
 from datetime import timezone
 from unittest.mock import patch
 
@@ -405,6 +406,38 @@ def test_component_base_set_arg_auto(my_predbat):
     return False
 
 
+def test_component_base_set_state_external(my_predbat):
+    """
+    Test ComponentBase.set_state_external() forwards to the HA interface with the attributes intact.
+
+    Components use this (rather than set_state_wrapper) when auto-discovery has to change one of
+    Predbat's own settings - only this path updates the matching CONFIG_ITEMS value, so writing the
+    state alone would move the displayed entity without changing what the planner reads.
+    """
+    print("\n*** Test: ComponentBase.set_state_external forwards to the HA interface ***")
+
+    calls = []
+
+    async def capture(entity_id, state, attributes={}):
+        """Record a forwarded external state write."""
+        calls.append((entity_id, state, attributes))
+        return "written"
+
+    base = MockBase()
+    base.ha_interface = SimpleNamespace(set_state_external=capture)
+    component = TestComponent(base)
+
+    result = asyncio.run(component.set_state_external("switch.predbat_inverter_hybrid", False))
+    assert calls == [("switch.predbat_inverter_hybrid", False, {})], f"Unexpected forwarded call {calls}"
+    assert result == "written", "The HA interface's return value should be passed back to the caller"
+
+    asyncio.run(component.set_state_external("sensor.predbat_test", 42, {"unit_of_measurement": "W"}))
+    assert calls[1] == ("sensor.predbat_test", 42, {"unit_of_measurement": "W"}), f"Attributes not forwarded: {calls[1]}"
+
+    print("PASS: set_state_external forwards entity, state and attributes and returns the result")
+    return False
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -417,6 +450,7 @@ def test_component_base_all(my_predbat):
         ("run_timeout", test_component_base_run_timeout, "Hung run() triggers timeout, stack trace, and error count"),
         ("first_cleared_preset", test_component_base_first_cleared_when_run_presets_api_started, "first flag clears even when run() pre-sets api_started"),
         ("set_arg_auto", test_component_base_set_arg_auto, "set_arg_auto warns once on an apps.yaml override, silent otherwise"),
+        ("set_state_external", test_component_base_set_state_external, "set_state_external forwards to the HA interface"),
     ]
 
     failed = []

@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import copy
 import json
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -56,6 +57,15 @@ POWERWALL_1_MAX_POWER = 3500  # Per-unit nameplate power at/below this is treate
 
 OPERATION_MODES = ["self_consumption", "autonomous", "backup"]
 EXPORT_RULES = ["never", "pv_only", "battery_ok"]
+# Large nested tariff structures that are never worth republishing - hidden from both the debug log
+# summary and the site_info review entity.
+TARIFF_BLOB_KEYS = ("tariff_content", "tariff_content_v2")
+# tou_settings.optimization_strategy: the OTHER dial the Fleet API exposes alongside the tariff itself,
+# deciding whether Time-Based Control actually acts on price. "balanced" (the device default, and what
+# is left in place if this is never sent) only discharges to offset house load and never exports stored
+# energy for price, no matter how attractive the pushed sell rate is; "economics" is the strategy that
+# exports for price. See GH#4600.
+TARIFF_OPTIMIZATION_STRATEGY = "economics"
 
 REAL_TIERS = ["SUPER_OFF_PEAK", "OFF_PEAK", "PARTIAL_PEAK"]
 BOOST_TIER = "ON_PEAK"
@@ -233,7 +243,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         for key in ("time_series", "SmartBreakerEnergyLogs"):
             if isinstance(response.get(key), list):
                 response[key] = "[{} entries hidden]".format(len(response[key]))
-        for key in ("tariff_content", "tariff_content_v2"):
+        for key in TARIFF_BLOB_KEYS:
             if isinstance(response.get(key), dict):
                 response[key] = "[hidden, code={}]".format(response[key].get("code"))
         return {"response": response}
@@ -244,6 +254,21 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if unit:
             attributes["unit_of_measurement"] = unit
         self.dashboard_item(self.entity(suffix), state, attributes, app="teslemetry")
+
+    def publish_site_info(self, response):
+        """Publish the site_info response as one entity so the device's own view of the site is reviewable.
+
+        Capacity, AC rating, battery coupling and the export rule all come from here and all change how
+        Predbat models the site, but none of it was visible outside a debug log line. The whole response
+        is published rather than a hand-picked subset, so fields added by future firmware appear without
+        a code change - and so nothing is lost to a wrong guess about where a field is nested (batteries,
+        customer_preferred_export_rule and net_meter_mode all live under components, not at the top).
+        Only the tariff blobs are dropped, the same large nested structures _summarize_for_log hides.
+        """
+        attributes = {key: value for key, value in response.items() if key not in TARIFF_BLOB_KEYS}
+        attributes["friendly_name"] = "Powerwall Site Info"
+        attributes["state_class"] = None
+        self.dashboard_item(self.entity("site_info"), response.get("site_name") or "unknown", attributes, app="teslemetry")
 
     def publish_soc_max(self, kwh, estimate=False):
         """Publish the battery capacity (soc_max) in kWh, preferring a real device value over an estimate.
@@ -315,6 +340,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if not data:
             return False
         response = data.get("response", {})
+        self.publish_site_info(response)
         nameplate_wh = response.get("nameplate_energy", 0)
         battery_count = response.get("battery_count")
         if nameplate_wh:
@@ -627,6 +653,9 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         max_site_meter_power_ac, so wiring them unconditionally would point Predbat at entities
         that never exist on a site missing those fields. Predbat falls back to its own defaults
         for absent args, so skipping the wiring here is safe.
+
+        Unlike the args above, inverter_hybrid is one of Predbat's OWN config switches rather than a
+        component entity, so it is written through set_state_external (see below).
         """
         self.log("Info: Teslemetry automatic configuration - wiring Predbat to the TESLA inverter type")
         self.set_arg("inverter_type", ["TESLA"])
@@ -657,6 +686,16 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.set_arg("discharge_target_soc", [self.entity("schedule_discharge_soc", domain="number")])
         self.set_arg("scheduled_discharge_enable", [self.entity("schedule_discharge_enable", domain="switch")])
         self.set_arg("schedule_write_button", [self.entity("schedule_write", domain="switch")])
+        # Every Powerwall is an AC-coupled battery, so Predbat must not model it as a hybrid. Left at
+        # Predbat's default (on), get_total_inverted() folds PV into the inverter_limit budget, so the
+        # Powerwall's own AC rating is applied as a cap on battery + PV combined - modelling a
+        # separately inverted solar array as clipping against a limit it never passes through, which
+        # invents both the clipping and the export windows that "recover" it.
+        # set_state_external is the write path that updates the matching CONFIG_ITEMS value; a plain
+        # state write would move the entity without changing the setting Predbat plans with.
+        hybrid_entity = "switch.{}_inverter_hybrid".format(self.prefix)
+        self.log("Info: Teslemetry setting {} off - Tesla Powerwall batteries are AC coupled".format(hybrid_entity))
+        await self.set_state_external(hybrid_entity, False)
 
     async def schedule_event(self, entity_id, value):
         """Stage a schedule entity write into pending_schedule; the write switch commits it.
@@ -912,11 +951,14 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
 
     @staticmethod
     def _tesla_dow(python_weekday):
-        """Map a Python weekday (0=Mon..6=Sun) to Tesla's fromDayOfWeek (0=Sun..6=Sat).
+        """Return Tesla's fromDayOfWeek for a Python weekday.
 
-        Isolated so any future convention change is a one-line fix.
+        Tesla's tariff_content_v2 fromDayOfWeek/toDayOfWeek use Monday=0..Sunday=6, the same
+        convention as datetime.weekday(), so this is the identity mapping (GH#4610 - the previous
+        Sunday=0 mapping shifted every boost band one day late). Kept as a named helper so the
+        convention is stated in exactly one place.
         """
-        return (python_weekday + 1) % 7
+        return python_weekday
 
     @staticmethod
     def _coalesce_day(slot_tiers):
@@ -1146,13 +1188,20 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         }
 
     async def set_tariff(self, tariff, force=False):
-        """Push a prebuilt tariff via time_of_use_settings, deduped on the serialised tariff body.
+        """Push a prebuilt tariff via time_of_use_settings, deduped on the serialised tou_settings body.
+
+        Also asserts optimization_strategy=TARIFF_OPTIMIZATION_STRATEGY on every push (GH#4600):
+        without it, Time-Based Control can silently stay in Balanced mode and never export, and there
+        is no read endpoint to detect that drift, so reasserting it alongside the tariff is the only
+        available mitigation. It is included in the dedupe signature so any future change to the
+        strategy forces a re-push rather than being masked by an unrelated-looking tariff match.
 
         Prices are rounded to whole pence upstream so per-cycle rate nudges do not change the JSON;
         a re-push therefore fires only on a genuine band, boost-window or day-of-week change.
         """
-        signature = json.dumps(tariff, sort_keys=True)
-        return await self._apply_command("tariff", signature, lambda: self._command("time_of_use_settings", {"tou_settings": {"tariff_content_v2": tariff}}), force=force)
+        body = {"optimization_strategy": TARIFF_OPTIMIZATION_STRATEGY, "tariff_content_v2": tariff}
+        signature = json.dumps(body, sort_keys=True)
+        return await self._apply_command("tariff", signature, lambda: self._command("time_of_use_settings", {"tou_settings": body}), force=force)
 
     async def sync_tariff(self):
         """Build the tariff from current rates + committed discharge window and push it (deduped).
@@ -1237,7 +1286,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.log("Info: TeslemetryAPI shutdown")
 
 
-async def test_teslemetry_api(key, site_id=None, base_url=None, control=False):
+async def test_teslemetry_api(key, site_id=None, base_url=None, control=False, auth_method=None, token_expires_at=None, token_hash=None, user_id=None, supabase_url=None, supabase_key=None):
     """Run a standalone test of the Teslemetry component against the live API.
 
     site_id is optional and acts as a filter over the sites discovered from /api/1/products; when
@@ -1246,20 +1295,42 @@ async def test_teslemetry_api(key, site_id=None, base_url=None, control=False):
     emulator and any crash-recovery writes are suppressed via set_read_only. Pass control=True to
     let the component send commands.
 
+    auth_method="oauth" exercises the direct-Fleet-API OAuth path (mirrors Fox/Kraken/Solis) instead
+    of the default static api_key mode: key is then the OAuth access token, token_expires_at/token_hash
+    seed refresh state, and user_id is written into MockBase.args (as OAuthMixin's _do_refresh reads
+    instance_id from self.base.args). A live refresh additionally needs a still-valid refresh token
+    held server-side, and SUPABASE_URL/SUPABASE_KEY: supabase_url/supabase_key are exported into
+    os.environ here (mirrors fox.py's test_fox_api) because OAuthMixin reads them from the environment
+    rather than accepting them as component arguments - passing them straight to TeslemetryAPI would
+    silently do nothing.
+
     Returns True only if the run connected and completed successfully. A failed connection -
     an auth failure (401/403) or an unsuccessful run() - returns False so main() can exit
     non-zero instead of a broken connection looking like a pass.
     """
+    if supabase_url:
+        os.environ["SUPABASE_URL"] = supabase_url
+    if supabase_key:
+        os.environ["SUPABASE_KEY"] = supabase_key
+
     mode = "READ-WRITE (controls may change)" if control else "READ-ONLY (status only, no controls changed)"
-    print("Testing Teslemetry API for site {} - {}".format(site_id or "auto-discover", mode))
+    print("Testing Teslemetry API for site {} - {} - auth={}".format(site_id or "auto-discover", mode, auth_method or "api_key"))
 
     mock_base = MockBase()
     # Read-only by default so a bare test run only reports status and never changes the Powerwall.
     mock_base.args["set_read_only"] = not control
+    if user_id:
+        mock_base.args["user_id"] = user_id
 
     arg_dict = {"key": key, "site_id": site_id or "", "automatic": True}
     if base_url:
         arg_dict["base_url"] = base_url
+    if auth_method:
+        arg_dict["auth_method"] = auth_method
+    if token_expires_at:
+        arg_dict["token_expires_at"] = token_expires_at
+    if token_hash:
+        arg_dict["token_hash"] = token_hash
     api = TeslemetryAPI(mock_base, **arg_dict)
 
     print("Calling run() once...")
@@ -1276,16 +1347,85 @@ async def test_teslemetry_api(key, site_id=None, base_url=None, control=False):
     return True
 
 
+APPS_YAML_ROOT_KEY = "pred_bat"
+# Maps a Predbat apps.yaml config item name to the test_teslemetry_api()/main() argument it feeds.
+# user_id is deliberately not teslemetry-prefixed: it is the shared predbat.com instance id consulted
+# by OAuthMixin's refresh for every OAuth-based component, not a Teslemetry-specific setting.
+APPS_YAML_ARG_KEYS = {
+    "teslemetry_key": "key",
+    "teslemetry_site_id": "site_id",
+    "teslemetry_base_url": "base_url",
+    "teslemetry_auth_method": "auth_method",
+    "teslemetry_token_expires_at": "token_expires_at",
+    "teslemetry_token_hash": "token_hash",
+    "user_id": "user_id",
+    "supabase_url": "supabase_url",
+    "supabase_key": "supabase_key",
+}
+
+
+def load_teslemetry_args_from_apps_yaml(path):
+    """Load Teslemetry CLI arguments from a Predbat apps.yaml's pred_bat: section.
+
+    Lets the standalone CLI harness be pointed at a real config file (--apps path) instead of every
+    value - including a long OAuth access token - being pasted onto the command line and left sitting
+    in shell history. Only keys actually present (and non-empty) in the file are returned, so an
+    absent item is omitted rather than defaulted to None/empty and overriding a CLI flag or argparse
+    default with a null.
+    """
+    from ruamel.yaml import YAML
+
+    yaml = YAML(typ="safe")
+    with open(path, "r") as f:
+        data = yaml.load(f) or {}
+    section = data.get(APPS_YAML_ROOT_KEY, data) or {}
+    return {arg_name: section[config_name] for config_name, arg_name in APPS_YAML_ARG_KEYS.items() if section.get(config_name) not in (None, "")}
+
+
 def main():  # pragma: no cover
     """Command line entry point to test the Teslemetry component against the live API."""
     parser = argparse.ArgumentParser(description="Test Teslemetry Tesla Powerwall API")
-    parser.add_argument("--key", required=True, help="Teslemetry (or Fleet API) bearer token")
+    parser.add_argument("--apps", default=None, help="Path to a Predbat apps.yaml (or an exported copy) to load teslemetry_key/site_id/base_url/auth_method/token_expires_at/token_hash/user_id from; any of --key etc below still override the file's values")
+    parser.add_argument("--key", default=None, help="Teslemetry (or Fleet API) bearer token")
     parser.add_argument("--site-id", default=None, help="Optional Tesla energy site id to filter the sites discovered from /api/1/products (default: use the first site on the account)")
     parser.add_argument("--base-url", default=None, help="REST API base URL (default {})".format(TESLEMETRY_DEFAULT_URL))
     parser.add_argument("--control", action="store_true", help="Allow control commands to be sent (default is read-only: report status only, change nothing)")
+    parser.add_argument("--auth-method", default=None, choices=["api_key", "oauth"], help="'api_key' (default) for a static Teslemetry token, or 'oauth' for a direct Fleet API OAuth access token")
+    parser.add_argument("--token-expires-at", default=None, help="OAuth access token expiry (ISO timestamp) - oauth mode only")
+    parser.add_argument("--token-hash", default=None, help="Server-computed OAuth token hash for refresh dedup - oauth mode only")
+    parser.add_argument("--user-id", default=None, help="predbat.com instance/user id, required by OAuthMixin to refresh - oauth mode only")
+    parser.add_argument("--supabase-url", default=None, help="Supabase URL for OAuth token refresh - oauth mode only")
+    parser.add_argument("--supabase-key", default=None, help="Supabase service key for OAuth token refresh - oauth mode only")
 
     args = parser.parse_args()
-    ok = asyncio.run(test_teslemetry_api(args.key, args.site_id, base_url=args.base_url, control=args.control))
+    file_args = load_teslemetry_args_from_apps_yaml(args.apps) if args.apps else {}
+
+    key = args.key or file_args.get("key")
+    if not key:
+        parser.error("--key is required (directly, or via --apps pointing at a file with teslemetry_key set)")
+    site_id = args.site_id or file_args.get("site_id")
+    base_url = args.base_url or file_args.get("base_url")
+    auth_method = args.auth_method or file_args.get("auth_method")
+    token_expires_at = args.token_expires_at or file_args.get("token_expires_at")
+    token_hash = args.token_hash or file_args.get("token_hash")
+    user_id = args.user_id or file_args.get("user_id")
+    supabase_url = args.supabase_url or file_args.get("supabase_url")
+    supabase_key = args.supabase_key or file_args.get("supabase_key")
+
+    ok = asyncio.run(
+        test_teslemetry_api(
+            key,
+            site_id,
+            base_url=base_url,
+            control=args.control,
+            auth_method=auth_method,
+            token_expires_at=token_expires_at,
+            token_hash=token_hash,
+            user_id=user_id,
+            supabase_url=supabase_url,
+            supabase_key=supabase_key,
+        )
+    )
     sys.exit(0 if ok else 1)
 
 

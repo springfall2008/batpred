@@ -88,8 +88,8 @@ def test_annual_config(my_predbat):
     if result["battery"]["charge_rate_kw"] != 5.0 or result["battery"]["discharge_rate_kw"] != 5.0:
         print("  ERROR: charge and discharge rates should default to inverter_kw, got {}".format(result["battery"]))
         failed = True
-    if result["battery"]["export_limit_kw"] != 5.0:
-        print("  ERROR: export_limit_kw should default to inverter_kw, got {}".format(result["battery"]))
+    if result["export_limit_kw"] != 10.0:
+        print("  ERROR: export_limit_kw should default to 10.0, got {}".format(result["export_limit_kw"]))
         failed = True
     if result["battery"]["hybrid"] is not True:
         print("  ERROR: hybrid should default to True, got {}".format(result["battery"].get("hybrid")))
@@ -461,5 +461,77 @@ def test_annual_config(my_predbat):
     if scrubbed["annual"]["load"]["octopus"]["account_id"] != "A-1":
         print("  ERROR: non-secret values should survive scrubbing")
         failed = True
+
+    print("Test: fast_mode defaults to False")
+    if validate_config(base_config())["fast_mode"] is not False:
+        print("  ERROR: fast_mode should default to False, got {!r}".format(validate_config(base_config())["fast_mode"]))
+        failed = True
+
+    print("Test: fast_mode accepts a real True")
+    config = base_config()
+    config["annual"]["fast_mode"] = True
+    if validate_config(config)["fast_mode"] is not True:
+        print("  ERROR: fast_mode True should survive validation")
+        failed = True
+
+    print("Test: an explicit 'false' string does not become truthy")
+    # Same trap as "debug"/"hybrid": bool("false") is True, so a YAML value quoted by
+    # hand would silently enable fast mode for someone who explicitly turned it off.
+    config = base_config()
+    config["annual"]["fast_mode"] = "false"
+    if validate_config(config)["fast_mode"] is not False:
+        print("  ERROR: fast_mode 'false' must coerce to False, not a truthy string")
+        failed = True
+
+    print("Test: an explicit top-level export_limit_kw survives validation")
+    config = base_config()
+    config["annual"]["export_limit_kw"] = 3.6
+    if validate_config(config)["export_limit_kw"] != 3.6:
+        print("  ERROR: export_limit_kw should survive validation as 3.6, got {}".format(validate_config(config)["export_limit_kw"]))
+        failed = True
+
+    print("Test: a legacy battery.export_limit_kw is still read for backward compatibility")
+    # This field used to live inside the battery block; an existing hand-written YAML file
+    # or a previously stored run must keep behaving the same after the move.
+    config = base_config()
+    config["annual"]["battery"]["export_limit_kw"] = 2.5
+    result = validate_config(config)
+    if result["export_limit_kw"] != 2.5:
+        print("  ERROR: a legacy battery.export_limit_kw should still set the top-level export_limit_kw, got {}".format(result["export_limit_kw"]))
+        failed = True
+    if "export_limit_kw" in result["battery"]:
+        print("  ERROR: export_limit_kw should no longer appear inside the validated battery block, got {}".format(result["battery"]))
+        failed = True
+
+    print("Test: an explicit top-level export_limit_kw takes priority over the legacy nested one")
+    config = base_config()
+    config["annual"]["export_limit_kw"] = 8.0
+    config["annual"]["battery"]["export_limit_kw"] = 2.5
+    result = validate_config(config)
+    if result["export_limit_kw"] != 8.0:
+        print("  ERROR: the top-level export_limit_kw should win over the legacy battery one, got {}".format(result["export_limit_kw"]))
+        failed = True
+
+    print("Test: export_limit_kw applies to a PV-only run too, with no legacy battery block to read")
+    config = base_config()
+    del config["annual"]["battery"]
+    config["annual"]["export_limit_kw"] = 4.0
+    result = validate_config(config)
+    if result["export_limit_kw"] != 4.0:
+        print("  ERROR: export_limit_kw should apply on a battery-less run, got {}".format(result["export_limit_kw"]))
+        failed = True
+
+    print("Test: a zero export_limit_kw is accepted, modelling a G99 zero-export limitation")
+    config = base_config()
+    config["annual"]["export_limit_kw"] = 0
+    result = validate_config(config)
+    if result["export_limit_kw"] != 0:
+        print("  ERROR: a zero export_limit_kw should survive validation as 0, got {}".format(result["export_limit_kw"]))
+        failed = True
+
+    print("Test: a negative export_limit_kw is rejected")
+    config = base_config()
+    config["annual"]["export_limit_kw"] = -1.0
+    failed = expect_error("negative export_limit_kw", config, "export_limit_kw", failed)
 
     return failed

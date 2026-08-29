@@ -22,14 +22,15 @@ production host would report.
 import gzip
 import json
 import os
-try:
-    import resource
-except ImportError:
-    resource = None
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+
+try:
+    import resource
+except ImportError:
+    resource = None
 
 import numpy as np
 
