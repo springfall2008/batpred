@@ -35,8 +35,12 @@ from chat import (
     COMPLETION_RATE_LIMIT_DELAYS_SECONDS,
     COMPLETION_RATE_LIMIT_MAX_ATTEMPTS,
     is_free_model,
+    LOCAL_MODEL_CACHE_MINUTES,
     max_attempts_for,
+    MODEL_CACHE_MINUTES,
     MODEL_CACHE_VERSION,
+    ollama_native_url,
+    ollama_tags_to_catalogue,
     model_cache_name,
     resolve_provider,
     parse_retry_after,
@@ -3483,6 +3487,93 @@ def test_a_conversation_model_does_not_survive_a_provider_switch(my_predbat):
     return failed
 
 
+def test_ollama_cloud_models_are_listed_but_not_free(my_predbat):
+    """A cloud model reaches the picker, and is not offered as free.
+
+    Ollama's cloud models run on somebody else's hardware and are paid for, but the server
+    offering them is your own and publishes no prices - so the "local endpoint, therefore free"
+    rule is exactly wrong for them, and "show only free models" would otherwise hand a user a
+    billable model under a filter asking for the opposite.
+
+    Only /api/tags says which models those are: remote_model and remote_host appear there and not
+    in the OpenAI-compatible /v1/models shim. Both endpoints list the same models - checked
+    against a live server with a cloud model pulled - so this is about telling them apart, not
+    about which are visible.
+    """
+    failed = False
+    print("**** Testing that Ollama cloud models are listed but not free ****")
+
+    # The shape /api/tags really returns, taken from a live server.
+    tags = {
+        "models": [
+            {"name": "gpt-oss:20b", "model": "gpt-oss:20b", "details": {}},
+            {"name": "gpt-oss:120b-cloud", "model": "gpt-oss:120b-cloud", "remote_model": "gpt-oss:120b", "remote_host": "https://ollama.com", "details": {}},
+        ]
+    }
+    catalogue = ollama_tags_to_catalogue(tags)
+    if [entry["id"] for entry in catalogue["data"]] != ["gpt-oss:20b", "gpt-oss:120b-cloud"]:
+        print("ERROR: the tags response did not become a catalogue: {}".format(catalogue))
+        return True
+    if catalogue["data"][0]["remote"] or not catalogue["data"][1]["remote"]:
+        print("ERROR: remote was not read from remote_model/remote_host: {}".format(catalogue))
+        failed = True
+
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "http://192.168.0.33:11434/v1"}})
+    agent.select_provider("ollama")
+
+    async def no_details(models, base_url=None):
+        """Skip the live /api/show enrichment."""
+        return models
+
+    agent._add_ollama_details = no_details
+    models = {entry["id"]: entry for entry in asyncio.run(agent._catalogue_to_models(catalogue, agent.provider, agent.base_url, None))}
+
+    if "gpt-oss:120b-cloud" not in models:
+        print("ERROR: the cloud model did not reach the picker: {}".format(sorted(models)))
+        failed = True
+    elif models["gpt-oss:120b-cloud"]["free"]:
+        print("ERROR: a cloud model was offered as free: {}".format(models["gpt-oss:120b-cloud"]))
+        failed = True
+    if not models.get("gpt-oss:20b", {}).get("free"):
+        print("ERROR: a genuinely local model stopped being free: {}".format(models.get("gpt-oss:20b")))
+        failed = True
+
+    # The native endpoint is derived from the OpenAI base by stripping a trailing /v1 - and only
+    # a whole trailing segment, or "/v1beta" would be truncated to nothing and a quite different
+    # server asked for its models.
+    for base, expected in (
+        ("http://192.168.0.33:11434/v1", "http://192.168.0.33:11434/api/tags"),
+        ("https://ollama.com/v1", "https://ollama.com/api/tags"),
+        ("http://192.168.0.33:11434", "http://192.168.0.33:11434/api/tags"),
+        ("https://host/v1beta", "https://host/v1beta/api/tags"),
+    ):
+        if ollama_native_url(base, "/api/tags") != expected:
+            print("ERROR: {} derived {}, expected {}".format(base, ollama_native_url(base, "/api/tags"), expected))
+            failed = True
+
+    # Ollama is free on your own machine and paid for at ollama.com, serving the identical API and
+    # publishing no prices either way - so where it is decides whether its models are free.
+    hosted = resolve_provider("ollama", "https://ollama.com/v1")[1]
+    local = resolve_provider("ollama", "http://192.168.0.33:11434/v1")[1]
+    if hosted["metered"] is not True or local["metered"] is not False:
+        print("ERROR: metered is not decided by where the endpoint is: hosted={} local={}".format(hosted["metered"], local["metered"]))
+        failed = True
+    if is_free_model(hosted, None, None):
+        print("ERROR: a model on hosted Ollama was offered as free")
+        failed = True
+    # And resolving one must not have edited the shared table for everybody else.
+    if PROVIDERS["ollama"]["metered"] is not False:
+        print("ERROR: resolving a hosted provider mutated the shared PROVIDERS table")
+        failed = True
+
+    # A local catalogue is what you just changed by pulling something, so it must not be trusted
+    # for a day the way a hosted one is - that is exactly "I pulled a model and it never appeared".
+    if LOCAL_MODEL_CACHE_MINUTES >= MODEL_CACHE_MINUTES:
+        print("ERROR: a local catalogue is cached as long as a hosted one: {} vs {}".format(LOCAL_MODEL_CACHE_MINUTES, MODEL_CACHE_MINUTES))
+        failed = True
+    return failed
+
+
 def test_stop_reaches_a_turn_that_is_still_streaming(my_predbat):
     """Stop ends a turn mid-completion, rather than waiting for the model to finish talking.
 
@@ -3791,6 +3882,7 @@ def run_chat_tests(my_predbat):
     failed |= test_a_working_catalogue_clears_the_previous_failure(my_predbat)
     failed |= test_local_models_are_free_however_little_pricing_they_publish(my_predbat)
     failed |= test_stop_reaches_a_turn_that_is_still_streaming(my_predbat)
+    failed |= test_ollama_cloud_models_are_listed_but_not_free(my_predbat)
     failed |= test_a_conversation_model_does_not_survive_a_provider_switch(my_predbat)
     failed |= test_component_gating(my_predbat)
     failed |= test_provider_detection_and_payload(my_predbat)

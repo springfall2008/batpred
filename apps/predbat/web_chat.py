@@ -2611,7 +2611,18 @@ function renderModelResults(filter) {
         empty.className = 'chat-model-empty';
         // Naming the filter matters here: with it on, a search for a paid model returns nothing
         // and the reason is a checkbox the user may have forgotten is ticked.
-        empty.textContent = state.freeOnly ? 'No free model matches "' + filter + '" - untick "Show only free models" to search them all' : 'No model matches "' + filter + '"';
+        //
+        // The no-search-term case is its own message rather than 'No free model matches ""',
+        // because it is a real configuration - a provider where nothing is free, such as Ollama
+        // Cloud - rather than a search that found nothing. Saying how many models are behind the
+        // filter is what turns "this is broken" into "untick that".
+        if (!state.freeOnly) {
+            empty.textContent = filter ? 'No model matches "' + filter + '"' : 'No models offered';
+        } else if (filter) {
+            empty.textContent = 'No free model matches "' + filter + '" - untick "Show only free models" to search them all';
+        } else {
+            empty.textContent = 'Nothing this provider offers is free - untick "Show only free models" to see ' + (state.models || []).length + ' paid models';
+        }
         list.appendChild(empty);
     } else if (matches.length > shown.length) {
         var more = document.createElement('div');

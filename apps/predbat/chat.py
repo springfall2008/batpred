@@ -71,6 +71,14 @@ EVENT_BUFFER_MAX = 2000
 # hours, not 24. OpenRouter's catalogue changes rarely enough that once a day is plenty either way.
 MODEL_CACHE_MINUTES = 1440
 
+# The same, for an endpoint on your own machine. A day is right for a hosted catalogue of several
+# hundred models fetched over the internet; it is wrong for a local server, where the catalogue is
+# whatever you have pulled and changes precisely because you just changed it. Pulling a model and
+# then not seeing it in the picker until tomorrow is the bug this exists to prevent. Not zero,
+# because the list still costs one /api/show per model to enrich - about 0.8s for ten models -
+# which is not worth repeating on every page load.
+LOCAL_MODEL_CACHE_MINUTES = 5
+
 # How long past its own deadline a turn must go before its slot is assumed abandoned. Only a
 # component restart can strand a slot, and that is rare - so the grace period is generous.
 STALE_TURN_GRACE_SECONDS = 60
@@ -324,11 +332,21 @@ def default_model_for(provider_name):
 
 
 def resolve_provider(api_type, url):
-    """Return the provider settings for a configured type, resolving 'auto' from the URL."""
+    """Return the provider settings for a configured type, resolving 'auto' from the URL.
+
+    Whether somebody bills for a provider is settled here rather than in the table, because for
+    Ollama it depends on where it is: the same software is free on your own machine and paid for
+    at ollama.com, which serves the identical API and publishes no prices either way. Marking a
+    hosted one unmetered would offer every model in it under "show only free models", which is a
+    filter asking specifically not to be billed.
+    """
     name = str(api_type or "auto").strip().lower()
     if name in ("", "auto"):
         name = detect_provider(url)
-    return name, PROVIDERS.get(name, PROVIDERS["openai"])
+    settings = PROVIDERS.get(name, PROVIDERS["openai"])
+    if not settings["metered"] and not is_local_endpoint(url):
+        settings = dict(settings, metered=True)
+    return name, settings
 
 
 def conversation_model_for(meta, active_provider):
@@ -366,7 +384,7 @@ def model_cache_name(base_url):
     return "models_v{}_{}".format(MODEL_CACHE_VERSION, hashlib.md5(str(base_url or "").encode("utf-8")).hexdigest()[:16])
 
 
-def is_free_model(provider, prompt_price, completion_price):
+def is_free_model(provider, prompt_price, completion_price, remote=False):
     """Return whether a model costs nothing to run on a given provider.
 
     Decided here rather than in the browser because only this side knows what the endpoint is. A
@@ -378,7 +396,13 @@ def is_free_model(provider, prompt_price, completion_price):
     On a metered endpoint the prices decide it, and an absent price stays not-free: OpenRouter's
     routing models quote -1 because their cost depends on where they route, and offering those as
     free would bill somebody who asked not to be.
+
+    A remote model is the exception on an unmetered endpoint. Ollama's cloud models run on
+    somebody else's hardware and are paid for, even though the server offering them is your own
+    and publishes no prices - so "local endpoint, therefore free" is exactly wrong for them.
     """
+    if remote:
+        return False
     if not provider.get("metered", True):
         return True
     if prompt_price is None or completion_price is None:
@@ -387,6 +411,47 @@ def is_free_model(provider, prompt_price, completion_price):
         return float(prompt_price) == 0 and float(completion_price) == 0
     except (TypeError, ValueError):
         return False
+
+
+def ollama_native_url(base_url, path):
+    """Return an Ollama native API URL for an endpoint given as its OpenAI-compatible base.
+
+    Only a trailing "/v1" is stripped, and only as a whole path segment. Splitting on "/v1"
+    anywhere in the string matches inside a longer segment - "https://host/v1beta" becomes
+    "https://host" - and then asks a quite different server for its models.
+
+    A base URL that is simply wrong is left wrong: "https://ollama.com/api/v1" still yields
+    "https://ollama.com/api/api/tags", which 404s. That is deliberate. Quietly repairing a
+    mistyped URL would hide the mistake until something subtler went wrong with it, and the 404
+    names the URL it tried, which is what tells the user which part they got wrong.
+    """
+    base = str(base_url or "").rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")]
+    return "{}{}".format(base, path)
+
+
+def ollama_tags_to_catalogue(payload):
+    """Turn Ollama's /api/tags response into the catalogue shape the rest of this expects.
+
+    Read for the model list because it is the only endpoint that says which models are cloud ones:
+    remote_model and remote_host appear here and not in the OpenAI-compatible /v1/models shim.
+    Both endpoints list the same models - measured against a live server with a cloud model pulled,
+    /v1/models does include it - so this is not about which models are visible. It is about telling
+    a cloud model from a local one, which decides whether it is free.
+
+    Anything running elsewhere is marked remote: a cloud model is somebody else's hardware, paid
+    for, whatever the local server says about pricing. Reading the native endpoint for a native
+    provider also matches what already happens per model, since the capability and context-length
+    enrichment has always come from /api/show.
+    """
+    models = []
+    for entry in (payload or {}).get("models") or []:
+        name = entry.get("model") or entry.get("name")
+        if not name:
+            continue
+        models.append({"id": name, "remote": bool(entry.get("remote_model") or entry.get("remote_host"))})
+    return {"data": models}
 
 
 def model_catalogue_headers(api_key):
@@ -1131,16 +1196,19 @@ class ChatAgent(ComponentBase):
         """
         headers = model_catalogue_headers(self.api_key)
         timeout = aiohttp.ClientTimeout(total=30)
+        native = bool(self.provider.get("ollama_details"))
+        url = ollama_native_url(self.base_url, "/api/tags") if native else "{}/models".format(self.base_url)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get("{}/models".format(self.base_url), headers=headers) as response:
+                async with session.get(url, headers=headers) as response:
                     if response.status in (401, 403):
                         self.catalogue_error = "{} rejected the API key (HTTP {})".format(self.base_url, response.status)
                         return None
                     if response.status != 200:
-                        self.catalogue_error = "{}/models returned HTTP {}".format(self.base_url, response.status)
+                        self.catalogue_error = "{} returned HTTP {}".format(url, response.status)
                         return None
-                    return await response.json()
+                    body = await response.json()
+                    return ollama_tags_to_catalogue(body) if native else body
         except (aiohttp.ClientError, asyncio.TimeoutError) as error:
             self.catalogue_error = "Could not reach {}: {}".format(self.base_url, error)
             raise
@@ -1171,7 +1239,8 @@ class ChatAgent(ComponentBase):
         storage = self.storage
         try:
             if storage:
-                catalogue = await storage.fetch_cached("chat", model_cache_name(self.base_url), self._fetch_model_catalogue, fresh_minutes=MODEL_CACHE_MINUTES, stale_minutes=MODEL_CACHE_MINUTES + 60, format="json")
+                fresh = MODEL_CACHE_MINUTES if self.provider.get("metered", True) else LOCAL_MODEL_CACHE_MINUTES
+                catalogue = await storage.fetch_cached("chat", model_cache_name(self.base_url), self._fetch_model_catalogue, fresh_minutes=fresh, stale_minutes=fresh + 60, format="json")
             else:
                 catalogue = await self._fetch_model_catalogue()
         except Exception as error:
@@ -1194,19 +1263,23 @@ class ChatAgent(ComponentBase):
         """
         name, provider = resolve_provider(api_type, url or default_url_for(api_type))
         base_url = str(url or default_url_for(name)).rstrip("/")
+        native = bool(provider.get("ollama_details"))
+        catalogue_url = ollama_native_url(base_url, "/api/tags") if native else "{}/models".format(base_url)
         timeout = aiohttp.ClientTimeout(total=PROBE_TIMEOUT_SECONDS)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get("{}/models".format(base_url), headers=model_catalogue_headers(api_key)) as response:
+                async with session.get(catalogue_url, headers=model_catalogue_headers(api_key)) as response:
                     if response.status in (401, 403):
                         return None, "{} rejected the API key (HTTP {})".format(base_url, response.status)
                     if response.status != 200:
-                        return None, "{}/models returned HTTP {}".format(base_url, response.status)
+                        return None, "{} returned HTTP {}".format(catalogue_url, response.status)
                     catalogue = await response.json()
+                    if native:
+                        catalogue = ollama_tags_to_catalogue(catalogue)
         except (aiohttp.ClientError, asyncio.TimeoutError) as error:
             return None, "Could not reach {}: {}".format(base_url, error)
         except ValueError:
-            return None, "{}/models did not return JSON - is that the right URL?".format(base_url)
+            return None, "{} did not return JSON - is that the right URL?".format(catalogue_url)
         models = await self._catalogue_to_models(catalogue, provider, base_url, None)
         if not models:
             return None, "{} served no tool-capable models".format(base_url)
@@ -1234,7 +1307,8 @@ class ChatAgent(ComponentBase):
                     "prompt_price": pricing.get("prompt"),
                     "completion_price": pricing.get("completion"),
                     "context_length": entry.get("context_length"),
-                    "free": is_free_model(provider, pricing.get("prompt"), pricing.get("completion")),
+                    "remote": bool(entry.get("remote")),
+                    "free": is_free_model(provider, pricing.get("prompt"), pricing.get("completion"), remote=bool(entry.get("remote"))),
                 }
             )
         if provider["ollama_details"]:
@@ -1259,7 +1333,7 @@ class ChatAgent(ComponentBase):
         list_models() is cached for a day - but a single slow or missing model must not lose the
         whole catalogue, so a failed lookup keeps the model rather than dropping it.
         """
-        base = str(base_url or self.base_url).rsplit("/v1", 1)[0]
+        base = ollama_native_url(base_url or self.base_url, "")
         detailed = []
         timeout = aiohttp.ClientTimeout(total=OLLAMA_DETAIL_TIMEOUT_SECONDS)
         try:

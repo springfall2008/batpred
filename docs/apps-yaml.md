@@ -2013,6 +2013,30 @@ Settings dialog gives the same message while you are still typing the address. A
 sleeps takes its models with it, so a desktop running Ollama needs to be awake when you ask
 Predbat something.
 
+### Ollama Cloud
+
+Ollama also runs models on its own hardware, which you reach as an ordinary provider rather than
+through your local server:
+
+```yaml
+  chat:
+    providers:
+      ollama_cloud:
+        type: ollama
+        url: 'https://ollama.com/v1'
+        model: gpt-oss:120b
+        api_key: !secret ollama_cloud_api_key
+```
+
+Two things to get right. The URL is `https://ollama.com/v1` - not `/api/v1`, which is a 404 - and
+the model ids there are plain (`gpt-oss:120b`), without the `-cloud` suffix a *local* server uses
+when it refers to a cloud model it has pulled.
+
+Unlike your own machine, this is a paid service, so Predbat treats its models as billable: the
+Chat tab's **Show only free models** box will hide all of them, and tells you how many are behind
+it. The same provider type pointed at a local address is free, because it is your own hardware -
+where Ollama runs decides which it is, not what the entry is called.
+
 A hosted endpoint needs an **api_key**; a local one needs only a **url** and no key at all. The name is yours to choose - it is what appears in the Chat tab - so you can have two of the same kind:
 
 ```yaml

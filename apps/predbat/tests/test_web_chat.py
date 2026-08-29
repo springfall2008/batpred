@@ -3158,6 +3158,13 @@ def test_settings_script_wires_the_provider_routes(my_predbat):
         if marker not in script:
             print("ERROR: the conversation dropdown is missing {!r}".format(marker))
             failed = True
+    # A provider where nothing is free - Ollama Cloud, for one - hits the free filter with no
+    # search term, and "No free model matches \"\"" reads as a broken picker rather than a ticked
+    # box. Saying how many models are behind the filter is what turns it into an instruction.
+    if "Nothing this provider offers is free" not in script:
+        print("ERROR: a provider with no free models has no empty-state message of its own")
+        failed = True
+
     if "'chat-no-provider'" not in script:
         print("ERROR: nothing shows or hides the no-provider banner")
         failed = True
