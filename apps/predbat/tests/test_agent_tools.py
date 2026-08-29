@@ -1310,11 +1310,7 @@ def test_set_config_rejects_fractional_value_for_step_one(my_predbat):
     print("**** Testing set_config accepts whole numbers and rejects fractional ones for step-1 settings ****")
 
     item = next(
-        (
-            entry
-            for entry in my_predbat.CONFIG_ITEMS
-            if entry.get("type") in ("input_number", "number") and entry.get("entity") and entry.get("step", 1) == 1 and not entry.get("enable") and not entry.get("enable_condition")
-        ),
+        (entry for entry in my_predbat.CONFIG_ITEMS if entry.get("type") in ("input_number", "number") and entry.get("entity") and entry.get("step", 1) == 1 and not entry.get("enable") and not entry.get("enable_condition")),
         None,
     )
     if item is None:
