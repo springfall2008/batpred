@@ -11,7 +11,7 @@
 
 from datetime import date
 
-from annual import AnnualConfigError, scrub_secrets, validate_config
+from annual import DEFAULT_SAMPLES_PER_MONTH, AnnualConfigError, scrub_secrets, validate_config
 
 
 def base_config():
@@ -292,6 +292,11 @@ def test_annual_config(my_predbat):
     config["annual"]["samples_per_month"] = 0
     failed = expect_error("zero samples", config, "annual.samples_per_month must be at least", failed)
 
+    print("Test: an invalid sampling value is rejected")
+    config = base_config()
+    config["annual"]["sampling"] = "monte_carlo"
+    failed = expect_error("bad sampling", config, "annual.sampling must be 'percentile' or 'weekday_spread'", failed)
+
     print("Test: a postcode-only location validates")
     config = base_config()
     config["annual"]["location"] = {"postcode": "SW1A 1AA"}
@@ -533,5 +538,110 @@ def test_annual_config(my_predbat):
     config = base_config()
     config["annual"]["export_limit_kw"] = -1.0
     failed = expect_error("negative export_limit_kw", config, "export_limit_kw", failed)
+
+    print("Test: annual.months defaults to all twelve months")
+    config = base_config()
+    if validate_config(config)["months"] != list(range(1, 13)):
+        print("  ERROR: an absent annual.months should default to months 1-12")
+        failed = True
+
+    print("Test: annual.months accepts an explicit subset and sorts it")
+    config = base_config()
+    config["annual"]["months"] = [7, 3]
+    if validate_config(config)["months"] != [3, 7]:
+        print("  ERROR: annual.months should be normalised to a sorted list")
+        failed = True
+
+    print("Test: annual.months rejects bad values")
+    for bad, fragment in (([], "non-empty"), ([0], "between"), ([13], "between"), ([1, 1], "repeat"), ("july", "list")):
+        config = base_config()
+        config["annual"]["months"] = bad
+        failed = expect_error("annual.months = {}".format(bad), config, fragment, failed)
+
+    print("Test: an explicit annual.months forces fast_mode off")
+    config = base_config()
+    config["annual"]["months"] = [7]
+    config["annual"]["fast_mode"] = True
+    if validate_config(config)["fast_mode"]:
+        print("  ERROR: fast_mode must be forced off when annual.months is set")
+        failed = True
+
+    print("Test: the current year is rejected without an explicit annual.months")
+    config = base_config()
+    config["annual"]["year"] = 2026
+    try:
+        validate_config(config, today=date(2026, 8, 26))
+        print("  ERROR: current year without annual.months should have raised AnnualConfigError")
+        failed = True
+    except AnnualConfigError as error:
+        if "at most" not in str(error):
+            print("  ERROR: current year rejection raised '{}', expected it to mention 'at most'".format(error))
+            failed = True
+
+    print("Test: the current year is accepted for a month that is safely complete")
+    config = base_config()
+    config["annual"]["year"] = 2026
+    config["annual"]["months"] = [7]
+    try:
+        result = validate_config(config, today=date(2026, 8, 26))
+        if result["year"] != 2026 or result["months"] != [7]:
+            print("  ERROR: July 2026 should be accepted on 26 August 2026")
+            failed = True
+    except AnnualConfigError as error:
+        print("  ERROR: July 2026 should be accepted on 26 August 2026, got '{}'".format(error))
+        failed = True
+
+    print("Test: a month still inside the archive lag is rejected")
+    config = base_config()
+    config["annual"]["year"] = 2026
+    config["annual"]["months"] = [8]
+    # 2 September is 2 days past 31 August, well inside the 8 day ERA5 lag.
+    try:
+        validate_config(config, today=date(2026, 9, 2))
+        print("  ERROR: August 2026 should be rejected on 2 September 2026, inside the archive lag")
+        failed = True
+    except AnnualConfigError as error:
+        if "complete" not in str(error).lower():
+            print("  ERROR: the lag rejection should explain the month is not yet complete, got '{}'".format(error))
+            failed = True
+
+    print("Test: the lag boundary is inclusive at exactly eight days")
+    config = base_config()
+    config["annual"]["year"] = 2026
+    config["annual"]["months"] = [8]
+    try:
+        validate_config(config, today=date(2026, 9, 8))
+    except AnnualConfigError as error:
+        print("  ERROR: 8 September is exactly eight days past 31 August and should be accepted, got '{}'".format(error))
+        failed = True
+
+    print("Test: an in-progress month is rejected")
+    config = base_config()
+    config["annual"]["year"] = 2026
+    config["annual"]["months"] = [9]
+    try:
+        validate_config(config, today=date(2026, 8, 26))
+        print("  ERROR: in-progress month should have raised AnnualConfigError")
+        failed = True
+    except AnnualConfigError as error:
+        if "complete" not in str(error).lower():
+            print("  ERROR: in-progress month rejection raised '{}', expected it to mention 'complete'".format(error))
+            failed = True
+
+    print("Test: a config using none of the new keys validates to the same document as before")
+    config = base_config()
+    result = validate_config(config, today=date(2026, 8, 26))
+    expected_defaults = {
+        "months": list(range(1, 13)),
+        "sampling": "percentile",
+        "export_tariffs": [],
+        "fast_mode": False,
+        "year": 2025,
+        "samples_per_month": DEFAULT_SAMPLES_PER_MONTH,
+    }
+    for key, expected in expected_defaults.items():
+        if result[key] != expected:
+            print("  ERROR: default for '{}' should be {}, got {}".format(key, expected, result[key]))
+            failed = True
 
     return failed

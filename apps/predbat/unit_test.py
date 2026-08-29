@@ -218,7 +218,7 @@ from tests.test_open_meteo import run_open_meteo_tests
 from tests.test_solar_model import test_solar_model
 from tests.test_annual_profiles import test_annual_profiles
 from tests.test_annual_load import test_annual_load, test_annual_load_octopus
-from tests.test_annual_weather import test_annual_weather
+from tests.test_annual_weather import test_annual_weather, test_annual_weather_orientation_cache, test_annual_weather_window
 from tests.test_annual_tariff import test_annual_tariff
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_iog_charge_skew import run_iog_charge_skew_tests
@@ -278,16 +278,27 @@ from tests.test_load_today_comparison import test_load_today_comparison
 from tests.test_annual_config import test_annual_config
 from tests.test_annual_bootstrap import test_annual_bootstrap
 from tests.test_annual_sampling import test_annual_sampling
+from tests.test_annual_weekday_sampling import test_annual_weekday_sampling
 from tests.test_annual_interpolate import test_annual_fast_mode_assembly, test_annual_interpolate
 from tests.test_annual_curve_reference import test_annual_curve_reference
 from tests.test_annual_scenarios import test_annual_scenarios
 from tests.test_annual_results import test_annual_results
 from tests.test_annual_integration import test_annual_integration
-from tests.test_annual_cli import test_annual_cli, test_annual_cli_fast_flag, test_annual_cli_machine, test_annual_cli_machine_end_to_end
+from tests.test_annual_cli import test_annual_cli, test_annual_cli_fast_flag, test_annual_cli_machine, test_annual_cli_machine_end_to_end, test_annual_cli_export_compare_flags, test_annual_cli_apply_cli_overrides_config_shapes
+from tests.test_annual_cli import test_annual_cli_export_compare_table
+from tests.test_annual_cli import test_annual_cli_export_compare_table_partial_failure, test_annual_cli_export_compare_table_baseline_fallback, test_annual_cli_export_compare_table_months_requested_wording
 from tests.test_annual_job import test_annual_job
 from tests.test_tariff_catalogue import test_tariff_catalogue
 from tests.test_annual_store import test_annual_store
 from tests.test_annual_costs import test_annual_costs
+from tests.test_annual_export_sweep import (
+    test_annual_export_sweep,
+    test_annual_export_sweep_card_shape,
+    test_annual_export_sweep_dno_region,
+    test_annual_export_sweep_rates_synthesised,
+    test_annual_export_sweep_run,
+    test_annual_export_sweep_tariff_threading,
+)
 from tests.test_debug_history import test_debug_history
 from tests.test_debug_history_capture import test_debug_history_capture, test_debug_history_capture_slot_alignment
 
@@ -559,6 +570,8 @@ def main():
         ("annual_load", test_annual_load, "Annual prediction load profile tests", False),
         ("annual_load_octopus", test_annual_load_octopus, "Annual prediction Octopus consumption tests", False),
         ("annual_weather", test_annual_weather, "Annual prediction Open-Meteo weather tests", False),
+        ("annual_weather_orientation_cache", test_annual_weather_orientation_cache, "Annual weather cache keys separate roof orientations", False),
+        ("annual_weather_window", test_annual_weather_window, "Annual weather month-window fetch tests", False),
         ("annual_tariff", test_annual_tariff, "Annual prediction tariff tests", False),
         ("solax", run_solax_tests, "SolaX API tests", False),
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
@@ -666,6 +679,7 @@ def main():
         ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
         ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
         ("annual_sampling", test_annual_sampling, "Annual prediction sample selection tests", False),
+        ("annual_weekday_sampling", test_annual_weekday_sampling, "Annual weekday-spread sample selection tests", False),
         ("annual_scenarios", test_annual_scenarios, "Annual prediction scenario helper tests", False),
         ("annual_results", test_annual_results, "Annual prediction results assembly tests", False),
         ("annual_cli", test_annual_cli, "Annual prediction CLI output tests", False),
@@ -675,9 +689,21 @@ def main():
         ("annual_curve_reference", test_annual_curve_reference, "Annual fast-mode curve reference scoring", False),
         ("annual_cli_machine", test_annual_cli_machine, "Annual CLI machine mode tests", False),
         ("annual_cli_machine_end_to_end", test_annual_cli_machine_end_to_end, "Annual CLI machine mode end-to-end tests", False),
+        ("annual_cli_export_compare", test_annual_cli_export_compare_flags, "Annual CLI export-compare flag tests", False),
+        ("annual_cli_overrides_shapes", test_annual_cli_apply_cli_overrides_config_shapes, "Annual CLI apply_cli_overrides config-shape and error-handling tests", False),
+        ("annual_cli_export_compare_table", test_annual_cli_export_compare_table, "Annual CLI export-compare table tests", False),
+        ("annual_cli_export_compare_table_partial_failure", test_annual_cli_export_compare_table_partial_failure, "Annual CLI export-compare table partial-failure (scenarios=None) tests", False),
+        ("annual_cli_export_compare_table_baseline_fallback", test_annual_cli_export_compare_table_baseline_fallback, "Annual CLI export-compare table baseline-fallback and delta-sign tests", False),
+        ("annual_cli_export_compare_table_months_requested_wording", test_annual_cli_export_compare_table_months_requested_wording, "Annual CLI export-compare table months_requested wording tests", False),
         ("annual_job", test_annual_job, "Annual subprocess job control tests", False),
         ("annual_store", test_annual_store, "Annual run store tests", False),
         ("annual_costs", test_annual_costs, "Annual install cost and payback model tests", False),
+        ("annual_export_sweep", test_annual_export_sweep, "Annual multi-export-tariff sweep tests", False),
+        ("annual_export_sweep_dno_region", test_annual_export_sweep_dno_region, "Annual export sweep dno_region templating validation tests", False),
+        ("annual_export_sweep_tariff_threading", test_annual_export_sweep_tariff_threading, "Annual export sweep per-tariff threading regression tests", False),
+        ("annual_export_sweep_card_shape", test_annual_export_sweep_card_shape, "Annual export sweep by_export card shape tests", False),
+        ("annual_export_sweep_rates_synthesised", test_annual_export_sweep_rates_synthesised, "Annual export sweep rates_synthesised semantics tests", False),
+        ("annual_export_sweep_run", test_annual_export_sweep_run, "Annual export sweep run() caveat-scoping and terminal-progress tests", False),
         ("tariff_catalogue", test_tariff_catalogue, "Tariff catalogue tests", False),
         ("annual_integration", run_annual_integration_isolated, "Annual prediction integration tests", True),
         ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
