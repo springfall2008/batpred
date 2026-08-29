@@ -1249,17 +1249,25 @@ def get_chat_setup_body():
             API key. Add one to the <code>pred_bat:</code> section of your <code>apps.yaml</code>:
         </p>
         <pre><code>pred_bat:
-  openrouter_api_key: 'sk-or-v1-...'</code></pre>
+  chat_api_key: 'sk-or-v1-...'</code></pre>
+        <p>
+            Or point it at a local model instead - anything with an OpenAI-compatible API, such as
+            <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>. No key is
+            needed, and nothing leaves your network:
+        </p>
+        <pre><code>pred_bat:
+  chat_api_url: 'http://localhost:11434/v1'</code></pre>
         <p>
             Predbat restarts automatically when <code>apps.yaml</code> is saved, and the Chat tab
             becomes usable once it has. You can edit the file from the
             <a href="./apps">apps.yaml</a> tab.
         </p>
         <p>
-            You do not need to choose a model here. Once the key is set you can pick one from the
-            search box below the message box, and Predbat remembers it. To pin a default instead,
-            set <code>openrouter_default_model</code> (for example
-            <code>openai/gpt-4o-mini</code>) alongside the key.
+            You do not need to choose a model here. Once it is configured you can pick one from
+            the search box below the message box, and Predbat remembers it. To pin a default
+            instead, set <code>chat_model</code> (for example <code>openai/gpt-4o-mini</code>).
+            The older <code>openrouter_api_key</code>, <code>openrouter_base_url</code> and
+            <code>openrouter_default_model</code> names still work if you already have them.
         </p>
         <p class="chat-setup-note">
             Chat sends tool results - including log lines and configuration - to OpenRouter and on

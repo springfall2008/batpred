@@ -1964,19 +1964,22 @@ See [Components - myenergi](components.md#myenergi-myenergi) for the full list o
 
 ## AI Chat Agent
 
-Predbat can add a Chat tab to the web interface, backed by a large language model served through [OpenRouter](https://openrouter.ai). Setting **openrouter_api_key** is what enables the feature - there is no separate enable switch, and the model is chosen in the UI rather than here:
+Predbat can add a Chat tab to the web interface, backed by a large language model served through [OpenRouter](https://openrouter.ai). Setting **chat_api_key** is what enables the feature - there is no separate enable switch, and the model is chosen in the UI rather than here:
 
 ```yaml
   openrouter_api_key: !secret openrouter_api_key
-  openrouter_default_model: openai/gpt-4o-mini   # optional
+  chat_model: openai/gpt-4o-mini   # optional
 ```
 
 Before enabling this, read the [chat component's security note](components.md#security-note-chat): the web interface has no login of its own, tool results (including log lines and configuration) are sent to OpenRouter and on to whichever provider serves the model you choose, and a deleted conversation's stored copy is not removed immediately - it stays on disk until it expires.
 
 **Configuration options:**
 
-- **openrouter_api_key** - Your OpenRouter API key - required, and on its own enough to enable the component
-- **openrouter_default_model** - Optional. The OpenRouter model id new conversations start on, e.g. `openai/gpt-4o-mini`. Leave it out and pick a model from the Chat tab's search box instead - Predbat remembers what you chose, including across restarts. Set it only if you want a fixed starting point
+- **chat_api_key** - Your API key - on its own enough to enable the component, using OpenRouter
+- **chat_api_url** - Optional. The OpenAI-compatible endpoint to talk to, defaulting to OpenRouter. Point it at a local model instead and no key is needed - `http://localhost:11434/v1` for [Ollama](https://ollama.com), which keeps every conversation on your own machine. Setting this alone is enough to enable the component
+- **chat_api_type** - Optional, defaults to `auto`, which works out the provider from the URL: OpenRouter, an Ollama or other local endpoint (no key needed), or a generic OpenAI-compatible service. Set it to `openrouter`, `ollama`, `openai` or `local` if the guess is wrong for your setup
+- The older **openrouter_api_key**, **openrouter_base_url** and **openrouter_default_model** names are still accepted, so an existing configuration keeps working unchanged
+- **chat_model** - Optional. The model id new conversations start on, e.g. `openai/gpt-4o-mini`. Leave it out and pick a model from the Chat tab's search box instead - Predbat remembers what you chose, including across restarts. Set it only if you want a fixed starting point
 - **openrouter_base_url** - Chat-completions endpoint (default: `https://openrouter.ai/api/v1`). Point it at another OpenAI-compatible endpoint if you want to, but doing so disables the OpenRouter-only web search plugin
 - **openrouter_max_tokens** - Maximum tokens per completion; `0` leaves it to the model/provider's own default (default: `0`)
 - **chat_max_tool_rounds** - Maximum model round trips (completions) allowed within one turn before Predbat stops and asks you to continue. Every tool call the model makes inside one round trip still runs - this bounds round trips, not tool calls (default: `32`)

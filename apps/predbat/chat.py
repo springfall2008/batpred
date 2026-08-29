@@ -33,11 +33,13 @@ see build_messages() and append_title_instruction().
 import aiohttp
 import asyncio
 import functools
+import ipaddress
 import json
 import traceback
 import threading
 import time
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 from agent_tools import TOOL_DEFS, PredbatTools, openai_tool_list
 from component_base import ComponentBase
@@ -131,6 +133,92 @@ Predbat has two separate kinds of setting, and they are changed by different too
 If a name is not in get_config it is not a live setting, so do not pass it to set_config. Names like car_charging_exclusive, num_cars, forecast_solar and the inverter and sensor entity names all live in apps.yaml.
 
 Prefer the snapshot below for simple facts about the setup, and reach for a tool when the answer needs current values, detail the snapshot lacks, or anything the user is about to act on."""
+
+
+# The LLM endpoint providers this understands, and what each one needs done differently. Kept as
+# a table rather than branches through the code so adding one is a single entry here: as more
+# providers appear, "which is this?" gets harder to answer in scattered conditionals.
+#
+#   needs_key       - a hosted endpoint that will reject an unauthenticated request
+#   openrouter_ext  - OpenRouter's own extensions: usage.include, the web plugin, and the pricing
+#                     and supported_parameters fields on its model catalogue
+#   stream_usage    - the standard OpenAI stream_options.include_usage, which is how everyone
+#                     else reports token counts (OpenRouter ignores it, Ollama honours it)
+#   ollama_details  - enrich the model list from Ollama's native /api/show, which publishes the
+#                     capabilities and context length its OpenAI-compatible /v1/models omits
+PROVIDERS = {
+    "openrouter": {"needs_key": True, "openrouter_ext": True, "stream_usage": False, "ollama_details": False},
+    "ollama": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": True},
+    "openai": {"needs_key": True, "openrouter_ext": False, "stream_usage": True, "ollama_details": False},
+    "local": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": False},
+}
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+# Hosts that mean "this endpoint is on your own machine or your own network", so no key is
+# expected. Anything else is assumed to be somebody's hosted service until told otherwise.
+LOCAL_HOST_NAMES = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal")
+LOCAL_HOST_SUFFIXES = (".local", ".lan", ".internal", ".home", ".arpa")
+
+# Ollama's default port. Used only as a hint by detect_provider() - a local endpoint on this port
+# is almost certainly Ollama, which unlocks the richer model list.
+OLLAMA_DEFAULT_PORT = 11434
+
+# Per-model timeout for the /api/show enrichment. Short because it is a local call on the machine
+# next to Predbat: if it is slow, the catalogue is better off without the extra detail than the
+# picker is waiting for it.
+OLLAMA_DETAIL_TIMEOUT_SECONDS = 10
+
+
+def is_local_endpoint(url):
+    """Return True if a URL points at this machine or this network rather than a hosted service."""
+    try:
+        host = (urlparse(str(url or "")).hostname or "").lower()
+    except (ValueError, UnicodeError):
+        return False
+    if not host:
+        return False
+    if host in LOCAL_HOST_NAMES or host.endswith(LOCAL_HOST_SUFFIXES):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_private
+    except ValueError:
+        # Not an IP literal, and not a name that looks local.
+        return False
+
+
+def detect_provider(url):
+    """Work out which provider a URL is, for chat_api_type: auto.
+
+    Deliberately decided from the URL alone rather than by probing: this runs during component
+    start-up, and a start-up that makes a network call is a start-up that can hang. A user whose
+    endpoint the guess gets wrong sets chat_api_type explicitly, which is what it is for.
+    """
+    text = str(url or "")
+    if not text:
+        return "openrouter"
+    try:
+        parsed = urlparse(text)
+        host = (parsed.hostname or "").lower()
+        port = parsed.port
+    except (ValueError, UnicodeError):
+        return "openrouter"
+    if "openrouter.ai" in host:
+        return "openrouter"
+    if is_local_endpoint(text):
+        # Port is the only signal distinguishing Ollama from llama.cpp, LM Studio and the rest,
+        # all of which serve the same OpenAI-compatible API. Guessing wrong only costs the extra
+        # model detail, not the ability to chat.
+        return "ollama" if port == OLLAMA_DEFAULT_PORT else "local"
+    return "openai"
+
+
+def resolve_provider(api_type, url):
+    """Return the provider settings for a configured type, resolving 'auto' from the URL."""
+    name = str(api_type or "auto").strip().lower()
+    if name in ("", "auto"):
+        name = detect_provider(url)
+    return name, PROVIDERS.get(name, PROVIDERS["openai"])
 
 
 class ChatBusyError(RuntimeError):
@@ -581,7 +669,32 @@ def empty_completion_message(message):
 class ChatAgent(ComponentBase):
     """Runs the OpenRouter-backed chat agent for the Predbat web interface."""
 
-    def initialize(self, api_key, model, base_url="https://openrouter.ai/api/v1", max_tokens=0, max_tool_rounds=8, max_history=0, max_conversations=20, expiry_days=30, turn_timeout=1800, request_timeout=300, fetch_allowlist=None):
+    # Defaults for an agent that has not been through initialize() yet - a partially built
+    # instance in a test, or one inspected before start-up. Every real agent overwrites both from
+    # chat_api_type and chat_api_url. Present so reading them is never an AttributeError, since
+    # they are consulted on paths (list_models, the request payload) that a half-built agent can
+    # still reach.
+    provider_name = "openrouter"
+    provider = PROVIDERS["openrouter"]
+
+    def initialize(
+        self,
+        api_key=None,
+        model=None,
+        base_url=None,
+        api_type="auto",
+        legacy_api_key=None,
+        legacy_base_url=None,
+        legacy_model=None,
+        max_tokens=0,
+        max_tool_rounds=8,
+        max_history=0,
+        max_conversations=20,
+        expiry_days=30,
+        turn_timeout=1800,
+        request_timeout=300,
+        fetch_allowlist=None,
+    ):
         """Store configuration and build the conversation store and event buffer.
 
         turn_timeout and request_timeout bound two different things and must not be conflated:
@@ -596,9 +709,15 @@ class ChatAgent(ComponentBase):
         max_history <= 0 (0 is the default) means unlimited - trim_history() itself implements
         that, this only stores whatever was passed through.
         """
-        self.api_key = api_key
-        self.default_model = model
-        self.base_url = str(base_url or "https://openrouter.ai/api/v1").rstrip("/")
+        # The chat_api_* names win; the openrouter_* ones are read as a fallback so an apps.yaml
+        # written before the rename keeps working without being touched.
+        self.api_key = api_key or legacy_api_key
+        self.base_url = str(base_url or legacy_base_url or OPENROUTER_BASE_URL)
+        self.provider_name, self.provider = resolve_provider(api_type, self.base_url)
+        if self.provider["needs_key"] and not self.api_key:
+            self.log("Warn: ChatAgent: {} needs an API key - set chat_api_key in apps.yaml".format(self.provider_name))
+        self.default_model = model or legacy_model
+        self.base_url = self.base_url.rstrip("/")
         self.max_tokens = max_tokens or 0
         self.max_tool_rounds = max_tool_rounds or 8
         self.max_history = max_history if max_history is not None else 0
@@ -831,14 +950,59 @@ class ChatAgent(ComponentBase):
 
         models = []
         for entry in (catalogue or {}).get("data") or []:
-            if "tools" not in (entry.get("supported_parameters") or []):
+            # Only OpenRouter publishes supported_parameters. Requiring it elsewhere filtered out
+            # every model and left an empty picker, because "the catalogue does not say" is not
+            # the same as "this model cannot use tools".
+            if self.provider["openrouter_ext"] and "tools" not in (entry.get("supported_parameters") or []):
                 continue
             pricing = entry.get("pricing") or {}
             models.append({"id": entry.get("id"), "name": entry.get("name") or entry.get("id"), "prompt_price": pricing.get("prompt"), "completion_price": pricing.get("completion"), "context_length": entry.get("context_length")})
+        if self.provider["ollama_details"]:
+            models = await self._add_ollama_details(models)
         models.sort(key=lambda entry: str(entry.get("id")))
         if self.default_model and self.default_model not in [entry["id"] for entry in models]:
             models.insert(0, {"id": self.default_model, "name": "{} (from apps.yaml)".format(self.default_model), "prompt_price": None, "completion_price": None, "context_length": None})
         return models
+
+    async def _add_ollama_details(self, models):
+        """Fill in tool capability and context length from Ollama's native /api/show.
+
+        Ollama's OpenAI-compatible /v1/models returns only id/object/created/owned_by - no
+        capabilities, no context length - so without this the picker cannot tell a tool-capable
+        model from one that will fail mid-turn, and the context counter has nothing to measure
+        against. /api/show has both.
+
+        Models that do not advertise tools are dropped, which is the same promise the OpenRouter
+        path makes: everything offered in the picker can actually run a tool call.
+
+        One request per model, measured at about 76ms each against a local server, and
+        list_models() is cached for a day - but a single slow or missing model must not lose the
+        whole catalogue, so a failed lookup keeps the model rather than dropping it.
+        """
+        base = self.base_url.rsplit("/v1", 1)[0]
+        detailed = []
+        timeout = aiohttp.ClientTimeout(total=OLLAMA_DETAIL_TIMEOUT_SECONDS)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                for model in models:
+                    try:
+                        async with session.post("{}/api/show".format(base), json={"model": model["id"]}) as response:
+                            if response.status != 200:
+                                detailed.append(model)
+                                continue
+                            body = await response.json()
+                    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+                        detailed.append(model)
+                        continue
+                    capabilities = body.get("capabilities") or []
+                    if capabilities and "tools" not in capabilities:
+                        continue
+                    info = body.get("model_info") or {}
+                    context = next((value for key, value in info.items() if key.endswith("context_length")), None)
+                    detailed.append(dict(model, context_length=context or model.get("context_length")))
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return models
+        return detailed
 
     async def _stream_chunks(self, payload):
         """Yield decoded chunk dicts from the chat-completions endpoint.
@@ -896,10 +1060,19 @@ class ChatAgent(ComponentBase):
           rearrange or modify the sequence of these blocks." A plain delta.reasoning string is
           also captured as a fallback for providers that send that instead.
         """
-        payload = {"model": model, "messages": messages, "tools": self.tool_payload(), "stream": True, "usage": {"include": True}}
+        payload = {"model": model, "messages": messages, "tools": self.tool_payload(), "stream": True}
+        # Two ways of asking for token counts, because providers disagree: OpenRouter reads its
+        # own usage.include and ignores stream_options, everyone else is the other way round.
+        # Sending only the one that applies keeps an unknown field out of the request.
+        if self.provider["openrouter_ext"]:
+            payload["usage"] = {"include": True}
+        if self.provider["stream_usage"]:
+            payload["stream_options"] = {"include_usage": True}
         if self.max_tokens:
             payload["max_tokens"] = self.max_tokens
-        if self.web_search_enabled():
+        # OpenRouter's own plugin. Sending it elsewhere is at best ignored and at worst a 400, and
+        # the switch has nothing to enable off OpenRouter anyway.
+        if self.provider["openrouter_ext"] and self.web_search_enabled():
             payload["plugins"] = [{"id": "web"}]
 
         content = ""

@@ -30,6 +30,8 @@ from chat import (
     COMPLETION_RATE_LIMIT_DELAYS_SECONDS,
     COMPLETION_RATE_LIMIT_MAX_ATTEMPTS,
     max_attempts_for,
+    OPENROUTER_BASE_URL,
+    resolve_provider,
     parse_retry_after,
     retry_delay_for,
     RETRY_AFTER_MAX_SECONDS,
@@ -66,7 +68,11 @@ def _make_agent(my_predbat, **overrides):
     settings = {
         "api_key": "test-key",
         "model": "test/model",
-        "base_url": "https://openrouter.example/api/v1",
+        # The real host, not a stand-in: chat_api_type auto-detects the provider from the URL,
+        # so a fake hostname is classified as a generic OpenAI-compatible endpoint and the
+        # OpenRouter-specific behaviour under test here never runs. Nothing is dialled - the
+        # stream is stubbed - so the real name costs nothing.
+        "base_url": "https://openrouter.ai/api/v1",
         "max_tokens": 0,
         "max_tool_rounds": 4,
         "max_history": 40,
@@ -96,16 +102,31 @@ def test_component_gating(my_predbat):
         print("ERROR: 'chat' is not registered in COMPONENT_LIST")
         return True
 
-    if not entry["args"].get("api_key", {}).get("required"):
-        print("ERROR: 'api_key' is not required, so the component would start unconfigured")
+    # Neither a key nor a url is required on its own: a hosted endpoint needs a key, a local one
+    # (Ollama and friends) needs no key but must be pointed at. required_or is what expresses
+    # "at least one of these", which a per-arg required cannot.
+    if entry["args"].get("api_key", {}).get("required"):
+        print("ERROR: 'api_key' is required, which would stop a keyless local endpoint starting")
+        failed = True
+    gate = entry.get("required_or") or []
+    for name in ("api_key", "base_url", "legacy_api_key"):
+        if name not in gate:
+            print("ERROR: {!r} is not in required_or, so that route to starting chat is closed: {}".format(name, gate))
+            failed = True
+    # A default on base_url would be truthy on every install and satisfy required_or for
+    # everyone, starting the component whether or not chat was configured.
+    if entry["args"].get("base_url", {}).get("default"):
+        print("ERROR: base_url has a default, which satisfies required_or on every install")
         failed = True
     for name in ("model", "base_url", "max_tool_rounds", "max_history", "max_conversations", "expiry_days", "turn_timeout", "request_timeout", "fetch_allowlist", "max_tokens"):
         if entry["args"].get(name, {}).get("required"):
             print("ERROR: '{}' is required, which would stop the component starting on a default install".format(name))
             failed = True
-    if entry["args"]["api_key"]["config"] != "openrouter_api_key" or entry["args"]["model"]["config"] != "openrouter_default_model":
-        print("ERROR: the gating args are not bound to the documented apps.yaml keys")
-        failed = True
+    bindings = {"api_key": "chat_api_key", "base_url": "chat_api_url", "api_type": "chat_api_type", "model": "chat_model", "legacy_api_key": "openrouter_api_key", "legacy_base_url": "openrouter_base_url", "legacy_model": "openrouter_default_model"}
+    for arg, config_key in bindings.items():
+        if entry["args"].get(arg, {}).get("config") != config_key:
+            print("ERROR: {!r} is bound to {!r}, expected {!r}".format(arg, entry["args"].get(arg, {}).get("config"), config_key))
+            failed = True
     if not entry.get("can_restart"):
         print("ERROR: the chat component should be restartable from the Components tab")
         failed = True
@@ -3185,10 +3206,124 @@ def test_approvals_are_recorded_but_never_replayed(my_predbat):
     return failed
 
 
+def test_provider_detection_and_payload(my_predbat):
+    """chat_api_type: auto works out the provider from the URL, and the payload follows it.
+
+    Two things are being decided, and they are not the same question: whether a key is required
+    (a local endpoint needs none) and whether this is OpenRouter (which decides pricing, the web
+    plugin and how token usage is requested). A LAN Ollama is remote but still keyless, so URL
+    locality and provider identity are resolved separately.
+
+    Decided from the URL rather than by probing: this runs during component start-up, and a
+    start-up that makes a network call is one that can hang. An explicit chat_api_type overrides
+    the guess, which is what it is for.
+
+    Mutation checks: making every provider need a key, or sending OpenRouter's extensions
+    everywhere, each fails below.
+    """
+    failed = False
+    print("**** Testing provider detection and per-provider payload ****")
+
+    cases = {
+        "https://openrouter.ai/api/v1": ("openrouter", True),
+        "http://localhost:11434/v1": ("ollama", False),
+        "http://192.168.1.50:11434/v1": ("ollama", False),
+        "http://127.0.0.1:8080/v1": ("local", False),
+        "http://nas.local:8080/v1": ("local", False),
+        "https://api.openai.com/v1": ("openai", True),
+    }
+    for url, (expected_name, expected_key) in cases.items():
+        name, settings = resolve_provider("auto", url)
+        if name != expected_name:
+            print("ERROR: {} detected as {!r}, expected {!r}".format(url, name, expected_name))
+            failed = True
+        if settings["needs_key"] is not expected_key:
+            print("ERROR: {} needs_key is {}, expected {}".format(url, settings["needs_key"], expected_key))
+            failed = True
+
+    # An explicit type wins over the URL - the escape hatch for a setup the guess gets wrong.
+    if resolve_provider("ollama", "https://somewhere.example/v1")[0] != "ollama":
+        print("ERROR: an explicit chat_api_type did not override detection")
+        failed = True
+    # An unknown type falls back to generic OpenAI-compatible rather than raising.
+    if resolve_provider("something-new", "https://x.example/v1")[1]["needs_key"] is not True:
+        print("ERROR: an unrecognised chat_api_type did not fall back safely")
+        failed = True
+
+    # The payload carries only the extensions the provider understands.
+    for url, expect_openrouter in (("https://openrouter.ai/api/v1", True), ("http://localhost:11434/v1", False)):
+        agent = _agent_with_fake(my_predbat, _text_response("ok"), base_url=url, api_type="auto")
+        payload = {}
+        original = agent._stream_chunks
+
+        async def capture(sent, _payload=payload, _original=original):
+            """Record the payload, then replay the canned response."""
+            _payload.update(sent)
+            async for chunk in _original(sent):
+                yield chunk
+
+        agent._stream_chunks = capture
+        cid = asyncio.run(agent.store.create())
+        asyncio.run(agent.run_turn(cid, "hello"))
+
+        has_usage_include = "usage" in payload
+        has_stream_options = "stream_options" in payload
+        if has_usage_include is not expect_openrouter:
+            print("ERROR: {} usage.include present={}, expected {}".format(url, has_usage_include, expect_openrouter))
+            failed = True
+        # Everyone else reports usage through the standard option, so the token counter keeps
+        # working off OpenRouter rather than silently reading zero.
+        if has_stream_options is expect_openrouter:
+            print("ERROR: {} stream_options present={}, expected {}".format(url, has_stream_options, not expect_openrouter))
+            failed = True
+
+    return failed
+
+
+def test_legacy_openrouter_keys_still_work(my_predbat):
+    """An apps.yaml written before the rename keeps working untouched.
+
+    The openrouter_* names were live on real installations before chat_api_* existed. Dropping
+    them would have broken those installs on update, with the Chat tab simply vanishing and
+    nothing saying why.
+
+    Mutation check: removing the legacy fallbacks leaves the agent with no key, url or model.
+    """
+    failed = False
+    print("**** Testing the pre-rename apps.yaml keys still work ****")
+
+    agent = _agent_with_fake(my_predbat, _text_response("ok"), api_key=None, base_url=None, model=None, legacy_api_key="sk-old", legacy_base_url="https://openrouter.ai/api/v1", legacy_model="old/model")
+    if agent.api_key != "sk-old":
+        print("ERROR: openrouter_api_key was not read as a fallback: {}".format(agent.api_key))
+        failed = True
+    if agent.default_model != "old/model":
+        print("ERROR: openrouter_default_model was not read as a fallback: {}".format(agent.default_model))
+        failed = True
+    if agent.provider_name != "openrouter":
+        print("ERROR: the legacy base url did not resolve to OpenRouter: {}".format(agent.provider_name))
+        failed = True
+
+    # The new names win when both are set.
+    agent = _agent_with_fake(my_predbat, _text_response("ok"), api_key="sk-new", legacy_api_key="sk-old")
+    if agent.api_key != "sk-new":
+        print("ERROR: the legacy key overrode the new one: {}".format(agent.api_key))
+        failed = True
+
+    # With neither url set, OpenRouter is still the default endpoint.
+    agent = _agent_with_fake(my_predbat, _text_response("ok"), api_key="sk-new", base_url=None, legacy_base_url=None)
+    if agent.base_url != OPENROUTER_BASE_URL:
+        print("ERROR: no url configured did not fall back to OpenRouter: {}".format(agent.base_url))
+        failed = True
+
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
     failed |= test_component_gating(my_predbat)
+    failed |= test_provider_detection_and_payload(my_predbat)
+    failed |= test_legacy_openrouter_keys_still_work(my_predbat)
     failed |= test_model_resolution_order(my_predbat)
     failed |= test_turn_error_is_detailed_and_stored_but_never_replayed(my_predbat)
     failed |= test_confirmation_card_resolves_nested_paths(my_predbat)
