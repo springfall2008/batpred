@@ -3198,6 +3198,44 @@ def test_settings_script_wires_the_provider_routes(my_predbat):
     return failed
 
 
+def test_text_inputs_are_hinted_against_password_autofill(my_predbat):
+    """No text field on the Chat tab invites a password manager to fill it.
+
+    The page has a type=password input for the provider key, and that alone makes every text input
+    on it a candidate username as far as macOS and the password managers are concerned - which is
+    why the model search box was being offered keychain entries. autocomplete=off does not settle
+    it, because it is deliberately ignored on anything thought to be a login field.
+
+    Two parts, and the password field is the load-bearing one: autocomplete="new-password" says
+    this is not a login, which is what stops a nearby text box being treated as its username.
+    """
+    failed = False
+    print("**** Testing that text inputs are hinted against password autofill ****")
+
+    body = web_chat.get_chat_body()
+    text_inputs = re.findall(r'<input type="text"[^>]*>', body)
+    if len(text_inputs) < 4:
+        print("ERROR: expected the chat page to have several text inputs, found {}".format(len(text_inputs)))
+        failed = True
+    for field in text_inputs:
+        for hint in ('autocomplete="off"', "data-1p-ignore", 'data-lpignore="true"', "data-bwignore", 'data-form-type="other"'):
+            if hint not in field:
+                print("ERROR: a text input is missing {}: {}".format(hint, field))
+                failed = True
+
+    password_inputs = re.findall(r'<input type="password"[^>]*>', body)
+    if not password_inputs:
+        print("ERROR: the provider key field is no longer a password input")
+        failed = True
+    for field in password_inputs:
+        # "off" is what it used to say, and is precisely what does not work here: the browser reads
+        # a password field with autocomplete off as a login it should still help with.
+        if 'autocomplete="new-password"' not in field:
+            print("ERROR: the key field does not declare itself as new-password: {}".format(field))
+            failed = True
+    return failed
+
+
 def test_unavailable_catalogue_says_why(my_predbat):
     """When the model list cannot be fetched, the picker reports the reason, not just the fact.
 
@@ -3525,6 +3563,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_active_provider_is_remembered_across_a_restart(my_predbat)
     failed |= test_chat_page_uses_a_top_bar_and_a_settings_dialog(my_predbat)
     failed |= test_settings_script_wires_the_provider_routes(my_predbat)
+    failed |= test_text_inputs_are_hinted_against_password_autofill(my_predbat)
     failed |= test_unavailable_catalogue_says_why(my_predbat)
     failed |= test_switching_provider_writes_nothing_and_restarts_nothing(my_predbat)
     failed |= test_save_button_is_ghosted_until_something_changes(my_predbat)

@@ -55,9 +55,11 @@ batteryb
 batusecap
 beforeunload
 bierner
+Bitwarden
 BLAS
 boostable
 brickatius
+bwignore
 byok
 cadata
 calib
@@ -111,6 +113,7 @@ darkgreen
 darkred
 darray
 dasharray
+Dashlane
 datain
 datalist
 datalog
@@ -326,6 +329,7 @@ lockstep
 logdata
 loglines
 lookback
+lpignore
 lstrip
 luxpower
 markdownlint

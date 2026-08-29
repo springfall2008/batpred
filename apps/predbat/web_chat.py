@@ -1953,6 +1953,19 @@ def get_chat_setup_body():
 """
 
 
+# What every text input on this page carries to keep password managers off it. autocomplete=off
+# alone is not enough: browsers and managers deliberately ignore it on anything they think is a
+# login field, and a page containing a type=password input - which this one does, in the Settings
+# dialog - makes every text input on it a candidate username. macOS was offering to fill the model
+# search box from the keychain because of that pairing.
+#
+# The data- attributes are the opt-outs 1Password, LastPass, Bitwarden and Dashlane each publish.
+# They are vendor-specific by necessity: there is no standard way to say "this is not a credential
+# field", only four proprietary ones. A manager not on this list may still offer - these are hints,
+# and none of them is binding.
+AUTOFILL_OFF = 'autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"'
+
+
 def get_chat_body():
     """Return the Chat tab's markup.
 
@@ -2006,7 +2019,7 @@ def get_chat_body():
         <div id="chat-footer">
             <select id="chat-provider-select" title="Which provider answers. Switching takes effect immediately - nothing is written and Predbat does not restart."></select>
             <span id="chat-model-wrap">
-                <input type="text" id="chat-model" autocomplete="off" spellcheck="false" placeholder="Choose a model">
+                <input type="text" id="chat-model" {autofill_off} spellcheck="false" placeholder="Choose a model">
                 <div id="chat-model-list"></div>
                 <span id="chat-model-note"></span>
             </span>
@@ -2034,22 +2047,22 @@ def get_chat_body():
             </div>
             <div class="chat-field">
                 <label for="chat-provider-name">Name</label>
-                <input type="text" id="chat-provider-name" autocomplete="off" spellcheck="false">
+                <input type="text" id="chat-provider-name" {autofill_off} spellcheck="false">
                 <span class="chat-field-note">What this endpoint is called in apps.yaml. Any name will do - it only has to be unique.</span>
             </div>
             <div class="chat-field">
                 <label for="chat-provider-url">URL</label>
-                <input type="text" id="chat-provider-url" autocomplete="off" spellcheck="false">
+                <input type="text" id="chat-provider-url" {autofill_off} spellcheck="false">
             </div>
             <div class="chat-field">
                 <label for="chat-provider-key">API key</label>
-                <input type="password" id="chat-provider-key" autocomplete="off" spellcheck="false">
+                <input type="password" id="chat-provider-key" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" spellcheck="false">
                 <span id="chat-provider-key-note" class="chat-field-note"></span>
             </div>
             <div class="chat-field">
                 <label for="chat-provider-model">Default model</label>
                 <span class="chat-field-row">
-                    <input type="text" id="chat-provider-model" list="chat-provider-model-options" autocomplete="off" spellcheck="false" placeholder="Fetch the list, or type a model id">
+                    <input type="text" id="chat-provider-model" list="chat-provider-model-options" {autofill_off} spellcheck="false" placeholder="Fetch the list, or type a model id">
                     <datalist id="chat-provider-model-options"></datalist>
                     <button id="chat-provider-fetch" type="button" class="chat-secondary-button">Fetch models</button>
                 </span>
@@ -2083,7 +2096,9 @@ def get_chat_body():
         </div>
     </div>
 </div>
-"""
+""".format(
+        autofill_off=AUTOFILL_OFF
+    )
 
 
 def get_chat_script():
