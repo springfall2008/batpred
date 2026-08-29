@@ -39,7 +39,7 @@ from tests.test_load_car_energy import test_load_car_energy_warns_when_configure
 from tests.test_predheat import test_predheat
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_charge_hold import run_charge_hold_tests
-from tests.test_octopus_slots import run_load_octopus_slots_tests
+from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_slot_max_default_tests
 from tests.test_multi_car_iog import run_multi_car_iog_tests
 from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
@@ -491,6 +491,7 @@ def main():
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("futurerate_auto", test_futurerate_auto, "FutureRate auto Agile detection tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
+        ("octopus_slot_max_default", run_octopus_slot_max_default_tests, "Octopus slot max auto-detection from IOG-SMB tariff code", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),
