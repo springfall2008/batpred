@@ -102,21 +102,15 @@ def test_component_gating(my_predbat):
         print("ERROR: 'chat' is not registered in COMPONENT_LIST")
         return True
 
-    # Neither a key nor a url is required on its own: a hosted endpoint needs a key, a local one
-    # (Ollama and friends) needs no key but must be pointed at. required_or is what expresses
-    # "at least one of these", which a per-arg required cannot.
-    if entry["args"].get("api_key", {}).get("required"):
-        print("ERROR: 'api_key' is required, which would stop a keyless local endpoint starting")
-        failed = True
-    gate = entry.get("required_or") or []
-    for name in ("api_key", "base_url", "legacy_api_key"):
-        if name not in gate:
-            print("ERROR: {!r} is not in required_or, so that route to starting chat is closed: {}".format(name, gate))
+    # The component takes no required arguments at all and always starts. The Chat tab configures
+    # its own providers - adding one writes apps.yaml - so the component has to be running before
+    # any provider exists, or there is nothing to configure it from.
+    for name, spec in entry["args"].items():
+        if spec.get("required"):
+            print("ERROR: {!r} is required, which would stop the component starting unconfigured".format(name))
             failed = True
-    # A default on base_url would be truthy on every install and satisfy required_or for
-    # everyone, starting the component whether or not chat was configured.
-    if entry["args"].get("base_url", {}).get("default"):
-        print("ERROR: base_url has a default, which satisfies required_or on every install")
+    if entry.get("required_or"):
+        print("ERROR: chat still has a required_or gate, so it cannot start unconfigured: {}".format(entry["required_or"]))
         failed = True
     for name in ("model", "base_url", "max_tool_rounds", "max_history", "max_conversations", "expiry_days", "turn_timeout", "request_timeout", "fetch_allowlist", "max_tokens"):
         if entry["args"].get(name, {}).get("required"):
@@ -177,38 +171,38 @@ def test_component_gating_end_to_end(my_predbat):
     failed = False
     print("**** Testing chat gating via Components.initialize() ****")
 
+    # Always constructed, whatever is or is not configured: the Chat tab configures its own
+    # providers by writing apps.yaml, so the component must exist before any provider does.
+    for description, args in (
+        ("nothing configured", {}),
+        ("only the legacy key", {"openrouter_api_key": "sk-test"}),
+        ("only a local url", {"chat_api_url": "http://localhost:11434/v1"}),
+        ("a named provider block", {"chat": {"ollama": {"url": "http://localhost:11434/v1"}}}),
+        ("a model but nothing to run it on", {"chat_model": "test/model"}),
+    ):
+        base = _FakeBase(args)
+        comps = Components(base)
+        comps.initialize(only="chat", phase=1)
+        if comps.components.get("chat") is None:
+            print("ERROR: chat component was not constructed with {}".format(description))
+            failed = True
+
+    # An install with nothing configured must not COMPLAIN about it. One ordinary init line is
+    # expected now the component always starts, the same as every other component logs - what
+    # would be wrong is a warning or error nagging a user who simply does not use chat. The Chat
+    # tab says what is missing, in the one place someone is looking when they care.
     base = _FakeBase({})
     comps = Components(base)
     comps.initialize(only="chat", phase=1)
-    if comps.components.get("chat") is not None:
-        print("ERROR: chat component was constructed with neither key configured")
-        failed = True
-    if base.logged:
-        print("ERROR: an unconfigured install should stay quiet, got: {}".format(base.logged))
+    complaints = [line for line in base.logged if "Warn" in line or "Error" in line]
+    if complaints:
+        print("ERROR: an unconfigured install complained: {}".format(complaints))
         failed = True
 
-    # The API key on its own is now enough. The model is chosen in the UI and remembered, so
-    # requiring it here would leave a user who has pasted only their key with no Chat tab.
-    base = _FakeBase({"openrouter_api_key": "sk-test"})
-    comps = Components(base)
-    comps.initialize(only="chat", phase=1)
-    if comps.components.get("chat") is None:
-        print("ERROR: chat component was not constructed with just the API key configured")
-        failed = True
-
-    base = _FakeBase({"openrouter_api_key": "sk-test", "openrouter_default_model": "test/model"})
-    comps = Components(base)
-    comps.initialize(only="chat", phase=1)
-    if comps.components.get("chat") is None:
-        print("ERROR: chat component was not constructed with both keys configured")
-        failed = True
-
-    # A model with no key is still nothing: the key is what the component cannot run without.
-    base = _FakeBase({"openrouter_default_model": "test/model"})
-    comps = Components(base)
-    comps.initialize(only="chat", phase=1)
-    if comps.components.get("chat") is not None:
-        print("ERROR: chat component was constructed with a model but no API key")
+    # But it knows it cannot answer a turn, which is what the setup page keys off.
+    agent = comps.components.get("chat")
+    if agent is not None and agent.provider_ready():
+        print("ERROR: an unconfigured agent reports itself ready to answer")
         failed = True
 
     return failed

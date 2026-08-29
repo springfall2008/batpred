@@ -2518,6 +2518,14 @@ APPS_SCHEMA = {
     # The chat agent's LLM endpoint. Named chat_api_* rather than openrouter_* because the
     # endpoint no longer has to be OpenRouter: any OpenAI-compatible API works, including a local
     # Ollama. The openrouter_* names are still accepted so an existing apps.yaml keeps working.
+    # A block of named LLM endpoints, so more than one can be configured at once and chosen from
+    # the Chat tab. Each entry is {type?, url?, api_key?} keyed by a name of the user's choosing:
+    #   chat:
+    #     openrouter: {api_key: !secret openrouter_key}
+    #     ollama:     {url: 'http://localhost:11434/v1'}
+    # The flat chat_api_* and openrouter_* keys below still work and are read as a single unnamed
+    # provider when no block is present.
+    "chat": {"type": "dict"},
     "chat_api_key": {"type": "string", "empty": False},
     "chat_api_url": {"type": "string", "empty": False},
     "chat_api_type": {"type": "string", "empty": False},

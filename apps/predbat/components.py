@@ -105,15 +105,14 @@ COMPONENT_LIST = {
         "name": "AI Chat Agent",
         "can_restart": True,
         "phase": 1,
-        # Started by a key OR a url: a hosted endpoint needs a key, a local one (Ollama and
-        # friends) needs no key but must be pointed at. Neither set means chat is not configured,
-        # and the Chat tab shows its setup page.
-        #
-        # base_url deliberately carries no default here: a default is always truthy, so it would
-        # satisfy required_or on every install and start the component for everyone. The
-        # OpenRouter fallback is applied in ChatAgent.initialize() instead, once a key is known.
-        "required_or": ["api_key", "base_url", "legacy_api_key", "legacy_base_url"],
+        # Always started, with no required arguments at all. The Chat tab configures its own
+        # providers - adding one writes apps.yaml - so the component has to be running before any
+        # provider exists, or there is nothing to configure it from. With none configured the tab
+        # shows its setup page and no turn can be sent.
         "args": {
+            # The named-provider block. Parsed by ChatAgent, not by the registry, because its
+            # shape is a dict of arbitrary names rather than a fixed set of args.
+            "providers": {"required": False, "config": "chat"},
             "api_key": {"required": False, "config": "chat_api_key"},
             "base_url": {"required": False, "config": "chat_api_url"},
             "api_type": {"required": False, "config": "chat_api_type", "default": "auto"},

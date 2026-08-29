@@ -164,6 +164,13 @@ LOCAL_HOST_SUFFIXES = (".local", ".lan", ".internal", ".home", ".arpa")
 # is almost certainly Ollama, which unlocks the richer model list.
 OLLAMA_DEFAULT_PORT = 11434
 
+# Where each provider lives when the user names a type but no url - the point of naming a type.
+PROVIDER_DEFAULT_URLS = {
+    "openrouter": OPENROUTER_BASE_URL,
+    "ollama": "http://localhost:11434/v1",
+    "openai": "https://api.openai.com/v1",
+}
+
 # Per-model timeout for the /api/show enrichment. Short because it is a local call on the machine
 # next to Predbat: if it is slow, the catalogue is better off without the extra detail than the
 # picker is waiting for it.
@@ -211,6 +218,64 @@ def detect_provider(url):
         # model detail, not the ability to chat.
         return "ollama" if port == OLLAMA_DEFAULT_PORT else "local"
     return "openai"
+
+
+def build_providers(block, flat=None):
+    """Turn the apps.yaml chat: block into an ordered list of usable provider entries.
+
+    Each entry is {name, type, url, api_key, configured}. The dict key is the user's own name for
+    an endpoint, not the provider type - so two Ollama servers, or two OpenRouter accounts, are just two
+    entries. type is optional and falls back to the name when the name is itself a known provider,
+    then to detection from the url.
+
+    flat is the pre-block configuration - chat_api_* and the older openrouter_* keys - read as one
+    unnamed entry when no block is present, so an existing apps.yaml keeps working untouched.
+    Ignored when a block exists: having both would leave two sources of truth for the same thing.
+    """
+    entries = []
+    if isinstance(block, dict) and block:
+        for name, settings in block.items():
+            if not isinstance(settings, dict):
+                continue
+            url = str(settings.get("url") or "").strip()
+            api_type = str(settings.get("type") or "").strip().lower()
+            if not api_type:
+                api_type = str(name).lower() if str(name).lower() in PROVIDERS else "auto"
+            resolved_name, resolved = resolve_provider(api_type, url or default_url_for(api_type))
+            entries.append(
+                {
+                    "name": str(name),
+                    "type": resolved_name,
+                    "url": url or default_url_for(resolved_name),
+                    "api_key": settings.get("api_key") or None,
+                    "settings": resolved,
+                }
+            )
+    elif flat:
+        url = str(flat.get("url") or "").strip()
+        api_type = str(flat.get("type") or "auto").strip().lower()
+        resolved_name, resolved = resolve_provider(api_type, url or OPENROUTER_BASE_URL)
+        if flat.get("api_key") or url:
+            entries.append(
+                {
+                    "name": resolved_name,
+                    "type": resolved_name,
+                    "url": url or default_url_for(resolved_name),
+                    "api_key": flat.get("api_key") or None,
+                    "settings": resolved,
+                }
+            )
+
+    for entry in entries:
+        # Usable means "a turn sent to this would not fail immediately": a hosted endpoint needs
+        # its key, a local one only needs to be pointed at.
+        entry["configured"] = bool(entry["url"]) and (bool(entry["api_key"]) or not entry["settings"]["needs_key"])
+    return entries
+
+
+def default_url_for(provider_name):
+    """Return the endpoint a provider type uses when the user gave no url."""
+    return PROVIDER_DEFAULT_URLS.get(provider_name, OPENROUTER_BASE_URL)
 
 
 def resolve_provider(api_type, url):
@@ -679,6 +744,7 @@ class ChatAgent(ComponentBase):
 
     def initialize(
         self,
+        providers=None,
         api_key=None,
         model=None,
         base_url=None,
@@ -709,15 +775,13 @@ class ChatAgent(ComponentBase):
         max_history <= 0 (0 is the default) means unlimited - trim_history() itself implements
         that, this only stores whatever was passed through.
         """
-        # The chat_api_* names win; the openrouter_* ones are read as a fallback so an apps.yaml
-        # written before the rename keeps working without being touched.
-        self.api_key = api_key or legacy_api_key
-        self.base_url = str(base_url or legacy_base_url or OPENROUTER_BASE_URL)
-        self.provider_name, self.provider = resolve_provider(api_type, self.base_url)
-        if self.provider["needs_key"] and not self.api_key:
-            self.log("Warn: ChatAgent: {} needs an API key - set chat_api_key in apps.yaml".format(self.provider_name))
+        # Named providers from the chat: block, or the flat keys read as one unnamed entry. The
+        # chat_api_* names win over the older openrouter_* ones, so an apps.yaml written before
+        # the rename keeps working without being touched.
+        flat = {"api_key": api_key or legacy_api_key, "url": base_url or legacy_base_url, "type": api_type}
+        self.providers = build_providers(providers, flat)
+        self.select_provider(None)
         self.default_model = model or legacy_model
-        self.base_url = self.base_url.rstrip("/")
         self.max_tokens = max_tokens or 0
         self.max_tool_rounds = max_tool_rounds or 8
         self.max_history = max_history if max_history is not None else 0
@@ -1504,6 +1568,41 @@ class ChatAgent(ComponentBase):
             current = SECRET_MASK
 
         return {"key": key, "current_value": current, "proposed_value": arguments.get("value"), "warning": APPS_YAML_RESTART_WARNING}
+
+    def select_provider(self, name):
+        """Make one named provider active, or fall back to the first usable one.
+
+        Called at start-up with None, and again whenever the Chat tab switches provider. Sets the
+        same self.api_key/base_url/provider the rest of the agent already reads, so nothing
+        downstream needs to know providers are named or that there is more than one.
+        """
+        chosen = None
+        if name:
+            chosen = next((entry for entry in self.providers if entry["name"] == name), None)
+        if chosen is None:
+            # A usable one first: a half-configured entry cannot answer a turn, and selecting it
+            # silently would produce a confusing failure rather than the setup page the user needs.
+            chosen = next((entry for entry in self.providers if entry["configured"]), None)
+        if chosen is None:
+            chosen = self.providers[0] if self.providers else None
+
+        if chosen is None:
+            self.active_provider = None
+            self.api_key = None
+            self.base_url = OPENROUTER_BASE_URL
+            self.provider_name, self.provider = "openrouter", PROVIDERS["openrouter"]
+            return None
+
+        self.active_provider = chosen["name"]
+        self.api_key = chosen["api_key"]
+        self.base_url = str(chosen["url"]).rstrip("/")
+        self.provider_name = chosen["type"]
+        self.provider = chosen["settings"]
+        return chosen["name"]
+
+    def provider_ready(self):
+        """Return whether the active provider could actually answer a turn."""
+        return any(entry["configured"] and entry["name"] == self.active_provider for entry in self.providers)
 
     def resolve_model(self, conversation_id):
         """Return the model this conversation should use, or None if nothing has been chosen.
