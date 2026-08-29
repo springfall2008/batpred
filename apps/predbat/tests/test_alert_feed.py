@@ -53,8 +53,6 @@ def test_alert_feed(my_predbat):
     tz_offset = f"{tz_offset:02d}"
 
     birmingham = [52.4823, -1.8900]
-    bristol = [51.4545, -2.5879]
-    manchester = [53.4808, -2.2426]
     fife = [56.2082, -3.1495]
 
     alert_data = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -498,7 +496,6 @@ def test_alert_feed(my_predbat):
         "event": "Yellow|Amber",
         "keep": 0.5,
     }
-    original_download_alert_data = alert_feed.download_alert_data
     alert_feed.alert_config = alert_config
     alert_feed.alert_xml = alert_data
     alerts, alert_active_keep = alert_feed.process_alerts(my_predbat.minutes_now, my_predbat.midnight_utc, testing=True)

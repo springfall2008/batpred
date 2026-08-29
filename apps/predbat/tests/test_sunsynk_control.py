@@ -559,6 +559,67 @@ def test_apply_settings_respects_control_enable():
     assert not failed, "test_apply_settings_respects_control_enable"
 
 
+def test_reconcile_control_applies_a_controlled_inverter():
+    """_reconcile_control re-applies the schedule of an inverter Predbat already controls."""
+    failed = False
+    s = MockSunsynk()
+    s.control_active = {"INV1"}
+    calls = []
+
+    async def fake_apply(sn):
+        """Record reconcile applies."""
+        calls.append(sn)
+        return False
+
+    with patch.object(s, "apply_schedule", side_effect=fake_apply):
+        run_async_local(s._reconcile_control("INV1"))
+    if calls != ["INV1"]:
+        print(f"ERROR: reconcile should apply the controlled inverter: {calls}")
+        failed = True
+    assert not failed, "test_reconcile_control_applies_a_controlled_inverter"
+
+
+def test_reconcile_control_skips_an_uncontrolled_inverter():
+    """_reconcile_control must not write to an inverter Predbat has not yet driven via the write button."""
+    failed = False
+    s = MockSunsynk()
+    s.control_active = set()  # INV1 not yet driven by Predbat
+    calls = []
+
+    async def fake_apply(sn):
+        """Record reconcile applies, which must not happen here."""
+        calls.append(sn)
+        return False
+
+    with patch.object(s, "apply_schedule", side_effect=fake_apply):
+        run_async_local(s._reconcile_control("INV1"))
+    if calls:
+        print(f"ERROR: reconcile should not apply an uncontrolled inverter: {calls}")
+        failed = True
+    assert not failed, "test_reconcile_control_skips_an_uncontrolled_inverter"
+
+
+def test_reconcile_control_skips_while_read_only():
+    """_reconcile_control must not write to the inverter while switch.predbat_set_read_only is on."""
+    failed = False
+    s = MockSunsynk()
+    s.control_active = {"INV1"}
+    s.base.get_state_wrapper.return_value = "on"
+    calls = []
+
+    async def fake_apply(sn):
+        """Record reconcile applies, which must not happen here."""
+        calls.append(sn)
+        return False
+
+    with patch.object(s, "apply_schedule", side_effect=fake_apply):
+        run_async_local(s._reconcile_control("INV1"))
+    if calls:
+        print(f"ERROR: reconcile must not write while read-only is on: {calls}")
+        failed = True
+    assert not failed, "test_reconcile_control_skips_while_read_only"
+
+
 def test_apply_settings_skips_when_the_payload_is_empty():
     """apply_settings must not post a payload that build_settings_payload refused to build.
 
@@ -1222,6 +1283,9 @@ def run_sunsynk_control_tests(my_predbat):
         ("apply_ignores_volatile_field", test_apply_settings_ignores_a_volatile_unowned_field),
         ("apply_fails_closed", test_apply_settings_fails_closed_without_a_read),
         ("apply_control_enable", test_apply_settings_respects_control_enable),
+        ("reconcile_applies_controlled", test_reconcile_control_applies_a_controlled_inverter),
+        ("reconcile_skips_uncontrolled", test_reconcile_control_skips_an_uncontrolled_inverter),
+        ("reconcile_skips_read_only", test_reconcile_control_skips_while_read_only),
         ("apply_skips_empty_payload", test_apply_settings_skips_when_the_payload_is_empty),
         ("apply_failed_write", test_apply_settings_reports_a_failed_write),
         ("note_settle_normalises_types", test_note_settle_normalises_wire_types_before_comparing),

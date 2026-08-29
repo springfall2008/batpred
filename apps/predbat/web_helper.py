@@ -1726,6 +1726,186 @@ function saveNestedValue(rowId) {
     updateChangeCounter();
 }
 
+// Counter used to give each pending addition a unique key, as several can target the same list
+let addCounter = 0;
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function deleteNestedValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+
+    // Keyed separately from an edit of the same value, so that undoing the deletion does not
+    // also silently undo a pending edit - the server applies edits before any deletion
+    pendingChanges[nestedPath + '#delete'] = {
+        rowId: rowId,
+        originalValue: row.dataset.nestedOriginal,
+        newValue: '',
+        type: 'delete',
+        isNested: true,
+        path: nestedPath
+    };
+
+    row.classList.add('row-deleted');
+    setDeleteButtonState(rowId, true);
+    updateChangeCounter();
+}
+
+function undoDeleteNestedValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+
+    delete pendingChanges[nestedPath + '#delete'];
+    row.classList.remove('row-deleted');
+    setDeleteButtonState(rowId, false);
+    updateChangeCounter();
+}
+
+function setDeleteButtonState(rowId, deleted) {
+    // The button is looked up by id rather than by class, as a row holding a nested table
+    // also contains the delete buttons of all of its children
+    const button = document.getElementById('delete_button_' + rowId);
+    if (!button) return;
+    if (deleted) {
+        button.textContent = 'Undo';
+        button.setAttribute('onclick', 'undoDeleteNestedValue(' + rowId + ')');
+    } else {
+        button.textContent = 'Delete';
+        button.setAttribute('onclick', 'deleteNestedValue(' + rowId + ')');
+    }
+}
+
+function hideAddDialog() {
+    const overlay = document.querySelector('.add-overlay');
+    if (overlay) {
+        overlay.remove();
+    }
+}
+
+// Show a dialog collecting one or more fields, calling onConfirm with an id -> value object
+function showAddDialog(title, help, fields, onConfirm) {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirmation-overlay add-overlay';
+
+    let fieldsHtml = '';
+    fields.forEach(field => {
+        if (field.type === 'textarea') {
+            fieldsHtml += `<label class="add-dialog-label" for="add_field_${field.id}">${field.label}</label>
+                           <textarea class="add-dialog-input" id="add_field_${field.id}" rows="5"></textarea>`;
+        } else {
+            fieldsHtml += `<label class="add-dialog-label" for="add_field_${field.id}">${field.label}</label>
+                           <input type="text" class="add-dialog-input" id="add_field_${field.id}">`;
+        }
+    });
+
+    overlay.innerHTML = `
+        <div class="confirmation-dialog">
+            <h3>${title}</h3>
+            <p>${help}</p>
+            ${fieldsHtml}
+            <div class="confirmation-buttons">
+                <button class="cancel-button-dialog" onclick="hideAddDialog()">Cancel</button>
+                <button class="confirm-button" id="addDialogConfirm">Add</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    // Pre-fill any defaults, which cannot go in the markup above as they may contain newlines
+    fields.forEach(field => {
+        document.getElementById('add_field_' + field.id).value = field.value || '';
+    });
+
+    document.getElementById('addDialogConfirm').onclick = () => {
+        const values = {};
+        for (const field of fields) {
+            values[field.id] = document.getElementById('add_field_' + field.id).value;
+        }
+        if (onConfirm(values)) {
+            hideAddDialog();
+        }
+    };
+
+    document.getElementById('add_field_' + fields[0].id).focus();
+}
+
+// Insert a pending row above the add button and register the change, returning the change key
+function registerPendingAdd(anchorId, path, valueText, nameHtml, valueHtml) {
+    addCounter += 1;
+    const changeKey = path + '#' + addCounter;
+
+    pendingChanges[changeKey] = {
+        rowId: null,
+        originalValue: '',
+        newValue: valueText,
+        type: 'add',
+        isNested: true,
+        path: path,
+        pendingRowId: addCounter
+    };
+
+    const anchor = document.getElementById('add_anchor_' + anchorId);
+    const row = document.createElement('tr');
+    row.id = 'pending_row_' + addCounter;
+    row.className = 'row-added';
+    row.dataset.changeKey = changeKey;
+    row.innerHTML = `<td>${nameHtml}</td><td>${valueHtml}</td>` +
+                    `<td><button class="cancel-button" onclick="cancelPendingAdd(${addCounter})">Remove</button></td>`;
+    anchor.parentNode.insertBefore(row, anchor);
+
+    updateChangeCounter();
+    return changeKey;
+}
+
+function cancelPendingAdd(pendingRowId) {
+    const row = document.getElementById('pending_row_' + pendingRowId);
+    if (!row) return;
+    delete pendingChanges[row.dataset.changeKey];
+    row.remove();
+    updateChangeCounter();
+}
+
+function addListItem(listPath, argName, anchorId) {
+    // compare_list entries need at least a name and an id, so offer them as a starting point
+    const template = (argName === 'compare_list') ? 'name: My Tariff\\nid: my_tariff' : '';
+    const help = (argName === 'compare_list')
+        ? 'Enter the new tariff to compare, one <b>setting: value</b> per line. A <b>name</b> and a unique <b>id</b> are required.'
+        : 'Enter the new entry in YAML format - a single value, or one <b>setting: value</b> per line.';
+
+    showAddDialog('Add entry to ' + listPath, help, [{id: 'value', label: 'New entry', type: 'textarea', value: template}], (values) => {
+        const valueText = values.value;
+        if (!valueText.trim()) {
+            showMessage('Value cannot be empty', 'error');
+            return false;
+        }
+        registerPendingAdd(anchorId, listPath + '[]', valueText, '+ ', '<pre>' + escapeHtml(valueText) + '</pre>');
+        return true;
+    });
+}
+
+function addDictKey(dictPath, anchorId) {
+    showAddDialog('Add setting to ' + dictPath, 'Enter the name of the new setting and its value.',
+                  [{id: 'key', label: 'Setting name', type: 'text'}, {id: 'value', label: 'Value', type: 'text'}], (values) => {
+        const key = values.key.trim();
+        const valueText = values.value;
+        if (!key.match(/^[A-Za-z0-9_-]+$/)) {
+            showMessage('Setting name must contain only letters, numbers, dashes or underscores', 'error');
+            return false;
+        }
+        if (!valueText.trim()) {
+            showMessage('Value cannot be empty', 'error');
+            return false;
+        }
+        registerPendingAdd(anchorId, dictPath + '.' + key, valueText, '<b>' + escapeHtml(key) + ': </b>', escapeHtml(valueText));
+        return true;
+    });
+}
+
 function markNestedRowAsChanged(rowId) {
     const row = document.getElementById('nested_row_' + rowId);
     row.classList.add('row-changed');
@@ -1742,7 +1922,20 @@ function discardAllChanges() {
     for (const pathOrArgName in pendingChanges) {
         const change = pendingChanges[pathOrArgName];
 
-        if (change.isNested) {
+        if (change.type === 'delete') {
+            // Restore a row marked for deletion
+            const row = document.getElementById('nested_row_' + change.rowId);
+            if (row) {
+                row.classList.remove('row-deleted');
+            }
+            setDeleteButtonState(change.rowId, false);
+        } else if (change.type === 'add') {
+            // Drop the preview row of a pending addition
+            const row = document.getElementById('pending_row_' + change.pendingRowId);
+            if (row) {
+                row.remove();
+            }
+        } else if (change.isNested) {
             // Handle nested values
             const row = document.getElementById('nested_row_' + change.rowId);
             const valueCell = document.getElementById('nested_value_' + change.rowId);
@@ -1888,6 +2081,57 @@ def get_apps_css():
 
 .edit-button:hover {
     background-color: #45a049;
+}
+
+.delete-button, .add-button {
+    color: white;
+    border: none;
+    padding: 4px 8px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 12px;
+    margin: 2px 2px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+
+.delete-button {
+    background-color: #dc3545;
+}
+
+.delete-button:hover {
+    background-color: #c82333;
+}
+
+.add-button {
+    background-color: #17a2b8;
+}
+
+.add-button:hover {
+    background-color: #138496;
+}
+
+.add-dialog-label {
+    display: block;
+    font-weight: bold;
+    margin-top: 10px;
+}
+
+.add-dialog-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 13px;
+}
+
+body.dark-mode .add-dialog-input {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+    border: 1px solid #555;
 }
 
 .edit-input {
@@ -2100,6 +2344,29 @@ body.dark-mode .toggle-button::before {
 .row-changed {
     background-color: #fff3cd !important;
     border-left: 4px solid #ffc107 !important;
+}
+
+/* Rows pending deletion or addition */
+.row-deleted {
+    background-color: #f8d7da !important;
+    border-left: 4px solid #dc3545 !important;
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+.row-added {
+    background-color: #d4edda !important;
+    border-left: 4px solid #28a745 !important;
+}
+
+body.dark-mode .row-deleted {
+    background-color: #3f1e1e !important;
+    border-left: 4px solid #dc3545 !important;
+}
+
+body.dark-mode .row-added {
+    background-color: #1e3f20 !important;
+    border-left: 4px solid #28a745 !important;
 }
 
 /* Dark mode save controls styles */
@@ -6412,7 +6679,41 @@ def get_plan_renderer_js():
     }
 
     // Render plan table from JSON data
-    function renderPlanTable(jsonData, overrides, showDebug, editable) {
+    // Find the retained debug-history snapshot for a plan row's timestamp, or null if none
+    // qualifies. window.debugHistoryData is a small array ({id, timestamp, steps_back}) fetched
+    // separately (see fetchAndRenderPlan) - matched here by wall-clock time rather than threaded
+    // through the plan JSON itself, since the History/Yesterday plan is a reconstruction (fed
+    // yesterday's real PV/load through the same renderer as the live plan) and has no inherent
+    // relationship to when a snapshot happened to be captured; only the row's own real timestamp
+    // does.
+    //
+    // Snapshots are captured server-side with their timestamp floored to the plan's own slot grid
+    // (self.midnight_utc + N * plan_interval_minutes, see predbat.py's _capture_debug_history) -
+    // the same anchor and step output.py uses to build each row's own row.time - so a snapshot's
+    // timestamp is either an exact match for one row or it isn't a match at all. That also gives
+    // each snapshot at most one owning row for free: two rows can never both claim the same
+    // snapshot, since row times a plan_interval_minutes apart can never both equal the same
+    // floored capture instant.
+    const DEBUG_SNAPSHOT_MATCH_TOLERANCE_MS = 1000; // guards only against sub-second formatting noise
+    function findNearestDebugSnapshot(rowTimeStr) {
+        if (!rowTimeStr || !window.debugHistoryData || !window.debugHistoryData.length) {
+            return null;
+        }
+        const rowTime = new Date(rowTimeStr).getTime();
+        if (isNaN(rowTime)) {
+            return null;
+        }
+        for (const snap of window.debugHistoryData) {
+            const snapTime = new Date(snap.timestamp).getTime();
+            if (isNaN(snapTime)) { continue; }
+            if (Math.abs(rowTime - snapTime) <= DEBUG_SNAPSHOT_MATCH_TOLERANCE_MS) {
+                return snap;
+            }
+        }
+        return null;
+    }
+
+    function renderPlanTable(jsonData, overrides, showDebug, editable, showHistoryLinks) {
         try {
             if (!jsonData || !jsonData.rows) {
                 return '<p style="color:red;">No plan data available</p>';
@@ -6488,6 +6789,9 @@ def get_plan_renderer_js():
                 html += th('co2_rate', 'CO2 g/kWh');
                 html += th('co2_total', 'CO2 kg');
             }
+            if (showHistoryLinks) {
+                html += '<th><b>Debug</b></th>';
+            }
             html += '</tr>';
 
             // Render rows
@@ -6526,6 +6830,17 @@ def get_plan_renderer_js():
                 }
                 if (editable) {
                     html += renderRateCell(row.import_rate, row.rate_color_import, 'import', row.time, timeDisplay, overrides, importText, row.slot_minute);
+                } else if (row.rate_split) {
+                    // Car's own rate has diverged from the house rate - not necessarily an IOG cap
+                    // (any car window with its own average can diverge, e.g. combined dynamic-rate
+                    // windows) - split the cell, house on the left, car on the right, own tooltip each.
+                    const houseTitle = escapeAttr(`House rate: ${row.import_rate.toFixed(2)}${currencyMinor}/kWh`);
+                    const carTitle = escapeAttr(`Car rate: ${row.car_rate.toFixed(2)}${currencyMinor}/kWh (differs from house rate)`);
+                    html += `<td id=import data-minute="${row.slot_minute}" data-rate="${row.import_rate}" style="padding:0;">`;
+                    html += `<div style="display:flex;">`;
+                    html += `<div style="flex:1;padding:4px;background-color:${row.rate_color_import || '#FFFFFF'};" title="${houseTitle}">${importText}</div>`;
+                    html += `<div style="flex:1;padding:4px;background-color:${row.car_rate_color || '#FFFFFF'};" title="${carTitle}">${row.car_rate.toFixed(2)}</div>`;
+                    html += `</div></td>`;
                 } else {
                     html += `<td id=import ${cellStyle} bgcolor=${row.rate_color_import || '#FFFFFF'}>${importText}</td>`;
                 }
@@ -6645,6 +6960,18 @@ def get_plan_renderer_js():
                     html += `<td id=total_carbon bgcolor=${row.carbon_color || '#FFFFFF'}>${row.total_carbon || ''}</td>`;
                 }
 
+                // Debug history snapshot link (History/Yesterday view only)
+                if (showHistoryLinks) {
+                    const snap = findNearestDebugSnapshot(row.time);
+                    if (snap) {
+                        const snapWhen = new Date(snap.timestamp);
+                        const snapLabel = isNaN(snapWhen.getTime()) ? snap.id : snapWhen.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+                        html += `<td bgcolor=#FFFFFF><a href="./debug_history_download?id=${encodeURIComponent(snap.id)}">&#8681; ${snapLabel}</a></td>`;
+                    } else {
+                        html += '<td bgcolor=#FFFFFF></td>';
+                    }
+                }
+
                 html += '</tr>';
             }
 
@@ -6699,6 +7026,11 @@ def get_plan_renderer_js():
                 if (jsonData.carbon_enable) {
                     html += '<td></td>'; // Empty cell for carbon intensity
                     html += `<td bgcolor=#FFFFFF><b>${totals.total_carbon || ''}</b></td>`;
+                }
+
+                // Empty cell for the Debug history column
+                if (showHistoryLinks) {
+                    html += '<td></td>';
                 }
 
                 html += '</tr>';
@@ -7135,9 +7467,29 @@ def get_plan_renderer_js():
         }
     }
 
+    // Fetch the rolling debug-history snapshot index (small: at most a few dozen tiny
+    // entries) into window.debugHistoryData for the History/Yesterday view's Debug
+    // column. Called on initial load and whenever the user switches to that view,
+    // rather than on every 5s plan poll (fetchAndRenderPlan) - the underlying data only
+    // changes on an hours-long capture interval, so polling it that often would just be
+    // wasted requests for something that only matters while the Yesterday view is open.
+    async function loadDebugHistoryData() {
+        try {
+            const response = await fetch('./debug_history_list');
+            if (response.ok) {
+                window.debugHistoryData = await response.json();
+            }
+        } catch (error) {
+            console.error('Error fetching debug history list:', error);
+        }
+    }
+
     // Switch between plan views
     function switchView(view) {
         currentView = view;
+        if (view === 'yesterday') {
+            loadDebugHistoryData().then(refreshPlan);
+        }
 
         // Update button styling
         document.querySelectorAll('.view-button').forEach(btn => {
@@ -7211,7 +7563,11 @@ def get_plan_renderer_js():
 
         // Render table
         const editable = (currentView === 'plan');
-        container.innerHTML = renderPlanTable(data, overrides, showDebug, editable);
+        // Debug-history download links only make sense on the History/Yesterday view -
+        // its rows are entirely in the past, unlike the live Plan view which is mostly
+        // future predictions with no corresponding capture.
+        const showHistoryLinks = (currentView === 'yesterday');
+        container.innerHTML = renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
 
         // Apply dark mode colors if needed
         updateTableColors();
@@ -7318,6 +7674,12 @@ def get_plan_renderer_js():
         // Initial render
         refreshPlan();
 
+        // Fetch the debug-history snapshot index once up front too, in case the page
+        // loads with currentView already set to 'yesterday' (e.g. restored state).
+        if (currentView === 'yesterday') {
+            loadDebugHistoryData().then(refreshPlan);
+        }
+
         // Set up polling every 5 seconds
         if (updateIntervalId) {
             clearInterval(updateIntervalId);
@@ -7364,6 +7726,16 @@ if (localStorage.getItem('darkMode') === 'true') {
     });
 }
 </script>
+<style>
+    /* Paint the correct background before the external font/chart resources below (which block
+       rendering while they load) have a chance to delay the full stylesheet - otherwise a slow or
+       uncached CDN fetch leaves the page showing its default white background until they resolve,
+       flashing bright white on every page load/refresh even with dark mode enabled (batpred#2256). */
+    html { background-color: #ffffff; }
+    html.dark-mode { background-color: #121212; }
+    body { background-color: #ffffff; color: #333; }
+    html.dark-mode body { background-color: #121212; color: #e0e0e0; }
+</style>
 <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
 <style>

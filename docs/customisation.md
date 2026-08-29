@@ -71,6 +71,8 @@ In **Control charge & discharge** mode Predbat will set both charge and force ex
 
 If you have set the **switch.predbat_set_export_freeze_only** set to On then forced export won't occur but Predbat can force the export of solar power to the grid when desired.
 
+Similarly, if you have **switch.predbat_set_charge_freeze_only** set to On then the battery won't be charged from the grid, but Predbat can still freeze charge to hold the current battery level.
+
 ## Expert mode
 
 Predbat has a toggle switch called **switch.predbat_expert_mode** which is set to Off by default for new installs (On by default for upgraded installs).
@@ -419,6 +421,10 @@ If you set this to a negative value then Predbat will assume unpublished export 
 **switch.predbat_calculate_inday_adjustment** Set to On by default. When turned on, will calculate the difference between today's actual load and today's predicated load and adjust the rest of the day's usage prediction accordingly.
 A scale factor can be set with **input_number.predbat_metric_inday_adjust_damping** (_expert mode_) (default 0.95) to either scale up or down the impact of the in-day adjustment (lower numbers scale down its impact).
 The in-day adjustment factor can be seen in **predbat.load_inday_adjustment** and charted with the [In-Day Adjustment chart](creating-charts.md).
+The adjustment is carried across midnight into the plan for tomorrow rather than being reset, decaying from its full value
+at midnight to no adjustment by the following midnight - the same curve Predbat itself applies when it seeds tomorrow's
+adjustment from today's final value. This keeps the overnight charge sized against the load Predbat will actually predict
+in the morning, which matters most when the divergence is systematic rather than a one-off (a holiday, for example).
 
 **input_number.predbat_carbon_metric** (_carbon enable_) When Carbon footprint tracking is turned On (**switch.predbat_carbon_enable**) (Off by default),
 you can specify a cost per kg of CO2 used to weight the selection of plans. Values of around 10-200 will give varying outcomes to trade off cost vs carbon footprint of your system.
@@ -460,6 +466,11 @@ this defaults to 10 but can be changed between 0 and 30.
 once it has been reached or to protect against discharging beyond the set limit.
 
 **switch.predbat_set_charge_freeze** (_expert mode_) When turned On will allow Predbat to hold the current battery level while drawing from the grid/solar as an alternative to charging. On by default.
+
+**switch.predbat_set_charge_freeze_only** (_expert mode_) When turned On charging the battery from the grid is prevented, but charge freeze can be used (if enabled) to hold the current battery
+level rather than discharging it. This is useful if you don't want to import to fill the battery at all, for example on a flat tariff or where you only want the battery charged by solar. Off by default.
+
+Note that if both this and **switch.predbat_set_charge_freeze** are turned Off, Predbat has no way to use a charge window at all and will leave the battery in demand mode throughout.
 
 **switch.predbat_set_export_freeze** When turned On (the default) will allow Predbat to export Solar to the grid rather than charging the battery.
 
@@ -708,10 +719,20 @@ Whilst the holiday days left are non-zero, Predbat's 'holiday mode' is active.
 
 When Predbat is in 'Demand' mode (i.e. not actively charging or discharging) and 'holiday mode' is active, Predbat's status will show as 'Demand (Holiday)'.
 
-With `days_previous_auto` enabled (the default), holiday mode is instead accounted for automatically by the
-weighted-bucket forecast, which down-weights historical days whose holiday mode state doesn't match today's.
+With `days_previous_auto` enabled (the default), holiday mode is accounted for automatically by the
+[weighted-bucket forecast](apps-yaml.md#days_previous_auto-weighted-historical-load-forecast), which predicts each
+day from historical days in the same holiday state - while you are away only your holiday days are used, and once
+you are home only your non-holiday days are. The holiday state is worked out for each day of the plan separately,
+so the day you travel home is already planned against your normal load.
 
-In this case just set holiday mode for the days you are away and Predbat does the rest.
+For the first 24 hours of a holiday there is no holiday history to learn from yet. Until there is, Predbat scales
+your normal predicted load by **input_number.predbat_holiday_load_scaling** (default 0.7, i.e. it assumes you will
+use 70% of normal while away). Lower it if your house draws very little while you are away, raise it towards 1.0 if
+your usage barely changes. The setting only applies while there is no matching holiday history for that time of day,
+so it retires itself automatically once the first holiday day has been recorded.
+
+Just set holiday mode for the days you are away and Predbat does the rest - **turn it off as soon as you are back**,
+so that the plan switches straight back to your normal load history.
 
 ### Holiday mode with days_previous_auto off
 
@@ -723,6 +744,10 @@ to take longer for the historical data to catch up, you could then enable holida
 
 - For short holidays set holiday_days_left to the number of full days you are away, including today but excluding the return day
 - For longer holidays set holiday_days_left to the number of days you are away plus another 7 days until the data catches back up
+
+Note that this last piece of advice applies only when `days_previous_auto` is off. With it on (the default), leaving
+holiday mode enabled after you get home would keep Predbat predicting from your holiday days and under-estimate your
+load, so turn it off on your return instead.
 
 ## Manual Control
 
@@ -847,7 +872,9 @@ You can view the clipping plan by setting up the appropriate Apex Chart — see 
 - Secondly Predbat will create a debug output file 'debug/predbat_debug_HH_MM_SS.yaml' in a subfolder of the Predbat installation directory.
 This file contains a full export of your current Predbat config and is extremely useful to enable recreating your setup to diagnose issues. Any sensitive information such as Solcast or GivEnergy Cloud API keys are automatically removed.
 
-The following automation might be useful to automatically turn off Predbat debug mode after turning it on to capture the debug logs:
+Predbat automatically turns this switch back Off after 2 hours if it's still on, to bound the raw disk writes it triggers if left on by accident - if you need a longer debug session than that, you'll need to turn it back On again.
+
+The following automation might be useful to automatically turn off Predbat debug mode sooner than that, after turning it on to capture the debug logs:
 
 ```yaml
 alias: "Predbat: Auto turn-off debug mode"
@@ -876,6 +903,17 @@ mode: single
 ```
 
 **switch.predbat_plan_debug** (_expert mode_) when turned On adds some extra debug to the Predbat HTML plan - see [Predbat Plan debug mode](predbat-plan-card.md#debug-mode-for-predbat-plan) for more details. Off by default.
+
+### Debug history
+
+Turning on `switch.predbat_debug_enable` only captures debug information from the moment you switch it on - not much help if you have already noticed a problem and want to see what Predbat was doing an hour or two ago. Predbat also keeps a small rolling history of debug snapshots automatically, independent of that switch, so there is always some recent history to look back at:
+
+- **switch.predbat_debug_history_enable** - turns the rolling history off entirely when off (default on). `debug_history_force_capture` still works even while this is off.
+- **input_number.predbat_debug_history_count** - how many snapshots to retain (default 15, minimum 1 - use the enable switch above to turn the feature off, not a count of 0).
+- **input_number.predbat_debug_history_interval** - how many hours between automatic snapshots (default 3). With the defaults, 15 snapshots at 3-hourly intervals covers just under 48 hours.
+- **switch.predbat_debug_history_force_capture** - turn this on to trigger an immediate snapshot rather than waiting for the next scheduled one, useful from an automation that has just spotted something worth investigating. Predbat resets the switch back off itself once the snapshot has been taken, and still takes the snapshot even if `debug_history_enable` is off.
+
+Retained snapshots can all be downloaded together as a single `.tgz` archive from a link on the web interface's dashboard **Debug** panel, or individually from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
 
 ## Updating Predbat
 

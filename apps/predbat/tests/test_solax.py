@@ -4086,7 +4086,7 @@ async def test_query_plant_realtime_data_main():
 
     api3.fetch_single_result = mock_fetch_multiple
 
-    result1 = await api3.query_plant_realtime_data("plant_001")
+    await api3.query_plant_realtime_data("plant_001")
     result2 = await api3.query_plant_realtime_data("plant_002")
 
     if "plant_001" not in api3.realtime_data or "plant_002" not in api3.realtime_data:
@@ -4681,7 +4681,7 @@ async def test_query_device_realtime_data_all_main():
 
     api5.query_device_realtime_data = mock_query_log_types
 
-    result5 = await api5.query_device_realtime_data_all("plant5")
+    await api5.query_device_realtime_data_all("plant5")
 
     if len(device_type_log) != 3:
         print(f"**** ERROR: Expected 3 calls, got {len(device_type_log)} ****")
@@ -7059,7 +7059,7 @@ async def test_positive_or_negative_mode_main():
         endpoint = call_args[0][0]
         payload = call_args[0][1]
         command_name = call_args[0][2]
-        sn = call_args[0][3]
+        call_args[0][3]
 
         if endpoint != "/openapi/v2/device/inverter_vpp_mode/push_power/positive_or_negative_mode":
             print(f"**** ERROR: Wrong endpoint: {endpoint} ****")

@@ -6,6 +6,7 @@
 """Unit tests for the TeslemetryAPI component (Tesla Powerwall via Teslemetry)."""
 
 import copy
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
@@ -67,6 +68,20 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.oauth_failed = False
         self._refresh_in_progress = False
         self.token_hash = ""
+        # automatic_config drives Predbat's own config switches (e.g. inverter_hybrid) through
+        # ComponentBase.set_state_external, which is the only path that updates the matching
+        # CONFIG_ITEMS value. Capture those writes rather than plain entity states so tests can
+        # tell a real config change from a display-only publish.
+        self.external_states = {}
+        # get_arg mirrors _rate_base's: the keyword-only "d" never matches the "default=" keyword
+        # ComponentBase.get_arg forwards, so it returns None - i.e. not read-only. That preserves
+        # the behaviour tests had before this double existed, when _is_read_only()'s missing-base
+        # guard returned False.
+        self.base = SimpleNamespace(ha_interface=SimpleNamespace(set_state_external=self._capture_external), get_arg=lambda a, d=None, **k: d)
+
+    async def _capture_external(self, entity_id, state, attributes={}):
+        """Capture set_state_external calls made against Predbat's own config entities."""
+        self.external_states[entity_id] = state
 
     @property
     def storage(self):
@@ -149,6 +164,42 @@ SITE_INFO_FULL = {
         "max_site_meter_power_ac": 11500,
         "default_real_mode": "self_consumption",
         "backup_reserve_percent": 20,
+        "tariff_content_v2": {"code": "PREDBAT-NORMAL"},
+    }
+}
+
+# A real-world Powerwall 2 site_info (identifiers replaced). Note the nesting: batteries,
+# customer_preferred_export_rule and net_meter_mode live under components, NOT at the top level -
+# publish_site_info republishes the response wholesale partly so that distinction cannot be got wrong.
+# max_site_meter_power_ac carries the 1e9 "unlimited" sentinel.
+SITE_INFO_AC_POWERWALL = {
+    "response": {
+        "site_name": "Home",
+        "default_real_mode": "self_consumption",
+        "backup_reserve_percent": 4,
+        "installation_date": "2023-04-27T14:12:19+01:00",
+        "version": "26.18.3 184289b9",
+        "battery_count": 1,
+        "nameplate_power": 5000,
+        "nameplate_energy": 13500,
+        "max_site_meter_power_ac": 1000000000,
+        "min_site_meter_power_ac": -1000000000,
+        "installation_time_zone": "Europe/London",
+        "components": {
+            "solar": True,
+            "solar_type": "pv_panel",
+            "battery": True,
+            "grid": True,
+            "backup": True,
+            "gateway": "teg",
+            "battery_type": "ac_powerwall",
+            "grid_services_enabled": False,
+            "customer_preferred_export_rule": "pv_only",
+            "net_meter_mode": "battery_ok",
+            "gateways": [{"part_name": "Tesla Backup Gateway 2", "serial_number": "CN322313G3J054"}],
+            "batteries": [{"part_name": "Powerwall 2", "serial_number": "TG123022000237", "nameplate_max_charge_power": 5000, "nameplate_max_discharge_power": 5000, "nameplate_energy": 13500}],
+        },
+        "tariff_content": {"code": "PREDBAT-NORMAL"},
         "tariff_content_v2": {"code": "PREDBAT-NORMAL"},
     }
 }
@@ -1100,8 +1151,14 @@ def test_teslemetry_inverter_def_tesla():
     assert tesla["support_discharge_freeze"] is False
     assert tesla["can_span_midnight"] is False
     assert tesla["target_soc_used_for_discharge"] is True
-    # inverter.py reads the FoxCloud key set unconditionally - TESLA must not miss any of them
+    # inverter.py reads the FoxCloud key set unconditionally - TESLA must not miss any of them.
+    # Exempt are the keys inverter.py reads through .get() with a default: those are opt-in
+    # capabilities a type is meant to omit, so requiring them here would force every inverter to
+    # spell out a capability it does not have.
+    optional_keys = {"support_feedin_first"}
     for key in INVERTER_DEF["FoxCloud"]:
+        if key in optional_keys:
+            continue
         assert key in tesla, "TESLA INVERTER_DEF missing key {}".format(key)
 
 
@@ -1369,6 +1426,81 @@ def test_teslemetry_run_skips_assert_without_soc():
     # live_status has no mock response -> fetch fails -> last_soc stays None
     run_async(api.run(seconds=0, first=True))
     assert [req for req in api.requests_made if req[0] == "POST"] == []
+
+
+def test_teslemetry_automatic_config_disables_inverter_hybrid():
+    """Tesla Powerwall batteries are AC coupled, so automatic_config must turn inverter_hybrid off.
+
+    Left at Predbat's default (True), inverter_limit is modelled as a cap on battery + PV combined
+    (see get_total_inverted in prediction.py), so the Powerwall's own 5 kW rating clips a separately
+    inverted PV array that it has no bearing on - inventing solar clipping and, with it, phantom
+    export windows. Writing through set_state_external (not set_state_wrapper) is what actually
+    updates the matching CONFIG_ITEMS entry rather than just the displayed entity state.
+    """
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_AC_POWERWALL
+    assert run_async(api.fetch_site_info()) is True
+    run_async(api.automatic_config())
+    assert api.external_states["switch.predbat_inverter_hybrid"] is False
+
+
+def test_teslemetry_automatic_config_disables_hybrid_without_site_info():
+    """The hybrid switch is a property of the hardware family, not of any site_info field, so it is
+    turned off even when site_info never ran or carried none of the optional fields."""
+    api = MockTeslemetryAPI()
+    run_async(api.automatic_config())
+    assert api.external_states["switch.predbat_inverter_hybrid"] is False
+
+
+def test_teslemetry_site_info_publishes_site_info_entity():
+    """site_info is republished wholesale as a review entity, nesting intact."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_AC_POWERWALL
+    assert run_async(api.fetch_site_info()) is True
+    item = api.dashboard_items["sensor.predbat_teslemetry_site_info"]
+    assert item["state"] == "Home"
+    attributes = item["attributes"]
+    assert attributes["friendly_name"] == "Powerwall Site Info"
+    assert attributes["state_class"] is None
+    assert attributes["nameplate_power"] == 5000
+    assert attributes["nameplate_energy"] == 13500
+    assert attributes["max_site_meter_power_ac"] == 1000000000
+    # The fields that decide how Predbat models the site are all nested under components.
+    assert attributes["components"]["battery_type"] == "ac_powerwall"
+    assert attributes["components"]["solar_type"] == "pv_panel"
+    assert attributes["components"]["customer_preferred_export_rule"] == "pv_only"
+    assert attributes["components"]["batteries"][0]["part_name"] == "Powerwall 2"
+    assert attributes["components"]["batteries"][0]["nameplate_max_discharge_power"] == 5000
+
+
+def test_teslemetry_site_info_entity_omits_tariff_blobs():
+    """The tariff structures are dropped - large, nested, and already hidden from the debug log."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_AC_POWERWALL
+    assert run_async(api.fetch_site_info()) is True
+    attributes = api.dashboard_items["sensor.predbat_teslemetry_site_info"]["attributes"]
+    assert "tariff_content" not in attributes
+    assert "tariff_content_v2" not in attributes
+
+
+def test_teslemetry_site_info_entity_does_not_mutate_response():
+    """Filtering builds a new dict, so the response the rest of fetch_site_info reads is untouched."""
+    api = MockTeslemetryAPI()
+    site_info = copy.deepcopy(SITE_INFO_AC_POWERWALL)
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = site_info
+    assert run_async(api.fetch_site_info()) is True
+    assert site_info["response"]["tariff_content_v2"] == {"code": "PREDBAT-NORMAL"}
+    assert api.entity_states["sensor.predbat_teslemetry_soc_max"] == 13.5
+
+
+def test_teslemetry_site_info_entity_survives_minimal_response():
+    """A site_info carrying almost nothing still publishes the entity rather than raising."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_energy": 13500}}
+    assert run_async(api.fetch_site_info()) is True
+    item = api.dashboard_items["sensor.predbat_teslemetry_site_info"]
+    assert item["state"] == "unknown"
+    assert item["attributes"]["nameplate_energy"] == 13500
 
 
 def test_teslemetry_automatic_config_sets_args():
@@ -2200,6 +2332,12 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_run_skips_assert_when_read_only()
     test_teslemetry_run_skips_assert_without_soc()
     test_teslemetry_automatic_config_sets_args()
+    test_teslemetry_automatic_config_disables_inverter_hybrid()
+    test_teslemetry_automatic_config_disables_hybrid_without_site_info()
+    test_teslemetry_site_info_publishes_site_info_entity()
+    test_teslemetry_site_info_entity_omits_tariff_blobs()
+    test_teslemetry_site_info_entity_does_not_mutate_response()
+    test_teslemetry_site_info_entity_survives_minimal_response()
     test_teslemetry_automatic_config_references_published_entities()
     test_teslemetry_run_triggers_automatic_config_once_after_site_info()
     test_teslemetry_emulator_failure_does_not_fail_run()

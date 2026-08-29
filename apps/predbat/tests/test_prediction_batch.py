@@ -22,6 +22,10 @@ handle in a multi-job batch comes back with its own job's result rather than a n
 
 import random
 
+import builtins
+import io
+
+import plan
 import prediction_batch
 from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10
 from plan import resolve_batch_threads
@@ -512,6 +516,63 @@ def test_batch_results_match_their_own_job(my_predbat):
     return failed
 
 
+def test_available_cpu_count_respects_a_cgroup_quota():
+    """Check the usable CPU count follows a container's quota, returns True on failure.
+
+    cpu_count() reports the host's cores even inside a container with a CPU limit, so 'auto' would
+    size the pool to the host and then be throttled by the CFS scheduler. Measured on a Kubernetes
+    pod limited to 4 cores on a 12-core node: cpu_count() said 12 while cpu.max said "400000 100000".
+
+    The cgroup reads are stubbed rather than exercised against the real filesystem, so this gives the
+    same answer on a developer's laptop, inside a container, and in CI.
+    """
+    print("**** Running available CPU count tests ****")
+    failed = False
+
+    # (cgroup files the case exposes, host cores, expected, why)
+    cases = [
+        ({"/sys/fs/cgroup/cpu.max": "400000 100000"}, 12, 4, "a v2 quota caps the host count"),
+        ({"/sys/fs/cgroup/cpu.max": "max 100000"}, 12, 12, "an unlimited v2 quota falls back to the host"),
+        ({"/sys/fs/cgroup/cpu.max": "350000 100000"}, 12, 3, "a fractional quota rounds down"),
+        ({"/sys/fs/cgroup/cpu.max": "50000 100000"}, 12, 1, "a sub-core quota still leaves one lane"),
+        ({"/sys/fs/cgroup/cpu.max": "1600000 100000"}, 12, 12, "a quota above the host cannot exceed it"),
+        ({"/sys/fs/cgroup/cpu/cpu.cfs_quota_us": "200000", "/sys/fs/cgroup/cpu/cpu.cfs_period_us": "100000"}, 8, 2, "a v1 quota caps the host count"),
+        ({"/sys/fs/cgroup/cpu/cpu.cfs_quota_us": "-1", "/sys/fs/cgroup/cpu/cpu.cfs_period_us": "100000"}, 8, 8, "an unlimited v1 quota falls back to the host"),
+        ({}, 8, 8, "no cgroup files at all falls back to the host"),
+        ({"/sys/fs/cgroup/cpu.max": "garbage"}, 8, 8, "an unparsable quota falls back rather than raising"),
+    ]
+
+    real_open = builtins.open
+    real_cpu_count = plan.cpu_count
+
+    for files, cores, expected, why in cases:
+
+        def fake_open(path, *args, **kwargs):
+            """Serve this case's cgroup files and hide any it omits"""
+            name = str(path)
+            if name.startswith("/sys/fs/cgroup"):
+                if name in files:
+                    return io.StringIO(files[name])
+                raise FileNotFoundError(name)
+            return real_open(path, *args, **kwargs)
+
+        builtins.open = fake_open
+        plan.cpu_count = lambda count=cores: count
+        try:
+            got = plan.available_cpu_count()
+        finally:
+            builtins.open = real_open
+            plan.cpu_count = real_cpu_count
+
+        if got != expected:
+            print("ERROR: files={} cores={} gave {} CPUs, expected {} ({})".format(files, cores, got, expected, why))
+            failed = True
+
+    if not failed:
+        print("Available CPU count tests passed")
+    return failed
+
+
 def test_batch_thread_count_resolution():
     """Check how the threads setting maps onto kernel lanes, returns True on failure.
 
@@ -548,6 +609,7 @@ def run_prediction_batch_tests(my_predbat):
     """Run every batched prediction test, returns True on failure"""
     failed = test_export_trial_does_not_mutate_caller_window(my_predbat)
     failed |= test_batch_thread_count_resolution()
+    failed |= test_available_cpu_count_respects_a_cgroup_quota()
     failed |= test_batch_state_exists_without_a_base(my_predbat)
 
     available, required_failure = kernel_available()

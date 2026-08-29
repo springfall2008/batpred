@@ -13,7 +13,7 @@ import requests
 from ha import run_async
 from download import DEFAULT_PREDBAT_REPOSITORY, resolve_predbat_repository
 from utils import dp1
-from predbat import THIS_VERSION
+from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
 
 class GitHub:
@@ -152,7 +152,7 @@ class GitHub:
                     self.releases["latest_beta_body"] = release.get("body", "Unknown")
                     found_latest_beta = True
 
-            self.log("Predbat {} repository {} version {} currently running, latest version is {}, latest beta is {}".format(__file__, repository, self.releases["this"], self.releases["latest"], self.releases["latest_beta"]))
+            self.log("Predbat {} repository {} version {} currently running, latest version is {}, latest beta is {}".format(__file__, repository, THIS_VERSION_DISPLAY, self.releases["latest"], self.releases["latest_beta"]))
             PREDBAT_UPDATE_OPTIONS = ["main"]
             this_tag = THIS_VERSION
             new_version = False

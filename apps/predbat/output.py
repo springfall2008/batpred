@@ -18,9 +18,10 @@ schedules, rate window sensors, and financial metric summaries.
 
 import math
 import copy
-from datetime import datetime, timedelta
-from config import THIS_VERSION
-from const import TIME_FORMAT, PREDICT_STEP, MINUTE_WATT
+from html import escape as escape_html
+from datetime import timedelta
+from predbat import THIS_VERSION_DISPLAY
+from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, MINUTE_WATT
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate
 from prediction import Prediction
 
@@ -686,6 +687,7 @@ class Output:
         rate_amount_min = rate_amount
         rate_amount_max = rate_amount
         start_minute = self.minutes_now
+        rate_range = "({}{})".format(rate_amount_min, self.currency_symbols[1])
 
         for minute in range(self.minutes_now, end_plan):
             if export:
@@ -762,7 +764,7 @@ class Output:
         export_window_n = -1
         for minute in range(minutes_now, self.forecast_minutes + minutes_now, PREDICT_STEP):
             export_window_n = self.in_charge_window(self.export_window_best, minute)
-            if export_window_n >= 0 and self.export_limits_best[export_window_n] == 100:
+            if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
                 export_window_n = -1
             if export_window_n >= 0:
                 break
@@ -774,7 +776,7 @@ class Output:
         """
         if export_window_n >= 0:
             target_export = self.export_window_best[export_window_n].get("target", self.export_limits_best[export_window_n])
-            if self.export_limits_best[export_window_n] == 99:
+            if self.export_limits_best[export_window_n] == EXPORT_LIMIT_FREEZE:
                 text = "freeze exporting for the next {}".format(self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))  # don't include target % for freeze exporting as (the 99%) is meaningless
             else:
                 text = "force exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
@@ -817,7 +819,7 @@ class Output:
         """
         Get the export type for the given export limit
         """
-        if export_limit == 99:
+        if export_limit == EXPORT_LIMIT_FREEZE:
             if current:
                 return "freeze exporting"
             else:
@@ -933,7 +935,7 @@ class Output:
             charge_window_n = -1
 
         export_window_n = self.in_charge_window(self.export_window_best, self.minutes_now)
-        if export_window_n >= 0 and self.export_limits_best[export_window_n] == 100:
+        if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
             export_window_n = -1
 
         charge_export_text = self.get_charge_export_text(self.minutes_now, charge_window_n, export_window_n)
@@ -1098,6 +1100,16 @@ class Output:
         if self.rate_best_cost_threshold_export:
             export_cost_threshold = self.rate_best_cost_threshold_export
 
+        def import_rate_color(rate):
+            """Colour an import rate the same way as the plan's own Import p column (blue/green/yellow/red)."""
+            if rate <= 0:
+                return "#74C1FF"
+            elif rate <= import_cost_threshold:
+                return "#3AEE85"
+            elif rate > (import_cost_threshold * 1.5):
+                return "#F18261"
+            return "#FFFFAA"
+
         raw_plan["import_cost_threshold"] = import_cost_threshold
         raw_plan["export_cost_threshold"] = export_cost_threshold
         raw_plan["reason_templates"] = REASON_TEMPLATES
@@ -1150,7 +1162,7 @@ class Output:
 
             for try_minute in range(minute_start, minute_end, PREDICT_STEP):
                 export_window_n = self.in_charge_window(self.export_window_best, try_minute)
-                if export_window_n >= 0 and self.export_limits_best[export_window_n] == 100:
+                if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
                     export_window_n = -1
                 if export_window_n >= 0:
                     break
@@ -1166,7 +1178,7 @@ class Output:
                 discharge_intersect = -1
                 for try_minute in range(minute_start, charge_end_minute, PREDICT_STEP):
                     discharge_intersect = self.in_charge_window(self.export_window_best, try_minute)
-                    if discharge_intersect >= 0 and self.export_limits_best[discharge_intersect] == 100:
+                    if discharge_intersect >= 0 and self.export_limits_best[discharge_intersect] == EXPORT_LIMIT_IDLE:
                         discharge_intersect = -1
                     if discharge_intersect >= 0:
                         break
@@ -1239,13 +1251,6 @@ class Output:
 
             soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
             soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
-            soc_min = self.soc_max
-            soc_max = 0
-            for minute_check in range(minute_relative_start, minute_relative_end + PREDICT_STEP, PREDICT_STEP):
-                soc_min = min(self.predict_soc_best.get(minute_check, 0), soc_min)
-                soc_max = max(self.predict_soc_best.get(minute_check, 0), soc_max)
-            soc_percent_min = calc_percent_limit(soc_min, self.soc_max)
-            soc_percent_max = calc_percent_limit(soc_max, self.soc_max)
             soc_min_window = self.soc_max
             soc_max_window = 0
             for minute_check in range(minute_relative_start, minute_relative_end + PREDICT_STEP, PREDICT_STEP):
@@ -1339,12 +1344,7 @@ class Output:
             if plan_debug and load_forecast10 > 0.0:
                 load_forecast += " (%s)" % (str(load_forecast10))
 
-            if rate_value_import <= 0:  # colour the import rate, blue for negative, then green, yellow and red
-                rate_color_import = "#74C1FF"
-            elif rate_value_import <= import_cost_threshold:
-                rate_color_import = "#3AEE85"
-            elif rate_value_import > (import_cost_threshold * 1.5):
-                rate_color_import = "#F18261"
+            rate_color_import = import_rate_color(rate_value_import)  # blue for negative, then green, yellow and red
 
             if rate_value_export >= (1.5 * export_cost_threshold):
                 rate_color_export = "#F18261"
@@ -1434,7 +1434,7 @@ class Output:
                 if "target" in self.export_window_best[export_window_n]:
                     target = self.export_window_best[export_window_n]["target"]
 
-                if limit == 99:  # freeze exporting
+                if limit == EXPORT_LIMIT_FREEZE:  # freeze exporting
                     if not had_state:
                         state = ""
                     if state:
@@ -1446,7 +1446,7 @@ class Output:
                     raw_state = "FrzExp"
                     show_limit = ""  # suppress displaying the limit (of 99) when freeze exporting as its a meaningless number
                     reason_parts.append({"code": "freeze_export", "params": {}})
-                elif limit < 100:
+                elif limit < EXPORT_LIMIT_IDLE:
                     if not had_state:
                         state = ""
                     if state:
@@ -1540,21 +1540,30 @@ class Output:
                 cost_color = "#FFFFFF"
 
             # Car charging?
+            car_rate = None
             if self.num_cars > 0:
                 car_charging_kwh = self.car_charge_slot_kwh(minute_start, minute_end)
                 car_total += car_charging_kwh
                 if car_charging_kwh > 0.0:
                     car_charging_str = str(car_charging_kwh)
                     car_color = "FFFF00"
+                    car_rate = self.car_charge_slot_rate(minute_start, minute_end)
                 else:
                     car_charging_str = "&#9866;"
                     car_color = "#FFFFFF"
+
+            # The car's own rate can diverge from the general household rate once its IOG dispatch
+            # cap is used up for the day - the car falls back to the peak rate while the house keeps
+            # its real (possibly still cheap) rate for the same clock-time (batpred#4646). Split the
+            # Import p cell to show both when that happens.
+            rate_split = car_rate is not None and abs(car_rate - rate_value_import) > 0.01
+            if rate_split:
+                car_rate_color = import_rate_color(car_rate)
 
             # iBoost
             iboost_amount_str = "&#9866;"
             iboost_color = "#FFFFFF"
             if self.iboost_enable:
-                iboost_slot_end = minute_relative_slot_end
                 iboost_amount = self.predict_iboost_best.get(minute_relative_start, 0)
                 iboost_amount_end = self.predict_iboost_best.get(minute_relative_slot_end, 0)
                 iboost_amount_prev = self.predict_iboost_best.get(minute_relative_slot_end - PREDICT_STEP, 0)
@@ -1621,7 +1630,16 @@ class Output:
             # Table row
             html += '<tr style="color:black">'
             html += "<td id=time bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
-            html += "<td id=import data-minute=" + str(minute) + " data-rate=" + str(rate_value_import) + " " + cell_style + " bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
+            if rate_split:
+                house_title = escape_html("House rate: {:.2f}{}/kWh".format(rate_value_import, self.currency_symbols[1]), quote=True)
+                car_title = escape_html("Car rate: {:.2f}{}/kWh (differs from house rate)".format(car_rate, self.currency_symbols[1]), quote=True)
+                html += "<td id=import data-minute=" + str(minute) + " data-rate=" + str(rate_value_import) + ' style="padding:0;">'
+                html += '<div style="display:flex;">'
+                html += '<div style="flex:1;padding:4px;background-color:' + rate_color_import + ';" title="' + house_title + '">' + str(rate_str_import) + "</div>"
+                html += '<div style="flex:1;padding:4px;background-color:' + car_rate_color + ';" title="' + car_title + '">' + "{:.2f}".format(car_rate) + "</div>"
+                html += "</div></td>"
+            else:
+                html += "<td id=import data-minute=" + str(minute) + " data-rate=" + str(rate_value_import) + " " + cell_style + " bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
             html += "<td id=export data-minute=" + str(minute) + " data-rate=" + str(rate_value_export) + " " + cell_style + " bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
             if start_span:
                 if split:  # for slots that are both charging and exporting, just output the (split cell) state
@@ -1728,6 +1746,9 @@ class Output:
             if self.num_cars > 0:
                 json_row["car_charging"] = car_charging_kwh
                 json_row["car_color"] = car_color
+                json_row["car_rate"] = car_rate
+                json_row["car_rate_color"] = car_rate_color if rate_split else None
+                json_row["rate_split"] = rate_split
             if self.iboost_enable:
                 json_row["iboost"] = iboost_amount
                 json_row["iboost_change"] = iboost_change
@@ -2244,7 +2265,7 @@ class Output:
         export_limit_time_kw = {}
 
         export_limit_soc = self.soc_max
-        export_limit_percent = 100
+        export_limit_percent = EXPORT_LIMIT_IDLE
         export_limit_first = False
         prev_limit = -1
 
@@ -2252,7 +2273,7 @@ class Output:
             window_n = self.in_charge_window(export_window, minute)
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
-            if window_n >= 0 and (export_limits[window_n] < 100.0):
+            if window_n >= 0 and (export_limits[window_n] < EXPORT_LIMIT_IDLE):
                 soc_perc = export_limits[window_n]
                 soc_kw = (soc_perc * self.soc_max) / 100.0
                 if not export_limit_first:
@@ -2260,7 +2281,7 @@ class Output:
                     export_limit_percent = export_limits[window_n]
                     export_limit_first = True
             else:
-                soc_perc = 100
+                soc_perc = EXPORT_LIMIT_IDLE
                 soc_kw = self.soc_max
             if prev_limit != soc_perc:
                 export_limit_time[stamp] = soc_perc
@@ -2599,9 +2620,9 @@ class Output:
                 "friendly_name": "Status",
                 "detail": extra,
                 "icon": "mdi:information",
-                "last_updated": str(datetime.now()),
+                "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
                 "debug": debug,
-                "version": THIS_VERSION,
+                "version": THIS_VERSION_DISPLAY,
                 "error": (had_errors or self.had_errors),
                 "error_count": error_count,
             },
@@ -2784,13 +2805,10 @@ class Output:
             # Make a ratio only if we have enough data to consider the outcome
             difference = 1.0 + ((actual_total_today - load_total_pred) / actual_total_today)
 
-        # Calculate blending weight for yesterday vs today adjustment
-        if minutes_now < 180:
-            # Use 100% yesterday's adjustment for first 3 hours
-            yesterday_weight = 1.0
-        else:
-            # Linear blend between yesterday and today over the day
-            yesterday_weight = (24 * 60 - minutes_now) / (24 * 60)
+        # Calculate blending weight for yesterday vs today adjustment: 100% yesterday for the first 3 hours,
+        # then a linear blend across the day. Shared with step_data_history(), which carries the adjustment
+        # past midnight on this same curve so the plan matches what will actually be applied tomorrow.
+        yesterday_weight = self.inday_yesterday_weight(minutes_now)
 
         # Work out divergence
         using_load_ml_forecast = self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False)
@@ -3170,7 +3188,6 @@ class Output:
         export_today_now = self.export_today_now
         pv_today_now = self.pv_today_now
         carbon_today_sofar = self.carbon_today_sofar
-        soc_kw = self.soc_kw
         car_charging_hold = self.car_charging_hold
         iboost_energy_subtract = self.iboost_energy_subtract
         load_minutes_now = self.load_minutes_now
@@ -3309,7 +3326,7 @@ class Output:
                     self.export_window_best.append({"start": export_start_minute, "end": export_end_minute})
                     if "freeze" in export_during_slot:
                         # Assume freeze export
-                        self.export_limits_best.append(99.0)
+                        self.export_limits_best.append(EXPORT_LIMIT_FREEZE)
                     else:
                         soc_was = battery_soc_yesterday_array.get(export_end_minute, 0.0)
                         soc_percent = calc_percent_limit(soc_was, self.soc_max)
@@ -3556,6 +3573,7 @@ class Output:
         opts += "calculate_export_oncharge({}), ".format(self.calculate_export_oncharge)
         opts += "calculate_export_on_pv({}), ".format(self.calculate_export_on_pv)
         opts += "set_export_freeze_only({}), ".format(self.set_export_freeze_only)
+        opts += "set_charge_freeze_only({}), ".format(self.set_charge_freeze_only)
         opts += "set_discharge_during_charge({}), ".format(self.set_discharge_during_charge)
         opts += "combine_charge_slots({}), ".format(self.combine_charge_slots)
         opts += "combine_export_slots({}), ".format(self.combine_export_slots)
@@ -3618,7 +3636,7 @@ class Output:
 
             if ignore_min and percent == 0.0:
                 continue
-            if ignore_max and percent == 100.0:
+            if ignore_max and percent == EXPORT_LIMIT_IDLE:
                 continue
 
             if not first_window:

@@ -104,6 +104,33 @@ class Fetch:
             id += 1
         return new_data
 
+    def inday_yesterday_weight(self, minutes_now):
+        """
+        Weight the previous day's in-day load adjustment carries at a point in the day: full weight for the
+        first three hours (too little of today has happened to measure a divergence), then decaying linearly
+        to zero by midnight as today's own measurement takes over.
+        """
+        if minutes_now < 180:
+            return 1.0
+        return (24 * 60 - minutes_now) / (24 * 60)
+
+    def inday_adjustment_at(self, minute_absolute, scale_today):
+        """
+        In-day load adjustment factor to apply at a given minute from midnight today.
+
+        Today keeps the factor in full. Tomorrow it decays on exactly the curve load_today_comparison() will
+        use when it seeds tomorrow's factor from today's final value, so the plan agrees with what Predbat
+        will actually apply a few hours later - resetting to 1.0 at midnight instead left tonight's overnight
+        charge sized against a forecast Predbat was about to correct (batpred#4732). Beyond tomorrow there is
+        no measurement left to carry and the factor is neutral.
+        """
+        day_offset = minute_absolute // (24 * 60)
+        if day_offset <= 0:
+            return scale_today
+        if day_offset > 1:
+            return 1.0
+        return 1.0 + (scale_today - 1.0) * self.inday_yesterday_weight(minute_absolute % (24 * 60))
+
     def step_data_history(
         self,
         item,
@@ -135,9 +162,9 @@ class Fetch:
             if load_scaling_dynamic:
                 scaling_dynamic = load_scaling_dynamic.get(minute_absolute, scaling_dynamic)
 
-            # Reset in-day adjustment for tomorrow
-            if (minute + minutes_now) > 24 * 60:
-                scale_today = 1.0
+            # Carry the in-day adjustment over midnight on the decay curve load_today_comparison() will
+            # apply tomorrow, rather than resetting it to 1.0 (batpred#4732)
+            scale_slot = self.inday_adjustment_at(minute_absolute, scale_today)
 
             if type_load and not forward:
                 if self.load_forecast_only:
@@ -163,7 +190,7 @@ class Fetch:
             if load_adjust:
                 load_extra += load_adjust.get(minute_absolute, 0) * step / float(self.plan_interval_minutes)  # The kWh figure is for the plan interval period, so divide by plan_interval_minutes and times by step
             load_extra = max(load_extra, -value)  # Don't allow going to negative load values
-            values[minute] = dp4((value + load_extra) * scaling_dynamic * scale_today * scale_fixed)
+            values[minute] = dp4((value + load_extra) * scaling_dynamic * scale_slot * scale_fixed)
 
             # Apply dynamic baseline
             if minute_absolute in load_baseline:
@@ -1108,6 +1135,12 @@ class Fetch:
                 self.load_forecast_array.append(hist_forecast)
                 self.log("Using weighted-bucket historical load forecast over {} days".format(min(self.load_minutes_age, self.max_days_previous - 1)))
 
+        # Where Load ML genuinely supplied this cycle's forecast, backfill the elapsed part of today
+        # with its own past predictions (the weighted-bucket forecast above is skipped in that case).
+        # load_ml_forecast is this cycle's own fetch result from earlier in this function, so there is
+        # no cross-cycle state that could leave a stale "ML was active" reading behind (#4762 review).
+        self.apply_load_ml_forecast_history(self.now_utc, load_ml_forecast)
+
         # Load today vs actual
         if self.load_minutes:
             self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now, save=save)
@@ -1293,7 +1326,7 @@ class Fetch:
                     self.octopus_slots[car_n] = self.add_now_to_octopus_slot(car_n, self.octopus_slots[car_n], self.now_utc)
                     if not entity_id_list[car_n]:
                         continue
-                    if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]:
+                    if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
                         self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
                         if self.car_charging_slots[car_n]:
                             self.log(
@@ -1464,6 +1497,7 @@ class Fetch:
                 "friendly_name": "Battery temperature",
                 "state_class": "measurement",
                 "unit_of_measurement": "°C",
+                "device_class": "temperature",
                 "icon": "mdi:temperature-celsius",
             },
         )
@@ -1526,8 +1560,6 @@ class Fetch:
         """
         minute = -24 * 60
         rate_last = 0
-        rate_first = 0
-        rate_first_valid = False
         rate_last_valid = False  # Track if we've seen any real rates yet
         adjusted_rates = {}
         replicated_rates = {}
@@ -1587,9 +1619,6 @@ class Fetch:
             else:
                 rate_last = rates[minute]
                 rate_last_valid = True
-                if not rate_first_valid:
-                    rate_first = rate_last
-                    rate_first_valid = True
             minute += 1
 
         return rates, replicated_rates
@@ -1811,10 +1840,14 @@ class Fetch:
 
         return rates
 
-    def basic_rates(self, info, rtype, prev=None, rate_replicate=None):
+    def basic_rates(self, info, rtype, prev=None, rate_replicate=None, include_manual_api=True):
         """
         Work out the energy rates based on user supplied time periods
         works on a 24-hour period only and then gets replicated later for future days
+
+        include_manual_api should be False for callers (e.g. tariff comparison, annual replay)
+        that simulate a tariff other than the live one - the live system's manual API overrides
+        apply to the actual running plan and must not leak into those simulations.
         """
         rates = {}
         if rate_replicate is None:
@@ -1830,7 +1863,26 @@ class Fetch:
                 rates[minute] = 0
             max_minute = 48 * 60
 
-        manual_items = self.get_manual_api(rtype)
+        # get_manual_api() returns each override wrapped as {"index": ..., "value": {...}}, not the
+        # flat {"start": ..., "end": ..., "rate": ...} shape this loop expects below - unwrap it here.
+        # Before this fix, an unwrapped entry's this_rate.get("start")/get("rate") always missed,
+        # falling through to the "00:00:00" start/end default (which, since end<=start, wraps to a
+        # full 24-hour range) and the rate=0/rate_increment=True default (a genuine no-op on the
+        # rate value) - silently marking every minute of the day as overridden in rate_replicate
+        # (and hence in the plan display) even for the narrowest override window (batpred#2578).
+        # For most callers (anything sourced via get_arg(..., default=[]), which already merges
+        # manual API overrides into its own return value) this would duplicate an override already
+        # present in `info`. Avoid double-applying, as incremental overrides would otherwise stack.
+        manual_items = []
+        if include_manual_api:
+            for item in self.get_manual_api(rtype):
+                value = item.get("value")
+                if not isinstance(value, dict):
+                    self.log("Warn: Manual API override for {} must use the '?start=...&end=...&rate=...' form, got {}".format(rtype, value))
+                    self.record_status("Warn: Manual API override for {} must use the '?start=...&end=...&rate=...' form".format(rtype), had_errors=True)
+                    continue
+                if value not in info:
+                    manual_items.append(value)
         if manual_items:
             self.log("Basic rate API override items for {} are {}".format(rtype, manual_items))
 
@@ -1899,9 +1951,9 @@ class Fetch:
                     rate_increment = True
 
                 # Resolve any sensor links
-                if isinstance(rate, str) and rate[0].isalpha():
+                if isinstance(rate, str) and rate and rate[0].isalpha():
                     rate = self.resolve_arg("rate", rate, 0.0)
-                if isinstance(load_scaling, str) and load_scaling[0].isalpha():
+                if isinstance(load_scaling, str) and load_scaling and load_scaling[0].isalpha():
                     load_scaling = self.resolve_arg("load_scaling", load_scaling, 1.0)
 
                 # Ensure the end result is a float
@@ -1927,6 +1979,17 @@ class Fetch:
                 # Make end > start
                 if end_minutes <= start_minutes:
                     end_minutes += 24 * 60
+
+                # A window flagged utc is given in UTC rather than local wall-clock time, so shift it
+                # by the local offset. That keeps a UTC-fixed schedule - an Economy 7 smart meter, for
+                # instance - aligned with the meter through British Summer Time instead of running an
+                # hour early. The offset is taken at local midnight, which is the reference the
+                # returned minute keys are relative to.
+                if this_rate.get("utc", False):
+                    utc_offset = self.midnight_utc.utcoffset()
+                    offset_minutes = int(utc_offset.total_seconds() // 60) if utc_offset else 0
+                    start_minutes += offset_minutes
+                    end_minutes += offset_minutes
 
                 # Adjust for date if specified
                 if date:
@@ -2064,7 +2127,6 @@ class Fetch:
         found_rates = []
         lowest = 99
         highest = -99
-        upcoming_period = self.minutes_now + 4 * 60
 
         while True:
             rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high, alt_rates=alt_rates, pv_light_dark=pv_light_dark)
@@ -2238,7 +2300,7 @@ class Fetch:
         if self.num_cars > 0:
             car_charging_limit_percent = [dp1(limit / size * 100) if size else 0 for limit, size in zip(self.car_charging_limit, self.car_charging_battery_size)]
             self.log(
-                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}{}, plan_time {}, battery size {}kWh, limit {}% ({}kWh), rate {}kW, exclusive {}".format(
+                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}{}, plan_time {}, battery size {}kWh, limit {}% ({}kWh), rate {}kW, exclusive {} (Predbat-led car settings, not Octopus Intelligent state)".format(
                     self.num_cars,
                     self.car_charging_from_battery,
                     self.car_charging_planned,
@@ -2289,10 +2351,65 @@ class Fetch:
                     return load_forecast
         return {}
 
+    def fetch_ml_load_forecast_history(self, now_utc):
+        """
+        Reconstruct a genuine past Load ML forecast for the elapsed part of today.
+
+        sensor.<prefix>_load_ml_stats publishes a load_today_h1 attribute every cycle: the model's
+        cumulative-load-since-midnight prediction for 60 minutes after that cycle ran. Shifting each
+        recorded reading's timestamp forward by that same 60-minute lead turns the entity's history
+        into a genuine record of what the model predicted for each past target minute - unlike a
+        same-time-of-day historical average, this is the model's own past output (batpred#4750).
+
+        Covers 2 days of history so a reading from shortly before local midnight (whose target minute
+        falls just after midnight) is included, rather than leaving the first hour of the day as a gap.
+        """
+        entity_id = "sensor." + self.prefix + "_load_ml_stats"
+        history = self.get_history_wrapper(entity_id, days=2, required=False)
+        if not history:
+            return {}
+
+        data_array = []
+        for record in history[0]:
+            attributes = record.get("attributes") or {}
+            value = attributes.get("load_today_h1")
+            last_updated = record.get("last_updated")
+            if value is None or not last_updated:
+                continue
+            try:
+                shifted_time = str2time(last_updated) + timedelta(minutes=60)
+            except (ValueError, TypeError):
+                continue
+            data_array.append({"energy": value, "last_updated": shifted_time.isoformat()})
+
+        if not data_array:
+            return {}
+
+        load_forecast, _ = minute_data(
+            data_array,
+            self.forecast_days + 1,
+            self.midnight_utc,
+            "energy",
+            "last_updated",
+            backwards=False,
+            clean_increment=False,
+            smoothing=True,
+            divide_by=1.0,
+            scale=1.0,
+        )
+        return load_forecast or {}
+
     def get_holiday_minutes(self, now_utc, num_days):
         """
         Build a per-minute history of the holiday_days_left value (indexed by minutes-ago) from the recorded
         entity history using minute_data, which holds each state forward until the next change.
+
+        Covers num_days + 1 days rather than num_days: a sample taken "num_days whole days ago at time of
+        day tod" reaches minutes_now past the num_days boundary, so a num_days map leaves the oldest day
+        in the window unreadable for every slot with tod <= minutes_now (batpred#4732). This mirrors the
+        load history window, which is deliberately max_days_previous = window_days + 1 for the same reason.
+        Both the fetch and the minute_data span have to be widened - minute_data bounds its map at
+        days * 24 * 60, so raising the index alone would just return the not-on-holiday default instead.
 
         Returns the minute_data dict, or None when no usable history is available.
         """
@@ -2301,15 +2418,16 @@ class Fetch:
         if not entity_id:
             return None
 
+        history_days = num_days + 1
         try:
-            history = self.get_history_wrapper(entity_id=entity_id, days=num_days, required=False)
+            history = self.get_history_wrapper(entity_id=entity_id, days=history_days, required=False)
         except (ValueError, TypeError):
             history = None
 
         if not history or not isinstance(history, list) or not history[0]:
             return None
 
-        holiday_minutes, _ = minute_data(history[0], num_days, now_utc, "state", "last_updated", backwards=True)
+        holiday_minutes, _ = minute_data(history[0], history_days, now_utc, "state", "last_updated", backwards=True)
         return holiday_minutes or None
 
     def compute_load_forecast_history(self, now_utc):
@@ -2319,13 +2437,21 @@ class Fetch:
 
         For each forward 5-minute slot the historical sample at the same time-of-day is gathered from each
         available past day and combined as a weighted average, ignoring zero (missing-data) buckets entirely.
-        Per-sample weight = weekday_factor * holiday_factor * age_factor:
+
+        Only days whose holiday state matches that of the day the slot falls on are averaged - the holiday
+        state is matched per sample (not per whole day) so a mid-day change of holiday mode is handled
+        correctly, and per forward day (not just today's) so the day you come home is planned against
+        non-holiday history. Per-sample weight = weekday_factor * age_factor:
           - weekday_factor: 1.0 if the historical day is the same weekday as today; else 0.7 if both are
-            weekend or both are weekday; else 0.5 (one weekday, one weekend).
-          - holiday_factor: 1.0 if the holiday state when that individual 5-minute sample was recorded matches
-            today's holiday state; else 0.5. This is matched per sample (not per whole day) so a mid-day change
-            of holiday mode is handled correctly.
+            weekend or both are weekday; else 0.5 (one weekday, one weekend). Held at 1.0 between two
+            holiday days: holiday load has no weekday structure, and discarding weight from a pool of two
+            or three matching days only amplifies noise.
           - age_factor: 0.9 for yesterday, reducing by 0.03 per day down to a floor of 0.1.
+
+        A slot with no matching history at all - the first 24 hours of a holiday, or a return from one
+        longer than the search window - falls back to the plain weighted average of every day scaled by
+        holiday_load_scaling (or divided by it when coming home), so holiday mode acts from the moment it
+        is switched on rather than waiting for a day of holiday history to accumulate (batpred#4732).
 
         Returns a cumulative-from-midnight kWh dict (same format as the ML load forecast), or {} if no data.
         """
@@ -2337,12 +2463,17 @@ class Fetch:
             return {}
 
         today_dow = now_utc.weekday()
-        today_holiday = self.holiday_days_left > 0
         holiday_minutes = self.get_holiday_minutes(now_utc, num_days)
-        max_holiday_index = num_days * 24 * 60 - 1
+        # get_holiday_minutes covers num_days + 1 days so the oldest day in the window stays readable for
+        # every slot; anything older than that is genuinely unknown (a purged or short recorder history)
+        max_holiday_index = (num_days + 1) * 24 * 60 - 1
+        # Assumed holiday load as a fraction of normal, used only for slots with no matching history
+        holiday_load_scaling = min(max(self.holiday_load_scaling, 0.1), 1.0)
 
-        # Precompute the static per-day weight (weekday * age); the holiday factor is applied per 5-minute bucket
+        # Precompute the per-day weights; the holiday state is matched per 5-minute bucket below. The age-only
+        # weight is what a holiday-to-holiday match uses, the weekday * age weight everything else.
         day_static_weight = {}
+        day_age_weight = {}
         for d in range(1, num_days + 1):
             hist_dow = (now_utc - timedelta(days=d)).weekday()
             if hist_dow == today_dow:
@@ -2354,6 +2485,7 @@ class Fetch:
                 weekday_factor = 0.5
             # Age: 0.9 for yesterday (d=1), reducing by 0.03 per day down to a floor of 0.1
             age_factor = max(0.1, 0.9 - (d - 1) * 0.03)
+            day_age_weight[d] = age_factor
             day_static_weight[d] = weekday_factor * age_factor
 
         # Build the per-step (5-minute) weighted-average estimate, keyed by minute-from-midnight, across the
@@ -2363,8 +2495,14 @@ class Fetch:
         per_step = {}
         for minute_absolute in range(0, horizon_end, PREDICT_STEP):
             tod = minute_absolute % (24 * 60)  # time of day of this slot
-            total = 0.0
-            total_weight = 0.0
+            # Holiday state of the day this slot falls on, not of today. holiday_days_left counts whole days
+            # remaining including today and is decremented at midnight, so the day you travel home (and every
+            # day after it) is planned against non-holiday history while you are still away.
+            slot_holiday = self.holiday_days_left > (minute_absolute // (24 * 60))
+            match_total = 0.0
+            match_weight = 0.0
+            all_total = 0.0
+            all_weight = 0.0
             for d in range(1, num_days + 1):
                 # Sample d whole days ago at this slot's time of day. Counting in whole days from today keeps
                 # each day distinct and handles midnight crossings (the slot may be tomorrow or later).
@@ -2375,18 +2513,29 @@ class Fetch:
                 sample, raw = self.get_filtered_load_minute(self.load_minutes, minute_previous, historical=False, step=PREDICT_STEP, base_in_raw=False)
                 if raw <= 0:
                     continue
-                # Match the holiday state at the moment this individual sample was recorded (per bucket). If
-                # the sample is older than the holiday history we have, treat it as matching today (neutral)
-                # rather than reusing the oldest known state.
+                # Holiday state at the moment this individual sample was recorded (per bucket). A sample older
+                # than the holiday history we hold is treated as not on holiday, the same default minute_data
+                # gives for a gap inside the window - treating it as matching instead would hand full weight to
+                # exactly the pre-holiday days holiday mode exists to discount.
                 if holiday_minutes is None or minute_previous > max_holiday_index:
-                    holiday_active = today_holiday
+                    holiday_active = False
                 else:
                     holiday_active = holiday_minutes.get(minute_previous, 0) > 0
-                holiday_factor = 1.0 if (holiday_active == today_holiday) else 0.5
-                weight = day_static_weight[d] * holiday_factor
-                total += sample * weight
-                total_weight += weight
-            per_step[minute_absolute] = (total / total_weight) if total_weight > 0 else 0.0
+                all_total += sample * day_static_weight[d]
+                all_weight += day_static_weight[d]
+                if holiday_active == slot_holiday:
+                    weight = day_age_weight[d] if slot_holiday else day_static_weight[d]
+                    match_total += sample * weight
+                    match_weight += weight
+            if match_weight > 0:
+                per_step[minute_absolute] = match_total / match_weight
+            elif all_weight > 0:
+                # Nothing in the window shares this slot's holiday state. Rather than leaving holiday mode inert
+                # (a normalised mean cannot express "all of my data is wrong"), fall back to every day scaled by
+                # the assumed holiday ratio - or divided by it when we are home and the whole window was holiday.
+                per_step[minute_absolute] = (all_total / all_weight) * (holiday_load_scaling if slot_holiday else 1.0 / holiday_load_scaling)
+            else:
+                per_step[minute_absolute] = 0.0
 
         # Convert per-step kWh buckets into a cumulative-from-midnight dict, filling every minute by linear
         # interpolation across each 5-minute span so get_from_incrementing(..., backwards=False) reproduces
@@ -2401,6 +2550,29 @@ class Fetch:
         # Final boundary so the last span's increment is well defined
         load_forecast[horizon_end] = dp4(cumulative)
         return load_forecast
+
+    def apply_load_ml_forecast_history(self, now_utc, ml_forecast=None):
+        """
+        Backfill the elapsed part of today with genuine past Load ML predictions.
+
+        Only takes effect when Load ML is genuinely the active forecast source this cycle, which is
+        exactly "fetch_sensor_data() fetched a non-empty ml_forecast this cycle" - a Load ML component
+        running in the background without being selected as the forecast source
+        (load_ml_enable/load_ml_source) must not influence the chart, so it has no effect and the
+        weighted-bucket historical forecast above (skipped while Load ML owns load_forecast_only) is
+        what would apply instead. This is passed in rather than held on self so there is no cycle-scoped
+        flag whose correctness depends on fetch_config_options() always running first (#4762 review).
+        Load ML's own forecast entity only ever publishes predictions from "now" onward
+        (load_ml_component.py _publish_entity), so without this the already-elapsed part of today has no
+        forecast data at all and load_today_comparison's Predicted chart series sits at zero from
+        midnight until "now" (batpred#4750).
+        """
+        if not ml_forecast:
+            return
+        h1_forecast = self.fetch_ml_load_forecast_history(now_utc)
+        for minute, value in h1_forecast.items():
+            if minute < self.minutes_now:
+                self.load_forecast[minute] = value
 
     def fetch_extra_load_forecast(self, now_utc, ml_forecast=None):
         """
@@ -2551,6 +2723,7 @@ class Fetch:
 
         # Days previous
         self.holiday_days_left = self.get_arg("holiday_days_left")
+        self.holiday_load_scaling = self.get_arg("holiday_load_scaling", 0.7)
         self.load_forecast_only = self.get_arg("load_forecast_only", False)
 
         self.days_previous = self.get_arg("days_previous", [7])
@@ -2569,11 +2742,13 @@ class Fetch:
             # runs unconditionally every cycle regardless of whether the weighted-bucket forecast
             # actually gets used: Load ML (or any other source that sets load_forecast_only) takes
             # precedence and skips it entirely (fetch_sensor_data(), guarded by
-            # "not self.load_forecast_only"). The "using weighted-bucket..." wording previously
-            # here read as if it was happening every cycle regardless, which is what actually gets
-            # logged only when the forecast is genuinely used (fetch_sensor_data()'s own "Using
-            # weighted-bucket historical load forecast over N days" line) - confusing on a Load ML
-            # setup where this fallback is rarely/never actually invoked (#4496 follow-up).
+            # "not self.load_forecast_only") - apply_load_ml_forecast_history() backfills the
+            # elapsed part of today from Load ML's own history instead in that case (batpred#4750).
+            # The "using weighted-bucket..." wording previously here read as if it was happening
+            # every cycle regardless, which is what actually gets logged only when the forecast is
+            # genuinely used (fetch_sensor_data()'s own "Using weighted-bucket historical load
+            # forecast over N days" line) - confusing on a Load ML setup where this fallback is
+            # rarely/never actually invoked (#4496 follow-up).
             self.log("days_previous_auto enabled - will fall back to a weighted-bucket historical load forecast over up to {} days if no other load forecast source takes precedence".format(window_days))
             self.max_days_previous = window_days + 1
         elif self.holiday_days_left > 0:
@@ -2653,6 +2828,8 @@ class Fetch:
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
         self.pv_ac_limit = self.get_arg("pv_ac_limit", 0.0) / MINUTE_WATT
+        self.inverter_freeze_export_discharge_rate = max(self.get_arg("inverter_freeze_export_discharge_rate", 0.0), 0.0) / MINUTE_WATT
+        self.log("Freeze Export discharge rate configured: {:.0f} W".format(self.inverter_freeze_export_discharge_rate * MINUTE_WATT))
         self.base_load = self.get_arg("base_load", 100) / 1000.0
 
         # Charge curve
@@ -2715,6 +2892,7 @@ class Fetch:
         self.set_reserve_hold = True
         self.set_export_freeze = self.get_arg("set_export_freeze")
         self.set_charge_freeze = self.get_arg("set_charge_freeze")
+        self.set_charge_freeze_only = self.get_arg("set_charge_freeze_only")
         self.set_charge_low_power = self.get_arg("set_charge_low_power")
         self.set_export_low_power = self.get_arg("set_export_low_power")
         self.charge_low_power_margin = self.get_arg("charge_low_power_margin")

@@ -183,7 +183,7 @@ def _test_db_manager_set_get_state(my_predbat=None):
             state2 = "15.3"
             attributes2 = {"unit_of_measurement": "kW"}
 
-            result2 = await loop.run_in_executor(None, db_mgr.set_state_db, entity_id2, state2, attributes2, custom_timestamp)
+            await loop.run_in_executor(None, db_mgr.set_state_db, entity_id2, state2, attributes2, custom_timestamp)
             retrieved2 = await loop.run_in_executor(None, db_mgr.get_state_db, entity_id2)
             assert retrieved2 is not None, "get_state_db returned None for entity2"
             assert retrieved2["state"] == state2, f"Expected state {state2}, got {retrieved2['state']}"
@@ -330,7 +330,7 @@ def _test_db_manager_entities_and_history(my_predbat=None):
                     try:
                         # Remove 'Z' suffix if present
                         ts = timestamp_str.rstrip("Z")
-                        parsed = datetime.strptime(ts, TIME_FORMAT_DB)
+                        datetime.strptime(ts, TIME_FORMAT_DB)
                         print(f"✓ Timestamp format correct: {timestamp_str}")
                         break
                     except ValueError as e:

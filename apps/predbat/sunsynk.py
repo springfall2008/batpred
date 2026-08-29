@@ -1330,6 +1330,27 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         current_soc = int(self._as_float(self.device_values.get(sn, {}).get("soc"), 0))
         return await self.apply_settings(sn, schedule, current_soc, force=force)
 
+    def _is_read_only(self):
+        """Return True when Predbat is in read-only mode and must not write to the inverter."""
+        return self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") == "on"
+
+    async def _reconcile_control(self, sn):
+        """Re-apply sn's schedule if Predbat already controls it, unforced (matches deye.py's _reconcile_control).
+
+        A no-op for an inverter Predbat has not yet driven via the write button (not in
+        ``control_active``), and a no-op while ``switch.predbat_set_read_only`` is on: the
+        top-level work mode is time-aware, so a window transition changes the payload even
+        with no plan change, and without this guard that transition would write to the
+        inverter regardless of read-only.
+        """
+        if sn not in self.control_active or self._is_read_only():
+            return
+        try:
+            if await self.apply_schedule(sn):
+                await self.save_control()
+        except Exception as error:
+            self.log(f"Warn: Sunsynk schedule apply failed for {sn}: {error}")
+
     async def _handle_control_event(self, entity_id, value):
         """Route one control-entity event to the right inverter and apply it."""
         sn = self._sn_from_entity(entity_id)
@@ -1727,17 +1748,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
                 await self.get_schedule_settings_ha(sn)
             except Exception as error:
                 self.log(f"Warn: Sunsynk schedule read failed for {sn}: {error}")
-            # Only inverters Predbat has actually been asked to drive (write button pressed
-            # at least once) are re-applied here, matching deye.py's _reconcile_control: a
-            # startup cycle must never clobber an inverter before there is a plan. Without
-            # this gate the second tick posted a whole settings object built from entities
-            # Predbat had never written - wiping the user's own time-of-use programme.
-            if sn in self.control_active:
-                try:
-                    if await self.apply_schedule(sn):
-                        await self.save_control()
-                except Exception as error:
-                    self.log(f"Warn: Sunsynk schedule apply failed for {sn}: {error}")
+            await self._reconcile_control(sn)
             # Published every tick, not just first: this is Predbat's control surface and
             # must keep reflecting local_schedule as it changes, matching deye.py's run().
             await self.publish_schedule_settings_ha(sn)

@@ -260,7 +260,7 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
 
     # Test 2: Get from cache (should not call HAInterface again)
     initial_call_count = len(mock_ha.get_history_calls)
-    result2 = ha_history.get_history(entity_id, days=30, tracked=True)
+    ha_history.get_history(entity_id, days=30, tracked=True)
 
     if len(mock_ha.get_history_calls) != initial_call_count:
         print("ERROR: Should use cache, not call HAInterface again")
@@ -269,7 +269,7 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
         print("✓ Used cache instead of fetching again")
 
     # Test 3: Request more days (should fetch again)
-    result3 = ha_history.get_history(entity_id, days=60, tracked=True)
+    ha_history.get_history(entity_id, days=60, tracked=True)
     if len(mock_ha.get_history_calls) == initial_call_count:
         print("ERROR: Should fetch when requesting more days")
         failed += 1

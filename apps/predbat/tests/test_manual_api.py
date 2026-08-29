@@ -150,4 +150,92 @@ def run_test_manual_api(my_predbat):
     my_predbat.api_select("manual_api", "off")
     my_predbat.manual_api = my_predbat.api_select_update("manual_api")
 
+    # --- api_select_update()'s storage-layer dedup rules (#4405) ---
+    my_predbat.api_select("manual_api", "rates_import_override?date=2026-08-21&start=00:00:00&end=01:00:00&rate=0")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    my_predbat.api_select("manual_api", "rates_import_override?date=2026-08-22&start=00:00:00&end=01:00:00&rate=0")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    my_predbat.api_select("manual_api", "rates_import_override?date=2026-08-22&start=00:00:00&end=01:00:00&rate=0")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    items = my_predbat.get_manual_api("rates_import_override")
+    expected = [
+        {"index": None, "value": {"date": "2026-08-21", "start": "00:00:00", "end": "01:00:00", "rate": "0"}},
+        {"index": None, "value": {"date": "2026-08-22", "start": "00:00:00", "end": "01:00:00", "rate": "0"}},
+    ]
+    if items != expected:
+        print("ERROR: T17 Expecting distinct no-index entries to coexist and an exact-duplicate resend to be a no-op, got {}".format(items))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "off")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    my_predbat.api_select("manual_api", "rates_import_override(0)?date=2026-08-21&start=00:00:00&end=01:00:00&rate=0")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    my_predbat.api_select("manual_api", "rates_import_override(0)?date=2026-08-21&start=00:00:00&end=01:00:00&rate=5")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    my_predbat.api_select("manual_api", "rates_import_override(1)?date=2026-08-22&start=00:00:00&end=01:00:00&rate=9")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    items = my_predbat.get_manual_api("rates_import_override")
+    expected = [
+        {"index": 0, "value": {"date": "2026-08-21", "start": "00:00:00", "end": "01:00:00", "rate": "5"}},
+        {"index": 1, "value": {"date": "2026-08-22", "start": "00:00:00", "end": "01:00:00", "rate": "9"}},
+    ]
+    if items != expected:
+        print("ERROR: T18 Expecting a same-index resend to replace and distinct indices to coexist, got {}".format(items))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "off")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    my_predbat.api_select("manual_api", "inverter_limit=1000")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    my_predbat.api_select("manual_api", "inverter_limit=2000")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    items = my_predbat.get_manual_api("inverter_limit")
+    expected = [{"index": None, "value": "2000"}]
+    if items != expected:
+        print("ERROR: T19 Expecting a scalar (non-dict_list) no-index override to still replace on resend, got {}".format(items))
+        failed = 1
+
+    # --- get_arg()/basic_rates() merge behaviour built on top of that storage (#4405) ---
+    my_predbat.api_select("manual_api", "off")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    my_predbat.args["rates_import_override"] = []
+    my_predbat.api_select("manual_api", "rates_import_override?start=01:00:00&end=02:00:00&rate=5")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    my_predbat.api_select("manual_api", "rates_import_override?start=03:00:00&end=04:00:00&rate=9")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    info = my_predbat.get_arg("rates_import_override", [], indirect=False)
+    expected = [
+        {"start": "01:00:00", "end": "02:00:00", "rate": "5"},
+        {"start": "03:00:00", "end": "04:00:00", "rate": "9"},
+    ]
+    if info != expected:
+        print("ERROR: T20 Expecting get_arg to merge both no-index dict_list overrides, got {}".format(info))
+        failed = 1
+
+    rates = my_predbat.basic_rates(info, "rates_import_override")
+    if rates.get(75) != 5 or rates.get(195) != 9:
+        print("ERROR: T20 Expecting minutes 75/195 to take rates 5/9 from the two windows, got {}/{}".format(rates.get(75), rates.get(195)))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "rates_import_override(0)?date=2026-08-22&start=00:00:00&end=01:00:00&rate=5")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    info = my_predbat.get_arg("rates_import_override", [], indirect=False)
+    if len(info) != 3:
+        print("ERROR: T21 Expecting no-index and explicit-index overrides to all survive together, got {}".format(info))
+        failed = 1
+
+    # --- A malformed index must not crash api_select_update ---
+    my_predbat.api_select("manual_api", "off")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    try:
+        my_predbat.api_select("manual_api", "rates_import_override(x)?date=2026-08-21&start=00:00:00&end=01:00:00&rate=0")
+        my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    except ValueError as e:
+        print("ERROR: T22 Expecting a malformed index to not crash api_select_update, got {}".format(e))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "off")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    del my_predbat.args["rates_import_override"]
+
     return failed

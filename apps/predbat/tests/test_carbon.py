@@ -188,7 +188,7 @@ def _test_fetch_carbon_data_success(my_predbat=None):
 
     with patch("carbon.aiohttp.ClientSession") as mock_session_class:
         mock_session_class.return_value = mock_session
-        result = run_async(api.fetch_carbon_data())
+        run_async(api.fetch_carbon_data())
 
         # Check data was collected (3 points per call * 2 calls)
         if len(api.carbon_data_points) != 6:

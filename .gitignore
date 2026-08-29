@@ -119,5 +119,8 @@ apps_ha.yaml
 # Superpowers planning artifacts (not project docs)
 docs/superpowers/
 
+# Dev-deploy/standalone commit marker (see coverage/deploy, hass.py)
+apps/predbat/git_version.txt
+
 # Claude Code local worktrees
 .claude/worktrees/

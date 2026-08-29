@@ -27,6 +27,9 @@ Types covered (see APPS_SCHEMA in config.py):
   sensor_list (with entries, modify, none|string sensor_type)
 """
 
+import os
+import tempfile
+
 
 def _run(my_predbat, extra_args, extra_states=None, expect_errors=(), expect_clean=()):
     """Inject args/states, run validate_config, assert per-field expectations.
@@ -362,7 +365,100 @@ def test_validate_config(my_predbat):
         expect_clean=["car_charging_now"],
     )
 
+    # ==========================================================================
+    # transient_ok  (car_charging_energy, car_charging_power)
+    #
+    # An EV charger routinely reports 'unavailable' or 'unknown' with nothing
+    # plugged into it. minute_data() already skips those samples (utils.py), and
+    # update_car_charging_power() reads them as zero, so the reading being absent
+    # right now is normal rather than a misconfiguration - but validate_config
+    # reads the same entity by its own path and required the state to parse as a
+    # float, leaving the whole run reporting errors for a car sitting on the
+    # driveway. transient_ok on those two schema entries allows the placeholder
+    # states without loosening anything else.
+    # ==========================================================================
+    for name in ("car_charging_energy", "car_charging_power"):
+        print(f"  [transient_ok] {name} reading 'unavailable' passes")
+        _run(my_predbat, {name: "sensor.test_charger_energy"}, extra_states={"sensor.test_charger_energy": "unavailable"}, expect_clean=[name])
+
+        print(f"  [transient_ok] {name} reading 'unknown' passes")
+        _run(my_predbat, {name: "sensor.test_charger_energy"}, extra_states={"sensor.test_charger_energy": "unknown"}, expect_clean=[name])
+
+        print(f"  [transient_ok] {name} reading a real number still passes")
+        _run(my_predbat, {name: "sensor.test_charger_energy"}, extra_states={"sensor.test_charger_energy": 4.2}, expect_clean=[name])
+
+        print(f"  [transient_ok] {name} reading a non-numeric value still fails")
+        _run(my_predbat, {name: "sensor.test_charger_energy"}, extra_states={"sensor.test_charger_energy": "banana"}, expect_errors=[name])
+
+        print(f"  [transient_ok] {name} pointing at an entity that does not exist still fails")
+        _run(my_predbat, {name: "sensor.test_charger_typo"}, expect_errors=[name])
+
     print("**** test_validate_config PASSED ****")
+    return False
+
+
+def test_validate_config_secrets(my_predbat):
+    """
+    Tests check_apps_yaml_secrets() (#4787) - re-reads apps.yaml with the ruamel round-trip
+    loader and flags credential-like values that are stored in plain text rather than
+    referenced via the '!secret' mechanism.
+
+    Writes a real temp apps.yaml so the round-trip loader has something genuine to parse:
+    provenance (whether a value came from a '!secret' tag or was written inline) only
+    survives in the raw file, not in self.args, which is why the check has to re-read it
+    rather than working off the already-resolved config the rest of validate_config() uses.
+    check_apps_yaml_secrets() takes an explicit path so this is independent of
+    PREDBAT_APPS_FILE and the working directory the test suite happens to run from.
+    """
+    print("**** test_validate_config_secrets ****")
+
+    apps_yaml_content = """
+pred_bat:
+  module: predbat
+  class: PredBat
+  mcp_secret: !secret my_mcp_secret
+  ohme_password: plaintext_password
+  kraken_key: ""
+  forecast_solar:
+    api_key: plaintext_nested_key
+  gateway_mqtt_host: mqtt.example.com
+  rates_import:
+    - start: "00:00"
+      end: "05:00"
+      rate: 0.07
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        temp_path = f.name
+        f.write(apps_yaml_content)
+
+    try:
+        my_predbat.check_apps_yaml_secrets(apps_yaml_path=temp_path)
+        warnings = my_predbat.arg_warnings
+
+        print("  Inline credential value is flagged")
+        assert "ohme_password" in warnings, f"Expected inline ohme_password to be flagged, got {warnings}"
+
+        print("  Nested inline credential value is flagged")
+        assert "forecast_solar.api_key" in warnings, f"Expected nested forecast_solar.api_key to be flagged, got {warnings}"
+
+        print("  '!secret'-referenced value is not flagged")
+        assert "mcp_secret" not in warnings, f"'!secret'-referenced mcp_secret must not be flagged, got {warnings}"
+
+        print("  Empty credential-like value is not flagged")
+        assert "kraken_key" not in warnings, f"Empty string value must not be flagged, got {warnings}"
+
+        print("  Non-credential key is not flagged")
+        assert "gateway_mqtt_host" not in warnings, f"Non-credential key must not be flagged, got {warnings}"
+        assert not any(w.startswith("rates_import") for w in warnings), f"Non-credential nested list must not be flagged, got {warnings}"
+    finally:
+        os.remove(temp_path)
+
+    print("  A missing apps.yaml is handled without error")
+    my_predbat.check_apps_yaml_secrets(apps_yaml_path="/tmp/does_not_exist_predbat_test_4787.yaml")
+    assert my_predbat.arg_warnings == {}, f"Expected no warnings for a missing file, got {my_predbat.arg_warnings}"
+
+    print("**** test_validate_config_secrets PASSED ****")
     return False
 
 

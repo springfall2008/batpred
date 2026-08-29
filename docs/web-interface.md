@@ -37,6 +37,10 @@ The initial view is the Dash view which gives a summary of Predbat's status and 
 
 ![image](images/web-interface-dash-view.png)
 
+The power flow diagram shows the PV, battery, grid and house, with animated arrows whose speed reflects how much power is flowing.
+A car is also shown if you have set [car_charging_power](car-charging.md#configure-appsyaml-for-your-car-charging) in `apps.yaml` (this is automatic for the supported charger integrations);
+the car charging power is then subtracted from the House figure so that it shows the rest of your household load rather than counting the car twice.
+
 The Debug panel provides easy access to a number of files that are useful in diagnosing a problem and are usually required if you raise a [Predbat GitHub issue](https://github.com/springfall2008/batpred/issues):
 
 - **Download apps.yaml** - provides a link to download your [apps.yaml file](apps-yaml.md). This is useful to identify issues with your Predbat configuration
@@ -45,6 +49,7 @@ all the input settings for Predbat and all Predbat's output data including the c
 This debug file enables your setup to be recreated to identify any configuration issues it may have or Predbat bugs to be re-created. Confidential information such as your Solcast API or GECloud API are redacted in the debug file.
 - **Download predbat.log** - provides a link to download the current [Predbat logfile](output-data.md#predbat-logfile) which contains progress and any error messages that occur whilst Predbat is running
 - **Download predbat_plan.html** - provides a link to download the current [Predbat HTML plan](output-data.md#viewing-the-predbat-plan)
+- **History** - a link to download every retained automatically-captured [debug history snapshot](customisation.md#debug-history) as a single `.tgz` archive, the same as `predbat_debug.yaml` above but covering a window of earlier points in time, without needing debug mode to have already been turned on. Individual snapshots for a specific plan time slot can also be downloaded from the **Debug** column on the plan's [History view](#plan-view).
 
 Note that before you can attach a downloaded apps.yaml or predbat_debug.yaml file to a GitHub issue you must rename the file extension, e.g. to '.txt', so for example `apps.txt` and `predbat_debug.txt`.
 This is because GitHub does not accept .yaml file attachments.
@@ -70,6 +75,8 @@ and 'Yesterday without Predbat' which is a simulated plan without any Predbat ba
 The starting battery SoC for this simulation is carried forward from the end of the previous day's 'Without Predbat' simulation (not the actual midnight SoC), so that the simulated
 'without Predbat' universe remains self-consistent — i.e. if Predbat had not been running, the battery may have had a different SoC at midnight than it actually did.
 This means the starting SoC shown in the 'Yesterday without Predbat' view can differ significantly from the 'History' view, which reflects what actually happened.
+
+The 'History' view also shows a **Debug** column with a download link on any time slot that has an automatically-captured [debug history snapshot](customisation.md#debug-history) from around that time - useful for grabbing the real Predbat state from the moment something looked wrong, without needing to have had debug mode switched on in advance.
 
 You can easily change Predbat's planned activity for a slot by clicking on the slot time, then selecting Manual Demand, Manual Charge, Manual Export, Manual Freeze Charge or Manual Freeze Export to set the activity.
 If you have previously changed Predbat's planned activity for a slot, choose Clear to return Predbat to its planned activity.
@@ -155,6 +162,11 @@ The Apps view allows you to look at your `apps.yaml` configuration and to modify
 Click the edit button to change a value, when all the edits are complete hit save to save the `apps.yaml` and Predbat will automatically be restarted with the new configuration.
 
 <img alt="image of Predbat apps view" src="https://github.com/user-attachments/assets/f9aacd17-f25b-45d6-95fe-229431a1f4d6" />
+
+Alongside the edit button, each entry of a list and each setting within it can be removed with the **Delete** button, and new ones created with the
+**Add item** and **Add setting** buttons at the end of each group. This is how you add, change or remove a [tariff to compare](compare.md) without hand-editing
+the YAML - **Add item** against `compare_list` asks for the new tariff as one `setting: value` per line, starting from a template of the required `name` and `id`.
+Deletions and additions are only pending until you hit save, so they can be undone first with the **Undo**, **Remove** and **Discard Changes** buttons.
 
 Predbat validates your `apps.yaml` every time it runs and if there are any configuration issues it displays a count of those errors and highlights the items in error in red:
 

@@ -76,7 +76,7 @@ class CarbonAPI(ComponentBase):
                                                 # Use TIME_FORMAT_CARBON to parse time strings
                                                 from_time = datetime.strptime(from_time, TIME_FORMAT_CARBON).replace(tzinfo=timezone.utc)
                                                 to_time = datetime.strptime(to_time, TIME_FORMAT_CARBON).replace(tzinfo=timezone.utc)
-                                            except Exception as e:
+                                            except Exception:
                                                 from_time = None
                                                 to_time = None
                                             if from_time and to_time and intensity is not None:

@@ -28,6 +28,7 @@ from urllib.parse import urlencode
 import aiohttp
 
 from component_base import ComponentBase
+from const import EXPORT_LIMIT_FREEZE
 from mock_base import MockBase
 from predbat_metrics import record_api_call
 
@@ -1056,8 +1057,8 @@ class EnphaseAPI(ComponentBase):
         dtg_limit = max(export_soc, int(local.get("reserve", 0)))
         return {
             "cfg": {"enabled": bool(charge.get("enable")), "start": ha_time_to_enphase(charge.get("start_time", "00:00:00")), "end": ha_time_to_enphase(charge.get("end_time", "00:00:00")), "limit": charge.get("soc", 100)},
-            "dtg": {"enabled": export_enabled and export_soc < 99, "start": export_start, "end": export_end, "limit": dtg_limit},
-            "rbd": {"enabled": export_enabled and export_soc == 99, "start": export_start, "end": export_end, "limit": None},
+            "dtg": {"enabled": export_enabled and export_soc < EXPORT_LIMIT_FREEZE, "start": export_start, "end": export_end, "limit": dtg_limit},
+            "rbd": {"enabled": export_enabled and export_soc == EXPORT_LIMIT_FREEZE, "start": export_start, "end": export_end, "limit": None},
         }
 
     async def _cleanup_family(self, site_id, family_key, target, force_recreate):

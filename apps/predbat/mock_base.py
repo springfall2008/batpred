@@ -26,6 +26,20 @@ from datetime import datetime
 import json
 
 
+class MockHAInterface:
+    """Minimal stand-in for the HA interface, used by the standalone CLI harnesses.
+
+    ComponentBase.set_state_external forwards here so components can change Predbat's OWN config
+    entities during auto-discovery (e.g. teslemetry turning inverter_hybrid off) - that is the only
+    write path that also updates the matching CONFIG_ITEMS value. Without this the harnesses would
+    crash on any component that auto-configures a Predbat setting.
+    """
+
+    async def set_state_external(self, entity_id, state, attributes={}):
+        """Print an external state write instead of applying it."""
+        print(f"SET EXTERNAL: {entity_id} = {state}")
+
+
 class MockBase:
     """Minimal stand-in for the PredBat base object, used by the standalone CLI harnesses."""
 
@@ -51,6 +65,7 @@ class MockBase:
         self.currency_symbols = "£p"
         self.arg_errors = {}
         self.args = {key: value for key, value in kwargs.items() if value is not None}
+        self.ha_interface = MockHAInterface()
 
     def log(self, message, quiet=True):
         """Print a timestamped log line.

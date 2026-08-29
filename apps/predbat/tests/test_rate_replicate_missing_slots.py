@@ -326,7 +326,7 @@ def _test_undefined_negative_minutes(my_predbat):
         try:
             # Simulate what publish_rates does: access rates[minute] directly
             test_minute = -1440
-            value = result[test_minute]  # This will raise KeyError
+            result[test_minute]  # This will raise KeyError
             print(f"    No KeyError at minute {test_minute} (unexpected!)")
         except KeyError as e:
             print(f"    ✓ Confirmed: KeyError accessing minute {test_minute}: {e}")

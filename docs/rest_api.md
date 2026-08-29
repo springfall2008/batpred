@@ -44,3 +44,5 @@ You must post in 'json' with the service name and the service data, as per Home 
     "data": {"entity_id": "switch.predbat_expert_mode"}
 }
 ```
+
+The response body is `true` on success, `false`/`null` on failure (via Home Assistant) or when the call was made in standalone mode against a service Predbat doesn't simulate itself.
