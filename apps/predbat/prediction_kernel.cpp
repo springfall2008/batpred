@@ -43,7 +43,7 @@
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
 #define PK_ABI_VERSION 5
-#define PK_PARITY_REVISION 10
+#define PK_PARITY_REVISION 11
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_LIMIT_FREEZE 99.0 // const.py EXPORT_LIMIT_FREEZE
@@ -145,6 +145,7 @@ struct PkContext {
     const double *rate_import;        // import rate per step
     const double *rate_export;        // export rate per step
     const double *alert_keep;         // alert keep value per step
+    const double *alert_keep_max;     // soc ceiling keep value per step (manual_soc_max), 0 = no ceiling
     const double *pv;                 // PV forecast kWh per step (central)
     const double *load;               // load kWh per step (central)
     const double *pv10;               // PV forecast kWh per step (PV10)
@@ -360,7 +361,7 @@ static PkScratch &thread_scratch()
 
 // Deep-copied context storage so Python-side buffers can be freed after create
 struct ContextStore {
-    std::vector<double> rate_import, rate_export, alert_keep;
+    std::vector<double> rate_import, rate_export, alert_keep, alert_keep_max;
     std::vector<double> pv, load, pv10, load10, pv90, load90;
     std::vector<double> temp_charge_cap, temp_discharge_cap;
     std::vector<int32_t> io_flag;
@@ -550,6 +551,7 @@ int64_t pk_context_create(const PkContext *in)
     store->rate_import.assign(in->rate_import, in->rate_import + n);
     store->rate_export.assign(in->rate_export, in->rate_export + n);
     store->alert_keep.assign(in->alert_keep, in->alert_keep + n);
+    store->alert_keep_max.assign(in->alert_keep_max, in->alert_keep_max + n);
     store->pv.assign(in->pv, in->pv + n);
     store->load.assign(in->load, in->load + n);
     store->pv10.assign(in->pv10, in->pv10 + n);
@@ -573,6 +575,7 @@ int64_t pk_context_create(const PkContext *in)
     store->ctx.rate_import = store->rate_import.data();
     store->ctx.rate_export = store->rate_export.data();
     store->ctx.alert_keep = store->alert_keep.data();
+    store->ctx.alert_keep_max = store->alert_keep_max.data();
     store->ctx.pv = store->pv.data();
     store->ctx.load = store->load.data();
     store->ctx.pv10 = store->pv10.data();
@@ -740,6 +743,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
         // Alert - prediction.py:583
         const double alert_keep = c->alert_keep[k];
+        const double alert_keep_max = c->alert_keep_max[k];
 
         // Four hour rule scaling - prediction.py:589-592
         double keep_minute_scaling = four_hour_rule ? std::min(minute / 240.0, 1.0) * best_soc_keep_weight : best_soc_keep_weight;
@@ -749,6 +753,14 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         if (alert_keep > 0) {
             keep_minute_scaling = std::max(keep_minute_scaling, 10.0);
             best_soc_keep = std::max(best_soc_keep, std::min(alert_keep / 100.0 * soc_max, soc_max));
+        }
+
+        // Soc max keep is a ceiling rather than a floor (manual_soc_max) - mirrors prediction.py's
+        // best_soc_max block right after the alert keep floor. 0 = no ceiling.
+        double best_soc_max = 0;
+        if (alert_keep_max > 0) {
+            keep_minute_scaling = std::max(keep_minute_scaling, 10.0);
+            best_soc_max = std::min(alert_keep_max / 100.0 * soc_max, soc_max);
         }
 
         // Find charge & discharge windows - prediction.py:602-607
@@ -1260,6 +1272,12 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         // Metric keep - prediction.py:1100-1102
         if (best_soc_keep > 0 && soc <= best_soc_keep) {
             metric_keep += (best_soc_keep - soc) * import_rate * keep_minute_scaling * step / 60.0;
+        }
+
+        // Metric keep max - pretend the excess above the ceiling should have been exported instead
+        // of held - mirrors prediction.py's best_soc_max block right after the floor.
+        if (best_soc_max > 0 && soc >= best_soc_max) {
+            metric_keep += (soc - best_soc_max) * export_rate * keep_minute_scaling * step / 60.0;
         }
 
         // Import/export accounting - prediction.py:1104-1143

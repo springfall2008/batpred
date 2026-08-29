@@ -106,6 +106,7 @@ SCENARIO_STATE_ATTRS = [
     "rate_export",
     "io_adjusted",
     "all_active_keep",
+    "all_active_keep_max",
     "carbon_enable",
     "carbon_intensity",
     "carbon_today_sofar",
@@ -269,6 +270,13 @@ def apply_random_scenario(my_predbat, rng):
         start = my_predbat.minutes_now + rng.randrange(0, my_predbat.forecast_minutes - 60, 5)
         for minute in range(start, start + 120):
             my_predbat.all_active_keep[minute] = rng.choice([20, 50, 100])
+    # Derived entirely from the floor block above (same activation, same window, value transformed
+    # from the already-drawn floor value) rather than new draws, so the seeded scenario stream for
+    # everything after this point is unchanged - see the "derived from an existing draw" note above.
+    my_predbat.all_active_keep_max = {}
+    if my_predbat.all_active_keep:
+        for minute, floor_value in my_predbat.all_active_keep.items():
+            my_predbat.all_active_keep_max[minute] = 100 - floor_value
 
     # Carbon intensity
     my_predbat.carbon_enable = rng.random() < 0.3
