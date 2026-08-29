@@ -92,11 +92,12 @@ CONFIRM_POLL_SECONDS = 0.2
 
 # Retry policy for one model completion. Live traffic against a free-tier model showed roughly one
 # in three completions fail mid-stream with a transient provider-side error, so a failure worth
-# retrying gets three attempts total (the first try plus two retries) before the turn gives up.
+# retrying gets ten attempts total (the first try plus nine retries) before the turn gives up.
 # COMPLETION_RETRY_DELAYS_SECONDS[0] is the backoff before the second attempt,
-# COMPLETION_RETRY_DELAYS_SECONDS[1] before the third.
-COMPLETION_MAX_ATTEMPTS = 3
-COMPLETION_RETRY_DELAYS_SECONDS = (1, 3)
+# COMPLETION_RETRY_DELAYS_SECONDS[1] before the third, and COMPLETION_RETRY_DELAYS_SECONDS[2] (5s)
+# repeats for every attempt after that - see retry_delay_for()'s docstring for the mechanism.
+COMPLETION_MAX_ATTEMPTS = 10
+COMPLETION_RETRY_DELAYS_SECONDS = (1, 3, 5)
 
 # A 429 is treated quite differently from a provider error. It is not a fault: the request was
 # refused because a quota window is full, and the only thing that fixes it is waiting - which the

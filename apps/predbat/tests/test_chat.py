@@ -2609,12 +2609,13 @@ def test_retry_after_header_is_honoured(my_predbat):
 
 
 def test_retry_backoff_sequence_is_one_then_three_seconds(my_predbat):
-    """Three attempts that all fail with a plain retryable error back off 1s then 3s - the module
-    constants named in the task, not hand-rolled numbers - and the suite never actually sleeps for
-    either, since agent._retry_sleep only records what was requested.
+    """Every attempt that fails with a plain retryable error backs off on retry_delay_for()'s own
+    schedule - the module constants named in the task, not hand-rolled numbers, with the last entry
+    of COMPLETION_RETRY_DELAYS_SECONDS repeating once the schedule runs out - and the suite never
+    actually sleeps for any of them, since agent._retry_sleep only records what was requested.
     """
     failed = False
-    print("**** Testing the plain retry backoff sequence is 1s then 3s ****")
+    print("**** Testing the plain retry backoff sequence follows the configured schedule ****")
     agent = _agent_with_fake(my_predbat, *[_mid_stream_error_response() for _ in range(COMPLETION_MAX_ATTEMPTS)])
     cid = asyncio.run(agent.store.create())
 
@@ -2622,8 +2623,12 @@ def test_retry_backoff_sequence_is_one_then_three_seconds(my_predbat):
     asyncio.run(agent.run_turn(cid, "hello"))
     elapsed = time.monotonic() - started
 
-    if agent.retry_sleeps != list(COMPLETION_RETRY_DELAYS_SECONDS):
-        print("ERROR: expected the backoff sequence {}, agent requested {}".format(list(COMPLETION_RETRY_DELAYS_SECONDS), agent.retry_sleeps))
+    # One backoff per retry, i.e. every attempt but the first - derived via retry_delay_for() itself
+    # rather than list(COMPLETION_RETRY_DELAYS_SECONDS), since the schedule now has fewer entries
+    # than there are retries and the tail value repeats for the rest.
+    expected = [retry_delay_for(attempt, False) for attempt in range(1, COMPLETION_MAX_ATTEMPTS)]
+    if agent.retry_sleeps != expected:
+        print("ERROR: expected the backoff sequence {}, agent requested {}".format(expected, agent.retry_sleeps))
         failed = True
     if elapsed > 2:
         print("ERROR: the turn took {:.2f}s - the injected sleep is not actually replacing the real backoff".format(elapsed))
@@ -2990,7 +2995,7 @@ def test_turn_error_is_detailed_and_stored_but_never_replayed(my_predbat):
     ]
     # A 502 is retryable, so the fake needs a response for every attempt - otherwise the turn
     # fails for running out of canned replies rather than for the error under test.
-    agent = _agent_with_fake(my_predbat, error_chunk, error_chunk, error_chunk)
+    agent = _agent_with_fake(my_predbat, *[error_chunk for _ in range(COMPLETION_MAX_ATTEMPTS)])
     cid = asyncio.run(agent.store.create())
     asyncio.run(agent.run_turn(cid, "is it sunny"))
 

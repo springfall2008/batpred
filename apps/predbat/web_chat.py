@@ -2663,11 +2663,24 @@ function openModelList() {
     var offered = (state.models || []).filter(function (model) { return !state.freeOnly || isFreeModel(model); });
     input.placeholder = 'Search ' + offered.length + (state.freeOnly ? ' free' : '') + ' models...';
     byId('chat-model-list').style.display = 'block';
+    // The list opens upward from the footer at the very bottom of the page (see #chat-model-list's
+    // `bottom: 100%`), so the CSS max-height of 320px assumes there is always that much room above
+    // it. On a short window there is not, and the list renders above the safe area where it is
+    // clipped by the viewport or painted over by .menu-bar - the page-wide fixed nav (web_helper.py,
+    // z-index: 1000) every Predbat page reserves body's padding-top for. Reaching the true top of
+    // the viewport is not enough: that bar's own height has to be subtracted too, or a short window
+    // still hides the top of the list underneath it. Clamp to what is actually free below it - the
+    // list is already scrollable, so less height just means scrolling to see the rest.
+    var wrapTop = byId('chat-model-wrap').getBoundingClientRect().top;
+    var menuBar = document.querySelector('.menu-bar');
+    var safeTop = menuBar ? menuBar.getBoundingClientRect().bottom : 0;
+    byId('chat-model-list').style.maxHeight = Math.max(0, Math.min(320, wrapTop - safeTop - 12)) + 'px';
     renderModelResults('');
 }
 
 function closeModelList() {
     byId('chat-model-list').style.display = 'none';
+    byId('chat-model-list').style.maxHeight = '';
     var input = byId('chat-model');
     input.value = modelLabel(effectiveModel());
     input.placeholder = '';
@@ -2850,6 +2863,13 @@ function setIdle() {
     setComposerDisabled(false);
     hideBanner();
     byId('chat-stop').classList.remove('visible');
+    // Every caller of setIdle() - the 'idle' SSE event, reconcileBusy() correcting a stale banner
+    // on reconnect, and the no-active-turn branch of loadConversationData() - means the server has
+    // no turn running. The thinking bubble is separate UI state driven by its own set of SSE
+    // handlers (see clearThinkingBubble()'s callers), so a client that missed the 'idle' event
+    // itself (a dropped connection, a thrown handler) previously had no way to notice the mismatch
+    // even once reconcileBusy() caught up on reconnect - the banner cleared but the bubble did not.
+    clearThinkingBubble();
 }
 
 function stopTurn() {
