@@ -159,7 +159,11 @@ Figures of around 0p-2p are recommended, the default is 0p per kWh.
 **input_number.predbat_metric_battery_value_scaling** (_expert mode_) A percentage value that can be used to scale the value of the energy in the battery at the end of the plan.
 The battery value is accounted for in the optimisations at the lowest future import rate including charging and inverter losses.
 A value of 1.0 (the default) means no change to this, while lower than 1.0 means to value future battery levels less,
-greater than 1.0 will value it more (and hence hold more charge at the end of the plan).
+greater than 1.0 will value it more (and hence hold more charge at the end of the plan).<BR>
+_NB: Take care reducing this below 1.0 if your export rate is close to your cheapest import rate._ Predbat only holds charge rather than exporting it while
+the stored energy is worth more than exporting it would earn. That margin is narrow on a flat export tariff - for example a 10.54p cheapest import against a
+12p export leaves only about 1%, so any value below roughly 0.99 makes Predbat export the battery whenever it can, even though the round trip actually loses
+money. If you see exports you cannot explain, check this setting is at its default before looking elsewhere (see issue #4840).
 
 **input_number.predbat_metric_battery_value_export_scaling** (_expert mode_) Discounts that end-of-plan battery value when you would not be able to sell
 the surplus for what it cost to buy. Valuing the battery at the lowest future import rate assumes the energy can always be redeployed, which holds while
