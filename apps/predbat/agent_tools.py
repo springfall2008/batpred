@@ -1131,6 +1131,11 @@ class PredbatTools:
             except (TypeError, ValueError):
                 return None, "'{}' is not a valid number for '{}'".format(value, item.get("name"))
             if item.get("step", 1) == 1:
+                # Rejected rather than floored: silently turning a requested 2.9 into 2 changes
+                # what was asked for without saying so, and the read-back check below would then
+                # report that wrong value as a successful write of what the caller sent.
+                if not number.is_integer():
+                    return None, "'{}' is not a whole number - '{}' only accepts whole numbers (step 1)".format(value, item.get("name"))
                 number = int(number)
             return number, None
         return value, None

@@ -1294,6 +1294,61 @@ def test_set_config_coerces_switch_value(my_predbat):
     return failed
 
 
+def test_set_config_rejects_fractional_value_for_step_one(my_predbat):
+    """set_config for a step-1 input_number accepts whole numbers and rejects fractional ones.
+
+    Flooring a fractional value (int(2.9) == 2) would silently write something other than what
+    was actually requested while still reporting success against the read-back - the same class
+    of bug as the switch truthiness issue, just for numbers. Rejecting up front means the caller
+    is told its value was not a whole number, rather than being told, incorrectly, that 2.9 was
+    accepted.
+
+    Mutation checks: dropping the is_integer() guard, or replacing the rejection with int()
+    flooring, fails below.
+    """
+    failed = False
+    print("**** Testing set_config accepts whole numbers and rejects fractional ones for step-1 settings ****")
+
+    item = next(
+        (
+            entry
+            for entry in my_predbat.CONFIG_ITEMS
+            if entry.get("type") in ("input_number", "number") and entry.get("entity") and entry.get("step", 1) == 1 and not entry.get("enable") and not entry.get("enable_condition")
+        ),
+        None,
+    )
+    if item is None:
+        print("ERROR: no step-1 input_number config item to test against")
+        return True
+
+    original_value = item.get("value")
+    original_components = getattr(my_predbat, "components", None)
+    my_predbat.components = Components(my_predbat)
+    tools = PredbatTools(my_predbat)
+    try:
+        # A whole number, even spelled with a decimal point, is accepted and stored as an int.
+        result = asyncio.run(tools.execute("set_config", {"entity_id": item["name"], "value": "5.0"}))
+        if not result.get("success"):
+            print("ERROR: set_config rejected a whole-number value '5.0': {}".format(result))
+            failed = True
+        if item.get("value") != 5 or not isinstance(item.get("value"), int):
+            print("ERROR: config value is {!r} after setting '5.0', expected int 5".format(item.get("value")))
+            failed = True
+
+        # A fractional value is refused rather than silently floored to the wrong number.
+        result = asyncio.run(tools.execute("set_config", {"entity_id": item["name"], "value": "2.9"}))
+        if result.get("success"):
+            print("ERROR: set_config silently accepted a fractional value for a step-1 setting: {}".format(result))
+            failed = True
+        if item.get("value") != 5:
+            print("ERROR: a rejected fractional value changed the setting anyway: {}".format(item.get("value")))
+            failed = True
+    finally:
+        item["value"] = original_value
+        my_predbat.components = original_components
+    return failed
+
+
 def run_agent_tools_tests(my_predbat):
     """Run every shared tool layer test, returning True if any of them failed."""
     failed = False
@@ -1317,6 +1372,7 @@ def run_agent_tools_tests(my_predbat):
     failed |= test_get_plan_is_slimmed(my_predbat)
     failed |= test_set_config_refuses_what_it_cannot_change(my_predbat)
     failed |= test_set_config_coerces_switch_value(my_predbat)
+    failed |= test_set_config_rejects_fractional_value_for_step_one(my_predbat)
     failed |= test_pathological_regex_arguments_are_rejected(my_predbat)
     failed |= test_get_entity_history_does_not_block_the_event_loop(my_predbat)
     return failed
