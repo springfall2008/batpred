@@ -159,7 +159,7 @@ def _test_carbon_initialization(my_predbat=None):
         print("  ✗ ERROR: Postcode not set correctly")
         failed = 1
 
-    if api.automatic != True:
+    if api.automatic is not True:
         print("  ✗ ERROR: Automatic flag not set correctly")
         failed = 1
 
@@ -793,7 +793,7 @@ def _test_run_first_call(my_predbat=None):
         # Call run with first=True
         result = run_async(api.run(seconds=0, first=True))
 
-        if result != True:
+        if result is not True:
             print(f"ERROR: run() should return True")
             return 1
 

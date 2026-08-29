@@ -415,7 +415,7 @@ def run_execute_test(
             if inverter.immediate_charge_soc_freeze != assert_immediate_charge_soc_freeze_array[inverter.id]:
                 print("ERROR: Inverter {} Immediate charge SOC freeze should be {} got {}".format(inverter.id, assert_immediate_charge_soc_freeze_array[inverter.id], inverter.immediate_charge_soc_freeze))
                 failed = True
-        elif assert_status in ["Freeze charging"] and inverter.immediate_charge_soc_freeze != True:
+        elif assert_status in ["Freeze charging"] and inverter.immediate_charge_soc_freeze is not True:
             print("ERROR: Inverter {} Immediate charge SOC freeze should be True got {}".format(inverter.id, inverter.immediate_charge_soc_freeze))
             failed = True
         if assert_immediate_discharge_soc_target_array:
@@ -427,7 +427,7 @@ def run_execute_test(
         if inverter.immediate_discharge_soc_target != assert_soc_target_force_dis:
             print("ERROR: Inverter {} Immediate export SOC target should be {} got {}".format(inverter.id, assert_soc_target_force_dis, inverter.immediate_discharge_soc_target))
             failed = True
-        if assert_status in ["Freeze exporting"] and inverter.immediate_discharge_soc_freeze != True:
+        if assert_status in ["Freeze exporting"] and inverter.immediate_discharge_soc_freeze is not True:
             print("ERROR: Inverter {} Immediate export SOC freeze should be True got {}".format(inverter.id, inverter.immediate_discharge_soc_freeze))
             failed = True
 

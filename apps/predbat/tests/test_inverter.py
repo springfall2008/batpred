@@ -265,7 +265,7 @@ def test_adjust_charge_window(
         expect_data = [["dummy/setChargeSlot1", {"start": charge_start_time[0:5], "finish": charge_end_time[0:5]}]]
     else:
         expect_data = []
-    if prev_enable_charge != True:
+    if prev_enable_charge is not True:
         expect_data.append(["dummy/enableChargeSchedule", {"state": "enable"}])
 
     if json.dumps(expect_data) != json.dumps(rest_command):
@@ -1489,7 +1489,7 @@ def test_charge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1529,7 +1529,7 @@ def test_charge_window_none_value(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1626,7 +1626,7 @@ def test_charge_window_rest_configured_but_no_data_yet(test_name, my_predbat, du
         return failed
 
     # Should set the same safe defaults as the "value is None" case
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1696,7 +1696,7 @@ def test_charge_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
         return True
 
     # Should set the same safe defaults as the REST case
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1773,7 +1773,7 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
         return True
 
     # Same safe defaults the discharge_start-is-None path already sets
-    if inv.discharge_enable_time != False:
+    if inv.discharge_enable_time is not False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
     # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
@@ -1868,7 +1868,7 @@ def test_discharge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.discharge_enable_time != False:
+    if inv.discharge_enable_time is not False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
     # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
@@ -1908,7 +1908,7 @@ def test_charge_window_invalid_format_time(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1948,7 +1948,7 @@ def test_discharge_window_invalid_format_time(test_name, my_predbat, dummy_items
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.discharge_enable_time != False:
+    if inv.discharge_enable_time is not False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
     # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
@@ -1990,7 +1990,7 @@ def test_discharge_window_none_value(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.discharge_enable_time != False:
+    if inv.discharge_enable_time is not False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
     # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
