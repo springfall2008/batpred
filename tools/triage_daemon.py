@@ -80,8 +80,8 @@ LOG_DIR = BASE_DIR / "logs"
 STATE_FILE = BASE_DIR / "state.json"
 POLL_SECONDS = 300
 
-EDIT_SCOPE = f"//{CLONE_DIR.relative_to('/')}/**"
-SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to('/')}/**"
+EDIT_SCOPE = f"//{CLONE_DIR.relative_to(CLONE_DIR.anchor).as_posix()}/**"
+SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to(SCRATCH_DIR.anchor).as_posix()}/**"
 _ALLOWED_TOOLS_NON_GH = [
     # Git history, and the re-sync/discard the skill does before investigating
     "Bash(git log*)",
