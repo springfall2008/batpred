@@ -322,6 +322,31 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
     return failed
 
 
+def test_adjust_reserve_device_bounds(test_name, ha, inv, prev_reserve, reserve, device_min, device_max, expect_reserve, reserve_min=4, reserve_max=100):
+    """
+    Test
+       inv.adjust_reserve(self, reserve) clamps its target against a component-published register
+       floor/ceiling (e.g. GE Cloud's "between:" validation rule surfaced onto the entity's min/max
+       attributes), rather than asking for a value the device will silently clamp-and-confirm to
+       something else forever (GH#4826)
+    """
+    failed = False
+    inv.reserve_percent = reserve_min
+    inv.reserve_min = reserve_min
+    inv.reserve_max = reserve_max
+
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    ha.dummy_items["number.reserve"] = {"state": prev_reserve, "min": device_min, "max": device_max}
+    inv.adjust_reserve(reserve)
+    if ha.get_state("number.reserve") != expect_reserve:
+        print("ERROR: Reserve should be {} got {}".format(expect_reserve, ha.get_state("number.reserve")))
+        failed = True
+
+    return failed
+
+
 def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_end, prev_force_export, prev_discharge_target, new_start, new_end, new_force_export, has_inv_time_button_press=False, expect_inv_time_button_press=False):
     """
     Test
@@ -3238,6 +3263,15 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_reserve("adjust_reserve3", ha, inv, dummy_rest, 20, 100, reserve_max=100)
     failed |= test_adjust_reserve("adjust_reserve4", ha, inv, dummy_rest, 20, 100, 98, reserve_min=4, reserve_max=98)
     failed |= test_adjust_reserve("adjust_reserve5", ha, inv, dummy_rest, 50, 0, 0, reserve_min=0, reserve_max=100)
+    if failed:
+        return failed
+
+    # GH#4826: a device-published register floor above Predbat's requested target must be honoured
+    # so the write converges instead of retrying the unreachable target forever
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_min1", ha, inv, 5, 4, device_min=5, device_max=100, expect_reserve=5)
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_min2", ha, inv, 3, 4, device_min=5, device_max=100, expect_reserve=5)
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_max1", ha, inv, 10, 80, device_min=4, device_max=50, expect_reserve=50)
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_no_bounds", ha, inv, 4, 10, device_min=None, device_max=None, expect_reserve=10)
     if failed:
         return failed
 
