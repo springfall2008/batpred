@@ -229,6 +229,53 @@ friendly_name: Octopus Intelligent Saving Sessions
     return failed
 
 
+def test_octopus_free_session_null_code(my_predbat):
+    """
+    Test that octopus_free_session accepts booked/auto-joined events published with code: null
+    (e.g. Weekend Happy Hours) - issue #4835. Only "available to join" events carry a code, so
+    gating on it dropped genuine, already-booked free periods.
+    """
+    print("Test octopus_free_session with code: null (issue #4835)")
+    ha = my_predbat.ha_interface
+    failed = False
+
+    free_session_events = """
+events:
+    - id: 5798
+      code: null
+      start: '2026-08-30T12:00:00+01:00'
+      end: '2026-08-30T13:00:00+01:00'
+      duration_in_minutes: 60
+    - id: 5800
+      code: 'OCTOPLUS-99999'
+      start: '2026-08-30T14:00:00+01:00'
+      end: '2026-08-30T15:00:00+01:00'
+      duration_in_minutes: 60
+"""
+    ha.dummy_items["event.octopus_energy_a_12345678_octoplus_free_electricity_session_events"] = yaml.safe_load(free_session_events)
+    my_predbat.args["octopus_free_session"] = "event.octopus_energy_a_12345678_octoplus_free_electricity_session_events"
+    if "octopus_saving_session" in my_predbat.args:
+        del my_predbat.args["octopus_saving_session"]
+    if "octopus_free_url" in my_predbat.args:
+        del my_predbat.args["octopus_free_url"]
+    if "octopus_free_electricity" in my_predbat.args:
+        del my_predbat.args["octopus_free_electricity"]
+
+    octopus_free_slots, octopus_saving_slots = my_predbat.fetch_octopus_sessions()
+
+    expected_free = [
+        {"start": "2026-08-30T12:00:00+01:00", "end": "2026-08-30T13:00:00+01:00", "rate": 0},
+        {"start": "2026-08-30T14:00:00+01:00", "end": "2026-08-30T15:00:00+01:00", "rate": 0},
+    ]
+    if octopus_free_slots != expected_free:
+        print("ERROR: Expected free slots {} got {}".format(expected_free, octopus_free_slots))
+        failed = True
+
+    if not failed:
+        print("PASS: code: null free-session event is accepted, same as one with a real code")
+    return failed
+
+
 def test_saving_session_notify_config(my_predbat):
     """
     Test that set_event_notify configuration controls Octopus saving session notifications

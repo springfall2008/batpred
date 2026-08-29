@@ -78,6 +78,7 @@ from tests.test_single_debug import run_single_debug
 from tests.test_saving_session import (
     test_saving_session,
     test_saving_session_null_octopoints,
+    test_octopus_free_session_null_code,
     test_saving_session_notify_config,
     test_saving_session_default_rate,
     test_saving_session_axle_conflict,
@@ -529,6 +530,7 @@ def main():
         ("energydataservice", run_energydataservice_tests, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
         ("saving_session_null", test_saving_session_null_octopoints, "Saving session null octopoints test (issue #3079)", False),
+        ("octopus_free_session_null_code", test_octopus_free_session_null_code, "Octopus free-session code: null acceptance test (issue #4835)", False),
         ("saving_session_notify", test_saving_session_notify_config, "Saving session notification config tests", False),
         ("saving_session_default_rate", test_saving_session_default_rate, "Saving session default rate injection test", False),
         ("saving_session_axle_conflict", test_saving_session_axle_conflict, "Saving session Axle conflict avoidance test (issue #4120)", False),
