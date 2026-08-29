@@ -177,6 +177,43 @@ def run_web_functions_tests(my_predbat):
         failed += 1
 
     # -------------------------------------------------------------------------
+    # is_running() must handle both the legacy naive last_updated format (pre-existing
+    # installs, before record_status() started writing a timezone-aware value) and the
+    # current timezone-aware format, without raising on the naive/aware datetime subtraction
+    print("Test: is_running() handles both naive and timezone-aware last_updated")
+    original_stop_thread = my_predbat.stop_thread
+    original_fatal_error = my_predbat.fatal_error
+    my_predbat.stop_thread = False
+    my_predbat.fatal_error = False
+    my_predbat.dashboard_index = [status_entity]
+
+    set_entity(my_predbat, status_entity, state="Idle", error=False, last_updated="2026-07-10 14:40:10.512590")
+    try:
+        result = my_predbat.is_running()
+    except TypeError as e:
+        print(f"  ERROR: is_running() raised on a legacy naive last_updated: {e}")
+        failed += 1
+    else:
+        if result is not False:
+            print(f"  ERROR: expected is_running() False for a stale (2026-07-10) naive last_updated, got: {result}")
+            failed += 1
+
+    set_entity(my_predbat, status_entity, state="Idle", error=False, last_updated="2026-07-10T14:40:10+0100")
+    try:
+        result = my_predbat.is_running()
+    except TypeError as e:
+        print(f"  ERROR: is_running() raised on a timezone-aware last_updated: {e}")
+        failed += 1
+    else:
+        if result is not False:
+            print(f"  ERROR: expected is_running() False for a stale (2026-07-10) aware last_updated, got: {result}")
+            failed += 1
+
+    my_predbat.dashboard_index = original_dashboard_index
+    my_predbat.stop_thread = original_stop_thread
+    my_predbat.fatal_error = original_fatal_error
+
+    # -------------------------------------------------------------------------
     # Currency unit display in the web config pages (issue #4071)
     # The web UI must show the user's configured currency symbol, not the raw "p".
     failed += run_currency_unit_tests(my_predbat, web)
@@ -420,6 +457,22 @@ def run_web_logo_image_tests(my_predbat):
         failed += 1
     if "./images/bat_logo" not in header:
         print("  ERROR: the page header should reference the local logo route")
+        failed += 1
+
+    print("Test: the dark mode background colour is set before any render-blocking external resource (issue #2256)")
+    dark_mode_class_pos = header.find("classList.add('dark-mode')")
+    external_resource_pos = header.find("cdn.jsdelivr.net")
+    background_style_pos = header.find("background-color: #121212")
+    if dark_mode_class_pos < 0 or external_resource_pos < 0 or background_style_pos < 0:
+        print("  ERROR: expected to find the dark-mode class script, an external CDN resource, and a dark background-color rule in the header")
+        failed += 1
+    elif not (dark_mode_class_pos < background_style_pos < external_resource_pos):
+        print(
+            "  ERROR: the dark-mode background colour must be set before the external CDN font/chart resources "
+            "(which block rendering while they load) - otherwise a slow fetch flashes the default white "
+            f"background first. Positions: dark-mode class {dark_mode_class_pos}, background colour rule "
+            f"{background_style_pos}, external CDN resource {external_resource_pos}"
+        )
         failed += 1
 
     print("**** Web logo image tests completed ****")

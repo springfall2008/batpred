@@ -67,8 +67,11 @@ def test_annual_bootstrap(my_predbat):
         failed = True
 
     print("Test: apply_hardware maps the battery block onto PredBat's internal units")
-    battery = {"size_kwh": 9.5, "inverter_kw": 5.0, "export_limit_kw": 3.6, "hybrid": True, "charge_rate_kw": 3.7, "discharge_rate_kw": 4.2}
-    apply_hardware(my_predbat, battery, [{"kwp": 5.6}])
+    battery = {"size_kwh": 9.5, "inverter_kw": 5.0, "hybrid": True, "charge_rate_kw": 3.7, "discharge_rate_kw": 4.2}
+    # A grid cap well above the inverter's own rating, so it does not bite here - this
+    # test is about the ordinary hardware mapping, not the cap. The cap itself is
+    # exercised separately below.
+    apply_hardware(my_predbat, battery, [{"kwp": 5.6}], 100.0)
     if abs(my_predbat.soc_max - 9.5) > 1e-9:
         print("  ERROR: soc_max expected 9.5, got {}".format(my_predbat.soc_max))
         failed = True
@@ -78,8 +81,8 @@ def test_annual_bootstrap(my_predbat):
     if abs(my_predbat.inverter_limit - (5.0 * 1000 / MINUTE_WATT)) > 1e-9:
         print("  ERROR: inverter_limit should be in kW per minute, got {}".format(my_predbat.inverter_limit))
         failed = True
-    if abs(my_predbat.export_limit - (3.6 * 1000 / MINUTE_WATT)) > 1e-9:
-        print("  ERROR: export_limit should be in kW per minute, got {}".format(my_predbat.export_limit))
+    if abs(my_predbat.export_limit - (5.0 * 1000 / MINUTE_WATT)) > 1e-9:
+        print("  ERROR: with no restrictive grid cap, export_limit should match inverter_limit, got {}".format(my_predbat.export_limit))
         failed = True
     if abs(my_predbat.battery_rate_max_charge - (3.7 * 1000 / MINUTE_WATT)) > 1e-9:
         print("  ERROR: battery_rate_max_charge should be in kW per minute, got {}".format(my_predbat.battery_rate_max_charge))
@@ -95,7 +98,7 @@ def test_annual_bootstrap(my_predbat):
         failed = True
 
     print("Test: apply_hardware with no battery produces a zero-capacity system")
-    apply_hardware(my_predbat, None, [{"kwp": 5.6}])
+    apply_hardware(my_predbat, None, [{"kwp": 5.6}], 100.0)
     if my_predbat.soc_max != 0.0 or my_predbat.soc_kw != 0.0:
         print("  ERROR: a battery-less run should have soc_max and soc_kw of 0, got {} / {}".format(my_predbat.soc_max, my_predbat.soc_kw))
         failed = True
@@ -113,7 +116,7 @@ def test_annual_bootstrap(my_predbat):
         failed = True
 
     print("Test: apply_hardware with no battery sums kwp across every solar array, not just the first")
-    apply_hardware(my_predbat, None, [{"kwp": 5.6}, {"kwp": 4.0}])
+    apply_hardware(my_predbat, None, [{"kwp": 5.6}, {"kwp": 4.0}], 100.0)
     expected_limit = (5.6 + 4.0) * 1000 / MINUTE_WATT
     if abs(my_predbat.inverter_limit - expected_limit) > 1e-9:
         print("  ERROR: inverter_limit should sum kwp across all arrays, expected {}, got {}".format(expected_limit, my_predbat.inverter_limit))
@@ -122,8 +125,35 @@ def test_annual_bootstrap(my_predbat):
         print("  ERROR: export_limit should track the summed inverter_limit, got {}".format(my_predbat.export_limit))
         failed = True
 
+    print("Test: a grid export cap below the solar-derived limit clips a PV-only run's export_limit")
+    # This is the actual gap the top-level export_limit_kw closes: a PV-only run
+    # previously had no way to express a grid connection cap independent of solar
+    # capacity at all.
+    apply_hardware(my_predbat, None, [{"kwp": 5.6}, {"kwp": 4.0}], 3.6)
+    if abs(my_predbat.inverter_limit - expected_limit) > 1e-9:
+        print("  ERROR: a grid cap must not affect inverter_limit, expected {}, got {}".format(expected_limit, my_predbat.inverter_limit))
+        failed = True
+    if abs(my_predbat.export_limit - (3.6 * 1000 / MINUTE_WATT)) > 1e-9:
+        print("  ERROR: export_limit should be clipped to the grid cap, got {}".format(my_predbat.export_limit))
+        failed = True
+
+    print("Test: a grid export cap below the battery's own inverter rating clips export_limit")
+    apply_hardware(my_predbat, battery, [{"kwp": 5.6}], 3.6)
+    if abs(my_predbat.inverter_limit - (5.0 * 1000 / MINUTE_WATT)) > 1e-9:
+        print("  ERROR: a grid cap must not affect inverter_limit, got {}".format(my_predbat.inverter_limit))
+        failed = True
+    if abs(my_predbat.export_limit - (3.6 * 1000 / MINUTE_WATT)) > 1e-9:
+        print("  ERROR: export_limit should be clipped to the grid cap, got {}".format(my_predbat.export_limit))
+        failed = True
+
+    print("Test: a grid export cap above the battery's own inverter rating does not loosen export_limit")
+    apply_hardware(my_predbat, battery, [{"kwp": 5.6}], 100.0)
+    if abs(my_predbat.export_limit - (5.0 * 1000 / MINUTE_WATT)) > 1e-9:
+        print("  ERROR: a generous grid cap must not raise export_limit above the inverter rating, got {}".format(my_predbat.export_limit))
+        failed = True
+
     print("Test: reset_sample_state clears the leaked fields but leaves apply_hardware's output alone")
-    apply_hardware(my_predbat, battery, [{"kwp": 5.6}])
+    apply_hardware(my_predbat, battery, [{"kwp": 5.6}], 100.0)
     configured_battery_rate_max_export = my_predbat.battery_rate_max_export
     configured_inverter_limit = my_predbat.inverter_limit
 

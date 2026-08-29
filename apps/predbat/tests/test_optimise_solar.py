@@ -284,12 +284,14 @@ def run_optimise_solar_tests(my_predbat):
     return failed
 
 
-def test_freeze_export_recapture_beyond_limit(my_predbat, inverter_can_charge_during_export, expect_charge):
+def test_freeze_export_recapture_beyond_limit(my_predbat, inverter_can_charge_during_export, inverter_support_feedin_first, expect_charge):
     """
     Freeze Export (target 99.0) with PV well above load + the hardware export limit: the genuine
     spillover should charge the battery when the inverter can recapture it (#4207 - e.g. FoxESS
     "Feed-in First" prioritises load, then export, then the battery), and leave SoC untouched
-    (clipped) when it can't.
+    (clipped) when it can't. Both gates have to be open: inverter_support_feedin_first says the
+    hardware really routes the surplus into the battery rather than just disabling charging, and
+    inverter_can_charge_during_export is the user's own override on top.
     """
     reset_inverter(my_predbat)
     my_predbat.forecast_minutes = 24 * 60
@@ -298,6 +300,7 @@ def test_freeze_export_recapture_beyond_limit(my_predbat, inverter_can_charge_du
     my_predbat.set_export_freeze = True
     my_predbat.set_export_freeze_only = False
     my_predbat.inverter_can_charge_during_export = inverter_can_charge_during_export
+    my_predbat.inverter_support_feedin_first = inverter_support_feedin_first
 
     # PV well above load + the 1kW hardware export limit (reset_inverter sets export_limit to
     # 10/60.0 kW; override it low here so the spillover condition is easy to trigger). inverter_limit
@@ -331,15 +334,26 @@ def test_freeze_export_recapture_beyond_limit(my_predbat, inverter_can_charge_du
 
     charged = final_soc > (my_predbat.soc_kw + 0.01)
     if charged != expect_charge:
-        print("ERROR: inverter_can_charge_during_export={} - expected charged={}, got final_soc={} (started at {})".format(inverter_can_charge_during_export, expect_charge, final_soc, my_predbat.soc_kw))
+        print(
+            "ERROR: inverter_can_charge_during_export={} inverter_support_feedin_first={} - expected charged={}, got final_soc={} (started at {})".format(
+                inverter_can_charge_during_export, inverter_support_feedin_first, expect_charge, final_soc, my_predbat.soc_kw
+            )
+        )
         return True
     return False
 
 
 def run_freeze_export_recapture_tests(my_predbat):
+    """Recapture needs both gates open - every other combination clips the spillover"""
     failed = False
-    print("Test: freeze export recapture - inverter_can_charge_during_export=True charges from genuine spillover")
-    failed |= test_freeze_export_recapture_beyond_limit(my_predbat, inverter_can_charge_during_export=True, expect_charge=True)
-    print("Test: freeze export recapture - inverter_can_charge_during_export=False still clips (old behaviour)")
-    failed |= test_freeze_export_recapture_beyond_limit(my_predbat, inverter_can_charge_during_export=False, expect_charge=False)
+    # (can_charge_during_export, support_feedin_first, expect_charge, what this case pins down)
+    cases = [
+        (True, True, True, "a real Feed-in First inverter charges from genuine spillover"),
+        (True, False, False, "an inverter that only disables charging still clips - freeze holds SoC flat"),
+        (False, True, False, "the user's inverter_can_charge_during_export=False vetoes recapture"),
+        (False, False, False, "neither gate open, nothing recaptured"),
+    ]
+    for can_charge, feedin_first, expect_charge, description in cases:
+        print("Test: freeze export recapture - {}".format(description))
+        failed |= test_freeze_export_recapture_beyond_limit(my_predbat, inverter_can_charge_during_export=can_charge, inverter_support_feedin_first=feedin_first, expect_charge=expect_charge)
     return failed

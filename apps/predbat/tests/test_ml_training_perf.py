@@ -22,14 +22,15 @@ production host would report.
 import gzip
 import json
 import os
-try:
-    import resource
-except ImportError:
-    resource = None
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+
+try:
+    import resource
+except ImportError:
+    resource = None
 
 import numpy as np
 
@@ -45,6 +46,8 @@ FIXTURE_NOW = datetime(2026, 8, 17, 12, 0, 0, tzinfo=timezone.utc)
 # interleaved with training's own allocations badly enough to change the result - the same
 # workload read 967MB with the sampler running and 474MB without. ru_maxrss is the kernel's
 # own high-water mark, so it needs no sampling at all: read it once before and once after.
+
+
 def peak_rss_mb():
     """Return this process's peak resident set size in MB.
 

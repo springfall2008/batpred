@@ -28,7 +28,7 @@ async def test_octopus_rate_limit(my_predbat):
     - Test 9: Expired token is automatically refreshed and query retried successfully
     """
     # Mock asyncio.sleep to prevent real delays during rate limit testing
-    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+    with patch("asyncio.sleep", new_callable=AsyncMock):
         print("**** Running Octopus API rate limit tests ****")
         failed = False
 

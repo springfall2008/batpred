@@ -465,10 +465,13 @@ annual:
       azimuth: 180               # 180 = south, default 180
       efficiency: 0.95           # default 0.95, must be greater than 0 and at most 1
 
+  export_limit_kw: 10.0          # grid connection export cap, default 10.0; applies with
+                                  # or without a battery (previously battery.export_limit_kw,
+                                  # which is still read for backward compatibility)
+
   battery:                       # omit for a PV-only run
     size_kwh: 9.5
     inverter_kw: 5.0
-    export_limit_kw: 5.0         # defaults to inverter_kw
     hybrid: true                 # false = AC coupled
     charge_rate_kw: 3.6          # defaults to inverter_kw
     discharge_rate_kw: 3.6       # defaults to inverter_kw

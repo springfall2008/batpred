@@ -313,6 +313,16 @@ class ComponentBase(ABC):
     def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
         return self.base.set_state_wrapper(entity_id, state, attributes=attributes, required_unit=required_unit)
 
+    async def set_state_external(self, entity_id, state, attributes={}):
+        """Change one of Predbat's OWN entities as if a user had, updating its CONFIG_ITEMS value.
+
+        Distinct from set_state_wrapper, which only writes the entity state: components use this when
+        auto-discovery has to change a Predbat setting (e.g. teslemetry turning inverter_hybrid off
+        for an AC-coupled Powerwall), where writing the state alone would move the displayed entity
+        without changing the value the planner reads.
+        """
+        return await self.base.ha_interface.set_state_external(entity_id, state, attributes=attributes)
+
     def call_notify(self, message):
         return self.base.call_notify(message)
 

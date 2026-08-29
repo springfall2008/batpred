@@ -9,12 +9,34 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta
-from const import PREDBAT_MAX_CARS
+from const import PREDBAT_MAX_CARS, MINUTE_WATT
 from prediction import Prediction
+import sys
+import matplotlib
+
+# Force the non-interactive Agg backend unless --plot was passed; otherwise merely importing
+# pyplot activates a GUI backend (bouncing the dock icon on macOS) even though plt.show() is
+# normally gated behind PLOT_ENABLED and not called in typical runs. Checked against sys.argv
+# directly since this import runs before argparse.
+if "--plot" not in sys.argv:
+    matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 import asyncio
 import numpy as np
 from unittest.mock import MagicMock
+
+# Whether a failure plot is displayed on screen as well as written to a PNG. Off by default and
+# turned on by the harness --plot flag: plt.show() blocks until the window is closed, so leaving
+# it on makes a failing run hang rather than report.
+PLOT_ENABLED = False
+
+
+def set_plot_enabled(enabled):
+    """
+    Enable or disable on-screen display of failure plots
+    """
+    global PLOT_ENABLED
+    PLOT_ENABLED = bool(enabled)
 
 
 def run_async(coro):
@@ -146,6 +168,7 @@ class TestHAInterface:
         self.dummy_items = {}
         self.service_store_enable = False
         self.service_store = []
+        self.service_store_fail = set()
         self.db_primary = False
 
     def get_service_store(self):
@@ -160,7 +183,6 @@ class TestHAInterface:
         state = 0.0
         for count in range(int(days * 24 * 60 / self.step)):
             point = start + timedelta(minutes=count * self.step)
-            point_str = point.strftime("%Y-%m-%dT%H:%M:%SZ")
             history.append({"state": state, "last_changed": point})
         self.history = history
 
@@ -189,7 +211,10 @@ class TestHAInterface:
         print("Calling service: {} {}".format(service, kwargs))
         if self.service_store_enable:
             self.service_store.append([service, kwargs])
-            return None
+            # Services in service_store_fail simulate a service that doesn't exist (e.g. testing a
+            # try-new-service-then-fall-back-to-old caller) - everything else succeeds, matching real
+            # HA behaviour for a registered service call.
+            return None if service in self.service_store_fail else True
 
         if service == "number/set_value":
             entity_id = kwargs.get("entity_id", None)
@@ -279,6 +304,7 @@ class MockConfigProvider:
             "calculate_plan_every": 10,
             "calculate_savings_max_charge_slots": 2,
             "holiday_days_left": 0,
+            "holiday_load_scaling": 0.7,
             "load_forecast_only": False,
             "days_previous": [7, 14],
             "days_previous_weight": [1.0, 0.5],
@@ -355,6 +381,7 @@ class MockConfigProvider:
             "set_status_notify": False,
             "set_inverter_notify": False,
             "set_export_freeze_only": False,
+            "set_charge_freeze_only": False,
             "set_discharge_during_charge": True,
             "set_freeze_export_during_demand": False,
             "mode": "Control charge & discharge",
@@ -510,6 +537,7 @@ def reset_inverter(my_predbat):
     my_predbat.inverter_loss = 1.0
     my_predbat.battery_loss_discharge = 1.0
     my_predbat.inverter_hybrid = False
+    my_predbat.inverter_support_feedin_first = False
     my_predbat.battery_charge_power_curve = {}
     my_predbat.battery_discharge_power_curve = {}
     my_predbat.battery_rate_max_scaling = 1.0
@@ -570,7 +598,12 @@ def plot(name, prediction):
     ax.set(xlabel="time (minutes)", ylabel="Value", title=name)
     ax.legend()
     plt.savefig("{}.png".format(name))
-    plt.show()
+    if PLOT_ENABLED:
+        plt.show()
+    else:
+        # plt.show() blocks until the window is closed, so a failing run would never terminate.
+        # Close the figure instead - matplotlib warns once more than 20 are left open.
+        plt.close(fig)
 
 
 def simple_scenario(
@@ -594,6 +627,7 @@ def simple_scenario(
     charge_window_best=[],
     charge_limit_best=None,
     inverter_loss=1.0,
+    inverter_freeze_export_discharge_rate=0.0,
     battery_rate_max_charge=1.0,
     battery_rate_max_charge_dc=None,
     charge_car=0,
@@ -616,6 +650,7 @@ def simple_scenario(
     keep=0.0,
     keep_weight=0.5,
     assert_keep=0.0,
+    assert_battery_cycle=None,
     save="best",
     quiet=False,
     iboost_rate_threshold=9999,
@@ -635,6 +670,7 @@ def simple_scenario(
     battery_temperature=20,
     set_export_freeze_only=False,
     inverter_can_charge_during_export=True,
+    inverter_support_feedin_first=False,
     prediction_handle=None,
     return_prediction_handle=False,
     ignore_failed=False,
@@ -708,6 +744,7 @@ def simple_scenario(
     my_predbat.pv_ac_limit = pv_ac_limit / 60.0
     my_predbat.reserve = reserve
     my_predbat.inverter_loss = inverter_loss
+    my_predbat.inverter_freeze_export_discharge_rate = inverter_freeze_export_discharge_rate / MINUTE_WATT
     my_predbat.battery_rate_max_charge = battery_rate_max_charge / 60.0
     my_predbat.battery_rate_max_charge_dc = battery_rate_max_charge_dc / 60.0
     my_predbat.battery_rate_max_discharge = battery_rate_max_charge / 60.0
@@ -742,6 +779,7 @@ def simple_scenario(
     my_predbat.car_charging_soc[0] = car_soc
     my_predbat.car_charging_limit[0] = car_limit
     my_predbat.inverter_can_charge_during_export = inverter_can_charge_during_export
+    my_predbat.inverter_support_feedin_first = inverter_support_feedin_first
     my_predbat.charge_scaling10 = charge_scaling10
 
     # Clipping peak penalty settings
@@ -895,6 +933,10 @@ def simple_scenario(
     if abs(final_soc - assert_final_soc) >= 0.1:
         if not ignore_failed:
             print("ERROR: Final SOC {} should be {}".format(final_soc, assert_final_soc))
+        failed = True
+    if assert_battery_cycle is not None and abs(battery_cycle - assert_battery_cycle) >= 0.001:
+        if not ignore_failed:
+            print("ERROR: Battery cycle {} should be {}".format(battery_cycle, assert_battery_cycle))
         failed = True
     if abs(final_iboost - assert_final_iboost) >= 0.1:
         if not ignore_failed:

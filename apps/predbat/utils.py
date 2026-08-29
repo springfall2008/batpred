@@ -17,12 +17,29 @@ and historical data extraction from incrementing energy counters.
 """
 
 import array
+import os
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 import copy
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+# The live log and the one rotated out from under it - both read whole when serving logs.
+PREDBAT_LOG_FILE = "predbat.log"
+PREDBAT_LOG_FILE_PREV = "predbat.1.log"
+
+# Key-name substrings that mark an apps.yaml value as a credential, for mask_secret_args().
+# "_key" and "password" were the original pair; "secret" and "token" were added for #4768,
+# which promotes apps.yaml over MCP as the config-review route and so hands it to a cloud AI -
+# sigenergy_app_secret, solis_api_secret, solis_access_token, gateway_mqtt_token and
+# mcp_secret were all being served in the clear.
+SECRET_KEY_SUBSTRINGS = ("_key", "password", "secret", "token")
+
+# Key suffixes that match a credential substring but hold no secret - timing metadata about a
+# token rather than the token itself. An expiry time is exactly what you want to see when
+# debugging "my cloud integration stopped working", so keep it readable.
+SECRET_KEY_EXEMPT_SUFFIXES = ("_expires_at", "_expires", "_expiry", "_expiration", "_birth")
 
 # Use datetime.fromisoformat in str2time rather than strptime, set False to revert to strptime
 STR2TIME_USE_FROMISOFORMAT = True
@@ -83,15 +100,151 @@ class MinuteArray:
         return new
 
 
+# Predbat member variables never included in a debug dump or served over MCP - live object
+# graphs, the HA interface, loaded secrets and the URL caches. Shared with is_debug_excluded_key().
+DEBUG_EXCLUDE_LIST = [
+    "ha_interface",
+    "components",
+    "prediction",
+    "logfile",
+    "predheat",
+    "inverters",
+    "run_list",
+    "threads",
+    "EVENT_LISTEN_LIST",
+    "local_tz",
+    "CONFIG_ITEMS",
+    "config_index",
+    "comparison",
+    "plugin_system",
+    "ge_url_cache",
+    "github_url_cache",
+    "octopus_url_cache",
+    "secrets",
+]
+
+
+def is_debug_excluded_key(key):
+    """
+    Return True when a Predbat member variable must be kept out of a debug dump or state query.
+
+    The "db" prefix drops the database internals and "_key" drops credentials; both predate
+    is_secret_key(), which is applied on top so secrets and tokens are caught here too (#4768).
+    """
+    if key.startswith("__") or key.startswith("db"):
+        return True
+    if key in DEBUG_EXCLUDE_LIST:
+        return True
+    return is_secret_key(key)
+
+
+def is_secret_key(key):
+    """
+    Return True when an apps.yaml key name looks like it holds a credential.
+    """
+    key_lower = str(key).lower()
+    if key_lower.endswith(SECRET_KEY_EXEMPT_SUFFIXES):
+        return False
+    return any(substring in key_lower for substring in SECRET_KEY_SUBSTRINGS)
+
+
 def mask_secret_args(args):
     """
     Return a deep copy of an apps.yaml-style args dict with credential-like keys redacted.
     """
     masked = copy.deepcopy(args)
     for key in masked:
-        if ("_key" in key.lower()) or ("password" in key.lower()):
+        if is_secret_key(key):
             masked[key] = "xxx"
     return masked
+
+
+def find_unmasked_secret_paths(node, path=""):
+    """
+    Recursively walk a ruamel round-trip-loaded apps.yaml section and yield the dotted path
+    of every credential-like key (per is_secret_key()) whose value is a plain scalar rather
+    than a '!secret' reference into secrets.yaml (loaded as a ruamel TaggedScalar).
+
+    Only usable against a document loaded with ruamel's round-trip loader - a plain
+    yaml.safe_load() has already resolved '!secret' tags to their real value and lost the
+    distinction this depends on.
+    """
+    from ruamel.yaml.comments import TaggedScalar
+
+    if isinstance(node, dict):
+        for key, value in node.items():
+            key_path = "{}.{}".format(path, key) if path else str(key)
+            if is_secret_key(key):
+                if value not in (None, "") and not isinstance(value, TaggedScalar):
+                    yield key_path
+            else:
+                yield from find_unmasked_secret_paths(value, key_path)
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            yield from find_unmasked_secret_paths(item, "{}[{}]".format(path, index))
+
+
+def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=PREDBAT_LOG_FILE_PREV):
+    """
+    Return the contents of predbat.log, prefixed with the rotated previous log when one exists.
+    """
+    # Decoded explicitly rather than with the platform default: a single non-UTF-8 byte anywhere
+    # in the log - an inverter API error message carrying one, say - would otherwise raise
+    # UnicodeDecodeError and take out both /api/log and the get_log MCP tool.
+    logdata = ""
+    if os.path.exists(logfile):
+        with open(logfile, "r", encoding="utf-8", errors="replace") as f:
+            logdata = f.read()
+    if os.path.exists(logfile_prev):
+        with open(logfile_prev, "r", encoding="utf-8", errors="replace") as f:
+            logdata = f.read() + "\n" + logdata
+    return logdata
+
+
+def classify_log_line(line):
+    """
+    Return the severity bucket ("error", "warning", "info" or "log") for one predbat.log line.
+    """
+    line_lower = line.lower()
+    if "error" in line_lower:
+        return "error"
+    if "warn" in line_lower:
+        return "warning"
+    if "info" in line_lower:
+        return "info"
+    return "log"
+
+
+def log_line_included(line_type, filter_type):
+    """
+    Return True when a log line of the given severity belongs in the requested view.
+
+    Errors appear on every view; warnings on "all" and "warnings"; info on "all" and
+    "info"; everything else only on "all".
+    """
+    if line_type == "error":
+        return True
+    if line_type == "warning":
+        return filter_type in ("all", "warnings")
+    if line_type == "info":
+        return filter_type in ("all", "info")
+    return filter_type == "all"
+
+
+def parse_log_timestamp(line):
+    """
+    Return the datetime a predbat.log line was written, or None when it carries no timestamp.
+
+    Lines are written as "{datetime.now()}: {message}", so the stamp is the leading 26
+    characters - or 19 when the microseconds happened to be zero and str() dropped them.
+    """
+    for length, time_format in ((26, "%Y-%m-%d %H:%M:%S.%f"), (19, "%Y-%m-%d %H:%M:%S")):
+        if len(line) >= length:
+            try:
+                return datetime.strptime(line[0:length], time_format)
+            except ValueError:
+                continue
+    return None
 
 
 # Helper to make dict hashable for caching
@@ -349,7 +502,7 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
         try:
             timestamp_key = str2time(key)
             oldest_date = min(oldest_date, timestamp_key)
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             continue
 
         value = data[key]
@@ -392,7 +545,6 @@ def minute_data(
     adata = {}
     io_adjusted = {}
     newest_state = 0
-    prev_state = 0
     newest_age = 999999
 
     # Bounds on the data we store
@@ -546,7 +698,6 @@ def minute_data(
 
         if minutes < newest_age:
             newest_age = minutes
-            prev_state = newest_state
             newest_state = state
 
         # Power to Energy
@@ -783,6 +934,63 @@ def format_time_ago(last_updated):
     except Exception as e:
         print(f"Error formatting time ago: {e}")
         return "Unknown ({})".format(last_updated)
+
+
+# The format Predbat publishes car charging plan windows in. No year, because a plan never
+# reaches more than 48 hours ahead - parse_car_plan_windows() puts one back.
+CAR_PLAN_TIME_FORMAT = "%m-%d %H:%M:%S"
+
+# How far from now a parsed window has to land before the year stamped on it is treated as
+# the wrong one. Comfortably beyond the 48 hours a plan covers, so a genuinely distant
+# window is never dragged into a different year, and far short of the ~12 months a
+# mis-stamped year produces.
+CAR_PLAN_YEAR_MARGIN = timedelta(days=180)
+
+
+def parse_car_plan_windows(planned, now, local_tz):
+    """Turn one car's published charging plan into a list of localised (start, end) pairs.
+
+    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC)
+    so the awkward parts stay in one place: the plan carries no year, so each window is
+    rebuilt around now - without that, a plan read either side of New Year lands eleven
+    months out - and a malformed entry is skipped rather than costing the rest of the plan.
+
+    The rebuild is symmetric. A window read at 23:30 on 31 December whose end is stamped
+    01-01 parses as January of the year just ending, and needs shifting forward; the same
+    window read at 00:30 on 1 January has its 12-31 start parsed as December of the year
+    just started, and needs shifting back. Only the second case ever hides an active
+    window, which is why it is the one that stops a car mid-charge if it is missed.
+
+    Args:
+        planned: The 'planned' attribute of a car charging slot sensor, a list of dicts
+            with 'start' and 'end' keys.
+        now: The instant every window is judged against, localised.
+        local_tz: The timezone the plan's wall clock times are expressed in.
+    """
+    parsed = []
+    for window in planned or []:
+        try:
+            start = local_tz.localize(datetime.strptime(window["start"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
+            end = local_tz.localize(datetime.strptime(window["end"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
+        except (KeyError, TypeError, ValueError):
+            continue
+        # Shift both ends together so their spacing survives, then close a window whose
+        # end is in January while its start is still in December
+        if start > now + CAR_PLAN_YEAR_MARGIN:
+            start = start.replace(year=start.year - 1)
+            end = end.replace(year=end.year - 1)
+        elif start < now - CAR_PLAN_YEAR_MARGIN:
+            start = start.replace(year=start.year + 1)
+            end = end.replace(year=end.year + 1)
+        if end < start:
+            end = end.replace(year=end.year + 1)
+        parsed.append((start, end))
+    return parsed
+
+
+def in_car_plan_window(windows, now):
+    """Is now inside one of the (start, end) pairs returned by parse_car_plan_windows."""
+    return any(start <= now < end for start, end in windows)
 
 
 def in_iboost_slot(minute, iboost_plan):
