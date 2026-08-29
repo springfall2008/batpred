@@ -3267,12 +3267,14 @@ class Octopus:
                         start = event.get("start", None)
                         end = event.get("end", None)
                         code = event.get("code", None)
-                        if start and end and code:
+                        if start and end:
                             start_time = str2time(start)  # reformat the saving session start & end time for improved readability
                             end_time = str2time(end)
                             diff_time = start_time - self.now_utc
                             if abs(diff_time.days) <= 3:
-                                self.log("Octopus: free events code {} {}-{}".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
+                                # Auto-joined events (e.g. Weekend Happy Hours) publish code: null - only
+                                # "available to join" events carry a code, so fall back to the event id.
+                                self.log("Octopus: free events code {} {}-{}".format(code or event.get("id"), start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
                             octopus_free_slot = {}
                             octopus_free_slot["start"] = start
                             octopus_free_slot["end"] = end
