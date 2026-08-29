@@ -3483,6 +3483,107 @@ def test_a_conversation_model_does_not_survive_a_provider_switch(my_predbat):
     return failed
 
 
+def test_stop_reaches_a_turn_that_is_still_streaming(my_predbat):
+    """Stop ends a turn mid-completion, rather than waiting for the model to finish talking.
+
+    Every other stop check sits between tool rounds or between tool calls. The completion itself
+    is the longest part of a turn - minutes on a reasoning model - and is exactly when somebody
+    reaches for Stop, so pressing it there did nothing at all until the model finished on its own,
+    with the timer visibly climbing.
+
+    What the model had already said is kept: the browser has rendered those deltas, and dropping
+    them would make them vanish on the next reload with nothing to explain it. Only the text -
+    half-built tool_calls from an interrupted stream must never be stored, because an assistant
+    message whose tool_calls were never answered makes the provider reject every later turn.
+    """
+    failed = False
+    print("**** Testing that Stop reaches a streaming turn ****")
+
+    agent = _agent_with_fake(my_predbat, [])
+    cid = asyncio.run(agent.store.create())
+    delivered = []
+
+    async def stream_until_stopped(payload):
+        """Stream a few words, then behave as a model that keeps talking indefinitely."""
+        for index in range(200):
+            # Stop lands after the third chunk, standing in for the user pressing the button while
+            # the model is still going.
+            if index == 3:
+                agent.stop_requested = (agent.active or {}).get("turn_id")
+            delivered.append(index)
+            yield {"choices": [{"delta": {"content": "word{} ".format(index)}}]}
+        yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    agent._stream_chunks = stream_until_stopped
+    asyncio.run(agent.run_turn(cid, "tell me everything"))
+
+    # It stopped near where the button was pressed rather than draining all 200 chunks.
+    if len(delivered) > 10:
+        print("ERROR: the stream ran on for {} chunks after Stop".format(len(delivered)))
+        failed = True
+
+    events = agent.events_since(0, cid)[0]
+    errors = [event for event in events if event["type"] == "error"]
+    if not errors:
+        print("ERROR: nothing told the user the turn had stopped")
+        failed = True
+    elif "Stopped" not in errors[-1]["data"].get("message", ""):
+        # A deliberate Stop is not a timeout, and saying "took longer than 1800 seconds" to
+        # somebody who pressed the button is simply untrue.
+        print("ERROR: a deliberate stop was reported as a timeout: {}".format(errors[-1]["data"]))
+        failed = True
+
+    stored = asyncio.run(agent.store.get_messages(cid))
+    assistants = [message for message in stored if message.get("role") == "assistant"]
+    if not assistants:
+        print("ERROR: the partial answer was dropped, so it vanishes on the next reload")
+        failed = True
+    elif "word0" not in (assistants[-1].get("content") or ""):
+        print("ERROR: what the model had already said was not kept: {}".format(assistants[-1]))
+        failed = True
+    if any(message.get("tool_calls") for message in stored):
+        print("ERROR: an interrupted stream stored tool_calls that were never answered: {}".format(stored))
+        failed = True
+
+    # And a stop aimed at a finished turn cannot cut the next one short.
+    agent2 = _agent_with_fake(my_predbat, _text_response("all done here"))
+    cid2 = asyncio.run(agent2.store.create())
+    agent2.stop_requested = 999
+    asyncio.run(agent2.run_turn(cid2, "and again"))
+    replies = [message for message in asyncio.run(agent2.store.get_messages(cid2)) if message.get("role") == "assistant"]
+    # Checked on the words rather than the sentence: _text_response streams each word as its own
+    # delta with no separator, so the stored content runs the words together - asserting the spaced
+    # sentence would fail on the fixture's shape rather than on anything this test is about.
+    if not replies or "done" not in (replies[-1].get("content") or ""):
+        print("ERROR: a stale stop id cut a different turn short: {}".format(replies))
+        failed = True
+    if [event for event in agent2.events_since(0, cid2)[0] if event["type"] == "error"]:
+        print("ERROR: a stale stop id reported the next turn as stopped")
+        failed = True
+
+    # The turn-id match itself, asserted directly. submit_turn() already clears stop_requested at
+    # the start of every turn, so no end-to-end path can reach a mismatched id - which makes this
+    # defence in depth, and means only a direct check can show it works. It is what keeps a stop
+    # aimed at one turn from ending whichever turn has since claimed the single slot.
+    agent2.deadline = time.monotonic() + 60
+    agent2.active = {"turn_id": 7}
+    agent2.stop_requested = 6
+    if agent2.stop_reason() is not None:
+        print("ERROR: a stop aimed at another turn ended this one: {}".format(agent2.stop_reason()))
+        failed = True
+    agent2.stop_requested = 7
+    if agent2.stop_reason() != "stopped":
+        print("ERROR: a stop aimed at the running turn was ignored: {}".format(agent2.stop_reason()))
+        failed = True
+    # And a blown deadline with no stop is a timeout, not a stop.
+    agent2.stop_requested = None
+    agent2.deadline = 0
+    if agent2.stop_reason() != "timeout":
+        print("ERROR: a blown deadline was not reported as a timeout: {}".format(agent2.stop_reason()))
+        failed = True
+    return failed
+
+
 def test_local_models_are_free_however_little_pricing_they_publish(my_predbat):
     """Every model on an unmetered endpoint is free, including one that quotes no price at all.
 
@@ -3689,6 +3790,7 @@ def run_chat_tests(my_predbat):
     failed |= test_model_catalogue_is_cached_per_endpoint(my_predbat)
     failed |= test_a_working_catalogue_clears_the_previous_failure(my_predbat)
     failed |= test_local_models_are_free_however_little_pricing_they_publish(my_predbat)
+    failed |= test_stop_reaches_a_turn_that_is_still_streaming(my_predbat)
     failed |= test_a_conversation_model_does_not_survive_a_provider_switch(my_predbat)
     failed |= test_component_gating(my_predbat)
     failed |= test_provider_detection_and_payload(my_predbat)

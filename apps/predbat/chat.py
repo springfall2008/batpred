@@ -414,6 +414,22 @@ CHAT_DEFAULTS = {
 }
 
 
+class TurnStopped(RuntimeError):
+    """Raised when a turn must end while a completion is still streaming.
+
+    Deliberately not a ChatRequestError: _run_completion_with_retry catches those and tries again,
+    and retrying a turn the user just stopped is the opposite of what they asked for. Carries the
+    text already streamed so the transcript can keep it rather than leaving the browser holding a
+    bubble that vanishes on the next reload.
+    """
+
+    def __init__(self, content="", reason="stopped"):
+        """Hold what had been streamed when the stop landed, and what caused it."""
+        super().__init__("The turn was stopped")
+        self.content = content
+        self.reason = reason
+
+
 class ChatBusyError(RuntimeError):
     """Raised when a turn is requested while another is already running."""
 
@@ -1349,6 +1365,13 @@ class ChatAgent(ComponentBase):
         next_anon_reasoning_key = 0
         truncated = False
         async for chunk in self._stream_chunks(payload):
+            # Checked per chunk, which is the only place that runs while the model is thinking.
+            # Every other stop check sits between rounds or between tool calls, so pressing Stop
+            # during a long completion - the longest part of a turn, and exactly when somebody
+            # reaches for it - did nothing until that completion finished on its own.
+            stopping = self.stop_reason()
+            if stopping:
+                raise TurnStopped(content, stopping)
             error = chunk.get("error")
             if error:
                 message_text = (error or {}).get("message") or "The provider reported an error"
@@ -1685,12 +1708,17 @@ class ChatAgent(ComponentBase):
             self.emit(conversation_id, "error", {"message": NO_MODEL_MESSAGE})
             return
         for iteration in range(self.max_tool_rounds + 1):
-            if time.monotonic() > self.deadline:
-                self.emit(conversation_id, "error", {"message": "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)})
+            ending = self.stop_reason()
+            if ending:
+                self.emit(conversation_id, "error", {"message": self.stop_message(ending)})
                 return
             history = await self.store.get_messages(conversation_id)
             messages = await self.build_messages(conversation_id, history)
-            message, usage, sources = await self._run_completion_with_retry(conversation_id, messages, model)
+            try:
+                message, usage, sources = await self._run_completion_with_retry(conversation_id, messages, model)
+            except TurnStopped as stopped:
+                await self._finish_stopped_turn(conversation_id, stopped)
+                return
             if usage:
                 self.store.add_usage(conversation_id, usage)
                 total = (self.store.get_meta(conversation_id) or {}).get("usage_total", {})
@@ -1732,15 +1760,31 @@ class ChatAgent(ComponentBase):
                 # reason _refuse_remaining_calls sets out - this path is reached by the Stop
                 # button (which zeroes the deadline) as much as by a genuine timeout, so it is
                 # the one a user hits deliberately and often.
-                if time.monotonic() > self.deadline:
+                ending = self.stop_reason()
+                if ending:
                     await self._refuse_remaining_calls(conversation_id, calls[index:], "Not run: the turn was stopped before this tool ran")
-                    self.emit(conversation_id, "error", {"message": "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)})
+                    self.emit(conversation_id, "error", {"message": self.stop_message(ending)})
                     return
                 await self._run_one_tool(conversation_id, turn_id, call)
 
         note = "I stopped after {} tool rounds, which is the configured limit for one turn. Ask me to continue if you want me to keep going.".format(self.max_tool_rounds)
         await self.store.append(conversation_id, {"role": "assistant", "content": note})
         self.emit(conversation_id, "assistant", {"text": note, "sources": []})
+
+    async def _finish_stopped_turn(self, conversation_id, stopped):
+        """End a turn the user stopped mid-stream, keeping whatever the model had already said.
+
+        The partial text is appended as an ordinary assistant message, because the browser has
+        already rendered it from the deltas and dropping it here would make it vanish on the next
+        reload with no explanation. Only text: any half-built tool_calls from the interrupted
+        chunk stream are discarded, since an assistant message carrying tool_calls that were never
+        answered makes the provider reject every later turn in the conversation.
+        """
+        content = (stopped.content or "").strip()
+        if content:
+            await self.store.append(conversation_id, {"role": "assistant", "content": content})
+            self.emit(conversation_id, "assistant", {"text": content, "sources": []})
+        self.emit(conversation_id, "error", {"message": self.stop_message(stopped.reason)})
 
     def _confirmation_card_arguments(self, name, arguments):
         """Return what a write tool's confirmation card should show the human, before they answer.
@@ -1809,6 +1853,30 @@ class ChatAgent(ComponentBase):
         self.provider = chosen["settings"]
         self.default_model = chosen["model"]
         return chosen["name"]
+
+    def stop_reason(self):
+        """Return 'stopped', 'timeout' or None for a turn that should end right now.
+
+        Both are checked together because both mean the same thing to the loop and different
+        things to the user: pressing Stop is a choice, and telling somebody who pressed it that
+        their turn "took longer than 1800 seconds" is simply wrong.
+
+        Read without the lock. stop_requested is a scalar and active is replaced wholesale rather
+        than mutated in place, so the worst a concurrent write can do is give this the previous
+        turn's answer a moment early - and it is called on every streamed chunk, where taking a
+        lock hundreds of times a turn buys nothing.
+        """
+        if self.stop_requested is not None and self.stop_requested == (self.active or {}).get("turn_id"):
+            return "stopped"
+        if time.monotonic() > self.deadline:
+            return "timeout"
+        return None
+
+    def stop_message(self, reason):
+        """Return what to tell the user about a turn that ended early."""
+        if reason == "stopped":
+            return "Stopped."
+        return "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)
 
     def provider_ready(self):
         """Return whether the active provider could actually answer a turn."""
