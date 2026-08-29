@@ -1750,6 +1750,21 @@ class ChatAgent(ComponentBase):
         self.providers = build_providers(extract_providers(block, self.log))
         return self.select_provider(self.store.get_selected_provider())
 
+    async def select_active_provider(self, name):
+        """Switch which provider answers, and remember it. Returns None if there is no such entry.
+
+        Nothing is written to apps.yaml, which is the whole point: the file already lists every
+        provider, so choosing between them is not a configuration change and must not pay for one
+        with a restart. Only the remembered choice moves, and that lives in the conversation index
+        beside the remembered model.
+        """
+        if not any(entry["name"] == name for entry in self.providers):
+            return None
+        self.store.set_selected_provider(name)
+        chosen = self.select_provider(name)
+        await self.store.flush()
+        return chosen
+
     async def apply_provider_block(self, block, active):
         """Adopt a freshly saved chat: block on this component's own loop, and remember the choice.
 

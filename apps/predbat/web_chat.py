@@ -596,6 +596,26 @@ class WebChat:
             return web.json_response({"error": "The chat component is still starting"}, status=503)
         return web.json_response({"models": models or [], "error": error})
 
+    async def html_chat_provider_select(self, request):
+        """Make one already-configured provider the active one.
+
+        Separate from the save route because it is a different kind of act: the providers in
+        apps.yaml do not change, so nothing is written and nothing restarts. That is what lets
+        this sit in the footer next to the model picker rather than behind a dialog and a restart.
+        """
+        agent = self.agent
+        if agent is None:
+            return web.json_response({"error": "Chat is not configured"}, status=404)
+        body = await request.json()
+        name = str(body.get("name") or "").strip()
+        try:
+            chosen = await agent.run_on_agent_loop(agent.select_active_provider(name))
+        except AgentNotReadyError:
+            return web.json_response({"error": "The chat component is still starting"}, status=503)
+        if chosen is None:
+            return web.json_response({"error": "'{}' is not a configured provider".format(name)}, status=400)
+        return web.json_response({"ok": True, "active": chosen, "ready": agent.provider_ready(), "providers": agent.provider_summary()})
+
     async def html_chat_providers_post(self, request):
         """Save the whole provider list to apps.yaml and adopt it in memory too.
 
@@ -1422,6 +1442,20 @@ body {
     color: var(--chat-text);
 }
 
+/* Hidden until there is more than one provider to choose between - see renderProviderSelect().
+   Sized to sit beside the model box without competing with it: which provider is answering is
+   context for the model list, not the primary control. */
+#chat-provider-select {
+    display: none;
+    max-width: 160px;
+    padding: 3px 6px;
+    border: 1px solid var(--chat-border);
+    border-radius: 4px;
+    background: var(--chat-input-bg);
+    color: var(--chat-text);
+    font-size: 12px;
+}
+
 #chat-model-wrap {
     position: relative;
 }
@@ -1611,6 +1645,23 @@ body {
     display: flex;
 }
 
+/* Deliberately not #chat-banner, which belongs to the busy state: showBanner/hideBanner own that
+   element and reconcileBusy() rewrites it on every conversation refresh, so a message left there
+   would be wiped within a second or two - exactly when the user needs to still be reading it. */
+#chat-notice {
+    display: none;
+    margin-bottom: 8px;
+    padding: 8px 12px;
+    border: 1px solid var(--chat-banner-border);
+    border-radius: 4px;
+    background: var(--chat-banner-bg);
+    color: var(--chat-banner-text);
+}
+
+#chat-notice.visible {
+    display: block;
+}
+
 #chat-no-provider button {
     padding: 5px 10px;
     border: 1px solid var(--chat-banner-text);
@@ -1714,9 +1765,15 @@ body {
     background: var(--chat-user-bubble);
 }
 
-.chat-provider-radio {
-    flex: 0 0 auto;
-    margin-top: 2px;
+.chat-active-chip {
+    margin-left: 6px;
+    padding: 0 6px;
+    border-radius: 8px;
+    background: var(--chat-accent);
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: normal;
+    line-height: 16px;
 }
 
 .chat-provider-detail {
@@ -1915,6 +1972,7 @@ def get_chat_body():
             <span>No AI provider is set up yet, so Chat cannot answer anything.</span>
             <button id="chat-no-provider-open" type="button">Open Settings</button>
         </div>
+        <div id="chat-notice"></div>
         <div id="chat-privacy">
             <span>Tool results - including log lines and configuration - are sent to the provider you have configured, and on to whoever runs the model you choose.</span>
             <button id="chat-privacy-dismiss" type="button">Dismiss</button>
@@ -1926,6 +1984,7 @@ def get_chat_body():
             <button id="chat-stop" type="button" title="Stops after the current step (the tool call or reply in progress finishes first)">Stop</button>
         </div>
         <div id="chat-footer">
+            <select id="chat-provider-select" title="Which provider answers. Switching takes effect immediately - nothing is written and Predbat does not restart."></select>
             <span id="chat-model-wrap">
                 <input type="text" id="chat-model" autocomplete="off" spellcheck="false" placeholder="Choose a model">
                 <div id="chat-model-list"></div>
@@ -1945,7 +2004,7 @@ def get_chat_body():
         </div>
         <div id="chat-settings-error"></div>
         <h3>Providers</h3>
-        <p class="chat-modal-note">Where your questions are sent. Saving writes them to <code>apps.yaml</code>, which restarts Predbat a few seconds later - this page will reconnect on its own.</p>
+        <p class="chat-modal-note">Where your questions are sent. Saving writes them to <code>apps.yaml</code>, which restarts Predbat a few seconds later - this page will reconnect on its own. To switch between providers you have already set up, use the selector next to the model box instead: that takes effect immediately.</p>
         <div id="chat-provider-list"></div>
         <button id="chat-provider-add" type="button" class="chat-secondary-button">+ Add provider</button>
         <div id="chat-provider-form">
@@ -3838,7 +3897,29 @@ function sendMessage() {
 // accidentally blank its credentials, and the browser never holds one.
 // ---------------------------------------------------------------------------------------------
 
-var settings = { providers: [], types: [], active: null, editing: null, loaded: false };
+var settings = { providers: [], types: [], active: null, editing: null, loaded: false, baseline: null };
+
+// What the dialog would post right now, as a comparable string. Save is ghosted while this still
+// equals the baseline taken when the list was loaded, so closing a dialog you only looked at, or
+// opening the add form and cancelling it, cannot write apps.yaml - and cannot therefore trigger a
+// restart for no reason at all. api_key is included because typing a new key is a real change
+// even when it leaves every visible field alone.
+function settingsSnapshot() {
+    return JSON.stringify({
+        active: settings.active || '',
+        providers: settings.providers.map(function (entry) {
+            return [entry.name, entry.type, entry.url, entry.model, entry.api_key || '', entry.original_name];
+        })
+    });
+}
+
+function updateSaveButton() {
+    var unchanged = settings.baseline !== null && settingsSnapshot() === settings.baseline;
+    byId('chat-settings-save').disabled = unchanged;
+    if (unchanged) {
+        setSettingsStatus('');
+    }
+}
 
 function settingsOpen() {
     return byId('chat-settings').classList.contains('open');
@@ -3868,6 +3949,33 @@ function setSettingsStatus(message) {
     byId('chat-settings-status').textContent = message || '';
 }
 
+// How long the post-save notice stays up. The file watcher checks every five seconds and the
+// restart follows, so this has to outlast that gap comfortably - the whole point is that the user
+// is still reading it when the tab goes quiet.
+var CHAT_NOTICE_SECONDS = 25;
+// A setTimeout id, always cleared through clearChatNotice() so a second save cannot leave the
+// first one's timer running to hide a message it did not write.
+var noticeTimer = null;
+
+function clearChatNotice() {
+    if (noticeTimer !== null) {
+        clearTimeout(noticeTimer);
+        noticeTimer = null;
+    }
+    byId('chat-notice').classList.remove('visible');
+}
+
+function showChatNotice(message) {
+    clearChatNotice();
+    var notice = byId('chat-notice');
+    notice.textContent = message;
+    notice.classList.add('visible');
+    noticeTimer = setTimeout(function () {
+        noticeTimer = null;
+        notice.classList.remove('visible');
+    }, CHAT_NOTICE_SECONDS * 1000);
+}
+
 function loadProviders() {
     return fetch('./chat/providers')
         .then(function (response) { return response.json(); })
@@ -3885,8 +3993,11 @@ function loadProviders() {
             settings.types = payload.types || [];
             settings.active = (payload.providers || []).reduce(function (found, entry) { return entry.active ? entry.name : found; }, null);
             settings.loaded = true;
+            settings.baseline = settingsSnapshot();
             renderProviderTypes();
             renderProviderList();
+            renderProviderSelect();
+            updateSaveButton();
             setProviderReady(!!payload.ready);
         })
         .catch(function (error) {
@@ -3931,23 +4042,20 @@ function renderProviderList() {
         var row = document.createElement('div');
         row.className = 'chat-provider-row' + (entry.name === settings.active ? ' active' : '');
 
-        var radio = document.createElement('input');
-        radio.type = 'radio';
-        radio.name = 'chat-active-provider';
-        radio.className = 'chat-provider-radio';
-        radio.checked = entry.name === settings.active;
-        radio.title = 'Use this provider';
-        radio.addEventListener('change', function () {
-            settings.active = entry.name;
-            renderProviderList();
-        });
-        row.appendChild(radio);
-
         var detail = document.createElement('div');
         detail.className = 'chat-provider-detail';
         var name = document.createElement('div');
         name.className = 'chat-provider-name';
         name.textContent = entry.name + ' (' + entry.type + ')';
+        // Which one is answering is shown here but changed in the footer: switching provider
+        // writes nothing and restarts nothing, so putting it behind this dialog's Save button
+        // would charge a restart for something that does not need one.
+        if (entry.name === settings.active) {
+            var chip = document.createElement('span');
+            chip.className = 'chat-active-chip';
+            chip.textContent = 'active';
+            name.appendChild(chip);
+        }
         detail.appendChild(name);
 
         var sub = document.createElement('div');
@@ -4007,7 +4115,12 @@ function removeProvider(index) {
     }
     closeProviderForm();
     renderProviderList();
+    // Status first, then the button: updateSaveButton() clears the status when the snapshot turns
+    // out to match the baseline, which is what happens when somebody opens Edit and clicks Done
+    // without changing anything. Setting it afterwards would leave "Not saved yet." above a
+    // ghosted Save button, saying there is something to save when there is not.
     setSettingsStatus('Not saved yet.');
+    updateSaveButton();
 }
 
 // A name that is unique among the providers already listed, so adding two of the same type in a
@@ -4178,7 +4291,55 @@ function applyProviderForm() {
     showSettingsError('');
     closeProviderForm();
     renderProviderList();
+    // Status first, then the button: updateSaveButton() clears the status when the snapshot turns
+    // out to match the baseline, which is what happens when somebody opens Edit and clicks Done
+    // without changing anything. Setting it afterwards would leave "Not saved yet." above a
+    // ghosted Save button, saying there is something to save when there is not.
     setSettingsStatus('Not saved yet.');
+    updateSaveButton();
+}
+
+// The footer selector: which of the already-configured providers is answering. Changing it
+// posts to a route that writes nothing to apps.yaml, so there is no restart and no Save button
+// involved - the model catalogue is the only thing that has to be refetched, because it belongs
+// to the endpoint rather than to Predbat.
+function renderProviderSelect() {
+    var select = byId('chat-provider-select');
+    select.innerHTML = '';
+    settings.providers.forEach(function (entry) {
+        var option = document.createElement('option');
+        option.value = entry.name;
+        option.textContent = entry.name;
+        option.selected = entry.name === settings.active;
+        select.appendChild(option);
+    });
+    // Nothing to choose between with one provider, so it stays out of the footer until there is.
+    select.style.display = settings.providers.length > 1 ? '' : 'none';
+}
+
+function changeProvider() {
+    var name = byId('chat-provider-select').value;
+    fetch('./chat/provider', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name }) })
+        .then(function (response) { return response.json(); })
+        .then(function (result) {
+            if (result.error) {
+                showChatNotice(result.error);
+                return;
+            }
+            settings.active = result.active;
+            settings.baseline = settingsSnapshot();
+            setProviderReady(!!result.ready);
+            renderProviderList();
+            renderProviderSelect();
+            updateSaveButton();
+            // The catalogue, and the remembered model, both belong to the provider - so the
+            // picker has to be refetched rather than left showing another endpoint's models.
+            loadModels();
+        })
+        .catch(function (error) {
+            console.error('Failed to switch provider', error);
+            showChatNotice('Could not switch provider.');
+        });
 }
 
 function saveSettings() {
@@ -4201,11 +4362,16 @@ function saveSettings() {
                 return;
             }
             showSettingsError('');
-            // Writing apps.yaml is what restarts Predbat, so say so rather than leaving the user
-            // wondering why the page goes quiet a few seconds after a successful save.
-            setSettingsStatus('Saved. Predbat is restarting to pick it up - this page will reconnect.');
+            setSettingsStatus('');
+            // Back to the conversation: the save is the end of what anyone came to this dialog to
+            // do, and leaving it open over the chat means dismissing it by hand before the page
+            // is usable again. The message moves out with the user, because writing apps.yaml is
+            // what restarts Predbat and the tab going quiet a few seconds later needs explaining.
+            closeSettings();
+            showChatNotice('Saved to apps.yaml. Predbat is restarting to pick it up - this page will reconnect on its own.');
             // Reloaded rather than assumed: the server decides which provider ends up active, and
             // has_key now reflects what is really in the file rather than what was typed here.
+            // Still worth doing with the dialog shut - it is what clears the no-provider banner.
             loadProviders();
             // The catalogue belongs to whichever provider is now active, so the footer picker has
             // to be refetched - its old contents are another endpoint's models.
@@ -4255,6 +4421,7 @@ document.addEventListener('DOMContentLoaded', function () {
     byId('chat-provider-cancel').addEventListener('click', closeProviderForm);
     byId('chat-provider-fetch').addEventListener('click', fetchProviderModels);
     byId('chat-provider-type').addEventListener('change', changeProviderType);
+    byId('chat-provider-select').addEventListener('change', changeProvider);
     // Clicking the backdrop closes; clicking the dialog itself must not, so the panel stops the
     // event before it reaches the overlay it sits inside.
     byId('chat-settings').addEventListener('click', function (event) {

@@ -179,12 +179,16 @@ that cannot call tools cannot drive the agent at all, and would answer from its 
 rather than from your plan. If the endpoint cannot be reached the box stays free text and tells
 you why.
 
-The radio button beside each provider chooses which one is used. **Save to apps.yaml** writes the
-lot into the `chat:` block of your `apps.yaml`. Predbat watches that file, so a few seconds after
-saving it restarts to pick the change up - the Chat tab goes quiet for a moment and then
-reconnects on its own, and any reply that was in progress is cut short. Your conversations are
-saved and will still be there. Which provider you chose is remembered across that restart, so it
-does not fall back to whichever one happens to be first in the file.
+**Save to apps.yaml** writes the
+lot into the `chat:` block of your `apps.yaml` and closes the dialog, putting you back on your
+conversation. Predbat watches that file, so a few seconds later it restarts to pick the change up.
+The Chat tab goes quiet for a moment and then reconnects on its own, and any reply that was in
+progress is cut short; a note above the transcript says so, and your conversations are saved and
+will still be there. Save stays greyed out until you actually change something, so
+closing a dialog you only looked at cannot restart Predbat for nothing.
+
+Switching between providers you have already set up is not done here - it is the dropdown next to
+the model box, described below. That writes nothing and restarts nothing.
 
 Your API keys are never sent to this page - a provider shows only whether a key is set, and
 leaving the key box empty when you edit one keeps the key already in the file, so changing a URL
@@ -199,9 +203,15 @@ for HA state access includes the MCP server, and applies the moment you make it 
 waiting for the Save button. See the
 [chat component's switch table](components.md#ai-chat-agent-chat) for what each one allows.
 
-#### Choosing a model
+#### Choosing a provider and a model
 
-A model search box under the message box lets you choose a different model for that one
+When you have more than one provider configured, a dropdown appears at the bottom left naming the
+one that is answering. Change it and it takes effect at once: nothing is written to `apps.yaml`
+and Predbat does not restart, because every provider is already in the file and which one answers
+is only a preference. Your choice is remembered across restarts. The model list is refetched when
+you switch, since the models on offer belong to the endpoint rather than to Predbat.
+
+A model search box beside it lets you choose a different model for that one
 conversation. Each result shows its price and context window - the price is US dollars per
 million tokens, input then output, so `$2/$10  1000k` means $2 per million tokens in, $10 per
 million out, with a one-million-token context. Models that cost nothing show `free`, and

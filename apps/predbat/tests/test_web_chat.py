@@ -129,6 +129,7 @@ def test_routes_always_registered_handlers_404_unconfigured(my_predbat):
             "/chat/status",
             "/chat/providers",
             "/chat/providers/models",
+            "/chat/provider",
         ]
         for expected in expected_routes:
             if expected not in paths:
@@ -3118,9 +3119,156 @@ def test_settings_script_wires_the_provider_routes(my_predbat):
     if "restart" not in dialog.lower():
         print("ERROR: the settings dialog does not warn that saving restarts Predbat")
         failed = True
-    saved_status = re.search(r"setSettingsStatus\('Saved([^']*)'\)", script)
-    if not saved_status or "restart" not in saved_status.group(0).lower():
-        print("ERROR: the post-save message does not mention the restart: {}".format(saved_status and saved_status.group(0)))
+    save_body = script[script.index("function saveSettings") : script.index("function saveSettings") + 2000]
+    notice = re.search(r"showChatNotice\('([^']*)'\)", save_body)
+    if not notice or "restart" not in notice.group(1).lower():
+        print("ERROR: the post-save message does not mention the restart: {}".format(notice and notice.group(1)))
+        failed = True
+
+    # A successful save closes the dialog and puts the user back on the conversation; a failed one
+    # must leave it open, since there is something to fix in it. Checked by position rather than
+    # presence: both branches live in the same function, and a closeSettings() that ran before the
+    # error branch's return would dismiss the dialog on a failure too.
+    if "closeSettings()" not in save_body:
+        print("ERROR: a successful save does not close the settings dialog")
+        failed = True
+    else:
+        error_branch = save_body.index("showSettingsError(result.error)")
+        if save_body.index("closeSettings()") < error_branch:
+            print("ERROR: the settings dialog is closed before the failure branch, so a failed save would dismiss it too")
+            failed = True
+        if "return;" not in save_body[error_branch : save_body.index("closeSettings()")]:
+            print("ERROR: the failure branch does not return before the dialog is closed")
+            failed = True
+
+    # The notice cannot live in #chat-banner: reconcileBusy() rewrites that element on every
+    # conversation refresh, which would wipe the message within a second or two of showing it.
+    if "byId('chat-notice')" not in script:
+        print("ERROR: the post-save notice does not use its own element")
+        failed = True
+    if "function clearChatNotice" not in script or "clearTimeout(noticeTimer)" not in script:
+        print("ERROR: the notice timer is not cleared through a single helper")
+        failed = True
+    return failed
+
+
+def test_switching_provider_writes_nothing_and_restarts_nothing(my_predbat):
+    """Choosing between configured providers is not a configuration change, so it costs no restart.
+
+    Every provider is already in apps.yaml; which one answers is a preference, and routing it
+    through the save route would rewrite the file, trip the watcher in hass.py and restart Predbat
+    to change nothing about the file's contents. The choice is remembered in the conversation
+    index instead, beside the remembered model.
+    """
+    failed = False
+    print("**** Testing the provider switch route ****")
+
+    path = _apps_yaml_fixture(APPS_YAML_WITH_PROVIDERS)
+    original = web_chat.APPS_YAML_PATH
+    web_chat.APPS_YAML_PATH = path
+    before = open(path).read()
+    try:
+        providers = {"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "sk-or-secret-value"}, "ollama": {"type": "ollama", "url": "http://localhost:11434/v1"}}
+        agent = _run_inline_on_agent(_make_agent(my_predbat, providers=providers))
+        page = _make_web(my_predbat, agent=agent).chat_page
+
+        response = asyncio.run(page.html_chat_provider_select(FakeRequest(body={"name": "ollama"})))
+        if response.status != 200:
+            print("ERROR: switching provider returned {}: {}".format(response.status, response.text))
+            failed = True
+        if agent.active_provider != "ollama" or agent.base_url != "http://localhost:11434/v1":
+            print("ERROR: the switch did not re-point the agent: {} / {}".format(agent.active_provider, agent.base_url))
+            failed = True
+        if agent.store.get_selected_provider() != "ollama":
+            print("ERROR: the switch was not remembered: {}".format(agent.store.get_selected_provider()))
+            failed = True
+        if open(path).read() != before:
+            print("ERROR: switching provider rewrote apps.yaml, which would restart Predbat:\n{}".format(open(path).read()))
+            failed = True
+
+        response = asyncio.run(page.html_chat_provider_select(FakeRequest(body={"name": "not-a-provider"})))
+        if response.status != 400:
+            print("ERROR: an unknown provider was accepted: {} {}".format(response.status, response.text))
+            failed = True
+        if agent.active_provider != "ollama":
+            print("ERROR: a refused switch changed the active provider anyway: {}".format(agent.active_provider))
+            failed = True
+    finally:
+        web_chat.APPS_YAML_PATH = original
+    return failed
+
+
+def test_save_button_is_ghosted_until_something_changes(my_predbat):
+    """Save is disabled while the dialog matches what was loaded.
+
+    A save that writes an identical file still bumps its mtime, and hass.py restarts Predbat on
+    mtime alone - so an enabled Save button on an untouched dialog offers the user a pointless
+    restart, and one they would have no reason to expect from a button they pressed to change
+    nothing. The snapshot includes api_key so that typing a replacement key counts as a change
+    even though it alters no visible field.
+    """
+    failed = False
+    print("**** Testing that Save is ghosted with nothing to save ****")
+
+    script = web_chat.get_chat_script()
+    for marker in ["function settingsSnapshot", "function updateSaveButton", "settings.baseline = settingsSnapshot()"]:
+        if marker not in script:
+            print("ERROR: the dirty check is missing {!r}".format(marker))
+            failed = True
+    snapshot = script[script.index("function settingsSnapshot") : script.index("function updateSaveButton")]
+    if "entry.api_key" not in snapshot:
+        print("ERROR: a newly typed API key would not count as a change: {!r}".format(snapshot))
+        failed = True
+    if "active" not in snapshot:
+        print("ERROR: the snapshot ignores which provider is active")
+        failed = True
+    if "disabled = unchanged" not in script:
+        print("ERROR: nothing actually disables the Save button")
+        failed = True
+    # Every mutation has to re-run the check, or the button stays ghosted over a real change.
+    for mutator in ("function applyProviderForm", "function removeProvider"):
+        body = script[script.index(mutator) : script.index(mutator) + 1800]
+        if "updateSaveButton()" not in body:
+            print("ERROR: {} does not re-check whether there is anything to save".format(mutator))
+            failed = True
+    return failed
+
+
+def test_provider_selector_sits_in_the_footer_beside_the_model_picker(my_predbat):
+    """Switching provider is a footer control, not a dialog one, and hides with nothing to choose.
+
+    It belongs next to the model picker because the two are the same kind of choice and the model
+    catalogue depends on the provider. Asserting the Settings dialog no longer carries a radio is
+    the other half: two controls for one setting, one of which needed a Save and a restart, is
+    what this replaced.
+    """
+    failed = False
+    print("**** Testing the footer provider selector ****")
+
+    body = web_chat.get_chat_body()
+    if 'id="chat-provider-select"' not in body:
+        print("ERROR: there is no provider selector")
+        failed = True
+    elif body.index('id="chat-provider-select"') < body.index('id="chat-footer"'):
+        print("ERROR: the provider selector is not in the footer")
+        failed = True
+    if 'name="chat-active-provider"' in web_chat.get_chat_script():
+        print("ERROR: the Settings dialog still carries its own active-provider radio")
+        failed = True
+
+    script = web_chat.get_chat_script()
+    if "fetch('./chat/provider', { method: 'POST'" not in script:
+        print("ERROR: the selector does not post to the switch route")
+        failed = True
+    # The trailing "(" matters: without it this matches changeProviderType, which is declared
+    # earlier, and the slice below comes out empty and passes on nothing.
+    select_body = script[script.index("function renderProviderSelect") : script.index("function changeProvider(")]
+    if "settings.providers.length > 1" not in select_body:
+        print("ERROR: the selector is shown even with nothing to choose between: {!r}".format(select_body))
+        failed = True
+    change_body = script[script.index("function changeProvider(") : script.index("function saveSettings")]
+    if "loadModels()" not in change_body:
+        print("ERROR: switching provider leaves the previous endpoint's models in the picker")
         failed = True
     return failed
 
@@ -3185,4 +3333,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_active_provider_is_remembered_across_a_restart(my_predbat)
     failed |= test_chat_page_uses_a_top_bar_and_a_settings_dialog(my_predbat)
     failed |= test_settings_script_wires_the_provider_routes(my_predbat)
+    failed |= test_switching_provider_writes_nothing_and_restarts_nothing(my_predbat)
+    failed |= test_save_button_is_ghosted_until_something_changes(my_predbat)
+    failed |= test_provider_selector_sits_in_the_footer_beside_the_model_picker(my_predbat)
     return failed
