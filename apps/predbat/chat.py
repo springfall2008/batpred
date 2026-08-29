@@ -47,7 +47,7 @@ from chat_store import APPROVAL_APPROVED, APPROVAL_REJECTED, ConversationStore, 
 from chat_tools import APPS_YAML_RESTART_WARNING, CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_docs, read_source, search_docs, search_source, set_apps_config
 from utils import SECRET_MASK, is_secret_key, parse_yaml_path, resolve_nested_yaml_value
 
-# Shown when a turn is attempted with no model chosen anywhere. openrouter_default_model is
+# Shown when a turn is attempted with no model chosen anywhere. A provider's own 'model' is
 # optional, so this is the ordinary state of a fresh install rather than a misconfiguration - the
 # wording points at the picker, which is where the user can fix it without touching apps.yaml.
 # Shown when no endpoint is configured, or the configured one is missing what it needs. Names the
@@ -55,7 +55,7 @@ from utils import SECRET_MASK, is_secret_key, parse_yaml_path, resolve_nested_ya
 # "one setting is wrong".
 NO_PROVIDER_MESSAGE = "No chat provider is configured. Add one to the 'chat: providers:' block in apps.yaml - for example " "'openrouter: {api_key: ...}' for a hosted model, or 'ollama: {url: http://localhost:11434/v1}' to use a local one."
 
-NO_MODEL_MESSAGE = "No model has been selected. Choose one from the model picker below the message box, or set 'openrouter_default_model' in apps.yaml."
+NO_MODEL_MESSAGE = "No model has been selected. Choose one from the model picker below the message box, or set a default for this provider in Settings."
 
 # How much of a provider's raw error text to keep. Enough to carry a real message, bounded because
 # a failing provider can return an entire HTML page, and this is stored on the conversation and
@@ -188,6 +188,11 @@ PROVIDER_DEFAULT_MODELS = {
     "ollama": "gpt-oss:20b",
 }
 
+# Timeout for probing an endpoint the user is still typing into (see probe_models). Shorter
+# than the catalogue fetch's own 30s: this one has somebody sat watching a dialog waiting for it,
+# and a wrong URL should say so quickly rather than look like a hang.
+PROBE_TIMEOUT_SECONDS = 20
+
 # Per-model timeout for the /api/show enrichment. Short because it is a local call on the machine
 # next to Predbat: if it is slow, the catalogue is better off without the extra detail than the
 # picker is waiting for it.
@@ -212,11 +217,11 @@ def is_local_endpoint(url):
 
 
 def detect_provider(url):
-    """Work out which provider a URL is, for chat_api_type: auto.
+    """Work out which provider a URL is, for a provider entry that names no type.
 
     Deliberately decided from the URL alone rather than by probing: this runs during component
     start-up, and a start-up that makes a network call is a start-up that can hang. A user whose
-    endpoint the guess gets wrong sets chat_api_type explicitly, which is what it is for.
+    endpoint the guess gets wrong sets the entry's 'type' explicitly, which is what it is for.
     """
     text = str(url or "")
     if not text:
@@ -314,6 +319,17 @@ def resolve_provider(api_type, url):
     if name in ("", "auto"):
         name = detect_provider(url)
     return name, PROVIDERS.get(name, PROVIDERS["openai"])
+
+
+def model_catalogue_headers(api_key):
+    """Return the headers for a /models request, omitting the bearer token when there is no key.
+
+    Sending `Authorization: Bearer None` - which is what formatting an absent key produces - is
+    not the same as sending nothing. Ollama ignores it, but an endpoint that validates the header
+    it was given answers 401 to a request that would have succeeded unauthenticated, which reads
+    as "your key is wrong" for an endpoint that never wanted a key in the first place.
+    """
+    return {"Authorization": "Bearer {}".format(api_key)} if api_key else {}
 
 
 # Defaults for the apps.yaml chat: block, kept here rather than in the component registry so each
@@ -779,8 +795,9 @@ class ChatAgent(ComponentBase):
     """Runs the OpenRouter-backed chat agent for the Predbat web interface."""
 
     # Defaults for an agent that has not been through initialize() yet - a partially built
-    # instance in a test, or one inspected before start-up. Every real agent overwrites both from
-    # chat_api_type and chat_api_url. Present so reading them is never an AttributeError, since
+    # instance in a test, or one inspected before start-up. Every real agent overwrites both in
+    # select_provider(), from its chosen entry in the chat: providers: block. Present so reading
+    # them is never an AttributeError, since
     # they are consulted on paths (list_models, the request payload) that a half-built agent can
     # still reach.
     provider_name = "openrouter"
@@ -913,6 +930,11 @@ class ChatAgent(ComponentBase):
             except Exception as error:
                 self.log("Warn: chat agent could not load its conversation index: {}".format(error))
             self.index_loaded = True
+            # Only now is the remembered choice readable - initialize() runs before the index is
+            # loaded, so the select_provider(None) there can only pick the first usable entry.
+            # Re-selecting here is what makes the Settings dialog's choice survive the restart
+            # that saving apps.yaml causes. A name that no longer exists falls back the same way.
+            self.select_provider(self.store.get_selected_provider())
         else:
             try:
                 await self.store.flush()
@@ -1008,8 +1030,13 @@ class ChatAgent(ComponentBase):
         return openai_tool_list() + openai_tool_list(CHAT_TOOL_DEFS)
 
     async def _fetch_model_catalogue(self):
-        """Download the model catalogue from the configured endpoint."""
-        headers = {"Authorization": "Bearer {}".format(self.api_key)}
+        """Download the model catalogue from the configured endpoint.
+
+        Returns None rather than raising on a non-200, because Storage's caching helper treats a
+        None as "nothing to cache" - which is why probe_models() does its own request instead of
+        reusing this one: a dialog needs to tell the user *why* an endpoint gave nothing back.
+        """
+        headers = model_catalogue_headers(self.api_key)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get("{}/models".format(self.base_url), headers=headers) as response:
@@ -1044,23 +1071,65 @@ class ChatAgent(ComponentBase):
         except Exception as error:
             self.log("Warn: could not fetch the model catalogue from {}: {}".format(self.base_url, error))
 
+        return await self._catalogue_to_models(catalogue, self.provider, self.base_url, self.default_model)
+
+    async def probe_models(self, api_type, url, api_key):
+        """Return (models, error) for an endpoint that is not the active provider.
+
+        This is what lets the Settings dialog offer a real model list for a provider that is not
+        in apps.yaml yet - the catalogue has to be readable before the entry is saved, or the user
+        would have to save a provider blind, restart, and only then find out what it serves.
+
+        Deliberately uncached and deliberately not routed through _fetch_model_catalogue(): the
+        endpoint being probed is one the user is still editing, so a cached answer would describe
+        the previous URL, and "returned None" is not a good enough answer for a dialog. The status
+        codes are separated out because they mean different things to whoever is typing - 401 is
+        "your key is wrong", a connection error is "your URL is wrong".
+        """
+        name, provider = resolve_provider(api_type, url or default_url_for(api_type))
+        base_url = str(url or default_url_for(name)).rstrip("/")
+        timeout = aiohttp.ClientTimeout(total=PROBE_TIMEOUT_SECONDS)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get("{}/models".format(base_url), headers=model_catalogue_headers(api_key)) as response:
+                    if response.status in (401, 403):
+                        return None, "{} rejected the API key (HTTP {})".format(base_url, response.status)
+                    if response.status != 200:
+                        return None, "{}/models returned HTTP {}".format(base_url, response.status)
+                    catalogue = await response.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+            return None, "Could not reach {}: {}".format(base_url, error)
+        except ValueError:
+            return None, "{}/models did not return JSON - is that the right URL?".format(base_url)
+        models = await self._catalogue_to_models(catalogue, provider, base_url, None)
+        if not models:
+            return None, "{} served no tool-capable models".format(base_url)
+        return models, None
+
+    async def _catalogue_to_models(self, catalogue, provider, base_url, default_model):
+        """Turn one endpoint's raw catalogue into the entries the model picker shows.
+
+        Takes its provider, endpoint and default model as arguments rather than reading self, so
+        the Settings dialog's probe of an unsaved endpoint runs through exactly the same filtering
+        and enrichment as the live picker does - one behaviour, not two that drift apart.
+        """
         models = []
         for entry in (catalogue or {}).get("data") or []:
             # Only OpenRouter publishes supported_parameters. Requiring it elsewhere filtered out
             # every model and left an empty picker, because "the catalogue does not say" is not
             # the same as "this model cannot use tools".
-            if self.provider["openrouter_ext"] and "tools" not in (entry.get("supported_parameters") or []):
+            if provider["openrouter_ext"] and "tools" not in (entry.get("supported_parameters") or []):
                 continue
             pricing = entry.get("pricing") or {}
             models.append({"id": entry.get("id"), "name": entry.get("name") or entry.get("id"), "prompt_price": pricing.get("prompt"), "completion_price": pricing.get("completion"), "context_length": entry.get("context_length")})
-        if self.provider["ollama_details"]:
-            models = await self._add_ollama_details(models)
+        if provider["ollama_details"]:
+            models = await self._add_ollama_details(models, base_url)
         models.sort(key=lambda entry: str(entry.get("id")))
-        if self.default_model and self.default_model not in [entry["id"] for entry in models]:
-            models.insert(0, {"id": self.default_model, "name": "{} (from apps.yaml)".format(self.default_model), "prompt_price": None, "completion_price": None, "context_length": None})
+        if default_model and default_model not in [entry["id"] for entry in models]:
+            models.insert(0, {"id": default_model, "name": "{} (from apps.yaml)".format(default_model), "prompt_price": None, "completion_price": None, "context_length": None})
         return models
 
-    async def _add_ollama_details(self, models):
+    async def _add_ollama_details(self, models, base_url=None):
         """Fill in tool capability and context length from Ollama's native /api/show.
 
         Ollama's OpenAI-compatible /v1/models returns only id/object/created/owned_by - no
@@ -1075,7 +1144,7 @@ class ChatAgent(ComponentBase):
         list_models() is cached for a day - but a single slow or missing model must not lose the
         whole catalogue, so a failed lookup keeps the model rather than dropping it.
         """
-        base = self.base_url.rsplit("/v1", 1)[0]
+        base = str(base_url or self.base_url).rsplit("/v1", 1)[0]
         detailed = []
         timeout = aiohttp.ClientTimeout(total=OLLAMA_DETAIL_TIMEOUT_SECONDS)
         try:
@@ -1646,13 +1715,63 @@ class ChatAgent(ComponentBase):
         """Return whether the active provider could actually answer a turn."""
         return any(entry["configured"] and entry["name"] == self.active_provider for entry in self.providers)
 
+    def provider_summary(self):
+        """Return the configured providers for the Settings dialog, without their API keys.
+
+        `has_key` rather than the key itself, and no way to ask for the real thing: the dialog
+        needs to show whether a key is set and to let one be replaced, neither of which requires
+        the browser to ever hold it. That also means an edit to some unrelated field cannot
+        round-trip a credential out of apps.yaml and back in - see the save route, where a blank
+        key field means "keep what is in the file".
+        """
+        return [
+            {
+                "name": entry["name"],
+                "type": entry["type"],
+                "url": entry["url"],
+                "model": entry["model"],
+                "has_key": bool(entry["api_key"]),
+                "needs_key": bool(entry["settings"]["needs_key"]),
+                "configured": entry["configured"],
+                "active": entry["name"] == self.active_provider,
+            }
+            for entry in self.providers
+        ]
+
+    def reload_providers(self, block):
+        """Rebuild the provider list from a freshly saved chat: block and re-select.
+
+        Called after the Settings dialog writes apps.yaml, so a provider change takes effect
+        without waiting for a restart. Only provider state is touched - the store, the event
+        buffer and any running turn are left exactly as they are, which is why this exists
+        instead of calling initialize() again.
+        """
+        self.providers = build_providers(extract_providers(block, self.log))
+        return self.select_provider(self.store.get_selected_provider())
+
+    async def apply_provider_block(self, block, active):
+        """Adopt a freshly saved chat: block on this component's own loop, and remember the choice.
+
+        Run here rather than from the web thread because select_provider() writes the api_key,
+        base_url and provider a turn reads. It is still possible for a save to land between two
+        rounds of a running turn, in which case that turn's remaining rounds go to the new
+        endpoint and will most likely fail on a model id it does not serve. That is a visible
+        error in the transcript rather than any kind of corruption, and it is a better trade than
+        refusing to let somebody fix their configuration while a turn is stuck.
+        """
+        self.store.set_selected_provider(active)
+        name = self.reload_providers(block)
+        await self.store.flush()
+        return name
+
     def resolve_model(self, conversation_id):
         """Return the model this conversation should use, or None if nothing has been chosen.
 
         Three sources, most specific first: the model set on this conversation, the model the
-        user last picked in the UI (remembered across restarts by the store), then
-        openrouter_default_model from apps.yaml. That last one is optional, so all three can be
-        empty on a fresh install - which is not an error, just a user who has not chosen yet.
+        user last picked in the UI (remembered per provider across restarts by the store), then
+        the active provider's own default - its 'model' in apps.yaml, or the built-in default for
+        its type. All three can be empty for an endpoint with no built-in default, which is not an
+        error, just a user who has not chosen yet.
         """
         conversation_model = (self.store.get_meta(conversation_id) or {}).get("model")
         return conversation_model or self.store.get_selected_model(self.active_provider) or self.default_model or None

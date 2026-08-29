@@ -1979,6 +1979,8 @@ Everything the chat agent uses lives in one **chat** block. Endpoints go under *
         model: qwen3:latest            # optional
 ```
 
+You do not have to write this block by hand. The Chat tab's **Settings** dialog adds, edits and removes providers and saves them here for you, keeping the rest of the file - including your comments - as it was; see [Chat View](web-interface.md#chat-view). It never shows you a saved API key, and leaving the key box empty when editing a provider keeps whatever is already in the file.
+
 **model** belongs to the provider rather than the block, because a model id only means anything to the endpoint serving it - `openai/gpt-4o-mini` does not exist on Ollama and `qwen3:latest` does not exist on OpenRouter.
 
 Leave it out and the provider starts on a sensible default for its kind, so a newly configured endpoint answers straight away:
@@ -2013,11 +2015,11 @@ Everything else the agent takes sits alongside **providers** in the same block, 
 
 **type** is only needed when the name does not already say which kind of endpoint it is. Left out, Predbat uses the entry's name if that is a provider it knows (`openrouter`, `ollama`, `openai`), and otherwise works it out from the URL - a `localhost` or private-network address needs no key, anything else does. Set it explicitly if the guess is wrong for your setup; `local` is the generic keyless option for an OpenAI-compatible server that is not Ollama.
 
-An entry missing what it needs - a hosted endpoint with no key - still appears in the Chat tab, greyed out and saying what to add, rather than silently vanishing.
+An entry missing what it needs - a hosted endpoint with no key - still appears in the Chat tab's Settings dialog, marked as needing a key before it can answer, rather than silently vanishing.
 
 There is no separate enable switch: configuring an endpoint is what enables the feature, and the model is chosen in the Chat tab rather than here.
 
-Before enabling this, read the [chat component's security note](components.md#security-note-chat): the web interface has no login of its own, tool results (including log lines and configuration) are sent to OpenRouter and on to whichever provider serves the model you choose, and a deleted conversation's stored copy is not removed immediately - it stays on disk until it expires.
+Before enabling this, read the [chat component's security note](components.md#security-note-chat): the web interface has no login of its own, tool results (including log lines and configuration) are sent to whichever provider you have configured and on to whoever serves the model you choose, and a deleted conversation's stored copy is not removed immediately - it stays on disk until it expires.
 
 **Configuration options:**
 

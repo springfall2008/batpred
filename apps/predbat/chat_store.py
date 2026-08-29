@@ -115,11 +115,17 @@ class ConversationStore:
         # _cache_body()) so a lookup never has to ask "loaded, but is the prompt?" separately.
         self.system_prompts = OrderedDict()
         self.dirty = set()
-        # The model the user last chose in the picker, remembered across restarts so a install
-        # with no openrouter_default_model does not ask again on every boot. Guarded by the same
+        # The model the user last chose in the picker, remembered across restarts so an install
+        # whose provider names no model does not ask again on every boot. Guarded by the same
         # lock as the index it is stored beside; None means nothing has been chosen yet.
         # Per provider: {provider name: model id}. See get_selected_model().
         self.selected_model = {}
+        # The provider the user last made active in the Settings dialog, remembered across
+        # restarts. It has to be remembered: saving a provider change writes apps.yaml, which
+        # restarts Predbat, so a choice held only in memory would be undone by the very act of
+        # making it. None means "no explicit choice", which select_provider() reads as
+        # "first usable entry".
+        self.selected_provider = None
         # The most recent failed turn per conversation, saved beside the messages rather than
         # among them: a transport failure is not something the model said, so it must never be
         # replayed back to it. Kept for the user and for a bug report, and overwritten by the next
@@ -146,16 +152,19 @@ class ConversationStore:
         payload = await self.storage.load(STORAGE_MODULE, INDEX_FILENAME) if self.storage else None
         entries = []
         selected_model = None
+        selected_provider = None
         if isinstance(payload, dict):
             if payload.get("version") != CONVERSATION_VERSION:
                 self.log("Warn: chat index version {} is not {}, discarding it".format(payload.get("version"), CONVERSATION_VERSION))
             else:
                 entries = payload.get("conversations") or []
                 selected_model = payload.get("selected_model") or None
+                selected_provider = payload.get("selected_provider") or None
 
         healed = False
         with self.lock:
             self.selected_model = selected_model if isinstance(selected_model, dict) else ({} if selected_model is None else selected_model)
+            self.selected_provider = selected_provider if isinstance(selected_provider, str) else None
             self.index = OrderedDict()
             for entry in entries:
                 cid = entry.get("id")
@@ -530,12 +539,22 @@ class ConversationStore:
             else:
                 self.selected_model.pop(key, None)
 
+    def get_selected_provider(self):
+        """Return the provider the user last made active, or None if they never chose one."""
+        with self.lock:
+            return self.selected_provider
+
+    def set_selected_provider(self, name):
+        """Remember which provider is active, to be written on the next index flush."""
+        with self.lock:
+            self.selected_provider = str(name) if name else None
+
     async def _save_index(self):
         """Write the conversation index with a renewed expiry."""
         if not self.storage:
             return False
         with self.lock:
-            payload = {"version": CONVERSATION_VERSION, "conversations": [dict(entry) for entry in self.index.values()], "selected_model": self.selected_model}
+            payload = {"version": CONVERSATION_VERSION, "conversations": [dict(entry) for entry in self.index.values()], "selected_model": self.selected_model, "selected_provider": self.selected_provider}
         return await self.storage.save(STORAGE_MODULE, INDEX_FILENAME, payload, format="json", expiry=self._expiry(), indent=CONVERSATION_JSON_INDENT)
 
     async def _save_body(self, cid, messages=None, system_prompt=_UNSET, system_prompt_at=_UNSET, evicted=False):

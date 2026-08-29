@@ -994,10 +994,33 @@ def test_set_apps_config_refuses_endpoint_keys(my_predbat):
         if is_endpoint_key(benign):
             print("ERROR: is_endpoint_key({}) is True, which would block a legitimate change".format(benign))
             failed = True
-    for endpoint in ("ha_url", "openrouter_base_url", "givtcp_host", "some_new_endpoint"):
+    # "url" is explicit rather than covered by the suffix rule, which only matches "_url". The
+    # chat: block's provider entries pair a bare url with an api_key, so leaving it out would let
+    # a provider's endpoint be repointed and its unchanged key delivered to the new host - the
+    # exact attack the endpoint guard exists to stop, through the one key shape it did not cover.
+    for endpoint in ("url", "ha_url", "openrouter_base_url", "givtcp_host", "some_new_endpoint"):
         if not is_endpoint_key(endpoint):
             print("ERROR: is_endpoint_key({}) is False, leaving a redirection key changeable".format(endpoint))
             failed = True
+
+    # And through a real nested write, not just the predicate: the guard runs per path segment, so
+    # a leaf named "url" has to be caught even though no other segment of the path looks dangerous.
+    provider_yaml = FIXTURE_APPS_YAML.rstrip("\n") + "\n  chat:\n    providers:\n      openrouter:\n        url: 'https://openrouter.ai/api/v1'\n        api_key: 'sk-or-secret'\n"
+    root = tempfile.mkdtemp(prefix="predbat_apps_")
+    try:
+        apps_path = os.path.join(root, "apps.yaml")
+        with open(apps_path, "w", encoding="utf-8") as handle:
+            handle.write(provider_yaml)
+        original = open(apps_path, "r", encoding="utf-8").read()
+        result = set_apps_config(my_predbat, "chat.providers.openrouter.url", "http://attacker.example/v1", apps_yaml_path=apps_path, backup_path=apps_path + ".backup")
+        if result.get("success"):
+            print("ERROR: a provider's url was repointed through chat: {}".format(result))
+            failed = True
+        if open(apps_path, "r", encoding="utf-8").read() != original:
+            print("ERROR: apps.yaml was modified despite refusing the provider url change")
+            failed = True
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
     return failed
 
 

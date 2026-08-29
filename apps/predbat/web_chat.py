@@ -16,12 +16,16 @@ what lets a user read another conversation while a turn runs.
 """
 
 import asyncio
+import copy
 import json
+import re
 import time
 
 from aiohttp import web
+from ruamel.yaml import YAML
 
-from chat import AgentNotReadyError, ChatBusyError
+from chat import AgentNotReadyError, ChatBusyError, PROVIDER_DEFAULT_URLS, PROVIDERS, default_model_for
+from utils import ROOT_YAML_KEY, SECRET_MASK
 
 SSE_POLL_SECONDS = 0.1
 SSE_HEARTBEAT_SECONDS = 15
@@ -37,6 +41,19 @@ CHAT_STATUS_SWITCHES = {
     "chat_web_search": False,
     "ai_ha_state_enable": True,
 }
+
+
+# What a provider may be called in apps.yaml. The name becomes a YAML mapping key and is shown
+# back to the user, so it is kept to characters that need no quoting and cannot be confused for
+# YAML structure - a name like "a: b" or "- x" would round-trip through the file as something
+# other than what was typed.
+PROVIDER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")
+
+# Sentinel for "the user did not type a new API key", which means keep whatever apps.yaml already
+# holds for this provider. Distinct from an empty string, which is a request to clear the key.
+KEEP_EXISTING_KEY = object()
+
+APPS_YAML_PATH = "apps.yaml"
 
 
 def format_sse_event(event):
@@ -416,6 +433,236 @@ class WebChat:
         await self.base.ha_interface.set_state_external(entity_id, enabled)
         return web.json_response({"ok": True, "name": name, "enabled": enabled})
 
+    # ------------------------------------------------------------------------------------------
+    # Provider settings.
+    # ------------------------------------------------------------------------------------------
+
+    def _saved_api_key(self, agent, name):
+        """Return the API key apps.yaml holds for a named provider, or None.
+
+        Server-side only. It exists so the Settings dialog can probe an existing provider's model
+        list, or save an edit to its URL, without the browser ever being sent the key and asked to
+        hand it back - a round trip that would put a credential in a page, in a POST body and in
+        anything logging either.
+        """
+        for entry in agent.providers:
+            if entry["name"] == name:
+                return entry["api_key"]
+        return None
+
+    def _clean_provider(self, agent, posted, seen):
+        """Validate one posted provider entry, returning (entry, error message).
+
+        Everything is checked before the file is opened, so a batch with one bad entry in it
+        cannot half-write apps.yaml.
+        """
+        if not isinstance(posted, dict):
+            return None, "Malformed provider entry"
+        name = str(posted.get("name") or "").strip()
+        api_type = str(posted.get("type") or "").strip().lower()
+        url = str(posted.get("url") or "").strip()
+        model = str(posted.get("model") or "").strip()
+        original = str(posted.get("original_name") or "").strip() or name
+
+        if not PROVIDER_NAME_PATTERN.match(name):
+            return None, "'{}' is not a usable provider name - use letters, numbers, spaces, dots, dashes or underscores".format(name)
+        if name.lower() == "providers":
+            return None, "'providers' cannot be used as a provider name"
+        if name in seen:
+            return None, "There is already a provider called '{}'".format(name)
+        if api_type not in PROVIDERS:
+            return None, "'{}' is not a provider type Predbat knows about".format(api_type)
+        # Same reasoning as provider_type_choices(): a missing URL falls back only where there
+        # is a real default for the type. For the others it stays empty and is refused below,
+        # rather than quietly becoming OpenRouter's endpoint under someone else's name.
+        url = url or PROVIDER_DEFAULT_URLS.get(api_type, "")
+        if not url.startswith(("http://", "https://")):
+            return None, "The URL for '{}' must start with http:// or https://".format(name)
+
+        # Three distinct cases, and conflating any two of them loses a key or writes a blank one
+        # over a real one: absent (or masked) means the dialog did not touch the field, so keep
+        # what apps.yaml has; an empty string means the user cleared it deliberately; anything
+        # else is a new key. saved_api_key travels alongside as the fallback for the keep case,
+        # for entries the file cannot preserve in place - a rename, or a provider written in the
+        # older loose shape - and never leaves this process.
+        saved = self._saved_api_key(agent, original)
+        api_key = posted.get("api_key")
+        if api_key is None or api_key == SECRET_MASK:
+            api_key = KEEP_EXISTING_KEY
+        else:
+            api_key = str(api_key).strip() or None
+        return {"name": name, "type": api_type, "url": url, "model": model, "api_key": api_key, "saved_api_key": saved, "original_name": original}, None
+
+    def _write_provider_block(self, cleaned):
+        """Write the validated providers into apps.yaml, returning (chat block, error message).
+
+        Existing entries are edited in place rather than replaced so their comments survive, and
+        provider entries written loosely in the chat: block - the shape documented briefly before
+        `providers:` existed - are folded in rather than left behind as config that silently stops
+        being read once `providers:` is present.
+        """
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        try:
+            with open(APPS_YAML_PATH, "r") as handle:
+                data = yaml.load(handle)
+        except Exception as error:
+            return None, "Error reading apps.yaml: {}".format(error)
+        if not isinstance(data, dict) or ROOT_YAML_KEY not in data:
+            return None, "'{}' section not found in apps.yaml".format(ROOT_YAML_KEY)
+
+        root = data[ROOT_YAML_KEY]
+        chat_block = root.get("chat")
+        if not isinstance(chat_block, dict):
+            chat_block = {}
+            root["chat"] = chat_block
+        providers = chat_block.get("providers")
+        if not isinstance(providers, dict):
+            providers = {}
+            chat_block["providers"] = providers
+
+        # Anything dict-valued sitting directly in the chat: block is a provider written in the
+        # older shape. Once `providers:` exists it is never read again, so it goes rather than
+        # lingering as settings the user can see but Predbat ignores.
+        for key in [key for key, value in list(chat_block.items()) if key != "providers" and isinstance(value, dict)]:
+            del chat_block[key]
+
+        keys_by_name = {entry["original_name"]: providers.get(entry["original_name"]) for entry in cleaned}
+        for name in [name for name in list(providers.keys()) if name not in [entry["original_name"] for entry in cleaned]]:
+            del providers[name]
+
+        for entry in cleaned:
+            existing = keys_by_name.get(entry["original_name"])
+            target = existing if isinstance(existing, dict) else {}
+            target["type"] = entry["type"]
+            target["url"] = entry["url"]
+            if entry["model"]:
+                target["model"] = entry["model"]
+            else:
+                target.pop("model", None)
+            if entry["api_key"] is KEEP_EXISTING_KEY:
+                # Left in place untouched wherever the file already carries it, so its quoting -
+                # and any anchor or alias it is written as - survives an edit to another field.
+                # The fallback covers the cases where there is nothing to leave alone: an entry
+                # being renamed, and one migrated out of the older loose shape above. Without it
+                # both would silently drop the key and leave the provider unable to answer.
+                if not target.get("api_key") and entry["saved_api_key"]:
+                    target["api_key"] = entry["saved_api_key"]
+            elif entry["api_key"]:
+                target["api_key"] = entry["api_key"]
+            else:
+                target.pop("api_key", None)
+            if entry["original_name"] != entry["name"]:
+                providers.pop(entry["original_name"], None)
+            providers[entry["name"]] = target
+
+        try:
+            with open(APPS_YAML_PATH, "w") as handle:
+                yaml.dump(data, handle)
+        except Exception as error:
+            return None, "Error writing to apps.yaml: {}".format(error)
+        return chat_block, None
+
+    async def html_chat_providers(self, request):
+        """Return the configured providers - without their keys - and the types one can be."""
+        agent = self.agent
+        if agent is None:
+            return web.json_response({"error": "Chat is not configured"}, status=404)
+        return web.json_response({"providers": agent.provider_summary(), "types": provider_type_choices(), "ready": agent.provider_ready()})
+
+    async def html_chat_provider_models(self, request):
+        """Probe one endpoint for its model list, so a provider can be set up before it is saved.
+
+        A failed probe is a 200 carrying an `error`, not an HTTP error: the request itself
+        succeeded, it is the endpoint being described that did not answer, and the dialog shows
+        that message beside the field rather than treating it as a broken page.
+        """
+        agent = self.agent
+        if agent is None:
+            return web.json_response({"error": "Chat is not configured"}, status=404)
+        body = await request.json()
+        api_type = str(body.get("type") or "").strip().lower()
+        if api_type not in PROVIDERS:
+            return web.json_response({"error": "Unknown provider type"}, status=400)
+        url = str(body.get("url") or "").strip() or default_url_for(api_type)
+        api_key = body.get("api_key")
+        if api_key is None or api_key == SECRET_MASK:
+            api_key = self._saved_api_key(agent, str(body.get("name") or "").strip())
+        else:
+            api_key = str(api_key).strip() or None
+        try:
+            models, error = await agent.run_on_agent_loop(agent.probe_models(api_type, url, api_key))
+        except AgentNotReadyError:
+            return web.json_response({"error": "The chat component is still starting"}, status=503)
+        return web.json_response({"models": models or [], "error": error})
+
+    async def html_chat_providers_post(self, request):
+        """Save the whole provider list to apps.yaml and adopt it without a restart."""
+        agent = self.agent
+        if agent is None:
+            return web.json_response({"error": "Chat is not configured"}, status=404)
+        body = await request.json()
+        posted = body.get("providers")
+        if not isinstance(posted, list):
+            return web.json_response({"error": "No providers supplied"}, status=400)
+
+        cleaned = []
+        seen = set()
+        for entry in posted:
+            clean, error = self._clean_provider(agent, entry, seen)
+            if error:
+                return web.json_response({"error": error}, status=400)
+            seen.add(clean["name"])
+            cleaned.append(clean)
+
+        active = str(body.get("active") or "").strip() or None
+        if active and active not in seen:
+            return web.json_response({"error": "'{}' is not one of the providers being saved".format(active)}, status=400)
+
+        chat_block, error = self._write_provider_block(cleaned)
+        if error:
+            return web.json_response({"error": error}, status=500)
+
+        # Only once the file write has succeeded is the live configuration changed, so a failed
+        # save never leaves Predbat running settings that are not in the file.
+        block = plain_yaml_value(chat_block)
+        self.base.args["chat"] = block
+        try:
+            selected = await agent.run_on_agent_loop(agent.apply_provider_block(copy.deepcopy(block), active))
+        except AgentNotReadyError:
+            return web.json_response({"error": "The chat component is still starting"}, status=503)
+        self.log("Chat providers saved to apps.yaml: {} ({} active)".format(", ".join(sorted(seen)) or "none", selected or "none"))
+        return web.json_response({"ok": True, "providers": agent.provider_summary(), "active": selected, "ready": agent.provider_ready()})
+
+
+def provider_type_choices():
+    """Return the provider types the Settings dialog offers, with their defaults.
+
+    Built from PROVIDERS itself so a type added to the agent appears in the dialog without a
+    second list here needing to be remembered.
+
+    Read from PROVIDER_DEFAULT_URLS directly rather than through default_url_for(), whose fallback
+    is OpenRouter's own endpoint. That fallback is right for the agent - a provider with nothing
+    configured has to dial somewhere - and wrong here, where it would prefill a form for a local
+    or generic OpenAI-compatible endpoint with openrouter.ai and invite the user to save it.
+    A type with no genuine default offers none, and the URL field starts empty.
+    """
+    return [{"type": name, "url": PROVIDER_DEFAULT_URLS.get(name, ""), "model": default_model_for(name) or "", "needs_key": bool(settings["needs_key"])} for name, settings in PROVIDERS.items()]
+
+
+def plain_yaml_value(value):
+    """Return a copy of a ruamel value as plain Python containers.
+
+    The live `args` dict is read all over Predbat and written back out by the apps.yaml page; a
+    CommentedMap works as a dict but carries the parsed file's comments and anchors with it, so
+    plain copies are what go into memory and the ruamel objects stay with the file.
+    """
+    if isinstance(value, dict):
+        return {str(key): plain_yaml_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [plain_yaml_value(item) for item in value]
+    return value
+
 
 def get_chat_styles():
     """Return the Chat tab's CSS.
@@ -516,42 +763,145 @@ body {
 }
 
 #chat-page {
-    display: grid;
-    grid-template-columns: 260px minmax(0, 1fr);
-    gap: 14px;
+    display: flex;
+    flex-direction: column;
     /* Takes whatever the header leaves. min-height: 0 is load-bearing, not tidiness: a flex item
        defaults to min-height auto, which refuses to shrink below its content, so without it the
-       grid's own content would push the page past the viewport and reintroduce the outer
-       scrollbar this whole rule exists to remove. */
+       page's own content would push past the viewport and reintroduce the outer scrollbar this
+       whole rule exists to remove. */
     flex: 1 1 auto;
     min-height: 0;
     color: var(--chat-text);
     background: var(--chat-bg);
 }
 
-#chat-sidebar {
+#chat-topbar {
+    flex: 0 0 auto;
     display: flex;
-    flex-direction: column;
-    border-right: 1px solid var(--chat-border);
-    padding-right: 10px;
-    overflow: hidden;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--chat-border);
+    /* Without this the title button refuses to shrink and a long conversation title pushes the
+       Settings and New chat buttons off the left of a phone screen. */
+    min-width: 0;
 }
 
-#chat-new {
+#chat-topbar button {
     flex: 0 0 auto;
-    margin-bottom: 8px;
-    padding: 8px 10px;
-    border: 1px solid var(--chat-accent);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 10px;
+    border: 1px solid var(--chat-border);
     border-radius: 4px;
-    background: var(--chat-accent);
-    color: #ffffff;
-    font-weight: bold;
+    background: var(--chat-panel-bg);
+    color: var(--chat-text);
+    font-size: 13px;
     cursor: pointer;
 }
 
-#chat-list {
+#chat-topbar button:hover {
+    border-color: var(--chat-accent);
+}
+
+#chat-new {
+    border-color: var(--chat-accent) !important;
+    background: var(--chat-accent) !important;
+    color: #ffffff !important;
+    font-weight: bold;
+}
+
+.chat-topbar-icon {
+    font-size: 14px;
+    line-height: 1;
+}
+
+#chat-title-wrap {
+    position: relative;
     flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    /* The whole point of the row: the title is the only thing allowed to give way. */
+    min-width: 0;
+}
+
+#chat-title-button {
+    flex: 1 1 auto !important;
+    min-width: 0;
+    justify-content: space-between;
+    border-color: transparent !important;
+    background: transparent !important;
+    font-size: 15px !important;
+    font-weight: 600;
+    text-align: left;
+}
+
+#chat-title-button:hover {
+    border-color: var(--chat-border) !important;
+    background: var(--chat-panel-bg) !important;
+}
+
+#chat-title-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#chat-title-caret {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: var(--chat-text-muted);
+}
+
+#chat-rename {
+    padding: 6px 8px !important;
+    border-color: transparent !important;
+    background: transparent !important;
+    color: var(--chat-text-muted) !important;
+}
+
+#chat-rename:hover {
+    color: var(--chat-text) !important;
+}
+
+/* The conversation list, which used to be a permanent 260px column. Anchored under the title it
+   belongs to, and above the transcript - the nav bar's own fixed elements sit higher still, but
+   nothing in this page does. */
+#chat-conv-panel {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 60;
+    width: min(380px, 85vw);
+    max-height: 60vh;
     overflow-y: auto;
+    padding: 6px;
+    border: 1px solid var(--chat-border);
+    border-radius: 6px;
+    background: var(--chat-bg);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+#chat-conv-panel.open {
+    display: block;
+}
+
+#chat-conv-empty {
+    padding: 8px;
+    font-size: 12px;
+    color: var(--chat-text-muted);
+}
+
+@media (max-width: 620px) {
+    /* Icons only: three labelled buttons plus a title do not fit a phone, and the title is the
+       one that carries information the user cannot guess from an icon. */
+    .chat-topbar-label {
+        display: none;
+    }
 }
 
 .chat-conv-row {
@@ -1134,11 +1484,14 @@ body {
 /* The three permission toggles share a wrap so they stay together as one group when the footer's
    space-between pushes the usage and cost readouts to the right. flex-wrap lets them fold onto a
    second line on a narrow window rather than squeezing the model picker. */
+/* In the Settings dialog now rather than the footer, so a column rather than a row: these are
+   set-once permissions with explanations attached, not controls a user reaches for mid-answer. */
 #chat-toggles {
-    display: inline-flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 4px 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 13px;
 }
 
 #chat-setup {
@@ -1224,55 +1577,292 @@ body {
 .chat-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     cursor: pointer;
     user-select: none;
-    white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   The Settings dialog.
+   --------------------------------------------------------------------------------------------- */
+
+#chat-no-provider {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+    padding: 8px 12px;
+    border: 1px solid var(--chat-banner-border);
+    border-radius: 4px;
+    background: var(--chat-banner-bg);
+    color: var(--chat-banner-text);
+}
+
+#chat-no-provider.visible {
+    display: flex;
+}
+
+#chat-no-provider button {
+    padding: 5px 10px;
+    border: 1px solid var(--chat-banner-text);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--chat-banner-text);
+    cursor: pointer;
+}
+
+#chat-settings {
+    display: none;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.45);
+}
+
+#chat-settings.open {
+    display: flex;
+}
+
+.chat-modal {
+    width: min(720px, 100%);
+    max-height: 88vh;
+    overflow-y: auto;
+    padding: 16px 18px 18px 18px;
+    border: 1px solid var(--chat-border);
+    border-radius: 8px;
+    background: var(--chat-bg);
+    color: var(--chat-text);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
+.chat-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.chat-modal h2 {
+    margin: 0;
+    font-size: 18px;
+}
+
+.chat-modal h3 {
+    margin: 18px 0 4px 0;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--chat-text-muted);
+}
+
+.chat-modal-note {
+    margin: 0 0 8px 0;
+    font-size: 12px;
+    color: var(--chat-text-muted);
+}
+
+#chat-settings-close {
+    border: none;
+    background: transparent;
+    color: var(--chat-text-muted);
+    font-size: 16px;
+    cursor: pointer;
+}
+
+#chat-settings-error {
+    display: none;
+    margin-top: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--chat-banner-border);
+    border-radius: 4px;
+    background: var(--chat-error-bubble);
+    color: var(--chat-error-text);
+    font-size: 13px;
+}
+
+#chat-settings-error.visible {
+    display: block;
+}
+
+.chat-provider-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid var(--chat-border);
+    border-radius: 4px;
+    margin-bottom: 6px;
+}
+
+.chat-provider-row.active {
+    border-color: var(--chat-accent);
+    background: var(--chat-user-bubble);
+}
+
+.chat-provider-radio {
+    flex: 0 0 auto;
+    margin-top: 2px;
+}
+
+.chat-provider-detail {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.chat-provider-name {
+    font-weight: 600;
+}
+
+.chat-provider-sub {
+    font-size: 12px;
+    color: var(--chat-text-muted);
+    overflow-wrap: anywhere;
+}
+
+.chat-provider-warn {
+    color: var(--chat-error-text);
+}
+
+.chat-provider-buttons {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 4px;
+}
+
+.chat-provider-buttons button,
+.chat-secondary-button,
+.chat-modal-actions button,
+.chat-form-actions button {
+    padding: 5px 10px;
+    border: 1px solid var(--chat-border);
+    border-radius: 4px;
+    background: var(--chat-panel-bg);
+    color: var(--chat-text);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+#chat-settings-save,
+#chat-provider-apply {
+    border-color: var(--chat-accent);
+    background: var(--chat-accent);
+    color: #ffffff;
+    font-weight: bold;
+}
+
+#chat-settings-save:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+#chat-provider-form {
+    display: none;
+    margin-top: 10px;
+    padding: 10px;
+    border: 1px solid var(--chat-border);
+    border-radius: 4px;
+    background: var(--chat-panel-bg);
+}
+
+#chat-provider-form.open {
+    display: block;
+}
+
+.chat-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-bottom: 10px;
+}
+
+.chat-field label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--chat-text-muted);
+}
+
+.chat-field input,
+.chat-field select {
+    padding: 6px 8px;
+    border: 1px solid var(--chat-border);
+    border-radius: 4px;
+    background: var(--chat-input-bg);
+    color: var(--chat-text);
+    font-size: 13px;
+    /* Without this a long model id or URL widens the dialog instead of fitting it. */
+    min-width: 0;
+    max-width: 100%;
+}
+
+.chat-field-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    min-width: 0;
+}
+
+.chat-field-row input {
+    flex: 1 1 auto;
+}
+
+.chat-field-note {
+    font-size: 11px;
+    color: var(--chat-text-muted);
+}
+
+.chat-field-note.chat-provider-warn {
+    color: var(--chat-error-text);
+}
+
+.chat-form-actions,
+.chat-modal-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.chat-modal-actions {
+    margin-top: 18px;
+    padding-top: 12px;
+    border-top: 1px solid var(--chat-border);
+}
+
+#chat-settings-status {
+    flex: 1 1 auto;
+    font-size: 12px;
+    color: var(--chat-text-muted);
 }
 </style>
 """
 
 
 def get_chat_setup_body():
-    """Return the Chat tab's setup page, shown when the component is not configured.
+    """Return the Chat tab's page for when the chat component itself is not running.
 
-    Deliberately concrete: the exact key, an example value, and where the file lives, because a
-    user who reaches this page has no other clue what is missing. The model is described as
-    optional because it genuinely is - the picker can set it once the key is in place.
+    Rare now that the component starts whatever apps.yaml says - a missing provider is handled on
+    the normal page by the Settings dialog, not here - so this only covers the component failing
+    to construct at all, which is a Predbat problem rather than a configuration one.
     """
     return """
 <div id="chat-page">
     <div id="chat-setup">
-        <h2>Chat is not set up yet</h2>
+        <h2>Chat is not running</h2>
         <p>
-            The Chat tab needs an <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a>
-            API key. Add one to the <code>pred_bat:</code> section of your <code>apps.yaml</code>:
-        </p>
-        <pre><code>pred_bat:
-  chat_api_key: 'sk-or-v1-...'</code></pre>
-        <p>
-            Or point it at a local model instead - anything with an OpenAI-compatible API, such as
-            <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>. No key is
-            needed, and nothing leaves your network:
-        </p>
-        <pre><code>pred_bat:
-  chat_api_url: 'http://localhost:11434/v1'</code></pre>
-        <p>
-            Predbat restarts automatically when <code>apps.yaml</code> is saved, and the Chat tab
-            becomes usable once it has. You can edit the file from the
-            <a href="./apps">apps.yaml</a> tab.
+            The chat component did not start, so there is nothing to talk to yet. This is not
+            something you can fix from this page - check the <a href="./log">log</a> for why it
+            failed to start, and the <a href="./components">components</a> page for its health.
         </p>
         <p>
-            You do not need to choose a model here. Once it is configured you can pick one from
-            the search box below the message box, and Predbat remembers it. To pin a default
-            instead, set <code>chat_model</code> (for example <code>openai/gpt-4o-mini</code>).
-            The older <code>openrouter_api_key</code>, <code>openrouter_base_url</code> and
-            <code>openrouter_default_model</code> names still work if you already have them.
-        </p>
-        <p class="chat-setup-note">
-            Chat sends tool results - including log lines and configuration - to OpenRouter and on
-            to the provider behind the model you choose. Credentials in <code>apps.yaml</code> are
-            redacted before they leave Predbat.
+            If Predbat has only just started, give it a moment and reload: components start in
+            order and the chat component is one of the last.
         </p>
     </div>
 </div>
@@ -1285,18 +1875,41 @@ def get_chat_body():
     `get_header_html()` has already opened `<body>` and written the nav bar, so this only adds
     the page's own content, following the same `<body>...` convention `web_annual.py` uses for its
     own pages.
+
+    The conversation list lives in a dropdown off the title rather than in a sidebar. A 260px
+    column is most of a phone's width for something a user looks at rarely, and keeping one
+    layout at every width means the pending badge, the active highlight and the rename and delete
+    controls exist once rather than twice.
     """
     return """
 <body>
 <div id="chat-page">
-    <div id="chat-sidebar">
-        <button id="chat-new" type="button">+ New chat</button>
-        <div id="chat-list"></div>
+    <div id="chat-topbar">
+        <button id="chat-settings-open" type="button" title="Providers, models and what the model is allowed to do">
+            <span class="chat-topbar-icon">&#9881;</span><span class="chat-topbar-label">Settings</span>
+        </button>
+        <button id="chat-new" type="button" title="Start a new chat">
+            <span class="chat-topbar-icon">+</span><span class="chat-topbar-label">New chat</span>
+        </button>
+        <span id="chat-title-wrap">
+            <button id="chat-title-button" type="button" aria-haspopup="true" aria-expanded="false" title="Switch to another chat">
+                <span id="chat-title-text">New chat</span>
+                <span id="chat-title-caret">&#9662;</span>
+            </button>
+            <button id="chat-rename" type="button" title="Rename this chat">&#9998;</button>
+            <div id="chat-conv-panel">
+                <div id="chat-list"></div>
+            </div>
+        </span>
     </div>
     <div id="chat-main">
         <div id="chat-banner"></div>
+        <div id="chat-no-provider">
+            <span>No AI provider is set up yet, so Chat cannot answer anything.</span>
+            <button id="chat-no-provider-open" type="button">Open Settings</button>
+        </div>
         <div id="chat-privacy">
-            <span>Tool results - including log lines and configuration - are sent to <strong>OpenRouter</strong>, and on to the provider behind whichever model is selected.</span>
+            <span>Tool results - including log lines and configuration - are sent to the provider you have configured, and on to whoever runs the model you choose.</span>
             <button id="chat-privacy-dismiss" type="button">Dismiss</button>
         </div>
         <div id="chat-transcript"></div>
@@ -1311,23 +1924,76 @@ def get_chat_body():
                 <div id="chat-model-list"></div>
                 <span id="chat-model-note"></span>
             </span>
-            <span id="chat-toggles">
-                <label class="chat-toggle" for="chat-confirm-writes-toggle" title="Ask before the model changes any Predbat setting or apps.yaml key. Turning this off lets it write without stopping to ask you.">
-                    <input type="checkbox" id="chat-confirm-writes-toggle" data-switch="chat_confirm_writes">
-                    Confirm writes
-                </label>
-                <label class="chat-toggle" for="chat-web-search-toggle" title="Costs extra: billed per request through OpenRouter, on top of the model's own cost. Off by default. Predbat's own documentation search does not need this and always works.">
-                    <input type="checkbox" id="chat-web-search-toggle" data-switch="chat_web_search">
-                    Web search <span class="chat-toggle-cost">(costs extra)</span>
-                </label>
-                <label class="chat-toggle" for="chat-ha-state-toggle" title="Lets the model read arbitrary Home Assistant entities and history, not just Predbat's own. On by default; also controls the MCP server, so turning it off closes those tools there too.">
-                    <input type="checkbox" id="chat-ha-state-toggle" data-switch="ai_ha_state_enable">
-                    HA state access
-                </label>
-            </span>
             <span id="chat-turn-usage"></span>
             <span id="chat-context-usage"></span>
             <span id="chat-total-cost"></span>
+        </div>
+    </div>
+</div>
+<div id="chat-settings" role="dialog" aria-modal="true" aria-labelledby="chat-settings-title">
+    <div class="chat-modal">
+        <div class="chat-modal-head">
+            <h2 id="chat-settings-title">Chat settings</h2>
+            <button id="chat-settings-close" type="button" title="Close">&#10005;</button>
+        </div>
+        <div id="chat-settings-error"></div>
+        <h3>Providers</h3>
+        <p class="chat-modal-note">Where your questions are sent. Saving writes them to <code>apps.yaml</code> and takes effect straight away.</p>
+        <div id="chat-provider-list"></div>
+        <button id="chat-provider-add" type="button" class="chat-secondary-button">+ Add provider</button>
+        <div id="chat-provider-form">
+            <div class="chat-field">
+                <label for="chat-provider-type">Provider</label>
+                <select id="chat-provider-type"></select>
+            </div>
+            <div class="chat-field">
+                <label for="chat-provider-name">Name</label>
+                <input type="text" id="chat-provider-name" autocomplete="off" spellcheck="false">
+                <span class="chat-field-note">What this endpoint is called in apps.yaml. Any name will do - it only has to be unique.</span>
+            </div>
+            <div class="chat-field">
+                <label for="chat-provider-url">URL</label>
+                <input type="text" id="chat-provider-url" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="chat-field">
+                <label for="chat-provider-key">API key</label>
+                <input type="password" id="chat-provider-key" autocomplete="off" spellcheck="false">
+                <span id="chat-provider-key-note" class="chat-field-note"></span>
+            </div>
+            <div class="chat-field">
+                <label for="chat-provider-model">Default model</label>
+                <span class="chat-field-row">
+                    <input type="text" id="chat-provider-model" list="chat-provider-model-options" autocomplete="off" spellcheck="false" placeholder="Fetch the list, or type a model id">
+                    <datalist id="chat-provider-model-options"></datalist>
+                    <button id="chat-provider-fetch" type="button" class="chat-secondary-button">Fetch models</button>
+                </span>
+                <span id="chat-provider-model-note" class="chat-field-note"></span>
+            </div>
+            <div class="chat-form-actions">
+                <button id="chat-provider-apply" type="button">Done</button>
+                <button id="chat-provider-cancel" type="button" class="chat-secondary-button">Cancel</button>
+            </div>
+        </div>
+        <h3>What the model is allowed to do</h3>
+        <p class="chat-modal-note">These are Predbat switches and take effect the moment you change them - they are not part of the Save below.</p>
+        <span id="chat-toggles">
+            <label class="chat-toggle" for="chat-confirm-writes-toggle" title="Ask before the model changes any Predbat setting or apps.yaml key. Turning this off lets it write without stopping to ask you.">
+                <input type="checkbox" id="chat-confirm-writes-toggle" data-switch="chat_confirm_writes">
+                Confirm writes
+            </label>
+            <label class="chat-toggle" for="chat-web-search-toggle" title="Costs extra: billed per request through OpenRouter, on top of the model's own cost. Off by default. Predbat's own documentation search does not need this and always works.">
+                <input type="checkbox" id="chat-web-search-toggle" data-switch="chat_web_search">
+                Web search <span class="chat-toggle-cost">(costs extra, OpenRouter only)</span>
+            </label>
+            <label class="chat-toggle" for="chat-ha-state-toggle" title="Lets the model read arbitrary Home Assistant entities and history, not just Predbat's own. On by default; also controls the MCP server, so turning it off closes those tools there too.">
+                <input type="checkbox" id="chat-ha-state-toggle" data-switch="ai_ha_state_enable">
+                HA state access
+            </label>
+        </span>
+        <div class="chat-modal-actions">
+            <span id="chat-settings-status"></span>
+            <button id="chat-settings-save" type="button">Save to apps.yaml</button>
+            <button id="chat-settings-cancel" type="button" class="chat-secondary-button">Close</button>
         </div>
     </div>
 </div>
@@ -2888,6 +3554,8 @@ function selectConversation(id) {
         // Storage unavailable (private browsing, quota) - the conversation just will not survive a reload.
     }
     highlightActiveRow(id);
+    updateChatTitle();
+    setConversationPanel(false);
     loadConversationData(id).catch(function (error) { console.error('Failed to load chat history', error); });
 }
 
@@ -2905,7 +3573,17 @@ function handleReload() {
 function renderConversationList(conversations) {
     var list = byId('chat-list');
     list.innerHTML = '';
+    // Titles are cached here because the top bar shows the current conversation's own title and
+    // has nowhere else to read it from - the transcript carries messages, not metadata.
+    state.titles = {};
+    if (!conversations.length) {
+        var empty = document.createElement('div');
+        empty.id = 'chat-conv-empty';
+        empty.textContent = 'No chats yet.';
+        list.appendChild(empty);
+    }
     conversations.forEach(function (meta) {
+        state.titles[meta.id] = meta.title || 'New chat';
         var row = document.createElement('div');
         row.className = 'chat-conv-row' + (meta.id === state.conversation ? ' active' : '');
         row.setAttribute('data-id', meta.id);
@@ -2957,6 +3635,47 @@ function renderConversationList(conversations) {
 
         list.appendChild(row);
     });
+    updateChatTitle();
+}
+
+// ---------------------------------------------------------------------------------------------
+// The conversation dropdown, which replaced the sidebar. The list itself is unchanged - the same
+// rows, the same pending badge and the same rename and delete buttons - it is only where they
+// are shown that moved.
+// ---------------------------------------------------------------------------------------------
+
+function updateChatTitle() {
+    var title = state.conversation ? (state.titles || {})[state.conversation] : null;
+    setTitleText(byId('chat-title-text'), title || 'New chat');
+    // Renaming needs something to rename. Nothing is selected on a first visit, and after the
+    // current conversation is deleted.
+    byId('chat-rename').disabled = !state.conversation;
+}
+
+function conversationPanelOpen() {
+    return byId('chat-conv-panel').classList.contains('open');
+}
+
+function setConversationPanel(open) {
+    byId('chat-conv-panel').classList.toggle('open', !!open);
+    byId('chat-title-button').setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+        // Costs and relative times go stale while the panel is shut, and a turn started in
+        // another browser may have added a pending badge, so the list is refetched on open
+        // rather than shown as it was whenever it was last drawn.
+        refreshConversations();
+    }
+}
+
+function toggleConversationPanel() {
+    setConversationPanel(!conversationPanelOpen());
+}
+
+function renameCurrentConversation() {
+    if (!state.conversation) {
+        return;
+    }
+    renameConversation(state.conversation, (state.titles || {})[state.conversation]);
 }
 
 function refreshConversations() {
@@ -3032,6 +3751,7 @@ function deleteConversation(id) {
                     // Storage unavailable - nothing to clean up.
                 }
                 clearThinkingBubble();
+                updateChatTitle();
                 byId('chat-transcript').innerHTML = '';
                 if (state.source) {
                     state.source.close();
@@ -3097,6 +3817,399 @@ function sendMessage() {
     doSend(state.conversation, text);
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Settings: providers and permissions.
+//
+// The provider list is edited entirely client-side and posted as a whole on Save, so a half-made
+// edit - a name typed but no URL yet, a provider being swapped for another - never reaches
+// apps.yaml. The server takes the full list and makes the file match it, which is also what makes
+// removal work without a delete route of its own.
+//
+// API keys are never sent to this page. An entry says whether a key is set, and an empty key
+// field means "leave whatever is in apps.yaml alone" - so editing a provider's URL cannot
+// accidentally blank its credentials, and the browser never holds one.
+// ---------------------------------------------------------------------------------------------
+
+var settings = { providers: [], types: [], active: null, editing: null, loaded: false };
+
+function settingsOpen() {
+    return byId('chat-settings').classList.contains('open');
+}
+
+function openSettings() {
+    byId('chat-settings').classList.add('open');
+    setConversationPanel(false);
+    showSettingsError('');
+    setSettingsStatus('');
+    loadProviders();
+    loadHaStateStatus();
+}
+
+function closeSettings() {
+    byId('chat-settings').classList.remove('open');
+    closeProviderForm();
+}
+
+function showSettingsError(message) {
+    var node = byId('chat-settings-error');
+    node.textContent = message || '';
+    node.classList.toggle('visible', !!message);
+}
+
+function setSettingsStatus(message) {
+    byId('chat-settings-status').textContent = message || '';
+}
+
+function loadProviders() {
+    return fetch('./chat/providers')
+        .then(function (response) { return response.json(); })
+        .then(function (payload) {
+            if (payload.error) {
+                showSettingsError(payload.error);
+                return;
+            }
+            settings.providers = (payload.providers || []).map(function (entry) {
+                // original_name is what the server looks the saved API key up under, so it has to
+                // survive a rename in this dialog - it is the name in apps.yaml, not the one on
+                // screen. api_key stays null until somebody types one.
+                return { name: entry.name, type: entry.type, url: entry.url, model: entry.model || '', has_key: !!entry.has_key, needs_key: !!entry.needs_key, configured: !!entry.configured, original_name: entry.name, api_key: null };
+            });
+            settings.types = payload.types || [];
+            settings.active = (payload.providers || []).reduce(function (found, entry) { return entry.active ? entry.name : found; }, null);
+            settings.loaded = true;
+            renderProviderTypes();
+            renderProviderList();
+            setProviderReady(!!payload.ready);
+        })
+        .catch(function (error) {
+            console.error('Failed to load providers', error);
+            showSettingsError('Could not load the provider list.');
+        });
+}
+
+function setProviderReady(ready) {
+    byId('chat-no-provider').classList.toggle('visible', !ready);
+}
+
+function providerType(name) {
+    return settings.types.filter(function (entry) { return entry.type === name; })[0] || null;
+}
+
+function renderProviderTypes() {
+    var select = byId('chat-provider-type');
+    if (select.options.length === settings.types.length && select.options.length) {
+        return;
+    }
+    select.innerHTML = '';
+    settings.types.forEach(function (entry) {
+        var option = document.createElement('option');
+        option.value = entry.type;
+        option.textContent = entry.type;
+        select.appendChild(option);
+    });
+}
+
+function renderProviderList() {
+    var list = byId('chat-provider-list');
+    list.innerHTML = '';
+    if (!settings.providers.length) {
+        var empty = document.createElement('p');
+        empty.className = 'chat-modal-note';
+        empty.textContent = 'No providers yet. Add one to start chatting.';
+        list.appendChild(empty);
+        return;
+    }
+    settings.providers.forEach(function (entry, index) {
+        var row = document.createElement('div');
+        row.className = 'chat-provider-row' + (entry.name === settings.active ? ' active' : '');
+
+        var radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'chat-active-provider';
+        radio.className = 'chat-provider-radio';
+        radio.checked = entry.name === settings.active;
+        radio.title = 'Use this provider';
+        radio.addEventListener('change', function () {
+            settings.active = entry.name;
+            renderProviderList();
+        });
+        row.appendChild(radio);
+
+        var detail = document.createElement('div');
+        detail.className = 'chat-provider-detail';
+        var name = document.createElement('div');
+        name.className = 'chat-provider-name';
+        name.textContent = entry.name + ' (' + entry.type + ')';
+        detail.appendChild(name);
+
+        var sub = document.createElement('div');
+        sub.className = 'chat-provider-sub';
+        sub.textContent = entry.url;
+        detail.appendChild(sub);
+
+        var extra = document.createElement('div');
+        extra.className = 'chat-provider-sub';
+        var bits = [entry.model ? entry.model : 'no default model'];
+        if (entry.api_key) {
+            bits.push('new key entered');
+        } else if (entry.has_key) {
+            bits.push('key saved');
+        } else if (entry.needs_key) {
+            bits.push('no key');
+        }
+        extra.textContent = bits.join(' - ');
+        detail.appendChild(extra);
+
+        // A provider that cannot answer is worth saying so about here, where it can be fixed,
+        // rather than leaving the user to find out when a question fails.
+        if (entry.needs_key && !entry.has_key && !entry.api_key) {
+            var warn = document.createElement('div');
+            warn.className = 'chat-provider-sub chat-provider-warn';
+            warn.textContent = 'Needs an API key before it can answer.';
+            detail.appendChild(warn);
+        }
+        row.appendChild(detail);
+
+        var buttons = document.createElement('div');
+        buttons.className = 'chat-provider-buttons';
+        var edit = document.createElement('button');
+        edit.type = 'button';
+        edit.textContent = 'Edit';
+        edit.addEventListener('click', function () { openProviderForm(index); });
+        var remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = 'Remove';
+        remove.addEventListener('click', function () { removeProvider(index); });
+        buttons.appendChild(edit);
+        buttons.appendChild(remove);
+        row.appendChild(buttons);
+
+        list.appendChild(row);
+    });
+}
+
+function removeProvider(index) {
+    var entry = settings.providers[index];
+    if (!entry || !window.confirm('Remove the provider "' + entry.name + '"?')) {
+        return;
+    }
+    settings.providers.splice(index, 1);
+    if (settings.active === entry.name) {
+        settings.active = settings.providers.length ? settings.providers[0].name : null;
+    }
+    closeProviderForm();
+    renderProviderList();
+    setSettingsStatus('Not saved yet.');
+}
+
+// A name that is unique among the providers already listed, so adding two of the same type in a
+// row does not produce a duplicate the server would refuse.
+function uniqueProviderName(base) {
+    var taken = settings.providers.map(function (entry) { return entry.name; });
+    if (taken.indexOf(base) < 0) {
+        return base;
+    }
+    var suffix = 2;
+    while (taken.indexOf(base + '-' + suffix) >= 0) {
+        suffix += 1;
+    }
+    return base + '-' + suffix;
+}
+
+function openProviderForm(index) {
+    var entry = index === null || index === undefined ? null : settings.providers[index];
+    var type = entry ? entry.type : (settings.types.length ? settings.types[0].type : 'openrouter');
+    var defaults = providerType(type) || { url: '', model: '' };
+    settings.editing = entry ? index : null;
+    byId('chat-provider-type').value = type;
+    byId('chat-provider-name').value = entry ? entry.name : uniqueProviderName(type);
+    byId('chat-provider-url').value = entry ? entry.url : defaults.url;
+    byId('chat-provider-model').value = entry ? entry.model : defaults.model;
+    byId('chat-provider-key').value = '';
+    byId('chat-provider-model-options').innerHTML = '';
+    setProviderNote('chat-provider-model-note', '');
+    updateKeyNote();
+    byId('chat-provider-form').classList.add('open');
+    showSettingsError('');
+}
+
+function closeProviderForm() {
+    settings.editing = null;
+    byId('chat-provider-form').classList.remove('open');
+}
+
+function setProviderNote(id, message, warn) {
+    var node = byId(id);
+    node.textContent = message || '';
+    node.classList.toggle('chat-provider-warn', !!warn);
+}
+
+function updateKeyNote() {
+    var type = byId('chat-provider-type').value;
+    var entry = settings.editing === null ? null : settings.providers[settings.editing];
+    var defaults = providerType(type);
+    var input = byId('chat-provider-key');
+    if (entry && (entry.has_key || entry.api_key)) {
+        input.placeholder = 'A key is already saved - leave blank to keep it';
+        setProviderNote('chat-provider-key-note', 'Type a new key to replace it. Clearing it is not possible from here - remove the provider instead.');
+        return;
+    }
+    if (defaults && !defaults.needs_key) {
+        input.placeholder = 'Not usually needed';
+        setProviderNote('chat-provider-key-note', 'Local endpoints do not normally need a key. Leave this blank unless yours is behind a proxy that wants one.');
+        return;
+    }
+    input.placeholder = '';
+    setProviderNote('chat-provider-key-note', 'Required before this provider can answer anything.');
+}
+
+// Changing the type re-points the URL and model, but only when they are still a default - a URL
+// the user typed themselves must survive flipping the type to correct a wrong guess.
+function changeProviderType() {
+    var defaults = providerType(byId('chat-provider-type').value);
+    if (!defaults) {
+        return;
+    }
+    var urlField = byId('chat-provider-url');
+    var modelField = byId('chat-provider-model');
+    var knownUrls = settings.types.map(function (entry) { return entry.url; });
+    var knownModels = settings.types.map(function (entry) { return entry.model; });
+    if (!urlField.value || knownUrls.indexOf(urlField.value) >= 0) {
+        urlField.value = defaults.url;
+    }
+    if (!modelField.value || knownModels.indexOf(modelField.value) >= 0) {
+        modelField.value = defaults.model;
+    }
+    byId('chat-provider-model-options').innerHTML = '';
+    setProviderNote('chat-provider-model-note', '');
+    updateKeyNote();
+}
+
+function fetchProviderModels() {
+    var entry = settings.editing === null ? null : settings.providers[settings.editing];
+    var button = byId('chat-provider-fetch');
+    var typedKey = byId('chat-provider-key').value;
+    var payload = {
+        type: byId('chat-provider-type').value,
+        url: byId('chat-provider-url').value.trim(),
+        // null, not an empty string: an empty string means "no key", while null means "use the
+        // one already saved for this provider", which is the only way to probe an existing
+        // endpoint without the browser ever seeing its key.
+        api_key: typedKey ? typedKey : null,
+        name: entry ? entry.original_name : ''
+    };
+    button.disabled = true;
+    setProviderNote('chat-provider-model-note', 'Asking ' + (payload.url || 'the endpoint') + '...');
+    fetch('./chat/providers/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        .then(function (response) { return response.json(); })
+        .then(function (result) {
+            button.disabled = false;
+            if (result.error) {
+                setProviderNote('chat-provider-model-note', result.error + ' You can still type a model id by hand.', true);
+                return;
+            }
+            var options = byId('chat-provider-model-options');
+            options.innerHTML = '';
+            (result.models || []).forEach(function (model) {
+                var option = document.createElement('option');
+                option.value = model.id;
+                option.label = model.name || model.id;
+                options.appendChild(option);
+            });
+            setProviderNote('chat-provider-model-note', 'Found ' + (result.models || []).length + ' tool-capable models - start typing to search them.');
+        })
+        .catch(function (error) {
+            button.disabled = false;
+            console.error('Failed to fetch models', error);
+            setProviderNote('chat-provider-model-note', 'Could not ask the server for the model list.', true);
+        });
+}
+
+function applyProviderForm() {
+    var name = byId('chat-provider-name').value.trim();
+    var type = byId('chat-provider-type').value;
+    var url = byId('chat-provider-url').value.trim() || (providerType(type) || {}).url || '';
+    var model = byId('chat-provider-model').value.trim();
+    var key = byId('chat-provider-key').value;
+    var editing = settings.editing;
+
+    if (!name) {
+        showSettingsError('Give the provider a name.');
+        return;
+    }
+    var clash = settings.providers.filter(function (entry, index) { return entry.name === name && index !== editing; });
+    if (clash.length) {
+        showSettingsError('There is already a provider called "' + name + '".');
+        return;
+    }
+    if (!/^https?:\/\//.test(url)) {
+        showSettingsError('The URL must start with http:// or https://');
+        return;
+    }
+
+    var defaults = providerType(type) || {};
+    if (editing === null) {
+        settings.providers.push({ name: name, type: type, url: url, model: model, has_key: false, needs_key: !!defaults.needs_key, configured: false, original_name: name, api_key: key || null });
+        if (!settings.active) {
+            settings.active = name;
+        }
+    } else {
+        var entry = settings.providers[editing];
+        if (settings.active === entry.name) {
+            settings.active = name;
+        }
+        entry.name = name;
+        entry.type = type;
+        entry.url = url;
+        entry.model = model;
+        entry.needs_key = !!defaults.needs_key;
+        if (key) {
+            entry.api_key = key;
+        }
+    }
+    showSettingsError('');
+    closeProviderForm();
+    renderProviderList();
+    setSettingsStatus('Not saved yet.');
+}
+
+function saveSettings() {
+    var button = byId('chat-settings-save');
+    var payload = {
+        active: settings.active,
+        providers: settings.providers.map(function (entry) {
+            return { name: entry.name, type: entry.type, url: entry.url, model: entry.model, api_key: entry.api_key, original_name: entry.original_name };
+        })
+    };
+    button.disabled = true;
+    setSettingsStatus('Saving...');
+    fetch('./chat/providers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        .then(function (response) { return response.json(); })
+        .then(function (result) {
+            button.disabled = false;
+            if (result.error) {
+                setSettingsStatus('');
+                showSettingsError(result.error);
+                return;
+            }
+            showSettingsError('');
+            setSettingsStatus('Saved to apps.yaml.');
+            // Reloaded rather than assumed: the server decides which provider ends up active, and
+            // has_key now reflects what is really in the file rather than what was typed here.
+            loadProviders();
+            // The catalogue belongs to whichever provider is now active, so the footer picker has
+            // to be refetched - its old contents are another endpoint's models.
+            loadModels();
+        })
+        .catch(function (error) {
+            button.disabled = false;
+            console.error('Failed to save providers', error);
+            setSettingsStatus('');
+            showSettingsError('Could not save to apps.yaml.');
+        });
+}
+
 // ---------------------------------------------------------------------------------------------
 // Startup.
 // ---------------------------------------------------------------------------------------------
@@ -3117,6 +4230,45 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
     chatToggles().forEach(function (toggle) { toggle.addEventListener('change', changeChatSwitch); });
+
+    byId('chat-title-button').addEventListener('click', function (event) {
+        event.stopPropagation();
+        toggleConversationPanel();
+    });
+    byId('chat-rename').addEventListener('click', renameCurrentConversation);
+    byId('chat-settings-open').addEventListener('click', openSettings);
+    byId('chat-no-provider-open').addEventListener('click', openSettings);
+    byId('chat-settings-close').addEventListener('click', closeSettings);
+    byId('chat-settings-cancel').addEventListener('click', closeSettings);
+    byId('chat-settings-save').addEventListener('click', saveSettings);
+    byId('chat-provider-add').addEventListener('click', function () { openProviderForm(null); });
+    byId('chat-provider-apply').addEventListener('click', applyProviderForm);
+    byId('chat-provider-cancel').addEventListener('click', closeProviderForm);
+    byId('chat-provider-fetch').addEventListener('click', fetchProviderModels);
+    byId('chat-provider-type').addEventListener('change', changeProviderType);
+    // Clicking the backdrop closes; clicking the dialog itself must not, so the panel stops the
+    // event before it reaches the overlay it sits inside.
+    byId('chat-settings').addEventListener('click', function (event) {
+        if (event.target === byId('chat-settings')) {
+            closeSettings();
+        }
+    });
+
+    document.addEventListener('click', function (event) {
+        if (conversationPanelOpen() && !byId('chat-title-wrap').contains(event.target)) {
+            setConversationPanel(false);
+        }
+    });
+    document.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape') {
+            return;
+        }
+        if (settingsOpen()) {
+            closeSettings();
+        } else if (conversationPanelOpen()) {
+            setConversationPanel(false);
+        }
+    });
 
     byId('chat-input').addEventListener('keydown', function (event) {
         if (event.key === 'Enter' && !event.shiftKey) {
@@ -3144,7 +4296,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
     loadModels();
     loadHaStateStatus();
+    // Loaded on every page view, not only when the dialog opens: this is what decides whether the
+    // "no provider" banner is shown, and a user with nothing configured needs to be told that
+    // before they type a question into a box that cannot answer it.
+    loadProviders();
     refreshConversations();
+    updateChatTitle();
     if (state.conversation) {
         selectConversation(state.conversation);
     }

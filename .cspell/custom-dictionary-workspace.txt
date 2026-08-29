@@ -251,6 +251,7 @@ hanres
 HAOS
 harvi
 hasattr
+haspopup
 hass
 hassapi
 hassio
@@ -308,6 +309,7 @@ kvarh
 kwargs
 kwhb
 labelcolor
+labelledby
 labelnames
 larr
 libbi
@@ -533,6 +535,7 @@ sigen
 sigencloud
 sigenergy
 sigenstor
+skynet
 Slee
 slugified
 slugifies
@@ -613,6 +616,7 @@ timezone
 tmpfs
 tmrw
 tojson
+topbar
 tottime
 trapezoidally
 trapz

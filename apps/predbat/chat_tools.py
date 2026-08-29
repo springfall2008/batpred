@@ -324,8 +324,13 @@ SOURCE_PATTERN_MAX = 200
 # credential never moves, so is_secret_key sees nothing wrong, but it ends up at an attacker's
 # endpoint just the same - a live route given that fetch_url can carry an injected instruction
 # and confirm_writes is a one-click toggle. The suffix rule covers keys added later; the
-# explicit names cover the two that match no suffix rule worth writing.
-ENDPOINT_KEY_NAMES = ("ha_url", "openrouter_base_url")
+# explicit names cover the ones that match no suffix rule worth writing.
+#
+# A bare "url" is one of those, and matters more than it looks: the chat: block's provider entries
+# are {url, api_key} pairs, so repointing chat.providers.<name>.url sends that provider's key -
+# which is_secret_key protects the value of, and which never changes - to whichever host the new
+# value names. The suffix rule does not cover it, because "url" does not end in "_url".
+ENDPOINT_KEY_NAMES = ("url", "ha_url", "openrouter_base_url")
 ENDPOINT_KEY_SUFFIXES = ("_url", "_host", "_endpoint", "_base_url")
 
 

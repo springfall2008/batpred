@@ -130,23 +130,29 @@ The Compare View provides access to Predbat's [Compare Energy Tariff feature](co
 ### Chat View
 
 The Chat tab gives you a conversational way to ask about your Predbat setup, backed by a large
-language model served through OpenRouter. It needs an `openrouter_api_key` in `apps.yaml`; until
-that is set the tab is still there, showing a short page telling you which key to add rather than
+language model. That model can be a hosted one reached through
+[OpenRouter](https://openrouter.ai), or one running on your own machine through
+[Ollama](https://ollama.com) or anything else with an OpenAI-compatible API. Until a provider is
+configured the tab is still there, showing a banner offering to open **Settings** rather than
 vanishing without explanation.
 
 A banner across the top of the page is a standing reminder that tool results - including log
-lines and configuration - are sent to OpenRouter and on to whichever provider serves the selected
-model; dismissing it persists in that browser (via `localStorage`) until its site data is
-cleared, not just for the current session. Read the
+lines and configuration - are sent to whichever provider you have configured, and on to whoever
+serves the model you choose; dismissing it persists in that browser (via `localStorage`) until its
+site data is cleared, not just for the current session. Read the
 [chat component's security note](components.md#security-note-chat) before enabling the feature -
 in particular, the web interface has no login of its own, so anyone who can reach it can use the
 chat and read every saved conversation.
 
-The sidebar lists your saved conversations, newest first, each showing when it was last updated
-and its running cost; click **+ New chat** to start another, click a conversation to switch to it,
-and click the &#10005; next to one to delete it. Deleting hides a conversation immediately, but its
-stored copy is not removed - it remains on disk until it ages out after `chat_expiry_days` of
-inactivity, the same as any conversation you have not touched.
+#### Finding your way around
+
+Across the top of the page are a **Settings** button, a **New chat** button, and the title of the
+conversation you are reading. Click the title to drop down the list of your saved conversations,
+newest first, each showing when it was last updated and its running cost; click one to switch to
+it, or the &#10005; beside it to delete it. The pencil next to the title renames the conversation
+you are in. Deleting hides a conversation immediately, but its stored copy is not removed - it
+remains on disk until it ages out after `chat_expiry_days` of inactivity, the same as any
+conversation you have not touched.
 
 Only one reply runs at a time across the whole installation - not just per conversation - so the
 composer locks itself while a reply is in progress, whichever conversation it belongs to, and a
@@ -158,30 +164,54 @@ confirmation card appears in the transcript showing the tool name and the exact 
 to call it with, and the turn waits for you to **Approve** or **Reject** it. Turn the switch off
 if you would rather the agent act without asking first.
 
+#### Settings
+
+**Settings** is where you tell Predbat which AI providers to use. Each one has a name of your
+choosing, a type (`openrouter`, `ollama`, `openai` or `local`), the URL of its endpoint, an API
+key where the provider needs one, and a default model. Choosing a type fills in the endpoint and a
+sensible default model for you, so adding a local Ollama is usually just picking `ollama` and
+saving.
+
+**Fetch models** asks that endpoint what it serves and turns the model box into a searchable list,
+which works before the provider has been saved - so you can pick a real model while setting it up
+rather than saving blind and finding out afterwards. Only tool-capable models are offered: a model
+that cannot call tools cannot drive the agent at all, and would answer from its own guesswork
+rather than from your plan. If the endpoint cannot be reached the box stays free text and tells
+you why.
+
+The radio button beside each provider chooses which one is used. **Save to apps.yaml** writes the
+lot into the `chat:` block of your `apps.yaml` and takes effect straight away, with no restart.
+Your API keys are never sent to this page - a provider shows only whether a key is set, and
+leaving the key box empty when you edit one keeps the key already in the file, so changing a URL
+cannot wipe your credentials. See [AI Chat Agent](apps-yaml.md#ai-chat-agent) for the file format
+if you would rather edit it by hand.
+
+Below the providers are the agent's three permission toggles - **Confirm writes**, **Web search**
+and **HA state access**. They are the same switches as `switch.predbat_chat_confirm_writes`,
+`switch.predbat_chat_web_search` and `switch.predbat_ai_ha_state_enable` under
+[Config](#config-view), not a per-tab copy of them: a change here takes effect everywhere, which
+for HA state access includes the MCP server, and applies the moment you make it rather than
+waiting for the Save button. See the
+[chat component's switch table](components.md#ai-chat-agent-chat) for what each one allows.
+
+#### Choosing a model
+
 A model search box under the message box lets you choose a different model for that one
 conversation. Each result shows its price and context window - the price is US dollars per
 million tokens, input then output, so `$2/$10  1000k` means $2 per million tokens in, $10 per
 million out, with a one-million-token context. Models that cost nothing show `free`, and
 OpenRouter's routing models (`openrouter/auto` and similar) show `varies`, because what they cost
-depends on which model they route your request to. Click it and type to filter - OpenRouter offers several hundred tool-capable models,
-so it filters on both id and name rather than being a plain dropdown. Your choice is remembered as
-the starting point for new conversations and survives a restart, so setting
-`openrouter_default_model` in `apps.yaml` is optional; if you do set it, it is what new
-conversations use until you pick something else. If OpenRouter's catalogue cannot be fetched, only
-the configured model is offered.
+depends on which model they route your request to. Click it and type to filter - OpenRouter offers
+several hundred tool-capable models, so it filters on both id and name rather than being a plain
+dropdown. Your choice is remembered per provider as the starting point for new conversations and
+survives a restart, so setting a provider's `model` in `apps.yaml` is optional; if you do set it,
+it is what new conversations use until you pick something else. If the provider's catalogue cannot
+be fetched, only the configured model is offered.
 
-Next to it are the agent's three permission toggles - **Confirm writes**, **Web search** and **HA
-state access** - so you can grant or withdraw a permission without leaving the conversation. They
-are the same switches as `switch.predbat_chat_confirm_writes`,
-`switch.predbat_chat_web_search` and `switch.predbat_ai_ha_state_enable` under
-[Config](#config-view), not a per-tab copy of them: a change here takes effect everywhere, which
-for HA state access includes the MCP server. See the
-[chat component's switch table](components.md#ai-chat-agent-chat) for what each one allows.
-
-Beside those, Predbat shows the token usage and cost of the turn that just completed, the
+Beside it, Predbat shows the token usage and cost of the turn that just completed, the
 conversation's context size against the selected model's limit, and the running total cost for
-the whole conversation - the costs come from OpenRouter's own reported pricing for the model in
-use.
+the whole conversation - the costs come from the provider's own reported pricing for the model in
+use, where it publishes any.
 
 ### Log View
 

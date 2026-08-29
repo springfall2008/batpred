@@ -15,7 +15,9 @@ one performs no network I/O, which is the same trick test_web_annual.py uses.
 
 import asyncio
 import json
+import os
 import re
+import tempfile
 import threading
 import time
 
@@ -112,21 +114,38 @@ def test_routes_always_registered_handlers_404_unconfigured(my_predbat):
         app = aiohttp_web.Application()
         interface._register_chat_routes(app)
         paths = {str(route.resource.canonical) for route in app.router.routes()}
-        expected_routes = ["/chat", "/chat/conversations", "/chat/history", "/chat/send", "/chat/stream", "/chat/confirm", "/chat/cancel", "/chat/delete", "/chat/rename", "/chat/models", "/chat/model", "/chat/status"]
+        expected_routes = [
+            "/chat",
+            "/chat/conversations",
+            "/chat/history",
+            "/chat/send",
+            "/chat/stream",
+            "/chat/confirm",
+            "/chat/cancel",
+            "/chat/delete",
+            "/chat/rename",
+            "/chat/models",
+            "/chat/model",
+            "/chat/status",
+            "/chat/providers",
+            "/chat/providers/models",
+        ]
         for expected in expected_routes:
             if expected not in paths:
                 print("ERROR: route {} was not registered with no chat component present, got {}".format(expected, sorted(paths)))
                 failed = True
 
-        # /chat is the exception to the 404 rule: a person typing it into a browser gets the
-        # setup page telling them which apps.yaml key to set. The JSON data routes below still
-        # 404, because their caller is the page's own script rather than a human.
+        # /chat is the exception to the 404 rule: a person typing it into a browser gets a page
+        # explaining that the component is not running, rather than an error. Configuration is no
+        # longer this page's job - a missing provider is handled by the Settings dialog on the
+        # normal page - so what it has to explain is that there is nothing to talk to at all. The
+        # JSON data routes below still 404, because their caller is the page's own script.
         response = asyncio.run(interface.chat_page.html_chat(FakeRequest()))
         if response.status != 200:
             print("ERROR: html_chat returned {} with no chat component, expected the setup page".format(response.status))
             failed = True
-        if "openrouter_api_key" not in getattr(response, "text", ""):
-            print("ERROR: the unconfigured chat page does not name the key to set")
+        if "Chat is not running" not in getattr(response, "text", "") or "./log" not in getattr(response, "text", ""):
+            print("ERROR: the unconfigured chat page does not explain that the component is not running")
             failed = True
 
         my_predbat.components = WithChat()
@@ -189,9 +208,9 @@ def test_chat_routes_survive_the_real_phase_order(my_predbat):
             print("ERROR: chat reported enabled before the chat component exists")
             failed = True
         # /chat serves the setup page rather than 404ing, so a user who lands here before the
-        # component exists is told which apps.yaml key to set instead of seeing an error.
+        # component exists is told what is happening instead of seeing an error.
         response = asyncio.run(interface.chat_page.html_chat(FakeRequest()))
-        if response.status != 200 or "openrouter_api_key" not in getattr(response, "text", ""):
+        if response.status != 200 or "Chat is not running" not in getattr(response, "text", ""):
             print("ERROR: /chat did not serve the setup page before phase 1, got {}".format(response.status))
             failed = True
 
@@ -863,17 +882,22 @@ def test_chat_page_assembles_real_content(my_predbat):
     failed = False
     print("**** Testing the Chat tab page assembly ****")
     styles = web_chat.get_chat_styles()
-    if "<style" not in styles or "chat-sidebar" not in styles:
+    if "<style" not in styles or "chat-topbar" not in styles:
         print("ERROR: get_chat_styles() does not look like a real stylesheet: {!r}".format(styles[:200]))
         failed = True
 
     body = web_chat.get_chat_body()
-    for element_id in ["chat-sidebar", "chat-list", "chat-new", "chat-banner", "chat-transcript", "chat-composer", "chat-input", "chat-stop", "chat-footer", "chat-model", "chat-turn-usage", "chat-context-usage", "chat-total-cost", "chat-privacy"]:
+    for element_id in ["chat-topbar", "chat-list", "chat-new", "chat-banner", "chat-transcript", "chat-composer", "chat-input", "chat-stop", "chat-footer", "chat-model", "chat-turn-usage", "chat-context-usage", "chat-total-cost", "chat-privacy"]:
         if element_id not in body:
             print("ERROR: get_chat_body() is missing #{}".format(element_id))
             failed = True
-    if "openrouter" not in body.lower():
-        print("ERROR: the privacy banner does not name OpenRouter as the destination for tool results")
+    # The banner no longer names OpenRouter: with several providers configurable there is no one
+    # destination to name, so it has to describe where the results go rather than assert a brand.
+    # Checked against the banner's own text, not the whole page - "OpenRouter" still appears in a
+    # tooltip, so a substring test over the body would pass without the banner saying anything.
+    banner = body[body.index('id="chat-privacy"') : body.index('id="chat-privacy-dismiss"')]
+    if "provider" not in banner.lower() or "tool results" not in banner.lower():
+        print("ERROR: the privacy banner does not say that tool results reach the configured provider: {!r}".format(banner))
         failed = True
 
     script = web_chat.get_chat_script()
@@ -2610,6 +2634,484 @@ def test_busy_banner_only_points_at_another_conversation(my_predbat):
     return failed
 
 
+# -------------------------------------------------------------------------------------------------
+# Provider settings.
+# -------------------------------------------------------------------------------------------------
+
+APPS_YAML_WITH_PROVIDERS = """pred_bat:
+  # A comment that must survive a provider edit
+  battery_size: 9.5
+  chat:
+    max_tool_rounds: 8
+    providers:
+      openrouter:
+        type: openrouter
+        url: 'https://openrouter.ai/api/v1'
+        api_key: 'sk-or-secret-value'
+        model: 'a/model'
+"""
+
+# The shape documented briefly before `providers:` existed: entries written straight into the chat
+# block. extract_providers() still reads it, so the dialog has to migrate it rather than orphan it.
+APPS_YAML_LOOSE_PROVIDERS = """pred_bat:
+  battery_size: 9.5
+  chat:
+    openrouter:
+      url: 'https://openrouter.ai/api/v1'
+      api_key: 'sk-or-loose-value'
+"""
+
+
+class _ProbeAgent:
+    """An agent stand-in that records what probe_models() was asked to dial."""
+
+    def __init__(self, providers=None):
+        """Present a provider list and capture probe calls."""
+        self.providers = providers or [{"name": "openrouter", "type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "sk-or-secret-value", "model": "a/model", "settings": {"needs_key": True}, "configured": True}]
+        self.calls = []
+
+    async def probe_models(self, api_type, url, api_key):
+        """Record the arguments and return a one-model catalogue."""
+        self.calls.append({"type": api_type, "url": url, "api_key": api_key})
+        return [{"id": "probe/model", "name": "Probe"}], None
+
+    @staticmethod
+    async def run_on_agent_loop(coro):
+        """Await inline, standing in for the real cross-loop marshalling."""
+        return await coro
+
+
+def _apps_yaml_fixture(contents):
+    """Write an apps.yaml into a temporary directory and return its path."""
+    directory = tempfile.mkdtemp(prefix="predbat_chat_providers_")
+    path = os.path.join(directory, "apps.yaml")
+    with open(path, "w") as handle:
+        handle.write(contents)
+    return path
+
+
+def _run_inline_on_agent(agent):
+    """Let an agent's run_on_agent_loop await inline, as if its own loop were already running.
+
+    The real one marshals onto the component's loop and refuses until that loop exists, which is
+    correct for the component and useless for a test - so the marshalling is replaced while the
+    coroutines it would have carried (apply_provider_block, and everything under it) stay real.
+    """
+
+    async def inline(coro):
+        """Await the coroutine on this loop."""
+        return await coro
+
+    agent.run_on_agent_loop = inline
+    return agent
+
+
+def _save_providers(page, providers, active=None):
+    """POST a provider list to the save route and return (status, decoded body)."""
+    response = asyncio.run(page.html_chat_providers_post(FakeRequest(body={"providers": providers, "active": active})))
+    return response.status, json.loads(response.text)
+
+
+def test_provider_list_route_never_hands_a_key_to_the_browser(my_predbat):
+    """/chat/providers reports that a key is set without ever sending its value.
+
+    The dialog needs to show 'key saved' and to let a key be replaced. Neither needs the key
+    itself, and a route that returned it would put a live credential into a page, into the
+    browser's memory, and into anything logging the response - for no gain at all.
+    """
+    failed = False
+    print("**** Testing the /chat/providers list route ****")
+
+    agent = _make_agent(my_predbat, providers={"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "sk-or-secret-value", "model": "a/model"}})
+    page = _make_web(my_predbat, agent=agent).chat_page
+    response = asyncio.run(page.html_chat_providers(FakeRequest()))
+    if response.status != 200:
+        print("ERROR: /chat/providers returned {}, expected 200".format(response.status))
+        failed = True
+    if "sk-or-secret-value" in response.text:
+        print("ERROR: the API key was sent to the browser: {!r}".format(response.text))
+        failed = True
+    body = json.loads(response.text)
+    entries = body.get("providers") or []
+    if len(entries) != 1 or entries[0].get("name") != "openrouter":
+        print("ERROR: unexpected provider list: {}".format(entries))
+        failed = True
+    elif not entries[0].get("has_key") or not entries[0].get("configured") or not entries[0].get("active"):
+        print("ERROR: the configured provider should report has_key/configured/active: {}".format(entries[0]))
+        failed = True
+    elif "api_key" in entries[0]:
+        print("ERROR: the summary carries an api_key field at all: {}".format(entries[0]))
+        failed = True
+
+    # The type list is what populates the dialog's dropdown and prefills its URL and model.
+    types = {entry["type"]: entry for entry in body.get("types") or []}
+    if "openrouter" not in types or "ollama" not in types:
+        print("ERROR: the provider types offered are missing openrouter/ollama: {}".format(sorted(types)))
+        failed = True
+    else:
+        if types["ollama"]["url"] != "http://localhost:11434/v1" or types["ollama"]["model"] != "gpt-oss:20b":
+            print("ERROR: ollama defaults are wrong: {}".format(types["ollama"]))
+            failed = True
+        if types["ollama"]["needs_key"] or not types["openrouter"]["needs_key"]:
+            print("ERROR: needs_key is wrong for ollama/openrouter: {}".format(types))
+            failed = True
+        # A type with no real default offers none. The agent's own fallback is OpenRouter's
+        # endpoint, which would prefill the form for a generic endpoint with a URL that has
+        # nothing to do with it and is plausible enough to be saved by mistake.
+        for name in ("local", "openai"):
+            if types.get(name, {}).get("url") == "https://openrouter.ai/api/v1":
+                print("ERROR: the {} type prefills OpenRouter's endpoint: {}".format(name, types.get(name)))
+                failed = True
+        if types["local"]["url"]:
+            print("ERROR: 'local' has no sensible default URL and should offer none: {}".format(types["local"]))
+            failed = True
+    return failed
+
+
+def test_provider_save_keeps_a_key_the_dialog_never_saw(my_predbat):
+    """Editing a provider's URL leaves its API key in apps.yaml untouched.
+
+    The browser is never given the key, so it cannot send it back; a save that took the empty key
+    field at face value would therefore wipe the credential of every provider on every edit. An
+    absent key means 'keep', and this is the test that says so.
+    """
+    failed = False
+    print("**** Testing that a provider edit preserves its key ****")
+
+    path = _apps_yaml_fixture(APPS_YAML_WITH_PROVIDERS)
+    original = web_chat.APPS_YAML_PATH
+    web_chat.APPS_YAML_PATH = path
+    try:
+        agent = _run_inline_on_agent(_make_agent(my_predbat, providers={"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "sk-or-secret-value", "model": "a/model"}}))
+        page = _make_web(my_predbat, agent=agent).chat_page
+
+        status, body = _save_providers(page, [{"name": "openrouter", "type": "openrouter", "url": "https://openrouter.ai/api/v1/", "model": "b/model", "api_key": None, "original_name": "openrouter"}], active="openrouter")
+        if status != 200 or not body.get("ok"):
+            print("ERROR: saving a provider edit failed: {} {}".format(status, body))
+            failed = True
+        written = open(path).read()
+        if "sk-or-secret-value" not in written:
+            print("ERROR: the API key was lost when the URL was edited:\n{}".format(written))
+            failed = True
+        if "b/model" not in written:
+            print("ERROR: the new model was not written:\n{}".format(written))
+            failed = True
+        if "A comment that must survive" not in written or "battery_size" not in written:
+            print("ERROR: the rest of apps.yaml did not survive the write:\n{}".format(written))
+            failed = True
+        if "max_tool_rounds" not in written:
+            print("ERROR: other chat settings were dropped from the block:\n{}".format(written))
+            failed = True
+        # The live agent adopts the change without waiting for a restart.
+        if agent.providers[0]["model"] != "b/model":
+            print("ERROR: the agent did not adopt the saved providers: {}".format(agent.providers))
+            failed = True
+        if (my_predbat.args.get("chat") or {}).get("providers", {}).get("openrouter", {}).get("model") != "b/model":
+            print("ERROR: the live args were not updated: {}".format(my_predbat.args.get("chat")))
+            failed = True
+
+        # Renaming has nothing to preserve in place, so the key has to be carried across
+        # explicitly - the case that silently emptied the credential before it was handled.
+        status, body = _save_providers(page, [{"name": "my-router", "type": "openrouter", "url": "https://openrouter.ai/api/v1", "model": "b/model", "api_key": None, "original_name": "openrouter"}], active="my-router")
+        if status != 200:
+            print("ERROR: renaming a provider failed: {} {}".format(status, body))
+            failed = True
+        written = open(path).read()
+        if "my-router" not in written or "sk-or-secret-value" not in written:
+            print("ERROR: renaming a provider lost its key:\n{}".format(written))
+            failed = True
+        if agent.active_provider != "my-router":
+            print("ERROR: the renamed provider did not become active: {}".format(agent.active_provider))
+            failed = True
+
+        # A typed key replaces the stored one.
+        status, body = _save_providers(page, [{"name": "my-router", "type": "openrouter", "url": "https://openrouter.ai/api/v1", "model": "b/model", "api_key": "sk-or-replacement", "original_name": "my-router"}], active="my-router")
+        written = open(path).read()
+        if "sk-or-replacement" not in written or "sk-or-secret-value" in written:
+            print("ERROR: a typed key did not replace the stored one:\n{}".format(written))
+            failed = True
+
+        # Adding a second provider, and making it the active one.
+        status, body = _save_providers(
+            page,
+            [
+                {"name": "my-router", "type": "openrouter", "url": "https://openrouter.ai/api/v1", "model": "b/model", "api_key": None, "original_name": "my-router"},
+                {"name": "ollama", "type": "ollama", "url": "http://localhost:11434/v1", "model": "gpt-oss:20b", "api_key": None, "original_name": "ollama"},
+            ],
+            active="ollama",
+        )
+        if status != 200:
+            print("ERROR: adding a second provider failed: {} {}".format(status, body))
+            failed = True
+        if agent.active_provider != "ollama" or agent.store.get_selected_provider() != "ollama":
+            print("ERROR: the chosen provider was not made active and remembered: {} / {}".format(agent.active_provider, agent.store.get_selected_provider()))
+            failed = True
+
+        # Removing one: the list posted is the whole truth, so what is missing is deleted.
+        status, body = _save_providers(page, [{"name": "ollama", "type": "ollama", "url": "http://localhost:11434/v1", "model": "gpt-oss:20b", "api_key": None, "original_name": "ollama"}], active="ollama")
+        written = open(path).read()
+        if "my-router" in written or "sk-or-replacement" in written:
+            print("ERROR: a removed provider was left in apps.yaml:\n{}".format(written))
+            failed = True
+        if len(agent.providers) != 1:
+            print("ERROR: the agent still holds the removed provider: {}".format(agent.providers))
+            failed = True
+    finally:
+        web_chat.APPS_YAML_PATH = original
+    return failed
+
+
+def test_provider_save_migrates_the_loose_block_without_losing_its_key(my_predbat):
+    """Saving folds providers written directly in the chat block under `providers:`, key and all.
+
+    Once `providers:` exists, extract_providers() stops reading the loose entries - so leaving
+    them behind would present a user with settings that are visibly in their file and silently
+    ignored. Migrating them means their key has to be re-written rather than left in place, which
+    is the one case where the file cannot preserve it for us.
+    """
+    failed = False
+    print("**** Testing migration of loosely-written providers ****")
+
+    path = _apps_yaml_fixture(APPS_YAML_LOOSE_PROVIDERS)
+    original = web_chat.APPS_YAML_PATH
+    web_chat.APPS_YAML_PATH = path
+    try:
+        agent = _make_agent(my_predbat, providers=None)
+        # Deliberately the loose shape: provider entries as direct members of the chat block.
+        agent.initialize({"openrouter": {"url": "https://openrouter.ai/api/v1", "api_key": "sk-or-loose-value"}})
+        _run_inline_on_agent(agent)
+        if not agent.providers or agent.providers[0]["api_key"] != "sk-or-loose-value":
+            print("ERROR: the fixture did not produce a loose provider: {}".format(agent.providers))
+            return True
+        page = _make_web(my_predbat, agent=agent).chat_page
+
+        status, body = _save_providers(page, [{"name": "openrouter", "type": "openrouter", "url": "https://openrouter.ai/api/v1", "model": "", "api_key": None, "original_name": "openrouter"}], active="openrouter")
+        if status != 200:
+            print("ERROR: saving a migrated provider failed: {} {}".format(status, body))
+            failed = True
+        written = open(path).read()
+        if "providers:" not in written:
+            print("ERROR: the provider was not moved under providers:\n{}".format(written))
+            failed = True
+        if "sk-or-loose-value" not in written:
+            print("ERROR: migrating the loose provider lost its key:\n{}".format(written))
+            failed = True
+        # One provider, not two: the loose copy must be gone rather than shadowed.
+        if written.count("openrouter:") != 1:
+            print("ERROR: the loose entry was left behind alongside the migrated one:\n{}".format(written))
+            failed = True
+    finally:
+        web_chat.APPS_YAML_PATH = original
+    return failed
+
+
+def test_provider_save_refuses_bad_input_before_touching_the_file(my_predbat):
+    """Every entry is validated before apps.yaml is opened, so one bad entry writes nothing.
+
+    The name becomes a YAML mapping key and the type selects behaviour the agent relies on, so
+    neither can be whatever a caller sends. Validating up front rather than per entry is what
+    stops a two-provider save writing the first and refusing the second.
+    """
+    failed = False
+    print("**** Testing provider save validation ****")
+
+    path = _apps_yaml_fixture(APPS_YAML_WITH_PROVIDERS)
+    original = web_chat.APPS_YAML_PATH
+    web_chat.APPS_YAML_PATH = path
+    before = open(path).read()
+    try:
+        agent = _make_agent(my_predbat, providers={"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "sk-or-secret-value", "model": "a/model"}})
+        page = _make_web(my_predbat, agent=agent).chat_page
+        good = {"name": "ollama", "type": "ollama", "url": "http://localhost:11434/v1", "model": "", "api_key": None, "original_name": "ollama"}
+
+        cases = [
+            ("an unknown provider type", [dict(good, type="skynet")], None),
+            ("a name that is not a safe YAML key", [dict(good, name="oh: no")], None),
+            ("an empty name", [dict(good, name="  ")], None),
+            ("a URL with no scheme", [dict(good, url="localhost:11434")], None),
+            ("two providers with the same name", [good, dict(good, original_name="other")], None),
+            ("an active provider that is not in the list", [good], "missing"),
+            ("providers that are not a list", None, None),
+        ]
+        for label, providers, active in cases:
+            body = {"providers": providers, "active": active}
+            response = asyncio.run(page.html_chat_providers_post(FakeRequest(body=body)))
+            if response.status != 400:
+                print("ERROR: {} was accepted with status {}: {}".format(label, response.status, response.text))
+                failed = True
+            elif not json.loads(response.text).get("error"):
+                print("ERROR: {} was refused without saying why: {}".format(label, response.text))
+                failed = True
+
+        if open(path).read() != before:
+            print("ERROR: a refused save still rewrote apps.yaml:\n{}".format(open(path).read()))
+            failed = True
+        # And the live configuration is untouched too.
+        if agent.providers[0]["url"] != "https://openrouter.ai/api/v1":
+            print("ERROR: a refused save changed the live providers: {}".format(agent.providers))
+            failed = True
+    finally:
+        web_chat.APPS_YAML_PATH = original
+    return failed
+
+
+def test_probe_route_uses_the_stored_key_rather_than_asking_the_browser(my_predbat):
+    """Probing an existing provider reuses its saved key; a typed key wins over it.
+
+    This is what lets the dialog list an existing provider's models without the key ever leaving
+    the server. A probe with no key and no name gets no key at all, which is correct for a local
+    endpoint being set up for the first time.
+    """
+    failed = False
+    print("**** Testing the /chat/providers/models probe route ****")
+
+    agent = _ProbeAgent()
+    page = _make_web(my_predbat, agent=agent).chat_page
+
+    response = asyncio.run(page.html_chat_provider_models(FakeRequest(body={"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": None, "name": "openrouter"})))
+    if response.status != 200:
+        print("ERROR: the probe route returned {}".format(response.status))
+        failed = True
+    if json.loads(response.text).get("models") != [{"id": "probe/model", "name": "Probe"}]:
+        print("ERROR: the probe result was not returned: {}".format(response.text))
+        failed = True
+    if not agent.calls or agent.calls[-1]["api_key"] != "sk-or-secret-value":
+        print("ERROR: the probe did not reuse the stored key: {}".format(agent.calls))
+        failed = True
+
+    asyncio.run(page.html_chat_provider_models(FakeRequest(body={"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "typed-key", "name": "openrouter"})))
+    if agent.calls[-1]["api_key"] != "typed-key":
+        print("ERROR: a typed key did not take priority: {}".format(agent.calls[-1]))
+        failed = True
+
+    asyncio.run(page.html_chat_provider_models(FakeRequest(body={"type": "ollama", "url": "http://localhost:11434/v1", "api_key": None, "name": ""})))
+    if agent.calls[-1]["api_key"] is not None:
+        print("ERROR: an unnamed provider was given somebody else's key: {}".format(agent.calls[-1]))
+        failed = True
+
+    response = asyncio.run(page.html_chat_provider_models(FakeRequest(body={"type": "skynet", "url": "https://example.com/v1"})))
+    if response.status != 400:
+        print("ERROR: an unknown provider type was probed anyway: {}".format(response.status))
+        failed = True
+    return failed
+
+
+def test_active_provider_is_remembered_across_a_restart(my_predbat):
+    """The chosen provider survives the restart that saving apps.yaml can cause.
+
+    Held only in memory it would be undone by the very act of choosing it, since a provider change
+    rewrites apps.yaml. A remembered name that no longer exists falls back to the first usable
+    entry rather than leaving the agent pointing at nothing.
+    """
+    failed = False
+    print("**** Testing that the active provider is remembered ****")
+
+    block = {"providers": {"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "k"}, "ollama": {"type": "ollama", "url": "http://localhost:11434/v1"}}}
+    agent = _make_agent(my_predbat, providers=block["providers"])
+
+    agent.store.set_selected_provider("ollama")
+    if agent.reload_providers(block) != "ollama" or agent.active_provider != "ollama":
+        print("ERROR: the remembered provider was not selected: {}".format(agent.active_provider))
+        failed = True
+    if agent.base_url != "http://localhost:11434/v1" or agent.default_model != "gpt-oss:20b":
+        print("ERROR: selecting a provider did not re-point the endpoint: {} / {}".format(agent.base_url, agent.default_model))
+        failed = True
+
+    # A remembered name that is no longer configured must not strand the agent.
+    agent.store.set_selected_provider("gone")
+    agent.reload_providers(block)
+    if agent.active_provider not in ("openrouter", "ollama"):
+        print("ERROR: a stale remembered provider left nothing active: {}".format(agent.active_provider))
+        failed = True
+
+    # And it is written into the index that survives a restart, not just held in the object.
+    payload = json.dumps({"selected_provider": agent.store.selected_provider})
+    if "gone" not in payload:
+        print("ERROR: the selected provider is not part of the saved index payload: {}".format(payload))
+        failed = True
+    return failed
+
+
+def test_chat_page_uses_a_top_bar_and_a_settings_dialog(my_predbat):
+    """The conversation list is a dropdown off the title, and the sidebar is gone.
+
+    A 260px column is most of a phone's width for something looked at rarely. Asserting the
+    sidebar is absent rather than only that the top bar is present is the point: leaving both in
+    would give two conversation lists, each needing the pending badge and the rename and delete
+    wiring kept in step.
+    """
+    failed = False
+    print("**** Testing the Chat tab's top bar and settings dialog ****")
+
+    body = web_chat.get_chat_body()
+    for marker in ['id="chat-topbar"', 'id="chat-settings-open"', 'id="chat-new"', 'id="chat-title-button"', 'id="chat-rename"', 'id="chat-conv-panel"', 'id="chat-list"']:
+        if marker not in body:
+            print("ERROR: the top bar is missing {}".format(marker))
+            failed = True
+    if "chat-sidebar" in body or "chat-sidebar" in web_chat.get_chat_styles():
+        print("ERROR: the sidebar is still present")
+        failed = True
+
+    for marker in ['id="chat-settings"', 'id="chat-provider-list"', 'id="chat-provider-add"', 'id="chat-provider-form"', 'id="chat-provider-fetch"', 'id="chat-settings-save"', 'id="chat-no-provider"']:
+        if marker not in body:
+            print("ERROR: the settings dialog is missing {}".format(marker))
+            failed = True
+
+    # The permission toggles moved out of the footer and into the dialog. Compared by position so
+    # this cannot pass on a page that simply has both.
+    if body.index('id="chat-toggles"') < body.index('id="chat-settings"'):
+        print("ERROR: the permission toggles are still in the footer, not the settings dialog")
+        failed = True
+    if body.index('id="chat-model-wrap"') > body.index('id="chat-settings"'):
+        print("ERROR: the model picker left the footer - it belongs there, not in Settings")
+        failed = True
+    for switch in web_chat.CHAT_STATUS_SWITCHES:
+        if 'data-switch="{}"'.format(switch) not in body:
+            print("ERROR: the {} toggle is missing from the dialog".format(switch))
+            failed = True
+
+    styles = web_chat.get_chat_styles()
+    if "#chat-settings.open" not in styles or "#chat-conv-panel.open" not in styles:
+        print("ERROR: the dialog and dropdown have no open state in the CSS")
+        failed = True
+    # The dialog and the dropdown must sit above the transcript, or they open behind it.
+    if "z-index: 200" not in styles or "z-index: 60" not in styles:
+        print("ERROR: the dialog/dropdown are not stacked above the page")
+        failed = True
+    return failed
+
+
+def test_settings_script_wires_the_provider_routes(my_predbat):
+    """The client posts the whole provider list, carries original_name, and never holds a key.
+
+    original_name is what the server looks a saved key up under, so a rename without it silently
+    empties the credential. api_key starting as null is what makes an untouched field mean 'keep'.
+    """
+    failed = False
+    print("**** Testing the settings dialog's client wiring ****")
+
+    script = web_chat.get_chat_script()
+    for marker in ["fetch('./chat/providers')", "fetch('./chat/providers/models'", "fetch('./chat/providers', { method: 'POST'", "function openSettings", "function saveSettings", "function fetchProviderModels", "function applyProviderForm"]:
+        if marker not in script:
+            print("ERROR: the settings script is missing {!r}".format(marker))
+            failed = True
+    if "original_name: entry.original_name" not in script:
+        print("ERROR: the save payload does not carry original_name, so a rename would lose the key")
+        failed = True
+    if "api_key: null" not in script:
+        print("ERROR: providers loaded from the server should start with a null api_key")
+        failed = True
+    # The dropdown, and what closes it.
+    for marker in ["function setConversationPanel", "function updateChatTitle", "function renameCurrentConversation", "chat-title-wrap"]:
+        if marker not in script:
+            print("ERROR: the conversation dropdown is missing {!r}".format(marker))
+            failed = True
+    if "'chat-no-provider'" not in script:
+        print("ERROR: nothing shows or hides the no-provider banner")
+        failed = True
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -2662,4 +3164,12 @@ def run_web_chat_tests(my_predbat):
     failed |= test_discard_pending_bubble_unconditionally_removes_the_bubble(my_predbat)
     failed |= test_retry_countdown_interval_is_genuinely_cleared(my_predbat)
     failed |= test_retry_status_element_takes_its_colour_from_theme_variables(my_predbat)
+    failed |= test_provider_list_route_never_hands_a_key_to_the_browser(my_predbat)
+    failed |= test_provider_save_keeps_a_key_the_dialog_never_saw(my_predbat)
+    failed |= test_provider_save_migrates_the_loose_block_without_losing_its_key(my_predbat)
+    failed |= test_provider_save_refuses_bad_input_before_touching_the_file(my_predbat)
+    failed |= test_probe_route_uses_the_stored_key_rather_than_asking_the_browser(my_predbat)
+    failed |= test_active_provider_is_remembered_across_a_restart(my_predbat)
+    failed |= test_chat_page_uses_a_top_bar_and_a_settings_dialog(my_predbat)
+    failed |= test_settings_script_wires_the_provider_routes(my_predbat)
     return failed

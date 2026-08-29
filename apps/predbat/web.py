@@ -424,6 +424,9 @@ class WebInterface(ComponentBase):
         app.router.add_post("/chat/model", self.chat_page.html_chat_model)
         app.router.add_get("/chat/status", self.chat_page.html_chat_status)
         app.router.add_post("/chat/status", self.chat_page.html_chat_status_post)
+        app.router.add_get("/chat/providers", self.chat_page.html_chat_providers)
+        app.router.add_post("/chat/providers", self.chat_page.html_chat_providers_post)
+        app.router.add_post("/chat/providers/models", self.chat_page.html_chat_provider_models)
 
     async def start(self):
         # Start the web server
