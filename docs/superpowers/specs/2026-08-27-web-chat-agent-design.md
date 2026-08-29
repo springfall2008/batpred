@@ -10,6 +10,36 @@ are seven tools and `_execute_get_apps` returns `self.base.args` verbatim with n
 all, which would send every credential to a third-party model. `feat/web-chat-agent` is
 therefore branched from #4775 and rebases onto `main` once that merges.
 
+## 0. Changes since approval
+
+This spec was approved before implementation and the design moved while it was built. The
+sections below have been amended in place where they described configuration that no longer
+exists; this list covers the material divergences so a reader knows which decisions were revisited
+and why.
+
+- **The endpoint is not necessarily OpenRouter.** Any OpenAI-compatible API works, including a
+  local Ollama, verified against a real server. The single flat `openrouter_*` connection became
+  a `chat:` block of named providers (§9.1), since a hosted model and a local one can both be
+  worth having configured at once.
+- **The component always starts**, with no required arguments. The original gating meant an
+  unconfigured install had no component - but the Chat tab configures its own providers by
+  writing `apps.yaml`, so the component must exist before any provider does.
+- **The model is optional.** Chosen in the UI and remembered, so an install with only a key gets
+  a working tab rather than none.
+- **`chat_max_tool_calls` is `chat_max_tool_rounds`**, which is what it always bounded: every
+  tool call inside one round already runs.
+- **One timeout became two.** `chat_turn_timeout` (whole turn) and `chat_request_timeout` (one
+  completion) bound different things; sharing a value killed multi-round turns on their total
+  budget even when no single request was slow.
+- **Approvals and errors are persisted beside the conversation**, not among its messages, so they
+  survive a reconnect without ever being replayed to the model.
+- **Documentation is read by section, not by page.** `search_docs` returns a section id and
+  `read_docs` returns that section: fetching a whole docs page cost about 35,000 tokens where a
+  section answers the question in one or two.
+- **Credential redaction is recursive.** `mask_secret_args()` walked only top-level keys, so a
+  credential nested one level down - `forecast_solar[].api_key`, or anything in the `chat:` block
+  - was returned to the model in the clear.
+
 ## 1. Purpose
 
 Add a **Chat** tab to the Predbat web interface, backed by an LLM served through OpenRouter,
@@ -238,7 +268,7 @@ as `{title, url, excerpt}`, where `url` is the site root joined to `location` an
 roughly 300 characters around the best match.
 
 One cached fetch a day, no third-party search service, no per-query cost, and it works whatever
-`openrouter_base_url` points at. The URL is hardcoded, so this tool carries none of the risk in
+the configured provider points at. The URL is hardcoded, so this tool carries none of the risk in
 section 7.3.
 
 If the index cannot be fetched, the tool returns
@@ -380,7 +410,7 @@ A `chat_web_search` switch, **default off**, adds the plugin to the request body
 come back, the `url_citation` annotations are rendered as a sources list under the message.
 
 Two honest caveats, both documented: it costs money per request, and it is an OpenRouter
-feature — if `openrouter_base_url` points elsewhere the plugin is silently ignored by that
+feature — off OpenRouter the plugin is not sent at all, since it would be ignored at best by that
 endpoint. The component logs a one-time warning when the switch is on and the base URL is not
 OpenRouter, rather than letting the user wonder why nothing changed.
 
@@ -395,27 +425,35 @@ Added to `COMPONENT_LIST` in `apps/predbat/components.py`, phase 1, restartable:
     "can_restart": True,
     "phase": 1,
     "args": {
-        "api_key":           {"required": True,  "config": "openrouter_api_key"},
-        "model":             {"required": True,  "config": "openrouter_model"},
-        "base_url":          {"required": False, "config": "openrouter_base_url",
-                              "default": "https://openrouter.ai/api/v1"},
+        "providers":         {"required": False, "config": "chat"},
+        "api_key":           {"required": False, "config": "chat_api_key"},
+        "base_url":          {"required": False, "config": "chat_api_url"},
+        "api_type":          {"required": False, "config": "chat_api_type", "default": "auto"},
+        "model":             {"required": False, "config": "chat_model"},
+        "legacy_api_key":    {"required": False, "config": "openrouter_api_key"},
+        "legacy_base_url":   {"required": False, "config": "openrouter_base_url"},
+        "legacy_model":      {"required": False, "config": "openrouter_default_model"},
         "max_tokens":        {"required": False, "config": "openrouter_max_tokens", "default": 0},
-        "max_tool_calls":    {"required": False, "config": "chat_max_tool_calls", "default": 8},
-        "max_history":       {"required": False, "config": "chat_max_history", "default": 40},
+        "max_tool_rounds":   {"required": False, "config": "chat_max_tool_rounds", "default": 32},
+        "max_history":       {"required": False, "config": "chat_max_history", "default": 0},
         "max_conversations": {"required": False, "config": "chat_max_conversations", "default": 20},
         "expiry_days":       {"required": False, "config": "chat_expiry_days", "default": 30},
-        "turn_timeout":      {"required": False, "config": "chat_turn_timeout", "default": 180},
+        "turn_timeout":      {"required": False, "config": "chat_turn_timeout", "default": 1800},
+        "request_timeout":   {"required": False, "config": "chat_request_timeout", "default": 300},
         "fetch_allowlist":   {"required": False, "config": "chat_fetch_allowlist", "default": None},
     },
 },
 ```
 
-`required: True` on the key and model gives the requested gating with no extra code: absent
-either one, `Components.initialize()` never constructs the component. It already logs a
-targeted warning when a component is *partially* configured
-(`apps/predbat/components.py:75-82`), so setting only `openrouter_api_key` produces
-`Warn: Skipping AI Chat Agent interface, missing required configuration: openrouter_model`
-rather than silence.
+**Amended during implementation.** The spec originally gated the component on `required: True`
+for the key and model, so an unconfigured install never constructed it. That was reversed: the
+component now takes no required arguments and always starts, because the Chat tab configures its
+own providers by writing `apps.yaml`, so the component has to be running before any provider
+exists or there is nothing to configure it from. With none configured the tab shows a setup page
+and no turn can be sent — `ChatAgent.provider_ready()` is what that keys off.
+
+The model also stopped being required: it is chosen in the UI and remembered, so an install with
+only a key gets a working tab rather than none.
 
 `ChatAgent.run()` returns `True` on its first tick without any network I/O; it loads the
 conversation index from storage and nothing else. Credentials are validated lazily on the first
@@ -429,27 +467,64 @@ inside `wait_api_started()` for up to ten minutes.
 
 ### 9.1 `apps.yaml`
 
-`openrouter_*` keys describe the connection; `chat_*` keys describe behaviour. All added to
-`APPS_SCHEMA` in `apps/predbat/config.py`:
+The endpoint is described by a `chat:` block of named providers; `chat_*` keys describe
+behaviour. All added to `APPS_SCHEMA` in `apps/predbat/config.py`.
+
+**Amended during implementation.** The spec originally had a single flat `openrouter_*`
+connection, on the assumption that OpenRouter was the endpoint. It is not: any OpenAI-compatible
+API works, including a local Ollama, which was verified against a real server rather than
+assumed. Since more than one can now be worth configuring at once - a hosted model and a local
+one - the connection became a block of named entries rather than one set of keys.
+
+```yaml
+pred_bat:
+  chat:
+    openrouter:
+      api_key: !secret openrouter_key
+    ollama:
+      url: 'http://localhost:11434/v1'
+    nas:
+      type: ollama
+      url: 'http://192.168.1.50:11434/v1'
+```
+
+The dict key is the user's own name for an endpoint, not the provider type, so two Ollama servers
+or two OpenRouter accounts are simply two entries. Each entry takes:
+
+| Field | Required | Purpose |
+| ----- | -------- | ------- |
+| `url` | For a local endpoint | The OpenAI-compatible base URL. Defaults to the endpoint the resolved type normally lives at |
+| `api_key` | For a hosted endpoint | Omitted for a local endpoint, which needs none |
+| `type` | No | `openrouter`, `ollama`, `openai` or `local`. Falls back to the entry's name when that is itself a provider, then to detection from the url |
+
+A provider is *usable* only when a turn sent to it would not fail immediately: a hosted endpoint
+needs its key, a local one only needs to be pointed at. A half-configured entry is listed rather
+than dropped, so the Chat tab can show what is missing.
 
 | Key | Type | Required | Default | Purpose |
 | --- | ---- | -------- | ------- | ------- |
-| `openrouter_api_key` | string | Yes | — | OpenRouter API key |
-| `openrouter_model` | string | Yes | — | Default model id, e.g. `anthropic/claude-sonnet-4.5` |
-| `openrouter_base_url` | string | No | `https://openrouter.ai/api/v1` | Override for any OpenAI-compatible endpoint (Ollama, LiteLLM, a proxy) |
+| `chat` | dict | No | — | Named provider block, above |
+| `chat_api_key` / `chat_api_url` / `chat_api_type` / `chat_model` | string | No | — | A single unnamed provider, read only when no `chat:` block exists |
+| `openrouter_api_key` / `openrouter_base_url` / `openrouter_default_model` | string | No | — | The pre-rename names, still read so an existing `apps.yaml` keeps working |
 | `openrouter_max_tokens` | integer | No | 0 (unset) | Per-response completion cap; omitted from the request when 0 |
-| `chat_max_tool_calls` | integer | No | 8 | Tool calls allowed in one turn before the loop stops |
-| `chat_max_history` | integer | No | 40 | Messages retained per conversation |
+| `chat_max_tool_rounds` | integer | No | 32 | Model round trips in one turn. Renamed from `chat_max_tool_calls`, which is what it always bounded: every call inside one round already runs |
+| `chat_max_history` | integer | No | 0 (unlimited) | Messages retained per conversation |
 | `chat_max_conversations` | integer | No | 20 | Visible conversations before the least recently used is hidden |
 | `chat_expiry_days` | integer | No | 30 | Days of inactivity before a conversation expires from the cache |
-| `chat_turn_timeout` | integer | No | 180 | Wall-clock seconds for one turn, excluding time awaiting a confirmation |
+| `chat_turn_timeout` | integer | No | 1800 | Wall-clock seconds for a whole turn, excluding time awaiting a confirmation |
+| `chat_request_timeout` | integer | No | 300 | Wall-clock seconds for one completion request |
 | `chat_fetch_allowlist` | string_list | No | docs site, `github.com`, `raw.githubusercontent.com` | Hosts `fetch_url` may reach |
 
-`openrouter_api_key` matches the existing `_key` suffix heuristic, so it is already redacted by
-`mask_secret_args()` in the Apps view, the debug YAML and the `get_apps` tool. No new redaction
-rule is needed; a test asserts this.
+`chat_turn_timeout` and `chat_request_timeout` were one value in the original spec. They bound
+different things and conflating them meant a turn died on its total budget after two or three
+completions even when no single request was slow.
 
-`openrouter_base_url` is documented rather than hidden. It is the only supported way to point
+An `api_key` matches the existing `_key` suffix heuristic, so it is redacted by
+`mask_secret_args()` in the Apps view, the debug YAML and the `get_apps` tool. That function was
+made recursive during implementation: it walked only top-level keys, so a credential nested
+inside the `chat:` block - or inside `forecast_solar` - was returned to the model in the clear.
+
+The provider block is documented rather than hidden. It is the supported way to point
 Predbat at a local model, and an undocumented key that users discover from the source is worse
 than a documented one.
 
@@ -734,7 +809,7 @@ Tool results are data, and some of it — log lines, entity names, `apps.yaml` c
 comments and fetched web pages — is text the model could be steered by. Two privileged actions are reachable:
 a Predbat write, which is behind the confirmation gate whose card shows the *actual* tool and
 arguments rather than the model's description of them; and an outbound fetch, which is behind
-the allowlist. The `chat_max_tool_calls` cap bounds a runaway loop.
+the allowlist. The `chat_max_tool_rounds` cap bounds a runaway loop.
 
 ### 14.7 XSS
 
@@ -813,7 +888,7 @@ so the picker costs one request a day. If the fetch fails, the list degrades to 
 be used for one thread and an expensive one for another. Switching mid-conversation is allowed
 between turns and appends a visible note to the transcript. A "Use default" entry clears the
 override back to `None`, meaning the `apps.yaml` value. That value is always offered even if it
-is missing from the catalogue, so a custom `openrouter_base_url` with no `/models` endpoint
+is missing from the catalogue, so a provider with no `/models` endpoint
 still works.
 
 ### 15.3 The tab
@@ -842,7 +917,7 @@ keeps the existing test call site valid.
 
 | Condition | Behaviour |
 | --------- | --------- |
-| 401 from OpenRouter | `error` event: "OpenRouter rejected the API key — check `openrouter_api_key`" |
+| 401 from the provider | `error` event naming the key to check |
 | 402 | Surfaced verbatim; it means the account is out of credit |
 | 429 | Retried with a longer first backoff, then reported. The original rule here ended the turn "so a user is never billed for a silent retry storm" - that reasoning was wrong: a 429 means the request was rejected, so no tokens were processed and nothing was billed. Retrying costs time, not money, and the three-attempt cap bounds it |
 | Timeout / connection error | `error` event naming the endpoint; `count_errors` incremented so the Components tab reflects it |
@@ -913,7 +988,7 @@ byte streams:
 
 - Component gating: missing key, missing model, both present.
 - Plain answer with no tool call; one tool call; chained tool calls.
-- `chat_max_tool_calls` cap reached → visible note, no infinite loop.
+- `chat_max_tool_rounds` cap reached → visible note, no infinite loop, and every refused call answered so the stored conversation stays replayable.
 - Tool raising an exception, and malformed tool-call argument JSON.
 - Write with confirm on: approved, rejected, timed out. Confirm off: executes directly.
 - `set_chat_title` sets and emits; over-length truncated; empty rejected; the first-user-message

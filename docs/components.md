@@ -324,7 +324,7 @@ caution about exposing the web/MCP port outside your home network applies here, 
   OAuth tokens can all sit in the same directory as the source being searched. `get_apps` and
   `get_log` are the only routes to that content, and both redact and filter what they return.
 - `chat_web_search` costs roughly $0.001-0.015 per request. It is an OpenRouter-only plugin - if
-  `openrouter_base_url` points somewhere else it is silently not sent, and a warning is logged
+  the active provider is not OpenRouter it is not sent at all, and a warning is logged
   once.
 - `fetch_url` can only reach a small allowlist of hosts (the Predbat docs site and GitHub). This
   is deliberate, not a limitation to work around.
@@ -338,9 +338,11 @@ caution about exposing the web/MCP port outside your home network applies here, 
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
-| `api_key` | String | Yes | - | `openrouter_api_key` | Your OpenRouter API key. This alone is what enables the component - there is no separate `chat_enable` setting |
-| `model` | String | No | - | `openrouter_default_model` | Optional. The model id new conversations start on, e.g. `openai/gpt-4o-mini`. With none set, pick one from the Chat tab's model search box; Predbat remembers the choice across restarts |
-| `base_url` | String | No | `https://openrouter.ai/api/v1` | `openrouter_base_url` | Chat-completions endpoint. Point it at another OpenAI-compatible endpoint if you want one, but doing so disables the OpenRouter-only web search plugin |
+| `providers` | Dict | No | - | `chat` | Named endpoints, each `{url, api_key, type}` - see [apps.yaml](apps-yaml.md#ai-chat-agent). Configuring one is what enables chat; there is no separate `chat_enable` setting |
+| `api_key` | String | No | - | `chat_api_key` | A single endpoint's key, for the simple case of exactly one. Read only when no `chat` block is present |
+| `base_url` | String | No | OpenRouter | `chat_api_url` | That endpoint's URL. A local one (`http://localhost:11434/v1` for Ollama) needs no key at all |
+| `api_type` | String | No | `auto` | `chat_api_type` | `openrouter`, `ollama`, `openai` or `local`. `auto` works it out from the URL |
+| `model` | String | No | - | `chat_model` | Optional. The model id new conversations start on, e.g. `openai/gpt-4o-mini`. With none set, pick one from the Chat tab's model search box; Predbat remembers the choice across restarts |
 | `max_tokens` | Integer | No | 0 | `openrouter_max_tokens` | Maximum tokens per completion; `0` leaves it to the model/provider's own default |
 | `max_tool_rounds` | Integer | No | 32 | `chat_max_tool_rounds` | Maximum model round trips (completions) allowed within one turn before Predbat stops and asks you to continue. Every tool call the model makes inside one round trip still runs - this bounds round trips, not tool calls |
 | `max_history` | Integer | No | 0 | `chat_max_history` | Maximum recent messages sent to the model each turn, trimmed at a user-message boundary so a tool call and its reply are never split apart. Bounds cost, not how much of the conversation is stored. `0` (the default) means unlimited - the whole conversation is sent every turn |

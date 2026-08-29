@@ -1964,23 +1964,48 @@ See [Components - myenergi](components.md#myenergi-myenergi) for the full list o
 
 ## AI Chat Agent
 
-Predbat can add a Chat tab to the web interface, backed by a large language model served through [OpenRouter](https://openrouter.ai). Setting **chat_api_key** is what enables the feature - there is no separate enable switch, and the model is chosen in the UI rather than here:
+Predbat can add a Chat tab to the web interface, backed by a large language model. That can be a hosted service such as [OpenRouter](https://openrouter.ai), or a model running on your own machine through [Ollama](https://ollama.com) - with a local model nothing you ask, and nothing the tools return, leaves your network.
+
+Endpoints are listed in a **chat** block. Each entry is named by you, so you can configure more than one and switch between them in the Chat tab:
 
 ```yaml
-  openrouter_api_key: !secret openrouter_api_key
-  chat_model: openai/gpt-4o-mini   # optional
+  chat:
+    openrouter:
+      api_key: !secret openrouter_api_key
+    ollama:
+      url: 'http://localhost:11434/v1'
 ```
+
+A hosted endpoint needs an **api_key**; a local one needs only a **url** and no key at all. The name is yours to choose - it is what appears in the Chat tab - so you can have two of the same kind:
+
+```yaml
+  chat:
+    desktop:
+      type: ollama
+      url: 'http://localhost:11434/v1'
+    nas:
+      type: ollama
+      url: 'http://192.168.1.50:11434/v1'
+    work:
+      type: openai
+      url: 'https://llm.example.com/v1'
+      api_key: !secret work_llm_key
+```
+
+**type** is only needed when the name does not already say which kind of endpoint it is. Left out, Predbat uses the entry's name if that is a provider it knows (`openrouter`, `ollama`, `openai`), and otherwise works it out from the URL - a `localhost` or private-network address needs no key, anything else does. Set it explicitly if the guess is wrong for your setup; `local` is the generic keyless option for an OpenAI-compatible server that is not Ollama.
+
+An entry missing what it needs - a hosted endpoint with no key - still appears in the Chat tab, greyed out and saying what to add, rather than silently vanishing.
+
+There is no separate enable switch: configuring an endpoint is what enables the feature, and the model is chosen in the Chat tab rather than here.
 
 Before enabling this, read the [chat component's security note](components.md#security-note-chat): the web interface has no login of its own, tool results (including log lines and configuration) are sent to OpenRouter and on to whichever provider serves the model you choose, and a deleted conversation's stored copy is not removed immediately - it stays on disk until it expires.
 
 **Configuration options:**
 
-- **chat_api_key** - Your API key - on its own enough to enable the component, using OpenRouter
-- **chat_api_url** - Optional. The OpenAI-compatible endpoint to talk to, defaulting to OpenRouter. Point it at a local model instead and no key is needed - `http://localhost:11434/v1` for [Ollama](https://ollama.com), which keeps every conversation on your own machine. Setting this alone is enough to enable the component
-- **chat_api_type** - Optional, defaults to `auto`, which works out the provider from the URL: OpenRouter, an Ollama or other local endpoint (no key needed), or a generic OpenAI-compatible service. Set it to `openrouter`, `ollama`, `openai` or `local` if the guess is wrong for your setup
-- The older **openrouter_api_key**, **openrouter_base_url** and **openrouter_default_model** names are still accepted, so an existing configuration keeps working unchanged
+- **chat** - The block of named endpoints described above. Each entry takes **url**, **api_key** and **type**, all optional individually but needing enough between them to reach something
+- **chat_api_key**, **chat_api_url**, **chat_api_type** - A single endpoint without the block, for the simple case of exactly one. Read only when no **chat** block is present; if you have both, the block wins and these are ignored
+- The older **openrouter_api_key**, **openrouter_base_url** and **openrouter_default_model** names are still accepted the same way, so an existing configuration keeps working unchanged
 - **chat_model** - Optional. The model id new conversations start on, e.g. `openai/gpt-4o-mini`. Leave it out and pick a model from the Chat tab's search box instead - Predbat remembers what you chose, including across restarts. Set it only if you want a fixed starting point
-- **openrouter_base_url** - Chat-completions endpoint (default: `https://openrouter.ai/api/v1`). Point it at another OpenAI-compatible endpoint if you want to, but doing so disables the OpenRouter-only web search plugin
 - **openrouter_max_tokens** - Maximum tokens per completion; `0` leaves it to the model/provider's own default (default: `0`)
 - **chat_max_tool_rounds** - Maximum model round trips (completions) allowed within one turn before Predbat stops and asks you to continue. Every tool call the model makes inside one round trip still runs - this bounds round trips, not tool calls (default: `32`)
 - **chat_max_history** - Maximum recent messages sent to the model each turn, trimmed at a user-message boundary so a tool call and its reply are never split apart - bounds cost, not how much of the conversation is stored. `0` (the default) means unlimited - the whole conversation is sent every turn (default: `0`)
