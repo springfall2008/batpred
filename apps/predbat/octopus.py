@@ -3141,12 +3141,7 @@ class Octopus:
                 if data_import:
                     data_all += data_import
                 else:
-                    prev_rate_id = entity_id.replace("_current_rate", "_previous_rate")
-                    data_import = self.get_state_wrapper(entity_id=prev_rate_id, attribute="all_rates")
-                    if data_import:
-                        data_all += data_import
-                    else:
-                        self.log("Warn: Octopus: No Octopus data in sensor {} attribute 'all_rates'".format(prev_rate_id))
+                    self.log("Warn: Octopus: No Octopus data in event {} attribute 'rates'".format(prev_rate_id))
 
             # Current rates
             if "_current_rate" in entity_id:
@@ -3154,17 +3149,12 @@ class Octopus:
             else:
                 current_rate_id = entity_id
 
-            data_import = (
-                self.get_state_wrapper(entity_id=current_rate_id, attribute="rates")
-                or self.get_state_wrapper(entity_id=current_rate_id, attribute="all_rates")
-                or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today")
-                or self.get_state_wrapper(entity_id=current_rate_id, attribute="prices")
-            )
+            data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="rates") or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today") or self.get_state_wrapper(entity_id=current_rate_id, attribute="prices")
 
             if data_import:
                 data_all += data_import
             else:
-                self.log("Warn: Octopus: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today' / 'prices'".format(current_rate_id))
+                self.log("Warn: Octopus: No Octopus data in sensor {} attribute 'rates' / 'raw_today' / 'prices'".format(current_rate_id))
 
             # Next rates
             if "_current_rate" in entity_id:
@@ -3172,11 +3162,6 @@ class Octopus:
                 data_import = self.get_state_wrapper(entity_id=next_rate_id, attribute="rates")
                 if data_import:
                     data_all += data_import
-                else:
-                    next_rate_id = entity_id.replace("_current_rate", "_next_rate")
-                    data_import = self.get_state_wrapper(entity_id=next_rate_id, attribute="all_rates")
-                    if data_import:
-                        data_all += data_import
             else:
                 # Nordpool tomorrow
                 data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_tomorrow")
