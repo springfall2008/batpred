@@ -34,6 +34,7 @@ from chat import (
     COMPLETION_RATE_LIMIT_DELAYS_SECONDS,
     COMPLETION_RATE_LIMIT_MAX_ATTEMPTS,
     max_attempts_for,
+    model_cache_name,
     resolve_provider,
     parse_retry_after,
     retry_delay_for,
@@ -3425,9 +3426,115 @@ def test_providers_accepted_without_the_nesting(my_predbat):
     return failed
 
 
+def test_model_catalogue_is_cached_per_endpoint(my_predbat):
+    """Each endpoint's model list is cached under its own name, not one shared "models".
+
+    The catalogue describes the endpoint that served it. Cached under a single shared name - which
+    it was - switching from OpenRouter to Ollama serves OpenRouter's several hundred models as
+    Ollama's, and keeps doing so for a day, because this is cached daily. Nothing in the picker
+    says why, and every model in it fails when selected.
+    """
+    failed = False
+    print("**** Testing that the model catalogue is cached per endpoint ****")
+
+    openrouter = model_cache_name("https://openrouter.ai/api/v1")
+    ollama = model_cache_name("http://192.168.0.33:11434/v1")
+    if openrouter == ollama:
+        print("ERROR: two endpoints share one cache name: {}".format(openrouter))
+        failed = True
+    if openrouter != model_cache_name("https://openrouter.ai/api/v1"):
+        print("ERROR: the cache name is not stable for one endpoint")
+        failed = True
+    if openrouter == "models":
+        print("ERROR: the cache name is still the shared literal")
+        failed = True
+
+    # And the name list_models() actually asks storage for is that one, per provider.
+    class RecordingStorage:
+        """Records the cache filename each fetch is made under, and serves that endpoint's list."""
+
+        def __init__(self):
+            """Start with nothing recorded and nothing cached."""
+            self.names = []
+            self.cache = {}
+
+        async def fetch_cached(self, module, filename, fetch_fn, fresh_minutes=30, stale_minutes=35, format="yaml"):
+            """Record the filename and cache under it, which is the behaviour under test.
+
+            Caching for real matters here: a stub that re-fetches every time returns the right
+            catalogue whatever the name, so it would pass with one shared name and prove nothing.
+            Keyed by filename, a shared name serves the first endpoint's list to the second - the
+            bug exactly as a user meets it.
+            """
+            self.names.append(filename)
+            if filename not in self.cache:
+                self.cache[filename] = await fetch_fn()
+            return self.cache[filename]
+
+    class StubComponents:
+        """Serves the recording storage to ComponentBase's read-only storage property."""
+
+        def __init__(self, storage):
+            """Hold the storage stand-in this registry should hand out."""
+            self.storage = storage
+
+        def get_component(self, name):
+            """Return the storage stand-in, and nothing else."""
+            return self.storage if name == "storage" else None
+
+    providers = {"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "k"}, "ollama": {"type": "ollama", "url": "http://192.168.0.33:11434/v1"}}
+    agent = _make_agent(my_predbat, providers=providers)
+    recorder = RecordingStorage()
+
+    catalogues = {
+        "https://openrouter.ai/api/v1": {"data": [{"id": "vendor/hosted", "supported_parameters": ["tools"]}]},
+        "http://192.168.0.33:11434/v1": {"data": [{"id": "gpt-oss:20b"}]},
+    }
+
+    async def fake_fetch():
+        """Return whichever catalogue belongs to the endpoint currently selected."""
+        return catalogues.get(agent.base_url)
+
+    agent._fetch_model_catalogue = fake_fetch
+
+    # Ollama's own enrichment dials /api/show, which has no place in a unit test.
+    async def no_details(models, base_url=None):
+        """Skip the live /api/show enrichment."""
+        return models
+
+    agent._add_ollama_details = no_details
+
+    # agent.storage is a read-only property reading base.components, so the registry is what has
+    # to be swapped - and put back, since my_predbat is shared with every other test.
+    previous_components = getattr(my_predbat, "components", None)
+    my_predbat.components = StubComponents(recorder)
+    try:
+        agent.select_provider("openrouter")
+        hosted = asyncio.run(agent.list_models())
+        agent.select_provider("ollama")
+        local = asyncio.run(agent.list_models())
+    finally:
+        my_predbat.components = previous_components
+
+    if len(set(recorder.names)) != 2:
+        print("ERROR: both providers fetched under the same cache name: {}".format(recorder.names))
+        failed = True
+    if "vendor/hosted" not in [entry["id"] for entry in hosted]:
+        print("ERROR: the hosted catalogue was not returned: {}".format(hosted))
+        failed = True
+    if "vendor/hosted" in [entry["id"] for entry in local]:
+        print("ERROR: switching to Ollama still served the hosted catalogue: {}".format(local))
+        failed = True
+    if "gpt-oss:20b" not in [entry["id"] for entry in local]:
+        print("ERROR: the local catalogue was not returned: {}".format(local))
+        failed = True
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
+    failed |= test_model_catalogue_is_cached_per_endpoint(my_predbat)
     failed |= test_component_gating(my_predbat)
     failed |= test_provider_detection_and_payload(my_predbat)
     failed |= test_model_resolution_order(my_predbat)

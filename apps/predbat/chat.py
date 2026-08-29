@@ -33,6 +33,7 @@ see build_messages() and append_title_instruction().
 import aiohttp
 import asyncio
 import functools
+import hashlib
 import ipaddress
 import json
 import traceback
@@ -319,6 +320,20 @@ def resolve_provider(api_type, url):
     if name in ("", "auto"):
         name = detect_provider(url)
     return name, PROVIDERS.get(name, PROVIDERS["openai"])
+
+
+def model_cache_name(base_url):
+    """Return the cache filename holding one endpoint's model catalogue.
+
+    Keyed on the endpoint, because that is whose catalogue it is. A single shared name - which is
+    what this was - hands OpenRouter's model list straight to Ollama the moment somebody switches
+    provider, and keeps doing it for a day, since the catalogue is cached daily. The user sees a
+    picker full of models their endpoint has never heard of and no way to tell why.
+
+    Hashed because a URL is not a filename, and truncated because the only collisions that matter
+    are between one user's own handful of endpoints.
+    """
+    return "models_{}".format(hashlib.md5(str(base_url or "").encode("utf-8")).hexdigest()[:16])
 
 
 def model_catalogue_headers(api_key):
@@ -1050,8 +1065,10 @@ class ChatAgent(ComponentBase):
         A model with no tool support cannot drive this agent at all - it would answer from the
         snapshot alone and never call get_plan - so the picker hides them rather than letting a
         user select one and wonder why the answers got worse. The catalogue itself is cached once
-        a day via Storage's stale-while-revalidate helper, because it is only ever consulted to
-        populate a dropdown and does not need to be fetched on every page load; a custom
+        a day via Storage's stale-while-revalidate helper, under a name derived from the endpoint
+        (see model_cache_name) so switching provider does not serve the previous one's list;
+        it is only ever consulted to populate a dropdown and does not need to be fetched on every
+        page load; a custom
         openrouter_base_url with no /models endpoint at all still works because the configured
         model is added whether or not the catalogue could be read.
 
@@ -1065,7 +1082,7 @@ class ChatAgent(ComponentBase):
         storage = self.storage
         try:
             if storage:
-                catalogue = await storage.fetch_cached("chat", "models", self._fetch_model_catalogue, fresh_minutes=MODEL_CACHE_MINUTES, stale_minutes=MODEL_CACHE_MINUTES + 60, format="json")
+                catalogue = await storage.fetch_cached("chat", model_cache_name(self.base_url), self._fetch_model_catalogue, fresh_minutes=MODEL_CACHE_MINUTES, stale_minutes=MODEL_CACHE_MINUTES + 60, format="json")
             else:
                 catalogue = await self._fetch_model_catalogue()
         except Exception as error:
