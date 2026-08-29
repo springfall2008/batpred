@@ -339,10 +339,10 @@ def test_annual_cli_fast_flag(my_predbat):
     # An empty YAML file loads as None and a malformed one as a list or a string. Any of
     # those must reach validate_config, which explains the problem, rather than dying here
     # with a bare TypeError - which is what --fast used to do on an empty config file.
-    # Value equality, not identity: apply_cli_overrides deepcopies its input unconditionally
-    # before checking its shape (unlike the deleted apply_fast_override, which checked first),
-    # so a mutable non-mapping like [] comes back as an equal but distinct object - only the
-    # value is the contract here.
+    # Value equality, not identity: apply_cli_overrides makes a deep copy of its input
+    # unconditionally before checking its shape (unlike the deleted apply_fast_override,
+    # which checked first), so a mutable non-mapping like [] comes back as an equal but
+    # distinct object - only the value is the contract here.
     for broken in (None, [], "not a config", 42):
         try:
             result = annual_cli.apply_cli_overrides(broken, fast=True)

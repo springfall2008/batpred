@@ -226,13 +226,13 @@ def test_annual_export_sweep_dno_region(my_predbat):
             print("  ERROR: expected the entry to survive validation, got {}".format(result))
             failed = True
 
-    print("Test: an untemplated export URL is unaffected by a missing dno_region")
+    print("Test: an export URL with no {dno_region} placeholder is unaffected by a missing dno_region")
     config = base_config()
     config["annual"]["export_tariffs"] = [{"id": "seg", "name": "SEG", "export_octopus_url": "https://example.test/flat-url/"}]
     try:
         result = validate_config(config)["export_tariffs"]
     except AnnualConfigError as error:
-        print("  ERROR: an untemplated export URL should not require dno_region, got '{}'".format(error))
+        print("  ERROR: an export URL with no {{dno_region}} placeholder should not require dno_region, got '{}'".format(error))
         failed = True
     else:
         if [entry["id"] for entry in result] != ["seg"]:

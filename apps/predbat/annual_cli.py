@@ -325,9 +325,10 @@ def apply_cli_overrides(config, months=None, export_compare=False, fast=False, y
     if fast:
         annual["fast_mode"] = True
     if export_compare:
-        # Exactly what whatif_contract emits for the SaaS page, so one flag reproduces a
-        # production run. If these two ever disagree, the CLI stops being a way to
-        # reproduce what the page printed.
+        # These values are pinned to match what a hosted caller sends for the same
+        # comparison, so one flag reproduces that run from the command line. If this flag
+        # and that caller are ever changed independently, the two would drift apart and
+        # the CLI would stop being a way to reproduce what was run there.
         annual["export_tariffs"] = export_compare_tariffs()
         annual["sampling"] = "weekday_spread"
         annual["samples_per_month"] = 5
