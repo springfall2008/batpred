@@ -24,7 +24,7 @@ import time
 from aiohttp import web
 from ruamel.yaml import YAML
 
-from chat import AgentNotReadyError, ChatBusyError, PROVIDER_DEFAULT_URLS, PROVIDERS, conversation_model_for, default_model_for
+from chat import AgentNotReadyError, ChatBusyError, PROVIDER_DEFAULT_URLS, PROVIDER_SETUP_HINTS, PROVIDERS, conversation_model_for, default_model_for
 from utils import ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH
 
 SSE_POLL_SECONDS = 0.1
@@ -712,8 +712,25 @@ def provider_type_choices():
     configured has to dial somewhere - and wrong here, where it would prefill a form for a local
     or generic OpenAI-compatible endpoint with openrouter.ai and invite the user to save it.
     A type with no genuine default offers none, and the URL field starts empty.
+
+    PROVIDER_SETUP_HINTS overrides both where a fresh setup wants something different from what an
+    existing entry resolves to - see its comment for why Ollama does. The note it carries is shown
+    under the URL field, which is the only place a prefilled value can be explained at the moment
+    somebody is deciding whether to keep it.
     """
-    return [{"type": name, "url": PROVIDER_DEFAULT_URLS.get(name, ""), "model": default_model_for(name) or "", "needs_key": bool(settings["needs_key"])} for name, settings in PROVIDERS.items()]
+    choices = []
+    for name, settings in PROVIDERS.items():
+        hint = PROVIDER_SETUP_HINTS.get(name, {})
+        choices.append(
+            {
+                "type": name,
+                "url": hint.get("url", PROVIDER_DEFAULT_URLS.get(name, "")),
+                "model": hint.get("model", default_model_for(name) or ""),
+                "needs_key": bool(settings["needs_key"]),
+                "note": hint.get("note", ""),
+            }
+        )
+    return choices
 
 
 def plain_yaml_value(value):
@@ -2080,6 +2097,7 @@ def get_chat_body():
             <div class="chat-field">
                 <label for="chat-provider-url">URL</label>
                 <input type="text" id="chat-provider-url" {autofill_off} spellcheck="false">
+                <span id="chat-provider-url-note" class="chat-field-note"></span>
             </div>
             <div class="chat-field">
                 <label for="chat-provider-key">API key</label>
@@ -4270,6 +4288,9 @@ function openProviderForm(index) {
     byId('chat-provider-key').value = '';
     byId('chat-provider-model-options').innerHTML = '';
     setProviderNote('chat-provider-model-note', '');
+    // Only when adding. Editing an existing provider must not explain a prefilled default over
+    // the URL the user actually chose and is looking at.
+    setProviderNote('chat-provider-url-note', entry ? '' : (defaults.note || ''));
     updateKeyNote();
     byId('chat-provider-form').classList.add('open');
     showSettingsError('');
@@ -4294,6 +4315,15 @@ function updateKeyNote() {
     if (entry && (entry.has_key || entry.api_key)) {
         input.placeholder = 'A key is already saved - leave blank to keep it';
         setProviderNote('chat-provider-key-note', 'Type a new key to replace it. Clearing it is not possible from here - remove the provider instead.');
+        return;
+    }
+    // A type whose form is prefilled with a hosted endpoint cannot claim a key is unnecessary -
+    // it is, for the endpoint sitting in the URL box above - but it is genuinely not needed if the
+    // user follows the note and points it at their own server. Said once, covering both, rather
+    // than reimplementing the server's is-this-address-local rule in the browser to guess which.
+    if (defaults && defaults.note) {
+        input.placeholder = 'Needed for a hosted endpoint';
+        setProviderNote('chat-provider-key-note', 'Needed for the hosted endpoint above. Leave it empty if you change the URL to a server of your own.');
         return;
     }
     if (defaults && !defaults.needs_key) {
@@ -4324,6 +4354,7 @@ function changeProviderType() {
     }
     byId('chat-provider-model-options').innerHTML = '';
     setProviderNote('chat-provider-model-note', '');
+    setProviderNote('chat-provider-url-note', defaults.note || '');
     updateKeyNote();
 }
 

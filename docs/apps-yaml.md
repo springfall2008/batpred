@@ -1974,12 +1974,30 @@ Everything the chat agent uses lives in one **chat** block. Endpoints go under *
   chat:
     providers:
       openrouter:
+        type: openrouter
+        url: 'https://openrouter.ai/api/v1'
+        model: nvidia/nemotron-3-ultra-550b-a55b:free
         api_key: !secret openrouter_api_key
-        model: openai/gpt-4o-mini      # optional
       ollama:
+        type: ollama
         url: 'http://localhost:11434/v1'
-        model: qwen3:latest            # optional
+        model: gpt-oss:20b
+      ollama_cloud:
+        type: ollama
+        url: 'https://ollama.com/v1'
+        model: gpt-oss:120b
+        api_key: !secret ollama_cloud_api_key
 ```
+
+That is a complete, working example with all three kinds of endpoint - a hosted aggregator, a
+server of your own, and Ollama's paid cloud - and you can delete whichever you do not want. The
+local one shows `localhost`, which is only right if Ollama runs on the same machine as Predbat;
+see [Reaching Ollama from Predbat](#reaching-ollama-from-predbat), because inside Home Assistant
+it usually does not.
+
+Every field above except **api_key** is optional. Left out, **type** is taken from the entry's
+name and **url** and **model** from the defaults below - so `openrouter:` with just a key is a
+working provider on its own.
 
 You do not have to write this block by hand. The Chat tab's **Settings** dialog adds, edits and removes providers and saves them here for you, keeping the rest of the file - including your comments - as it was; see [Chat View](web-interface.md#chat-view). It never shows you a saved API key, and leaving the key box empty when editing a provider keeps whatever is already in the file.
 

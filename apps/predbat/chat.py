@@ -194,6 +194,25 @@ PROVIDER_DEFAULT_URLS = {
     "openai": "https://api.openai.com/v1",
 }
 
+# What the Settings dialog offers when somebody adds a provider of each type, where that differs
+# from what an under-specified apps.yaml entry resolves to. The two answer different questions:
+# PROVIDER_DEFAULT_URLS answers "what did this existing entry mean", and changing it would
+# silently repoint installs that are working today, while this answers "what is most likely to
+# work for somebody starting now".
+#
+# For Ollama those answers genuinely differ. localhost is the conventional address and the right
+# reading of an entry that names no url, but it is almost never right for a new install: Predbat
+# runs inside its Home Assistant container, where localhost is the container and not the machine
+# the user is thinking of. Ollama's own cloud works from there without any of that, so it is what
+# the form suggests - with a note saying how to point it at your own server instead.
+PROVIDER_SETUP_HINTS = {
+    "ollama": {
+        "url": "https://ollama.com/v1",
+        "model": "gpt-oss:120b",
+        "note": "This is Ollama's own cloud, which needs an API key from ollama.com. If you run Ollama yourself, replace the URL with your server's address - for example http://localhost:11434/v1 when it is on this machine, or http://192.168.1.50:11434/v1 elsewhere on your network - and leave the key empty.",
+    },
+}
+
 # The model a provider starts on when the entry names none, so a freshly configured endpoint can
 # answer immediately rather than sending the user to the picker first. Per type, because a model
 # id only means anything to the endpoint serving it.
