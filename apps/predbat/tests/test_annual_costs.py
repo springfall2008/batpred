@@ -203,6 +203,57 @@ def test_annual_costs(my_predbat):
         print("  ERROR: 11 months should refuse payback and say why, got {}".format(partial))
         failed = True
 
+    print("Test: a deliberate single-month run is refused as a subset, not a failure")
+    # months_requested defaults to 12 (every caller before this parameter existed), so this
+    # must be passed explicitly to get the subset wording. Without it, a real acceptance run
+    # with annual.months: [7] reported "only 1 of 12 months could be modelled. The missing
+    # months are named in the caveats." on the hosted page, which reads as a broken model
+    # rather than a deliberate one-month run - see build_payback's docstring.
+    single_month = build_payback(scenarios, costs, 1, settings, months_requested=1)
+    if single_month.get("available") is not False:
+        print("  ERROR: a single modelled month should still refuse payback, got {}".format(single_month))
+        failed = True
+    reason = str(single_month.get("reason", ""))
+    if "deliberately covered" not in reason or "1" not in reason:
+        print("  ERROR: a deliberate single-month run should say it deliberately covered 1 month, got '{}'".format(reason))
+        failed = True
+    if "could not be modelled" in reason or "missing" in reason.lower():
+        print("  ERROR: a deliberate single-month run must not be described as a failure to model months, got '{}'".format(reason))
+        failed = True
+
+    print("Test: a full-year attempt that came up short keeps the original failure wording")
+    # The counterpart to the test above: months_requested=12 (explicit, matching the default)
+    # with fewer months included is a genuine shortfall, not a deliberate subset, so the
+    # original wording - which names what is missing - must survive unchanged.
+    shortfall = build_payback(scenarios, costs, 11, settings, months_requested=12)
+    reason = str(shortfall.get("reason", ""))
+    if "could be modelled" not in reason or "missing months are named in the caveats" not in reason.lower():
+        print("  ERROR: a full-year shortfall should keep the original 'only N of 12 months could be modelled' wording, got '{}'".format(reason))
+        failed = True
+    if "deliberately covered" in reason:
+        print("  ERROR: a full-year shortfall must not use the deliberate-subset wording, got '{}'".format(reason))
+        failed = True
+
+    print("Test: months_requested defaults to 12 when the caller does not pass it")
+    # Every caller before this parameter existed calls build_payback with exactly four
+    # positional arguments (see the "partial year" test above); the default must keep
+    # producing the original wording for those callers, unchanged.
+    default_caller = build_payback(scenarios, costs, 11, settings)
+    if "could be modelled" not in str(default_caller.get("reason", "")):
+        print("  ERROR: omitting months_requested should default to the full-year wording, got {}".format(default_caller))
+        failed = True
+
+    print("Test: a partially-failed subset run names what actually got modelled, not what was requested")
+    # An explicit 3-month subset where only 2 planned successfully: still a subset run (not
+    # a full-year attempt), so it keeps the "deliberately covered" framing rather than the
+    # alarming "could not be modelled" one - but the count must reflect the 2 that actually
+    # produced a usable result, not the 3 that were asked for.
+    partial_subset = build_payback(scenarios, costs, 2, settings, months_requested=3)
+    reason = str(partial_subset.get("reason", ""))
+    if "deliberately covered 2" not in reason:
+        print("  ERROR: a partially-failed subset run should name the 2 months actually modelled, got '{}'".format(reason))
+        failed = True
+
     print("Test: a missing scenario is refused rather than treated as a zero saving")
     # Reachable when a stored run predates the pv_only scenario, or an engine change
     # drops one - .get(key, {}).get("cost_p", baseline) would silently read this as no

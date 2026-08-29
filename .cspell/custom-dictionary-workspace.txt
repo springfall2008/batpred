@@ -1,4 +1,5 @@
 # Custom Dictionary Words
+aaaabbbbccccdddd
 activepower
 adata
 adbase
@@ -54,8 +55,12 @@ batteryb
 batusecap
 beforeunload
 bierner
+Bitwarden
+BLAS
 boostable
+Bottlecap
 brickatius
+bwignore
 byok
 cadata
 calib
@@ -79,6 +84,7 @@ CHECKCODE
 Chrg
 citem
 cloudfront
+cmpl
 cobat
 codepoint
 codepoints
@@ -108,6 +114,7 @@ darkgreen
 darkred
 darray
 dasharray
+Dashlane
 datain
 datalist
 datalog
@@ -119,6 +126,7 @@ dateutil
 dayname
 daynumber
 daysymbol
+deadbeefdeadbeef
 dedup
 dedupe
 dend
@@ -185,6 +193,7 @@ etok
 euids
 EVDC
 evergen
+evilspringfall
 evse
 exog
 expmsg
@@ -212,6 +221,7 @@ freephase
 fronius
 funcs
 futurerate
+gaierror
 gcoan
 gecloud
 gekey
@@ -219,9 +229,11 @@ generationmix
 generationpower
 geserial
 geseriale
+getaffinity
 getall
 getrusage
 Ginlong
+gitnexus
 GivEnergy
 givtcp
 gnueabihf
@@ -230,6 +242,7 @@ gridcharge
 gridcode
 gridconsumption
 gridconsumptionpower
+Groq
 growatt
 GWMQTT
 HACS
@@ -243,9 +256,11 @@ hanres
 HAOS
 harvi
 hasattr
+haspopup
 hass
 hassapi
 hassio
+heartbeating
 heatingactive
 heatingtemp
 heatpump
@@ -268,11 +283,13 @@ inteless
 INTELLI
 intelligentdevice
 interp
+interprocedural
 intraday
 inva
 invb
 invbatpower
 invname
+IPPROTO
 isinstance
 isoformat
 isort
@@ -293,12 +310,15 @@ Kostal
 kostalplenticore
 kostalplenticoreg
 Krakenflex
+Kuzu
 kvar
 kvarh
 kwargs
 kwhb
 labelcolor
+labelledby
 labelnames
+ladybugdb
 larr
 libbi
 libc
@@ -314,6 +334,7 @@ lockstep
 logdata
 loglines
 lookback
+lpignore
 lstrip
 luxpower
 markdownlint
@@ -355,6 +376,7 @@ mogons
 monkeypatched
 monokai
 Mosquitto
+mousedown
 mpan
 mppt
 mprn
@@ -370,6 +392,7 @@ nanstd
 nattribute
 ncalls
 nearr
+nemotron
 NESO
 newtok
 njpwerner
@@ -383,6 +406,7 @@ nordpool
 noreferrer
 nosc
 nosuchrun
+notgithub
 notsn
 nrgheat
 numpy
@@ -395,6 +419,7 @@ Ofgem
 Ohme
 ohmepy
 Okabe
+ollama
 onblur
 onchange
 oncharge
@@ -403,7 +428,9 @@ oninput
 onmouseout
 onmouseover
 openapi
+openrouter
 openweathermap
+overclaim
 overfitting
 overvoltage
 ownerapi
@@ -460,6 +487,7 @@ pyproject
 pytest
 pythonhashseed
 pytz
+Qwen
 randn
 rarr
 reactivepower
@@ -476,9 +504,11 @@ relogin
 remainings
 remotecontrol
 renderable
+replayer
 resetmidnight
 resultid
 resultmid
+retryable
 reweight
 reweighted
 rname
@@ -514,6 +544,7 @@ sigen
 sigencloud
 sigenergy
 sigenstor
+skynet
 Slee
 slugified
 slugifies
@@ -574,6 +605,7 @@ Teslemetry
 testname
 thirdparty
 threadpool
+threadpoolctl
 timea
 timeb
 timec
@@ -593,6 +625,7 @@ timezone
 tmpfs
 tmrw
 tojson
+topbar
 tottime
 trapezoidally
 trapz
@@ -607,15 +640,24 @@ typecodes
 tzfile
 tzpath
 unasserted
+uncompilable
 unconfigured
 underivable
 undiscounted
 undriven
+unencodable
+unfetchable
+unflushed
+unindexed
 unnormalised
 unparseable
 unpickled
 unpickles
 unpushed
+unreachability
+unredacted
+unregisters
+unreproduced
 unsmoothed
 unstaged
 untriaged

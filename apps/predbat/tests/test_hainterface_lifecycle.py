@@ -284,8 +284,6 @@ def test_hainterface_wait_api_started_timeout(my_predbat=None):
             return
 
     with patch("ha.time.sleep", side_effect=mock_sleep):
-        # Set max count to trigger timeout quickly
-        original_count = 0
         result = ha_interface.wait_api_started()
         # After 240 iterations without api_started, should return False
 
@@ -369,13 +367,13 @@ def test_hainterface_start_with_websocket(my_predbat=None):
     else:
         print("✓ socketLoop called")
 
-    if ha_interface.websocket_active != True:
+    if ha_interface.websocket_active is not True:
         print("ERROR: websocket_active should be True")
         failed += 1
     else:
         print("✓ websocket_active set to True")
 
-    if ha_interface.api_started != False:
+    if ha_interface.api_started is not False:
         print("ERROR: api_started should be False after exit")
         failed += 1
     else:
@@ -421,7 +419,7 @@ def test_hainterface_start_dummy_mode(my_predbat=None):
     else:
         print("✓ Dummy startup message logged")
 
-    if ha_interface.api_started != False:
+    if ha_interface.api_started is not False:
         print("ERROR: api_started should be False after exit")
         failed += 1
     else:

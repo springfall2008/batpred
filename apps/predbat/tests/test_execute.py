@@ -415,7 +415,7 @@ def run_execute_test(
             if inverter.immediate_charge_soc_freeze != assert_immediate_charge_soc_freeze_array[inverter.id]:
                 print("ERROR: Inverter {} Immediate charge SOC freeze should be {} got {}".format(inverter.id, assert_immediate_charge_soc_freeze_array[inverter.id], inverter.immediate_charge_soc_freeze))
                 failed = True
-        elif assert_status in ["Freeze charging"] and inverter.immediate_charge_soc_freeze != True:
+        elif assert_status in ["Freeze charging"] and inverter.immediate_charge_soc_freeze is not True:
             print("ERROR: Inverter {} Immediate charge SOC freeze should be True got {}".format(inverter.id, inverter.immediate_charge_soc_freeze))
             failed = True
         if assert_immediate_discharge_soc_target_array:
@@ -427,7 +427,7 @@ def run_execute_test(
         if inverter.immediate_discharge_soc_target != assert_soc_target_force_dis:
             print("ERROR: Inverter {} Immediate export SOC target should be {} got {}".format(inverter.id, assert_soc_target_force_dis, inverter.immediate_discharge_soc_target))
             failed = True
-        if assert_status in ["Freeze exporting"] and inverter.immediate_discharge_soc_freeze != True:
+        if assert_status in ["Freeze exporting"] and inverter.immediate_discharge_soc_freeze is not True:
             print("ERROR: Inverter {} Immediate export SOC freeze should be True got {}".format(inverter.id, inverter.immediate_discharge_soc_freeze))
             failed = True
 
@@ -2756,6 +2756,29 @@ def run_execute_tests(my_predbat):
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         assert_immediate_soc_target=100,
         assert_pause_discharge=True,
+    )
+    # #3899: holding the car off the battery must not ratchet reserve while the battery is actually
+    # charging - it is filling from the grid, so it cannot be feeding the car, and tracking a rising
+    # SoC costs a register write per 1%. Reserve resets for the duration instead; the "car2" scenario
+    # above covers it being latched at SoC+1 once charging is no longer running.
+    failed |= run_execute_test(
+        my_predbat,
+        "car_charge_no_reserve_ratchet",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        soc_kw=5,
+        car_slot=charge_window_best_slot,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging, Hold for car",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_immediate_soc_target=100,
+        has_timed_pause=False,
+        assert_pause_discharge=False,
+        assert_discharge_rate=0,
+        assert_reserve=0,
     )
     failed |= run_execute_test(
         my_predbat,

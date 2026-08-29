@@ -408,7 +408,7 @@ def test_compare(my_predbat):
     cmp.recompute_car_charging = lambda slots: None
     cmp.run_scenario = lambda end_record: {"cost": 0, "metric": 0}
 
-    result = cmp.run_single({"name": "test_tariff", "id": "test"}, {}, {}, 48 * 60, fetch_sensor=False)
+    cmp.run_single({"name": "test_tariff", "id": "test"}, {}, {}, 48 * 60, fetch_sensor=False)
 
     if not tariff_plan_calls:
         print("ERROR T13: plan_iboost_smart() was not called during run_single()")

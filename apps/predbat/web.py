@@ -69,18 +69,18 @@ from web_helper import (
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args
+from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, read_predbat_log, classify_log_line, log_line_included
+from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
 import debug_history
 from web_annual import AnnualPage
+from web_chat import WebChat
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
-
-ROOT_YAML_KEY = "pred_bat"
 
 
 def state_as_of_slots(records, slots):
@@ -184,46 +184,6 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch):
     return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
 
 
-def is_data_numerical(history, attribute=None):
-    """
-    Check if history data is numerical (supports both state and attribute checking)
-    Returns True if at least 10% of values are numeric or boolean
-    """
-    count_nums = 0
-    count_total = 0
-
-    if history and len(history) >= 1:
-        for item in history[0]:
-            if attribute:
-                # Check attribute value
-                attr_value = item.get("attributes", {}).get(attribute, None)
-                if attr_value is None:
-                    continue
-                value = str(attr_value)
-            else:
-                # Check state value
-                value = item.get("state", None)
-                if value is None:
-                    continue
-                value = str(value)
-
-            if value.lower() in ["on", "off", "true", "false"]:
-                count_nums += 1
-            else:
-                try:
-                    float(value)
-                    count_nums += 1
-                except (ValueError, TypeError):
-                    pass
-            count_total += 1
-
-    if count_total > 0 and (count_nums / count_total) >= 0.1:
-        return True
-    elif count_total == 0:
-        return True
-    return False
-
-
 def split_entities_for_charting(entities, entity_data_fetch):
     """
     Fetch each entity's history and split a unit group into numeric vs non-numeric entries.
@@ -307,6 +267,7 @@ class WebInterface(ComponentBase):
         self.registered_endpoints = []
 
         self.annual_page = AnnualPage(self)
+        self.chat_page = WebChat(self)
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -431,6 +392,43 @@ class WebInterface(ComponentBase):
         app.router.add_get("/annual_view", self.annual_page.html_annual_view)
         app.router.add_get("/annual_compare", self.annual_page.html_annual_compare)
 
+    def chat_enabled(self):
+        """Return whether the chat component is configured and running."""
+        components = getattr(self.base, "components", None)
+        return bool(components and components.get_component("chat"))
+
+    def _register_chat_routes(self, app):
+        """Register the Chat tab's routes on ``app``, unconditionally.
+
+        Split out of start() the same way the annual routes are, so a test can assert the routes
+        exist against a bare aiohttp Application without opening a socket.
+
+        These must be registered regardless of whether chat is configured yet: phase 0 (which
+        builds this Application and starts the site) runs before phase 1 (which initialises the
+        chat component), so gating on chat_enabled() here would freeze the router with the routes
+        permanently absent. Each handler already checks self.agent and returns 404 "Chat is not
+        configured" when the component is not up yet - that per-request check is what stands in
+        for a boot-time gate.
+        """
+        app.router.add_get("/chat", self.chat_page.html_chat)
+        app.router.add_get("/chat/conversations", self.chat_page.html_chat_conversations)
+        app.router.add_post("/chat/conversations", self.chat_page.html_chat_create)
+        app.router.add_post("/chat/rename", self.chat_page.html_chat_rename)
+        app.router.add_post("/chat/delete", self.chat_page.html_chat_delete)
+        app.router.add_get("/chat/history", self.chat_page.html_chat_history)
+        app.router.add_post("/chat/send", self.chat_page.html_chat_send)
+        app.router.add_get("/chat/stream", self.chat_page.html_chat_stream)
+        app.router.add_post("/chat/confirm", self.chat_page.html_chat_confirm)
+        app.router.add_post("/chat/cancel", self.chat_page.html_chat_cancel)
+        app.router.add_get("/chat/models", self.chat_page.html_chat_models)
+        app.router.add_post("/chat/model", self.chat_page.html_chat_model)
+        app.router.add_get("/chat/status", self.chat_page.html_chat_status)
+        app.router.add_post("/chat/status", self.chat_page.html_chat_status_post)
+        app.router.add_get("/chat/providers", self.chat_page.html_chat_providers)
+        app.router.add_post("/chat/providers", self.chat_page.html_chat_providers_post)
+        app.router.add_post("/chat/providers/models", self.chat_page.html_chat_provider_models)
+        app.router.add_post("/chat/provider", self.chat_page.html_chat_provider_select)
+
     async def start(self):
         # Start the web server
         app = web.Application()
@@ -463,6 +461,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
         self._register_annual_routes(app)
+        self._register_chat_routes(app)
         app.router.add_get("/apps_editor", self.html_apps_editor)
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_get("/apps_editor_checksum", self.html_apps_editor_checksum)
@@ -602,13 +601,18 @@ class WebInterface(ComponentBase):
         load_power = self.base.load_power
 
         # Car charging only appears when a car_charging_power sensor is configured (execute.py
-        # update_car_charging_power). The charger sits on the house side of the meter, so its power
-        # is already inside load_power - subtract it so the House circle reads as the rest of the
+        # update_car_charging_power). Where the charger sits relative to the house CT clamp is what
+        # car_energy_reported_load records. With it on the charger is behind the clamp and its power
+        # is already inside load_power, so subtract it and the House circle reads as the rest of the
         # house rather than counting the car twice. Clamped at zero because the two readings come
         # from different meters and a slow-updating load sensor can briefly read below the car.
+        # With it off the charger is outside the clamp and was never in load_power, so subtracting
+        # would take the car off a figure that never held it and the clamp would then swallow the
+        # whole house load - leave the reading alone and feed the car from the Grid instead (#4788).
         car_configured = self.base.car_charging_power_configured
         car_power = self.base.car_charging_power
-        house_power = max(0, load_power - car_power) if car_configured else load_power
+        car_inside_clamp = self.base.car_energy_reported_load
+        house_power = max(0, load_power - car_power) if (car_configured and car_inside_clamp) else load_power
 
         # Determine flow directions. battery_power is positive when the battery is DISCHARGING
         # (gateway.py negates the firmware's sign for exactly this reason) and grid_power is
@@ -662,52 +666,69 @@ class WebInterface(ComponentBase):
             battery_icon, dp0(house_power)
         )
 
-        # Car charging arm - drawn top right, the corner left free by PV/battery/grid
+        # Car charging arm - drawn top right, the corner left free by PV/battery/grid. It runs from
+        # whichever node is actually feeding the charger: the House when the charger is behind the
+        # CT clamp, otherwise the Grid, since the incoming supply is then the only thing left that
+        # can be feeding it. Both run circle edge to circle edge, stopping short of the Car by the
+        # length of the arrowhead the marker draws past the end of the line.
         if car_configured:
             car_charging = car_power >= 10
+            if car_inside_clamp:
+                car_source = "House"
+                car_line = 'x1="342" y1="172" x2="391" y2="139"'
+                car_path = "M342,172 L391,139"
+                car_label = 'x="356" y="122"'
+            else:
+                car_source = "Grid"
+                car_line = 'x1="450" y1="250" x2="450" y2="170"'
+                car_path = "M450,250 L450,170"
+                car_label = 'x="485" y="205"'
+
             html += """
                 <!-- Car Circle -->
                 <circle cx="450" cy="100" r="50" fill="#E53935"><title>Car</title></circle>
                 <text x="450" y="100" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF010B;</text>
 
                 <defs>
-                    <!-- House to Car path -->
-                    <path id="house-car-path" d="M342,172 L391,139" stroke="transparent" fill="none" />
+                    <!-- {source} to Car path -->
+                    <path id="{source_id}-car-path" d="{path}" stroke="transparent" fill="none" />
                     <marker id="car-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
                     <polygon points="0 0, 10 3.5, 0 7" fill="#E53935"/>
                     </marker>
                 </defs>
-            """
+            """.format(
+                source=car_source, source_id=car_source.lower(), path=car_path
+            )
             if car_charging:
                 # Calculate animation speed based on power flow - faster for higher power
                 car_speed = max(0.5, min(3.0, 2.0 - (abs(car_power) / 3000)))
 
                 html += """
-                <!-- House to Car Arrow -->
-                <line x1="342" y1="172" x2="391" y2="139" stroke="#E53935" stroke-width="2" marker-end="url(#car-arrow)" />
-                <text x="356" y="122" text-anchor="middle" fill="#E53935">{} W</text>
+                <!-- {source} to Car Arrow -->
+                <line {line} stroke="#E53935" stroke-width="2" marker-end="url(#car-arrow)" />
+                <text {label} text-anchor="middle" fill="#E53935">{power} W</text>
 
-                <!-- Moving dots for House to Car -->
+                <!-- Moving dots for {source} to Car -->
                 <circle r="4" fill="#E53935" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,172 L391,139" />
+                    <animateMotion dur="{speed}s" repeatCount="indefinite" path="{path}" />
                 </circle>
                 <circle r="3" fill="#E53935" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,172 L391,139" />
+                    <animateMotion dur="{speed}s" repeatCount="indefinite" begin="0.5s" path="{path}" />
                 </circle>
                 <circle r="2" fill="#E53935" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,172 L391,139" />
+                    <animateMotion dur="{speed}s" repeatCount="indefinite" begin="1.0s" path="{path}" />
                 </circle>
                 """.format(
-                    dp0(car_power), car_speed, car_speed, car_speed
+                    source=car_source, line=car_line, label=car_label, power=dp0(car_power), speed=car_speed, path=car_path
                 )
             else:
                 html += """
-                <!-- House to Car Arrow (dashed) -->
-                <line x1="342" y1="172" x2="391" y2="139" stroke="#E53935" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
-                <text x="356" y="122" text-anchor="middle" fill="#E53935">{} W</text>
+                <!-- {source} to Car Arrow (dashed) -->
+                <line {line} stroke="#E53935" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
+                <text {label} text-anchor="middle" fill="#E53935">{power} W</text>
                 <!-- No moving dot when the car is not charging -->
                 """.format(
-                    dp0(car_power)
+                    source=car_source, line=car_line, label=car_label, power=dp0(car_power)
                 )
 
         # Draw arrows and labels
@@ -967,6 +988,15 @@ class WebInterface(ComponentBase):
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all (.tgz)</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
+        # The HA Companion app's embedded webview does not act on Content-Disposition: attachment,
+        # so it renders these downloads inline instead of saving them - a client limitation with no
+        # server-side fix (see #4720). Rather than try to detect the app (its webview sends no
+        # reliable identifying User-Agent - see #4720 discussion) and grey the links out, which risks
+        # false-positives against a genuine desktop browser, just say so for everyone.
+        text += "<tr><td colspan='2' style='font-size:0.85em; color:var(--text-secondary,#888); padding-top:6px;'>"
+        text += "'Create' and 'Download' above need a web browser - the HA Companion app cannot save files from them. "
+        text += "Companion app users can instead browse to <code>{}/debug/</code>, which also holds the rolling snapshot history as plain, readable files.".format(self.base.config_root_p)
+        text += "</td></tr>\n"
         text += "</table>\n"
         text += "</div>\n"
 
@@ -1695,7 +1725,7 @@ class WebInterface(ComponentBase):
         if self.base.update_pending:
             calculating = True
         self.update_success_timestamp()
-        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror)
+        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror, chat_enabled=self.chat_enabled())
 
     def get_chart_series(self, name, results, chart_type, color):
         """
@@ -2267,16 +2297,7 @@ chart.render();
             return "".join(result_parts)
 
         try:
-            logfile = "predbat.log"
-            logfile_1 = "predbat.1.log"
-            logdata = ""
-
-            if os.path.exists(logfile):
-                with open(logfile, "r") as f:
-                    logdata = f.read()
-            if os.path.exists(logfile_1):
-                with open(logfile_1, "r") as f:
-                    logdata = f.read() + "\n" + logdata
+            logdata = read_predbat_log()
 
             # Get query parameters
             args = request.query
@@ -2304,22 +2325,10 @@ chart.render();
                     lineno -= 1
                     continue
 
-                # Apply log level filtering first
-                include_line = False
-                line_type = "log"
-
-                if "error" in line_lower:  # any error log lines will appear on all, info, warning and error tabs
-                    line_type = "error"
-                    include_line = True
-                elif "warn" in line_lower:  # warning log lines appear on all and warning tabs
-                    line_type = "warning"
-                    include_line = filter_type in ["all", "warnings"]
-                elif "info" in line_lower:  # info log lines appear on all and info tabs
-                    line_type = "info"
-                    include_line = filter_type in ["all", "info"]
-                else:  # all other log lines appear on just the all tab
-                    line_type = "log"
-                    include_line = filter_type == "all"
+                # Apply log level filtering first - shared with the get_log MCP tool so the
+                # two views of the same log can't drift apart (#4768)
+                line_type = classify_log_line(line)
+                include_line = log_line_included(line_type, filter_type)
 
                 # Apply search filter if search term is provided
                 if include_line and search_term:
@@ -2745,6 +2754,23 @@ chart.render();
 
         raise web.HTTPFound("./config")
 
+    def render_delete_button(self, nested_row_id):
+        """
+        Render the delete button shown against a nested list item or dictionary key
+        """
+        return f'<button class="delete-button" id="delete_button_{nested_row_id}" onclick="deleteNestedValue({nested_row_id})">Delete</button>'
+
+    def render_add_row(self, function, js_args, label, row_counter):
+        """
+        Render the trailing table row holding an add button, which doubles as the anchor new rows are inserted before
+        """
+        if row_counter is None:
+            return ""
+        row_counter[0] += 1
+        anchor_id = row_counter[0]
+        args = ", ".join(["'{}'".format(html_module.escape(str(item), quote=True)) for item in js_args] + [str(anchor_id)])
+        return f"<tr id='add_anchor_{anchor_id}'><td colspan='2'></td><td><button class=\"add-button\" onclick=\"{function}({args})\">{label}</button></td></tr>\n"
+
     def render_type(self, arg, value, parent_path="", row_counter=None):
         """
         Render a value based on its type with support for nested editing.
@@ -2762,67 +2788,81 @@ chart.render();
         """
         text = ""
         if isinstance(value, list):
+            list_path = parent_path if parent_path else arg
             text += "<table>"
             for idx, item in enumerate(value):
-                nested_path = f"{parent_path}[{idx}]" if parent_path else f"{arg}[{idx}]"
+                nested_path = f"{list_path}[{idx}]"
 
                 # Check if this list item is editable
                 can_edit = self.is_editable_value(item)
                 actions_cell = ""
+                nested_row_id = None
 
-                if can_edit and row_counter is not None:
+                if row_counter is not None:
                     row_counter[0] += 1
                     nested_row_id = row_counter[0]
 
-                    if isinstance(item, bool):
-                        toggle_class = "toggle-button active" if item else "toggle-button"
-                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
-                    else:
-                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                    if can_edit:
+                        if isinstance(item, bool):
+                            toggle_class = "toggle-button active" if item else "toggle-button"
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
+                        else:
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
 
-                    # Store the nested value info for later processing
-                    if not hasattr(self, "_nested_values"):
-                        self._nested_values = {}
-                    self._nested_values[nested_row_id] = {"path": nested_path, "value": item}
+                        # Store the nested value info for later processing
+                        if not hasattr(self, "_nested_values"):
+                            self._nested_values = {}
+                        self._nested_values[nested_row_id] = {"path": nested_path, "value": item}
+
+                    # Every list item can be removed, whether or not its value itself is editable
+                    actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(arg, item)
 
-                if actions_cell:
-                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                if nested_row_id is not None:
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{nested_row_id}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item, nested_path, row_counter))
+            text += self.render_add_row("addListItem", [list_path, arg], "Add item", row_counter)
             text += "</table>"
         elif isinstance(value, dict):
+            dict_path = parent_path if parent_path else arg
             text += "<table>"
             for key in value:
-                nested_path = f"{parent_path}.{key}" if parent_path else f"{arg}.{key}"
+                nested_path = f"{dict_path}.{key}"
                 nested_value = value[key]
 
                 # Check if this nested value is editable
                 can_edit = self.is_editable_value(nested_value)
                 actions_cell = ""
+                nested_row_id = None
 
-                if can_edit and row_counter is not None:
+                if row_counter is not None:
                     row_counter[0] += 1
                     nested_row_id = row_counter[0]
 
-                    if isinstance(nested_value, bool):
-                        toggle_class = "toggle-button active" if nested_value else "toggle-button"
-                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
-                    else:
-                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                    if can_edit:
+                        if isinstance(nested_value, bool):
+                            toggle_class = "toggle-button active" if nested_value else "toggle-button"
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
+                        else:
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
 
-                    # Store the nested value info for later processing
-                    if not hasattr(self, "_nested_values"):
-                        self._nested_values = {}
-                    self._nested_values[nested_row_id] = {"path": nested_path, "value": nested_value}
+                        # Store the nested value info for later processing
+                        if not hasattr(self, "_nested_values"):
+                            self._nested_values = {}
+                        self._nested_values[nested_row_id] = {"path": nested_path, "value": nested_value}
+
+                    # Every setting can be removed, whether or not its value itself is editable
+                    actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(key, nested_value)
 
-                if actions_cell:
-                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                if nested_row_id is not None:
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
+            text += self.render_add_row("addDictKey", [dict_path], "Add setting", row_counter)
             text += "</table>"
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z_]+\.\S+", value)
@@ -3606,6 +3646,8 @@ chart.render();
         if self.base.arg_errors:
             warning = "&#9888;"
         text += "{}<a href='./debug_apps'>apps.yaml</a> - has {} errors<br>\n".format(warning, len(self.base.arg_errors))
+        if self.base.arg_warnings:
+            text += "&#9888; apps.yaml has {} credential-like value(s) stored in plain text - consider using '!secret' to reference secrets.yaml: {}<br>\n".format(len(self.base.arg_warnings), html_module.escape(", ".join(sorted(self.base.arg_warnings))))
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><th>Actions</th></tr>\n"
 
@@ -3660,30 +3702,38 @@ chart.render();
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
-    def _update_nested_yaml_value(self, data, path, value):
+    def _split_yaml_path(self, path):
         """
-        Update a nested value in YAML data using a dot-notation path
+        Split a dot-notation path into keys, with each list index as its own '[n]' key
         """
-        pre_keys = path.split(".")
         keys = []
-        # Split out set of square brackets into a different key
-        for key in pre_keys:
-            if "[" in key and "]" in key:
-                # Handle keys with square brackets, e.g., "battery_charge_low[0]"
-                base_key, index = key.split("[")
-                index = index.rstrip("]")
-                keys.append(base_key)
-                keys.append(f"[{index}]")
-            else:
-                keys.append(key)
+        # Split out every set of square brackets into its own key, e.g. "battery_charge_low[0]"
+        # into "battery_charge_low", "[0]", and a directly nested list's "foo[0][1]" into
+        # "foo", "[0]", "[1]"
+        for component in path.split("."):
+            for token in re.split(r"(\[[^\[\]]*\])", component):
+                if token:
+                    keys.append(token)
+        return keys
 
+    def _yaml_path_index(self, key, path):
+        """
+        Return the integer index held by a '[n]' path key, raising KeyError if it is not one
+        """
+        index = key[1:-1]
+        if not index.isdigit():
+            raise KeyError(f"Invalid list index '{key}' in path '{path}'")
+        return int(index)
+
+    def _navigate_yaml_path(self, data, keys, path):
+        """
+        Walk YAML data along all but the last key and return the container holding the final key
+        """
         current = data
-
-        # Navigate to the parent of the target value
         for key in keys[:-1]:
             if key.startswith("[") and key.endswith("]"):
                 # Handle numerical index in square brackets
-                index = int(key[1:-1])
+                index = self._yaml_path_index(key, path)
                 if not isinstance(current, list) or index >= len(current):
                     raise KeyError(f"Index '{index}' out of range in path '{path}'")
                 current = current[index]
@@ -3691,12 +3741,83 @@ chart.render();
                 current = current[key]
             else:
                 raise KeyError(f"Key '{key}' not found in path '{path}'")
+        return current
+
+    def _yaml_path_sort_key(self, path):
+        """
+        Return a sort key for a path so that deeper paths and higher list indices sort last
+        """
+        sort_key = []
+        for key in self._split_yaml_path(path):
+            if key.startswith("[") and key.endswith("]") and key[1:-1].isdigit():
+                sort_key.append((0, int(key[1:-1]), ""))
+            else:
+                sort_key.append((1, 0, str(key)))
+        return sort_key
+
+    def _parse_yaml_fragment(self, text):
+        """
+        Parse a user supplied YAML fragment (a scalar, or a block of key: value lines) into a value
+        """
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        value = yaml.load(text)
+        if value is None:
+            raise ValueError("value is empty")
+        return value
+
+    def _delete_nested_yaml_value(self, data, path):
+        """
+        Delete a nested list item or dictionary key from YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
+
+        key = keys[-1]
+        if key.startswith("[") and key.endswith("]"):
+            # Handle numerical index in square brackets
+            index = self._yaml_path_index(key, path)
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(f"Index '{index}' out of range in path '{path}'")
+            del current[index]
+        elif isinstance(current, dict) and key in current:
+            del current[key]
+        else:
+            raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+    def _add_nested_yaml_value(self, data, path, value):
+        """
+        Add a new list item (path ending in '[]') or dictionary key to YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
+
+        key = keys[-1]
+        if key == "[]":
+            if not isinstance(current, list):
+                raise KeyError(f"Path '{path}' does not refer to a list")
+            current.append(value)
+        elif key.startswith("[") and key.endswith("]"):
+            raise KeyError(f"Cannot add at an existing list index, use [] to append in path '{path}'")
+        elif not isinstance(current, dict):
+            raise KeyError(f"Path '{path}' does not refer to a dictionary")
+        elif key in current:
+            raise KeyError(f"Key '{key}' already exists in path '{path}'")
+        else:
+            current[key] = value
+
+    def _update_nested_yaml_value(self, data, path, value):
+        """
+        Update a nested value in YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
 
         # Set the final value
         key = keys[-1]
         if key.startswith("[") and key.endswith("]"):
             # Handle numerical index in square brackets
-            index = int(key[1:-1])
+            index = self._yaml_path_index(key, path)
             if not isinstance(current, list) or index >= len(current):
                 raise KeyError(f"Index '{index}' out of range in path '{path}'")
             current[index] = value
@@ -3712,6 +3833,27 @@ chart.render();
                     current[key] = value
             else:
                 raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+    def _validate_compare_list(self, compare_list):
+        """
+        Check every compare_list profile still has the unique id and non-empty name that
+        compare.py indexes results by, raising ValueError if a batch has left one without
+        """
+        if not compare_list:
+            return
+
+        seen_ids = set()
+        for entry in compare_list:
+            if not isinstance(entry, dict):
+                raise ValueError("Each compare_list entry must be a dictionary with an id and a name")
+            entry_id = entry.get("id")
+            if not entry_id:
+                raise ValueError("Each compare_list entry requires a non-empty 'id'")
+            if entry_id in seen_ids:
+                raise ValueError(f"Duplicate compare_list id '{entry_id}'")
+            seen_ids.add(entry_id)
+            if not entry.get("name"):
+                raise ValueError(f"compare_list entry '{entry_id}' requires a non-empty 'name'")
 
     async def html_apps_post(self, request):
         """
@@ -3737,6 +3879,7 @@ chart.render();
             apps_yaml_path = "apps.yaml"
             yaml = YAML()
             yaml.preserve_quotes = True
+            yaml.width = YAML_DUMP_WIDTH
 
             try:
                 with open(apps_yaml_path, "r") as f:
@@ -3748,12 +3891,47 @@ chart.render();
             if ROOT_YAML_KEY not in data:
                 return web.json_response({"success": False, "message": "pred_bat section not found in apps.yaml"})
 
-            # Process each change
+            # Process each change - additions and updates are applied first, then deletions, as
+            # deleting a list item shifts the indices every other path was rendered against.
+            # Every mutation lands on live_args, a copy of self.args, rather than self.args
+            # itself - a batch that fails partway, or whose file write fails, must never leave
+            # self.args (which is the same object as self.base.args) reflecting only some of it
             updated_args = []
+            deleted_paths = []
+            live_args = copy.deepcopy(self.args)
             for path_or_arg, change_info in changes.items():
-                new_value = change_info["newValue"]
                 change_type = change_info.get("type", "numerical")
                 is_nested = change_info.get("isNested", False)
+                # Adds are keyed uniquely by the browser so several can target one list, so the
+                # path is taken from the change itself rather than from the key
+                path_or_arg = change_info.get("path", path_or_arg) if is_nested else path_or_arg
+
+                if change_type in ("add", "delete"):
+                    # Determine nesting from the parsed path itself, not the client-supplied
+                    # isNested flag, so a delete posted with isNested spoofed true still cannot
+                    # reach a bare top-level key
+                    if len(self._split_yaml_path(path_or_arg)) < 2:
+                        return web.json_response({"success": False, "message": f"Only nested values can be added or deleted, not {path_or_arg}"})
+
+                if change_type == "delete":
+                    deleted_paths.append(path_or_arg)
+                    continue
+
+                new_value = change_info["newValue"]
+
+                if change_type == "add":
+                    # Added values are entered as YAML so a whole new list entry can be created at once
+                    try:
+                        added_value = self._parse_yaml_fragment(new_value)
+                    except Exception as e:
+                        return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {str(e)}"})
+                    try:
+                        self._add_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, added_value)
+                        self._add_nested_yaml_value(live_args, path_or_arg, copy.deepcopy(added_value))
+                    except (KeyError, TypeError) as e:
+                        return web.json_response({"success": False, "message": f"Could not add {path_or_arg}: {str(e)}"})
+                    updated_args.append(f"added {path_or_arg}")
+                    continue
 
                 # Convert the new value to appropriate type
                 try:
@@ -3776,7 +3954,7 @@ chart.render();
                     # Handle nested paths like "battery_charge_low.normal"
                     try:
                         self._update_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, converted_value)
-                        self._update_nested_yaml_value(self.args, path_or_arg, converted_value)
+                        self._update_nested_yaml_value(live_args, path_or_arg, converted_value)
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     except (KeyError, TypeError) as e:
                         return web.json_response({"success": False, "message": f"Path {path_or_arg} not found or invalid: {str(e)}"})
@@ -3784,15 +3962,38 @@ chart.render();
                     # Handle top-level arguments
                     if path_or_arg in data[ROOT_YAML_KEY]:
                         data[ROOT_YAML_KEY][path_or_arg] = converted_value
-                        self.args[path_or_arg] = converted_value  # Update the base args as well
+                        live_args[path_or_arg] = converted_value
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     else:
                         return web.json_response({"success": False, "message": f"Argument {path_or_arg} not found in apps.yaml"})
+
+            # Deletions run last, deepest path and highest list index first, so that one deletion
+            # never shifts the index another one still refers to
+            for path in sorted(deleted_paths, key=self._yaml_path_sort_key, reverse=True):
+                try:
+                    self._delete_nested_yaml_value(data[ROOT_YAML_KEY], path)
+                    self._delete_nested_yaml_value(live_args, path)
+                except (KeyError, TypeError) as e:
+                    return web.json_response({"success": False, "message": f"Could not delete {path}: {str(e)}"})
+                updated_args.append(f"deleted {path}")
+
+            # Compare profiles are indexed by id elsewhere (e.g. compare.py), so a batch that
+            # leaves one without an id or name, or with a duplicate id, must be refused
+            try:
+                self._validate_compare_list(data[ROOT_YAML_KEY].get("compare_list"))
+            except ValueError as e:
+                return web.json_response({"success": False, "message": str(e)})
 
             # Write back to the file, preserving comments and formatting
             try:
                 with open(apps_yaml_path, "w") as f:
                     yaml.dump(data, f)
+
+                # Only now that the whole batch has validated and the file write has succeeded is
+                # the live config published - in place, so self.args (the same object as
+                # self.base.args) never reflects a partially applied batch
+                self.args.clear()
+                self.args.update(live_args)
 
                 change_count = len(updated_args)
                 self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")
@@ -4644,7 +4845,6 @@ chart.render();
             from components import COMPONENT_LIST
 
             component_info = COMPONENT_LIST.get(component_name, {})
-            component = self.base.components.get_component(component_name)
             is_alive = self.base.components.is_alive(component_name)
             can_restart = self.base.components.can_restart(component_name)
             is_active = component_name in active_components
@@ -4990,6 +5190,7 @@ document.addEventListener('DOMContentLoaded', function() {
             yaml = YAML()
             yaml.preserve_quotes = True
             yaml.default_flow_style = False
+            yaml.width = YAML_DUMP_WIDTH
 
             try:
                 with open(apps_yaml_path, "r") as f:
@@ -5612,13 +5813,13 @@ document.addEventListener('DOMContentLoaded', function() {
                                     import linecache
 
                                     line_code = linecache.getline(code.co_filename, line_no).strip()
-                                except:
+                                except Exception:
                                     line_code = ""
 
                                 stack.append({"file": code.co_filename, "line": line_no, "name": code.co_name, "code": line_code})
 
                             task_info["stack"] = stack
-                except Exception as e:
+                except Exception:
                     # If we can't get the coroutine stack, just skip it
                     pass
 
@@ -5791,7 +5992,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 except Exception as e:
                     try:
                         yaml_key = str(key)
-                    except:
+                    except Exception:
                         yaml_key = f"<unprintable_key_{hash(key)}>"
                     result[yaml_key] = f"<error: {type(e).__name__}>"
             # Remove from visited after processing to allow same object in different branches
@@ -5822,7 +6023,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if len(str_value) > 200:
                 return str_value[:200] + "..."
             return str_value
-        except:
+        except Exception:
             return f"<{type(obj).__name__}>"
 
     def _get_object_members(self, obj, path):
@@ -5927,7 +6128,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     display_value = str_value[:100] + "..."
                 else:
                     display_value = str_value
-            except:
+            except Exception:
                 display_value = f"<{value_type}>"
 
         # Build the full path for this item using :: as separator

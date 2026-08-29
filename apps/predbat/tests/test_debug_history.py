@@ -12,26 +12,31 @@
 import asyncio
 import datetime
 import io
+import os
 import tempfile
 import shutil
 import tarfile
 
-from debug_history import STORAGE_MODULE, _discard_snapshot, annotate_steps_back, build_archive, capture_snapshot, list_snapshots, load_all_snapshots, load_snapshot, snapshot_filename
+from debug_history import INDEX_NAME, STORAGE_MODULE, _discard_snapshot, _legacy_snapshot_key, annotate_steps_back, build_archive, capture_snapshot, list_snapshots, load_all_snapshots, load_snapshot, snapshot_filename
 from storage import StorageLocalFiles
 
 
 class FakeStorage:
-    """An in-memory stand-in for the Storage component that supports ``delete``.
+    """An in-memory stand-in for the Storage component.
 
-    Exercises the primary eviction path in ``debug_history``, where a genuine
-    ``delete`` method is available and preferred over the fallback.
+    ``store`` backs the generic save()/load() surface, used only for the ring's own
+    index. ``debug_copies`` backs save_debug_copy()/load_debug_copy()/delete_debug_copy(),
+    used for a snapshot's actual text (see #4720) - the two are deliberately separate
+    dicts, mirroring how the real backend keeps the index in config_root/cache/ and
+    snapshot content in config_root/debug/.
     """
 
     def __init__(self):
         """Start with nothing stored."""
         self.store = {}
-        self.deleted = []
         self.save_calls = []
+        self.debug_copies = {}
+        self.debug_copies_deleted = []
 
     async def save(self, module, filename, data, format="yaml", expiry=None):
         """Record a saved value, the format it was saved with, and that a save happened."""
@@ -43,33 +48,19 @@ class FakeStorage:
         entry = self.store.get((module, filename))
         return entry[0] if entry else None
 
-    async def delete(self, module, filename):
-        """Remove a stored value and record that it happened."""
-        self.deleted.append(filename)
-        self.store.pop((module, filename), None)
+    async def save_debug_copy(self, filename, text):
+        """Record a debug/ write, matching StorageLocalFiles.save_debug_copy()."""
+        self.debug_copies[filename] = text
+        return True
 
+    async def load_debug_copy(self, filename):
+        """Return previously written debug/ text, or None, matching StorageLocalFiles.load_debug_copy()."""
+        return self.debug_copies.get(filename)
 
-class FakeStorageNoDelete:
-    """An in-memory stand-in for the Storage component with no ``delete`` method.
-
-    Matches the real Storage component's actual surface, so it exercises the
-    fallback eviction path: overwriting the evicted snapshot with ``None`` and a
-    past expiry, via ``save``, rather than calling a method that does not exist.
-    """
-
-    def __init__(self):
-        """Start with nothing stored."""
-        self.store = {}
-        self.expiries = {}
-
-    async def save(self, module, filename, data, format="yaml", expiry=None):
-        """Record a saved value and the expiry it was saved with, if any."""
-        self.store[(module, filename)] = data
-        self.expiries[(module, filename)] = expiry
-
-    async def load(self, module, filename):
-        """Return a stored value, or None."""
-        return self.store.get((module, filename))
+    async def delete_debug_copy(self, filename):
+        """Record a debug/ deletion, matching StorageLocalFiles.delete_debug_copy()."""
+        self.debug_copies_deleted.append(filename)
+        self.debug_copies.pop(filename, None)
 
 
 def sample_yaml_text(marker):
@@ -96,10 +87,12 @@ def test_debug_history(my_predbat):
         print("  ERROR: loaded snapshot should match what was saved verbatim, got {!r}".format(loaded))
         failed = True
 
-    print("Test: snapshot text is saved with format='text', not 'yaml' (must not be re-serialised)")
-    saved_entry = storage.store.get((STORAGE_MODULE, "snapshot_{}".format(snapshot_id)))
-    if saved_entry is None or saved_entry[1] != "text":
-        print("  ERROR: snapshot should be saved with format='text', got {}".format(saved_entry))
+    print("Test: snapshot text is written via save_debug_copy(), verbatim, not through the generic cache store (#4720)")
+    if storage.debug_copies.get(snapshot_filename(snapshot_id)) != sample_yaml_text(1):
+        print("  ERROR: snapshot text should be in debug_copies verbatim, got {!r}".format(storage.debug_copies.get(snapshot_filename(snapshot_id))))
+        failed = True
+    if (STORAGE_MODULE, "snapshot_{}".format(snapshot_id)) in storage.store:
+        print("  ERROR: snapshot text should not also be duplicated into the generic cache store")
         failed = True
 
     print("Test: the index is newest-first")
@@ -125,8 +118,8 @@ def test_debug_history(my_predbat):
     if asyncio.run(load_snapshot(minute_storage, older_id)) is not None:
         print("  ERROR: the older same-minute capture should have been discarded from storage, not just the index")
         failed = True
-    if "snapshot_{}".format(older_id) not in minute_storage.deleted:
-        print("  ERROR: expected the older same-minute capture to go through the normal discard path, deletions were {}".format(minute_storage.deleted))
+    if snapshot_filename(older_id) not in minute_storage.debug_copies_deleted:
+        print("  ERROR: expected the older same-minute capture to go through the normal discard path, deletions were {}".format(minute_storage.debug_copies_deleted))
         failed = True
 
     print("Test: captures in different minutes are unaffected by the same-minute dedup")
@@ -165,7 +158,7 @@ def test_debug_history(my_predbat):
         print("  ERROR: with no max_age given, only max_count should apply - both should survive, got {}".format(asyncio.run(list_snapshots(no_age_storage))))
         failed = True
 
-    print("Test: pruning to a configured count (not a fixed constant) evicts the oldest and deletes it (delete-capable backend)")
+    print("Test: pruning to a configured count (not a fixed constant) evicts the oldest and deletes its debug/ file (#4720)")
     storage = FakeStorage()
     max_count = 5
     ids = []
@@ -179,35 +172,15 @@ def test_debug_history(my_predbat):
     if ids[0] in [entry["id"] for entry in index]:
         print("  ERROR: the oldest snapshot should have been evicted from the index")
         failed = True
-    if "snapshot_{}".format(ids[0]) not in storage.deleted:
-        print("  ERROR: the evicted snapshot should be deleted, deletions were {}".format(storage.deleted))
+    if snapshot_filename(ids[0]) not in storage.debug_copies_deleted:
+        print("  ERROR: the evicted snapshot's debug/ file should have been deleted too, deletions were {}".format(storage.debug_copies_deleted))
         failed = True
     if asyncio.run(load_snapshot(storage, ids[0])) is not None:
         print("  ERROR: an evicted snapshot should no longer load")
         failed = True
-
-    print("Test: pruning evicts via the fallback (expiry) path when delete is unavailable")
-    no_delete_storage = FakeStorageNoDelete()
-    ids = []
-    for offset in range(max_count + 2):
-        this_time = now + datetime.timedelta(hours=offset)
-        ids.append(asyncio.run(capture_snapshot(no_delete_storage, sample_yaml_text(offset), this_time, max_count=max_count)))
-    index = asyncio.run(list_snapshots(no_delete_storage))
-    if len(index) != max_count:
-        print("  ERROR: the ring should hold {} snapshots without delete, got {}".format(max_count, len(index)))
-        failed = True
-    if asyncio.run(load_snapshot(no_delete_storage, ids[0])) is not None:
-        print("  ERROR: an evicted snapshot should read back as None when the fallback blanking is used")
-        failed = True
-    evicted_expiry = no_delete_storage.expiries.get((STORAGE_MODULE, "snapshot_{}".format(ids[0])))
-    if evicted_expiry is None:
-        print("  ERROR: the fallback should set an expiry on the blanked snapshot so cleanup() can reclaim it")
-        failed = True
-    elif evicted_expiry.tzinfo is None:
-        print("  ERROR: the fallback expiry should be timezone-aware, got {!r}".format(evicted_expiry))
-        failed = True
-    elif evicted_expiry >= datetime.datetime.now(datetime.timezone.utc):
-        print("  ERROR: the fallback expiry should be in the past, got {!r}".format(evicted_expiry))
+    surviving_id = ids[-1]
+    if storage.debug_copies.get(snapshot_filename(surviving_id)) != sample_yaml_text(max_count + 1):
+        print("  ERROR: a surviving snapshot's debug/ file should hold its yaml text verbatim, got {!r}".format(storage.debug_copies.get(snapshot_filename(surviving_id))))
         failed = True
 
     print("Test: annotate_steps_back adds 0,1,2... in order without mutating its input")
@@ -240,7 +213,7 @@ def test_debug_history(my_predbat):
     print("Test: 'latest' (and a falsy id) resolves to the newest snapshot")
     storage = FakeStorage()
     asyncio.run(capture_snapshot(storage, sample_yaml_text("first"), now, max_count=15))
-    newest_id = asyncio.run(capture_snapshot(storage, sample_yaml_text("newest"), now + datetime.timedelta(hours=1), max_count=15))
+    asyncio.run(capture_snapshot(storage, sample_yaml_text("newest"), now + datetime.timedelta(hours=1), max_count=15))
     if asyncio.run(load_snapshot(storage, "latest")) != sample_yaml_text("newest"):
         print("  ERROR: id='latest' should resolve to the newest snapshot")
         failed = True
@@ -268,7 +241,7 @@ def test_debug_history(my_predbat):
         print("  ERROR: capture_snapshot(None, ...) should give None rather than raising")
         failed = True
 
-    print("Test: format='text' round-trips genuine YAML-syntax content (colons, nesting, newlines) through the real Storage backend")
+    print("Test: snapshot text round-trips genuine YAML-syntax content (colons, nesting, newlines) through a real Storage backend, unaltered")
     tmpdir = tempfile.mkdtemp()
     try:
         log_messages = []
@@ -279,22 +252,82 @@ def test_debug_history(my_predbat):
         if real_loaded != yaml_like_text:
             print("  ERROR: real Storage round-trip should return the exact original text, got {!r} expected {!r}".format(real_loaded, yaml_like_text))
             failed = True
-        # This is exactly the trap being guarded against: if capture_snapshot ever saved with
-        # format="yaml" instead of "text", the colons/indentation in yaml_like_text would come
-        # back re-escaped as a quoted scalar rather than as the original text.
+        # save_debug_copy() has no format/serialisation step to trip over (unlike a generic
+        # storage.save(..., format="yaml") call, which would re-escape this as a quoted scalar) -
+        # confirm the colons/indentation genuinely survived the round trip through real disk I/O.
         if ":" not in real_loaded or "\n" not in real_loaded:
             print("  ERROR: round-tripped text lost its YAML structure (colons/newlines), got {!r}".format(real_loaded))
             failed = True
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-    print("Test: _discard_snapshot uses delete when available, expiry fallback otherwise (direct, not just via pruning)")
+    print("Test: an install upgrading straight from before #4720 still loads its old snapshots, and eviction reaps the leftover legacy cache/ file from disk (real Storage backend)")
+    tmpdir = tempfile.mkdtemp()
+    try:
+        real_storage = StorageLocalFiles(tmpdir, lambda msg: None)
+        pre_upgrade_text = sample_yaml_text("pre-upgrade-on-disk")
+        pre_upgrade_id = now.strftime("%Y%m%d-%H%M%S")
+        # Simulate exactly what the pre-#4720 code left behind: an index entry, and content
+        # saved to the generic cache store under the legacy key - no debug/ file at all.
+        asyncio.run(real_storage.save(STORAGE_MODULE, INDEX_NAME, [{"id": pre_upgrade_id, "timestamp": now.isoformat()}], format="json"))
+        asyncio.run(real_storage.save(STORAGE_MODULE, _legacy_snapshot_key(pre_upgrade_id), pre_upgrade_text, format="text"))
+        legacy_meta_path = os.path.join(tmpdir, "cache", "{}_{}.meta".format(STORAGE_MODULE, _legacy_snapshot_key(pre_upgrade_id)))
+        if not os.path.exists(legacy_meta_path):
+            print("  ERROR: test setup bug - the simulated legacy cache/ file should exist on disk before eviction")
+            failed = True
+
+        if asyncio.run(load_snapshot(real_storage, pre_upgrade_id)) != pre_upgrade_text:
+            print("  ERROR: a pre-upgrade snapshot should still load from the real backend via the legacy-key fallback")
+            failed = True
+
+        asyncio.run(_discard_snapshot(real_storage, pre_upgrade_id))
+        asyncio.run(real_storage.cleanup())
+        if os.path.exists(legacy_meta_path):
+            print("  ERROR: the legacy cache/ file should have been reaped from disk after eviction + cleanup()")
+            failed = True
+        if asyncio.run(load_snapshot(real_storage, pre_upgrade_id)) is not None:
+            print("  ERROR: the pre-upgrade snapshot should no longer load once its legacy entry has been reaped")
+            failed = True
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    print("Test: _discard_snapshot removes the snapshot's debug/ file directly (called outside of pruning too)")
     direct_storage = FakeStorage()
     asyncio.run(capture_snapshot(direct_storage, sample_yaml_text("to-discard"), now, max_count=15))
     ids_before = [entry["id"] for entry in asyncio.run(list_snapshots(direct_storage))]
     asyncio.run(_discard_snapshot(direct_storage, ids_before[0]))
-    if "snapshot_{}".format(ids_before[0]) not in direct_storage.deleted:
-        print("  ERROR: _discard_snapshot should call delete when the backend supports it")
+    if snapshot_filename(ids_before[0]) not in direct_storage.debug_copies_deleted:
+        print("  ERROR: _discard_snapshot should delete the snapshot's debug/ file")
+        failed = True
+
+    print("Test: a snapshot captured under the pre-#4720 scheme (content in the legacy cache/ key, nothing in debug/) still loads (#4720 upgrade path)")
+    legacy_storage = FakeStorage()
+    legacy_id = asyncio.run(capture_snapshot(legacy_storage, sample_yaml_text("pre-upgrade"), now, max_count=15))
+    legacy_storage.debug_copies.pop(snapshot_filename(legacy_id), None)  # simulate: never written under the old scheme
+    legacy_storage.store[(STORAGE_MODULE, _legacy_snapshot_key(legacy_id))] = (sample_yaml_text("pre-upgrade"), "text")  # simulate: still sitting there from before the upgrade
+    if asyncio.run(load_snapshot(legacy_storage, legacy_id)) != sample_yaml_text("pre-upgrade"):
+        print("  ERROR: a pre-upgrade snapshot with only a legacy cache/ entry should still load via the fallback")
+        failed = True
+
+    print("Test: evicting a pre-#4720 snapshot also expires its legacy cache/ entry, so an upgrade does not leak it forever (#4720)")
+    if asyncio.run(legacy_storage.load(STORAGE_MODULE, _legacy_snapshot_key(legacy_id))) is None:
+        print("  ERROR: test setup bug - the legacy entry should still be there before eviction")
+        failed = True
+    asyncio.run(_discard_snapshot(legacy_storage, legacy_id))
+    legacy_entry = legacy_storage.store.get((STORAGE_MODULE, _legacy_snapshot_key(legacy_id)))
+    if legacy_entry is None:
+        print("  ERROR: _discard_snapshot should overwrite the legacy entry (with an expiry), not remove it outright - it has no delete() to call")
+        failed = True
+    if asyncio.run(load_snapshot(legacy_storage, legacy_id)) is not None:
+        print("  ERROR: the legacy entry should no longer be readable as snapshot content once evicted")
+        failed = True
+    # A snapshot that never had a legacy entry (the common, post-upgrade case) must not gain one -
+    # _discard_snapshot should not write legacy junk for every future eviction, only reap real leftovers.
+    fresh_storage = FakeStorage()
+    fresh_id = asyncio.run(capture_snapshot(fresh_storage, sample_yaml_text("fresh"), now, max_count=15))
+    asyncio.run(_discard_snapshot(fresh_storage, fresh_id))
+    if (STORAGE_MODULE, _legacy_snapshot_key(fresh_id)) in fresh_storage.store:
+        print("  ERROR: a snapshot with no legacy entry should not have one created on eviction")
         failed = True
 
     print("Test: snapshot_filename is keyed on the timestamp id alone, not on ring position")
@@ -336,7 +369,7 @@ def test_debug_history(my_predbat):
     partial_storage = FakeStorage()
     asyncio.run(capture_snapshot(partial_storage, sample_yaml_text("keep"), now, max_count=15))
     missing_id = asyncio.run(capture_snapshot(partial_storage, sample_yaml_text("gone"), now + datetime.timedelta(hours=1), max_count=15))
-    partial_storage.store.pop((STORAGE_MODULE, "snapshot_{}".format(missing_id)), None)  # simulate a corrupt/evicted entry still left in the index
+    partial_storage.debug_copies.pop(snapshot_filename(missing_id), None)  # simulate a corrupt/evicted entry still left in the index
     named_partial = asyncio.run(load_all_snapshots(partial_storage))
     if len(named_partial) != 1 or named_partial[0][1] != sample_yaml_text("keep"):
         print("  ERROR: expected only the loadable snapshot to survive, got {}".format(named_partial))

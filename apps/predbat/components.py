@@ -41,6 +41,7 @@ from sunsynk import SunsynkAPI
 from enphase import EnphaseAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
+from chat import ChatAgent
 
 try:
     from gateway import GatewayMQTT
@@ -98,6 +99,23 @@ COMPONENT_LIST = {
             "mcp_port": {"required": False, "config": "mcp_port", "default": 8199},
         },
         "phase": 1,
+    },
+    "chat": {
+        "class": ChatAgent,
+        "name": "AI Chat Agent",
+        "can_restart": True,
+        "phase": 1,
+        # Always started, with no required arguments at all. The Chat tab configures its own
+        # providers - adding one writes apps.yaml - so the component has to be running before any
+        # provider exists, or there is nothing to configure it from. With none configured the tab
+        # shows its setup page and no turn can be sent.
+        #
+        # One argument, because the whole feature is configured by one apps.yaml block. Defaults
+        # live in chat.py beside the code that reads them rather than here, where a dozen entries
+        # said little more than their own names.
+        "args": {
+            "config": {"required": False, "config": "chat"},
+        },
     },
     "solar": {
         "class": SolarAPI,
@@ -173,6 +191,11 @@ COMPONENT_LIST = {
                 "required": False,
                 "default": [7],
                 "config": "days_previous",
+                # days_previous is a global load-forecasting setting configured by virtually every
+                # installation regardless of inverter brand, so it must not count towards "did the
+                # user configure GE Cloud Data" - otherwise the missing ge_cloud_data/ge_cloud_key
+                # warning fires for everyone, not just people who tried to enable this component.
+                "shared_config": True,
             },
         },
         "phase": 1,
@@ -705,7 +728,7 @@ class Components:
                 configured_args = getattr(self.base, "args_from_apps_yaml", None)
                 if configured_args is None:
                     configured_args = self.base.args
-                component_configured = any(configured_args.get(arg_info["config"]) for arg_info in component_info["args"].values())
+                component_configured = any(configured_args.get(arg_info["config"]) for arg_info in component_info["args"].values() if not arg_info.get("shared_config", False))
                 if component_configured:
                     reasons = []
                     if missing_config:
