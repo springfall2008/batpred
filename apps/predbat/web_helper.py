@@ -7705,7 +7705,7 @@ def get_plan_renderer_js():
     return text
 
 
-def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon, refresh=0, codemirror=False):
+def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon, refresh=0, codemirror=False, chat_enabled=False):
     """
     Return the HTML header for a page
     """
@@ -8177,11 +8177,11 @@ function toggleSwitch(element, fieldName) {
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/lint/lint.min.css">
     </head>"""
     text += "</head><body>"
-    text += get_menu_html(calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon)
+    text += get_menu_html(calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon, chat_enabled)
     return text
 
 
-def get_menu_html(calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon):
+def get_menu_html(calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon, chat_enabled=False):
     """
     Return the Predbat Menu page as HTML
     """
@@ -8574,7 +8574,9 @@ setTimeout(function() {
 <a href='./charts'>Charts</a>
 <a href='./compare'>Compare</a>
 <a href='./annual'>WhatIf</a>
-<a href='./log'>Log</a>
+"""
+        + ("<a href='./chat'>Chat</a>\n" if chat_enabled else "")
+        + """<a href='./log'>Log</a>
 <a href='./config'>Config</a>
 <a href='./apps'>Apps"""
         + config_warning

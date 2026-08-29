@@ -39,7 +39,7 @@ from tests.test_load_car_energy import test_load_car_energy_warns_when_configure
 from tests.test_predheat import test_predheat
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_charge_hold import run_charge_hold_tests
-from tests.test_octopus_slots import run_load_octopus_slots_tests
+from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_slot_max_default_tests
 from tests.test_multi_car_iog import run_multi_car_iog_tests
 from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
@@ -108,6 +108,11 @@ from tests.test_web_if import run_test_web_if
 from tests.test_web_apps_edit import run_web_apps_edit_tests
 from tests.test_web_chart_currency import test_rates_chart_series_names_use_currency_symbol
 from tests.test_web_debug_history_routes import test_web_debug_history_routes
+from tests.test_agent_tools import run_agent_tools_tests
+from tests.test_chat_store import run_chat_store_tests
+from tests.test_chat_tools import run_chat_tools_tests
+from tests.test_chat import run_chat_tests
+from tests.test_web_chat import run_web_chat_tests
 from tests.test_web_mcp import run_web_mcp_tests
 from tests.test_debug_history_client_js import test_debug_history_client_js
 from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
@@ -361,6 +366,7 @@ def create_predbat():
     my_predbat.reset()
     my_predbat.update_time()
     my_predbat.ha_interface = TestHAInterface()
+    my_predbat.ha_interface.base = my_predbat
     my_predbat.ha_interface.history_enable = False
     my_predbat.auto_config()
     my_predbat.load_user_config()
@@ -464,6 +470,11 @@ def main():
         ("web_apps_edit", run_web_apps_edit_tests, "Apps.yaml editor add/delete tests (issue #4714)", False),
         ("web_chart_currency", test_rates_chart_series_names_use_currency_symbol, "Rates chart series names follow currency_symbols tests", False),
         ("web_debug_history_routes", test_web_debug_history_routes, "Debug-history web routes tests (#4438 review items 4, 6, 21)", False),
+        ("agent_tools", run_agent_tools_tests, "Shared agent tool layer and schema projection tests", False),
+        ("chat_store", run_chat_store_tests, "Chat conversation store tests (expiry, deletion, LRU, trimming)", False),
+        ("chat_tools", run_chat_tools_tests, "Chat agent docs search, source access and URL fetch guard tests", False),
+        ("chat", run_chat_tests, "Chat agent component, snapshot and event buffer tests", False),
+        ("web_chat", run_web_chat_tests, "Chat tab route, SSE framing and markdown escaping tests", False),
         ("web_mcp", run_web_mcp_tests, "MCP get_log and apps.yaml redaction tests (issue #4768)", False),
         ("debug_history_client_js", test_debug_history_client_js, "Debug-history client-side JS structure tests (#4438 review item 22)", False),
         ("metrics_dashboard_soc_refresh", test_soc_chart_center_text_reads_live_data, "Metrics dashboard SoC chart live-refresh tests", False),
@@ -491,6 +502,7 @@ def main():
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("futurerate_auto", test_futurerate_auto, "FutureRate auto Agile detection tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
+        ("octopus_slot_max_default", run_octopus_slot_max_default_tests, "Octopus slot max auto-detection from IOG-SMB tariff code", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),

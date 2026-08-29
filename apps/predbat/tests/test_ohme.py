@@ -709,7 +709,7 @@ def _test_ohme_client_async_pause_charge(my_predbat=None):
 
     result = run_async(client.async_pause_charge())
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Check request was logged
     assert len(client.request_log) > 0, "No requests logged"
@@ -730,7 +730,7 @@ def _test_ohme_client_async_resume_charge(my_predbat=None):
 
     result = run_async(client.async_resume_charge())
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Check request was logged
     last_request = client.request_log[-1]
@@ -750,7 +750,7 @@ def _test_ohme_client_async_approve_charge(my_predbat=None):
 
     result = run_async(client.async_approve_charge())
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Check request was logged
     last_request = client.request_log[-1]
@@ -770,7 +770,7 @@ def _test_ohme_client_async_max_charge_enable(my_predbat=None):
 
     result = run_async(client.async_max_charge(True))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Check request was logged
     last_request = client.request_log[-1]
@@ -790,7 +790,7 @@ def _test_ohme_client_async_max_charge_disable(my_predbat=None):
 
     result = run_async(client.async_max_charge(False))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Check request was logged
     last_request = client.request_log[-1]
@@ -815,7 +815,7 @@ def _test_ohme_client_async_set_target(my_predbat=None):
 
     result = run_async(client.async_set_target(target_percent=90, target_time=(8, 30)))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Check request was logged - a PATCH against the rule id from _last_rule, with the changed
     # fields in the JSON body rather than the URL (#4719: the old PUT-with-query-params rule
@@ -864,7 +864,7 @@ def _test_ohme_client_async_update_device_info(my_predbat=None):
 
     result = run_async(client.async_update_device_info())
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Check that serial was set
     assert client.serial == "TEST-SERIAL-123", f"Expected TEST-SERIAL-123, got {client.serial}"
@@ -902,7 +902,7 @@ def _test_ohme_client_async_login_success(my_predbat=None):
         with patch('aiohttp.ClientSession', return_value=mock_session):
             result = run_async(client.async_login())
 
-        assert result == True, f"Expected True, got {result}"
+        assert result is True, f"Expected True, got {result}"
         assert client._token is not None, "Token not set after login"
         assert client._refresh_token is not None, "Refresh token not set after login"
 
@@ -929,7 +929,7 @@ def _test_ohme_client_async_refresh_session_no_token(my_predbat=None):
 
     result = run_async(client._async_refresh_session())
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
     assert len(login_called) == 1, f"Expected async_login called once, got {len(login_called)}"
 
     print("PASS: _async_refresh_session calls async_login when no token")
@@ -955,7 +955,7 @@ def _test_ohme_client_async_refresh_session_recent_token(my_predbat=None):
 
     result = run_async(client._async_refresh_session())
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
     assert len(login_called) == 0, f"Expected async_login not called, got {len(login_called)}"
 
     print("PASS: _async_refresh_session skips refresh for recent token")
@@ -992,7 +992,7 @@ def _test_ohme_client_async_refresh_session_expired_token(my_predbat=None):
 
     result = run_async(client._async_refresh_session())
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
     assert client._token == "refreshed_token", f"Expected token 'refreshed_token', got {client._token}"
     assert client._refresh_token == "refreshed_refresh", f"Expected refresh token 'refreshed_refresh', got {client._refresh_token}"
 
@@ -1418,7 +1418,7 @@ def _test_ohme_client_async_set_vehicle_found(my_predbat=None):
     # Call async_set_vehicle with matching name
     result = run_async(client.async_set_vehicle("Tesla Model 3"))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Check request was made to select vehicle
     last_request = client.request_log[-1]
@@ -1441,7 +1441,7 @@ def _test_ohme_client_async_set_vehicle_not_found(my_predbat=None):
     # Call async_set_vehicle with non-matching name
     result = run_async(client.async_set_vehicle("BMW i3"))
 
-    assert result == False, f"Expected False, got {result}"
+    assert result is False, f"Expected False, got {result}"
 
     # Check no request was made
     assert len(client.request_log) == 0, f"Expected no requests, got {len(client.request_log)}"
@@ -1471,12 +1471,12 @@ def _test_ohme_client_async_update_schedule_all_params(my_predbat=None):
         pre_condition_length=45
     ))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Check rule was updated correctly
     assert client._next_session["targetPercent"] == 90, f"Expected 90%, got {client._next_session['targetPercent']}"
     assert client._next_session["targetTime"] == 30600, f"Expected 30600 seconds (8:30), got {client._next_session['targetTime']}"  # 8*3600 + 30*60
-    assert client._next_session["preconditioningEnabled"] == True, f"Expected True, got {client._next_session['preconditioningEnabled']}"
+    assert client._next_session["preconditioningEnabled"] is True, f"Expected True, got {client._next_session['preconditioningEnabled']}"
     assert client._next_session["preconditionLengthMins"] == 45, f"Expected 45 mins, got {client._next_session['preconditionLengthMins']}"
 
     # Check PUT request was made
@@ -1504,12 +1504,12 @@ def _test_ohme_client_async_update_schedule_partial_params(my_predbat=None):
     # Call async_update_schedule with only target_percent
     result = run_async(client.async_update_schedule(target_percent=85))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Check only target_percent was updated
     assert client._next_session["targetPercent"] == 85, f"Expected 85%, got {client._next_session['targetPercent']}"
     assert client._next_session["targetTime"] == 25200, f"Expected 25200 (unchanged), got {client._next_session['targetTime']}"
-    assert client._next_session["preconditioningEnabled"] == False, f"Expected False (unchanged), got {client._next_session['preconditioningEnabled']}"
+    assert client._next_session["preconditioningEnabled"] is False, f"Expected False (unchanged), got {client._next_session['preconditioningEnabled']}"
 
     print("PASS: async_update_schedule correctly updates only provided parameters")
     return 0
@@ -1525,7 +1525,7 @@ def _test_ohme_client_async_update_schedule_no_rule(my_predbat=None):
     # Call async_update_schedule
     result = run_async(client.async_update_schedule(target_percent=90))
 
-    assert result == False, f"Expected False, got {result}"
+    assert result is False, f"Expected False, got {result}"
 
     # Check no request was made
     assert len(client.request_log) == 0, f"Expected no requests, got {len(client.request_log)}"
@@ -2431,7 +2431,7 @@ def _test_ohme_publish_data(my_predbat=None):
         f"Expected preconditioning 30 mins, got {api.dashboard_items['number.predbat_ohme_preconditioning']['state']}"
 
     # Verify slot_active (should be True since we have an active slot)
-    assert api.dashboard_items["binary_sensor.predbat_ohme_slot_active"]["state"] == True, \
+    assert api.dashboard_items["binary_sensor.predbat_ohme_slot_active"]["state"] is True, \
         f"Expected slot_active True, got {api.dashboard_items['binary_sensor.predbat_ohme_slot_active']['state']}"
 
     # Verify planned_dispatches attribute exists
@@ -2485,7 +2485,7 @@ def _test_ohme_publish_data_disconnected(my_predbat=None):
         f"Expected status 'unplugged', got {api.dashboard_items['sensor.predbat_ohme_status']['state']}"
 
     # Verify slot_active is False (no slots)
-    assert api.dashboard_items["binary_sensor.predbat_ohme_slot_active"]["state"] == False, \
+    assert api.dashboard_items["binary_sensor.predbat_ohme_slot_active"]["state"] is False, \
         f"Expected slot_active False, got {api.dashboard_items['binary_sensor.predbat_ohme_slot_active']['state']}"
 
     # Verify available is "off"
@@ -2531,7 +2531,7 @@ def _test_ohme_run_first_call(my_predbat=None):
     # Call run with first=True
     result = run_async(api.run(seconds=0, first=True))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Verify first call log
     assert any("Ohme API: Started" in msg for msg in api.log_messages), "Expected 'Started' log message"
@@ -2577,7 +2577,7 @@ def _test_ohme_run_periodic_30min(my_predbat=None):
     # Call run with seconds=1800 (30 minutes)
     result = run_async(api.run(seconds=1800, first=False))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Verify async_update_device_info was called (30 min = 30*60 = 1800 seconds)
     assert len(update_device_called) == 1, f"Expected async_update_device_info called once, got {len(update_device_called)}"
@@ -2621,7 +2621,7 @@ def _test_ohme_run_periodic_120s(my_predbat=None):
     # Call run with seconds=120 (2 minutes)
     result = run_async(api.run(seconds=120, first=False))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Verify async_update_device_info was NOT called (120 doesn't divide 1800)
     assert len(update_device_called) == 0, f"Expected async_update_device_info not called, got {len(update_device_called)}"
@@ -2665,7 +2665,7 @@ def _test_ohme_run_no_periodic(my_predbat=None):
     # Call run with seconds=60 (doesn't trigger periodic updates)
     result = run_async(api.run(seconds=60, first=False))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Verify no periodic methods were called
     assert len(update_device_called) == 0, f"Expected async_update_device_info not called, got {len(update_device_called)}"
@@ -2714,7 +2714,7 @@ def _test_ohme_run_with_queued_events(my_predbat=None):
     # Call run with seconds=60 (normally wouldn't trigger updates)
     result = run_async(api.run(seconds=60, first=False))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Verify handler was called
     assert len(handler_called) == 1, f"Expected handler called once, got {len(handler_called)}"
@@ -2758,7 +2758,7 @@ def _test_ohme_run_event_handler_exception(my_predbat=None):
     # Call run - should not raise exception
     result = run_async(api.run(seconds=60, first=False))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Verify error was logged
     assert any("Event handler error" in msg for msg in api.log_messages), "Expected 'Event handler error' log message"
@@ -2799,7 +2799,7 @@ def _test_ohme_run_first_with_octopus_intelligent(my_predbat=None):
     # Call run with first=True
     result = run_async(api.run(seconds=0, first=True))
 
-    assert result == True, f"Expected True, got {result}"
+    assert result is True, f"Expected True, got {result}"
 
     # Verify automatic_config_octopus_intelligent was called
     assert len(auto_config_called) == 1, f"Expected automatic_config_octopus_intelligent called once, got {len(auto_config_called)}"

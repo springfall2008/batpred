@@ -16,6 +16,7 @@ dictionaries, time string parsing, data filtering/pruning, rounding,
 and historical data extraction from incrementing energy counters.
 """
 
+import re
 import array
 import os
 from datetime import datetime, timedelta, timezone, time
@@ -40,6 +41,10 @@ SECRET_KEY_SUBSTRINGS = ("_key", "password", "secret", "token")
 # token rather than the token itself. An expiry time is exactly what you want to see when
 # debugging "my cloud integration stopped working", so keep it readable.
 SECRET_KEY_EXEMPT_SUFFIXES = ("_expires_at", "_expires", "_expiry", "_expiration", "_birth")
+
+# What a redacted credential is replaced with. Named because find_redacted_secret_overwrite()
+# has to recognise it coming back in on a write, so the writer and the redactor must agree.
+SECRET_MASK = "xxx"
 
 # Use datetime.fromisoformat in str2time rather than strptime, set False to revert to strptime
 STR2TIME_USE_FROMISOFORMAT = True
@@ -148,14 +153,33 @@ def is_secret_key(key):
     return any(substring in key_lower for substring in SECRET_KEY_SUBSTRINGS)
 
 
+def _mask_secrets_in_place(value):
+    """
+    Redact credential-like keys anywhere inside an already-copied structure, in place.
+    """
+    if isinstance(value, dict):
+        for key in value:
+            if is_secret_key(key):
+                value[key] = SECRET_MASK
+            else:
+                _mask_secrets_in_place(value[key])
+    elif isinstance(value, list):
+        for entry in value:
+            _mask_secrets_in_place(entry)
+
+
 def mask_secret_args(args):
     """
     Return a deep copy of an apps.yaml-style args dict with credential-like keys redacted.
+
+    Recurses through nested dicts and lists rather than checking only top-level names. apps.yaml
+    routinely nests credentials one level down - the shipped template documents
+    forecast_solar as a list of dicts each carrying its own api_key - and 'forecast_solar'
+    matches none of SECRET_KEY_SUBSTRINGS, so a top-level-only pass hands that key over intact.
+    That matters because everything this redacts is on its way to a third-party model.
     """
     masked = copy.deepcopy(args)
-    for key in masked:
-        if is_secret_key(key):
-            masked[key] = "xxx"
+    _mask_secrets_in_place(masked)
     return masked
 
 
@@ -299,6 +323,187 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             last_time = timekey
             prev_value = data[key]
     return results
+
+
+def is_data_numerical(history, attribute=None):
+    """
+    Check if history data is numerical (supports both state and attribute checking)
+    Returns True if at least 10% of values are numeric or boolean
+    """
+    count_nums = 0
+    count_total = 0
+
+    if history and len(history) >= 1:
+        for item in history[0]:
+            if attribute:
+                # Check attribute value
+                attr_value = item.get("attributes", {}).get(attribute, None)
+                if attr_value is None:
+                    continue
+                value = str(attr_value)
+            else:
+                # Check state value
+                value = item.get("state", None)
+                if value is None:
+                    continue
+                value = str(value)
+
+            if value.lower() in ["on", "off", "true", "false"]:
+                count_nums += 1
+            else:
+                try:
+                    float(value)
+                    count_nums += 1
+                except (ValueError, TypeError):
+                    pass
+            count_total += 1
+
+    if count_total > 0 and (count_nums / count_total) >= 0.1:
+        return True
+    elif count_total == 0:
+        return True
+    return False
+
+
+# The top-level key apps.yaml wraps its whole Predbat configuration section in. Shared between
+# web.py's apps.yaml editor and the AI tool layer (agent_tools.py/chat_tools.py) so both read and
+# write the same section under one name - moved here, alongside update_nested_yaml_value() below,
+# for the same reason is_data_numerical() was: the tool layer must not import from web.py (#4768).
+ROOT_YAML_KEY = "pred_bat"
+
+# Line width for any dump of apps.yaml. ruamel defaults to 80, which folds a long plain scalar onto
+# a following, more-indented line - so rewriting the file to change one setting silently re-wraps
+# every long value in it, API keys included. That still parses back to the same string, but it
+# turns a one-line edit into a diff across the whole file and leaves credentials looking mangled.
+# Set high enough that nothing Predbat writes ever wraps.
+YAML_DUMP_WIDTH = 4096
+
+
+def parse_yaml_path(path):
+    """
+    Split a dot-notation apps.yaml path into its segments, with "[n]" indexes as their own entry.
+
+    "forecast_solar[0].azimuth" becomes ["forecast_solar", "[0]", "azimuth"]. Shared by
+    update_nested_yaml_value(), resolve_nested_yaml_value() and set_apps_config()'s guards so all
+    three agree on what a path means - a second copy of this parsing would eventually disagree
+    with the writer about which segment is the leaf, which is the segment the credential checks
+    depend on.
+    """
+    keys = []
+    for component in path.split("."):
+        # Split every bracket group into its own key, so a directly nested index - "foo[0][1]" -
+        # becomes "foo", "[0]", "[1]". The earlier version split on the first "[" and unpacked
+        # into two, which raised ValueError on any path with more than one index rather than
+        # returning anything: reachable from set_apps_config, where it surfaced as a failed tool
+        # call against the user's real configuration. Matches WebInterface._split_yaml_path, which
+        # arrived at the same algorithm independently for the apps.yaml editor.
+        for token in re.split(r"(\[[^\[\]]*\])", component):
+            if token:
+                keys.append(token)
+    return keys
+
+
+def resolve_nested_yaml_value(data, path):
+    """
+    Return the value a dot-notation path points at, raising KeyError if any segment is missing.
+
+    The read-only twin of update_nested_yaml_value(), so a caller can confirm a path exists and
+    read its current value *before* taking a backup and writing - update_nested_yaml_value raises
+    part-way through otherwise, after the caller has already committed to the write.
+    """
+    keys = parse_yaml_path(path)
+    current = data
+    for key in keys:
+        if key.startswith("[") and key.endswith("]"):
+            index = int(key[1:-1])
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError("Index '{}' out of range in path '{}'".format(index, path))
+            current = current[index]
+        else:
+            try:
+                contains = key in current
+            except TypeError:
+                contains = False
+            if not contains:
+                raise KeyError("Key '{}' not found in path '{}'".format(key, path))
+            current = current[key]
+    return current
+
+
+def find_redacted_secret_overwrite(previous_value, new_value):
+    """
+    Return the name of a credential a write would replace with the redaction placeholder.
+
+    get_apps_config redacts credentials to "xxx", so a model that reads a container, edits one
+    field and writes the whole thing back would store the literal "xxx" over a live key - the
+    read-modify-write round trip silently destroys the credential it was careful not to read.
+    Returns None when nothing is at risk, so the caller can refuse and point at the nested path
+    instead of the container.
+    """
+    if isinstance(new_value, dict) and isinstance(previous_value, dict):
+        for key, item in new_value.items():
+            if is_secret_key(key) and item == SECRET_MASK and previous_value.get(key) not in (None, SECRET_MASK):
+                return key
+            found = find_redacted_secret_overwrite(previous_value.get(key), item)
+            if found:
+                return found
+    elif isinstance(new_value, list) and isinstance(previous_value, list):
+        for index, item in enumerate(new_value):
+            if index < len(previous_value):
+                found = find_redacted_secret_overwrite(previous_value[index], item)
+                if found:
+                    return found
+    return None
+
+
+def update_nested_yaml_value(data, path, value):
+    """
+    Update a nested value in YAML data using a dot-notation path, e.g. "battery_charge_low.normal"
+    or a plain top-level key such as "num_inverters" (a path with no dots).
+
+    Shared by web.py's apps.yaml batch editor (WebInterface.html_apps_post) and the chat agent's
+    set_apps_config tool (chat_tools.py) - moved here so the tool layer can reuse it without
+    importing from web.py (#4768). Raises KeyError when a key in the path - including the final
+    one - is not already present, which is what gives both callers their "a key must already exist
+    to be changed" rule for free, rather than each having to check it separately.
+    """
+    keys = parse_yaml_path(path)
+
+    current = data
+
+    # Navigate to the parent of the target value
+    for key in keys[:-1]:
+        if key.startswith("[") and key.endswith("]"):
+            # Handle numerical index in square brackets
+            index = int(key[1:-1])
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(f"Index '{index}' out of range in path '{path}'")
+            current = current[index]
+        elif key in current:
+            current = current[key]
+        else:
+            raise KeyError(f"Key '{key}' not found in path '{path}'")
+
+    # Set the final value
+    key = keys[-1]
+    if key.startswith("[") and key.endswith("]"):
+        # Handle numerical index in square brackets
+        index = int(key[1:-1])
+        if not isinstance(current, list) or index >= len(current):
+            raise KeyError(f"Index '{index}' out of range in path '{path}'")
+        current[index] = value
+    elif key in current:
+        current[key] = value
+    else:
+        # If final key is numerical try it as an integer
+        if key.isdigit():
+            key = int(key)
+            if key not in current:
+                raise KeyError(f"Final key '{key}' not found in path '{path}'")
+            else:
+                current[key] = value
+        else:
+            raise KeyError(f"Final key '{key}' not found in path '{path}'")
 
 
 def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False, is_numerical=True):
