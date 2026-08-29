@@ -71,6 +71,14 @@ EVENT_BUFFER_MAX = 2000
 # hours, not 24. OpenRouter's catalogue changes rarely enough that once a day is plenty either way.
 MODEL_CACHE_MINUTES = 1440
 
+# The same, for an endpoint on your own machine. A day is right for a hosted catalogue of several
+# hundred models fetched over the internet; it is wrong for a local server, where the catalogue is
+# whatever you have pulled and changes precisely because you just changed it. Pulling a model and
+# then not seeing it in the picker until tomorrow is the bug this exists to prevent. Not zero,
+# because the list still costs one /api/show per model to enrich - about 0.8s for ten models -
+# which is not worth repeating on every page load.
+LOCAL_MODEL_CACHE_MINUTES = 5
+
 # How long past its own deadline a turn must go before its slot is assumed abandoned. Only a
 # component restart can strand a slot, and that is rare - so the grace period is generous.
 STALE_TURN_GRACE_SECONDS = 60
@@ -157,13 +165,19 @@ Prefer the snapshot below for simple facts about the setup, and reach for a tool
 #                     and supported_parameters fields on its model catalogue
 #   stream_usage    - the standard OpenAI stream_options.include_usage, which is how everyone
 #                     else reports token counts (OpenRouter ignores it, Ollama honours it)
-#   ollama_details  - enrich the model list from Ollama's native /api/show, which publishes the
-#                     capabilities and context length its OpenAI-compatible /v1/models omits
+#   ollama_details  - talk to Ollama's own API rather than the OpenAI-compatible one: /api/tags
+#                     for the model list, which is the only place cloud models are marked as
+#                     such, and /api/show per model for the capabilities and context length
+#                     /v1/models omits. True only for Ollama itself - 'local' is the generic
+#                     OpenAI-compatible option (llama.cpp, LM Studio and the rest), and those
+#                     serve neither endpoint, so asking would cost a 404 for the whole catalogue
+#   metered         - somebody bills per token. False for an endpoint running on your own
+#                     hardware, where every model is free however little it says about pricing
 PROVIDERS = {
-    "openrouter": {"needs_key": True, "openrouter_ext": True, "stream_usage": False, "ollama_details": False},
-    "ollama": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": True},
-    "openai": {"needs_key": True, "openrouter_ext": False, "stream_usage": True, "ollama_details": False},
-    "local": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": False},
+    "openrouter": {"needs_key": True, "openrouter_ext": True, "stream_usage": False, "ollama_details": False, "metered": True},
+    "ollama": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": True, "metered": False},
+    "openai": {"needs_key": True, "openrouter_ext": False, "stream_usage": True, "ollama_details": False, "metered": True},
+    "local": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": False, "metered": False},
 }
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -182,6 +196,25 @@ PROVIDER_DEFAULT_URLS = {
     "openrouter": OPENROUTER_BASE_URL,
     "ollama": "http://localhost:11434/v1",
     "openai": "https://api.openai.com/v1",
+}
+
+# What the Settings dialog offers when somebody adds a provider of each type, where that differs
+# from what an under-specified apps.yaml entry resolves to. The two answer different questions:
+# PROVIDER_DEFAULT_URLS answers "what did this existing entry mean", and changing it would
+# silently repoint installs that are working today, while this answers "what is most likely to
+# work for somebody starting now".
+#
+# For Ollama those answers genuinely differ. localhost is the conventional address and the right
+# reading of an entry that names no url, but it is almost never right for a new install: Predbat
+# runs inside its Home Assistant container, where localhost is the container and not the machine
+# the user is thinking of. Ollama's own cloud works from there without any of that, so it is what
+# the form suggests - with a note saying how to point it at your own server instead.
+PROVIDER_SETUP_HINTS = {
+    "ollama": {
+        "url": "https://ollama.com/v1",
+        "model": "gpt-oss:120b",
+        "note": "This is Ollama's own cloud, which needs an API key from ollama.com. If you run Ollama yourself, replace the URL with your server's address - for example http://localhost:11434/v1 when it is on this machine, or http://192.168.1.50:11434/v1 elsewhere on your network - and leave the key empty.",
+    },
 }
 
 # The model a provider starts on when the entry names none, so a freshly configured endpoint can
@@ -322,11 +355,21 @@ def default_model_for(provider_name):
 
 
 def resolve_provider(api_type, url):
-    """Return the provider settings for a configured type, resolving 'auto' from the URL."""
+    """Return the provider settings for a configured type, resolving 'auto' from the URL.
+
+    Whether somebody bills for a provider is settled here rather than in the table, because for
+    Ollama it depends on where it is: the same software is free on your own machine and paid for
+    at ollama.com, which serves the identical API and publishes no prices either way. Marking a
+    hosted one unmetered would offer every model in it under "show only free models", which is a
+    filter asking specifically not to be billed.
+    """
     name = str(api_type or "auto").strip().lower()
     if name in ("", "auto"):
         name = detect_provider(url)
-    return name, PROVIDERS.get(name, PROVIDERS["openai"])
+    settings = PROVIDERS.get(name, PROVIDERS["openai"])
+    if not settings["metered"] and not is_local_endpoint(url):
+        settings = dict(settings, metered=True)
+    return name, settings
 
 
 def conversation_model_for(meta, active_provider):
@@ -343,6 +386,13 @@ def conversation_model_for(meta, active_provider):
     return meta.get("model") if meta.get("model_provider") == active_provider else None
 
 
+# Bumped whenever a stored catalogue entry gains or changes a field, so an existing cache is
+# ignored rather than served without it. Without this a fix to how entries are built takes up to a
+# day to reach anyone who has used the picker recently - the catalogue is cached daily - and does
+# so silently, which is the worst way for a user to experience a fix.
+MODEL_CACHE_VERSION = 2
+
+
 def model_cache_name(base_url):
     """Return the cache filename holding one endpoint's model catalogue.
 
@@ -354,7 +404,77 @@ def model_cache_name(base_url):
     Hashed because a URL is not a filename, and truncated because the only collisions that matter
     are between one user's own handful of endpoints.
     """
-    return "models_{}".format(hashlib.md5(str(base_url or "").encode("utf-8")).hexdigest()[:16])
+    return "models_v{}_{}".format(MODEL_CACHE_VERSION, hashlib.md5(str(base_url or "").encode("utf-8")).hexdigest()[:16])
+
+
+def is_free_model(provider, prompt_price, completion_price, remote=False):
+    """Return whether a model costs nothing to run on a given provider.
+
+    Decided here rather than in the browser because only this side knows what the endpoint is. A
+    local endpoint publishes no pricing at all - Ollama's /v1/models has no pricing field - and the
+    picker read that absence as "not known to be free", so ticking "show only free models" emptied
+    the list of a server where every model is free by definition. The box is ticked by default, so
+    that was the first thing a new Ollama user saw.
+
+    On a metered endpoint the prices decide it, and an absent price stays not-free: OpenRouter's
+    routing models quote -1 because their cost depends on where they route, and offering those as
+    free would bill somebody who asked not to be.
+
+    A remote model is the exception on an unmetered endpoint. Ollama's cloud models run on
+    somebody else's hardware and are paid for, even though the server offering them is your own
+    and publishes no prices - so "local endpoint, therefore free" is exactly wrong for them.
+    """
+    if remote:
+        return False
+    if not provider.get("metered", True):
+        return True
+    if prompt_price is None or completion_price is None:
+        return False
+    try:
+        return float(prompt_price) == 0 and float(completion_price) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def ollama_native_url(base_url, path):
+    """Return an Ollama native API URL for an endpoint given as its OpenAI-compatible base.
+
+    Only a trailing "/v1" is stripped, and only as a whole path segment. Splitting on "/v1"
+    anywhere in the string matches inside a longer segment - "https://host/v1beta" becomes
+    "https://host" - and then asks a quite different server for its models.
+
+    A base URL that is simply wrong is left wrong: "https://ollama.com/api/v1" still yields
+    "https://ollama.com/api/api/tags", which 404s. That is deliberate. Quietly repairing a
+    mistyped URL would hide the mistake until something subtler went wrong with it, and the 404
+    names the URL it tried, which is what tells the user which part they got wrong.
+    """
+    base = str(base_url or "").rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")]
+    return "{}{}".format(base, path)
+
+
+def ollama_tags_to_catalogue(payload):
+    """Turn Ollama's /api/tags response into the catalogue shape the rest of this expects.
+
+    Read for the model list because it is the only endpoint that says which models are cloud ones:
+    remote_model and remote_host appear here and not in the OpenAI-compatible /v1/models shim.
+    Both endpoints list the same models - measured against a live server with a cloud model pulled,
+    /v1/models does include it - so this is not about which models are visible. It is about telling
+    a cloud model from a local one, which decides whether it is free.
+
+    Anything running elsewhere is marked remote: a cloud model is somebody else's hardware, paid
+    for, whatever the local server says about pricing. Reading the native endpoint for a native
+    provider also matches what already happens per model, since the capability and context-length
+    enrichment has always come from /api/show.
+    """
+    models = []
+    for entry in (payload or {}).get("models") or []:
+        name = entry.get("model") or entry.get("name")
+        if not name:
+            continue
+        models.append({"id": name, "remote": bool(entry.get("remote_model") or entry.get("remote_host"))})
+    return {"data": models}
 
 
 def model_catalogue_headers(api_key):
@@ -380,6 +500,22 @@ CHAT_DEFAULTS = {
     "turn_timeout": 1800,
     "request_timeout": 300,
 }
+
+
+class TurnStopped(RuntimeError):
+    """Raised when a turn must end while a completion is still streaming.
+
+    Deliberately not a ChatRequestError: _run_completion_with_retry catches those and tries again,
+    and retrying a turn the user just stopped is the opposite of what they asked for. Carries the
+    text already streamed so the transcript can keep it rather than leaving the browser holding a
+    bubble that vanishes on the next reload.
+    """
+
+    def __init__(self, content="", reason="stopped"):
+        """Hold what had been streamed when the stop landed, and what caused it."""
+        super().__init__("The turn was stopped")
+        self.content = content
+        self.reason = reason
 
 
 class ChatBusyError(RuntimeError):
@@ -1083,16 +1219,19 @@ class ChatAgent(ComponentBase):
         """
         headers = model_catalogue_headers(self.api_key)
         timeout = aiohttp.ClientTimeout(total=30)
+        native = bool(self.provider.get("ollama_details"))
+        url = ollama_native_url(self.base_url, "/api/tags") if native else "{}/models".format(self.base_url)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get("{}/models".format(self.base_url), headers=headers) as response:
+                async with session.get(url, headers=headers) as response:
                     if response.status in (401, 403):
                         self.catalogue_error = "{} rejected the API key (HTTP {})".format(self.base_url, response.status)
                         return None
                     if response.status != 200:
-                        self.catalogue_error = "{}/models returned HTTP {}".format(self.base_url, response.status)
+                        self.catalogue_error = "{} returned HTTP {}".format(url, response.status)
                         return None
-                    return await response.json()
+                    body = await response.json()
+                    return ollama_tags_to_catalogue(body) if native else body
         except (aiohttp.ClientError, asyncio.TimeoutError) as error:
             self.catalogue_error = "Could not reach {}: {}".format(self.base_url, error)
             raise
@@ -1123,7 +1262,8 @@ class ChatAgent(ComponentBase):
         storage = self.storage
         try:
             if storage:
-                catalogue = await storage.fetch_cached("chat", model_cache_name(self.base_url), self._fetch_model_catalogue, fresh_minutes=MODEL_CACHE_MINUTES, stale_minutes=MODEL_CACHE_MINUTES + 60, format="json")
+                fresh = MODEL_CACHE_MINUTES if self.provider.get("metered", True) else LOCAL_MODEL_CACHE_MINUTES
+                catalogue = await storage.fetch_cached("chat", model_cache_name(self.base_url), self._fetch_model_catalogue, fresh_minutes=fresh, stale_minutes=fresh + 60, format="json")
             else:
                 catalogue = await self._fetch_model_catalogue()
         except Exception as error:
@@ -1146,19 +1286,23 @@ class ChatAgent(ComponentBase):
         """
         name, provider = resolve_provider(api_type, url or default_url_for(api_type))
         base_url = str(url or default_url_for(name)).rstrip("/")
+        native = bool(provider.get("ollama_details"))
+        catalogue_url = ollama_native_url(base_url, "/api/tags") if native else "{}/models".format(base_url)
         timeout = aiohttp.ClientTimeout(total=PROBE_TIMEOUT_SECONDS)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get("{}/models".format(base_url), headers=model_catalogue_headers(api_key)) as response:
+                async with session.get(catalogue_url, headers=model_catalogue_headers(api_key)) as response:
                     if response.status in (401, 403):
                         return None, "{} rejected the API key (HTTP {})".format(base_url, response.status)
                     if response.status != 200:
-                        return None, "{}/models returned HTTP {}".format(base_url, response.status)
+                        return None, "{} returned HTTP {}".format(catalogue_url, response.status)
                     catalogue = await response.json()
+                    if native:
+                        catalogue = ollama_tags_to_catalogue(catalogue)
         except (aiohttp.ClientError, asyncio.TimeoutError) as error:
             return None, "Could not reach {}: {}".format(base_url, error)
         except ValueError:
-            return None, "{}/models did not return JSON - is that the right URL?".format(base_url)
+            return None, "{} did not return JSON - is that the right URL?".format(catalogue_url)
         models = await self._catalogue_to_models(catalogue, provider, base_url, None)
         if not models:
             return None, "{} served no tool-capable models".format(base_url)
@@ -1179,12 +1323,22 @@ class ChatAgent(ComponentBase):
             if provider["openrouter_ext"] and "tools" not in (entry.get("supported_parameters") or []):
                 continue
             pricing = entry.get("pricing") or {}
-            models.append({"id": entry.get("id"), "name": entry.get("name") or entry.get("id"), "prompt_price": pricing.get("prompt"), "completion_price": pricing.get("completion"), "context_length": entry.get("context_length")})
+            models.append(
+                {
+                    "id": entry.get("id"),
+                    "name": entry.get("name") or entry.get("id"),
+                    "prompt_price": pricing.get("prompt"),
+                    "completion_price": pricing.get("completion"),
+                    "context_length": entry.get("context_length"),
+                    "remote": bool(entry.get("remote")),
+                    "free": is_free_model(provider, pricing.get("prompt"), pricing.get("completion"), remote=bool(entry.get("remote"))),
+                }
+            )
         if provider["ollama_details"]:
             models = await self._add_ollama_details(models, base_url)
         models.sort(key=lambda entry: str(entry.get("id")))
         if default_model and default_model not in [entry["id"] for entry in models]:
-            models.insert(0, {"id": default_model, "name": "{} (from apps.yaml)".format(default_model), "prompt_price": None, "completion_price": None, "context_length": None})
+            models.insert(0, {"id": default_model, "name": "{} (from apps.yaml)".format(default_model), "prompt_price": None, "completion_price": None, "context_length": None, "free": is_free_model(provider, None, None)})
         return models
 
     async def _add_ollama_details(self, models, base_url=None):
@@ -1202,7 +1356,7 @@ class ChatAgent(ComponentBase):
         list_models() is cached for a day - but a single slow or missing model must not lose the
         whole catalogue, so a failed lookup keeps the model rather than dropping it.
         """
-        base = str(base_url or self.base_url).rsplit("/v1", 1)[0]
+        base = ollama_native_url(base_url or self.base_url, "")
         detailed = []
         timeout = aiohttp.ClientTimeout(total=OLLAMA_DETAIL_TIMEOUT_SECONDS)
         try:
@@ -1308,6 +1462,13 @@ class ChatAgent(ComponentBase):
         next_anon_reasoning_key = 0
         truncated = False
         async for chunk in self._stream_chunks(payload):
+            # Checked per chunk, which is the only place that runs while the model is thinking.
+            # Every other stop check sits between rounds or between tool calls, so pressing Stop
+            # during a long completion - the longest part of a turn, and exactly when somebody
+            # reaches for it - did nothing until that completion finished on its own.
+            stopping = self.stop_reason()
+            if stopping:
+                raise TurnStopped(content, stopping)
             error = chunk.get("error")
             if error:
                 message_text = (error or {}).get("message") or "The provider reported an error"
@@ -1644,12 +1805,17 @@ class ChatAgent(ComponentBase):
             self.emit(conversation_id, "error", {"message": NO_MODEL_MESSAGE})
             return
         for iteration in range(self.max_tool_rounds + 1):
-            if time.monotonic() > self.deadline:
-                self.emit(conversation_id, "error", {"message": "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)})
+            ending = self.stop_reason()
+            if ending:
+                self.emit(conversation_id, "error", {"message": self.stop_message(ending)})
                 return
             history = await self.store.get_messages(conversation_id)
             messages = await self.build_messages(conversation_id, history)
-            message, usage, sources = await self._run_completion_with_retry(conversation_id, messages, model)
+            try:
+                message, usage, sources = await self._run_completion_with_retry(conversation_id, messages, model)
+            except TurnStopped as stopped:
+                await self._finish_stopped_turn(conversation_id, stopped)
+                return
             if usage:
                 self.store.add_usage(conversation_id, usage)
                 total = (self.store.get_meta(conversation_id) or {}).get("usage_total", {})
@@ -1691,15 +1857,31 @@ class ChatAgent(ComponentBase):
                 # reason _refuse_remaining_calls sets out - this path is reached by the Stop
                 # button (which zeroes the deadline) as much as by a genuine timeout, so it is
                 # the one a user hits deliberately and often.
-                if time.monotonic() > self.deadline:
+                ending = self.stop_reason()
+                if ending:
                     await self._refuse_remaining_calls(conversation_id, calls[index:], "Not run: the turn was stopped before this tool ran")
-                    self.emit(conversation_id, "error", {"message": "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)})
+                    self.emit(conversation_id, "error", {"message": self.stop_message(ending)})
                     return
                 await self._run_one_tool(conversation_id, turn_id, call)
 
         note = "I stopped after {} tool rounds, which is the configured limit for one turn. Ask me to continue if you want me to keep going.".format(self.max_tool_rounds)
         await self.store.append(conversation_id, {"role": "assistant", "content": note})
         self.emit(conversation_id, "assistant", {"text": note, "sources": []})
+
+    async def _finish_stopped_turn(self, conversation_id, stopped):
+        """End a turn the user stopped mid-stream, keeping whatever the model had already said.
+
+        The partial text is appended as an ordinary assistant message, because the browser has
+        already rendered it from the deltas and dropping it here would make it vanish on the next
+        reload with no explanation. Only text: any half-built tool_calls from the interrupted
+        chunk stream are discarded, since an assistant message carrying tool_calls that were never
+        answered makes the provider reject every later turn in the conversation.
+        """
+        content = (stopped.content or "").strip()
+        if content:
+            await self.store.append(conversation_id, {"role": "assistant", "content": content})
+            self.emit(conversation_id, "assistant", {"text": content, "sources": []})
+        self.emit(conversation_id, "error", {"message": self.stop_message(stopped.reason)})
 
     def _confirmation_card_arguments(self, name, arguments):
         """Return what a write tool's confirmation card should show the human, before they answer.
@@ -1768,6 +1950,30 @@ class ChatAgent(ComponentBase):
         self.provider = chosen["settings"]
         self.default_model = chosen["model"]
         return chosen["name"]
+
+    def stop_reason(self):
+        """Return 'stopped', 'timeout' or None for a turn that should end right now.
+
+        Both are checked together because both mean the same thing to the loop and different
+        things to the user: pressing Stop is a choice, and telling somebody who pressed it that
+        their turn "took longer than 1800 seconds" is simply wrong.
+
+        Read without the lock. stop_requested is a scalar and active is replaced wholesale rather
+        than mutated in place, so the worst a concurrent write can do is give this the previous
+        turn's answer a moment early - and it is called on every streamed chunk, where taking a
+        lock hundreds of times a turn buys nothing.
+        """
+        if self.stop_requested is not None and self.stop_requested == (self.active or {}).get("turn_id"):
+            return "stopped"
+        if time.monotonic() > self.deadline:
+            return "timeout"
+        return None
+
+    def stop_message(self, reason):
+        """Return what to tell the user about a turn that ended early."""
+        if reason == "stopped":
+            return "Stopped."
+        return "This turn took longer than {} seconds and was stopped".format(self.turn_timeout)
 
     def provider_ready(self):
         """Return whether the active provider could actually answer a turn."""

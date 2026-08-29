@@ -27,7 +27,7 @@ from aiohttp.test_utils import make_mocked_request
 from ruamel.yaml import YAML
 
 import web_chat
-from chat import AgentNotReadyError
+from chat import AgentNotReadyError, PROVIDER_DEFAULT_URLS
 from components import Components
 from tests.test_chat import _make_agent
 from web import WebInterface
@@ -2542,8 +2542,11 @@ def test_model_picker_free_only_filter(my_predbat):
     browsable and keeps a user from picking something billable by accident. Unticking shows
     everything.
 
-    "Free" means the catalogue quotes zero both ways. The routing models quote -1, because their
-    cost depends on where they route - they must not be offered as free.
+    Which models are free is decided by the server, not from the quoted price here: only that side
+    knows what the endpoint is. Reading it from the price - which this did - meant a local endpoint
+    publishing no pricing had every model treated as not-free, so the filter emptied the picker on
+    an Ollama server where everything is free. With the box ticked by default, that was the first
+    thing a new Ollama user saw. See is_free_model() in chat.py for the rule itself.
 
     Mutation checks: defaulting the filter off, dropping the current-model exemption, or letting
     a non-free model through, each fails below.
@@ -2557,9 +2560,10 @@ def test_model_picker_free_only_filter(my_predbat):
     if free_check is None:
         print("ERROR: there is no isFreeModel() to filter on")
         return True
-    # Anchored to the formatter, so "varies" (the -1 routing models) can never read as free.
-    if "formatModelPrice" not in free_check or "'free'" not in free_check:
-        print("ERROR: isFreeModel() does not decide from the formatted price: {!r}".format(free_check))
+    # Anchored to the server's own answer. Deriving it here from the price is the bug: a local
+    # endpoint quotes none, and "no price" is not "not free".
+    if "model.free" not in free_check or "formatModelPrice" in free_check:
+        print("ERROR: isFreeModel() does not take the server's answer: {!r}".format(free_check))
         failed = True
 
     default_read = _extract_function_body(script, "readFreeOnly")
@@ -2752,8 +2756,24 @@ def test_provider_list_route_never_hands_a_key_to_the_browser(my_predbat):
         print("ERROR: the provider types offered are missing openrouter/ollama: {}".format(sorted(types)))
         failed = True
     else:
-        if types["ollama"]["url"] != "http://localhost:11434/v1" or types["ollama"]["model"] != "gpt-oss:20b":
-            print("ERROR: ollama defaults are wrong: {}".format(types["ollama"]))
+        # The Ollama form is prefilled with Ollama's own cloud rather than localhost. localhost is
+        # the right reading of an existing entry that names no url - which is why
+        # PROVIDER_DEFAULT_URLS still says so - but it is almost never right for a new install,
+        # because Predbat runs inside its Home Assistant container where localhost is the
+        # container. The note is what makes that a suggestion rather than a trap.
+        if types["ollama"]["url"] != "https://ollama.com/v1" or types["ollama"]["model"] != "gpt-oss:120b":
+            print("ERROR: the ollama form is not prefilled with the cloud endpoint: {}".format(types["ollama"]))
+            failed = True
+        if "localhost" not in types["ollama"].get("note", ""):
+            print("ERROR: nothing tells the user how to point Ollama at their own server: {}".format(types["ollama"].get("note")))
+            failed = True
+        # Resolution of an existing apps.yaml entry is deliberately unchanged, so an install that
+        # relies on the localhost fallback today keeps working.
+        if PROVIDER_DEFAULT_URLS["ollama"] != "http://localhost:11434/v1":
+            print("ERROR: the apps.yaml fallback for ollama changed, which repoints working installs")
+            failed = True
+        if types["openrouter"].get("note"):
+            print("ERROR: a type with nothing to explain carries a note anyway: {}".format(types["openrouter"]))
             failed = True
         if types["ollama"]["needs_key"] or not types["openrouter"]["needs_key"]:
             print("ERROR: needs_key is wrong for ollama/openrouter: {}".format(types))
@@ -3143,6 +3163,21 @@ def test_settings_script_wires_the_provider_routes(my_predbat):
         if marker not in script:
             print("ERROR: the settings script is missing {!r}".format(marker))
             failed = True
+    # The type's setup note has to reach the form, not just the payload: it is the only thing that
+    # explains a prefilled URL at the moment somebody is deciding whether to keep it.
+    if 'id="chat-provider-url-note"' not in web_chat.get_chat_body():
+        print("ERROR: the URL field has nowhere to show its note")
+        failed = True
+    open_form = script[script.index("function openProviderForm") : script.index("function closeProviderForm")]
+    if "chat-provider-url-note" not in open_form or "defaults.note" not in open_form:
+        print("ERROR: opening the form does not show the type's note: {!r}".format(open_form))
+        failed = True
+    # And not over an existing provider, where it would explain a default the user did not choose
+    # against the URL they did.
+    if "entry ?" not in open_form:
+        print("ERROR: the note is shown when editing an existing provider, not only when adding")
+        failed = True
+
     if "original_name: entry.original_name" not in script:
         print("ERROR: the save payload does not carry original_name, so a rename would lose the key")
         failed = True
@@ -3154,6 +3189,13 @@ def test_settings_script_wires_the_provider_routes(my_predbat):
         if marker not in script:
             print("ERROR: the conversation dropdown is missing {!r}".format(marker))
             failed = True
+    # A provider where nothing is free - Ollama Cloud, for one - hits the free filter with no
+    # search term, and "No free model matches \"\"" reads as a broken picker rather than a ticked
+    # box. Saying how many models are behind the filter is what turns it into an instruction.
+    if "Nothing this provider offers is free" not in script:
+        print("ERROR: a provider with no free models has no empty-state message of its own")
+        failed = True
+
     if "'chat-no-provider'" not in script:
         print("ERROR: nothing shows or hides the no-provider banner")
         failed = True
