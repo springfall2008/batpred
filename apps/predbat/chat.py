@@ -1741,10 +1741,11 @@ class ChatAgent(ComponentBase):
     def reload_providers(self, block):
         """Rebuild the provider list from a freshly saved chat: block and re-select.
 
-        Called after the Settings dialog writes apps.yaml, so a provider change takes effect
-        without waiting for a restart. Only provider state is touched - the store, the event
-        buffer and any running turn are left exactly as they are, which is why this exists
-        instead of calling initialize() again.
+        Called after the Settings dialog writes apps.yaml. The restart that write triggers is what
+        really applies the change; this keeps the live agent consistent with the file in the
+        seconds before it, so the save's own response is not describing stale configuration. Only
+        provider state is touched - the store, the event buffer and any running turn are left
+        exactly as they are, which is why this exists instead of calling initialize() again.
         """
         self.providers = build_providers(extract_providers(block, self.log))
         return self.select_provider(self.store.get_selected_provider())
@@ -1752,12 +1753,17 @@ class ChatAgent(ComponentBase):
     async def apply_provider_block(self, block, active):
         """Adopt a freshly saved chat: block on this component's own loop, and remember the choice.
 
-        Run here rather than from the web thread because select_provider() writes the api_key,
-        base_url and provider a turn reads. It is still possible for a save to land between two
-        rounds of a running turn, in which case that turn's remaining rounds go to the new
-        endpoint and will most likely fail on a model id it does not serve. That is a visible
-        error in the transcript rather than any kind of corruption, and it is a better trade than
-        refusing to let somebody fix their configuration while a turn is stuck.
+        Saving apps.yaml restarts Predbat within a few seconds (hass.py watches the file), so this
+        is not what makes a provider change take effect - it is what makes the seconds until then,
+        and the response the dialog renders from, describe the configuration that was actually
+        saved. Remembering `active` is the part that has to happen here and not later: the restart
+        is what would otherwise discard the choice, since select_provider() falls back to the first
+        usable entry when nothing is remembered.
+
+        Run on this loop rather than the web thread because select_provider() writes the api_key,
+        base_url and provider a turn reads. A turn in flight when this lands will finish against
+        the new endpoint and most likely fail on a model it does not serve - but that turn is
+        about to be cut short by the restart in any case.
         """
         self.store.set_selected_provider(active)
         name = self.reload_providers(block)

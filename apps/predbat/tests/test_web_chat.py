@@ -3109,6 +3109,19 @@ def test_settings_script_wires_the_provider_routes(my_predbat):
     if "'chat-no-provider'" not in script:
         print("ERROR: nothing shows or hides the no-provider banner")
         failed = True
+
+    # Writing apps.yaml restarts Predbat - hass.py watches the file and stops the process within
+    # about five seconds of its mtime changing. The dialog has to say so in both places a user
+    # looks: before saving, and after, when the page goes quiet and they are left wondering why.
+    body = web_chat.get_chat_body()
+    dialog = body[body.index('id="chat-settings"') :]
+    if "restart" not in dialog.lower():
+        print("ERROR: the settings dialog does not warn that saving restarts Predbat")
+        failed = True
+    saved_status = re.search(r"setSettingsStatus\('Saved([^']*)'\)", script)
+    if not saved_status or "restart" not in saved_status.group(0).lower():
+        print("ERROR: the post-save message does not mention the restart: {}".format(saved_status and saved_status.group(0)))
+        failed = True
     return failed
 
 

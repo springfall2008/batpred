@@ -180,7 +180,12 @@ rather than from your plan. If the endpoint cannot be reached the box stays free
 you why.
 
 The radio button beside each provider chooses which one is used. **Save to apps.yaml** writes the
-lot into the `chat:` block of your `apps.yaml` and takes effect straight away, with no restart.
+lot into the `chat:` block of your `apps.yaml`. Predbat watches that file, so a few seconds after
+saving it restarts to pick the change up - the Chat tab goes quiet for a moment and then
+reconnects on its own, and any reply that was in progress is cut short. Your conversations are
+saved and will still be there. Which provider you chose is remembered across that restart, so it
+does not fall back to whichever one happens to be first in the file.
+
 Your API keys are never sent to this page - a provider shows only whether a key is set, and
 leaving the key box empty when you edit one keeps the key already in the file, so changing a URL
 cannot wipe your credentials. See [AI Chat Agent](apps-yaml.md#ai-chat-agent) for the file format

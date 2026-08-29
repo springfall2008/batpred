@@ -597,7 +597,14 @@ class WebChat:
         return web.json_response({"models": models or [], "error": error})
 
     async def html_chat_providers_post(self, request):
-        """Save the whole provider list to apps.yaml and adopt it without a restart."""
+        """Save the whole provider list to apps.yaml and adopt it in memory too.
+
+        Writing apps.yaml restarts Predbat: hass.py watches the file and stops the process within
+        about five seconds of its mtime changing, and the supervisor brings it back. The in-memory
+        adoption below is therefore not what makes the change take effect - the restart is - but
+        it is what makes this response describe reality rather than the configuration that was
+        live before the write, and it keeps the seconds before the restart consistent.
+        """
         agent = self.agent
         if agent is None:
             return web.json_response({"error": "Chat is not configured"}, status=404)
@@ -1938,7 +1945,7 @@ def get_chat_body():
         </div>
         <div id="chat-settings-error"></div>
         <h3>Providers</h3>
-        <p class="chat-modal-note">Where your questions are sent. Saving writes them to <code>apps.yaml</code> and takes effect straight away.</p>
+        <p class="chat-modal-note">Where your questions are sent. Saving writes them to <code>apps.yaml</code>, which restarts Predbat a few seconds later - this page will reconnect on its own.</p>
         <div id="chat-provider-list"></div>
         <button id="chat-provider-add" type="button" class="chat-secondary-button">+ Add provider</button>
         <div id="chat-provider-form">
@@ -4194,7 +4201,9 @@ function saveSettings() {
                 return;
             }
             showSettingsError('');
-            setSettingsStatus('Saved to apps.yaml.');
+            // Writing apps.yaml is what restarts Predbat, so say so rather than leaving the user
+            // wondering why the page goes quiet a few seconds after a successful save.
+            setSettingsStatus('Saved. Predbat is restarting to pick it up - this page will reconnect.');
             // Reloaded rather than assumed: the server decides which provider ends up active, and
             // has_key now reflects what is really in the file rather than what was typed here.
             loadProviders();
