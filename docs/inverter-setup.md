@@ -652,7 +652,8 @@ All four of Predbat's service hooks call the same script, `script.hanchu_set_sta
 
 Create a new script (Settings → Automations & Scenes → Scripts → Add Script → Edit in YAML) and paste the following, replacing `YOURSERIAL` with your device serial number as it appears in your HA entity IDs, and replacing `notify.notify` with your own mobile notification service:
 
-```alias: Hanchu Set State Queued
+```yaml
+alias: Hanchu Set State Queued
 mode: queued
 fields:
   mode_action:
