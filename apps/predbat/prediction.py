@@ -164,6 +164,7 @@ class Prediction(PredictionBatch):
             self.load_minutes_step90 = load_minutes_step90 if load_minutes_step90 is not None else load_minutes_step
             self.carbon_intensity = base.carbon_intensity
             self.all_active_keep = base.all_active_keep
+            self.all_active_keep_max = base.all_active_keep_max
             self.iboost_running = False
             self.iboost_running_solar = False
             self.iboost_running_full = False
@@ -623,6 +624,7 @@ class Prediction(PredictionBatch):
         battery_loss_discharge = self.battery_loss_discharge
         battery_temperature_prediction = self.battery_temperature_prediction
         all_active_keep = self.all_active_keep
+        all_active_keep_max = self.all_active_keep_max
         best_soc_keep_weight = self.best_soc_keep_weight
         best_soc_keep_orig = self.best_soc_keep
         debug_enable = self.debug_enable
@@ -692,6 +694,7 @@ class Prediction(PredictionBatch):
 
             # Alert?
             alert_keep = all_active_keep.get(minute_absolute, 0)
+            alert_keep_max = all_active_keep_max.get(minute_absolute, 0)
 
             # Project battery temperature
             battery_temperature = battery_temperature_prediction.get(minute, self.battery_temperature)
@@ -709,6 +712,12 @@ class Prediction(PredictionBatch):
             if alert_keep > 0:
                 keep_minute_scaling = max(keep_minute_scaling, 10.0)
                 best_soc_keep = max(best_soc_keep, min(alert_keep / 100.0 * soc_max, soc_max))
+
+            # Soc max keep is a ceiling rather than a floor (e.g. manual_soc_max) - 0 means no ceiling
+            best_soc_max = 0
+            if alert_keep_max > 0:
+                keep_minute_scaling = max(keep_minute_scaling, 10.0)
+                best_soc_max = min(alert_keep_max / 100.0 * soc_max, soc_max)
 
             # Find charge & discharge windows
             charge_window_n = charge_window_optimised.get(minute_absolute, -1)
@@ -1269,6 +1278,10 @@ class Prediction(PredictionBatch):
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if best_soc_keep > 0 and soc <= best_soc_keep:
                 metric_keep += (best_soc_keep - soc) * import_rate * keep_minute_scaling * step / 60.0
+
+            # Metric keep max - pretend the excess above the ceiling should have been exported instead of held
+            if best_soc_max > 0 and soc >= best_soc_max:
+                metric_keep += (soc - best_soc_max) * export_rate * keep_minute_scaling * step / 60.0
 
             if diff > 0:
                 # Import

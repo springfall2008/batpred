@@ -1179,6 +1179,7 @@ class Output:
 
             in_alert = self.alert_active_keep.get(minute, 0) > 0
             in_manual_soc = self.manual_soc_keep.get(minute, 0) > 0
+            in_manual_soc_max = self.manual_soc_max_keep.get(minute, 0) > 0
 
             pv_forecast = 0
             load_forecast = 0
@@ -1449,6 +1450,8 @@ class Output:
                 soc_sym = "&#9888; " + soc_sym
             if in_manual_soc:
                 soc_sym = "&#9998; " + soc_sym
+            if in_manual_soc_max:
+                soc_sym = "&#11015; " + soc_sym
 
             # Import and export rates -> to string
             adjust_type = self.rate_import_replicated.get(minute, None)

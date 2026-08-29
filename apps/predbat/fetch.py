@@ -802,6 +802,25 @@ class Fetch:
                 else:
                     self.all_active_keep[minute] = soc_value
 
+        # Manual SOC max is a ceiling rather than a floor - combine separately, taking the
+        # tightest (lowest) ceiling if more than one source ever applies to the same minute.
+        self.all_active_keep_max = {}
+        if self.manual_soc_max_keep:
+            for minute, soc_value in self.manual_soc_max_keep.items():
+                if minute in self.all_active_keep_max:
+                    self.all_active_keep_max[minute] = min(self.all_active_keep_max[minute], soc_value)
+                else:
+                    self.all_active_keep_max[minute] = soc_value
+
+        # A ceiling below the floor at the same minute is a contradiction (e.g. a leftover manual_soc
+        # override never cleared) - the floor wins as the safety-relevant constraint, so drop the
+        # conflicting ceiling rather than hand the optimiser two penalties pulling opposite ways.
+        for minute in list(self.all_active_keep_max.keys()):
+            floor_value = self.all_active_keep.get(minute, 0)
+            if floor_value > self.all_active_keep_max[minute]:
+                self.log("Warn: manual_soc_max target {}% at minute {} is below the manual_soc/alert floor {}% for the same minute - ignoring the ceiling there".format(self.all_active_keep_max[minute], minute, floor_value))
+                del self.all_active_keep_max[minute]
+
         # iBoost load data
         if "iboost_energy_today" in self.args:
             self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0)
@@ -2985,6 +3004,7 @@ class Fetch:
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
         self.manual_load_adjust = self.manual_rates("manual_load_adjust", default_rate=self.get_arg("manual_load_value"))
         self.manual_soc_keep = self.manual_rates("manual_soc", default_rate=self.get_arg("manual_soc_value"))
+        self.manual_soc_max_keep = self.manual_rates("manual_soc_max", default_rate=self.get_arg("manual_soc_max_value"))
 
         # Update list of config options to save/restore to
         self.update_save_restore_list()

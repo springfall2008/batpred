@@ -3077,6 +3077,8 @@ class Plan:
                     and (export_limits_best[window_n] == new_enable[-1])
                     and (export_window_best[window_n]["start"] not in self.manual_all_times)
                     and (new_best[-1]["start"] not in self.manual_all_times)
+                    and (export_window_best[window_n]["start"] not in self.all_active_keep_max)
+                    and (new_best[-1]["start"] not in self.all_active_keep_max)
                 ):
                     new_best[-1]["end"] = export_window_best[window_n]["end"]
                     new_best[-1]["target"] = export_window_best[window_n].get("target", export_limits_best[window_n])

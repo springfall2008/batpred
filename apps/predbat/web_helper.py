@@ -6547,19 +6547,22 @@ def get_plan_css():
         closeDropdowns();
     }
 
-    // Handle SOC override
-    function handleSocOverride(time, dropdownId, isClear) {
+    // Handle SOC override (isMax selects the manual_soc_max ceiling instead of the manual_soc floor)
+    function handleSocOverride(time, dropdownId, isClear, isMax) {
+        const inputPrefix = isMax ? 'socmax_' : 'soc_';
+        const overrideKey = isMax ? 'manual_soc_max' : 'manual_soc';
+
         // Get the SOC value from the input field (unless clearing)
         let value = null;
         if (!isClear && dropdownId) {
-            const inputElement = document.getElementById('soc_' + dropdownId);
+            const inputElement = document.getElementById(inputPrefix + dropdownId);
             if (inputElement) {
                 value = inputElement.value;
             }
         } else if (isClear) {
             // When clearing, we need to find the actual stored SOC for this time
             const minutesFromMidnight = getMinutesFromTimeString(time);
-            const override = window.overridesData.manual_soc.find(r => r.minutes === minutesFromMidnight);
+            const override = window.overridesData[overrideKey].find(r => r.minutes === minutesFromMidnight);
             if (override) {
                 value = override.target;
             } else {
@@ -6568,7 +6571,7 @@ def get_plan_css():
         }
 
         // Construct the action string the server expects
-        const action = isClear ? 'Clear SOC' : 'Set SOC';
+        const action = isMax ? (isClear ? 'Clear SOC Max' : 'Set SOC Max') : (isClear ? 'Clear SOC' : 'Set SOC');
 
         // Create a form data object to send the override parameters
         const formData = new FormData();
@@ -6586,10 +6589,11 @@ def get_plan_css():
             if (data.success) {
                 // Show success message
                 const messageElement = document.createElement('div');
+                const label = isMax ? 'SOC max' : 'SOC';
                 if (isClear) {
-                    messageElement.textContent = `SOC override cleared for ${time}`;
+                    messageElement.textContent = `${label} override cleared for ${time}`;
                 } else {
-                    messageElement.textContent = `SOC target set to ${value}% for ${time}`;
+                    messageElement.textContent = `${label} target set to ${value}% for ${time}`;
                 }
                 messageElement.style.position = 'fixed';
                 messageElement.style.top = '65px';
@@ -7275,21 +7279,28 @@ def get_plan_renderer_js():
         return html;
     }
 
-    // Render SOC cell with dropdown for manual SOC targets
+    // Render SOC cell with dropdown for manual SOC targets (minimum floor and maximum ceiling)
     function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides, slotMinute) {
         const dropdownId = `dropdown_${dropdownCounter++}`;
         const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_soc.some(r => r.minutes === minutesFromMidnight);
+        const isOverrideMax = overrides.manual_soc_max.some(r => r.minutes === minutesFromMidnight);
 
         let html = `<td id=soc data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
-        html += `${socValue}${socSym}${isOverride ? ' &#8526;' : ''}`;
+        html += `${socValue}${socSym}${isOverride ? ' &#8526;' : ''}${isOverrideMax ? ' &#11015;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
-        html += '<label>Target SOC (%):</label>';
+        html += '<label>Minimum SOC (%):</label>';
         html += `<input type="number" id="soc_${dropdownId}" value="${socValue}" step="1" min="0" max="100">`;
         html += `<button onclick="handleSocOverride('${timeDisplay}', '${dropdownId}')">Set Target</button>`;
         if (isOverride) {
             html += `<a onclick="handleSocOverride('${timeDisplay}', null, true)">Clear</a>`;
+        }
+        html += '<label>Maximum SOC (%):</label>';
+        html += `<input type="number" id="socmax_${dropdownId}" value="${socValue}" step="1" min="0" max="100">`;
+        html += `<button onclick="handleSocOverride('${timeDisplay}', '${dropdownId}', false, true)">Set Max</button>`;
+        if (isOverrideMax) {
+            html += `<a onclick="handleSocOverride('${timeDisplay}', null, true, true)">Clear</a>`;
         }
         html += '</div></div></td>';
         return html;
