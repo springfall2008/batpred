@@ -208,6 +208,8 @@ class Inverter:
             self.rest_getData = rest_getData
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
+        if "inverter_type" not in self.base.args:
+            self.log("Warn: Inverter {}: inverter_type is not set in apps.yaml, assuming GivEnergy (GE) - if this is not correct, set inverter_type to match your inverter, see the documentation".format(self.id))
 
         # Read user defined inverter type
         if "inverter" in self.base.args:
