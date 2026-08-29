@@ -88,7 +88,10 @@ to multiply the **car_charging_energy** sensor data by if required (e.g. set to 
 This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary in `apps.yaml` for your charger sensor.<BR>
 Unlike **car_charging_energy** this is display only - it has no effect at all on the Predbat plan. When it is set:
 
-- the [web interface](web-interface.md) power flow diagram gains a Car showing what the charger is drawing, and the House figure becomes the household load with the car charging subtracted from it
+- the [web interface](web-interface.md) power flow diagram gains a Car showing what the charger is drawing.
+What the Car is drawn as being fed from follows **switch.predbat_car_energy_reported_load**: with it on (the default) your charger sits inside the house CT clamp,
+so the Car hangs off the House and its power is subtracted from the House figure to stop the car being counted twice;
+with it off the charger is outside the clamp and was never part of your house load, so the Car hangs off the Grid instead and the House figure is left alone
 - Predbat publishes a **predbat.car_charging_power** sensor (in kW) which you can graph or use in your own automations
 
 Like car_charging_energy it can be a list of sensors, one per line, if you have more than one charger - they are added together:
