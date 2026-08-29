@@ -3280,6 +3280,42 @@ def test_save_button_is_ghosted_until_something_changes(my_predbat):
     return failed
 
 
+def test_nothing_is_revealed_by_clearing_an_inline_display(my_predbat):
+    """No element hidden by a stylesheet rule is re-shown by blanking its inline display.
+
+    `node.style.display = ''` removes the inline style and hands the element straight back to the
+    rule that hid it, so the show branch shows nothing. It reads exactly like working code, and
+    the provider selector shipped that way: right condition, right element, permanently invisible.
+
+    Enforced over the whole script rather than that one function, because the trap is in the idiom
+    and not in any one use of it. Setting a real value ('block', 'inline-block') is fine, as is
+    toggling a class - it is the empty string that is the bug.
+    """
+    failed = False
+    print("**** Testing that nothing is shown by clearing an inline display ****")
+
+    script = web_chat.get_chat_script()
+    styles = web_chat.get_chat_styles()
+    blanked = re.findall(r"\.style\.display = ((?:''|\"\")|[^;\n]*\?[^;\n]*''[^;\n]*)", script)
+    if blanked:
+        print("ERROR: an element is shown by clearing its inline display, which a stylesheet rule then undoes: {}".format(blanked))
+        failed = True
+
+    # The other half of the same rule: an id the stylesheet hides must have somewhere to be shown
+    # from - a .visible/.open rule - or nothing in the script can reveal it at all.
+    hidden_ids = set(re.findall(r"#([a-z-]+) \{\n(?:[^}]*?)display: none;", styles))
+    # Setting a real display value is the other legitimate way to reveal one of these, and is what
+    # the model list does, so those are not missing a rule - they simply do not need one.
+    shown_inline = set(re.findall(r"byId\('([^']+)'\)\.style\.display = '[a-z-]+'", script))
+    for element_id in sorted(hidden_ids - shown_inline):
+        if element_id not in script:
+            continue
+        if not re.search(r"#" + element_id + r"\.(visible|open|dismissed)", styles):
+            print("ERROR: #{} is hidden by the stylesheet with no rule that can show it again".format(element_id))
+            failed = True
+    return failed
+
+
 def test_provider_selector_sits_in_the_footer_beside_the_model_picker(my_predbat):
     """Switching provider is a footer control, not a dialog one, and hides with nothing to choose.
 
@@ -3309,8 +3345,20 @@ def test_provider_selector_sits_in_the_footer_beside_the_model_picker(my_predbat
     # The trailing "(" matters: without it this matches changeProviderType, which is declared
     # earlier, and the slice below comes out empty and passes on nothing.
     select_body = script[script.index("function renderProviderSelect") : script.index("function changeProvider(")]
-    if "settings.providers.length > 1" not in select_body:
-        print("ERROR: the selector is shown even with nothing to choose between: {!r}".format(select_body))
+    # Shown with one provider too: it names the endpoint that is answering, and the endpoint the
+    # model list beside it belongs to, which is worth knowing before there is anything to switch
+    # between. Only a configuration with no providers at all has nothing to say.
+    if "settings.providers.length > 0" not in select_body:
+        print("ERROR: the selector is not shown whenever a provider exists: {!r}".format(select_body))
+        failed = True
+    # Asserting the condition is not enough - the first version of this shipped with the right
+    # condition and a show branch that showed nothing, because it cleared the inline display of an
+    # element the stylesheet hides by default. So check the mechanism actually reveals it.
+    if "classList.toggle('visible'" not in select_body:
+        print("ERROR: the selector is not revealed by its .visible class: {!r}".format(select_body))
+        failed = True
+    if "#chat-provider-select.visible" not in web_chat.get_chat_styles():
+        print("ERROR: there is no .visible rule to reveal the provider selector")
         failed = True
     change_body = script[script.index("function changeProvider(") : script.index("function saveSettings")]
     if "loadModels()" not in change_body:
@@ -3383,4 +3431,5 @@ def run_web_chat_tests(my_predbat):
     failed |= test_switching_provider_writes_nothing_and_restarts_nothing(my_predbat)
     failed |= test_save_button_is_ghosted_until_something_changes(my_predbat)
     failed |= test_provider_selector_sits_in_the_footer_beside_the_model_picker(my_predbat)
+    failed |= test_nothing_is_revealed_by_clearing_an_inline_display(my_predbat)
     return failed

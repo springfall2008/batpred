@@ -205,11 +205,12 @@ waiting for the Save button. See the
 
 #### Choosing a provider and a model
 
-When you have more than one provider configured, a dropdown appears at the bottom left naming the
-one that is answering. Change it and it takes effect at once: nothing is written to `apps.yaml`
-and Predbat does not restart, because every provider is already in the file and which one answers
-is only a preference. Your choice is remembered across restarts. The model list is refetched when
-you switch, since the models on offer belong to the endpoint rather than to Predbat.
+A dropdown at the bottom left names the provider that is answering - and so also names the
+endpoint the model list beside it came from. With more than one provider configured you can
+change it there, and it takes effect at once: nothing is written to `apps.yaml` and Predbat does
+not restart, because every provider is already in the file and which one answers is only a
+preference. Your choice is remembered across restarts. The model list is refetched when you
+switch, since the models on offer belong to the endpoint rather than to Predbat.
 
 A model search box beside it lets you choose a different model for that one
 conversation. Each result shows its price and context window - the price is US dollars per

@@ -1443,7 +1443,11 @@ body {
     color: var(--chat-text);
 }
 
-/* Hidden until there is more than one provider to choose between - see renderProviderSelect().
+/* Hidden only while no provider exists at all - see renderProviderSelect().
+   Shown by adding .visible, the same way #chat-no-provider and #chat-notice are, and NOT by
+   clearing an inline display: an element hidden by a rule here has no inline style to clear, so
+   `style.display = ''` just lets this rule apply again and the control never appears at all.
+
    Sized to sit beside the model box without competing with it: which provider is answering is
    context for the model list, not the primary control. */
 #chat-provider-select {
@@ -1455,6 +1459,10 @@ body {
     background: var(--chat-input-bg);
     color: var(--chat-text);
     font-size: 12px;
+}
+
+#chat-provider-select.visible {
+    display: inline-block;
 }
 
 #chat-model-wrap {
@@ -4314,8 +4322,13 @@ function renderProviderSelect() {
         option.selected = entry.name === settings.active;
         select.appendChild(option);
     });
-    // Nothing to choose between with one provider, so it stays out of the footer until there is.
-    select.style.display = settings.providers.length > 1 ? '' : 'none';
+    // Shown even with a single provider. It is not only a control - it is the label saying which
+    // endpoint is answering, and which endpoint the model list beside it came from. Hiding it
+    // until a second provider exists means the one case where a user most needs to know what they
+    // are talking to, a fresh install with one endpoint, is the case that tells them nothing.
+    // A class, not an inline display: the stylesheet hides this element by default, so clearing
+    // the inline style would simply hand it back to that rule and show nothing ever.
+    select.classList.toggle('visible', settings.providers.length > 0);
 }
 
 function changeProvider() {
