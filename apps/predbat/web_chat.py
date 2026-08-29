@@ -2513,10 +2513,12 @@ function updateModelNote() {
 }
 
 function isFreeModel(model) {
-    // Free means the catalogue quotes zero for both directions, which is what formatModelPrice
-    // already reduces to. The routing models, which quote -1 because their cost depends on where
-    // they route, are not free and must not be offered as if they were.
-    return formatModelPrice(model) === 'free';
+    // Decided by the server, which is the only side that knows what the endpoint is - see
+    // is_free_model() in chat.py. Reading it from the quoted price here, which is what this did,
+    // meant a local endpoint publishing no pricing had every model treated as not-free, and
+    // "show only free models" - ticked by default - emptied the picker on an Ollama server where
+    // everything is free.
+    return model.free === true;
 }
 
 function appendFreeOnlyRow(list) {

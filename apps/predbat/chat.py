@@ -159,11 +159,13 @@ Prefer the snapshot below for simple facts about the setup, and reach for a tool
 #                     else reports token counts (OpenRouter ignores it, Ollama honours it)
 #   ollama_details  - enrich the model list from Ollama's native /api/show, which publishes the
 #                     capabilities and context length its OpenAI-compatible /v1/models omits
+#   metered         - somebody bills per token. False for an endpoint running on your own
+#                     hardware, where every model is free however little it says about pricing
 PROVIDERS = {
-    "openrouter": {"needs_key": True, "openrouter_ext": True, "stream_usage": False, "ollama_details": False},
-    "ollama": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": True},
-    "openai": {"needs_key": True, "openrouter_ext": False, "stream_usage": True, "ollama_details": False},
-    "local": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": False},
+    "openrouter": {"needs_key": True, "openrouter_ext": True, "stream_usage": False, "ollama_details": False, "metered": True},
+    "ollama": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": True, "metered": False},
+    "openai": {"needs_key": True, "openrouter_ext": False, "stream_usage": True, "ollama_details": False, "metered": True},
+    "local": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": True, "metered": False},
 }
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -343,6 +345,13 @@ def conversation_model_for(meta, active_provider):
     return meta.get("model") if meta.get("model_provider") == active_provider else None
 
 
+# Bumped whenever a stored catalogue entry gains or changes a field, so an existing cache is
+# ignored rather than served without it. Without this a fix to how entries are built takes up to a
+# day to reach anyone who has used the picker recently - the catalogue is cached daily - and does
+# so silently, which is the worst way for a user to experience a fix.
+MODEL_CACHE_VERSION = 2
+
+
 def model_cache_name(base_url):
     """Return the cache filename holding one endpoint's model catalogue.
 
@@ -354,7 +363,30 @@ def model_cache_name(base_url):
     Hashed because a URL is not a filename, and truncated because the only collisions that matter
     are between one user's own handful of endpoints.
     """
-    return "models_{}".format(hashlib.md5(str(base_url or "").encode("utf-8")).hexdigest()[:16])
+    return "models_v{}_{}".format(MODEL_CACHE_VERSION, hashlib.md5(str(base_url or "").encode("utf-8")).hexdigest()[:16])
+
+
+def is_free_model(provider, prompt_price, completion_price):
+    """Return whether a model costs nothing to run on a given provider.
+
+    Decided here rather than in the browser because only this side knows what the endpoint is. A
+    local endpoint publishes no pricing at all - Ollama's /v1/models has no pricing field - and the
+    picker read that absence as "not known to be free", so ticking "show only free models" emptied
+    the list of a server where every model is free by definition. The box is ticked by default, so
+    that was the first thing a new Ollama user saw.
+
+    On a metered endpoint the prices decide it, and an absent price stays not-free: OpenRouter's
+    routing models quote -1 because their cost depends on where they route, and offering those as
+    free would bill somebody who asked not to be.
+    """
+    if not provider.get("metered", True):
+        return True
+    if prompt_price is None or completion_price is None:
+        return False
+    try:
+        return float(prompt_price) == 0 and float(completion_price) == 0
+    except (TypeError, ValueError):
+        return False
 
 
 def model_catalogue_headers(api_key):
@@ -1179,12 +1211,21 @@ class ChatAgent(ComponentBase):
             if provider["openrouter_ext"] and "tools" not in (entry.get("supported_parameters") or []):
                 continue
             pricing = entry.get("pricing") or {}
-            models.append({"id": entry.get("id"), "name": entry.get("name") or entry.get("id"), "prompt_price": pricing.get("prompt"), "completion_price": pricing.get("completion"), "context_length": entry.get("context_length")})
+            models.append(
+                {
+                    "id": entry.get("id"),
+                    "name": entry.get("name") or entry.get("id"),
+                    "prompt_price": pricing.get("prompt"),
+                    "completion_price": pricing.get("completion"),
+                    "context_length": entry.get("context_length"),
+                    "free": is_free_model(provider, pricing.get("prompt"), pricing.get("completion")),
+                }
+            )
         if provider["ollama_details"]:
             models = await self._add_ollama_details(models, base_url)
         models.sort(key=lambda entry: str(entry.get("id")))
         if default_model and default_model not in [entry["id"] for entry in models]:
-            models.insert(0, {"id": default_model, "name": "{} (from apps.yaml)".format(default_model), "prompt_price": None, "completion_price": None, "context_length": None})
+            models.insert(0, {"id": default_model, "name": "{} (from apps.yaml)".format(default_model), "prompt_price": None, "completion_price": None, "context_length": None, "free": is_free_model(provider, None, None)})
         return models
 
     async def _add_ollama_details(self, models, base_url=None):

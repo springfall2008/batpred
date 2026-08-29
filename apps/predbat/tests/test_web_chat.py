@@ -2542,8 +2542,11 @@ def test_model_picker_free_only_filter(my_predbat):
     browsable and keeps a user from picking something billable by accident. Unticking shows
     everything.
 
-    "Free" means the catalogue quotes zero both ways. The routing models quote -1, because their
-    cost depends on where they route - they must not be offered as free.
+    Which models are free is decided by the server, not from the quoted price here: only that side
+    knows what the endpoint is. Reading it from the price - which this did - meant a local endpoint
+    publishing no pricing had every model treated as not-free, so the filter emptied the picker on
+    an Ollama server where everything is free. With the box ticked by default, that was the first
+    thing a new Ollama user saw. See is_free_model() in chat.py for the rule itself.
 
     Mutation checks: defaulting the filter off, dropping the current-model exemption, or letting
     a non-free model through, each fails below.
@@ -2557,9 +2560,10 @@ def test_model_picker_free_only_filter(my_predbat):
     if free_check is None:
         print("ERROR: there is no isFreeModel() to filter on")
         return True
-    # Anchored to the formatter, so "varies" (the -1 routing models) can never read as free.
-    if "formatModelPrice" not in free_check or "'free'" not in free_check:
-        print("ERROR: isFreeModel() does not decide from the formatted price: {!r}".format(free_check))
+    # Anchored to the server's own answer. Deriving it here from the price is the bug: a local
+    # endpoint quotes none, and "no price" is not "not free".
+    if "model.free" not in free_check or "formatModelPrice" in free_check:
+        print("ERROR: isFreeModel() does not take the server's answer: {!r}".format(free_check))
         failed = True
 
     default_read = _extract_function_body(script, "readFreeOnly")

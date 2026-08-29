@@ -27,13 +27,16 @@ import aiohttp
 import chat
 from chat import (
     CHAT_DEFAULTS,
+    PROVIDERS,
     PROVIDER_DEFAULT_MODELS,
     build_providers,
     extract_providers,
     COMPLETION_MAX_ATTEMPTS,
     COMPLETION_RATE_LIMIT_DELAYS_SECONDS,
     COMPLETION_RATE_LIMIT_MAX_ATTEMPTS,
+    is_free_model,
     max_attempts_for,
+    MODEL_CACHE_VERSION,
     model_cache_name,
     resolve_provider,
     parse_retry_after,
@@ -3480,6 +3483,68 @@ def test_a_conversation_model_does_not_survive_a_provider_switch(my_predbat):
     return failed
 
 
+def test_local_models_are_free_however_little_pricing_they_publish(my_predbat):
+    """Every model on an unmetered endpoint is free, including one that quotes no price at all.
+
+    Ollama's /v1/models has no pricing field, so the picker - which worked the answer out from the
+    quoted price - treated every local model as not-free and the "show only free models" filter
+    emptied the list. The box is ticked by default, so an Ollama user's first sight of the picker
+    was an empty one on a server where nothing costs anything.
+
+    The rule has to live here rather than in the browser because only this side knows what the
+    endpoint is: an absent price means "free" on a local server and "unknown, so assume not" on a
+    metered one.
+    """
+    failed = False
+    print("**** Testing that local models count as free ****")
+
+    metered = PROVIDERS["openrouter"]
+    unmetered = PROVIDERS["ollama"]
+
+    # The case that was broken: no pricing at all, on hardware you own.
+    if not is_free_model(unmetered, None, None):
+        print("ERROR: a local model with no quoted price is not free")
+        failed = True
+    if not is_free_model(unmetered, "0.000002", "0.00001"):
+        print("ERROR: a local model is not free even when a price is somehow quoted")
+        failed = True
+
+    # And the metered rules are unchanged. A quoted zero is free; a routing model quoting -1 is
+    # not, because its cost depends on where it routes; an absent price is not free either.
+    if not is_free_model(metered, "0", "0"):
+        print("ERROR: a zero-priced hosted model is not free")
+        failed = True
+    if is_free_model(metered, "-1", "-1"):
+        print("ERROR: a routing model quoting -1 was offered as free")
+        failed = True
+    if is_free_model(metered, "0.000002", "0.00001"):
+        print("ERROR: a billable model was offered as free")
+        failed = True
+    if is_free_model(metered, None, None):
+        print("ERROR: a hosted model with no quoted price was assumed free")
+        failed = True
+
+    # And it reaches the catalogue entries the picker actually filters on, including the
+    # apps.yaml default injected when the catalogue could not be read - which for a local
+    # endpoint is exactly the situation this bug left with an empty picker.
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "http://localhost:11434/v1", "model": "gpt-oss:20b"}})
+    agent.select_provider("ollama")
+
+    async def no_details(models, base_url=None):
+        """Skip the live /api/show enrichment."""
+        return models
+
+    agent._add_ollama_details = no_details
+    entries = asyncio.run(agent._catalogue_to_models({"data": [{"id": "qwen3:latest"}]}, agent.provider, agent.base_url, agent.default_model))
+    if not entries or not all(entry.get("free") for entry in entries):
+        print("ERROR: not every local catalogue entry is marked free: {}".format(entries))
+        failed = True
+    if "gpt-oss:20b" not in [entry["id"] for entry in entries]:
+        print("ERROR: the apps.yaml default was not offered: {}".format(entries))
+        failed = True
+    return failed
+
+
 def test_a_working_catalogue_clears_the_previous_failure(my_predbat):
     """A reason from an earlier failed fetch does not outlive it.
 
@@ -3529,6 +3594,11 @@ def test_model_catalogue_is_cached_per_endpoint(my_predbat):
         failed = True
     if openrouter == "models":
         print("ERROR: the cache name is still the shared literal")
+        failed = True
+    # Versioned, so a change to how entries are built does not spend a day being served from a
+    # cache written before it - the "free" flag was exactly that kind of change.
+    if "_v{}_".format(MODEL_CACHE_VERSION) not in openrouter:
+        print("ERROR: the cache name carries no schema version: {}".format(openrouter))
         failed = True
 
     # And the name list_models() actually asks storage for is that one, per provider.
@@ -3618,6 +3688,7 @@ def run_chat_tests(my_predbat):
     failed = False
     failed |= test_model_catalogue_is_cached_per_endpoint(my_predbat)
     failed |= test_a_working_catalogue_clears_the_previous_failure(my_predbat)
+    failed |= test_local_models_are_free_however_little_pricing_they_publish(my_predbat)
     failed |= test_a_conversation_model_does_not_survive_a_provider_switch(my_predbat)
     failed |= test_component_gating(my_predbat)
     failed |= test_provider_detection_and_payload(my_predbat)
