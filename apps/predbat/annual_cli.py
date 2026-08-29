@@ -307,6 +307,17 @@ def apply_cli_overrides(config, months=None, export_compare=False, fast=False, y
     --export-compare) if --months, --year or --export-compare cannot be resolved, so a
     malformed flag or a stale catalogue reaches the user the same way every other config
     problem does.
+
+    --months is checked against `is not None` rather than truthiness, so an override
+    attempt is any invocation that actually passed the flag - including `--months ""` -
+    and only the flag being absent entirely (argparse's default) leaves the file's own
+    months untouched. A truthiness check would treat "" the same as "absent" and silently
+    keep the file's months, discarding an override the user did ask for with no message
+    at all. Whatever the flag resolves to, an override that names zero month numbers
+    (empty, or comma(s) with nothing between them) is rejected here rather than being
+    written through as annual["months"] = [] - left to validate_config, that surfaces as
+    an "annual.months" config error, naming a section the user never touched instead of
+    the --months flag that actually caused it.
     """
     merged = copy.deepcopy(config)
     if not isinstance(merged, dict):
@@ -318,11 +329,14 @@ def apply_cli_overrides(config, months=None, export_compare=False, fast=False, y
             annual["year"] = int(year)
         except (TypeError, ValueError):
             raise AnnualConfigError("--year must be a whole number, got '{}'".format(year))
-    if months:
+    if months is not None:
         try:
-            annual["months"] = [int(part.strip()) for part in str(months).split(",") if part.strip()]
+            month_numbers = [int(part.strip()) for part in str(months).split(",") if part.strip()]
         except ValueError:
             raise AnnualConfigError("--months must be a comma-separated list of month numbers, got '{}'".format(months))
+        if not month_numbers:
+            raise AnnualConfigError("--months must name at least one month number, got '{}'".format(months))
+        annual["months"] = month_numbers
     if fast:
         annual["fast_mode"] = True
     if export_compare:

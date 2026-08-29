@@ -671,6 +671,59 @@ def test_annual_cli_apply_cli_overrides_config_shapes(my_predbat):
         print("  ERROR: --months 6,abc raised a bare {} ('{}') instead of AnnualConfigError".format(type(error).__name__, error))
         failed = True
 
+    # A config that already carries its own annual.months, distinct from the [3, 4] used
+    # elsewhere in this test, so the two cases below can tell "the override was rejected"
+    # apart from "the override was silently ignored and the file's own months survived".
+    config_with_months = {
+        "annual": {
+            "location": {"latitude": 51.5, "longitude": -0.1},
+            "solar": [{"kwp": 5.0}],
+            "load": {"annual_kwh": 3000},
+            "tariff": {"rates_import": [{"rate": 25.0}]},
+            "months": [3, 4],
+        }
+    }
+
+    print("Test: --months '' raises AnnualConfigError naming --months, not a silent no-op")
+    # A truthiness check (`if months:`) treats "" the same as the flag being absent
+    # (argparse's None default for an omitted --months) and silently keeps the file's own
+    # months - the user asked for an override and got none, with no message at all. `is not
+    # None` distinguishes "provided but empty" from "not provided", so an empty override
+    # attempt is rejected here instead of passing through as a no-op.
+    try:
+        annual_cli.apply_cli_overrides(config_with_months, months="", export_compare=False, fast=False)
+        print("  ERROR: --months '' should have raised AnnualConfigError")
+        failed = True
+    except AnnualConfigError as error:
+        if "--months" not in str(error):
+            print("  ERROR: the AnnualConfigError should name --months, got '{}'".format(error))
+            failed = True
+    except Exception as error:  # noqa: BLE001
+        print("  ERROR: --months '' raised a bare {} ('{}') instead of AnnualConfigError".format(type(error).__name__, error))
+        failed = True
+
+    print("Test: --months ',' (commas, no numbers) also raises AnnualConfigError naming --months, not annual.months")
+    # Previously this parsed cleanly to annual["months"] = [] and was only caught later by
+    # validate_config, surfacing as an "annual.months" config error - naming a section the
+    # user never touched instead of the --months flag that actually caused it.
+    try:
+        annual_cli.apply_cli_overrides(config_with_months, months=",", export_compare=False, fast=False)
+        print("  ERROR: --months ',' should have raised AnnualConfigError")
+        failed = True
+    except AnnualConfigError as error:
+        if "--months" not in str(error):
+            print("  ERROR: the AnnualConfigError should name --months, got '{}'".format(error))
+            failed = True
+    except Exception as error:  # noqa: BLE001
+        print("  ERROR: --months ',' raised a bare {} ('{}') instead of AnnualConfigError".format(type(error).__name__, error))
+        failed = True
+
+    print("Test: --months omitted entirely (None) still leaves an existing annual.months untouched")
+    merged = annual_cli.apply_cli_overrides(config_with_months, months=None, export_compare=False, fast=False)
+    if merged["annual"]["months"] != [3, 4]:
+        print("  ERROR: omitting --months must not touch an existing annual.months, got {!r}".format(merged["annual"].get("months")))
+        failed = True
+
     print("Test: a malformed --year raises AnnualConfigError, not a bare ValueError")
     try:
         annual_cli.apply_cli_overrides(config, year="not-a-year")
