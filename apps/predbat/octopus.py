@@ -101,6 +101,13 @@ HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
 # consecutive edge blocks fall back to refreshing the token in case the credential really
 # was revoked. Without this the component could never recover from a misclassification.
 EDGE_BLOCK_REFRESH_AFTER = 5
+# The token mint is behind the same CDN as the queries, so an edge block can catch it too.
+# Unlike a query there is no cached result to fall back on: once the JWT expires every
+# authenticated call fails, so without a backoff the component re-mints on every poll and
+# keeps hammering an endpoint that is already refusing it. Back off exponentially instead,
+# capped so a block that clears is still noticed within the hour.
+TOKEN_MINT_BACKOFF_BASE_SECONDS = 300
+TOKEN_MINT_BACKOFF_MAX_SECONDS = 3600
 
 
 def is_edge_block_body(text):
@@ -557,6 +564,9 @@ class OctopusAPI(ComponentBase):
         self.graphql_token = None
         self.graphql_expiration = None
         self.consecutive_edge_blocks = 0
+        # Set while the token mint itself is edge blocked - see async_refresh_token
+        self.token_mint_blocked_until = None
+        self.token_mint_block_count = 0
         self.account_data = {}
         self.tariffs = {}
         self.saving_sessions = {}
@@ -1909,6 +1919,23 @@ class OctopusAPI(ComponentBase):
         # Return the response as-is - let caller handle other errors (including auth errors that need retry)
         return data_as_json
 
+    def start_token_mint_backoff(self):
+        """Back off from the token mint after a CDN/WAF block.
+
+        Each consecutive block doubles the wait, capped at TOKEN_MINT_BACKOFF_MAX_SECONDS.
+        """
+        self.token_mint_block_count += 1
+        delay = min(TOKEN_MINT_BACKOFF_BASE_SECONDS * (2 ** (self.token_mint_block_count - 1)), TOKEN_MINT_BACKOFF_MAX_SECONDS)
+        self.token_mint_blocked_until = datetime.now() + timedelta(seconds=delay)
+        self.log("Warn: OctopusAPI: Token mint edge/WAF blocked (block {}) - this is rate limiting, not a bad API key. Backing off for {}s".format(self.token_mint_block_count, delay))
+
+    def clear_token_mint_backoff(self):
+        """Clear the mint backoff after a successful token mint"""
+        if self.token_mint_block_count:
+            self.log("OctopusAPI: Token mint recovered after {} edge/WAF block(s)".format(self.token_mint_block_count))
+        self.token_mint_block_count = 0
+        self.token_mint_blocked_until = None
+
     async def async_refresh_token(self):
         """
         Refresh the token using JWT expiry from the token itself
@@ -1919,6 +1946,11 @@ class OctopusAPI(ComponentBase):
             if expiry and expiry > datetime.now() + timedelta(minutes=5):
                 return self.graphql_token
 
+        # The mint is edge blocked and the cached token (if any) has expired. Re-minting now
+        # would only be refused again, so skip the request until the backoff window elapses.
+        if self.token_mint_blocked_until and datetime.now() < self.token_mint_blocked_until:
+            return None
+
         client = await self.api.async_create_client_session()
         url = f"{self.api.base_url}/v1/graphql/"
         payload = {"query": api_token_query.format(api_key=self.api_key)}
@@ -1926,6 +1958,15 @@ class OctopusAPI(ComponentBase):
 
         try:
             async with client.post(url, headers=headers, json=payload) as token_response:
+                # A 403 carrying a CDN block page is rate limiting, not a revoked credential.
+                # Handled here rather than in async_read_response so it is logged as the edge
+                # block it is - the generic "Unauthenticated request" line reads like a bad
+                # API key and sends anyone diagnosing this down the wrong path.
+                if token_response.status == 403 and is_edge_block_body(await token_response.text()):
+                    self.failures_total += 1
+                    self.start_token_mint_backoff()
+                    return None
+
                 token_response_body = await self.async_read_response_retry(token_response, url)
                 if (
                     token_response_body is not None
@@ -1935,6 +1976,7 @@ class OctopusAPI(ComponentBase):
                     and "token" in token_response_body["data"]["obtainKrakenToken"]
                 ):
                     self.graphql_token = token_response_body["data"]["obtainKrakenToken"]["token"]
+                    self.clear_token_mint_backoff()
                     # Save token to cache immediately
                     await self.save_octopus_cache()
                     return self.graphql_token
