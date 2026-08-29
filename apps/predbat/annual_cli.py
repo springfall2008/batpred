@@ -303,9 +303,10 @@ def apply_cli_overrides(config, months=None, export_compare=False, fast=False, y
       actually read - writing them under a new top-level "annual" key on a bare-shape
       config would silently discard the rest of that config.
 
-    Raises AnnualConfigError (never a bare ValueError) if --months or --year cannot be
-    parsed, so a malformed flag reaches the user the same way every other config problem
-    does.
+    Raises AnnualConfigError (never a bare ValueError, or a bare KeyError for
+    --export-compare) if --months, --year or --export-compare cannot be resolved, so a
+    malformed flag or a stale catalogue reaches the user the same way every other config
+    problem does.
     """
     merged = copy.deepcopy(config)
     if not isinstance(merged, dict):
@@ -329,7 +330,17 @@ def apply_cli_overrides(config, months=None, export_compare=False, fast=False, y
         # comparison, so one flag reproduces that run from the command line. If this flag
         # and that caller are ever changed independently, the two would drift apart and
         # the CLI would stop being a way to reproduce what was run there.
-        annual["export_tariffs"] = export_compare_tariffs()
+        try:
+            annual["export_tariffs"] = export_compare_tariffs()
+        except KeyError as error:
+            # export_compare_tariffs() raises KeyError with a message naming the missing
+            # catalogue ids (e.g. a built-in tariff renamed or removed from
+            # tariff_catalogue.py). Re-raised as AnnualConfigError, same as a malformed
+            # --months or --year above, so it reaches main() as a clean config error
+            # rather than a bare traceback. error.args[0] is the plain message; str(error)
+            # would wrap it in quotes, because KeyError's __str__ shows its argument as a
+            # repr rather than as plain text.
+            raise AnnualConfigError("--export-compare: {}".format(error.args[0]))
         annual["sampling"] = "weekday_spread"
         annual["samples_per_month"] = 5
         annual["fast_mode"] = False

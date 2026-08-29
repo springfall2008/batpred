@@ -682,6 +682,26 @@ def test_annual_cli_apply_cli_overrides_config_shapes(my_predbat):
         print("  ERROR: --year not-a-year raised a bare {} ('{}') instead of AnnualConfigError".format(type(error).__name__, error))
         failed = True
 
+    print("Test: --export-compare raises AnnualConfigError, not a bare KeyError, when the catalogue is missing an id")
+    # export_compare_tariffs() itself raises a bare KeyError if a built-in tariff id it
+    # expects (e.g. "outgoing_prime") has been renamed or removed from tariff_catalogue.py.
+    # Patched here rather than mutating the real catalogue, which always has all three ids.
+    original_export_compare_tariffs = annual_cli.export_compare_tariffs
+    annual_cli.export_compare_tariffs = lambda: (_ for _ in ()).throw(KeyError("export-compare tariff ids missing from catalogue: outgoing_prime"))
+    try:
+        annual_cli.apply_cli_overrides(config, export_compare=True)
+        print("  ERROR: a missing catalogue id should have raised AnnualConfigError")
+        failed = True
+    except AnnualConfigError as error:
+        if "outgoing_prime" not in str(error):
+            print("  ERROR: the AnnualConfigError should name the missing id, got '{}'".format(error))
+            failed = True
+    except Exception as error:  # noqa: BLE001 - the whole point is that it's AnnualConfigError, nothing else
+        print("  ERROR: a missing catalogue id raised a bare {} ('{}') instead of AnnualConfigError".format(type(error).__name__, error))
+        failed = True
+    finally:
+        annual_cli.export_compare_tariffs = original_export_compare_tariffs
+
     print("Test: main() itself reports a bad --months cleanly (exit 2, readable stderr, no traceback) rather than a bare crash")
     with tempfile.TemporaryDirectory() as work_dir:
         config_path = os.path.join(work_dir, "annual.yaml")
@@ -733,6 +753,37 @@ def test_annual_cli_apply_cli_overrides_config_shapes(my_predbat):
         if "--year" not in stderr_capture.getvalue():
             print("  ERROR: the stderr message should name --year as the problem, got {!r}".format(stderr_capture.getvalue()))
             failed = True
+
+    print("Test: main() itself reports a missing export-compare catalogue id cleanly (exit 2, readable stderr, no traceback) rather than a bare KeyError")
+    original_export_compare_tariffs = annual_cli.export_compare_tariffs
+    annual_cli.export_compare_tariffs = lambda: (_ for _ in ()).throw(KeyError("export-compare tariff ids missing from catalogue: outgoing_prime"))
+    try:
+        with tempfile.TemporaryDirectory() as work_dir:
+            config_path = os.path.join(work_dir, "annual.yaml")
+            with open(config_path, "w") as handle:
+                handle.write("annual: {}\n")
+            stdout_capture = io.StringIO()
+            stderr_capture = io.StringIO()
+            try:
+                with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                    exit_code = annual_cli.main(["--config", config_path, "--work-dir", os.path.join(work_dir, "work"), "--export-compare"])
+            except Exception as error:  # noqa: BLE001 - main() must never let this escape as a raw traceback
+                print("  ERROR: main() let a missing catalogue id escape as {}: {}".format(type(error).__name__, error))
+                failed = True
+                exit_code = None
+
+        if exit_code is not None:
+            if exit_code != 2:
+                print("  ERROR: a missing catalogue id should exit 2, got {}".format(exit_code))
+                failed = True
+            if stdout_capture.getvalue() != "":
+                print("  ERROR: stdout must stay empty on an --export-compare config error, got {!r}".format(stdout_capture.getvalue()))
+                failed = True
+            if "outgoing_prime" not in stderr_capture.getvalue():
+                print("  ERROR: the stderr message should name the missing id, got {!r}".format(stderr_capture.getvalue()))
+                failed = True
+    finally:
+        annual_cli.export_compare_tariffs = original_export_compare_tariffs
 
     return failed
 
