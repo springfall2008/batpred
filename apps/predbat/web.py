@@ -967,6 +967,15 @@ class WebInterface(ComponentBase):
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all (.tgz)</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
+        # The HA Companion app's embedded webview does not act on Content-Disposition: attachment,
+        # so it renders these downloads inline instead of saving them - a client limitation with no
+        # server-side fix (see #4720). Rather than try to detect the app (its webview sends no
+        # reliable identifying User-Agent - see #4720 discussion) and grey the links out, which risks
+        # false-positives against a genuine desktop browser, just say so for everyone.
+        text += "<tr><td colspan='2' style='font-size:0.85em; color:var(--text-secondary,#888); padding-top:6px;'>"
+        text += "'Create' and 'Download' above need a web browser - the HA Companion app cannot save files from them. "
+        text += "Companion app users can instead browse to <code>{}/debug/</code>, which also holds the rolling snapshot history as plain, readable files.".format(self.base.config_root_p)
+        text += "</td></tr>\n"
         text += "</table>\n"
         text += "</div>\n"
 

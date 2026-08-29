@@ -112,6 +112,41 @@ class StorageBase(ABC):
         """Delete all expired cached files."""
         pass
 
+    async def save_debug_copy(self, filename, text):
+        """Write a plain-text mirror of already-serialised text for a human to find on disk.
+
+        Default no-op: a backend with no real filesystem (there may not be one - see
+        debug_history.py) has nothing sensible to do here, and a caller must not have to
+        know or care which kind of backend it is talking to before calling this.
+
+        Args:
+            filename: Name of the file to write, including its extension
+            text: Already-serialised text to write verbatim
+
+        Returns:
+            True on success, False otherwise (including "not supported by this backend")
+        """
+        return False
+
+    async def delete_debug_copy(self, filename):
+        """Remove a file previously written by save_debug_copy(). Default no-op.
+
+        Args:
+            filename: Name of the file to remove
+        """
+        return None
+
+    async def load_debug_copy(self, filename):
+        """Load text previously written by save_debug_copy(). Default no-op.
+
+        Args:
+            filename: Name of the file to read
+
+        Returns:
+            The file's text, or None if missing or unsupported by this backend
+        """
+        return None
+
     async def _acquire_refresh_lock(self, module, filename):
         """Try to acquire a refresh lock for a key. Default: always succeeds (no coordination).
 
@@ -197,6 +232,7 @@ class StorageLocalFiles(StorageBase):
             log: Logging function
         """
         self.cache_path = os.path.join(config_root, "cache")
+        self.debug_path = os.path.join(config_root, "debug")
         self.log = log
         os.makedirs(self.cache_path, exist_ok=True)
 
@@ -413,6 +449,61 @@ class StorageLocalFiles(StorageBase):
 
             self.log("Storage: Cleaned up expired cache file {} (module={})".format(stem, module))
 
+    async def save_debug_copy(self, filename, text):
+        """Write a plain-text mirror of already-serialised text into config_root/debug/.
+
+        No metadata sidecar and no format envelope - this is both a human-facing file for
+        someone to find with File Editor/Samba and the rolling history's primary stored
+        content, read back through load_debug_copy(). It is written exactly as given under
+        its real filename alongside the raw predbat_debug_*.yaml files that
+        switch.predbat_debug_enable already writes to this directory (see #4720).
+
+        Args:
+            filename: Name of the file to write, including its extension
+            text: Already-serialised text to write verbatim
+
+        Returns:
+            True on success, False on failure
+        """
+        data_path = os.path.join(self.debug_path, os.path.basename(filename))
+        try:
+            os.makedirs(self.debug_path, exist_ok=True)
+            async with aiofiles.open(data_path, "w") as f:
+                await f.write(text)
+        except IOError as e:
+            self.log("Storage: Warn: Failed to write debug copy {}: {}".format(data_path, e))
+            return False
+        return True
+
+    async def delete_debug_copy(self, filename):
+        """Remove a file previously written by save_debug_copy(). Best-effort - a missing file is not an error.
+
+        Args:
+            filename: Name of the file to remove
+        """
+        data_path = os.path.join(self.debug_path, os.path.basename(filename))
+        try:
+            if os.path.exists(data_path):
+                os.remove(data_path)
+        except OSError as e:
+            self.log("Storage: Warn: Failed to delete debug copy {}: {}".format(data_path, e))
+
+    async def load_debug_copy(self, filename):
+        """Load text previously written by save_debug_copy() from config_root/debug/.
+
+        Args:
+            filename: Name of the file to read
+
+        Returns:
+            The file's text, or None if it does not exist
+        """
+        data_path = os.path.join(self.debug_path, os.path.basename(filename))
+        try:
+            async with aiofiles.open(data_path, "r") as f:
+                return await f.read()
+        except IOError:
+            return None
+
 
 class StorageComponent(ComponentBase):
     """Storage component providing save/load access to a cache backend.
@@ -478,6 +569,37 @@ class StorageComponent(ComponentBase):
             Cached or freshly fetched data, or None if nothing could be obtained
         """
         return await self.backend.fetch_cached(module, filename, fetch_fn, fresh_minutes=fresh_minutes, stale_minutes=stale_minutes, format=format)
+
+    async def save_debug_copy(self, filename, text):
+        """Write a plain-text debug-directory mirror via the storage backend.
+
+        Args:
+            filename: Name of the file to write, including its extension
+            text: Already-serialised text to write verbatim
+
+        Returns:
+            True on success, False otherwise
+        """
+        return await self.backend.save_debug_copy(filename, text)
+
+    async def delete_debug_copy(self, filename):
+        """Remove a file previously written by save_debug_copy() via the storage backend.
+
+        Args:
+            filename: Name of the file to remove
+        """
+        return await self.backend.delete_debug_copy(filename)
+
+    async def load_debug_copy(self, filename):
+        """Load text previously written by save_debug_copy() via the storage backend.
+
+        Args:
+            filename: Name of the file to read
+
+        Returns:
+            The file's text, or None if missing
+        """
+        return await self.backend.load_debug_copy(filename)
 
     async def run(self, seconds, first):
         """Run the storage component, cleaning up expired files every hour.

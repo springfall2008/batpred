@@ -9,8 +9,14 @@
 Captures create_debug_yaml()'s output on a coarse interval and keeps the most recent
 ones, so there is always some recent history to replay a bug report against without
 switch.predbat_debug_enable having already been on before the problem happened.
-Everything goes through the Storage abstraction rather than the filesystem, because
-there may not be one.
+
+The ring's own index (which snapshot ids exist and when they were taken) goes through
+the generic Storage abstraction, since it is small and needs no particular backend. A
+snapshot's actual text is written just once, straight to config_root/debug/ via
+save_debug_copy()/load_debug_copy()/delete_debug_copy() (see #4720) - not duplicated
+into the generic cache store as well, since create_debug_yaml() already writes its own
+output to that same real directory unconditionally, so nothing here is any more
+filesystem-dependent than the feature it is capturing snapshots of.
 """
 
 import datetime
@@ -21,8 +27,12 @@ STORAGE_MODULE = "debug_history"
 INDEX_NAME = "snapshots_index"
 
 
-def _snapshot_key(snapshot_id):
-    """Return the storage filename holding one snapshot's debug-yaml text."""
+def _legacy_snapshot_key(snapshot_id):
+    """Return the pre-#4720 generic-cache-store key a snapshot's content used to be saved under.
+
+    Only ever read/expired now, never written to - see resolve_and_load_snapshot() and
+    _discard_snapshot() for why an entry might still exist there after an install upgrades.
+    """
     return "snapshot_{}".format(snapshot_id)
 
 
@@ -59,6 +69,12 @@ async def resolve_and_load_snapshot(storage, snapshot_id):
     could resolve to a different snapshot than the one whose bytes were actually loaded,
     serving one snapshot's data under another's filename.
 
+    Falls back to the pre-#4720 legacy cache/ key if nothing is in debug/ for this id -
+    a snapshot captured before an install upgraded to this version has its content there,
+    not in debug/, and it stays downloadable this way for the rest of its normal time in
+    the ring rather than silently going dark the moment the install updates. _discard_snapshot()
+    reaps that legacy entry once the snapshot is naturally evicted, same as any other.
+
     Returns (None, None) when nothing could be resolved or loaded.
     """
     if not storage:
@@ -68,7 +84,9 @@ async def resolve_and_load_snapshot(storage, snapshot_id):
         if not snapshots:
             return None, None
         snapshot_id = snapshots[0]["id"]
-    data = await storage.load(STORAGE_MODULE, _snapshot_key(snapshot_id))
+    data = await storage.load_debug_copy(snapshot_filename(snapshot_id))
+    if data is None:
+        data = await storage.load(STORAGE_MODULE, _legacy_snapshot_key(snapshot_id))
     return snapshot_id, data
 
 
@@ -89,27 +107,33 @@ async def load_snapshot(storage, snapshot_id):
 async def _discard_snapshot(storage, snapshot_id):
     """Remove an evicted snapshot's stored text so the ring does not leak it.
 
-    The real Storage component has no ``delete`` method, so the primary path is to
-    overwrite it with ``None`` and set an expiry in the past, which lets
-    ``storage.cleanup()`` reclaim it later. A ``delete`` method is still preferred
-    when a backend (or a test fake) provides one.
+    Also reaps the pre-#4720 legacy cache/ copy, if one is still there: before this,
+    a snapshot's content lived in the generic cache store under "snapshot_<id>" with no
+    expiry, so cleanup() (which only reaps entries that have one) would never have
+    touched it - an install upgrading straight from that version would otherwise leak
+    one orphaned pair of cache/ files per snapshot that existed at upgrade time, forever.
+    Every id in the index is eventually evicted here as the ring rotates regardless of
+    when it was captured, so this opportunistic check-then-expire, run on each eviction,
+    is enough to reap every legacy entry within one ring's worth of time - no separate
+    one-off migration sweep is needed. A snapshot captured under the current scheme never
+    has a legacy entry, so the extra load() below is the only cost in the common case.
     """
-    key = _snapshot_key(snapshot_id)
-    if hasattr(storage, "delete"):
-        await storage.delete(STORAGE_MODULE, key)
-        return
-    expired = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
-    await storage.save(STORAGE_MODULE, key, None, format="text", expiry=expired)
+    await storage.delete_debug_copy(snapshot_filename(snapshot_id))
+    legacy_key = _legacy_snapshot_key(snapshot_id)
+    if await storage.load(STORAGE_MODULE, legacy_key) is not None:
+        expired = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
+        await storage.save(STORAGE_MODULE, legacy_key, None, format="text", expiry=expired)
 
 
 async def capture_snapshot(storage, yaml_text, now_utc, max_count, max_age=None):
     """Save a new debug snapshot and prune the ring. Returns the snapshot id.
 
     ``yaml_text`` must be ``create_debug_yaml(write_file=False)``'s already-rendered
-    YAML string - saved with ``format="text"`` (raw passthrough), NOT ``format="yaml"``,
-    which would run ``yaml.safe_dump()`` on an already-serialised string a second time
-    and turn it into an unreadable quoted block scalar that ``unit_test.py --debug_file``
-    could not parse.
+    YAML string, written verbatim - save_debug_copy() writes exactly the text it is
+    given with no re-serialisation, so (unlike a generic ``storage.save(..., format="yaml")``
+    call, which would run ``yaml.safe_dump()`` on an already-serialised string a second
+    time) the result stays plain, readable YAML that ``unit_test.py --debug_file`` can
+    parse straight back.
 
     ``max_count`` is passed in per call (the live config value) rather than a fixed
     module constant, so a change to the retention count takes effect on the very next
@@ -129,7 +153,13 @@ async def capture_snapshot(storage, yaml_text, now_utc, max_count, max_age=None)
         return None
 
     snapshot_id = now_utc.strftime("%Y%m%d-%H%M%S")
-    await storage.save(STORAGE_MODULE, _snapshot_key(snapshot_id), yaml_text, format="text")
+    # Written straight to config_root/debug/ (#4720), not the generic cache store - this is also
+    # what makes it reachable by a HA Companion-app user, whose embedded webview cannot save the
+    # tgz/single-file download routes (it ignores Content-Disposition: attachment) but can still
+    # browse to a real file there with File Editor/Samba.
+    filename = snapshot_filename(snapshot_id)
+    if not await storage.save_debug_copy(filename, yaml_text):
+        raise IOError("Failed to save debug snapshot {}".format(filename))
 
     index = await list_snapshots(storage)
     index = [existing for existing in index if existing.get("id") != snapshot_id]
