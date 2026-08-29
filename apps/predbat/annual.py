@@ -1859,10 +1859,15 @@ class AnnualPredictor:
             fast_mode = await self._fast_mode_viable(year, zone)
         else:
             fast_mode = False
-        # Rate downloads and availability checks cover every month this run actually plans -
-        # all twelve in a full run, just the four anchors in fast mode - even though they are
-        # network-bound and cheap next to planning; skipping them would let interpolation
-        # paper over a month that genuinely had no rates.
+        # Rate downloads and availability checks cover every month in self.config["months"]
+        # - all twelve unless the user asked for an explicit subset - not just the months
+        # this run actually plans. _plan_months visits sorted(set(months_to_plan) |
+        # set(self.config["months"])), and months_to_plan is always a subset of
+        # self.config["months"] (fast mode's four anchors are only used when
+        # self.config["months"] is the full twelve, per the check above), so that union is
+        # simply self.config["months"] whether or not fast_mode is on. This is deliberate:
+        # a month that genuinely has no rate data still gets downloaded and checked, so
+        # interpolation can never paper over it.
         months_to_plan = list(ANCHOR_MONTHS) if fast_mode else list(self.config["months"])
         total_units = len(months_to_plan) + (1 if fast_mode else 0)
         completed = 0
