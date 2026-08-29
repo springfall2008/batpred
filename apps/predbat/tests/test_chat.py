@@ -27,6 +27,9 @@ import aiohttp
 import chat
 from chat import (
     CHAT_DEFAULTS,
+    PROVIDER_DEFAULT_MODELS,
+    build_providers,
+    extract_providers,
     COMPLETION_MAX_ATTEMPTS,
     COMPLETION_RATE_LIMIT_DELAYS_SECONDS,
     COMPLETION_RATE_LIMIT_MAX_ATTEMPTS,
@@ -2769,8 +2772,10 @@ def test_model_resolution_order(my_predbat):
     failed = False
     print("**** Testing model resolution order ****")
 
-    # A provider with no model of its own, which is the fresh-install case.
-    agent = _agent_with_fake(my_predbat, _text_response("hello"), providers={"openrouter": {"api_key": "test-key", "url": "https://openrouter.ai/api/v1"}})
+    # A generic OpenAI-compatible endpoint: configured and usable, but its type has no default
+    # model, so nothing is resolved. OpenRouter and Ollama both take one from the table, which is
+    # the point of the table - this is the case where the picker is the only way in.
+    agent = _agent_with_fake(my_predbat, _text_response("hello"), providers={"custom": {"type": "openai", "api_key": "test-key", "url": "https://llm.example/v1"}})
     cid = asyncio.run(agent.store.create())
 
     # Nothing anywhere: refuse, and name the picker.
@@ -3261,8 +3266,10 @@ def test_provider_detection_and_payload(my_predbat):
         failed = True
 
     # The payload carries only the extensions the provider understands.
+    # A key on both, though the local one does not need it: without one the hosted entry is not
+    # usable, the turn is refused before any request is built, and there is no payload to inspect.
     for url, expect_openrouter in (("https://openrouter.ai/api/v1", True), ("http://localhost:11434/v1", False)):
-        agent = _agent_with_fake(my_predbat, _text_response("ok"), providers={"endpoint": {"url": url, "model": "test/model"}})
+        agent = _agent_with_fake(my_predbat, _text_response("ok"), providers={"endpoint": {"url": url, "model": "test/model", "api_key": "test-key"}})
         payload = {}
         original = agent._stream_chunks
 
@@ -3290,12 +3297,143 @@ def test_provider_detection_and_payload(my_predbat):
     return failed
 
 
+def test_turn_refuses_with_no_provider_configured(my_predbat):
+    """A turn with no usable provider says so, instead of dialling out unauthenticated.
+
+    provider_ready() existed but nothing called it, so a turn ran with no endpoint configured at
+    all: the request went to OpenRouter's default URL with no key and came back 401, which reads
+    as "your key is wrong" rather than "you have not configured anything". resolve_model() is not
+    the guard either - a conversation that already remembers a model sails past it, which is
+    exactly what happens to anyone who used chat before changing their configuration.
+
+    Mutation check: removing the provider_ready() call sends a request and produces no error
+    event naming the block.
+    """
+    failed = False
+    print("**** Testing a turn with no provider refuses cleanly ****")
+
+    agent = _agent_with_fake(my_predbat, _text_response("should never be sent"), providers={})
+    cid = asyncio.run(agent.store.create())
+    # A model remembered from before the configuration changed - the case that reached the wire.
+    agent.store.set_model(cid, "some/model")
+    asyncio.run(agent.run_turn(cid, "how much solar today?"))
+
+    if agent.fake.payloads:
+        print("ERROR: a request was sent with no provider configured: {}".format(agent.fake.payloads))
+        failed = True
+    errors = [event for event in agent.events_since(0, cid)[0] if event["type"] == "error"]
+    if not errors:
+        print("ERROR: no error was shown for an unconfigured install")
+        return True
+    message = str(errors[0]["data"].get("message", ""))
+    # Names what to add, not a single key: the failure is "nothing is set up".
+    for needle in ("providers", "apps.yaml"):
+        if needle not in message:
+            print("ERROR: the message does not say what to configure ({!r} missing): {}".format(needle, message))
+            failed = True
+
+    return failed
+
+
+def test_default_model_per_provider_type(my_predbat):
+    """A provider that names no model starts on its type's default, so it works immediately.
+
+    Per type, because a model id only means anything to the endpoint serving it. The OpenRouter
+    default is a free model deliberately - a default that quietly bills someone on their first
+    question is a poor introduction - and an arbitrary OpenAI-compatible endpoint has no sensible
+    generic default, so it gets none and the picker is the way in.
+
+    Mutation check: removing the table leaves every provider with no model, so a fresh install
+    cannot answer until the user visits the picker.
+    """
+    failed = False
+    print("**** Testing the per-type default model ****")
+
+    entries = {
+        entry["name"]: entry
+        for entry in build_providers(
+            {
+                "openrouter": {"api_key": "k"},
+                "ollama": {"url": "http://localhost:11434/v1"},
+                "nas": {"type": "ollama", "url": "http://192.168.1.50:11434/v1"},
+                "explicit": {"type": "ollama", "url": "http://localhost:11434/v1", "model": "qwen3:latest"},
+                "generic": {"type": "openai", "url": "https://llm.example/v1", "api_key": "k"},
+            }
+        )
+    }
+
+    if entries["openrouter"]["model"] != PROVIDER_DEFAULT_MODELS["openrouter"]:
+        print("ERROR: openrouter did not take its default model: {}".format(entries["openrouter"]["model"]))
+        failed = True
+    if not entries["openrouter"]["model"].endswith(":free"):
+        print("ERROR: the OpenRouter default is not a free model: {}".format(entries["openrouter"]["model"]))
+        failed = True
+    # A renamed entry still gets its type's default, since the type is what serves the model.
+    for name in ("ollama", "nas"):
+        if entries[name]["model"] != PROVIDER_DEFAULT_MODELS["ollama"]:
+            print("ERROR: {} did not take the ollama default: {}".format(name, entries[name]["model"]))
+            failed = True
+    # An explicit model always wins over the default.
+    if entries["explicit"]["model"] != "qwen3:latest":
+        print("ERROR: an explicit model was overridden by the default: {}".format(entries["explicit"]["model"]))
+        failed = True
+    # No guess for an arbitrary endpoint - a wrong model id fails on the first turn.
+    if entries["generic"]["model"] is not None:
+        print("ERROR: a generic endpoint was given a model it may not have: {}".format(entries["generic"]["model"]))
+        failed = True
+
+    return failed
+
+
+def test_providers_accepted_without_the_nesting(my_predbat):
+    """Provider entries written directly in the chat: block still work, with a warning.
+
+    That was the documented shape briefly before providers were nested, so an install written
+    against it would otherwise report no providers and fail with a bare 401. Unambiguous either
+    way: every other setting in the block is a scalar or a list, so a dict-valued key that is not
+    'providers' can only be a provider entry.
+
+    Mutation check: dropping the loose-entry fallback leaves both cases below with no providers.
+    """
+    failed = False
+    print("**** Testing providers written without the nesting ****")
+
+    warnings = []
+    nested = extract_providers({"providers": {"openrouter": {"api_key": "k"}}, "turn_timeout": 60}, warnings.append)
+    if list(nested) != ["openrouter"] or warnings:
+        print("ERROR: the nested form did not resolve cleanly: {} {}".format(nested, warnings))
+        failed = True
+
+    loose = extract_providers({"openrouter": {"api_key": "k"}, "turn_timeout": 60}, warnings.append)
+    if list(loose) != ["openrouter"]:
+        print("ERROR: a provider written directly in the block was not found: {}".format(loose))
+        failed = True
+    # Scalar settings must never be mistaken for providers.
+    if "turn_timeout" in loose:
+        print("ERROR: a plain setting was read as a provider: {}".format(loose))
+        failed = True
+    if not warnings:
+        print("ERROR: the un-nested form was accepted silently, so nobody is told to migrate")
+        failed = True
+
+    # The nested form wins outright when both are present, rather than merging two sources.
+    both = extract_providers({"providers": {"a": {"url": "http://x/v1"}}, "b": {"url": "http://y/v1"}}, None)
+    if list(both) != ["a"]:
+        print("ERROR: the nested form did not take precedence: {}".format(both))
+        failed = True
+
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
     failed |= test_component_gating(my_predbat)
     failed |= test_provider_detection_and_payload(my_predbat)
     failed |= test_model_resolution_order(my_predbat)
+    failed |= test_turn_refuses_with_no_provider_configured(my_predbat)
+    failed |= test_default_model_per_provider_type(my_predbat)
+    failed |= test_providers_accepted_without_the_nesting(my_predbat)
     failed |= test_turn_error_is_detailed_and_stored_but_never_replayed(my_predbat)
     failed |= test_confirmation_card_resolves_nested_paths(my_predbat)
     failed |= test_stop_reaches_a_turn_parked_on_a_confirmation(my_predbat)

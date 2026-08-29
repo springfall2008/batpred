@@ -50,6 +50,11 @@ from utils import SECRET_MASK, is_secret_key, parse_yaml_path, resolve_nested_ya
 # Shown when a turn is attempted with no model chosen anywhere. openrouter_default_model is
 # optional, so this is the ordinary state of a fresh install rather than a misconfiguration - the
 # wording points at the picker, which is where the user can fix it without touching apps.yaml.
+# Shown when no endpoint is configured, or the configured one is missing what it needs. Names the
+# block to add rather than a single key, because the failure is "nothing is set up" rather than
+# "one setting is wrong".
+NO_PROVIDER_MESSAGE = "No chat provider is configured. Add one to the 'chat: providers:' block in apps.yaml - for example " "'openrouter: {api_key: ...}' for a hosted model, or 'ollama: {url: http://localhost:11434/v1}' to use a local one."
+
 NO_MODEL_MESSAGE = "No model has been selected. Choose one from the model picker below the message box, or set 'openrouter_default_model' in apps.yaml."
 
 # How much of a provider's raw error text to keep. Enough to carry a real message, bounded because
@@ -171,6 +176,18 @@ PROVIDER_DEFAULT_URLS = {
     "openai": "https://api.openai.com/v1",
 }
 
+# The model a provider starts on when the entry names none, so a freshly configured endpoint can
+# answer immediately rather than sending the user to the picker first. Per type, because a model
+# id only means anything to the endpoint serving it.
+#
+# The OpenRouter default is a free model deliberately: a default that quietly bills someone on
+# their first question is a poor introduction. There is no sensible generic default for an
+# arbitrary OpenAI-compatible endpoint, so those have none and the picker is the way in.
+PROVIDER_DEFAULT_MODELS = {
+    "openrouter": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "ollama": "gpt-oss:20b",
+}
+
 # Per-model timeout for the /api/show enrichment. Short because it is a local call on the machine
 # next to Predbat: if it is slow, the catalogue is better off without the extra detail than the
 # picker is waiting for it.
@@ -230,6 +247,8 @@ def build_providers(block):
     """
     entries = []
     for name, settings in (block or {}).items() if isinstance(block, dict) else []:
+        # Skip anything that is not a provider entry - see extract_providers(), which is what
+        # decides that; this loop only ever receives entries.
         if not isinstance(settings, dict):
             continue
         url = str(settings.get("url") or "").strip()
@@ -246,7 +265,7 @@ def build_providers(block):
                 # A model id only means anything to the provider that serves it -
                 # openai/gpt-4o-mini does not exist on Ollama and qwen3:latest does not exist on
                 # OpenRouter - so the default model belongs to the entry, not the block.
-                "model": settings.get("model") or None,
+                "model": settings.get("model") or default_model_for(resolved_name),
                 "settings": resolved,
             }
         )
@@ -258,9 +277,35 @@ def build_providers(block):
     return entries
 
 
+def extract_providers(block, log=None):
+    """Return the provider entries from an apps.yaml chat: block.
+
+    Normally they live under `providers:`. They are also accepted written directly in the block,
+    because that was the documented shape briefly before the nesting was added, and an install
+    written against it would otherwise report no providers at all and fail with a bare 401.
+
+    Unambiguous either way: every other setting in the block is a scalar or a list, so a
+    dict-valued key that is not `providers` can only be a provider entry.
+    """
+    if not isinstance(block, dict):
+        return {}
+    nested = block.get("providers")
+    if isinstance(nested, dict) and nested:
+        return nested
+    loose = {name: value for name, value in block.items() if name != "providers" and isinstance(value, dict)}
+    if loose and log:
+        log("Warn: chat providers are written directly in the chat: block - move them under 'providers:' as documented; they still work for now")
+    return loose
+
+
 def default_url_for(provider_name):
     """Return the endpoint a provider type uses when the user gave no url."""
     return PROVIDER_DEFAULT_URLS.get(provider_name, OPENROUTER_BASE_URL)
+
+
+def default_model_for(provider_name):
+    """Return the model a provider type starts on when the entry names none, or None."""
+    return PROVIDER_DEFAULT_MODELS.get(provider_name)
 
 
 def resolve_provider(api_type, url):
@@ -373,7 +418,7 @@ class ChatRequestError(RuntimeError):
         if self.provider_message:
             return "OpenRouter reported an error: {}".format(self.provider_message)
         if self.status == 401:
-            return "OpenRouter rejected the API key - check openrouter_api_key in apps.yaml"
+            return "The provider rejected the API key - check the api_key for this provider in apps.yaml's chat: block"
         if self.status == 402:
             return "OpenRouter reports insufficient credit: {}".format(self.body[:200])
         if self.status == 429:
@@ -763,7 +808,7 @@ class ChatAgent(ComponentBase):
             value = settings.get(name)
             return CHAT_DEFAULTS[name] if value is None else value
 
-        self.providers = build_providers(settings.get("providers"))
+        self.providers = build_providers(extract_providers(settings, self.log))
         self.select_provider(None)
         self.max_tokens = setting("max_tokens")
         self.max_tool_rounds = setting("max_tool_rounds")
@@ -1459,6 +1504,14 @@ class ChatAgent(ComponentBase):
         check alone leaves a gap wide enough for one round, on its own, to run far past the
         deadline.
         """
+        # Checked before anything is sent. Without this a turn ran with no provider configured at
+        # all, dialling OpenRouter unauthenticated and coming back with a bare 401 - which reads
+        # as a rejected key rather than as "you have not configured an endpoint". A conversation
+        # that already remembers a model reaches here even on a fresh install, so resolve_model()
+        # alone is not the guard.
+        if not self.provider_ready():
+            self.emit(conversation_id, "error", {"message": NO_PROVIDER_MESSAGE})
+            return
         model = self.resolve_model(conversation_id)
         if not model:
             self.emit(conversation_id, "error", {"message": NO_MODEL_MESSAGE})

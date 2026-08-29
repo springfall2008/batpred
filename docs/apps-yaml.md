@@ -1979,7 +1979,17 @@ Everything the chat agent uses lives in one **chat** block. Endpoints go under *
         model: qwen3:latest            # optional
 ```
 
-**model** belongs to the provider rather than the block, because a model id only means anything to the endpoint serving it - `openai/gpt-4o-mini` does not exist on Ollama and `qwen3:latest` does not exist on OpenRouter. Leave it out and pick from the Chat tab's search box; Predbat remembers your choice per provider, so switching between them does not lose it.
+**model** belongs to the provider rather than the block, because a model id only means anything to the endpoint serving it - `openai/gpt-4o-mini` does not exist on Ollama and `qwen3:latest` does not exist on OpenRouter.
+
+Leave it out and the provider starts on a sensible default for its kind, so a newly configured endpoint answers straight away:
+
+| Provider type | Default model |
+| ------------- | ------------- |
+| `openrouter` | `nvidia/nemotron-3-ultra-550b-a55b:free` - free, so a first question never bills you unexpectedly |
+| `ollama` | `gpt-oss:20b` |
+| `openai`, `local` | None - there is no sensible guess for an arbitrary endpoint, so pick one from the Chat tab |
+
+You can change model at any time from the Chat tab's search box, and Predbat remembers your choice per provider, so switching between them does not lose it.
 
 A hosted endpoint needs an **api_key**; a local one needs only a **url** and no key at all. The name is yours to choose - it is what appears in the Chat tab - so you can have two of the same kind:
 

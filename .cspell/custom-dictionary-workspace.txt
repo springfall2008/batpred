@@ -685,3 +685,4 @@ zappi
 zappis
 zcat
 zigbee
+nemotron
