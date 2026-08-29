@@ -20,6 +20,7 @@ from datetime import date, datetime, timedelta
 import pytz
 
 from annual_costs import build_costs, build_payback, resolve_costs
+from annual_interpolate import ANCHOR_MONTHS, FAST_MODE_MAX_RATE_CV, build_interpolated_rows, rate_variability
 from annual_load import build_load_forecast, OctopusConsumptionLoadProfile, SyntheticLoadProfile
 from annual_tariff import AnnualTariff
 from annual_weather import AnnualWeather, resolve_postcode
@@ -36,6 +37,11 @@ DEFAULT_DECLINATION = 35
 DEFAULT_AZIMUTH = 180
 DEFAULT_EFFICIENCY = 0.95
 DEFAULT_HYBRID = True
+
+# The property's grid-connection export cap. High enough not to bite any real
+# domestic inverter, so an unset value behaves as "no extra restriction" rather
+# than silently clipping exports.
+DEFAULT_EXPORT_LIMIT_KW = 10.0
 
 # A typical domestic panel in 2026. Only used to turn a panel count into kWp.
 DEFAULT_PANEL_WATTS = 400.0
@@ -177,7 +183,6 @@ def _validate_battery(raw):
     return {
         "size_kwh": _require_number(raw["size_kwh"], "annual.battery.size_kwh", minimum=0, exclusive_minimum=True),
         "inverter_kw": inverter_kw,
-        "export_limit_kw": _require_number(raw.get("export_limit_kw", inverter_kw), "annual.battery.export_limit_kw", minimum=0),
         "hybrid": _coerce_bool(raw.get("hybrid", DEFAULT_HYBRID)),
         "charge_rate_kw": _require_number(raw.get("charge_rate_kw", inverter_kw), "annual.battery.charge_rate_kw", minimum=0, exclusive_minimum=True),
         "discharge_rate_kw": _require_number(raw.get("discharge_rate_kw", inverter_kw), "annual.battery.discharge_rate_kw", minimum=0, exclusive_minimum=True),
@@ -292,6 +297,17 @@ def validate_config(config, today=None):
     if not solar and battery is None:
         raise AnnualConfigError("annual needs at least one of solar or battery: with neither there is nothing to evaluate")
 
+    # The grid-connection export cap applies whether or not there is a battery, so it lives
+    # at the top level rather than inside the (possibly absent) battery block. A config
+    # written before this moved still has it nested under battery - read it from there as a
+    # fallback so an existing YAML file or stored run keeps behaving the same.
+    raw_battery = raw.get("battery")
+    legacy_export_limit_kw = raw_battery.get("export_limit_kw") if isinstance(raw_battery, dict) else None
+    export_limit_default = legacy_export_limit_kw if legacy_export_limit_kw is not None else DEFAULT_EXPORT_LIMIT_KW
+    # minimum=0 inclusive, not exclusive: a G99 zero-export limitation (see the docs) is a
+    # real, supported scenario, and battery.export_limit_kw allowed 0 before this moved.
+    export_limit_kw = _require_number(raw.get("export_limit_kw", export_limit_default), "annual.export_limit_kw", minimum=0)
+
     samples_per_month = _require_number(raw.get("samples_per_month", DEFAULT_SAMPLES_PER_MONTH), "annual.samples_per_month", minimum=1, integer=True)
 
     if today is None:
@@ -308,6 +324,7 @@ def validate_config(config, today=None):
         "year": year,
         "solar": solar,
         "battery": battery,
+        "export_limit_kw": export_limit_kw,
         "load": _validate_load(raw.get("load")),
         "tariff": _validate_tariff(raw.get("tariff")),
         # The counterfactual bill is what the household would pay with no system at all,
@@ -319,6 +336,10 @@ def validate_config(config, today=None):
         "samples_per_month": samples_per_month,
         "costs": _validated_costs(raw.get("costs")),
         "debug": _coerce_bool(raw.get("debug", False)),
+        # Plans four seasonal months and interpolates the rest - see annual_interpolate.py.
+        # _coerce_bool for the same reason as "debug": an explicit fast_mode: "false" in a
+        # hand-written YAML must not read as truthy.
+        "fast_mode": _coerce_bool(raw.get("fast_mode", False)),
         "timezone": raw.get("timezone", DEFAULT_TIMEZONE),
         "pv10_derate_fallback": _require_number(raw.get("pv10_derate_fallback", DEFAULT_PV10_DERATE_FALLBACK), "annual.pv10_derate_fallback", minimum=0, exclusive_minimum=True, maximum=1),
         "raw": scrub_secrets(raw),
@@ -442,7 +463,7 @@ def create_headless_predbat(work_dir, timezone, log):
     return instance
 
 
-def apply_hardware(predbat, battery, solar):
+def apply_hardware(predbat, battery, solar, export_limit_kw):
     """Map the config's battery block onto the PredBat instance.
 
     Rates are stored internally as kW per minute, matching
@@ -455,7 +476,16 @@ def apply_hardware(predbat, battery, solar):
     whatever it happened to hold before, since clamping only makes sense when a
     caller has deliberately set a starting SOC first — a later task does that
     explicitly, after calling this function.
+
+    ``export_limit_kw`` is the property's grid-connection export cap (independent of
+    whether there is a battery) and is applied as a ``min()`` against whatever the
+    hardware itself would otherwise allow to export - it can only tighten the export
+    limit, never loosen it, and never affects ``inverter_limit`` (the inverter's own
+    charge/discharge rate is unrelated to what the grid connection permits leaving
+    the property).
     """
+    export_limit_predbat_units = export_limit_kw * 1000 / MINUTE_WATT
+
     if battery is None:
         predbat.soc_max = 0.0
         predbat.soc_kw = 0.0
@@ -473,14 +503,14 @@ def apply_hardware(predbat, battery, solar):
         # difference between scenarios - this tool's whole output - is computed against
         # two different caps.
         predbat.inverter_limit = (sum(array["kwp"] for array in solar) if solar else 5.0) * 1000 / MINUTE_WATT
-        predbat.export_limit = predbat.inverter_limit
+        predbat.export_limit = min(predbat.inverter_limit, export_limit_predbat_units)
         predbat.inverter_hybrid = False
         return
 
     predbat.soc_max = battery["size_kwh"]
     predbat.soc_kw = predbat.soc_max
     predbat.inverter_limit = battery["inverter_kw"] * 1000 / MINUTE_WATT
-    predbat.export_limit = battery["export_limit_kw"] * 1000 / MINUTE_WATT
+    predbat.export_limit = min(predbat.inverter_limit, export_limit_predbat_units)
     predbat.battery_rate_max_charge = battery["charge_rate_kw"] * 1000 / MINUTE_WATT
     # Synthetic configs have no separate DC figure to scale proportionally (unlike
     # compare.py's apply_hardware_overrides(), which scales an inherited DC/AC ratio), so
@@ -1033,7 +1063,7 @@ def prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_
     rate_import, rate_export = tariff.rates_for(midnight_utc, PLAN_MINUTES)
     _apply_rates(predbat, rate_import, rate_export)
 
-    apply_hardware(predbat, config["battery"], config["solar"])
+    apply_hardware(predbat, config["battery"], config["solar"], config["export_limit_kw"])
     predbat.soc_kw = START_SOC_KWH
 
 
@@ -1177,7 +1207,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     # Like scenarios 1 and 2 this is a single prediction with empty windows. It must NOT
     # call calculate_plan(): the planner is what makes a run expensive, and there is
     # nothing to plan without a battery.
-    apply_hardware(predbat, config["battery"], config["solar"])
+    apply_hardware(predbat, config["battery"], config["solar"], config["export_limit_kw"])
     predbat.soc_kw = 0
     predbat.charge_limit_best = []
     predbat.charge_window_best = []
@@ -1189,7 +1219,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
         plans["pv_only"] = _capture_plan(predbat, actual_step, actual_step, load_step, load_step, DAY_MINUTES)
 
     # Scenario 2: PV and battery on a dumb cheapest-rate timer, no export optimisation
-    apply_hardware(predbat, config["battery"], config["solar"])
+    apply_hardware(predbat, config["battery"], config["solar"], config["export_limit_kw"])
     predbat.soc_kw = START_SOC_KWH
     charge_window, charge_limit = _baseline_charge_window(predbat)
     predbat.charge_window_best = charge_window
@@ -1230,7 +1260,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
         # loop from iterating it, so this is a shape placeholder rather than a live car.
         predbat.car_charging_slots = [[]]
 
-    apply_hardware(predbat, config["battery"], config["solar"])
+    apply_hardware(predbat, config["battery"], config["solar"], config["export_limit_kw"])
     predbat.soc_kw = START_SOC_KWH
     predbat.pv_forecast_minute = forecast_pv
     predbat.pv_forecast_minute10 = p10_pv
@@ -1257,6 +1287,12 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
 SCENARIO_KEYS = ["no_pvbat", "pv_only", "without_predbat", "with_predbat"]
 
 SCENARIO_FIELDS = ["cost_p", "import_kwh", "export_kwh", "pv_generated_kwh", "battery_throughput_kwh", "battery_cycles"]
+
+# Month statuses that carry real figures and count toward the annual totals. "interpolated"
+# is one of them: a fast-mode month was never planned, but it is a modelled estimate of a
+# real month, and dropping it would report a four month year. Shared with annual_cli and
+# web_annual so the CLI table, the chart and the month table cannot drift from the totals.
+INCLUDED_STATUSES = ("ok", "degraded", "interpolated")
 
 
 def _blend_results(with_car, without_car, fraction):
@@ -1450,7 +1486,6 @@ class AnnualPredictor:
     async def run(self, progress=None):
         """Run the full annual projection and return the results document."""
         year = self.config["year"]
-        samples_per_month = self.config["samples_per_month"]
         has_solar = bool(self.config["solar"])
 
         weather_client = AnnualWeather(
@@ -1498,11 +1533,22 @@ class AnnualPredictor:
         baseline_fallback_months = []
         zone = pytz.timezone(self.config["timezone"])
         months = []
-        total_units = 12
+        # Months fast mode skipped, carrying the figures the interpolation step needs. Only
+        # months whose rates downloaded cleanly get in here, so a genuinely unavailable month
+        # is never quietly interpolated over.
+        interpolatable = []
+        fast_mode = self.config["fast_mode"]
+        if fast_mode:
+            fast_mode = await self._fast_mode_viable(year, zone)
+        # Rate downloads and availability checks still cover all twelve months even in fast
+        # mode - they are network-bound and cheap next to planning, and skipping them would
+        # let interpolation paper over a month that genuinely had no rates.
+        months_to_plan = list(ANCHOR_MONTHS) if fast_mode else list(range(1, 13))
+        total_units = len(months_to_plan) + (1 if fast_mode else 0)
         completed = 0
 
         for month in range(1, 13):
-            if progress:
+            if progress and month in months_to_plan:
                 progress(completed, total_units, "Month {:02d}/{}".format(month, year))
 
             days_in_month = calendar.monthrange(year, month)[1]
@@ -1515,7 +1561,8 @@ class AnnualPredictor:
                 baseline_fallback_months.append(month)
             if not await self.tariff.fetch_month(year, month):
                 months.append({"month": month, "status": "unavailable", "reason": "no rate data available", "days": days_in_month, "standing_charge_p": standing_charge_p})
-                completed += 1
+                if month in months_to_plan:
+                    completed += 1
                 continue
             # The 48 hour plan for the last sampled day can spill into the next month
             next_year, next_month = (year, month + 1) if month < 12 else (year + 1, 1)
@@ -1525,74 +1572,70 @@ class AnnualPredictor:
                 if spill_message not in self.caveats:
                     self.caveats.append(spill_message)
 
-            samples = select_samples(self.weather, year, month, samples_per_month, has_solar=has_solar)
-            if not samples:
-                months.append({"month": month, "status": "unavailable", "reason": "no usable weather days", "days": days_in_month, "standing_charge_p": standing_charge_p})
-                completed += 1
+            if month not in months_to_plan:
+                # Nothing planned here; the row is built after the loop by interpolation.
+                # Reached only once this month's rates are known good, which is what keeps an
+                # unavailable month unavailable rather than fabricated.
+                interpolatable.append((month, days_in_month, standing_charge_p))
                 continue
 
-            surviving_samples = []
-            day_results = []
-            failed_days = []
-            month_plans = []
-            for day, weight in samples:
-                midnight_utc = zone.localize(datetime(day.year, day.month, day.day)).astimezone(pytz.utc)
-                day_plans = [] if self.config["debug"] else None
-                try:
-                    result = run_day(self.predbat, self.config, self.weather, self.tariff, self.load_source, day, midnight_utc, plans=day_plans, baseline_tariff=self.baseline_tariff if baseline_ready else None)
-                except Exception as exc:  # noqa: BLE001 - one bad sample must not abort the whole year
-                    self.log("Warn: Annual: {} in month {} failed to plan/cost ({}: {}); excluding it from this month's total".format(day.isoformat(), month, type(exc).__name__, exc))
-                    failed_days.append(day.isoformat())
-                    continue
-                surviving_samples.append((day, weight))
-                day_results.append(result)
-                if day_plans is not None:
-                    month_plans.extend(dict(entry, day=day.isoformat()) for entry in day_plans)
-
-            if not day_results:
-                months.append({"month": month, "status": "unavailable", "reason": "every sampled day failed to plan", "days": days_in_month, "standing_charge_p": standing_charge_p, "failed_days": failed_days})
-                completed += 1
-                continue
-
-            if failed_days:
-                surviving_samples = self._reweight_survivors(surviving_samples, days_in_month)
-
-            totals = self._month_scenarios(surviving_samples, day_results)
-            first_midnight = zone.localize(datetime(surviving_samples[0][0].year, surviving_samples[0][0].month, surviving_samples[0][0].day)).astimezone(pytz.utc)
-            _, rate_export = self.tariff.rates_for(first_midnight, DAY_MINUTES)
-            export_rate = average_rate(rate_export, DAY_MINUTES)
-
-            scenarios = {}
-            for key in SCENARIO_KEYS:
-                entry = {field: totals[key][field] for field in SCENARIO_FIELDS}
-                # An approximation, not a second income stream: cost_p already prices export at
-                # the real per-minute export rate for every minute it happened, so the export
-                # credit is already inside it. This is a cruder second estimate of the same
-                # money (a single day's flat average export rate), kept only for a human-
-                # readable "how much of that came from export" figure. Adding it to cost_p
-                # double-counts the export income - see the results-document caveat below.
-                entry["export_credit_p_estimate"] = entry["export_kwh"] * export_rate
-                scenarios[key] = {name: round(value, 3) for name, value in entry.items()}
-
-            row = {
-                "month": month,
-                "status": "ok" if not failed_days else "degraded",
-                "days": days_in_month,
-                "sampled_days": [day.isoformat() for day, _ in surviving_samples],
-                "failed_days": failed_days,
-                "standing_charge_p": round(standing_charge_p, 3),
-                "scenarios": scenarios,
-                # Which sides of *this* month's rates (if any) came from the tariff's
-                # current-rates fallback rather than a real historical download -
-                # carried onto the row itself, not just into a run-wide caveat, so a
-                # synthesised month is not indistinguishable from a real one in the
-                # JSON, the chart or the table.
-                "rates_synthesised": self._synthesised_sides(self.tariff.fallback_months, year, month),
-            }
-            if self.config["debug"]:
-                row["plans"] = month_plans
+            row = await self._plan_one_month(month, year, zone, days_in_month, standing_charge_p, baseline_ready)
             months.append(row)
             completed += 1
+
+        interpolated_count = 0
+        if fast_mode:
+            anchor_rows = {entry["month"]: entry for entry in months if entry["status"] in INCLUDED_STATUSES}
+            # Volatility is settled before planning starts (see _fast_mode_viable), so the
+            # only way to arrive here without usable anchors is that the anchor months
+            # themselves failed to plan. Rather than fit a line through one point, plan the
+            # remaining months and finish as an ordinary full run: slower, but right. No work
+            # is wasted - the anchors already planned are months a full run needed anyway.
+            if len(anchor_rows) < 2 and interpolatable:
+                reason = "Fast mode was abandoned because too few of the four sampled months produced a usable result, so all twelve months were planned instead. This run is a full run."
+                self.log("Warn: Annual: {}".format(reason))
+                self.caveats.append(reason)
+                # A full run now, so the progress total has to grow to match or the bar
+                # reports something like 12/5 as the skipped months are planned.
+                total_units = 12
+                for month, days_in_month, standing_charge_p in interpolatable:
+                    if progress:
+                        progress(completed, total_units, "Month {:02d}/{}".format(month, year))
+                    baseline_ready = await self.baseline_tariff.fetch_month(year, month)
+                    if not baseline_ready:
+                        baseline_fallback_months.append(month)
+                    months.append(await self._plan_one_month(month, year, zone, days_in_month, standing_charge_p, baseline_ready))
+                    completed += 1
+                months.sort(key=lambda entry: entry["month"])
+                fast_mode = False
+            elif anchor_rows:
+                monthly_pv = self.weather.monthly_actual_kwh(year) if self.weather else None
+                if progress:
+                    progress(completed, total_units, "Interpolating {} month(s)".format(len(interpolatable)))
+                wanted = [month for month, _, _ in interpolatable]
+                rows = build_interpolated_rows(anchor_rows, year, monthly_pv, months=wanted)
+                for month, days_in_month, standing_charge_p in interpolatable:
+                    row = rows.get(month)
+                    if not row:
+                        continue
+                    row["standing_charge_p"] = round(standing_charge_p, 3)
+                    # Recomputed from this month's own export rate rather than interpolated,
+                    # so the field means exactly what it means in a planned month. The 15th
+                    # stands in for the month the way a planned month uses its first sample.
+                    midnight_utc = zone.localize(datetime(year, month, 15)).astimezone(pytz.utc)
+                    _, rate_export = self.tariff.rates_for(midnight_utc, DAY_MINUTES)
+                    export_rate = average_rate(rate_export, DAY_MINUTES)
+                    for key in row["scenarios"]:
+                        row["scenarios"][key]["export_credit_p_estimate"] = round(row["scenarios"][key].get("export_kwh", 0.0) * export_rate, 3)
+                    months.append(row)
+                    interpolated_count += 1
+                months.sort(key=lambda entry: entry["month"])
+            if interpolated_count:
+                self.caveats.append(
+                    "Fast mode: only {} were planned; the other {} month(s) were estimated from them against this year's solar curve. Measured against a full run on the same system, the annual savings land within about 3% and the payback within about 1%. Individual months are rougher - typically within about 10%, worse in the tails - so read a single month's figures as indicative rather than exact. A tariff whose daily prices move too much for this to hold is detected before planning starts and gets a full run instead.".format(
+                        ", ".join(calendar.month_abbr[month] for month in sorted(anchor_rows)), interpolated_count
+                    )
+                )
 
         self.caveats.extend(self._tariff_fallback_caveats(self.tariff.fallback_months, self.tariff.unpaid_export_months, year))
 
@@ -1606,9 +1649,133 @@ class AnnualPredictor:
         if progress:
             progress(total_units, total_units, "Complete")
 
-        return self._build_results(months)
+        return self._build_results(months, fast_mode=fast_mode, months_interpolated=interpolated_count)
 
-    def _build_results(self, months):
+    def _daily_mean_import_rates(self, year, zone, months):
+        """Return {month: [mean import p/kWh, ...]} sampling every second day of each month.
+
+        Every second day rather than every day because this only feeds a coefficient of
+        variation - roughly fifteen days a month is ample for that - and ``rates_for``
+        expands a whole day to per-minute rates each time it is called. The stride is
+        coprime with seven, so it cannot lock onto a weekday-only or weekend-only pattern.
+        """
+        by_month = {}
+        for month in months:
+            days_in_month = calendar.monthrange(year, month)[1]
+            for day in range(1, days_in_month + 1, 2):
+                midnight_utc = zone.localize(datetime(year, month, day)).astimezone(pytz.utc)
+                rate_import, _ = self.tariff.rates_for(midnight_utc, DAY_MINUTES)
+                if not rate_import:
+                    continue
+                by_month.setdefault(month, []).append(average_rate(rate_import, DAY_MINUTES))
+        return by_month
+
+    async def _fast_mode_viable(self, year, zone):
+        """Return True when this tariff is steady enough day to day for fast mode to be honest.
+
+        Fast mode rebuilds unplanned months from planned ones, which holds only while a
+        month's economics follow the solar curve. On a tariff whose whole price level moves
+        day to day, they do not, and the reconstructed savings and payback can be tens of
+        percent out - measured at 20-30% on Agile. Rather than report that with a warning
+        attached, the run quietly becomes a full one: slower, but right.
+
+        Decided here, before any month is planned, so the progress total is honest from the
+        first month instead of growing mid-run. Only the anchor months are examined - four
+        months give the metric a comfortable margin where one does not (the quietest single
+        Agile month sits just above the limit, the four-month mean at twice it) - and their
+        rates are needed by the run regardless, so the fetches are not extra work.
+        """
+        daily_means = {}
+        for month in ANCHOR_MONTHS:
+            if not await self.tariff.fetch_month(year, month):
+                continue
+            daily_means.update(self._daily_mean_import_rates(year, zone, [month]))
+        variability = rate_variability(daily_means)
+        if variability <= FAST_MODE_MAX_RATE_CV:
+            return True
+        reason = "This tariff's daily prices move too much from day to day (variability {:.2f}, above the {:.2f} limit) for four sampled months to stand in for the other eight, so fast mode was declined and all twelve months were planned. This run is a full run, and its figures are as accurate as any other full run.".format(
+            variability, FAST_MODE_MAX_RATE_CV
+        )
+        self.log("Warn: Annual: {}".format(reason))
+        self.caveats.append(reason)
+        return False
+
+    async def _plan_one_month(self, month, year, zone, days_in_month, standing_charge_p, baseline_ready):
+        """Plan and cost one month, returning its results row.
+
+        Extracted from run()'s loop so the fast-mode fallback can plan a month it originally
+        skipped without duplicating the body. Always returns a row - an "unavailable" one when
+        the month produced nothing usable - so the caller appends unconditionally rather than
+        reproducing the loop's branching.
+        """
+        samples_per_month = self.config["samples_per_month"]
+        has_solar = bool(self.config["solar"])
+
+        samples = select_samples(self.weather, year, month, samples_per_month, has_solar=has_solar)
+        if not samples:
+            return {"month": month, "status": "unavailable", "reason": "no usable weather days", "days": days_in_month, "standing_charge_p": standing_charge_p}
+
+        surviving_samples = []
+        day_results = []
+        failed_days = []
+        month_plans = []
+        for day, weight in samples:
+            midnight_utc = zone.localize(datetime(day.year, day.month, day.day)).astimezone(pytz.utc)
+            day_plans = [] if self.config["debug"] else None
+            try:
+                result = run_day(self.predbat, self.config, self.weather, self.tariff, self.load_source, day, midnight_utc, plans=day_plans, baseline_tariff=self.baseline_tariff if baseline_ready else None)
+            except Exception as exc:  # noqa: BLE001 - one bad sample must not abort the whole year
+                self.log("Warn: Annual: {} in month {} failed to plan/cost ({}: {}); excluding it from this month's total".format(day.isoformat(), month, type(exc).__name__, exc))
+                failed_days.append(day.isoformat())
+                continue
+            surviving_samples.append((day, weight))
+            day_results.append(result)
+            if day_plans is not None:
+                month_plans.extend(dict(entry, day=day.isoformat()) for entry in day_plans)
+
+        if not day_results:
+            return {"month": month, "status": "unavailable", "reason": "every sampled day failed to plan", "days": days_in_month, "standing_charge_p": standing_charge_p, "failed_days": failed_days}
+
+        if failed_days:
+            surviving_samples = self._reweight_survivors(surviving_samples, days_in_month)
+
+        totals = self._month_scenarios(surviving_samples, day_results)
+        first_midnight = zone.localize(datetime(surviving_samples[0][0].year, surviving_samples[0][0].month, surviving_samples[0][0].day)).astimezone(pytz.utc)
+        _, rate_export = self.tariff.rates_for(first_midnight, DAY_MINUTES)
+        export_rate = average_rate(rate_export, DAY_MINUTES)
+
+        scenarios = {}
+        for key in SCENARIO_KEYS:
+            entry = {field: totals[key][field] for field in SCENARIO_FIELDS}
+            # An approximation, not a second income stream: cost_p already prices export at
+            # the real per-minute export rate for every minute it happened, so the export
+            # credit is already inside it. This is a cruder second estimate of the same
+            # money (a single day's flat average export rate), kept only for a human-
+            # readable "how much of that came from export" figure. Adding it to cost_p
+            # double-counts the export income - see the results-document caveat below.
+            entry["export_credit_p_estimate"] = entry["export_kwh"] * export_rate
+            scenarios[key] = {name: round(value, 3) for name, value in entry.items()}
+
+        row = {
+            "month": month,
+            "status": "ok" if not failed_days else "degraded",
+            "days": days_in_month,
+            "sampled_days": [day.isoformat() for day, _ in surviving_samples],
+            "failed_days": failed_days,
+            "standing_charge_p": round(standing_charge_p, 3),
+            "scenarios": scenarios,
+            # Which sides of *this* month's rates (if any) came from the tariff's
+            # current-rates fallback rather than a real historical download -
+            # carried onto the row itself, not just into a run-wide caveat, so a
+            # synthesised month is not indistinguishable from a real one in the
+            # JSON, the chart or the table.
+            "rates_synthesised": self._synthesised_sides(self.tariff.fallback_months, year, month),
+        }
+        if self.config["debug"]:
+            row["plans"] = month_plans
+        return row
+
+    def _build_results(self, months, fast_mode=False, months_interpolated=0):
         """Assemble the final results document from the per-month rows.
 
         A month that is entirely ``"unavailable"`` (no rate data, no usable weather days, or
@@ -1618,8 +1785,8 @@ class AnnualPredictor:
         ``annual.standing_charge_p`` are ``None`` and ``annual.savings`` is empty rather than
         reporting a fabricated zero-cost, zero-saving year.
         """
-        included = [entry for entry in months if entry["status"] in ("ok", "degraded")]
-        excluded = [entry["month"] for entry in months if entry["status"] not in ("ok", "degraded")]
+        included = [entry for entry in months if entry["status"] in INCLUDED_STATUSES]
+        excluded = [entry["month"] for entry in months if entry["status"] not in INCLUDED_STATUSES]
 
         annual_scenarios = None
         standing_total = None
@@ -1657,6 +1824,10 @@ class AnnualPredictor:
                 "savings": savings,
                 "months_included": len(included),
                 "months_excluded": excluded,
+                # Recorded so a stored run can never be mistaken for a full one after the
+                # fact - the results page and the compare table both key off this.
+                "fast_mode": fast_mode,
+                "months_interpolated": months_interpolated,
                 "costs": costs,
                 "payback": payback,
             },

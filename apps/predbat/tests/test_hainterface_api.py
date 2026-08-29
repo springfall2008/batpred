@@ -124,7 +124,7 @@ def test_hainterface_api_call_supervisor(my_predbat=None):
         mock_env.return_value = "supervisor_token"
         mock_get.return_value = create_mock_requests_response(200, {"supervisor": "data"})
 
-        result = ha_interface.api_call("/addons/self/info", core=False)
+        ha_interface.api_call("/addons/self/info", core=False)
 
         # Verify supervisor URL used
         if not mock_get.called:
@@ -266,7 +266,7 @@ def test_hainterface_api_call_silent_mode(my_predbat=None):
         mock_get.return_value = mock_response
 
         # Call with silent=True
-        result = ha_interface.api_call("/api/states", silent=True)
+        ha_interface.api_call("/api/states", silent=True)
 
         # Verify warning not logged
         if log_called[0]:
@@ -296,7 +296,7 @@ def test_hainterface_api_call_error_limit(my_predbat=None):
     with patch("ha.requests.get") as mock_get:
         mock_get.side_effect = requests.Timeout("Connection timeout")
 
-        result = ha_interface.api_call("/api/states")
+        ha_interface.api_call("/api/states")
 
         # Verify fatal error triggered
         if not fatal_called[0]:
@@ -320,7 +320,7 @@ def test_hainterface_api_call_error_reset(my_predbat=None):
     with patch("ha.requests.get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, {"result": "success"})
 
-        result = ha_interface.api_call("/api/states")
+        ha_interface.api_call("/api/states")
 
         # Verify error count reset
         if ha_interface.api_errors != 0:
@@ -524,7 +524,7 @@ def test_hainterface_get_history_from_time(my_predbat=None):
     with patch("ha.requests.get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, [[]])
 
-        result = ha_interface.get_history("sensor.battery", now, from_time=from_time)
+        ha_interface.get_history("sensor.battery", now, from_time=from_time)
 
         # Verify API called with from_time in path
         if not mock_get.called:

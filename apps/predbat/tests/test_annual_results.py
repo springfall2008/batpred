@@ -19,7 +19,7 @@ exercise this same code from the top.
 import inspect
 from datetime import date
 
-from annual import SCENARIO_FIELDS, SCENARIO_KEYS, AnnualPredictor, _billed_result, _capture_plan, _run_scenarios, average_rate, run_day, validate_config
+from annual import INCLUDED_STATUSES, SCENARIO_FIELDS, SCENARIO_KEYS, AnnualPredictor, _billed_result, _capture_plan, _run_scenarios, average_rate, run_day, validate_config
 from prediction import Prediction
 from tests.test_infra import reset_inverter
 
@@ -280,6 +280,30 @@ def test_annual_results(my_predbat):
         failed = True
     if partial["annual"]["costs"]["total_gbp"] <= 0:
         print("  ERROR: costs should still be reported even when payback cannot be")
+        failed = True
+
+    print("Test: INCLUDED_STATUSES covers planned, degraded and interpolated months")
+    if sorted(INCLUDED_STATUSES) != ["degraded", "interpolated", "ok"]:
+        print("  ERROR: INCLUDED_STATUSES should be ok/degraded/interpolated, got {!r}".format(INCLUDED_STATUSES))
+        failed = True
+
+    print("Test: an interpolated month counts toward the annual totals")
+    # The whole point of fast mode: these months were never planned, but excluding them
+    # would report a four month year rather than a twelve month one.
+    predictor = make_predictor()
+    months = [
+        make_month_row(1, {"no_pvbat": 100.0, "pv_only": 75.0, "without_predbat": 50.0, "with_predbat": 20.0}),
+        make_month_row(2, {"no_pvbat": 200.0, "pv_only": 140.0, "without_predbat": 80.0, "with_predbat": 30.0}, status="interpolated"),
+    ]
+    result = predictor._build_results(months)
+    if result["annual"]["months_included"] != 2:
+        print("  ERROR: an interpolated month should be included, got months_included {}".format(result["annual"]["months_included"]))
+        failed = True
+    if result["annual"]["months_excluded"] != []:
+        print("  ERROR: an interpolated month must not be excluded, got {}".format(result["annual"]["months_excluded"]))
+        failed = True
+    if result["annual"]["scenarios"]["no_pvbat"]["cost_p"] != 300.0:
+        print("  ERROR: the interpolated month's cost should be in the total, expected 300.0, got {}".format(result["annual"]["scenarios"]["no_pvbat"]["cost_p"]))
         failed = True
 
     if test_annual_debug_flag():

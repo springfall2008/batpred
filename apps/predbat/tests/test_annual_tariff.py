@@ -342,12 +342,14 @@ def test_annual_tariff(my_predbat):
 
     print("Test: basic rates are computed once and cached, not recomputed on every rates_for call")
     basic_rates_calls = []
+    basic_rates_include_manual_api = []
     original_basic_rates = my_predbat.basic_rates
 
-    def counting_basic_rates(info, rtype, prev=None, rate_replicate=None):
+    def counting_basic_rates(info, rtype, prev=None, rate_replicate=None, include_manual_api=True):
         """Wrap basic_rates to count how many times it is actually invoked, then delegate to the real implementation."""
         basic_rates_calls.append(rtype)
-        return original_basic_rates(info, rtype, prev=prev, rate_replicate=rate_replicate)
+        basic_rates_include_manual_api.append(include_manual_api)
+        return original_basic_rates(info, rtype, prev=prev, rate_replicate=rate_replicate, include_manual_api=include_manual_api)
 
     my_predbat.basic_rates = counting_basic_rates
     try:
@@ -360,6 +362,9 @@ def test_annual_tariff(my_predbat):
         my_predbat.basic_rates = original_basic_rates
     if basic_rates_calls.count("rates_import") != 1 or basic_rates_calls.count("rates_export") != 1:
         print("  ERROR: expected basic_rates called exactly once per rate type across three rates_for calls, got {}".format(basic_rates_calls))
+        failed = True
+    if any(basic_rates_include_manual_api):
+        print("  ERROR: expected annual replay to call basic_rates with include_manual_api=False, so a live manual API override never leaks into a historical replay, got {}".format(basic_rates_include_manual_api))
         failed = True
 
     print("Test: standing charge is carried through from config")

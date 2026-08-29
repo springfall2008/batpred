@@ -1069,8 +1069,6 @@ def _test_axle_load_slot_export(my_predbat=None):
     end_minutes = 16 * 60  # 16:00 = 960 minutes
 
     original_rate_before = base.rate_export[start_minutes]
-    original_rate_during = base.rate_export[start_minutes + 30]  # 14:30
-    original_rate_after = base.rate_export[end_minutes]  # Should not be modified
 
     # Load the Axle export slot
     rate_replicate = {}

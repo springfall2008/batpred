@@ -231,9 +231,7 @@ class FutureRate:
             self.record_status("Warn: Error downloading futurerate data from cloud, no multiAreaEntries", debug=url, had_errors=True)
             return {}, {}
 
-        prev_time_date_start = None
         prev_time_date_end = None
-        prev_duration = 0
         prev_rate_import = 0
         prev_rate_export = 0
 
@@ -290,9 +288,7 @@ class FutureRate:
                     extracted_keys.append(time_date_start)
                     extracted_data[time_date_start] = item
 
-            prev_time_date_start = time_date_start
             prev_time_date_end = time_date_end
-            prev_duration = minutes_end - minutes_start
             prev_rate_import = rate_import
             prev_rate_export = rate_export
 

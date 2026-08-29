@@ -74,6 +74,18 @@ class WeatherYear:
         """Return the total actual PV kWh generated on the given date."""
         return self._daily_actual.get(day, 0.0)
 
+    def monthly_actual_kwh(self, year):
+        """Return {month: total actual PV kWh} for the given year.
+
+        The whole twelve month solar curve, already in hand from the archive fetch - this is
+        what lets fast mode reconstruct months it never planned without another download.
+        """
+        totals = {month: 0.0 for month in range(1, 13)}
+        for day, kwh in self._daily_actual.items():
+            if day.year == year:
+                totals[day.month] += kwh
+        return totals
+
     def p10_ratio(self, month):
         """Return the P10 scaling ratio for the given month number, 1 = January."""
         return self.p10_ratios.get(month, 1.0)

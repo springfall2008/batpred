@@ -1,0 +1,735 @@
+{
+ "daily_mean_import_rates": {
+  "1": [
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996
+  ],
+  "10": [
+   26.9179,
+   27.2776,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179
+  ],
+  "11": [
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179
+  ],
+  "12": [
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179,
+   26.9179
+  ],
+  "2": [
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996
+  ],
+  "3": [
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.0996,
+   23.4678
+  ],
+  "4": [
+   25.9684,
+   26.3155,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684
+  ],
+  "5": [
+   25.9684,
+   26.3155,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   26.0934
+  ],
+  "6": [
+   25.9684,
+   26.3155,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684,
+   25.9684
+  ],
+  "7": [
+   23.4827,
+   23.7965,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.5957
+  ],
+  "8": [
+   23.4827,
+   23.7965,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.5957
+  ],
+  "9": [
+   23.4827,
+   23.7965,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827,
+   23.4827
+  ]
+ },
+ "monthly_pv": {
+  "1": 168.144,
+  "10": 248.143,
+  "11": 178.38,
+  "12": 129.456,
+  "2": 188.244,
+  "3": 463.661,
+  "4": 585.81,
+  "5": 683.941,
+  "6": 651.888,
+  "7": 654.348,
+  "8": 595.702,
+  "9": 429.12
+ },
+ "months": [
+  {
+   "days": 31,
+   "month": 1,
+   "scenarios": {
+    "no_pvbat": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 29173.702,
+     "export_credit_p_estimate": 0.0,
+     "export_kwh": 0.0,
+     "import_kwh": 1117.338,
+     "pv_generated_kwh": 0.0
+    },
+    "pv_only": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 22198.809,
+     "export_credit_p_estimate": 132.548,
+     "export_kwh": 8.837,
+     "import_kwh": 964.756,
+     "pv_generated_kwh": 168.144
+    },
+    "with_predbat": {
+     "battery_cycles": 64.874,
+     "battery_throughput_kwh": 1235.197,
+     "cost_p": 15413.817,
+     "export_credit_p_estimate": 1188.703,
+     "export_kwh": 79.247,
+     "import_kwh": 1300.81,
+     "pv_generated_kwh": 168.144
+    },
+    "without_predbat": {
+     "battery_cycles": 31.916,
+     "battery_throughput_kwh": 607.665,
+     "cost_p": 18553.982,
+     "export_credit_p_estimate": 5.301,
+     "export_kwh": 0.353,
+     "import_kwh": 998.881,
+     "pv_generated_kwh": 168.144
+    }
+   }
+  },
+  {
+   "days": 28,
+   "month": 2,
+   "scenarios": {
+    "no_pvbat": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 25546.838,
+     "export_credit_p_estimate": 0.0,
+     "export_kwh": 0.0,
+     "import_kwh": 978.431,
+     "pv_generated_kwh": 0.0
+    },
+    "pv_only": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 18523.647,
+     "export_credit_p_estimate": 482.139,
+     "export_kwh": 32.143,
+     "import_kwh": 829.86,
+     "pv_generated_kwh": 188.244
+    },
+    "with_predbat": {
+     "battery_cycles": 55.632,
+     "battery_throughput_kwh": 1059.227,
+     "cost_p": 12759.264,
+     "export_credit_p_estimate": 1103.025,
+     "export_kwh": 73.535,
+     "import_kwh": 1084.213,
+     "pv_generated_kwh": 188.244
+    },
+    "without_predbat": {
+     "battery_cycles": 31.29,
+     "battery_throughput_kwh": 595.752,
+     "cost_p": 14884.72,
+     "export_credit_p_estimate": 19.278,
+     "export_kwh": 1.285,
+     "import_kwh": 838.86,
+     "pv_generated_kwh": 188.244
+    }
+   }
+  },
+  {
+   "days": 31,
+   "month": 3,
+   "scenarios": {
+    "no_pvbat": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 26502.372,
+     "export_credit_p_estimate": 0.0,
+     "export_kwh": 0.0,
+     "import_kwh": 1015.028,
+     "pv_generated_kwh": 0.0
+    },
+    "pv_only": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 13866.215,
+     "export_credit_p_estimate": 2158.806,
+     "export_kwh": 143.92,
+     "import_kwh": 713.832,
+     "pv_generated_kwh": 463.661
+    },
+    "with_predbat": {
+     "battery_cycles": 60.991,
+     "battery_throughput_kwh": 1161.254,
+     "cost_p": 9380.082,
+     "export_credit_p_estimate": 4074.935,
+     "export_kwh": 271.662,
+     "import_kwh": 1098.307,
+     "pv_generated_kwh": 463.661
+    },
+    "without_predbat": {
+     "battery_cycles": 35.289,
+     "battery_throughput_kwh": 671.919,
+     "cost_p": 9250.628,
+     "export_credit_p_estimate": 1555.076,
+     "export_kwh": 103.672,
+     "import_kwh": 717.982,
+     "pv_generated_kwh": 463.661
+    }
+   }
+  },
+  {
+   "days": 30,
+   "month": 4,
+   "scenarios": {
+    "no_pvbat": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 23923.57,
+     "export_credit_p_estimate": 0.0,
+     "export_kwh": 0.0,
+     "import_kwh": 916.261,
+     "pv_generated_kwh": 0.0
+    },
+    "pv_only": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 10420.951,
+     "export_credit_p_estimate": 3612.343,
+     "export_kwh": 240.823,
+     "import_kwh": 594.706,
+     "pv_generated_kwh": 585.81
+    },
+    "with_predbat": {
+     "battery_cycles": 32.407,
+     "battery_throughput_kwh": 617.045,
+     "cost_p": 7269.37,
+     "export_credit_p_estimate": 738.675,
+     "export_kwh": 49.245,
+     "import_kwh": 647.198,
+     "pv_generated_kwh": 585.81
+    },
+    "without_predbat": {
+     "battery_cycles": 32.507,
+     "battery_throughput_kwh": 618.932,
+     "cost_p": 7057.776,
+     "export_credit_p_estimate": 2881.495,
+     "export_kwh": 192.1,
+     "import_kwh": 638.666,
+     "pv_generated_kwh": 585.81
+    }
+   }
+  },
+  {
+   "days": 31,
+   "month": 5,
+   "scenarios": {
+    "no_pvbat": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 23471.942,
+     "export_credit_p_estimate": 0.0,
+     "export_kwh": 0.0,
+     "import_kwh": 898.964,
+     "pv_generated_kwh": 0.0
+    },
+    "pv_only": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 8056.604,
+     "export_credit_p_estimate": 4875.731,
+     "export_kwh": 325.049,
+     "import_kwh": 567.429,
+     "pv_generated_kwh": 683.941
+    },
+    "with_predbat": {
+     "battery_cycles": 27.447,
+     "battery_throughput_kwh": 522.607,
+     "cost_p": 5614.947,
+     "export_credit_p_estimate": 1258.406,
+     "export_kwh": 83.894,
+     "import_kwh": 499.994,
+     "pv_generated_kwh": 683.941
+    },
+    "without_predbat": {
+     "battery_cycles": 32.428,
+     "battery_throughput_kwh": 617.429,
+     "cost_p": 5329.343,
+     "export_credit_p_estimate": 3917.349,
+     "export_kwh": 261.157,
+     "import_kwh": 647.999,
+     "pv_generated_kwh": 683.941
+    }
+   }
+  },
+  {
+   "days": 30,
+   "month": 6,
+   "scenarios": {
+    "no_pvbat": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 21851.228,
+     "export_credit_p_estimate": 0.0,
+     "export_kwh": 0.0,
+     "import_kwh": 836.891,
+     "pv_generated_kwh": 0.0
+    },
+    "pv_only": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 7258.626,
+     "export_credit_p_estimate": 5053.667,
+     "export_kwh": 336.911,
+     "import_kwh": 547.99,
+     "pv_generated_kwh": 651.888
+    },
+    "with_predbat": {
+     "battery_cycles": 28.322,
+     "battery_throughput_kwh": 539.249,
+     "cost_p": 5040.052,
+     "export_credit_p_estimate": 1440.675,
+     "export_kwh": 96.045,
+     "import_kwh": 503.623,
+     "pv_generated_kwh": 651.888
+    },
+    "without_predbat": {
+     "battery_cycles": 32.493,
+     "battery_throughput_kwh": 618.667,
+     "cost_p": 4745.871,
+     "export_credit_p_estimate": 3785.847,
+     "export_kwh": 252.39,
+     "import_kwh": 628.021,
+     "pv_generated_kwh": 651.888
+    }
+   }
+  },
+  {
+   "days": 31,
+   "month": 7,
+   "scenarios": {
+    "no_pvbat": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 22403.798,
+     "export_credit_p_estimate": 0.0,
+     "export_kwh": 0.0,
+     "import_kwh": 858.054,
+     "pv_generated_kwh": 0.0
+    },
+    "pv_only": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 5882.604,
+     "export_credit_p_estimate": 4127.991,
+     "export_kwh": 275.199,
+     "import_kwh": 505.081,
+     "pv_generated_kwh": 654.348
+    },
+    "with_predbat": {
+     "battery_cycles": 49.644,
+     "battery_throughput_kwh": 945.223,
+     "cost_p": 4493.325,
+     "export_credit_p_estimate": 7467.468,
+     "export_kwh": 497.831,
+     "import_kwh": 939.889,
+     "pv_generated_kwh": 654.348
+    },
+    "without_predbat": {
+     "battery_cycles": 28.183,
+     "battery_throughput_kwh": 536.613,
+     "cost_p": 4208.217,
+     "export_credit_p_estimate": 3537.487,
+     "export_kwh": 235.832,
+     "import_kwh": 637.657,
+     "pv_generated_kwh": 654.348
+    }
+   }
+  },
+  {
+   "days": 31,
+   "month": 8,
+   "scenarios": {
+    "no_pvbat": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 22579.602,
+     "export_credit_p_estimate": 0.0,
+     "export_kwh": 0.0,
+     "import_kwh": 864.788,
+     "pv_generated_kwh": 0.0
+    },
+    "pv_only": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 7815.932,
+     "export_credit_p_estimate": 4145.791,
+     "export_kwh": 276.386,
+     "import_kwh": 569.299,
+     "pv_generated_kwh": 595.702
+    },
+    "with_predbat": {
+     "battery_cycles": 54.816,
+     "battery_throughput_kwh": 1043.702,
+     "cost_p": 5442.717,
+     "export_credit_p_estimate": 6596.095,
+     "export_kwh": 439.74,
+     "import_kwh": 1016.243,
+     "pv_generated_kwh": 595.702
+    },
+    "without_predbat": {
+     "battery_cycles": 31.85,
+     "battery_throughput_kwh": 606.433,
+     "cost_p": 5147.762,
+     "export_credit_p_estimate": 3367.178,
+     "export_kwh": 224.479,
+     "import_kwh": 648.064,
+     "pv_generated_kwh": 595.702
+    }
+   }
+  },
+  {
+   "days": 30,
+   "month": 9,
+   "scenarios": {
+    "no_pvbat": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 23059.747,
+     "export_credit_p_estimate": 0.0,
+     "export_kwh": 0.0,
+     "import_kwh": 883.177,
+     "pv_generated_kwh": 0.0
+    },
+    "pv_only": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 10988.177,
+     "export_credit_p_estimate": 2197.8,
+     "export_kwh": 146.52,
+     "import_kwh": 617.743,
+     "pv_generated_kwh": 429.12
+    },
+    "with_predbat": {
+     "battery_cycles": 43.965,
+     "battery_throughput_kwh": 837.084,
+     "cost_p": 8135.167,
+     "export_credit_p_estimate": 3179.289,
+     "export_kwh": 211.953,
+     "import_kwh": 828.407,
+     "pv_generated_kwh": 429.12
+    },
+    "without_predbat": {
+     "battery_cycles": 33.445,
+     "battery_throughput_kwh": 636.797,
+     "cost_p": 7852.664,
+     "export_credit_p_estimate": 1443.246,
+     "export_kwh": 96.216,
+     "import_kwh": 646.106,
+     "pv_generated_kwh": 429.12
+    }
+   }
+  },
+  {
+   "days": 31,
+   "month": 10,
+   "scenarios": {
+    "no_pvbat": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 25610.032,
+     "export_credit_p_estimate": 0.0,
+     "export_kwh": 0.0,
+     "import_kwh": 980.852,
+     "pv_generated_kwh": 0.0
+    },
+    "pv_only": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 19992.744,
+     "export_credit_p_estimate": 589.504,
+     "export_kwh": 39.3,
+     "import_kwh": 781.935,
+     "pv_generated_kwh": 248.143
+    },
+    "with_predbat": {
+     "battery_cycles": 47.376,
+     "battery_throughput_kwh": 902.021,
+     "cost_p": 13882.406,
+     "export_credit_p_estimate": 20.367,
+     "export_kwh": 1.358,
+     "import_kwh": 1025.561,
+     "pv_generated_kwh": 248.143
+    },
+    "without_predbat": {
+     "battery_cycles": 33.292,
+     "battery_throughput_kwh": 633.877,
+     "cost_p": 14889.623,
+     "export_credit_p_estimate": 267.784,
+     "export_kwh": 17.852,
+     "import_kwh": 803.862,
+     "pv_generated_kwh": 248.143
+    }
+   }
+  },
+  {
+   "days": 30,
+   "month": 11,
+   "scenarios": {
+    "no_pvbat": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 26857.029,
+     "export_credit_p_estimate": 0.0,
+     "export_kwh": 0.0,
+     "import_kwh": 1028.611,
+     "pv_generated_kwh": 0.0
+    },
+    "pv_only": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 23123.294,
+     "export_credit_p_estimate": 357.66,
+     "export_kwh": 23.844,
+     "import_kwh": 881.21,
+     "pv_generated_kwh": 178.38
+    },
+    "with_predbat": {
+     "battery_cycles": 47.401,
+     "battery_throughput_kwh": 902.519,
+     "cost_p": 16014.14,
+     "export_credit_p_estimate": 12.195,
+     "export_kwh": 0.813,
+     "import_kwh": 1018.918,
+     "pv_generated_kwh": 178.38
+    },
+    "without_predbat": {
+     "battery_cycles": 32.445,
+     "battery_throughput_kwh": 617.742,
+     "cost_p": 18708.768,
+     "export_credit_p_estimate": 14.31,
+     "export_kwh": 0.954,
+     "import_kwh": 900.421,
+     "pv_generated_kwh": 178.38
+    }
+   }
+  },
+  {
+   "days": 31,
+   "month": 12,
+   "scenarios": {
+    "no_pvbat": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 29533.775,
+     "export_credit_p_estimate": 0.0,
+     "export_kwh": 0.0,
+     "import_kwh": 1131.129,
+     "pv_generated_kwh": 0.0
+    },
+    "pv_only": {
+     "battery_cycles": 0.0,
+     "battery_throughput_kwh": 0.0,
+     "cost_p": 26969.245,
+     "export_credit_p_estimate": 20.576,
+     "export_kwh": 1.372,
+     "import_kwh": 1008.223,
+     "pv_generated_kwh": 129.456
+    },
+    "with_predbat": {
+     "battery_cycles": 52.962,
+     "battery_throughput_kwh": 1008.379,
+     "cost_p": 18958.546,
+     "export_credit_p_estimate": 0.814,
+     "export_kwh": 0.054,
+     "import_kwh": 1179.756,
+     "pv_generated_kwh": 129.456
+    },
+    "without_predbat": {
+     "battery_cycles": 31.155,
+     "battery_throughput_kwh": 593.176,
+     "cost_p": 23485.608,
+     "export_credit_p_estimate": 0.814,
+     "export_kwh": 0.054,
+     "import_kwh": 1049.09,
+     "pv_generated_kwh": 129.456
+    }
+   }
+  }
+ ],
+ "year": 2025
+}

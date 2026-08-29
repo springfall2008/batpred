@@ -11,6 +11,7 @@
 import os
 import json
 import hashlib
+import re
 import shutil
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -527,7 +528,7 @@ def test_cache_get_url_metrics_forecast_solar(my_predbat):
             return test_api.mock_aiohttp_session()
 
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
-            result = run_async(test_api.solar.cache_get_url(url, params, max_age=60))
+            run_async(test_api.solar.cache_get_url(url, params, max_age=60))
 
         # Should increment forecast_solar metrics, not solcast
         if test_api.solar.forecast_solar_requests_total != 1:
@@ -2508,6 +2509,20 @@ def capture_unit_factor(test_api):
     return captured
 
 
+def capture_log_messages(test_api):
+    """Wrap solar.log so a test can inspect every message logged during a fetch."""
+    captured = []
+    original = test_api.solar.log
+
+    def wrapper(message, *args, **kwargs):
+        """Record the message then log as normal."""
+        captured.append(message)
+        return original(message, *args, **kwargs)
+
+    test_api.solar.log = wrapper
+    return captured
+
+
 def day_zero_kwh(pv_forecast_data, midnight_utc):
     """Sum pv_estimate over the forecast entries that fall on the first forecast day."""
     total = 0
@@ -2752,7 +2767,10 @@ def test_fetch_pv_forecast_ha_sensors_unit_factor_unchanged(my_predbat):
     """
     The HA sensor path carries its own kW/kWh unit factor in divide_by. Making the period
     recalculation unconditional must leave that path alone, so check all three valid factors
-    (1.0 kWh per slot, 2.0 kW on 30-minute slots, 4.0 kW on 15-minute slots).
+    (1.0 kWh per slot, 2.0 kW on 30-minute slots, 4.0 kW on 15-minute slots). Also checks the
+    #2544 regression: a valid, expected factor must not log a "Warn:" message or imply the
+    data is misleading/unexpected - Solcast's detailedForecast reporting average kW per slot
+    (factor 2.0/4.0) rather than kWh is normal, already-compensated-for behaviour.
     """
     print("  - test_fetch_pv_forecast_ha_sensors_unit_factor_unchanged")
     failed = False
@@ -2783,6 +2801,7 @@ def test_fetch_pv_forecast_ha_sensors_unit_factor_unchanged(my_predbat):
             test_api.set_mock_ha_state("sensor.pv_forecast_today", {"state": str(sensor_total), "detailedForecast": detailed})
 
             captured = capture_unit_factor(test_api)
+            logged = capture_log_messages(test_api)
 
             def create_mock_session(*args, **kwargs):
                 """Create a mock aiohttp session."""
@@ -2796,6 +2815,30 @@ def test_fetch_pv_forecast_ha_sensors_unit_factor_unchanged(my_predbat):
                 print(f"ERROR: HA sensors, {label}: expected the unit factor to stay {expected_factor}, got {unit_factor}")
                 failed = True
 
+            factor_messages = [message for message in logged if "PV Forecast today adds up to" in message]
+            if not factor_messages:
+                print(f"ERROR: HA sensors, {label}: expected a PV Forecast factor log message, got none")
+                failed = True
+            else:
+                message = factor_messages[0]
+                if message.startswith("Warn:"):
+                    print(f"ERROR: HA sensors, {label}: valid, expected factor {expected_factor} logged a Warn: message ({message!r}) - #2544 regression")
+                    failed = True
+                # #2544: the raw forecast total isn't really "kWh" when the data is average-kW
+                # per slot (factor 2.0/4.0) - the message shouldn't label it that way, and should
+                # say what units were actually detected instead.
+                if expected_factor == 1.0:
+                    if "kW average per slot" in message:
+                        print(f"ERROR: HA sensors, {label}: kWh-per-slot data was reported as kW average ({message!r})")
+                        failed = True
+                else:
+                    if "kW average per slot" not in message:
+                        print(f"ERROR: HA sensors, {label}: expected message to say 'kW average per slot' for factor {expected_factor} ({message!r})")
+                        failed = True
+                    if re.search(r"adds up to [\d.]+ kWh", message):
+                        print(f"ERROR: HA sensors, {label}: message still labels the raw kW-average total as 'kWh' ({message!r})")
+                        failed = True
+
             today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
             total = test_api.dashboard_items.get(today_entity, {}).get("attributes", {}).get("total", 0)
             if abs(total - sensor_total) > 0.01:
@@ -2806,6 +2849,53 @@ def test_fetch_pv_forecast_ha_sensors_unit_factor_unchanged(my_predbat):
 
         finally:
             test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_ha_sensors_invalid_factor_still_warns(my_predbat):
+    """
+    A ratio that fits neither the kWh-per-slot nor kW-average-per-slot case (i.e. not 1.0, 2.0
+    or 4.0) is a genuine mismatch worth flagging - unlike the #2544 cases above, this one must
+    still log a "Warn:" message.
+    """
+    print("  - test_fetch_pv_forecast_ha_sensors_invalid_factor_still_warns")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.solcast_host = None
+        test_api.solar.solcast_api_key = None
+        test_api.solar.forecast_solar = None
+        test_api.solar.pv_forecast_today = "sensor.pv_forecast_today"
+        test_api.solar.pv_forecast_tomorrow = None
+
+        # Sensor reports 2.0 kWh total, but the detailed forecast sums to 3.0 - a 1.5 ratio,
+        # which is neither a plausible kWh-per-slot nor kW-average-per-slot reading.
+        sensor_total = 2.0
+        start = test_api.mock_base.midnight_utc + timedelta(minutes=10 * 60)
+        detailed = [{"period_start": start.strftime(TIME_FORMAT), "pv_estimate": 3.0}]
+        test_api.set_mock_ha_state("sensor.pv_forecast_today", {"state": str(sensor_total), "detailedForecast": detailed})
+
+        logged = capture_log_messages(test_api)
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        factor_messages = [message for message in logged if "PV Forecast today adds up to" in message]
+        if not factor_messages:
+            print("ERROR: expected a PV Forecast factor log message, got none")
+            failed = True
+        elif not factor_messages[0].startswith("Warn:"):
+            print(f"ERROR: expected a Warn: message for an invalid factor, got {factor_messages[0]!r}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
 
     return failed
 
@@ -3052,9 +3142,6 @@ def test_pv_calibration_power_conversion(my_predbat):
     try:
         solar = test_api.solar
         base = test_api.mock_base
-
-        plan_interval = base.plan_interval_minutes  # 5
-        minutes_now = base.minutes_now  # 720 (12:00)
 
         # Build synthetic cumulative pv_today history.
         # We represent 5 previous days.  Each day, the panel produces 2 kWh between
@@ -4989,6 +5076,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_fetch_pv_forecast_solcast_direct_15min_slots(my_predbat)
     failed |= test_fetch_pv_forecast_open_meteo_first_hourly_slots(my_predbat)
     failed |= test_fetch_pv_forecast_ha_sensors_unit_factor_unchanged(my_predbat)
+    failed |= test_fetch_pv_forecast_ha_sensors_invalid_factor_still_warns(my_predbat)
 
     # Calibration tests
     failed |= test_pv_calibration_power_conversion(my_predbat)
