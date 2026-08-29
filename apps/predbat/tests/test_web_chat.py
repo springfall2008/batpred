@@ -3198,6 +3198,103 @@ def test_settings_script_wires_the_provider_routes(my_predbat):
     return failed
 
 
+def test_unavailable_catalogue_says_why(my_predbat):
+    """When the model list cannot be fetched, the picker reports the reason, not just the fact.
+
+    An unreachable URL, a rejected key and an endpoint serving nothing all reduced to the same
+    "(catalogue unavailable)" note, leaving the user to work out which of three quite different
+    problems they had. The reason is recorded where the failure happens and carried through to the
+    note beside the picker.
+    """
+    failed = False
+    print("**** Testing that an unavailable catalogue says why ****")
+
+    class FailingAgent:
+        """An agent whose catalogue fetch has failed, with a reason to report."""
+
+        default_model = "gpt-oss:20b"
+        active_provider = "ollama"
+        store = _StubSelectionStore()
+        catalogue_error = "Could not reach http://192.168.0.33:11434/v1: Cannot connect to host"
+
+        @staticmethod
+        async def list_models():
+            """Return only the configured model, as a failed catalogue fetch leaves it."""
+            return [{"id": "gpt-oss:20b", "name": "gpt-oss:20b (from apps.yaml)"}]
+
+        @staticmethod
+        async def run_on_agent_loop(coro):
+            """Await inline."""
+            return await coro
+
+    page = _make_web(my_predbat, agent=FailingAgent()).chat_page
+    response = asyncio.run(page.html_chat_models(FakeRequest()))
+    body = json.loads(response.text)
+    if body.get("catalogue_available") is not False:
+        print("ERROR: a one-model catalogue should not report as available: {}".format(body))
+        failed = True
+    if body.get("catalogue_error") != FailingAgent.catalogue_error:
+        print("ERROR: the reason was not passed on: {}".format(body.get("catalogue_error")))
+        failed = True
+
+    # A healthy agent that never set the attribute must not break the route.
+    class BareAgent:
+        """An agent predating catalogue_error entirely."""
+
+        default_model = "a/model"
+        active_provider = "openrouter"
+        store = _StubSelectionStore()
+
+        @staticmethod
+        async def list_models():
+            """Return two models, so the catalogue counts as available."""
+            return [{"id": "a/model"}, {"id": "b/model"}]
+
+        @staticmethod
+        async def run_on_agent_loop(coro):
+            """Await inline."""
+            return await coro
+
+    response = asyncio.run(page.html_chat_models(FakeRequest()))
+    page.agent_override = BareAgent()
+    response = asyncio.run(page.html_chat_models(FakeRequest()))
+    if response.status != 200 or json.loads(response.text).get("catalogue_error") is not None:
+        print("ERROR: an agent with no catalogue_error should report none: {}".format(response.text))
+        failed = True
+
+    script = web_chat.get_chat_script()
+    if "state.catalogueError" not in script:
+        print("ERROR: the client never reads the reason")
+        failed = True
+
+    # A failed catalogue is never cached, so the endpoint coming back is one request away - but
+    # only if something asks. Opening the picker is when the user wants the list and when they
+    # have just fixed the endpoint, so it retries then rather than staying stale until a reload.
+    open_body = script[script.index("function openModelList") : script.index("function closeModelList")]
+    if "state.catalogueAvailable" not in open_body or "loadModels()" not in open_body:
+        print("ERROR: opening the picker does not retry a failed catalogue: {!r}".format(open_body))
+        failed = True
+
+    # And a reconnect - which is what a restart looks like from the browser - refreshes both the
+    # provider list and the models, since either can have changed while the stream was down.
+    stream_body = script[script.index("function openStream") : script.index("function openStream") + 1800]
+    if "state.streamConnected" not in stream_body:
+        print("ERROR: a reconnect is not told apart from a first connection")
+        failed = True
+    if "loadModels()" not in stream_body or "loadProviders()" not in stream_body:
+        print("ERROR: a reconnect does not refresh the provider or model state")
+        failed = True
+    # Reset per source, or switching conversation looks like a reconnect and refetches every time.
+    if "state.streamConnected = false" not in stream_body:
+        print("ERROR: the reconnect flag is not reset per EventSource")
+        failed = True
+    note = script[script.index("function updateModelNote") : script.index("function updateModelNote") + 700]
+    if "state.catalogueError ?" not in note:
+        print("ERROR: the note does not prefer the reason over the bare 'unavailable': {!r}".format(note))
+        failed = True
+    return failed
+
+
 def test_switching_provider_writes_nothing_and_restarts_nothing(my_predbat):
     """Choosing between configured providers is not a configuration change, so it costs no restart.
 
@@ -3428,6 +3525,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_active_provider_is_remembered_across_a_restart(my_predbat)
     failed |= test_chat_page_uses_a_top_bar_and_a_settings_dialog(my_predbat)
     failed |= test_settings_script_wires_the_provider_routes(my_predbat)
+    failed |= test_unavailable_catalogue_says_why(my_predbat)
     failed |= test_switching_provider_writes_nothing_and_restarts_nothing(my_predbat)
     failed |= test_save_button_is_ghosted_until_something_changes(my_predbat)
     failed |= test_provider_selector_sits_in_the_footer_beside_the_model_picker(my_predbat)

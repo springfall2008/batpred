@@ -172,6 +172,10 @@ key where the provider needs one, and a default model. Choosing a type fills in 
 sensible default model for you, so adding a local Ollama is usually just picking `ollama` and
 saving.
 
+Pointing this at Ollama on another machine needs two things doing first - Ollama has to be told to
+listen on the network, and the URL has to name that machine rather than `localhost`. See
+[Reaching Ollama from Predbat](apps-yaml.md#reaching-ollama-from-predbat).
+
 **Fetch models** asks that endpoint what it serves and turns the model box into a searchable list,
 which works before the provider has been saved - so you can pick a real model while setting it up
 rather than saving blind and finding out afterwards. Only tool-capable models are offered: a model

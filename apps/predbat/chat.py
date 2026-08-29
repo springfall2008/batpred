@@ -863,6 +863,9 @@ class ChatAgent(ComponentBase):
         self.active = None
         self.pending_confirm = {}
         self.warned_web_search_base_url = False
+        # Why the last catalogue fetch failed, or None. Set by _fetch_model_catalogue and read by
+        # the /chat/models route; initialised here so reading it is never an AttributeError.
+        self.catalogue_error = None
         # Set to the turn id the user pressed Stop on. Distinct from zeroing self.deadline, which
         # only the turn loop reads: a turn parked on a confirmation is not in that loop, so
         # without this it could not be stopped at all.
@@ -1048,16 +1051,30 @@ class ChatAgent(ComponentBase):
         """Download the model catalogue from the configured endpoint.
 
         Returns None rather than raising on a non-200, because Storage's caching helper treats a
-        None as "nothing to cache" - which is why probe_models() does its own request instead of
-        reusing this one: a dialog needs to tell the user *why* an endpoint gave nothing back.
+        None as "nothing to cache" - which is also why probe_models() does its own request instead
+        of reusing this one.
+
+        Why it failed is recorded on self.catalogue_error on the way past, because by the time the
+        answer reaches the picker there is nothing left to say: a None here and a None from an
+        endpoint that simply serves no models look identical, and the picker was left telling the
+        user "catalogue unavailable" and nothing else. An unreachable URL and a rejected key need
+        very different things doing about them.
         """
         headers = model_catalogue_headers(self.api_key)
         timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get("{}/models".format(self.base_url), headers=headers) as response:
-                if response.status != 200:
-                    return None
-                return await response.json()
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get("{}/models".format(self.base_url), headers=headers) as response:
+                    if response.status in (401, 403):
+                        self.catalogue_error = "{} rejected the API key (HTTP {})".format(self.base_url, response.status)
+                        return None
+                    if response.status != 200:
+                        self.catalogue_error = "{}/models returned HTTP {}".format(self.base_url, response.status)
+                        return None
+                    return await response.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+            self.catalogue_error = "Could not reach {}: {}".format(self.base_url, error)
+            raise
 
     async def list_models(self):
         """Return the tool-capable models on offer, always including the configured one.
@@ -1079,6 +1096,9 @@ class ChatAgent(ComponentBase):
         renderContextUsage() in web_chat.py.
         """
         catalogue = None
+        # Cleared per call: a cache hit never runs the fetch, so a reason left over from an
+        # earlier failure would be reported against a catalogue that arrived perfectly well.
+        self.catalogue_error = None
         storage = self.storage
         try:
             if storage:

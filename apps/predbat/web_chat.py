@@ -368,7 +368,18 @@ class WebChat:
             models = await agent.run_on_agent_loop(agent.list_models())
         except AgentNotReadyError:
             return web.json_response({"error": "The chat component is still starting"}, status=503)
-        return web.json_response({"models": models, "default_model": agent.default_model, "selected_model": agent.store.get_selected_model(agent.active_provider), "catalogue_available": len(models) > 1})
+        return web.json_response(
+            {
+                "models": models,
+                "default_model": agent.default_model,
+                "selected_model": agent.store.get_selected_model(agent.active_provider),
+                "catalogue_available": len(models) > 1,
+                # Why it is unavailable, when that is known. "catalogue unavailable" on its own
+                # leaves a user to work out for themselves whether the endpoint is down, the URL
+                # is wrong or the key is refused - three very different fixes.
+                "catalogue_error": getattr(agent, "catalogue_error", None),
+            }
+        )
 
     async def html_chat_model(self, request):
         """Set the model for one conversation."""
@@ -2287,7 +2298,7 @@ function setTitleText(node, title) {
 // the server's only shared state is the single active turn, broadcast via the busy/idle events.
 // ---------------------------------------------------------------------------------------------
 
-var state = { freeOnly: readFreeOnly(), conversation: localStorage.getItem('predbatChatConversation'), cursor: 0, source: null, busy: null, models: [], defaultModel: '', selectedModel: '', currentModel: null, catalogueAvailable: true };
+var state = { catalogueError: '', streamConnected: false, freeOnly: readFreeOnly(), conversation: localStorage.getItem('predbatChatConversation'), cursor: 0, source: null, busy: null, models: [], defaultModel: '', selectedModel: '', currentModel: null, catalogueAvailable: true };
 var toolRows = {};
 // Per tool call, keyed by call id: the summary element (so an approval badge can be attached),
 // and the status marker. Declared here beside toolRows rather than next to the functions that
@@ -2451,7 +2462,7 @@ function effectiveModel() {
 function updateModelNote() {
     var note = byId('chat-model-note');
     if (!state.catalogueAvailable) {
-        note.textContent = '(catalogue unavailable - only the configured model is offered)';
+        note.textContent = state.catalogueError ? '(' + state.catalogueError + ' - only the configured model is offered)' : '(catalogue unavailable - only the configured model is offered)';
     } else if (!effectiveModel()) {
         note.textContent = 'Pick a model to start';
     } else {
@@ -2567,6 +2578,13 @@ function renderModelResults(filter) {
 }
 
 function openModelList() {
+    // A catalogue that could not be fetched is not cached, so the endpoint coming back is one
+    // request away - but nothing was asking. Opening the picker is exactly when someone wants the
+    // list, and exactly when they have just fixed the endpoint that failed, so retry then. Only
+    // while it is unavailable: a working catalogue is cached for a day and needs no re-asking.
+    if (!state.catalogueAvailable) {
+        loadModels().then(function () { renderModelResults(byId('chat-model').value || ''); });
+    }
     var input = byId('chat-model');
     input.value = '';
     var offered = (state.models || []).filter(function (model) { return !state.freeOnly || isFreeModel(model); });
@@ -2618,6 +2636,7 @@ function loadModels() {
             state.defaultModel = payload.default_model || '';
             state.selectedModel = payload.selected_model || '';
             state.catalogueAvailable = payload.catalogue_available !== false;
+            state.catalogueError = payload.catalogue_error || '';
             populateModelPicker(state.models, state.currentModel);
         })
         .catch(function (error) { console.error('Failed to load chat models', error); });
@@ -3511,6 +3530,10 @@ function openStream() {
     if (!state.conversation) {
         return;
     }
+    // Reset per EventSource, so "have we connected before?" means "has THIS source reconnected",
+    // not "has any stream ever opened". Without it, switching conversation - which builds a new
+    // source and fires 'open' again - would look like a reconnect and refetch on every click.
+    state.streamConnected = false;
     var source = new EventSource('./chat/stream?conversation=' + encodeURIComponent(state.conversation) + '&cursor=' + state.cursor);
     source.addEventListener('open', function () {
         // A reconnect is exactly when events go missing - EventSource resumes on its own after a
@@ -3519,6 +3542,15 @@ function openStream() {
         // also fires on the first connection, where it costs one request and confirms the state
         // the page was rendered with.
         refreshConversations();
+        // A reconnect usually means Predbat restarted, which is the other moment the page's idea
+        // of the provider and its models goes stale - a provider edit, or an endpoint that was
+        // down when the page loaded and is up now. Skipped on the first connection, where the
+        // page's own start-up already fetched both a moment ago.
+        if (state.streamConnected) {
+            loadProviders();
+            loadModels();
+        }
+        state.streamConnected = true;
     });
     on(source, 'user', handleUser);
     on(source, 'delta', handleDelta);

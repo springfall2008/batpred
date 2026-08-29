@@ -3426,6 +3426,34 @@ def test_providers_accepted_without_the_nesting(my_predbat):
     return failed
 
 
+def test_a_working_catalogue_clears_the_previous_failure(my_predbat):
+    """A reason from an earlier failed fetch does not outlive it.
+
+    The reason is only set when the fetch runs, and a cache hit does not run it - so without
+    clearing it per call, a picker that is working perfectly well goes on reporting an endpoint
+    that was unreachable an hour ago, for as long as the cache lasts.
+    """
+    failed = False
+    print("**** Testing that a working catalogue clears the previous failure ****")
+
+    agent = _make_agent(my_predbat)
+    agent.catalogue_error = "Could not reach http://192.168.0.33:11434/v1: connection refused"
+
+    async def working_fetch():
+        """Return a healthy two-model catalogue."""
+        return {"data": [{"id": "a/model", "supported_parameters": ["tools"]}, {"id": "b/model", "supported_parameters": ["tools"]}]}
+
+    agent._fetch_model_catalogue = working_fetch
+    models = asyncio.run(agent.list_models())
+    if agent.catalogue_error is not None:
+        print("ERROR: a stale failure survived a working fetch: {!r}".format(agent.catalogue_error))
+        failed = True
+    if len(models) < 2:
+        print("ERROR: the working catalogue was not returned: {}".format(models))
+        failed = True
+    return failed
+
+
 def test_model_catalogue_is_cached_per_endpoint(my_predbat):
     """Each endpoint's model list is cached under its own name, not one shared "models".
 
@@ -3535,6 +3563,7 @@ def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
     failed |= test_model_catalogue_is_cached_per_endpoint(my_predbat)
+    failed |= test_a_working_catalogue_clears_the_previous_failure(my_predbat)
     failed |= test_component_gating(my_predbat)
     failed |= test_provider_detection_and_payload(my_predbat)
     failed |= test_model_resolution_order(my_predbat)

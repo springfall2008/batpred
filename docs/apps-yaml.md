@@ -1993,6 +1993,24 @@ Leave it out and the provider starts on a sensible default for its kind, so a ne
 
 You can change model at any time from the Chat tab's search box, and Predbat remembers your choice per provider, so switching between them does not lose it.
 
+### Reaching Ollama from Predbat
+
+`http://localhost:11434/v1` only works when Ollama is running on the same machine as Predbat, and
+it usually is not - Predbat runs inside its Home Assistant container, so "localhost" there means
+the container, not your desktop. Two things need doing:
+
+1. **Let Ollama listen on the network.** Out of the box it only accepts connections from its own
+   machine. In the Ollama desktop app, turn on **Expose Ollama to the network** in Settings. For a
+   server or Docker install, set `OLLAMA_HOST=0.0.0.0` in its environment and restart it.
+2. **Point Predbat at the host, not at localhost.** Use the machine's name or IP address -
+   `http://192.168.1.50:11434/v1`, `http://my-desktop.local:11434/v1` - as the **url**.
+
+If the URL is wrong or Ollama is not listening, the Chat tab says so rather than failing silently:
+the model picker reports what went wrong instead of offering models, and **Fetch models** in the
+Settings dialog gives the same message while you are still typing the address. A machine that
+sleeps takes its models with it, so a desktop running Ollama needs to be awake when you ask
+Predbat something.
+
 A hosted endpoint needs an **api_key**; a local one needs only a **url** and no key at all. The name is yours to choose - it is what appears in the Chat tab - so you can have two of the same kind:
 
 ```yaml
