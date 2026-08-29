@@ -488,12 +488,12 @@ def test_web_annual_form(my_predbat):
         # It is a secret credential, so it should not be readable as plain text
         # over someone's shoulder or in a screen share, unlike the account id.
         key_row = re.search(r'<label for="load_octopus_api_key".*?</div>', wide_form, re.S)
-        if not key_row or 'type="password"' not in key_row.group(0):
-            print('  ERROR: load_octopus_api_key should render as type="password"')
+        if not key_row or 'type="password"' not in key_row.group(0) or 'autocomplete="off"' not in key_row.group(0):
+            print('  ERROR: load_octopus_api_key should render as type="password" with autocomplete="off"')
             failed = True
         account_row = re.search(r'<label for="load_octopus_account_id".*?</div>', wide_form, re.S)
-        if not account_row or 'type="text"' not in account_row.group(0):
-            print('  ERROR: load_octopus_account_id should still render as type="text"')
+        if not account_row or 'type="text"' not in account_row.group(0) or "autocomplete" in account_row.group(0):
+            print('  ERROR: load_octopus_account_id should still render as a plain type="text" field, unaffected by the API key masking')
             failed = True
 
         print("Test: selecting a basic-rates tariff uses THAT tariff, not the price-cap default")
