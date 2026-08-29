@@ -79,6 +79,25 @@ class WebChat:
         components = getattr(self.base, "components", None)
         return components.get_component("chat") if components else None
 
+    async def _marshal(self, agent, coro):
+        """Run a coroutine on the component's own loop, returning (result, error response).
+
+        Every route that touches the store has to go through the component's loop, and every one
+        of them can be called while that loop does not exist yet - the component is one of the last
+        to start, and saving a provider deliberately restarts Predbat, so "reload the Chat tab
+        while it is coming back" is a normal thing for a user to do rather than a rare race.
+
+        Four routes were calling run_on_agent_loop() directly and answering 500 to that, including
+        the one every page load makes. Written as a helper rather than a fifth copy of the same
+        try/except so there is one place to be right, and so the test can assert that no route
+        marshals any other way. Shaped like _conversation_or_404 below: a result and a response to
+        return instead of it.
+        """
+        try:
+            return await agent.run_on_agent_loop(coro), None
+        except AgentNotReadyError:
+            return None, web.json_response({"error": "The chat component is still starting"}, status=503)
+
     def _conversation_or_404(self, agent, conversation_id):
         """Return a conversation's metadata, or a 404 response to return instead."""
         meta = agent.store.get_meta(conversation_id) if conversation_id else None
@@ -130,10 +149,9 @@ class WebChat:
         if agent is None:
             return web.json_response({"error": "Chat is not configured"}, status=404)
         protect = (agent.active or {}).get("conversation_id")
-        try:
-            cid = await agent.run_on_agent_loop(agent.store.create(protect_id=protect))
-        except AgentNotReadyError:
-            return web.json_response({"error": "The chat component is still starting"}, status=503)
+        cid, error = await self._marshal(agent, agent.store.create(protect_id=protect))
+        if error:
+            return error
         return web.json_response({"id": cid})
 
     async def html_chat_rename(self, request):
@@ -146,7 +164,9 @@ class WebChat:
         if error:
             return error
         title = agent.store.rename(body.get("id"), body.get("title"))
-        await agent.run_on_agent_loop(agent.store.flush(body.get("id")))
+        _, error = await self._marshal(agent, agent.store.flush(body.get("id")))
+        if error:
+            return error
         return web.json_response({"id": body.get("id"), "title": title})
 
     async def html_chat_delete(self, request):
@@ -161,7 +181,9 @@ class WebChat:
             return error
         if (agent.active or {}).get("conversation_id") == cid:
             return web.json_response({"error": "busy", "message": "This conversation is mid-reply"}, status=409)
-        await agent.run_on_agent_loop(agent.store.delete(cid))
+        _, error = await self._marshal(agent, agent.store.delete(cid))
+        if error:
+            return error
         return web.json_response({"deleted": cid})
 
     async def html_chat_history(self, request):
@@ -187,7 +209,10 @@ class WebChat:
         # in a new conversation would silently vanish until they switched away and back. Nothing
         # can run on the agent's loop between two synchronous statements in the same coroutine, so
         # combining them closes that window.
-        messages, cursor = await agent.run_on_agent_loop(self._snapshot_and_cursor(agent, cid))
+        snapshot, error = await self._marshal(agent, self._snapshot_and_cursor(agent, cid))
+        if error:
+            return error
+        messages, cursor = snapshot
         return web.json_response(
             {
                 "id": cid,
@@ -367,10 +392,9 @@ class WebChat:
         agent = self.agent
         if agent is None:
             return web.json_response({"error": "Chat is not configured"}, status=404)
-        try:
-            models = await agent.run_on_agent_loop(agent.list_models())
-        except AgentNotReadyError:
-            return web.json_response({"error": "The chat component is still starting"}, status=503)
+        models, error = await self._marshal(agent, agent.list_models())
+        if error:
+            return error
         return web.json_response(
             {
                 "models": models,
@@ -400,7 +424,9 @@ class WebChat:
         # should not pin whatever the default happened to be at that moment.
         if model_id:
             agent.store.set_selected_model(model_id, agent.active_provider)
-        await agent.run_on_agent_loop(agent.store.flush(body.get("conversation")))
+        _, error = await self._marshal(agent, agent.store.flush(body.get("conversation")))
+        if error:
+            return error
         return web.json_response({"ok": True})
 
     async def html_chat_status(self, request):
@@ -605,11 +631,11 @@ class WebChat:
             api_key = self._saved_api_key(agent, str(body.get("name") or "").strip())
         else:
             api_key = str(api_key).strip() or None
-        try:
-            models, error = await agent.run_on_agent_loop(agent.probe_models(api_type, url, api_key))
-        except AgentNotReadyError:
-            return web.json_response({"error": "The chat component is still starting"}, status=503)
-        return web.json_response({"models": models or [], "error": error})
+        probed, error = await self._marshal(agent, agent.probe_models(api_type, url, api_key))
+        if error:
+            return error
+        models, reason = probed
+        return web.json_response({"models": models or [], "error": reason})
 
     async def html_chat_provider_select(self, request):
         """Make one already-configured provider the active one.
@@ -623,10 +649,9 @@ class WebChat:
             return web.json_response({"error": "Chat is not configured"}, status=404)
         body = await request.json()
         name = str(body.get("name") or "").strip()
-        try:
-            chosen = await agent.run_on_agent_loop(agent.select_active_provider(name))
-        except AgentNotReadyError:
-            return web.json_response({"error": "The chat component is still starting"}, status=503)
+        chosen, error = await self._marshal(agent, agent.select_active_provider(name))
+        if error:
+            return error
         if chosen is None:
             return web.json_response({"error": "'{}' is not a configured provider".format(name)}, status=400)
         return web.json_response({"ok": True, "active": chosen, "ready": agent.provider_ready(), "providers": agent.provider_summary()})
@@ -669,10 +694,9 @@ class WebChat:
         # save never leaves Predbat running settings that are not in the file.
         block = plain_yaml_value(chat_block)
         self.base.args["chat"] = block
-        try:
-            selected = await agent.run_on_agent_loop(agent.apply_provider_block(copy.deepcopy(block), active))
-        except AgentNotReadyError:
-            return web.json_response({"error": "The chat component is still starting"}, status=503)
+        selected, error = await self._marshal(agent, agent.apply_provider_block(copy.deepcopy(block), active))
+        if error:
+            return error
         self.log("Chat providers saved to apps.yaml: {} ({} active)".format(", ".join(sorted(seen)) or "none", selected or "none"))
         return web.json_response({"ok": True, "providers": agent.provider_summary(), "active": selected, "ready": agent.provider_ready()})
 

@@ -14,6 +14,7 @@ one performs no network I/O, which is the same trick test_web_annual.py uses.
 """
 
 import asyncio
+import inspect
 import json
 import os
 import re
@@ -3198,6 +3199,108 @@ def test_settings_script_wires_the_provider_routes(my_predbat):
     return failed
 
 
+def test_every_route_answers_503_while_the_component_is_starting(my_predbat):
+    """A route that marshals onto the component's loop answers 503, never 500, before it exists.
+
+    The chat component is one of the last to start, and saving a provider deliberately restarts
+    Predbat - the dialog even says the page will reconnect - so "reload the Chat tab while it is
+    coming back" is a normal thing for a user to do rather than a rare race. Four routes answered
+    500 to that, including html_chat_history, which every page load calls.
+
+    Enforced two ways. The structural check is the one that lasts: no route may call
+    run_on_agent_loop() itself, because a route added next year will not remember this rule but
+    will copy a neighbour, and every neighbour now goes through _marshal(). The behavioural check
+    proves _marshal actually produces a 503 rather than merely existing.
+    """
+    failed = False
+    print("**** Testing that marshalling routes answer 503 while starting ****")
+
+    source = inspect.getsource(web_chat.WebChat)
+    for block in re.split(r"\n    (?=async def |def )", source):
+        name = re.match(r"(?:async )?def (\w+)", block)
+        if not name or name.group(1) == "_marshal":
+            continue
+        if "run_on_agent_loop" in block and "self._marshal" not in block:
+            print("ERROR: {} marshals without going through _marshal, so it answers 500 while starting".format(name.group(1)))
+            failed = True
+
+    class StartingAgent:
+        """An agent whose loop does not exist yet - exactly what the real one does before start."""
+
+        active = None
+        active_provider = "openrouter"
+        default_model = "a/model"
+        providers = []
+
+        class store:
+            """The store slice these routes touch before they reach the loop."""
+
+            @staticmethod
+            def get_meta(cid):
+                """Every conversation resolves, so the 404 gate is not what answers here."""
+                return {"id": cid, "title": "known", "usage_total": {}, "message_count": 0}
+
+            @staticmethod
+            def rename(cid, title):
+                """Renaming is synchronous; only the flush after it needs the loop."""
+                return title
+
+            @staticmethod
+            def set_model(cid, model, provider=None):
+                """Setting the model is synchronous; only the flush needs the loop."""
+                return True
+
+            @staticmethod
+            def set_selected_model(model, provider=None):
+                """Remembering the choice is synchronous too."""
+                return True
+
+            @staticmethod
+            def flush(cid=None):
+                """Return a coroutine the route will try to marshal."""
+                return asyncio.sleep(0)
+
+            @staticmethod
+            def delete(cid):
+                """Return a coroutine the route will try to marshal."""
+                return asyncio.sleep(0)
+
+            @staticmethod
+            def create(protect_id=None):
+                """Return a coroutine the route will try to marshal."""
+                return asyncio.sleep(0)
+
+        @staticmethod
+        async def run_on_agent_loop(coro):
+            """Refuse, as the real one does until the component's own loop exists."""
+            coro.close()
+            raise AgentNotReadyError("The chat component has not finished starting")
+
+        @staticmethod
+        def events_since(cursor, conversation_id):
+            """No events yet."""
+            return [], 0, False
+
+    page = _make_web(my_predbat, agent=StartingAgent()).chat_page
+    cid = "aaaabbbbccccdddd"
+    calls = [
+        ("history", page.html_chat_history(FakeRequest(query={"conversation": cid}))),
+        ("rename", page.html_chat_rename(FakeRequest(body={"id": cid, "title": "new"}))),
+        ("delete", page.html_chat_delete(FakeRequest(body={"id": cid}))),
+        ("model", page.html_chat_model(FakeRequest(body={"conversation": cid, "id": "a/model"}))),
+        ("create", page.html_chat_create(FakeRequest())),
+    ]
+    for label, coro in calls:
+        response = asyncio.run(coro)
+        if response.status != 503:
+            print("ERROR: /chat/{} answered {} while the component was starting, expected 503".format(label, response.status))
+            failed = True
+        elif "starting" not in json.loads(response.text).get("error", ""):
+            print("ERROR: /chat/{} did not say why it refused: {}".format(label, response.text))
+            failed = True
+    return failed
+
+
 def test_history_reports_the_override_only_for_its_own_provider(my_predbat):
     """The page is not handed a model override belonging to a provider that is not answering.
 
@@ -3677,6 +3780,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_active_provider_is_remembered_across_a_restart(my_predbat)
     failed |= test_chat_page_uses_a_top_bar_and_a_settings_dialog(my_predbat)
     failed |= test_settings_script_wires_the_provider_routes(my_predbat)
+    failed |= test_every_route_answers_503_while_the_component_is_starting(my_predbat)
     failed |= test_history_reports_the_override_only_for_its_own_provider(my_predbat)
     failed |= test_picker_drops_a_model_the_provider_does_not_serve(my_predbat)
     failed |= test_text_inputs_are_hinted_against_password_autofill(my_predbat)
