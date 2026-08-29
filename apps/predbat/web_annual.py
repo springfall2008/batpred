@@ -340,7 +340,7 @@ class AnnualPage:
             name=name, label=label, step=step, value=html.escape(str(value), quote=True) if value is not None else "", suffix=" {}".format(suffix) if suffix else ""
         )
 
-    def _text_field(self, name, label, value, wide=False):
+    def _text_field(self, name, label, value, wide=False, secret=False):
         """Return one labelled text input row.
 
         ``value`` is HTML-escaped before interpolation - it is user-controlled
@@ -349,9 +349,21 @@ class AnnualPage:
         ``wide`` puts the input on its own full-width line beneath the label, for the
         long values - rates URLs and API keys - that are otherwise shown through a
         keyhole and cannot be read or checked without scrolling within the box.
+
+        ``secret`` renders the input as type="password" so the value is masked on
+        screen (a shoulder-surfing / screen-share concern for an API key), while
+        it can still be pasted, selected and submitted like any other text input.
+        It also sets autocomplete="off", since a password-type input is otherwise
+        a candidate for the browser's saved-password manager, which is the wrong
+        prompt for a site API key; other fields are unaffected.
         """
-        return '<div class="annual-field{wide}"><label for="{name}">{label}</label><input type="text" id="{name}" name="{name}" value="{value}"></div>\n'.format(
-            name=name, label=label, wide=" annual-field-wide" if wide else "", value=html.escape(str(value), quote=True) if value is not None else ""
+        return '<div class="annual-field{wide}"><label for="{name}">{label}</label><input type="{type}" id="{name}" name="{name}" value="{value}"{autocomplete}></div>\n'.format(
+            name=name,
+            label=label,
+            wide=" annual-field-wide" if wide else "",
+            type="password" if secret else "text",
+            autocomplete=' autocomplete="off"' if secret else "",
+            value=html.escape(str(value), quote=True) if value is not None else "",
         )
 
     @staticmethod
@@ -520,7 +532,7 @@ class AnnualPage:
         # _validate_load treats the two as mutually exclusive.
         saved_octopus = load.get("octopus") or {}
         args_key, args_account = self._octopus_from_args()
-        text += self._text_field("load_octopus_api_key", "Octopus API key", saved_octopus.get("api_key") or (args_key if args_key and args_account else "") or "", wide=True)
+        text += self._text_field("load_octopus_api_key", "Octopus API key", saved_octopus.get("api_key") or (args_key if args_key and args_account else "") or "", wide=True, secret=True)
         text += self._text_field("load_octopus_account_id", "Account ID", saved_octopus.get("account_id") or (args_account if args_key and args_account else "") or "", wide=True)
         text += '<p class="annual-note">Your meter readings already include any car charging, so the figures above are not used with this option.</p>\n'
         # An import meter records what was BOUGHT, not what the house used. On a home that
@@ -1828,7 +1840,7 @@ annualLoadPlan();
    rather than beside it, so they can use the full width without pushing the form wide;
    max-width keeps them inside the column on a narrow screen. */
 .annual-field.annual-field-wide label { display: block; min-width: 0; margin-bottom: 0.15rem; }
-.annual-field-wide input[type="text"] { width: 100%; max-width: 60rem; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; }
+.annual-field-wide input[type="text"], .annual-field-wide input[type="password"] { width: 100%; max-width: 60rem; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; }
 .annual-subgroup { margin-left: 1.5rem; }
 /* Each array is its own block. Without this the Remove button of one array sat directly
    against the "Array N" heading of the next, reading as though it belonged to the array
