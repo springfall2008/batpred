@@ -41,6 +41,7 @@ from sunsynk import SunsynkAPI
 from enphase import EnphaseAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
+from chat import ChatAgent
 
 try:
     from gateway import GatewayMQTT
@@ -98,6 +99,23 @@ COMPONENT_LIST = {
             "mcp_port": {"required": False, "config": "mcp_port", "default": 8199},
         },
         "phase": 1,
+    },
+    "chat": {
+        "class": ChatAgent,
+        "name": "AI Chat Agent",
+        "can_restart": True,
+        "phase": 1,
+        # Always started, with no required arguments at all. The Chat tab configures its own
+        # providers - adding one writes apps.yaml - so the component has to be running before any
+        # provider exists, or there is nothing to configure it from. With none configured the tab
+        # shows its setup page and no turn can be sent.
+        #
+        # One argument, because the whole feature is configured by one apps.yaml block. Defaults
+        # live in chat.py beside the code that reads them rather than here, where a dozen entries
+        # said little more than their own names.
+        "args": {
+            "config": {"required": False, "config": "chat"},
+        },
     },
     "solar": {
         "class": SolarAPI,

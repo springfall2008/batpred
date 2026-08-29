@@ -57,6 +57,7 @@ OCTOPUS_MAX_RETRIES = 5
 CATALOGUE_FRESH_MINUTES = 24 * 60
 CATALOGUE_STALE_MINUTES = 25 * 60
 OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
+OCTOPUS_SLOT_MAX_CAPPED = 12  # 6 hours with 30-minute slots
 
 # Per-device settings read from the Octopus intelligent settings query. Kept as a list so a poll
 # whose settings query fails can carry the previous values forward rather than dropping the device.
@@ -1523,6 +1524,13 @@ class OctopusAPI(ComponentBase):
         else:
             return ("INTELLI-" in tariff_code) or ("IOG-" in tariff_code)
 
+    @staticmethod
+    def has_six_hour_cap(tariff_code):
+        """
+        Determine whether a tariff code enforces Octopus's 6-hour (12-slot) Intelligent cap.
+        """
+        return bool(tariff_code) and "IOG-SMB" in tariff_code
+
     async def async_get_tou_night_windows(self, days=7):
         """
         Read the meter's real off-peak windows from the measurements API's TOU bucket labels.
@@ -2876,6 +2884,24 @@ class Octopus:
 
         return start_minutes, end_minutes, kwh, source, location
 
+    def get_octopus_slot_max(self):
+        """
+        Resolve the Octopus Intelligent daily low-rate slot cap.
+
+        An explicit apps.yaml octopus_slot_max always wins. Otherwise IOG-SMB tariffs, which
+        Octopus enforces a 6-hour daily cap on, default to 12 slots; every other tariff
+        (including the older INTELLI-VAR) stays uncapped.
+        """
+        if "octopus_slot_max" in self.args:
+            return self.get_arg("octopus_slot_max", OCTOPUS_SLOT_MAX_DEFAULT)
+
+        components = getattr(self, "components", None)
+        octopus_api = components.get_component("octopus") if components else None
+        tariff_code = octopus_api.tariffs.get("import", {}).get("tariffCode") if octopus_api else None
+        if OctopusAPI.has_six_hour_cap(tariff_code):
+            return OCTOPUS_SLOT_MAX_CAPPED
+        return OCTOPUS_SLOT_MAX_DEFAULT
+
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """
         Turn octopus slots into charging plan
@@ -2885,7 +2911,7 @@ class Octopus:
             # Car not configured, just return the slots as they are (for export or other non-car use)
             return new_slots
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
-        octopus_slot_max = self.get_arg("octopus_slot_max", OCTOPUS_SLOT_MAX_DEFAULT)  # Default to 12 slots (6 hours) per midday-to-midday period
+        octopus_slot_max = self.get_octopus_slot_max()
         slots_per_day = {}  # Track 30-min blocks used per midday-to-midday period
         car_soc = self.car_charging_soc[car_n]
         limit = self.car_charging_limit[car_n]
@@ -3037,7 +3063,7 @@ class Octopus:
         # Octopus limits cheap slots to 6 hours (12 x 30-min slots) per 24-hour period
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
-        octopus_slot_max = self.get_arg("octopus_slot_max", OCTOPUS_SLOT_MAX_DEFAULT)
+        octopus_slot_max = self.get_octopus_slot_max()
 
         # Track slots per 24-hour period (keyed by day offset from midday)
         # Period 0 = noon today to 11:59 tomorrow, Period -1 = noon yesterday to 11:59 today, etc.
@@ -3052,6 +3078,14 @@ class Octopus:
             # Add in IO slots
             for slot in octopus_slots:
                 start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot, raw=True)
+
+                # A dispatch that's already fully in the past and delivered zero kWh either never
+                # actually happened (a withdrawn planned slot Octopus hasn't dropped yet) or genuinely
+                # delivered nothing, so it shouldn't consume one of the day's capped low-rate slots.
+                # A future/still-active slot is left alone even at zero kWh - its kWh is usually
+                # synthesised rather than genuinely zero, and an in-progress dispatch is still real.
+                if end_minutes <= self.minutes_now and kwh <= 0:
+                    continue
 
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
@@ -3141,12 +3175,7 @@ class Octopus:
                 if data_import:
                     data_all += data_import
                 else:
-                    prev_rate_id = entity_id.replace("_current_rate", "_previous_rate")
-                    data_import = self.get_state_wrapper(entity_id=prev_rate_id, attribute="all_rates")
-                    if data_import:
-                        data_all += data_import
-                    else:
-                        self.log("Warn: Octopus: No Octopus data in sensor {} attribute 'all_rates'".format(prev_rate_id))
+                    self.log("Warn: Octopus: No Octopus data in event {} attribute 'rates'".format(prev_rate_id))
 
             # Current rates
             if "_current_rate" in entity_id:
@@ -3154,17 +3183,12 @@ class Octopus:
             else:
                 current_rate_id = entity_id
 
-            data_import = (
-                self.get_state_wrapper(entity_id=current_rate_id, attribute="rates")
-                or self.get_state_wrapper(entity_id=current_rate_id, attribute="all_rates")
-                or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today")
-                or self.get_state_wrapper(entity_id=current_rate_id, attribute="prices")
-            )
+            data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="rates") or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today") or self.get_state_wrapper(entity_id=current_rate_id, attribute="prices")
 
             if data_import:
                 data_all += data_import
             else:
-                self.log("Warn: Octopus: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today' / 'prices'".format(current_rate_id))
+                self.log("Warn: Octopus: No Octopus data in sensor {} attribute 'rates' / 'raw_today' / 'prices'".format(current_rate_id))
 
             # Next rates
             if "_current_rate" in entity_id:
@@ -3172,11 +3196,6 @@ class Octopus:
                 data_import = self.get_state_wrapper(entity_id=next_rate_id, attribute="rates")
                 if data_import:
                     data_all += data_import
-                else:
-                    next_rate_id = entity_id.replace("_current_rate", "_next_rate")
-                    data_import = self.get_state_wrapper(entity_id=next_rate_id, attribute="all_rates")
-                    if data_import:
-                        data_all += data_import
             else:
                 # Nordpool tomorrow
                 data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_tomorrow")

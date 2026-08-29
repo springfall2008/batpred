@@ -21,8 +21,8 @@ import os
 import tempfile
 from datetime import datetime, timedelta
 
+import agent_tools
 import web
-import web_mcp
 from web import WebInterface
 from web_mcp import (
     MCPServerWrapper,
@@ -313,6 +313,62 @@ def test_mcp_get_apps(my_predbat):
     return failed
 
 
+def test_mcp_get_apps_config(my_predbat):
+    """get_apps_config reads one apps.yaml key at a time, redacting a credential-like value with
+    no way to opt out, reporting a clean error for a key that is not present, and never mutating
+    the live args (#4768 follow-up: apps.yaml read/write tools).
+
+    Unlike get_apps there is deliberately no 'masked' argument to bypass here at all - see
+    PredbatTools._execute_get_apps_config's docstring in agent_tools.py for why a single-key read
+    has no legitimate use for an unmasked credential the way a full-configuration review does.
+    """
+    failed = False
+    print("**** Testing MCP get_apps_config ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_args = my_predbat.args
+    try:
+        my_predbat.args = {"ha_key": "supersecret", "battery_rate_max_charge": 3.0, "inverter_type": "GE"}
+
+        result, _ = _call_tool(mcp, "get_apps_config", {"key": "ha_key"})
+        if not result.get("success"):
+            print("  ERROR: get_apps_config failed for an existing credential key: {}".format(result.get("error")))
+            failed = True
+        data = result.get("data") or {}
+        if data.get("value") != "xxx":
+            print("  ERROR: expected the credential value to be redacted, got {!r}".format(data))
+            failed = True
+        if result.get("masked") is not True:
+            print("  ERROR: expected the response to report masked=True for a credential key")
+            failed = True
+        if my_predbat.args["ha_key"] != "supersecret":
+            print("  ERROR: get_apps_config mutated the live args")
+            failed = True
+
+        print("Test: an ordinary key is returned unmasked")
+        result, _ = _call_tool(mcp, "get_apps_config", {"key": "battery_rate_max_charge"})
+        data = result.get("data") or {}
+        if data.get("value") != 3.0 or result.get("masked") is not False:
+            print("  ERROR: expected the ordinary value unmasked, got {!r} masked={}".format(data, result.get("masked")))
+            failed = True
+
+        print("Test: an unknown key is a clean failure, not an exception")
+        result, _ = _call_tool(mcp, "get_apps_config", {"key": "not_a_real_apps_yaml_config_item"})
+        if result.get("success"):
+            print("  ERROR: an unknown key was reported as found: {}".format(result))
+            failed = True
+
+        print("Test: a missing key argument is a clean failure")
+        result, is_error = _call_tool(mcp, "get_apps_config", {})
+        if result.get("success"):
+            print("  ERROR: a missing 'key' argument was accepted")
+            failed = True
+    finally:
+        my_predbat.args = saved_args
+
+    return failed
+
+
 def test_mcp_get_log(my_predbat):
     """get_log filters by level, search term and age, caps the number of lines returned, and
     reports the log oldest-first (#4768).
@@ -321,9 +377,9 @@ def test_mcp_get_log(my_predbat):
     print("**** Testing MCP get_log ****")
 
     mcp = _make_mcp(my_predbat)
-    saved_reader = web_mcp.read_predbat_log
+    saved_reader = agent_tools.read_predbat_log
     try:
-        web_mcp.read_predbat_log = lambda: _sample_log()
+        agent_tools.read_predbat_log = lambda: _sample_log()
 
         print("Test: the default warnings view returns warnings and errors only")
         result, _ = _call_tool(mcp, "get_log")
@@ -413,7 +469,7 @@ def test_mcp_get_log(my_predbat):
             failed = True
 
         print("Test: an empty log is reported as success with no lines")
-        web_mcp.read_predbat_log = lambda: ""
+        agent_tools.read_predbat_log = lambda: ""
         result, _ = _call_tool(mcp, "get_log", {"filter": "all"})
         if not result.get("success") or result["data"]["returned_lines"] != 0:
             print("  ERROR: expected an empty but successful result, got {}".format(result))
@@ -425,13 +481,13 @@ def test_mcp_get_log(my_predbat):
             """Stand-in reader that fails the way an unreadable log file would."""
             raise IOError("log file unreadable")
 
-        web_mcp.read_predbat_log = _boom
+        agent_tools.read_predbat_log = _boom
         result, _ = _call_tool(mcp, "get_log")
         if result.get("success") or "unreadable" not in (result.get("error") or ""):
             print("  ERROR: expected a failure result naming the error, got {}".format(result))
             failed = True
     finally:
-        web_mcp.read_predbat_log = saved_reader
+        agent_tools.read_predbat_log = saved_reader
 
     return failed
 
@@ -776,10 +832,10 @@ def test_mcp_argument_validation(my_predbat):
     print("Test: every filtering tool reports a bad regex the same way")
     mcp = _make_mcp(my_predbat)
     saved_args = my_predbat.args
-    saved_reader = web_mcp.read_predbat_log
+    saved_reader = agent_tools.read_predbat_log
     try:
         my_predbat.args = {"battery_rate_max_charge": 3.0}
-        web_mcp.read_predbat_log = lambda: _sample_log()
+        agent_tools.read_predbat_log = lambda: _sample_log()
         for tool in ["get_apps", "get_config", "get_entities", "get_state"]:
             result, _ = _call_tool(mcp, tool, {"filter": "[unclosed"})
             if result.get("success"):
@@ -809,7 +865,7 @@ def test_mcp_argument_validation(my_predbat):
             failed = True
     finally:
         my_predbat.args = saved_args
-        web_mcp.read_predbat_log = saved_reader
+        agent_tools.read_predbat_log = saved_reader
 
     return failed
 
@@ -967,6 +1023,7 @@ def run_web_mcp_tests(my_predbat):
     failed |= test_read_predbat_log(my_predbat)
     failed |= test_log_filter_helpers(my_predbat)
     failed |= test_mcp_get_apps(my_predbat)
+    failed |= test_mcp_get_apps_config(my_predbat)
     failed |= test_mcp_get_log(my_predbat)
     failed |= test_state_value_helpers(my_predbat)
     failed |= test_debug_excluded_keys(my_predbat)

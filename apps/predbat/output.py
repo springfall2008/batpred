@@ -1685,10 +1685,13 @@ class Output:
             json_row["show_limit"] = show_limit
             json_row["pv_forecast"] = raw_pv_forecast
             json_row["pv_forecast10"] = pv_forecast10
-            json_row["pv_forecast_total"] = raw_pv_total
+            # Rounded here rather than in the accumulator: these are running sums, so adding
+            # ~96 two-decimal values gives 0.41000000000000003 and the like. The accumulator
+            # keeps full precision so the rounding cannot drift over the length of the plan.
+            json_row["pv_forecast_total"] = dp2(raw_pv_total)
             json_row["load_forecast"] = raw_load_forecast
             json_row["load_forecast10"] = load_forecast10
-            json_row["load_forecast_total"] = raw_load_total
+            json_row["load_forecast_total"] = dp2(raw_load_total)
             json_row["clipped"] = clipped_change
 
             # Add color information for client-side rendering
@@ -1702,7 +1705,7 @@ class Output:
 
             if self.load_forecast:
                 json_row["extra_load"] = raw_extra_forecast
-                json_row["extra_load_total"] = raw_extra_forecast_total
+                json_row["extra_load_total"] = dp2(raw_extra_forecast_total)
                 json_row["extra_color"] = extra_color
             if self.num_cars > 0:
                 json_row["car_charging"] = car_charging_kwh
