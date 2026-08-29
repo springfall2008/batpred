@@ -3016,6 +3016,14 @@ class Output:
             self.savings_last_updated = self.now_utc
             return
 
+        # Unlike cost above, missing carbon_today history isn't fatal to this function - carbon is an
+        # optional add-on metric, so a user who has just turned it on (and so has no history for it yet)
+        # should still get their savings/plan history, just with carbon_yesterday reading 0 until a full
+        # day of predbat.carbon_today history has accumulated for it to read back.
+        carbon_today_data = self.get_history_wrapper(entity_id=self.prefix + ".carbon_today", days=2, required=False) if self.carbon_enable else None
+        if self.carbon_enable and not carbon_today_data:
+            self.log("Warn: Calculate yesterday: No history for {}.carbon_today yet, carbon_yesterday will read 0 and carbon_total can't increment until a day of history has built up".format(self.prefix))
+
         self.log("Calculating data from yesterday for savings calculation")
 
         # step_data_history() only fills in offsets up to self.forecast_minutes + plan_interval_minutes.
@@ -3091,6 +3099,17 @@ class Output:
         cost_data_per_kwh, _ = minute_data(cost_today_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(minutes_back, 0.0)
         cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
+
+        # Get Carbon yesterday, read back the same way as cost above - predbat.carbon_today's own
+        # recorded history at 23:59 yesterday is its final value for the day, before it resets to 0.
+        # carbon_enable_real is captured now because self.carbon_enable is temporarily forced False
+        # further down (to keep the no-PV/battery baseline simulation from computing carbon too) for
+        # longer than this function's remaining "yesterday" publishing runs after it.
+        carbon_enable_real = self.carbon_enable
+        carbon_yesterday = 0.0
+        if carbon_today_data:
+            carbon_data, _ = minute_data(carbon_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+            carbon_yesterday = carbon_data.get(minutes_back, 0.0)
         cost_yesterday_array = {}
         for minute in range(0, end_record + self.minutes_now):
             cost_value = cost_data.get(minutes_back + 24 * 60 - minute - 5, 0.0)  # -5 gives 4 minutes into new data to allow for reset
@@ -3346,6 +3365,7 @@ class Output:
         self.savings_today_predbat_soc = final_soc
         self.savings_today_actual = cost_yesterday
         self.cost_yesterday_car = cost_yesterday_car
+        self.carbon_yesterday = carbon_yesterday
 
         # Save state
         self.dashboard_item(
@@ -3365,6 +3385,17 @@ class Output:
                 "json": plan_json_yesterday,
             },
         )
+        if carbon_enable_real:
+            self.dashboard_item(
+                self.prefix + ".carbon_yesterday",
+                state=dp2(carbon_yesterday),
+                attributes={
+                    "friendly_name": "Carbon yesterday",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "g",
+                    "icon": "mdi:carbon-molecule",
+                },
+            )
         if num_cars > 0:
             self.dashboard_item(
                 self.prefix + ".cost_yesterday_car",
