@@ -23,6 +23,7 @@ import time
 
 from aiohttp import web as aiohttp_web
 from aiohttp.test_utils import make_mocked_request
+from ruamel.yaml import YAML
 
 import web_chat
 from chat import AgentNotReadyError
@@ -2862,6 +2863,51 @@ def test_provider_save_keeps_a_key_the_dialog_never_saw(my_predbat):
     return failed
 
 
+def test_provider_save_does_not_rewrap_long_values(my_predbat):
+    """A long API key stays on its own line rather than being folded onto the next one.
+
+    ruamel defaults to a line width of 80. An OpenRouter key is 73 characters, so at any realistic
+    indent `api_key: sk-or-v1-...` is over that and gets written as a bare `api_key:` with the
+    value folded onto a following, more-indented line. It reads back as the same string, so
+    nothing breaks - but every long value in the file is re-wrapped by a save that meant to change
+    one setting, and a credential written that way looks mangled to anyone opening the file.
+    """
+    failed = False
+    print("**** Testing that saving providers does not re-wrap long values ****")
+
+    long_key = "sk-or-v1-" + "b" * 64
+    # Written unquoted, which is the shape that actually folds: preserve_quotes keeps a quoted
+    # scalar as it found it and ruamel never wraps those, so a quoted fixture would pass this test
+    # with or without the width set - and a real apps.yaml holds the key plain.
+    path = _apps_yaml_fixture(APPS_YAML_WITH_PROVIDERS.replace("'sk-or-secret-value'", long_key))
+    original = web_chat.APPS_YAML_PATH
+    web_chat.APPS_YAML_PATH = path
+    try:
+        agent = _run_inline_on_agent(_make_agent(my_predbat, providers={"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": long_key, "model": "a/model"}}))
+        page = _make_web(my_predbat, agent=agent).chat_page
+        status, body = _save_providers(page, [{"name": "openrouter", "type": "openrouter", "url": "https://openrouter.ai/api/v1", "model": "b/model", "api_key": None, "original_name": "openrouter"}], active="openrouter")
+        if status != 200:
+            print("ERROR: the save failed: {} {}".format(status, body))
+            failed = True
+        written = open(path).read()
+        # Asserted against the api_key line itself rather than the whole file: preserve_quotes
+        # keeps the fixture's own quoting, so matching a bare "api_key: <key>" would be testing
+        # how the value is quoted instead of whether it was folded onto the next line.
+        key_lines = [line for line in written.splitlines() if "api_key" in line]
+        if len(key_lines) != 1 or long_key not in key_lines[0]:
+            print("ERROR: the key was folded off its own line:\n{}".format(written))
+            failed = True
+        # And it still means the same thing once read back.
+        reloaded = YAML().load(written)
+        stored = reloaded["pred_bat"]["chat"]["providers"]["openrouter"]["api_key"]
+        if stored != long_key:
+            print("ERROR: the key did not survive the round trip: {!r}".format(stored))
+            failed = True
+    finally:
+        web_chat.APPS_YAML_PATH = original
+    return failed
+
+
 def test_provider_save_migrates_the_loose_block_without_losing_its_key(my_predbat):
     """Saving folds providers written directly in the chat block under `providers:`, key and all.
 
@@ -3327,6 +3373,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_retry_status_element_takes_its_colour_from_theme_variables(my_predbat)
     failed |= test_provider_list_route_never_hands_a_key_to_the_browser(my_predbat)
     failed |= test_provider_save_keeps_a_key_the_dialog_never_saw(my_predbat)
+    failed |= test_provider_save_does_not_rewrap_long_values(my_predbat)
     failed |= test_provider_save_migrates_the_loose_block_without_losing_its_key(my_predbat)
     failed |= test_provider_save_refuses_bad_input_before_touching_the_file(my_predbat)
     failed |= test_probe_route_uses_the_stored_key_rather_than_asking_the_browser(my_predbat)

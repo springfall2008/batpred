@@ -346,6 +346,13 @@ def is_data_numerical(history, attribute=None):
 # for the same reason is_data_numerical() was: the tool layer must not import from web.py (#4768).
 ROOT_YAML_KEY = "pred_bat"
 
+# Line width for any dump of apps.yaml. ruamel defaults to 80, which folds a long plain scalar onto
+# a following, more-indented line - so rewriting the file to change one setting silently re-wraps
+# every long value in it, API keys included. That still parses back to the same string, but it
+# turns a one-line edit into a diff across the whole file and leaves credentials looking mangled.
+# Set high enough that nothing Predbat writes ever wraps.
+YAML_DUMP_WIDTH = 4096
+
 
 def parse_yaml_path(path):
     """

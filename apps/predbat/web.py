@@ -70,7 +70,7 @@ from web_helper import (
 )
 
 from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, read_predbat_log, classify_log_line, log_line_included
-from utils import is_data_numerical, ROOT_YAML_KEY, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
+from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
@@ -3846,6 +3846,7 @@ chart.render();
             apps_yaml_path = "apps.yaml"
             yaml = YAML()
             yaml.preserve_quotes = True
+            yaml.width = YAML_DUMP_WIDTH
 
             try:
                 with open(apps_yaml_path, "r") as f:
@@ -5156,6 +5157,7 @@ document.addEventListener('DOMContentLoaded', function() {
             yaml = YAML()
             yaml.preserve_quotes = True
             yaml.default_flow_style = False
+            yaml.width = YAML_DUMP_WIDTH
 
             try:
                 with open(apps_yaml_path, "r") as f:

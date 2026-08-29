@@ -32,7 +32,7 @@ from urllib.parse import urljoin, urlparse
 
 from ruamel.yaml import YAML
 
-from utils import ROOT_YAML_KEY, SECRET_MASK, find_redacted_secret_overwrite, is_secret_key, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value
+from utils import ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, find_redacted_secret_overwrite, is_secret_key, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value
 
 DOCS_SITE_ROOT = "https://springfall2008.github.io/batpred/"
 DOCS_INDEX_URL = DOCS_SITE_ROOT + "search/search_index.json"
@@ -716,6 +716,7 @@ def set_apps_config(base, key, value, apps_yaml_path=APPS_YAML_PATH, backup_path
 
     yaml = YAML()
     yaml.preserve_quotes = True
+    yaml.width = YAML_DUMP_WIDTH
     try:
         with open(apps_yaml_path, "r") as handle:
             data = yaml.load(handle)

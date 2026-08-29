@@ -25,7 +25,7 @@ from aiohttp import web
 from ruamel.yaml import YAML
 
 from chat import AgentNotReadyError, ChatBusyError, PROVIDER_DEFAULT_URLS, PROVIDERS, default_model_for
-from utils import ROOT_YAML_KEY, SECRET_MASK
+from utils import ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH
 
 SSE_POLL_SECONDS = 0.1
 SSE_HEARTBEAT_SECONDS = 15
@@ -503,6 +503,7 @@ class WebChat:
         """
         yaml = YAML()
         yaml.preserve_quotes = True
+        yaml.width = YAML_DUMP_WIDTH
         try:
             with open(APPS_YAML_PATH, "r") as handle:
                 data = yaml.load(handle)
