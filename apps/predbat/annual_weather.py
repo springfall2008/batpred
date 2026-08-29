@@ -123,8 +123,12 @@ class AnnualWeather:
     def __init__(self, arrays, latitude, longitude, log, storage=None, p10_fallback=0.7, fetch_json=None, months=None):
         """Configure the site's PV arrays, the JSON fetcher, and an optional month window.
 
-        ``months`` bounds every download to the calendar months it names (plus the buffer the
-        last sampled day's 48 hour plan needs). ``None`` keeps the whole-year window every
+        ``months`` bounds every download to ONE contiguous window running from the earliest
+        to the latest month it names (plus the buffer the last sampled day's 48 hour plan
+        needs) - not to just the months named. A non-contiguous subset like [3, 7] still
+        downloads April, May and June along with March and July, since this fetches a
+        single ranged request per array rather than one request per named month; see
+        ``_window`` below for the exact span. ``None`` keeps the whole-year window every
         caller before this used.
         """
         self.arrays = arrays
