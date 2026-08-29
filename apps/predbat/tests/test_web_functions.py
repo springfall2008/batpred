@@ -519,5 +519,10 @@ def run_web_dark_mode_preference_tests(my_predbat):
         print("  ERROR: expected a matchMedia change listener so the page follows OS theme switches live")
         failed += 1
 
+    print("Test: the live listener falls back to addListener() for browsers without MediaQueryList.addEventListener")
+    if "darkModeMediaQuery.addListener" not in header:
+        print("  ERROR: expected a fallback to the deprecated addListener() for older Safari/Chrome")
+        failed += 1
+
     print("**** Web dark mode preference tests completed ****")
     return failed

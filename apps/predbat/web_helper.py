@@ -8068,11 +8068,18 @@ function applyDarkMode() {
 
 // Re-apply if the OS/browser theme changes while no explicit preference is stored (batpred#4800)
 if (window.matchMedia) {
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+    const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleDarkModePreferenceChange = function() {
         if (localStorage.getItem('darkMode') === null) {
             applyDarkMode();
         }
-    });
+    };
+    // Safari < 14 and Chrome < 39 only implement the older, deprecated addListener() method
+    if (darkModeMediaQuery.addEventListener) {
+        darkModeMediaQuery.addEventListener('change', handleDarkModePreferenceChange);
+    } else if (darkModeMediaQuery.addListener) {
+        darkModeMediaQuery.addListener(handleDarkModePreferenceChange);
+    }
 }
 
 function toggleDarkMode() {
