@@ -1105,6 +1105,36 @@ class PredbatTools:
                 return item
         return None
 
+    def _coerce_config_value(self, item, value):
+        """Coerce a set_config value to the Python type its CONFIG_ITEMS entry actually stores.
+
+        The tool schema declares 'value' as a JSON string unconditionally, because a model has no
+        way to know a setting's underlying type in advance. Passed straight through, that string
+        breaks switches specifically: set_state_external() picks turn_on/turn_off by Python
+        truthiness, and any non-empty string - including the literal text "False" - is truthy, so
+        every switch write resolved to turn_on regardless of what was asked for. Returns (value,
+        None) on success or (None, error message) when the text cannot be read as that type.
+        """
+        itemtype = item.get("type", "")
+        if itemtype == "switch":
+            if isinstance(value, bool):
+                return value, None
+            text = str(value).strip().lower()
+            if text in ("true", "on", "yes", "1"):
+                return True, None
+            if text in ("false", "off", "no", "0"):
+                return False, None
+            return None, "'{}' is not a valid value for switch '{}' - use true or false".format(value, item.get("name"))
+        if itemtype in ("input_number", "number"):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None, "'{}' is not a valid number for '{}'".format(value, item.get("name"))
+            if item.get("step", 1) == 1:
+                number = int(number)
+            return number, None
+        return value, None
+
     async def _execute_set_config(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the set_config tool.
 
@@ -1114,7 +1144,8 @@ class PredbatTools:
         model does when it reaches for this tool with an apps.yaml key, since those look like
         settings but are not CONFIG_ITEMS entities. Reporting success for a write that never
         happened is worse than failing: the model tells the user it is done, and the user believes
-        it.
+        it. The same reasoning extends to a recognised entity whose value did not actually move -
+        see the read-back check below.
         """
         try:
             entity_id = arguments.get("entity_id")
@@ -1127,14 +1158,26 @@ class PredbatTools:
             if item is None:
                 return {"success": False, "error": "'{}' is not a Predbat configuration setting.{}".format(entity_id, self._wrong_tool_hint(entity_id)), "data": None}
 
+            coerced_value, error = self._coerce_config_value(item, value)
+            if error:
+                return {"success": False, "error": error, "data": None}
+
             previous_value = item.get("value")
             target = item.get("entity") or entity_id
-            await self.base.ha_interface.set_state_external(target, value)
+            await self.base.ha_interface.set_state_external(target, coerced_value)
 
             # Read back rather than echoing what was asked for: set_state_external routes the
             # change through a real service call, which can coerce or reject a value, and the
-            # caller needs to know what actually landed.
+            # caller needs to know what actually landed. Comparing it against what was actually
+            # requested - not just trusting that set_state_external raised no exception - is what
+            # catches a write that silently did nothing, which used to be reported as success.
             applied = (self.find_config_item(target) or {}).get("value")
+            if applied != coerced_value:
+                return {
+                    "success": False,
+                    "error": "'{}' is still {!r} - the write did not take effect".format(item.get("name") or target, applied),
+                    "data": {"entity_id": target, "name": item.get("name"), "previous_value": previous_value, "new_value": applied},
+                }
             return {
                 "success": True,
                 "error": None,
