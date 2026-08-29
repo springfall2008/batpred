@@ -2525,22 +2525,21 @@ APPS_SCHEMA = {
     #     ollama:     {url: 'http://localhost:11434/v1'}
     # The flat chat_api_* and openrouter_* keys below still work and are read as a single unnamed
     # provider when no block is present.
+    # Everything the chat agent is configured with lives in one block, rather than a dozen
+    # chat_-prefixed keys scattered through the file. Providers sit under their own sub-key so a
+    # provider named "model" cannot collide with the model setting:
+    #
+    #   chat:
+    #     providers:
+    #       openrouter: {api_key: !secret openrouter_key}
+    #       ollama:     {url: 'http://localhost:11434/v1'}
+    #     model: openai/gpt-4o-mini
+    #     turn_timeout: 1800
+    #
+    # Validated as a dict here; ChatAgent applies the per-setting defaults and ignores anything it
+    # does not recognise. The switches that control chat at runtime (chat_confirm_writes and
+    # friends) are CONFIG_ITEMS entities, not apps.yaml, and are unaffected.
     "chat": {"type": "dict"},
-    "chat_api_key": {"type": "string", "empty": False},
-    "chat_api_url": {"type": "string", "empty": False},
-    "chat_api_type": {"type": "string", "empty": False},
-    "chat_model": {"type": "string", "empty": False},
-    "openrouter_api_key": {"type": "string", "empty": False},
-    "openrouter_default_model": {"type": "string", "empty": False},
-    "openrouter_base_url": {"type": "string", "empty": False},
-    "openrouter_max_tokens": {"type": "integer"},
-    "chat_max_tool_rounds": {"type": "integer"},
-    "chat_max_history": {"type": "integer"},
-    "chat_max_conversations": {"type": "integer"},
-    "chat_expiry_days": {"type": "integer"},
-    "chat_turn_timeout": {"type": "integer"},
-    "chat_request_timeout": {"type": "integer"},
-    "chat_fetch_allowlist": {"type": "string_list"},
     "load_today": {"type": "sensor|sensor_list", "sensor_type": "float", "required": True},
     "import_today": {
         "type": "sensor|sensor_list",

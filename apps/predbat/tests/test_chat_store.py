@@ -643,28 +643,39 @@ def test_selected_model_persists(my_predbat):
     store = ConversationStore(storage, my_predbat.log)
     asyncio.run(store.load_index())
 
-    if store.get_selected_model() is not None:
-        print("ERROR: a fresh store already has a model selected: {}".format(store.get_selected_model()))
+    if store.get_selected_model("openrouter") is not None:
+        print("ERROR: a fresh store already has a model selected: {}".format(store.get_selected_model("openrouter")))
         failed = True
 
     cid = asyncio.run(store.create())
-    store.set_selected_model("anthropic/claude-sonnet-5")
+    store.set_selected_model("anthropic/claude-sonnet-5", "openrouter")
     asyncio.run(store.flush(cid))
 
     # A second store over the same storage is what a restart looks like.
     reloaded = ConversationStore(storage, my_predbat.log)
     asyncio.run(reloaded.load_index())
-    if reloaded.get_selected_model() != "anthropic/claude-sonnet-5":
-        print("ERROR: the selected model did not survive a reload, got {}".format(reloaded.get_selected_model()))
+    if reloaded.get_selected_model("openrouter") != "anthropic/claude-sonnet-5":
+        print("ERROR: the selected model did not survive a reload, got {}".format(reloaded.get_selected_model("openrouter")))
         failed = True
 
     # Clearing it back to nothing must also persist, rather than leaving the old pin in place.
-    reloaded.set_selected_model(None)
+    reloaded.set_selected_model(None, "openrouter")
     asyncio.run(reloaded.flush(cid))
     again = ConversationStore(storage, my_predbat.log)
     asyncio.run(again.load_index())
-    if again.get_selected_model() is not None:
-        print("ERROR: clearing the selected model did not persist, got {}".format(again.get_selected_model()))
+    if again.get_selected_model("openrouter") is not None:
+        print("ERROR: clearing the selected model did not persist, got {}".format(again.get_selected_model("openrouter")))
+        failed = True
+
+    # Two providers keep separate choices. A single remembered id would point at an OpenRouter
+    # model the moment someone switched to Ollama, leaving the picker set to something not there.
+    again.set_selected_model("openai/gpt-4o-mini", "openrouter")
+    again.set_selected_model("qwen3:latest", "ollama")
+    if again.get_selected_model("openrouter") != "openai/gpt-4o-mini" or again.get_selected_model("ollama") != "qwen3:latest":
+        print("ERROR: providers do not keep separate remembered models: {}".format(again.selected_model))
+        failed = True
+    if again.get_selected_model("never-configured") is not None:
+        print("ERROR: an unknown provider inherited another's remembered model")
         failed = True
 
     return failed

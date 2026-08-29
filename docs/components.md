@@ -338,19 +338,21 @@ caution about exposing the web/MCP port outside your home network applies here, 
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
-| `providers` | Dict | No | - | `chat` | Named endpoints, each `{url, api_key, type}` - see [apps.yaml](apps-yaml.md#ai-chat-agent). Configuring one is what enables chat; there is no separate `chat_enable` setting |
-| `api_key` | String | No | - | `chat_api_key` | A single endpoint's key, for the simple case of exactly one. Read only when no `chat` block is present |
-| `base_url` | String | No | OpenRouter | `chat_api_url` | That endpoint's URL. A local one (`http://localhost:11434/v1` for Ollama) needs no key at all |
-| `api_type` | String | No | `auto` | `chat_api_type` | `openrouter`, `ollama`, `openai` or `local`. `auto` works it out from the URL |
-| `model` | String | No | - | `chat_model` | Optional. The model id new conversations start on, e.g. `openai/gpt-4o-mini`. With none set, pick one from the Chat tab's model search box; Predbat remembers the choice across restarts |
-| `max_tokens` | Integer | No | 0 | `openrouter_max_tokens` | Maximum tokens per completion; `0` leaves it to the model/provider's own default |
-| `max_tool_rounds` | Integer | No | 32 | `chat_max_tool_rounds` | Maximum model round trips (completions) allowed within one turn before Predbat stops and asks you to continue. Every tool call the model makes inside one round trip still runs - this bounds round trips, not tool calls |
-| `max_history` | Integer | No | 0 | `chat_max_history` | Maximum recent messages sent to the model each turn, trimmed at a user-message boundary so a tool call and its reply are never split apart. Bounds cost, not how much of the conversation is stored. `0` (the default) means unlimited - the whole conversation is sent every turn |
-| `max_conversations` | Integer | No | 20 | `chat_max_conversations` | Maximum conversations kept; the least recently updated are pruned once you go over this |
-| `expiry_days` | Integer | No | 30 | `chat_expiry_days` | Days of inactivity before a conversation's stored copy expires |
-| `turn_timeout` | Integer | No | 1800 | `chat_turn_timeout` | Seconds a whole turn is allowed to run, across every round trip, before Predbat stops it |
-| `request_timeout` | Integer | No | 300 | `chat_request_timeout` | Seconds a single completion request is allowed to run before it is treated as hung. Bounds one request, not the whole turn - see `turn_timeout` above |
-| `fetch_allowlist` | List | No | `springfall2008.github.io`, `github.com`, `raw.githubusercontent.com` | `chat_fetch_allowlist` | Hosts `fetch_url` is allowed to reach. Replaces the default list rather than adding to it |
+| Setting | Type | Default | Description |
+| ------- | ---- | ------- | ----------- |
+| `providers` | Dict | - | Named endpoints, each `{url, api_key, type, model}` - see [apps.yaml](apps-yaml.md#ai-chat-agent). Configuring one is what enables chat; there is no separate `chat_enable` setting. `model` sits on the provider rather than here, since a model id only means anything to the endpoint serving it |
+| `max_tokens` | Integer | 0 | Maximum tokens per completion; `0` leaves it to the model/provider's own default |
+| `max_tool_rounds` | Integer | 32 | Maximum model round trips (completions) within one turn before Predbat stops and asks you to continue. Every tool call the model makes inside one round trip still runs - this bounds round trips, not tool calls |
+| `max_history` | Integer | 0 | Maximum recent messages sent to the model each turn, trimmed at a user-message boundary so a tool call and its reply are never split apart. Bounds cost, not how much is stored. `0` means unlimited |
+| `max_conversations` | Integer | 20 | Conversations kept before the least recently updated are pruned |
+| `expiry_days` | Integer | 30 | Days of inactivity before a conversation's stored copy expires |
+| `turn_timeout` | Integer | 1800 | Seconds a whole turn may run, across every round trip |
+| `request_timeout` | Integer | 300 | Seconds one completion request may take |
+| `fetch_allowlist` | String list | docs site, `github.com`, `raw.githubusercontent.com` | Hosts `fetch_url` may reach |
+
+All of these live inside the single `chat:` block in `apps.yaml`, which is the component's only
+argument - the defaults above come from `CHAT_DEFAULTS` in `chat.py` rather than the component
+registry, so each sits beside the code that reads it.
 
 Three switches also control the chat agent. All three appear both under
 [Config](web-interface.md#config-view) and in the Chat tab's own footer, so you can change your

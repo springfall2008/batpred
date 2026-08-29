@@ -220,51 +220,36 @@ def detect_provider(url):
     return "openai"
 
 
-def build_providers(block, flat=None):
-    """Turn the apps.yaml chat: block into an ordered list of usable provider entries.
+def build_providers(block):
+    """Turn the providers sub-block of apps.yaml's chat: block into usable provider entries.
 
     Each entry is {name, type, url, api_key, configured}. The dict key is the user's own name for
-    an endpoint, not the provider type - so two Ollama servers, or two OpenRouter accounts, are just two
-    entries. type is optional and falls back to the name when the name is itself a known provider,
-    then to detection from the url.
-
-    flat is the pre-block configuration - chat_api_* and the older openrouter_* keys - read as one
-    unnamed entry when no block is present, so an existing apps.yaml keeps working untouched.
-    Ignored when a block exists: having both would leave two sources of truth for the same thing.
+    an endpoint, not the provider type - so two Ollama servers, or two OpenRouter accounts, are
+    just two entries. type is optional and falls back to the name when the name is itself a known
+    provider, then to detection from the url.
     """
     entries = []
-    if isinstance(block, dict) and block:
-        for name, settings in block.items():
-            if not isinstance(settings, dict):
-                continue
-            url = str(settings.get("url") or "").strip()
-            api_type = str(settings.get("type") or "").strip().lower()
-            if not api_type:
-                api_type = str(name).lower() if str(name).lower() in PROVIDERS else "auto"
-            resolved_name, resolved = resolve_provider(api_type, url or default_url_for(api_type))
-            entries.append(
-                {
-                    "name": str(name),
-                    "type": resolved_name,
-                    "url": url or default_url_for(resolved_name),
-                    "api_key": settings.get("api_key") or None,
-                    "settings": resolved,
-                }
-            )
-    elif flat:
-        url = str(flat.get("url") or "").strip()
-        api_type = str(flat.get("type") or "auto").strip().lower()
-        resolved_name, resolved = resolve_provider(api_type, url or OPENROUTER_BASE_URL)
-        if flat.get("api_key") or url:
-            entries.append(
-                {
-                    "name": resolved_name,
-                    "type": resolved_name,
-                    "url": url or default_url_for(resolved_name),
-                    "api_key": flat.get("api_key") or None,
-                    "settings": resolved,
-                }
-            )
+    for name, settings in (block or {}).items() if isinstance(block, dict) else []:
+        if not isinstance(settings, dict):
+            continue
+        url = str(settings.get("url") or "").strip()
+        api_type = str(settings.get("type") or "").strip().lower()
+        if not api_type:
+            api_type = str(name).lower() if str(name).lower() in PROVIDERS else "auto"
+        resolved_name, resolved = resolve_provider(api_type, url or default_url_for(api_type))
+        entries.append(
+            {
+                "name": str(name),
+                "type": resolved_name,
+                "url": url or default_url_for(resolved_name),
+                "api_key": settings.get("api_key") or None,
+                # A model id only means anything to the provider that serves it -
+                # openai/gpt-4o-mini does not exist on Ollama and qwen3:latest does not exist on
+                # OpenRouter - so the default model belongs to the entry, not the block.
+                "model": settings.get("model") or None,
+                "settings": resolved,
+            }
+        )
 
     for entry in entries:
         # Usable means "a turn sent to this would not fail immediately": a hosted endpoint needs
@@ -284,6 +269,20 @@ def resolve_provider(api_type, url):
     if name in ("", "auto"):
         name = detect_provider(url)
     return name, PROVIDERS.get(name, PROVIDERS["openai"])
+
+
+# Defaults for the apps.yaml chat: block, kept here rather than in the component registry so each
+# one sits beside the code that reads it and the reasoning that chose it. A setting absent from
+# the block, or explicitly null, takes the value here.
+CHAT_DEFAULTS = {
+    "max_tokens": 0,
+    "max_tool_rounds": 32,
+    "max_history": 0,
+    "max_conversations": 20,
+    "expiry_days": 30,
+    "turn_timeout": 1800,
+    "request_timeout": 300,
+}
 
 
 class ChatBusyError(RuntimeError):
@@ -742,25 +741,7 @@ class ChatAgent(ComponentBase):
     provider_name = "openrouter"
     provider = PROVIDERS["openrouter"]
 
-    def initialize(
-        self,
-        providers=None,
-        api_key=None,
-        model=None,
-        base_url=None,
-        api_type="auto",
-        legacy_api_key=None,
-        legacy_base_url=None,
-        legacy_model=None,
-        max_tokens=0,
-        max_tool_rounds=8,
-        max_history=0,
-        max_conversations=20,
-        expiry_days=30,
-        turn_timeout=1800,
-        request_timeout=300,
-        fetch_allowlist=None,
-    ):
+    def initialize(self, config=None):
         """Store configuration and build the conversation store and event buffer.
 
         turn_timeout and request_timeout bound two different things and must not be conflated:
@@ -775,19 +756,25 @@ class ChatAgent(ComponentBase):
         max_history <= 0 (0 is the default) means unlimited - trim_history() itself implements
         that, this only stores whatever was passed through.
         """
-        # Named providers from the chat: block, or the flat keys read as one unnamed entry. The
-        # chat_api_* names win over the older openrouter_* ones, so an apps.yaml written before
-        # the rename keeps working without being touched.
-        flat = {"api_key": api_key or legacy_api_key, "url": base_url or legacy_base_url, "type": api_type}
-        self.providers = build_providers(providers, flat)
+        settings = config if isinstance(config, dict) else {}
+
+        def setting(name):
+            """Read one setting from the block, falling back to its documented default."""
+            value = settings.get(name)
+            return CHAT_DEFAULTS[name] if value is None else value
+
+        self.providers = build_providers(settings.get("providers"))
         self.select_provider(None)
-        self.default_model = model or legacy_model
-        self.max_tokens = max_tokens or 0
-        self.max_tool_rounds = max_tool_rounds or 8
-        self.max_history = max_history if max_history is not None else 0
-        self.turn_timeout = turn_timeout or 1800
-        self.request_timeout = request_timeout or 300
-        self.fetch_allowlist = list(fetch_allowlist) if fetch_allowlist else list(DEFAULT_FETCH_ALLOWLIST)
+        self.max_tokens = setting("max_tokens")
+        self.max_tool_rounds = setting("max_tool_rounds")
+        # 0 means unlimited, and is also the default, so an explicit 0 and an absent value reach
+        # the same place - no special handling needed. That equivalence is worth knowing if the
+        # default ever changes: setting() cannot then tell "unset" from a deliberate 0.
+        self.max_history = setting("max_history")
+        self.turn_timeout = setting("turn_timeout")
+        self.request_timeout = setting("request_timeout")
+        allowlist = settings.get("fetch_allowlist")
+        self.fetch_allowlist = list(allowlist) if allowlist else list(DEFAULT_FETCH_ALLOWLIST)
         self.lock = threading.Lock()
         # Set on the first run() tick, from inside this component's own thread. Everything the
         # web layer hands over is scheduled onto it; until it exists, the component is still
@@ -803,7 +790,7 @@ class ChatAgent(ComponentBase):
         # only the turn loop reads: a turn parked on a confirmation is not in that loop, so
         # without this it could not be stopped at all.
         self.stop_requested = None
-        self.store = ConversationStore(self.storage, self.log, max_history=self.max_history, max_conversations=max_conversations or 20, expiry_days=expiry_days or 30)
+        self.store = ConversationStore(self.storage, self.log, max_history=self.max_history, max_conversations=setting("max_conversations"), expiry_days=setting("expiry_days"))
         self.index_loaded = False
         self.turn_counter = 0
         self.tools = PredbatTools(self.base, log_func=self.log)
@@ -1134,9 +1121,9 @@ class ChatAgent(ComponentBase):
             payload["stream_options"] = {"include_usage": True}
         if self.max_tokens:
             payload["max_tokens"] = self.max_tokens
-        # OpenRouter's own plugin. Sending it elsewhere is at best ignored and at worst a 400, and
-        # the switch has nothing to enable off OpenRouter anyway.
-        if self.provider["openrouter_ext"] and self.web_search_enabled():
+        # web_search_enabled() decides, including whether the active provider supports it at all -
+        # gating it here as well would short-circuit the warning it logs when it does not.
+        if self.web_search_enabled():
             payload["plugins"] = [{"id": "web"}]
 
         content = ""
@@ -1591,6 +1578,7 @@ class ChatAgent(ComponentBase):
             self.api_key = None
             self.base_url = OPENROUTER_BASE_URL
             self.provider_name, self.provider = "openrouter", PROVIDERS["openrouter"]
+            self.default_model = None
             return None
 
         self.active_provider = chosen["name"]
@@ -1598,6 +1586,7 @@ class ChatAgent(ComponentBase):
         self.base_url = str(chosen["url"]).rstrip("/")
         self.provider_name = chosen["type"]
         self.provider = chosen["settings"]
+        self.default_model = chosen["model"]
         return chosen["name"]
 
     def provider_ready(self):
@@ -1613,7 +1602,7 @@ class ChatAgent(ComponentBase):
         empty on a fresh install - which is not an error, just a user who has not chosen yet.
         """
         conversation_model = (self.store.get_meta(conversation_id) or {}).get("model")
-        return conversation_model or self.store.get_selected_model() or self.default_model or None
+        return conversation_model or self.store.get_selected_model(self.active_provider) or self.default_model or None
 
     def _report_turn_error(self, conversation_id, message, detail=None):
         """Show a failed turn in the transcript and record it on the conversation.
@@ -1718,17 +1707,22 @@ class ChatAgent(ComponentBase):
     def web_search_enabled(self):
         """Return whether OpenRouter's web search plugin should be added to the request.
 
-        The plugin is an OpenRouter feature. If the user has pointed openrouter_base_url at
-        something else it is silently ignored by that endpoint, so say so once rather than
-        leaving them wondering why nothing changed.
+        The plugin is an OpenRouter feature, so it is not sent to any other provider - it would be
+        ignored at best and rejected at worst. The switch being on with a different provider
+        active is worth saying once, rather than leaving the user wondering why turning it on
+        changed nothing.
+
+        The provider check lives here rather than at the call site: written as
+        `provider["openrouter_ext"] and web_search_enabled()`, Python short-circuits and this
+        never runs off OpenRouter, so the explanation was never logged.
         """
         value, _ = self.get_ha_config("chat_web_search", False)
         if not value:
             return False
-        if "openrouter.ai" not in self.base_url:
+        if not self.provider["openrouter_ext"]:
             if not self.warned_web_search_base_url:
                 self.warned_web_search_base_url = True
-                self.log("Warn: chat web search is enabled but openrouter_base_url is '{}', which is not OpenRouter - the web plugin will be ignored by that endpoint".format(self.base_url))
+                self.log("Warn: chat web search is enabled but the active provider is '{}' ({}), not OpenRouter - the web plugin is only sent to OpenRouter".format(self.active_provider, self.base_url))
             return False
         return True
 

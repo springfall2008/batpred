@@ -118,7 +118,8 @@ class ConversationStore:
         # The model the user last chose in the picker, remembered across restarts so a install
         # with no openrouter_default_model does not ask again on every boot. Guarded by the same
         # lock as the index it is stored beside; None means nothing has been chosen yet.
-        self.selected_model = None
+        # Per provider: {provider name: model id}. See get_selected_model().
+        self.selected_model = {}
         # The most recent failed turn per conversation, saved beside the messages rather than
         # among them: a transport failure is not something the model said, so it must never be
         # replayed back to it. Kept for the user and for a bug report, and overwritten by the next
@@ -154,7 +155,7 @@ class ConversationStore:
 
         healed = False
         with self.lock:
-            self.selected_model = selected_model
+            self.selected_model = selected_model if isinstance(selected_model, dict) else ({} if selected_model is None else selected_model)
             self.index = OrderedDict()
             for entry in entries:
                 cid = entry.get("id")
@@ -504,15 +505,30 @@ class ConversationStore:
         with self.lock:
             return [dict(entry) for entry in self.approvals.get(cid, [])]
 
-    def get_selected_model(self):
-        """Return the model the user last chose in the picker, or None."""
+    def get_selected_model(self, provider=None):
+        """Return the model the user last chose for a provider, or None.
+
+        Kept per provider because a model id only means anything to the provider that serves it:
+        a single remembered id would point at an OpenRouter model the moment someone switched to
+        Ollama, leaving the picker set to something that is not there.
+        """
         with self.lock:
+            if isinstance(self.selected_model, dict):
+                return self.selected_model.get(provider or "")
+            # A value stored before this was per-provider. Honoured for whichever provider is
+            # asking, since there is only one it could have belonged to.
             return self.selected_model
 
-    def set_selected_model(self, model_id):
-        """Remember the model the user chose, to be written on the next index flush."""
+    def set_selected_model(self, model_id, provider=None):
+        """Remember the model chosen for a provider, to be written on the next index flush."""
         with self.lock:
-            self.selected_model = model_id or None
+            if not isinstance(self.selected_model, dict):
+                self.selected_model = {}
+            key = provider or ""
+            if model_id:
+                self.selected_model[key] = model_id
+            else:
+                self.selected_model.pop(key, None)
 
     async def _save_index(self):
         """Write the conversation index with a renewed expiry."""

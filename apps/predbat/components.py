@@ -109,26 +109,12 @@ COMPONENT_LIST = {
         # providers - adding one writes apps.yaml - so the component has to be running before any
         # provider exists, or there is nothing to configure it from. With none configured the tab
         # shows its setup page and no turn can be sent.
+        #
+        # One argument, because the whole feature is configured by one apps.yaml block. Defaults
+        # live in chat.py beside the code that reads them rather than here, where a dozen entries
+        # said little more than their own names.
         "args": {
-            # The named-provider block. Parsed by ChatAgent, not by the registry, because its
-            # shape is a dict of arbitrary names rather than a fixed set of args.
-            "providers": {"required": False, "config": "chat"},
-            "api_key": {"required": False, "config": "chat_api_key"},
-            "base_url": {"required": False, "config": "chat_api_url"},
-            "api_type": {"required": False, "config": "chat_api_type", "default": "auto"},
-            "model": {"required": False, "config": "chat_model", "default": "minimax/minimax-m3:free"},
-            # The pre-rename names, still read so an existing apps.yaml keeps working untouched.
-            "legacy_api_key": {"required": False, "config": "openrouter_api_key"},
-            "legacy_base_url": {"required": False, "config": "openrouter_base_url"},
-            "legacy_model": {"required": False, "config": "openrouter_default_model"},
-            "max_tokens": {"required": False, "config": "openrouter_max_tokens", "default": 0},
-            "max_tool_rounds": {"required": False, "config": "chat_max_tool_rounds", "default": 32},
-            "max_history": {"required": False, "config": "chat_max_history", "default": 0},
-            "max_conversations": {"required": False, "config": "chat_max_conversations", "default": 20},
-            "expiry_days": {"required": False, "config": "chat_expiry_days", "default": 30},
-            "turn_timeout": {"required": False, "config": "chat_turn_timeout", "default": 1800},
-            "request_timeout": {"required": False, "config": "chat_request_timeout", "default": 300},
-            "fetch_allowlist": {"required": False, "config": "chat_fetch_allowlist", "default": None},
+            "config": {"required": False, "config": "chat"},
         },
     },
     "solar": {

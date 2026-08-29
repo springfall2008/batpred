@@ -50,12 +50,12 @@ class _StubSelectionStore:
         """Start with nothing selected unless a test says otherwise."""
         self.selected = selected
 
-    def get_selected_model(self):
-        """Return the remembered model choice."""
+    def get_selected_model(self, provider=None):
+        """Return the remembered model choice for a provider."""
         return self.selected
 
-    def set_selected_model(self, model_id):
-        """Remember a model choice."""
+    def set_selected_model(self, model_id, provider=None):
+        """Remember a model choice for a provider."""
         self.selected = model_id or None
 
 
@@ -1168,6 +1168,8 @@ def test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_pred
         """An agent stand-in whose list_models() is only reachable via run_on_agent_loop."""
 
         default_model = "configured/model"
+        # The remembered model is per provider, so the route asks which one is active.
+        active_provider = "openrouter"
         # /chat/models reports the remembered selection alongside the catalogue.
         store = _StubSelectionStore()
 
@@ -1226,6 +1228,7 @@ def test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_pred
         """An agent stand-in whose catalogue degraded to just the configured model."""
 
         default_model = "configured/model"
+        active_provider = "openrouter"
         store = _StubSelectionStore()
 
         @staticmethod

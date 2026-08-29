@@ -26,11 +26,11 @@ import aiohttp
 
 import chat
 from chat import (
+    CHAT_DEFAULTS,
     COMPLETION_MAX_ATTEMPTS,
     COMPLETION_RATE_LIMIT_DELAYS_SECONDS,
     COMPLETION_RATE_LIMIT_MAX_ATTEMPTS,
     max_attempts_for,
-    OPENROUTER_BASE_URL,
     resolve_provider,
     parse_retry_after,
     retry_delay_for,
@@ -65,25 +65,21 @@ def _make_agent(my_predbat, **overrides):
     agent.count_errors = 0
     agent.api_started = False
     agent.api_stop = False
-    settings = {
-        "api_key": "test-key",
-        "model": "test/model",
-        # The real host, not a stand-in: chat_api_type auto-detects the provider from the URL,
-        # so a fake hostname is classified as a generic OpenAI-compatible endpoint and the
-        # OpenRouter-specific behaviour under test here never runs. Nothing is dialled - the
-        # stream is stubbed - so the real name costs nothing.
-        "base_url": "https://openrouter.ai/api/v1",
-        "max_tokens": 0,
+    # The whole agent is configured by one apps.yaml block, so the fixture builds one. Provider
+    # entries are named the real thing rather than a stand-in: the type is detected from the URL,
+    # so a fake hostname resolves to a generic OpenAI-compatible endpoint and the
+    # OpenRouter-specific behaviour under test never runs. Nothing is dialled - the stream is
+    # stubbed - so the real name costs nothing.
+    config = {
+        "providers": {"openrouter": {"api_key": "test-key", "url": "https://openrouter.ai/api/v1", "model": "test/model"}},
         "max_tool_rounds": 4,
         "max_history": 40,
-        "max_conversations": 20,
-        "expiry_days": 30,
         "turn_timeout": 30,
         "request_timeout": 30,
-        "fetch_allowlist": None,
     }
-    settings.update(overrides)
-    agent.initialize(**settings)
+    # Overrides name settings inside the block, except "providers" which replaces it wholesale.
+    config.update(overrides)
+    agent.initialize(config)
     return agent
 
 
@@ -116,25 +112,41 @@ def test_component_gating(my_predbat):
         if entry["args"].get(name, {}).get("required"):
             print("ERROR: '{}' is required, which would stop the component starting on a default install".format(name))
             failed = True
-    bindings = {"api_key": "chat_api_key", "base_url": "chat_api_url", "api_type": "chat_api_type", "model": "chat_model", "legacy_api_key": "openrouter_api_key", "legacy_base_url": "openrouter_base_url", "legacy_model": "openrouter_default_model"}
-    for arg, config_key in bindings.items():
-        if entry["args"].get(arg, {}).get("config") != config_key:
-            print("ERROR: {!r} is bound to {!r}, expected {!r}".format(arg, entry["args"].get(arg, {}).get("config"), config_key))
-            failed = True
+    # One argument for the whole feature: everything the chat agent takes lives in the apps.yaml
+    # chat: block, so the registry has one binding rather than a dozen that said little more than
+    # their own names.
+    if list(entry["args"]) != ["config"]:
+        print("ERROR: chat should take one 'config' argument, got {}".format(list(entry["args"])))
+        failed = True
+    if entry["args"].get("config", {}).get("config") != "chat":
+        print("ERROR: the config argument is not bound to the chat block: {}".format(entry["args"].get("config")))
+        failed = True
     if not entry.get("can_restart"):
         print("ERROR: the chat component should be restartable from the Components tab")
         failed = True
-    if entry["args"]["max_tool_rounds"]["config"] != "chat_max_tool_rounds":
-        print("ERROR: max_tool_rounds is not bound to chat_max_tool_rounds: {}".format(entry["args"]["max_tool_rounds"]))
-        failed = True
-    if entry["args"]["max_history"].get("default") != 0:
-        print("ERROR: chat_max_history should default to 0 (unlimited), got {}".format(entry["args"]["max_history"].get("default")))
-        failed = True
-    if entry["args"]["turn_timeout"].get("default") != 1800:
-        print("ERROR: chat_turn_timeout should default to 1800s (the whole-turn budget), got {}".format(entry["args"]["turn_timeout"].get("default")))
-        failed = True
-    if entry["args"]["request_timeout"].get("default") != 300 or entry["args"]["request_timeout"]["config"] != "chat_request_timeout":
-        print("ERROR: request_timeout should default to 300s and bind to chat_request_timeout: {}".format(entry["args"]["request_timeout"]))
+    # The defaults moved out of the registry and into chat.py, beside the code that reads them.
+    expected_defaults = {"max_tool_rounds": 32, "max_history": 0, "turn_timeout": 1800, "request_timeout": 300, "max_conversations": 20, "expiry_days": 30, "max_tokens": 0}
+    for name, value in expected_defaults.items():
+        if CHAT_DEFAULTS.get(name) != value:
+            print("ERROR: {} defaults to {}, expected {}".format(name, CHAT_DEFAULTS.get(name), value))
+            failed = True
+
+    # An empty block, or none at all, must produce a working agent on defaults rather than raise.
+    for description, block in (("no block", None), ("empty block", {}), ("providers only", {"providers": {}})):
+        agent = _make_agent(my_predbat, providers={})
+        agent.initialize(block)
+        if agent.max_tool_rounds != 32 or agent.turn_timeout != 1800:
+            print("ERROR: {} did not fall back to the documented defaults".format(description))
+            failed = True
+        if agent.provider_ready():
+            print("ERROR: {} reported itself ready to answer a turn".format(description))
+            failed = True
+
+    # 0 for max_history means unlimited and is a deliberate value, so it must survive rather than
+    # being read as "unset" and replaced by the default.
+    agent = _make_agent(my_predbat, max_history=0)
+    if agent.max_history != 0:
+        print("ERROR: an explicit max_history of 0 was replaced by the default: {}".format(agent.max_history))
         failed = True
 
     return failed
@@ -1934,7 +1946,8 @@ def test_web_search_switch(my_predbat):
         print("ERROR: the web plugin was not sent with the switch on: {}".format(on.fake.payloads[0].get("plugins")))
         failed = True
 
-    foreign = _make_agent(my_predbat, base_url="http://localhost:11434/v1")
+    # A provider that is not OpenRouter, configured the way one actually is now.
+    foreign = _make_agent(my_predbat, providers={"ollama": {"url": "http://localhost:11434/v1"}})
     warnings = []
     foreign.log = lambda message, **kwargs: warnings.append(str(message))
     foreign.get_ha_config = lambda name, default: (True, False)
@@ -2742,9 +2755,11 @@ def test_empty_completion_is_retried_and_recovers(my_predbat):
 
 
 def test_model_resolution_order(my_predbat):
-    """A turn picks the conversation's model, then the remembered pick, then the apps.yaml default.
+    """A turn picks the conversation's model, then the remembered pick, then the provider's own.
 
-    With openrouter_default_model optional, all three can be empty - a fresh install where the
+    A model id only means anything to the provider serving it, so both the configured default and
+    the remembered pick belong to a provider rather than being global. All three can be empty - a
+    fresh install where the
     user has pasted only an API key. That is not a misconfiguration, so the turn must say what to
     do rather than posting a request with model=None and surfacing whatever the API says about it.
 
@@ -2754,7 +2769,8 @@ def test_model_resolution_order(my_predbat):
     failed = False
     print("**** Testing model resolution order ****")
 
-    agent = _agent_with_fake(my_predbat, _text_response("hello"), model=None)
+    # A provider with no model of its own, which is the fresh-install case.
+    agent = _agent_with_fake(my_predbat, _text_response("hello"), providers={"openrouter": {"api_key": "test-key", "url": "https://openrouter.ai/api/v1"}})
     cid = asyncio.run(agent.store.create())
 
     # Nothing anywhere: refuse, and name the picker.
@@ -2769,7 +2785,7 @@ def test_model_resolution_order(my_predbat):
         failed = True
 
     # The remembered pick is used when the conversation has none of its own.
-    agent.store.set_selected_model("remembered/model")
+    agent.store.set_selected_model("remembered/model", agent.active_provider)
     if agent.resolve_model(cid) != "remembered/model":
         print("ERROR: the remembered model was not used, got {}".format(agent.resolve_model(cid)))
         failed = True
@@ -2779,14 +2795,14 @@ def test_model_resolution_order(my_predbat):
     if agent.resolve_model(cid) != "remembered/model":
         print("ERROR: the apps.yaml default outranked the user's remembered pick")
         failed = True
-    agent.store.set_selected_model(None)
+    agent.store.set_selected_model(None, agent.active_provider)
     if agent.resolve_model(cid) != "apps/default":
         print("ERROR: the apps.yaml default was not used once nothing was remembered")
         failed = True
 
     # The conversation's own model outranks everything.
     agent.store.set_model(cid, "conversation/model")
-    agent.store.set_selected_model("remembered/model")
+    agent.store.set_selected_model("remembered/model", agent.active_provider)
     if agent.resolve_model(cid) != "conversation/model":
         print("ERROR: the conversation's own model did not win, got {}".format(agent.resolve_model(cid)))
         failed = True
@@ -3246,7 +3262,7 @@ def test_provider_detection_and_payload(my_predbat):
 
     # The payload carries only the extensions the provider understands.
     for url, expect_openrouter in (("https://openrouter.ai/api/v1", True), ("http://localhost:11434/v1", False)):
-        agent = _agent_with_fake(my_predbat, _text_response("ok"), base_url=url, api_type="auto")
+        agent = _agent_with_fake(my_predbat, _text_response("ok"), providers={"endpoint": {"url": url, "model": "test/model"}})
         payload = {}
         original = agent._stream_chunks
 
@@ -3274,50 +3290,11 @@ def test_provider_detection_and_payload(my_predbat):
     return failed
 
 
-def test_legacy_openrouter_keys_still_work(my_predbat):
-    """An apps.yaml written before the rename keeps working untouched.
-
-    The openrouter_* names were live on real installations before chat_api_* existed. Dropping
-    them would have broken those installs on update, with the Chat tab simply vanishing and
-    nothing saying why.
-
-    Mutation check: removing the legacy fallbacks leaves the agent with no key, url or model.
-    """
-    failed = False
-    print("**** Testing the pre-rename apps.yaml keys still work ****")
-
-    agent = _agent_with_fake(my_predbat, _text_response("ok"), api_key=None, base_url=None, model=None, legacy_api_key="sk-old", legacy_base_url="https://openrouter.ai/api/v1", legacy_model="old/model")
-    if agent.api_key != "sk-old":
-        print("ERROR: openrouter_api_key was not read as a fallback: {}".format(agent.api_key))
-        failed = True
-    if agent.default_model != "old/model":
-        print("ERROR: openrouter_default_model was not read as a fallback: {}".format(agent.default_model))
-        failed = True
-    if agent.provider_name != "openrouter":
-        print("ERROR: the legacy base url did not resolve to OpenRouter: {}".format(agent.provider_name))
-        failed = True
-
-    # The new names win when both are set.
-    agent = _agent_with_fake(my_predbat, _text_response("ok"), api_key="sk-new", legacy_api_key="sk-old")
-    if agent.api_key != "sk-new":
-        print("ERROR: the legacy key overrode the new one: {}".format(agent.api_key))
-        failed = True
-
-    # With neither url set, OpenRouter is still the default endpoint.
-    agent = _agent_with_fake(my_predbat, _text_response("ok"), api_key="sk-new", base_url=None, legacy_base_url=None)
-    if agent.base_url != OPENROUTER_BASE_URL:
-        print("ERROR: no url configured did not fall back to OpenRouter: {}".format(agent.base_url))
-        failed = True
-
-    return failed
-
-
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
     failed |= test_component_gating(my_predbat)
     failed |= test_provider_detection_and_payload(my_predbat)
-    failed |= test_legacy_openrouter_keys_still_work(my_predbat)
     failed |= test_model_resolution_order(my_predbat)
     failed |= test_turn_error_is_detailed_and_stored_but_never_replayed(my_predbat)
     failed |= test_confirmation_card_resolves_nested_paths(my_predbat)

@@ -351,7 +351,7 @@ class WebChat:
             models = await agent.run_on_agent_loop(agent.list_models())
         except AgentNotReadyError:
             return web.json_response({"error": "The chat component is still starting"}, status=503)
-        return web.json_response({"models": models, "default_model": agent.default_model, "selected_model": agent.store.get_selected_model(), "catalogue_available": len(models) > 1})
+        return web.json_response({"models": models, "default_model": agent.default_model, "selected_model": agent.store.get_selected_model(agent.active_provider), "catalogue_available": len(models) > 1})
 
     async def html_chat_model(self, request):
         """Set the model for one conversation."""
@@ -368,7 +368,7 @@ class WebChat:
         # survives a restart. Only a real selection is remembered - clearing back to the default
         # should not pin whatever the default happened to be at that moment.
         if model_id:
-            agent.store.set_selected_model(model_id)
+            agent.store.set_selected_model(model_id, agent.active_provider)
         await agent.run_on_agent_loop(agent.store.flush(body.get("conversation")))
         return web.json_response({"ok": True})
 
