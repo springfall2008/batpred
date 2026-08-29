@@ -2692,6 +2692,49 @@ def test_battery_scaling_invalid_value_clamped(test_name, my_predbat):
     return failed
 
 
+def test_inverter_type_default_warning(test_name, my_predbat):
+    """
+    Verify Inverter.__init__ warns when inverter_type is not set in apps.yaml and Predbat is
+    silently assuming GivEnergy (GE) - issue #4822, where a fully custom entity-based setup with
+    no inverter_type configured had its scheduled_discharge_enable entity silently overridden by
+    the GE fallback, with nothing in the log distinguishing an assumed GE from a configured one.
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    orig_inverter_type = my_predbat.args.get("inverter_type")
+    orig_log = my_predbat.log
+    my_predbat.args["givtcp_rest"] = None
+
+    def warned(log_messages):
+        return any("inverter_type is not set" in msg for msg in log_messages)
+
+    try:
+        # inverter_type entirely absent - must warn
+        my_predbat.args.pop("inverter_type", None)
+        log_messages = []
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        Inverter(my_predbat, 0)
+        if not warned(log_messages):
+            print("ERROR: expected a warning when inverter_type is not configured, got none")
+            failed = True
+
+        # inverter_type explicitly configured as GE - must not warn
+        my_predbat.args["inverter_type"] = ["GE"]
+        log_messages = []
+        Inverter(my_predbat, 0)
+        if warned(log_messages):
+            print("ERROR: unexpected warning when inverter_type is explicitly set to GE")
+            failed = True
+    finally:
+        my_predbat.log = orig_log
+        if orig_inverter_type is None:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = orig_inverter_type
+    return failed
+
+
 def test_rest_battery_capacity_fallback(test_name, my_predbat):
     """
     Verify that when V3 REST data omits Battery_Capacity_kWh and battery_nominal_capacity,
@@ -3042,6 +3085,10 @@ def run_inverter_tests(my_predbat_dummy):
         return failed
 
     failed |= test_battery_scaling_invalid_value_clamped("battery_scaling_invalid_value_clamped", my_predbat)
+
+    failed |= test_inverter_type_default_warning("inverter_type_default_warning", my_predbat)
+    if failed:
+        return failed
 
     failed |= test_rest_battery_capacity_fallback("rest_capacity_fallback", my_predbat)
     if failed:
