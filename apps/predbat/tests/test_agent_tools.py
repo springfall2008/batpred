@@ -16,9 +16,10 @@ before and after the extraction, or an MCP client's tool set changed without any
 import asyncio
 import json
 import os
+import re
 import time
 
-from agent_tools import TOOL_DEFS, PredbatTools, mcp_tool_list, openai_tool_list, slim_plan, compile_filter_argument, MCPArgumentError, FILTER_PATTERN_MAX
+from agent_tools import TOOL_DEFS, PredbatTools, format_plan_rows_table, mcp_tool_list, openai_tool_list, slim_plan, slim_plan_rows, compile_filter_argument, MCPArgumentError, FILTER_PATTERN_MAX
 from utils import mask_secret_args
 from web_mcp import MCPServerWrapper
 
@@ -909,12 +910,15 @@ def test_get_plan_is_slimmed(my_predbat):
         "show_limit": "4",
         "reasons": [{"code": "freeze_export", "params": {}}],
         "clipped": 0,
+        "extra_load": 0.15,
         "car_charging": 0.0,
         "car_rate": None,
         "import_rate": 30.26,
         "export_rate": 12.0,
         "pv_forecast": 0.28,
+        "pv_forecast10": 0.19,
         "load_forecast": 0.2,
+        "load_forecast10": 0.22,
         "soc_percent": 85,
         "soc_change": -1.41,
         "cost_change": -0.01,
@@ -929,10 +933,13 @@ def test_get_plan_is_slimmed(my_predbat):
         "skip_state_cell": False,
         "split": False,
     }
-    plan = {"rows": [row], "soc": 8.09, "soc_max": 9.52, "mode": "Control charge & discharge", "iboost_enable": None, "reason_templates": {"freeze_export": "Freezing export at {target_percent}%"}}
+    plan = {"rows": [row], "soc": 8.09, "soc_max": 9.52, "mode": "Control charge & discharge", "iboost_enable": None, "currency_symbols": ["\u00a3", "p"], "reason_templates": {"freeze_export": "Freezing export at {target_percent}%"}}
 
     slimmed = slim_plan(plan)
-    out = slimmed["rows"][0]
+    # Field-level rules are asserted against the slimmed dicts, not the rendered table: in a table
+    # a dropped field and an empty cell look identical, so every "was it dropped?" check below
+    # would pass on a field that was merely blank.
+    out = slim_plan_rows(plan["rows"])[0]
 
     # Weekday plus clock, not a raw ISO stamp.
     if out.get("time") != "Fri 09:00":
@@ -979,12 +986,20 @@ def test_get_plan_is_slimmed(my_predbat):
         if gone in out:
             print("ERROR: {} was not dropped: {}".format(gone, out))
             failed = True
-    # And it must not take the legend's word for them with it - a unit entry for a field that is
-    # never sent is a line of the response describing nothing.
-    for gone in ("slot_minute", "import_rate_adjusted", "export_rate_adjusted"):
-        if gone in (slimmed.get("units") or {}):
-            print("ERROR: the legend still documents the dropped field {}".format(gone))
+    # Running totals of columns the table already carries per slot, plus the raw form of the
+    # limit the plan page displays. The plan's own top-level "totals" answers the whole-day
+    # question these were there for.
+    for gone in ("pv_forecast_total", "load_forecast_total", "extra_load_total", "state_target"):
+        if gone in out:
+            print("ERROR: {} was not dropped: {}".format(gone, out))
             failed = True
+    # The legend describes exactly the columns rendered - no entry for a field that no longer
+    # arrives, and no rendered column left unexplained.
+    legend = slimmed.get("columns") or {}
+    headings = [cell.strip() for cell in slimmed["rows"].split("\n")[0].strip("|").split("|")]
+    if set(legend) - set(headings):
+        print("ERROR: the legend describes columns the table does not have: {}".format(sorted(set(legend) - set(headings))))
+        failed = True
 
     # The semantic content survives untouched.
     for kept in ("state", "show_limit", "soc_percent", "import_rate", "total_cost"):
@@ -1001,45 +1016,158 @@ def test_get_plan_is_slimmed(my_predbat):
         print("ERROR: slim_plan mutated the caller's plan: {}".format(row))
         failed = True
 
-    # A unit legend, stated once rather than per row - annotating ~96 rows would undo the
-    # slimming. The units themselves come from the web table's own headers and from output.py.
-    units = slimmed.get("units") or {}
-    if units.get("pv_forecast", "")[:3] != "kWh":
-        print("ERROR: pv_forecast is not documented as kWh - the model cannot tell it from watts: {}".format(units))
+    # rows reaches the model as a markdown table. JSON spells a table out by repeating every column
+    # name on every row - on a real 73-row plan that was 19,723 characters of key names, 73% of the
+    # payload, and rendering it as a table took the whole response from 41,709 to 12,497.
+    table = slimmed.get("rows")
+    if not isinstance(table, str):
+        print("ERROR: rows did not render as a table: {!r}".format(table))
+        return True
+    lines = table.split("\n")
+    if len(lines) != 3:
+        print("ERROR: expected a header, a separator and one data row: {!r}".format(lines))
         failed = True
-    if units.get("soc_change", "")[:3] != "kWh":
-        print("ERROR: soc_change is not documented as kWh: {}".format(units))
+    if not lines[1].strip().startswith("| ---"):
+        print("ERROR: the table has no markdown separator row: {!r}".format(lines[1]))
         failed = True
-    if "%" not in units.get("soc_percent", ""):
-        print("ERROR: soc_percent is not documented as a percentage: {}".format(units))
+    header = [cell.strip() for cell in lines[0].strip("|").split("|")]
+    values = [cell.strip() for cell in lines[-1].strip("|").split("|")]
+
+    def column_of(heading):
+        """Index of a column by the heading the table shows."""
+        return header.index(heading) if heading in header else -1
+
+    # The same headings as the web plan page, so a model and a user looking at their plan are
+    # reading the same table. Raw field names would be a second vocabulary for one set of data.
+    for heading in ("Time", "Import p", "Export p", "State", "Limit %", "PV kWh (10%)", "Load kWh (10%)", "Clip kWh", "XLoad kWh", "Car kWh", "SoC % (chg kWh)", "Cost \u00a3", "Total \u00a3"):
+        if column_of(heading) < 0:
+            print("ERROR: the header is missing the plan page's {!r} column: {}".format(heading, header))
+            failed = True
+    if any("color" in heading for heading in header):
+        print("ERROR: a presentation field reached the header: {}".format(header))
+        failed = True
+    # The point of the whole change: a column name appears once, not once per row.
+    if lines[-1].count("Import"):
+        print("ERROR: a data row still repeats the column name: {!r}".format(lines[-1]))
+        failed = True
+    if len(values) != len(header):
+        print("ERROR: a data row has {} cells against {} columns".format(len(values), len(header)))
+        failed = True
+    elif values[column_of("Import p")] != "30.26":
+        print("ERROR: a value did not land under its own column: {} / {}".format(header, values))
+        failed = True
+
+    # Change and alternative-forecast fields are folded into the column they belong to rather than
+    # taking one of their own, and a change carries an explicit sign so it cannot be read as a
+    # second measurement.
+    for gone in ("soc_change", "cost_change", "pv_forecast10", "load_forecast10"):
+        if any(gone in heading for heading in header):
+            print("ERROR: {} kept its own column: {}".format(gone, header))
+            failed = True
+    if values[column_of("SoC % (chg kWh)")] != "85 (-1.41)":
+        print("ERROR: the change was not folded into its column: {!r}".format(values[column_of("SoC % (chg kWh)")]))
+        failed = True
+    if values[column_of("PV kWh (10%)")] != "0.28 (0.19)":
+        print("ERROR: the 10% forecast was not folded into the PV column: {!r}".format(values[column_of("PV kWh (10%)")]))
+        failed = True
+    # A rise must be signed too, or "84 (0.4)" reads as an unrelated second number.
+    rising, _ = format_plan_rows_table([{"soc_percent": 84, "soc_change": 0.4}])
+    if "84 (+0.4)" not in rising:
+        print("ERROR: a positive change was not signed: {!r}".format(rising))
+        failed = True
+    # A change with no column to fold into keeps its own rather than disappearing.
+    orphan, _ = format_plan_rows_table([{"time": "Fri 09:00", "soc_change": 0.4}])
+    if "soc_change" not in orphan.split("\n")[0]:
+        print("ERROR: a change with no matching column was dropped: {!r}".format(orphan))
+        failed = True
+
+    # iBoost and carbon get columns exactly when they are enabled, which is the same rule the plan
+    # page follows: output.py only writes iboost/iboost_change into a row under `if
+    # self.iboost_enable`, and co2_rate/co2_total under `if self.carbon_enable`, so presence in the
+    # data IS the feature being on. An install with neither should see neither column rather than
+    # two of empty cells.
+    enabled, _ = format_plan_rows_table([{"time": "Fri 09:00", "iboost": 1.2, "iboost_change": 0.3, "co2_rate": 210, "co2_total": 4.1}])
+    enabled_header = enabled.split("\n")[0]
+    for heading in ("iBoost kWh", "CO2 g/kWh", "CO2 kg"):
+        if heading not in enabled_header:
+            print("ERROR: {} is missing when the feature is enabled: {!r}".format(heading, enabled_header))
+            failed = True
+    if "1.2 (+0.3)" not in enabled:
+        print("ERROR: the iBoost slot figure was not folded into its column: {!r}".format(enabled))
+        failed = True
+    if any(heading in header for heading in ("iBoost kWh", "CO2 g/kWh", "CO2 kg")):
+        print("ERROR: a disabled feature still took a column: {}".format(header))
+        failed = True
+
+    # A field Predbat adds later still reaches the model, under its own name, rather than being
+    # silently swallowed because nobody remembered to add it to PLAN_COLUMNS.
+    unknown, _ = format_plan_rows_table([{"time": "Fri 09:00", "brand_new_field": 7}])
+    if "brand_new_field" not in unknown.split("\n")[0]:
+        print("ERROR: a field not in the column table was dropped: {!r}".format(unknown))
+        failed = True
+
+    # An empty cell has to mean something specific, or a model reads it as zero - "no car charging
+    # figure for this slot" and "the car drew nothing" are different claims.
+    if "not set" not in (slimmed.get("rows_format") or ""):
+        print("ERROR: nothing tells the model what an empty cell means: {}".format(slimmed.get("rows_format")))
+        failed = True
+
+    # A pipe inside a value would end its cell early and shift every value after it one column
+    # left - silent corruption, not a visible error.
+    piped, _ = format_plan_rows_table([{"state": "a|b", "import_rate": 1}])
+    if "a\\|b" not in piped:
+        print("ERROR: a pipe in a value was not escaped: {!r}".format(piped))
+        failed = True
+    # Split on unescaped pipes only - a markdown renderer reads "\\|" as a literal, so a naive
+    # split counts the escape itself as a column boundary and reports a break that is not there.
+    piped_cells = re.split(r"(?<!\\)\|", piped.split("\n")[-1].strip("|"))
+    if len(piped_cells) != 2:
+        print("ERROR: a pipe in a value broke its row into extra columns: {!r} -> {}".format(piped, piped_cells))
+        failed = True
+
+    # A field only some slots carry still gets a column, with an empty cell where it does not.
+    sparse, _ = format_plan_rows_table([{"time": "Fri 09:00"}, {"time": "Fri 09:30", "car_rate": 6.9}])
+    if "Car rate" not in sparse.split("\n")[0]:
+        print("ERROR: a field present on only some rows lost its column: {!r}".format(sparse))
+        failed = True
+
+    # The legend is keyed by the heading the table actually shows. Keyed by field name - which it
+    # was - it would explain "pv_forecast" to a model looking at a column called "PV kWh (10%)".
+    legend = slimmed.get("columns") or {}
+    if "pv_forecast" in legend or "PV kWh (10%)" not in legend:
+        print("ERROR: the legend is not keyed by the heading the table shows: {}".format(sorted(legend)))
+        failed = True
+    if "10%" not in legend.get("PV kWh (10%)", ""):
+        print("ERROR: nothing explains what the bracketed PV figure is: {}".format(legend.get("PV kWh (10%)")))
+        failed = True
+    if "change" not in legend.get("SoC % (chg kWh)", ""):
+        print("ERROR: nothing explains what the bracketed SoC figure is: {}".format(legend.get("SoC % (chg kWh)")))
         failed = True
 
     # The trap this exists for: output.py divides cost by 100 before publishing, so cost is in the
     # MAJOR currency unit while the rates beside it are in the minor one. A model that assumes
-    # both are pence is out by a factor of 100 on every cost it quotes.
-    plan_with_currency = dict(plan, currency_symbols=["\u00a3", "p"])
-    money = slim_plan(plan_with_currency).get("units") or {}
-    if not money.get("total_cost", "").startswith("\u00a3"):
-        print("ERROR: total_cost is not documented in the major currency unit: {}".format(money))
-        failed = True
-    if not money.get("import_rate", "").startswith("p/kWh"):
-        print("ERROR: import_rate is not documented in the minor currency unit per kWh: {}".format(money))
+    # both are pence is out by a factor of 100 on every cost it quotes. The heading is where that
+    # is now said, which is the one place it cannot be missed.
+    pounds = slimmed["rows"].split("\n")[0]
+    if "Total \u00a3" not in pounds or "Import p" not in pounds:
+        print("ERROR: the headings do not distinguish the major and minor currency units: {!r}".format(pounds))
         failed = True
 
     # Symbols come from the plan, so a non-GBP install is not told everything is in pounds.
-    euros = slim_plan(dict(plan, currency_symbols=["\u20ac", "c"])).get("units") or {}
-    if not euros.get("total_cost", "").startswith("\u20ac") or not euros.get("import_rate", "").startswith("c/kWh"):
-        print("ERROR: the legend ignored the plan's own currency symbols: {}".format(euros))
+    euros = slim_plan(dict(plan, currency_symbols=["\u20ac", "c"]))["rows"].split("\n")[0]
+    if "Total \u20ac" not in euros or "Import c" not in euros:
+        print("ERROR: the headings ignored the plan's own currency symbols: {!r}".format(euros))
         failed = True
 
-    # It must describe only what is there. This plan has no car, iBoost or carbon columns, and a
-    # legend for absent columns would invite the model to ask about data that does not exist.
-    for absent in ("iboost", "co2_rate", "co2_total"):
-        if absent in units:
-            print("ERROR: the legend documents {}, which this plan does not contain: {}".format(absent, units))
+    # It must describe only what is there. This plan has no iBoost or carbon columns, and a legend
+    # for absent columns would invite the model to ask about data that does not exist.
+    for absent in ("iBoost kWh", "CO2 g/kWh", "CO2 kg"):
+        if absent in legend:
+            print("ERROR: the legend documents {}, which this plan does not contain: {}".format(absent, sorted(legend)))
             failed = True
     # An unparseable time is passed through rather than guessed at.
-    passthrough = slim_plan({"rows": [{"time": "not a timestamp", "state": "Demand"}]})
+    passthrough_rows = slim_plan_rows([{"time": "not a timestamp", "state": "Demand"}])
+    passthrough = {"rows": passthrough_rows}
     if passthrough["rows"][0]["time"] != "not a timestamp":
         print("ERROR: an unparseable time was not passed through: {}".format(passthrough))
         failed = True

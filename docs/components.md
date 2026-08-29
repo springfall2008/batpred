@@ -186,7 +186,7 @@ Example usage in VSCode
 | Tool | What it returns or does |
 | ---- | ----------------------- |
 | `get_status` | Current system status - mode, SoC, live power figures |
-| `get_plan` | The current battery plan, with forecasts and costs |
+| `get_plan` | The current battery plan, with forecasts and costs. Returned as a markdown table with the same columns as the plan page, plus a legend describing each one |
 | `get_config` | Every Predbat setting, with its current value and its default |
 | `get_apps` | Your `apps.yaml` configuration, with credentials redacted |
 | `get_apps_config` | The current value of one `apps.yaml` key, with a credential-like value redacted |

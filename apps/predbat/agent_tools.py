@@ -322,6 +322,16 @@ PLAN_DROP_KEYS = frozenset(
         # nothing left to look up it is 2,060 characters describing fields that are no longer
         # sent. It goes back if reasons does.
         "reason_templates",
+        # Running totals of fields the table already shows per slot. The plan's own top-level
+        # "totals" carries the whole-day figure for each of them, which is what a question about
+        # the day actually needs, and the web plan table shows none of these columns either.
+        "pv_forecast_total",
+        "load_forecast_total",
+        "extra_load_total",
+        # The raw form of show_limit, which is what the plan page's "Limit %" column displays.
+        # Two spellings of one number, and show_limit is the one that says what it means when a
+        # limit is suppressed.
+        "state_target",
     }
 )
 
@@ -367,54 +377,187 @@ def format_plan_time(value):
 # (web_helper.py) or the code that builds the value (output.py) - notably cost_change and
 # total_cost are divided by 100 before publishing, so they are in the MAJOR unit while the rates
 # beside them are in the minor one, which is exactly the sort of thing a model assumes wrongly.
-PLAN_UNITS = {
-    "time": "local time, weekday and 24-hour clock",
-    "import_rate": "{minor}/kWh",
-    "export_rate": "{minor}/kWh",
-    "state_target": "% target state of charge for this slot",
-    "show_limit": "% charge or export limit shown for this slot",
-    "pv_forecast": "kWh generated in this slot",
-    "pv_forecast10": "kWh generated in this slot, 10% (pessimistic) forecast",
-    "pv_forecast_total": "kWh generated cumulatively to the end of this slot",
-    "load_forecast": "kWh consumed in this slot",
-    "load_forecast10": "kWh consumed in this slot, 10% (pessimistic) forecast",
-    "load_forecast_total": "kWh consumed cumulatively to the end of this slot",
-    "clipped": "kWh of solar lost to inverter clipping in this slot",
-    "extra_load": "kWh of additional forecast load in this slot",
-    "extra_load_total": "kWh of additional forecast load, cumulative",
-    "car_charging": "kWh delivered to the car in this slot",
-    "iboost": "kWh diverted to iBoost cumulatively",
-    "iboost_change": "kWh diverted to iBoost in this slot",
-    "soc_percent": "% battery state of charge at the end of this slot",
-    "soc_change": "kWh the battery gains (positive) or loses (negative) in this slot",
-    "cost_change": "{major} added to or removed from the running cost by this slot",
-    "total_cost": "{major} running total cost at this slot",
-    "co2_rate": "gCO2/kWh of grid electricity in this slot",
-    "co2_total": "kgCO2 cumulative",
-}
+# The columns a plan is rendered with, in order: heading, the field it reads, the field shown in
+# brackets beside it (None for none), and a one-line description for the legend.
+#
+# Deliberately the same columns and the same headings as the web plan table, because that is the
+# view of this data everything else is written against - the documentation, the screenshots users
+# post in bug reports, and the user's own mental model. A model reading "XLoad kWh" and a user
+# reading their plan page are then looking at the same thing, which they were not when this was
+# raw field names.
+#
+# A column appears only if its field is present in the rows, so an install with no iBoost, no car
+# and no carbon tracking gets a table with none of those columns rather than a wall of blanks.
+# {major} and {minor} are the plan's own currency symbols.
+PLAN_COLUMNS = (
+    ("Time", "time", None, "local time, weekday and 24-hour clock"),
+    ("Import {minor}", "import_rate", None, "price paid for imported energy in this slot"),
+    ("Car rate {minor}", "car_rate", None, "price paid for car charging, shown only where it differs from Import"),
+    ("Export {minor}", "export_rate", None, "price received for exported energy in this slot"),
+    ("State", "state", None, "what Predbat is doing in this slot"),
+    ("Limit %", "show_limit", None, "the charge or export limit for this slot"),
+    ("PV kWh (10%)", "pv_forecast", "pv_forecast10", "solar generated in this slot; bracketed is the 10% (pessimistic) forecast"),
+    ("Load kWh (10%)", "load_forecast", "load_forecast10", "house consumption in this slot; bracketed is the 10% (pessimistic) forecast"),
+    ("Clip kWh", "clipped", None, "solar lost to inverter clipping in this slot"),
+    ("XLoad kWh", "extra_load", None, "additional forecast load in this slot, such as a scheduled appliance"),
+    ("Car kWh", "car_charging", None, "energy delivered to the car in this slot"),
+    ("iBoost kWh", "iboost", "iboost_change", "energy diverted to iBoost, cumulative; bracketed is this slot alone"),
+    ("SoC % (chg kWh)", "soc_percent", "soc_change", "battery charge at the end of the slot; bracketed is the change across it"),
+    ("CO2 g/kWh", "co2_rate", None, "carbon intensity of grid electricity in this slot"),
+    ("CO2 kg", "co2_total", None, "cumulative carbon"),
+    ("Cost {major}", "cost_change", None, "cost added to or removed from the running total by this slot"),
+    ("Total {major}", "total_cost", None, "running total cost at this slot"),
+)
 
 
-def plan_units(plan):
-    """Return the unit legend for the fields a given plan actually contains.
+def format_plan_change(value):
+    """Render a bracketed change with an explicit sign, so it reads as a delta.
 
-    Filtered to what is present so the legend never describes a column this install does not have
-    - a system with no car or no iBoost should not be told what those columns mean.
+    Without the "+" a rise and an absolute level look identical - "84 (0.4)" could as easily be a
+    second measurement as a gain of 0.4. Negatives already carry their sign. Only the *_change
+    fields get this: the bracketed 10% forecasts are an alternative reading of the same quantity,
+    not a movement in it, and signing them would claim a relationship that does not hold.
     """
-    symbols = plan.get("currency_symbols") if isinstance(plan, dict) else None
-    major, minor = "GBP", "p"
-    if isinstance(symbols, (list, tuple)) and len(symbols) >= 2:
-        major, minor = str(symbols[0]), str(symbols[1])
+    try:
+        return "+{}".format(value) if float(value) >= 0 else str(value)
+    except (TypeError, ValueError):
+        return str(value)
 
+
+def plan_currency(plan):
+    """Return the (major, minor) currency symbols a plan is denominated in."""
+    symbols = plan.get("currency_symbols") if isinstance(plan, dict) else None
+    if isinstance(symbols, (list, tuple)) and len(symbols) >= 2:
+        return str(symbols[0]), str(symbols[1])
+    return "GBP", "p"
+
+
+def plan_columns_for(rows, major, minor):
+    """Return the (heading, field, bracket field, description) columns a set of rows needs.
+
+    Driven by what the rows actually carry, so a disabled feature costs no column. Any field not
+    named in PLAN_COLUMNS still gets one, under its own name: a field Predbat adds later should
+    reach the model looking unpolished rather than not at all.
+    """
     present = set()
-    for row in (plan.get("rows") or []) if isinstance(plan, dict) else []:
+    for row in rows:
         if isinstance(row, dict):
             present.update(row.keys())
 
-    units = {}
-    for key, text in PLAN_UNITS.items():
-        if key in present:
-            units[key] = text.format(major=major, minor=minor)
-    return units
+    columns = []
+    spoken_for = set()
+    for heading, field, bracket, description in PLAN_COLUMNS:
+        spoken_for.add(field)
+        if field not in present:
+            continue
+        # Only claim the bracketed field once the column that would carry it exists. Claiming it
+        # unconditionally means a change whose level is absent - soc_change with no soc_percent -
+        # is neither folded in nor given a column of its own, and disappears silently.
+        if bracket and bracket in present:
+            spoken_for.add(bracket)
+            columns.append((heading.format(major=major, minor=minor), field, bracket, description))
+        else:
+            columns.append((heading.format(major=major, minor=minor), field, None, description))
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for field in row:
+            if field not in spoken_for and not any(field == known for _, known, _, _ in columns):
+                columns.append((field, field, None, ""))
+                spoken_for.add(field)
+    return columns
+
+
+def plan_legend(columns):
+    """Return the description of each rendered column, keyed by the heading the table shows.
+
+    Keyed by heading rather than by field name: the heading is what a model actually sees in the
+    table, and a legend keyed by something that appears nowhere in it explains nothing. Columns
+    whose heading already says everything carry no entry rather than a restatement of themselves.
+    """
+    return {heading: description for heading, _, _, description in columns if description}
+
+
+# Said once, above the table, because an empty cell is the one thing a table cannot express for
+# itself - and reading it as zero rather than "not set" would turn "no car charging figure for this
+# slot" into "the car drew nothing", which is a different claim.
+PLAN_ROWS_FORMAT = (
+    "markdown table, one row per half-hour slot, with the same columns as Predbat's own plan page. "
+    "Each heading carries its unit, and 'columns' describes each one. Where a heading brackets a "
+    "second thing - 'PV kWh (10%)', 'SoC % (chg kWh)' - the bracketed figure in each cell is that "
+    "second thing for the same slot. An empty cell means that field is not set for that slot, which "
+    "is not the same as zero."
+)
+
+
+def slim_plan_rows(rows):
+    """Return a plan's rows as slimmed dicts, dropping what a model cannot use.
+
+    Split out from slim_plan() so the field-level rules can be tested directly, rather than only
+    through the rendered table where a missing field and an empty cell look alike.
+    """
+    slimmed = []
+    for row in rows:
+        if not isinstance(row, dict):
+            slimmed.append(row)
+            continue
+        slim_row = {}
+        for row_key, row_value in row.items():
+            if not slim_plan_value(row_key, row_value):
+                continue
+            slim_row[row_key] = format_plan_time(row_value) if row_key == "time" else row_value
+        slimmed.append(slim_row)
+    return slimmed
+
+
+def format_plan_rows_table(rows, major="GBP", minor="p"):
+    """Render slimmed plan rows as a markdown table laid out like the web plan.
+
+    A plan is a table, and JSON spells one out by repeating every column name on every row: on a
+    real 73-row plan the key names alone were 19,723 characters, 73% of the payload, to say the
+    same twenty-one words over and over. A table names them once, and the whole response went from
+    41,709 characters to about a quarter of that.
+
+    Markdown rather than CSV, which is smaller again (7,223 characters) but positional: finding the
+    fourteenth value by counting separators is a different and more error-prone task than reading
+    a labelled column, and a model already reads and writes markdown tables fluently. The 3,000
+    characters CSV would save are not worth buying a misread column with.
+
+    Cells are not padded to an even width - alignment is for human eyes and costs characters here -
+    and the web table's split and merged cells are not reproduced, since they exist to save a
+    reader's eye work that a model does not do.
+    """
+    columns = plan_columns_for(rows, major, minor)
+    if not columns:
+        return "", []
+
+    def escape(value):
+        """Render one value, keeping a table cell from breaking the row it sits in."""
+        if value is None:
+            return ""
+        # A literal pipe would end the cell early and shift every value after it into the wrong
+        # column - silent corruption rather than a visible error, so it is escaped.
+        return str(value).replace("|", "\\|")
+
+    def cell(row, field, bracket):
+        """Render one cell: its value, and any second figure the column shows in brackets."""
+        text = escape(row.get(field))
+        if bracket and row.get(bracket) not in (None, ""):
+            value = row.get(bracket)
+            # Only a genuine change is signed - see format_plan_change.
+            text += " ({})".format(escape(format_plan_change(value) if bracket.endswith("_change") else value))
+        return text
+
+    lines = [
+        "| " + " | ".join(heading for heading, _, _, _ in columns) + " |",
+        "| " + " | ".join(["---"] * len(columns)) + " |",
+    ]
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        lines.append("| " + " | ".join(cell(row, field, bracket) for _, field, bracket, _ in columns) + " |")
+    return "\n".join(lines), columns
 
 
 def slim_plan(plan):
@@ -427,31 +570,25 @@ def slim_plan(plan):
         return plan
 
     slimmed = {}
+    rows = None
     for key, value in plan.items():
         if not slim_plan_value(key, value):
             continue
         if key == "rows" and isinstance(value, list):
-            rows = []
-            for row in value:
-                if not isinstance(row, dict):
-                    rows.append(row)
-                    continue
-                slim_row = {}
-                for row_key, row_value in row.items():
-                    if not slim_plan_value(row_key, row_value):
-                        continue
-                    slim_row[row_key] = format_plan_time(row_value) if row_key == "time" else row_value
-                rows.append(slim_row)
-            slimmed[key] = rows
+            rows = slim_plan_rows(value)
         else:
             slimmed[key] = value
 
-    # Built from the slimmed rows rather than the originals. Belt and braces today - PLAN_UNITS
-    # names no field that slimming strips, so both sources give the same answer - but it stays
-    # correct if PLAN_UNITS ever grows an entry for something presentational.
-    units = plan_units(slimmed)
-    if units:
-        slimmed["units"] = units
+    # The unit legend is built from the slimmed rows, not the rendered table - it needs the field
+    # names, and by the time the table exists they are a header line rather than data.
+    if rows is not None:
+        major, minor = plan_currency(plan)
+        table, columns = format_plan_rows_table(rows, major, minor)
+        legend = plan_legend(columns)
+        if legend:
+            slimmed["columns"] = legend
+        slimmed["rows_format"] = PLAN_ROWS_FORMAT
+        slimmed["rows"] = table
     return slimmed
 
 
@@ -503,7 +640,7 @@ class PredbatTools:
                 "error": None,
                 "data": slim_plan(raw_plan),
                 "timestamp": datetime.now().isoformat(),
-                "description": "Current Predbat battery plan including forecasts, costs, and operational states. Row times are local, as weekday and clock time; the plan's top-level 'time' gives the date it starts from.",
+                "description": "Current Predbat battery plan including forecasts, costs, and operational states. 'rows' is a markdown table, one row per slot, with a 'units' legend for its columns. Row times are local, as weekday and clock time; the plan's top-level 'time' gives the date it starts from.",
             }
         except Exception as e:
             return {"success": False, "error": f"Error retrieving plan data: {str(e)}", "data": None}
@@ -1293,7 +1430,13 @@ class PredbatTools:
 
 
 TOOL_DEFS = [
-    {"name": "get_plan", "description": "Get the current Predbat battery plan data including forecast, costs, and state information", "parameters": {"type": "object", "properties": {}, "required": []}, "writes": False, "chat_omit_properties": []},
+    {
+        "name": "get_plan",
+        "description": "Get the current Predbat battery plan. 'rows' is a markdown table of half-hourly slots with a 'units' legend describing its columns; an empty cell means that field is not set for that slot.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "writes": False,
+        "chat_omit_properties": [],
+    },
     {"name": "get_status", "description": "Get the current Predbat system status and configuration", "parameters": {"type": "object", "properties": {}, "required": []}, "writes": False, "chat_omit_properties": []},
     # get_apps: 'masked' is stripped from the chat projection so a model cannot ask for
     # unmasked credentials and send them to a third-party provider. See spec section 14.1.

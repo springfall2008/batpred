@@ -2,7 +2,7 @@
   "tools": [
     {
       "name": "get_plan",
-      "description": "Get the current Predbat battery plan data including forecast, costs, and state information",
+      "description": "Get the current Predbat battery plan. 'rows' is a markdown table of half-hourly slots with a 'units' legend describing its columns; an empty cell means that field is not set for that slot.",
       "inputSchema": {
         "type": "object",
         "properties": {},
