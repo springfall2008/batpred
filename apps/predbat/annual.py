@@ -1694,7 +1694,7 @@ class AnnualPredictor:
             caveats.append("No export rates at all (historical or current) could be found for {} on this tariff, so export was priced at zero for those months. If this tariff pays for export, savings for those months are understated.".format(unpaid_list))
         return caveats
 
-    def _export_card(self, entry, tariff, months, year):
+    def _export_card(self, entry, tariff, months, year, extra_caveats=None):
         """Build one by_export[id] card from a swept tariff's own planned months.
 
         Extracted out of run()'s sweep loop so a stub-tariff test can exercise the card's
@@ -1714,6 +1714,13 @@ class AnnualPredictor:
         message naming which tariff actually failed. ``self.caveats`` is swapped out for an
         empty scratch list for the duration of the call and restored immediately after, so
         those messages are captured as THIS card's own caveats instead.
+
+        ``extra_caveats``: the same leak also happens one call earlier, inside
+        ``_plan_months`` (the spill-month rate-download warning) - but that call happens in
+        run()'s sweep loop BEFORE this method is invoked, so it is outside the scratch-list
+        swap above and can't be captured by it. The caller does its own swap around that
+        call instead and hands the result in here, so both sources land on the same card
+        rather than the spill warning alone leaking onto the run-wide list.
         """
         run_caveats, self.caveats = self.caveats, []
         try:
@@ -1725,7 +1732,7 @@ class AnnualPredictor:
             "name": entry["name"],
             "annual": results["annual"],
             "months": results["months"],
-            "caveats": self._tariff_fallback_caveats(tariff.fallback_months, tariff.unpaid_export_months, year) + card_caveats,
+            "caveats": self._tariff_fallback_caveats(tariff.fallback_months, tariff.unpaid_export_months, year) + (extra_caveats or []) + card_caveats,
             # Export-side only, and scoped to the modelled year: this exists to flag a card
             # whose EXPORT rates were synthesised from the current-rates fallback (Outgoing
             # Prime has no history before June 2026), not one whose shared import side fell
@@ -1894,9 +1901,21 @@ class AnnualPredictor:
                     if entry.get(key):
                         tariff_config[key] = entry[key]
                 tariff = AnnualTariff(tariff_config, log=self.log, predbat=self.predbat, storage=self.storage, timezone=self.config["timezone"])
-                months, baseline_fallback_months, completed, _ = await self._plan_months(tariff, year, zone, months_to_plan, progress, sweep_total_units, completed)
+                # _plan_months's own caveat (the next-month spill-fetch warning) is raised
+                # against THIS tariff's own download, not the shared import side - see its
+                # docstring - so it is exactly as per-card as the ones _export_card already
+                # isolates below, and leaks onto the run-wide list the same way if left
+                # alone. Swapped out here for the duration of this tariff's plan and handed
+                # to _export_card as extra_caveats rather than being restored onto
+                # self.caveats, so it lands on this tariff's card instead.
+                run_caveats, self.caveats = self.caveats, []
+                try:
+                    months, baseline_fallback_months, completed, _ = await self._plan_months(tariff, year, zone, months_to_plan, progress, sweep_total_units, completed)
+                    plan_caveats = self.caveats
+                finally:
+                    self.caveats = run_caveats
                 baseline_fallback_months_sweep.update(baseline_fallback_months)
-                by_export[entry["id"]] = self._export_card(entry, tariff, months, year)
+                by_export[entry["id"]] = self._export_card(entry, tariff, months, year, extra_caveats=plan_caveats)
             baseline_fallback_caveat = self._baseline_fallback_caveat(baseline_fallback_months_sweep)
             if baseline_fallback_caveat:
                 self.caveats.append(baseline_fallback_caveat)

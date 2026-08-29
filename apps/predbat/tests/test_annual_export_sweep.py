@@ -433,9 +433,16 @@ def test_annual_export_sweep_run(my_predbat):
     (called once per swept tariff by _export_card) appends its "no month produced a usable
     result" and payback caveats onto self.caveats as a side effect, and left alone that
     lands on the shared run-wide list every time it is called - so one failed tariff out of
-    three tells every card's reader that NOTHING was modelled, naming no tariff at all. And
+    four tells every card's reader that NOTHING was modelled, naming no tariff at all. And
     _plan_months only ever reports progress up to (sweep_total - 1, sweep_total), so a
     sweep never closed out its own progress bar.
+
+    Also covers the sibling leak found in review: _plan_months itself appends the
+    next-month spill-fetch warning straight onto self.caveats, and that call happens
+    BEFORE _export_card's own scratch-list swap even starts, so left alone it would land
+    on the run-wide list regardless of _export_card's fix - one tariff's spill warning
+    would read as "every card's figures may be wrong" instead of naming the one tariff
+    whose download actually failed.
 
     Fully stubbed - AnnualTariff, run_day, select_samples and create_headless_predbat are
     all replaced, and the config has no solar array so run() never touches the weather
@@ -451,18 +458,27 @@ def test_annual_export_sweep_run(my_predbat):
         """A per-instance AnnualTariff stand-in, one call to AnnualTariff() per sweep entry.
 
         Every fetch_month() fails when this tariff's own config carries the sentinel
-        export_octopus_url "FAIL", modelling the "1 of 3 sweep tariffs has no rate data"
-        case I1 describes; the other two succeed and plan a real (stubbed) month.
+        export_octopus_url "FAIL", modelling the "1 of 4 sweep tariffs has no rate data"
+        case I1 describes. A second sentinel, "FAIL_SPILL", instead fails only the fetch
+        for month 7 - the (year, month + 1) spill month _plan_months fetches after month
+        6 (the only month this test plans) succeeds - so that tariff plans its own month
+        fine but still hits the spill-warning branch. The remaining two tariffs succeed on
+        every fetch_month call and plan a real (stubbed) month.
         """
 
         def __init__(self, config, log=None, predbat=None, storage=None, timezone=None):
             self.fails = config.get("export_octopus_url") == "FAIL"
+            self.fails_spill_month = config.get("export_octopus_url") == "FAIL_SPILL"
             self.fallback_months = set()
             self.unpaid_export_months = set()
             self.standing_charge_p_per_day = 50.0
 
         async def fetch_month(self, year, month):
-            return not self.fails
+            if self.fails:
+                return False
+            if self.fails_spill_month and month == 7:
+                return False
+            return True
 
         def rates_for(self, midnight_utc, minutes):
             return {}, {}
@@ -485,6 +501,7 @@ def test_annual_export_sweep_run(my_predbat):
                 {"id": "ok_one", "name": "OK One", "rates_export": [{"rate": 4.1}]},
                 {"id": "fails", "name": "Fails", "export_octopus_url": "FAIL"},
                 {"id": "ok_two", "name": "OK Two", "rates_export": [{"rate": 8.0}]},
+                {"id": "spills", "name": "Spills", "export_octopus_url": "FAIL_SPILL"},
             ],
         }
     }
@@ -519,24 +536,40 @@ def test_annual_export_sweep_run(my_predbat):
         print("  ERROR: the failing tariff's card should carry the no-usable-result caveat, got {}".format(results["by_export"]["fails"]["caveats"]))
         failed = True
 
-    print("Test: that caveat does NOT leak onto the run-wide list or the other two cards (I1)")
+    print("Test: that caveat does NOT leak onto the run-wide list or the other cards (I1)")
     run_wide_caveats = " ".join(results["caveats"])
     if "No month produced a usable result" in run_wide_caveats:
         print("  ERROR: the failing tariff's caveat leaked into the run-wide caveats, got {}".format(results["caveats"]))
         failed = True
-    for tariff_id in ("ok_one", "ok_two"):
+    for tariff_id in ("ok_one", "ok_two", "spills"):
         card_caveats = " ".join(results["by_export"][tariff_id]["caveats"])
         if "No month produced a usable result" in card_caveats:
             print("  ERROR: {}'s card should not carry the failed tariff's caveat, got {}".format(tariff_id, results["by_export"][tariff_id]["caveats"]))
+            failed = True
+
+    print("Test: a tariff that fails only its spill-month fetch carries that caveat on its own card (review finding)")
+    spill_caveats = " ".join(results["by_export"]["spills"]["caveats"])
+    if "could not be downloaded" not in spill_caveats:
+        print("  ERROR: the spill tariff's card should carry the spill-month caveat, got {}".format(results["by_export"]["spills"]["caveats"]))
+        failed = True
+
+    print("Test: the spill-month caveat does NOT leak onto the run-wide list or the other cards (review finding)")
+    if "could not be downloaded" in run_wide_caveats:
+        print("  ERROR: the spill tariff's caveat leaked into the run-wide caveats, got {}".format(results["caveats"]))
+        failed = True
+    for tariff_id in ("ok_one", "ok_two", "fails"):
+        card_caveats = " ".join(results["by_export"][tariff_id]["caveats"])
+        if "could not be downloaded" in card_caveats:
+            print("  ERROR: {}'s card should not carry the spill tariff's caveat, got {}".format(tariff_id, results["by_export"][tariff_id]["caveats"]))
             failed = True
 
     print("Test: the sweep emits a terminal completed==total 'Complete' progress event (I2)")
     if not progress_events or progress_events[-1][0] != progress_events[-1][1] or progress_events[-1][2] != "Complete":
         print("  ERROR: expected a final (total, total, 'Complete') progress event, got {}".format(progress_events[-1] if progress_events else None))
         failed = True
-    # A 1-month x 3-tariff sweep should report a total of 3 throughout, closing at (3, 3).
-    if any(total != 3 for _, total, _ in progress_events):
-        print("  ERROR: expected every progress event to report total=3, got {}".format(progress_events))
+    # A 1-month x 4-tariff sweep should report a total of 4 throughout, closing at (4, 4).
+    if any(total != 4 for _, total, _ in progress_events):
+        print("  ERROR: expected every progress event to report total=4, got {}".format(progress_events))
         failed = True
 
     return failed
