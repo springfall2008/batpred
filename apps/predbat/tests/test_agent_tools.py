@@ -902,6 +902,8 @@ def test_get_plan_is_slimmed(my_predbat):
     row = {
         "time": "2026-08-28T09:00:00+0100",
         "slot_minute": 540,
+        "import_rate_adjusted": 31.84,
+        "export_rate_adjusted": 11.4,
         "state": "FrzExp",
         "state_target": "",
         "show_limit": "4",
@@ -927,7 +929,7 @@ def test_get_plan_is_slimmed(my_predbat):
         "skip_state_cell": False,
         "split": False,
     }
-    plan = {"rows": [row], "soc": 8.09, "soc_max": 9.52, "mode": "Control charge & discharge", "iboost_enable": None}
+    plan = {"rows": [row], "soc": 8.09, "soc_max": 9.52, "mode": "Control charge & discharge", "iboost_enable": None, "reason_templates": {"freeze_export": "Freezing export at {target_percent}%"}}
 
     slimmed = slim_plan(plan)
     out = slimmed["rows"][0]
@@ -957,14 +959,35 @@ def test_get_plan_is_slimmed(my_predbat):
         print("ERROR: a null survived at the top level: {}".format(slimmed))
         failed = True
 
+    # The reason templates are the lookup table the dropped reason codes index into. With nothing
+    # left to look up they are 2,060 characters describing fields that are no longer sent.
+    if "reason_templates" in slimmed:
+        print("ERROR: the reason template table outlived the reasons it explains: {}".format(sorted(slimmed)))
+        failed = True
+
     # Numeric zero is data, not an empty - dropping it would hide "none" behind "not reported".
     for kept, value in (("clipped", 0), ("car_charging", 0.0)):
         if out.get(kept) != value:
             print("ERROR: numeric zero {} was dropped: {}".format(kept, out))
             failed = True
 
+    # Content dropped for size, which is a different decision from dropping presentation and is
+    # worth asserting separately: two derived rate fields, a timestamp that duplicates `time` once
+    # it renders as "Fri 09:00", and the optimiser's reason codes. Measured on a real 73-row plan
+    # these were 5,470 characters of reasons and 4,656 of adjusted rates.
+    for gone in ("slot_minute", "import_rate_adjusted", "export_rate_adjusted", "reasons"):
+        if gone in out:
+            print("ERROR: {} was not dropped: {}".format(gone, out))
+            failed = True
+    # And it must not take the legend's word for them with it - a unit entry for a field that is
+    # never sent is a line of the response describing nothing.
+    for gone in ("slot_minute", "import_rate_adjusted", "export_rate_adjusted"):
+        if gone in (slimmed.get("units") or {}):
+            print("ERROR: the legend still documents the dropped field {}".format(gone))
+            failed = True
+
     # The semantic content survives untouched.
-    for kept in ("state", "reasons", "show_limit", "slot_minute", "soc_percent"):
+    for kept in ("state", "show_limit", "soc_percent", "import_rate", "total_cost"):
         if kept not in out:
             print("ERROR: meaningful field {} was dropped: {}".format(kept, out))
             failed = True

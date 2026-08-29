@@ -277,14 +277,22 @@ def parse_bool_argument(value, default=False):
     return str(value).strip().lower() not in ("false", "0", "no", "off", "")
 
 
-# Presentation-only keys in a plan row. The plan structure is built for the web table, so roughly
-# a third of every row is styling: twelve colour fields, the HTML fragments the table cells are
-# made of, and the rowspan/skip bookkeeping that merges cells vertically. None of it means
-# anything to a model, and a 96-row plan repeats all of it 96 times - it was the single largest
-# part of a get_plan response. The semantic content is kept: state, state_target, show_limit and
-# reasons all survive, and reasons is the field that actually explains a slot.
+# Keys dropped from a plan row before a model sees it, in two groups.
+#
+# The first is presentation. The plan structure is built for the web table, so roughly a third of
+# every row is styling: twelve colour fields, the HTML fragments the table cells are made of, and
+# the rowspan/skip bookkeeping that merges cells vertically. None of it means anything to a model,
+# and a 96-row plan repeats all of it 96 times - it was the single largest part of a get_plan
+# response.
+#
+# The second is content dropped for size, which is a different kind of decision and marked as such
+# below: two derived rate fields, a duplicate timestamp, and the optimiser's reason codes. What
+# remains is the state of each slot and the numbers behind it - state, state_target, show_limit,
+# the forecasts, the rates and the costs.
 PLAN_DROP_KEYS = frozenset(
     {
+        # Presentational: markup, symbols and table-layout bookkeeping the web plan needs and a
+        # model cannot use.
         "state_html",
         "state_text",
         "state2_text",
@@ -295,6 +303,25 @@ PLAN_DROP_KEYS = frozenset(
         "skip_limit_cell",
         "split",
         "rate_split",
+        # Derived or duplicated. The adjusted rates are the raw ones with battery and inverter
+        # losses folded in, which a model can reason about from the raw rate and the costs beside
+        # it; on a real 73-row plan the pair cost 4,656 characters to restate what is already
+        # there. slot_minute became redundant when time started rendering as "Fri 09:00" - two
+        # spellings of the same instant, one of them needing arithmetic against the plan start.
+        "import_rate_adjusted",
+        "export_rate_adjusted",
+        "slot_minute",
+        # The optimiser's own reason codes for each slot. Dropped for size - 5,470 characters on
+        # that same plan, for 12 distinct values restated 73 times as nested {code, params} dicts.
+        # Worth knowing this is the one entry here that is not redundant: nothing else in the plan
+        # says WHY a slot was chosen, so questions like "why is the car charging then?" are
+        # answered by inference from the rates rather than from the optimiser's own reasoning.
+        "reasons",
+        # The template table those codes index into, at the top level rather than per row. It
+        # survived the first pass because it is cheap per plan rather than per row, but with
+        # nothing left to look up it is 2,060 characters describing fields that are no longer
+        # sent. It goes back if reasons does.
+        "reason_templates",
     }
 )
 
@@ -320,8 +347,9 @@ def format_plan_time(value):
     """Render a plan row's ISO timestamp as a short weekday and clock time, e.g. "Fri 09:00".
 
     A plan spans 48 hours, so a weekday and a time identify a slot unambiguously while costing a
-    fraction of a full ISO timestamp repeated across ~96 rows. Nothing is lost: each row keeps its
-    slot_minute, and the plan's own top-level "time" field carries the date the plan starts from.
+    fraction of a full ISO timestamp repeated across ~96 rows. This is now the only per-row
+    timestamp - slot_minute used to sit beside it and was dropped as a second spelling of the same
+    instant - and the plan's own top-level "time" field carries the date it starts from.
     Anything unparseable is passed through untouched rather than guessed at.
     """
     if not isinstance(value, str):
@@ -341,11 +369,8 @@ def format_plan_time(value):
 # beside them are in the minor one, which is exactly the sort of thing a model assumes wrongly.
 PLAN_UNITS = {
     "time": "local time, weekday and 24-hour clock",
-    "slot_minute": "minutes from the plan start given by the top-level 'time'",
     "import_rate": "{minor}/kWh",
     "export_rate": "{minor}/kWh",
-    "import_rate_adjusted": "{minor}/kWh including battery and inverter losses",
-    "export_rate_adjusted": "{minor}/kWh including battery and inverter losses",
     "state_target": "% target state of charge for this slot",
     "show_limit": "% charge or export limit shown for this slot",
     "pv_forecast": "kWh generated in this slot",
@@ -478,7 +503,7 @@ class PredbatTools:
                 "error": None,
                 "data": slim_plan(raw_plan),
                 "timestamp": datetime.now().isoformat(),
-                "description": "Current Predbat battery plan including forecasts, costs, and operational states. Row times are local, as weekday and clock time; each row's slot_minute is minutes from the plan start given by the top-level 'time'.",
+                "description": "Current Predbat battery plan including forecasts, costs, and operational states. Row times are local, as weekday and clock time; the plan's top-level 'time' gives the date it starts from.",
             }
         except Exception as e:
             return {"success": False, "error": f"Error retrieving plan data: {str(e)}", "data": None}
