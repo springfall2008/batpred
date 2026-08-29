@@ -553,3 +553,52 @@ def run_web_logo_image_tests(my_predbat):
 
     print("**** Web logo image tests completed ****")
     return failed
+
+
+def run_web_dark_mode_preference_tests(my_predbat):
+    """Unit tests for dark mode falling back to the OS/browser prefers-color-scheme setting (issue #4800)."""
+    failed = 0
+    print("**** Running web dark mode preference tests ****")
+
+    from web_helper import get_header_html
+
+    header = get_header_html("Test", False, "./dash", [], "v1.0", "")
+
+    print("Test: a shared preference helper checks prefers-color-scheme when no explicit choice is stored")
+    helper_pos = header.find("function getDarkModePreference()")
+    media_query_pos = header.find("matchMedia('(prefers-color-scheme: dark)')")
+    stored_check_pos = header.find("localStorage.getItem('darkMode')")
+    if helper_pos < 0 or media_query_pos < 0 or stored_check_pos < 0:
+        print("  ERROR: expected getDarkModePreference() to check both localStorage and prefers-color-scheme")
+        failed += 1
+
+    print("Test: the pre-CSS flash-prevention script and applyDarkMode() both use the shared helper")
+    pre_css_call_pos = header.find("if (getDarkModePreference())")
+    apply_dark_mode_call_pos = header.find("const darkModeEnabled = getDarkModePreference();")
+    if pre_css_call_pos < 0 or apply_dark_mode_call_pos < 0:
+        print("  ERROR: expected both the pre-CSS script and applyDarkMode() to call getDarkModePreference()")
+        failed += 1
+    elif not (helper_pos < pre_css_call_pos):
+        print("  ERROR: getDarkModePreference() must be defined before it is first called")
+        failed += 1
+
+    print("Test: an explicit stored preference is not overridden by prefers-color-scheme")
+    helper_body_start = header.find("function getDarkModePreference()")
+    helper_body_end = header.find("\n}", helper_body_start)
+    helper_body = header[helper_body_start:helper_body_end]
+    if "storedDarkMode === 'true'" not in helper_body or "storedDarkMode !== null" not in helper_body:
+        print("  ERROR: an explicit localStorage value should be honoured ahead of the OS preference")
+        failed += 1
+
+    print("Test: a live listener re-applies the theme if the OS preference changes with no explicit choice stored")
+    if "addEventListener('change'" not in header or "prefers-color-scheme: dark" not in header:
+        print("  ERROR: expected a matchMedia change listener so the page follows OS theme switches live")
+        failed += 1
+
+    print("Test: the live listener falls back to addListener() for browsers without MediaQueryList.addEventListener")
+    if "darkModeMediaQuery.addListener" not in header:
+        print("  ERROR: expected a fallback to the deprecated addListener() for older Safari/Chrome")
+        failed += 1
+
+    print("**** Web dark mode preference tests completed ****")
+    return failed
