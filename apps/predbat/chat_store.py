@@ -370,13 +370,19 @@ class ConversationStore:
         """Rename a conversation - the same operation a user drives from the list."""
         return self.set_title(cid, title)
 
-    def set_model(self, cid, model):
-        """Set a conversation's model override, or clear it back to the default with None."""
+    def set_model(self, cid, model, provider=None):
+        """Set a conversation's model override, or clear it back to the default with None.
+
+        The provider it was chosen for is recorded alongside it. A model id only means anything to
+        the endpoint serving it, so without knowing whose choice this was there is no way to tell,
+        after a provider switch, whether the override still refers to something that exists.
+        """
         with self.lock:
             entry = self.index.get(cid)
             if entry is None or entry.get("deleted"):
                 return False
             entry["model"] = model
+            entry["model_provider"] = provider if model else None
             self.dirty.add(cid)
         return True
 

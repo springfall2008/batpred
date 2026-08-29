@@ -24,7 +24,7 @@ import time
 from aiohttp import web
 from ruamel.yaml import YAML
 
-from chat import AgentNotReadyError, ChatBusyError, PROVIDER_DEFAULT_URLS, PROVIDERS, default_model_for
+from chat import AgentNotReadyError, ChatBusyError, PROVIDER_DEFAULT_URLS, PROVIDERS, conversation_model_for, default_model_for
 from utils import ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH
 
 SSE_POLL_SECONDS = 0.1
@@ -192,7 +192,10 @@ class WebChat:
             {
                 "id": cid,
                 "title": meta.get("title"),
-                "model": meta.get("model"),
+                # The override only when it belongs to the provider now active, decided by the
+                # same helper resolve_model() uses rather than a second copy of the rule: a page
+                # showing a model the next turn would not use is worse than showing none.
+                "model": conversation_model_for(meta, getattr(agent, "active_provider", None)),
                 "usage_total": meta.get("usage_total"),
                 # The most recent completion's prompt_tokens, not the cumulative usage_total.prompt_tokens
                 # - see ConversationStore.add_usage() and the Chat tab's context-size footer
@@ -391,7 +394,7 @@ class WebChat:
         if error:
             return error
         model_id = body.get("id") or None
-        agent.store.set_model(body.get("conversation"), model_id)
+        agent.store.set_model(body.get("conversation"), model_id, agent.active_provider)
         # Also remembered as the global choice, so the next new conversation starts on it and it
         # survives a restart. Only a real selection is remembered - clearing back to the default
         # should not pin whatever the default happened to be at that moment.
@@ -2637,6 +2640,30 @@ function selectModel(id) {
         .catch(function (error) { console.error('Failed to set chat model', error); });
 }
 
+function modelOffered(id) {
+    return (state.models || []).some(function (model) { return model.id === id; });
+}
+
+// Drop a remembered model the provider now in use does not serve, so the picker falls back to
+// "Pick a model to start" rather than naming something the next turn would fail on. The server
+// applies the same rule to the conversation override, which is per provider - this covers what
+// the browser is still holding from before the switch, and the case that rule cannot see: a model
+// genuinely gone from an endpoint that still has it remembered.
+//
+// Only when the catalogue could actually be read. With no list to check against, "not in the
+// list" means nothing, and blanking a configured model that works would be the worse mistake.
+function dropModelsTheProviderDoesNotServe() {
+    if (!state.catalogueAvailable) {
+        return;
+    }
+    if (state.currentModel && !modelOffered(state.currentModel)) {
+        state.currentModel = null;
+    }
+    if (state.selectedModel && !modelOffered(state.selectedModel)) {
+        state.selectedModel = '';
+    }
+}
+
 function populateModelPicker(models, selectedId) {
     state.currentModel = selectedId || state.currentModel;
     closeModelList();
@@ -2652,6 +2679,7 @@ function loadModels() {
             state.selectedModel = payload.selected_model || '';
             state.catalogueAvailable = payload.catalogue_available !== false;
             state.catalogueError = payload.catalogue_error || '';
+            dropModelsTheProviderDoesNotServe();
             populateModelPicker(state.models, state.currentModel);
         })
         .catch(function (error) { console.error('Failed to load chat models', error); });

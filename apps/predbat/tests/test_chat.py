@@ -2806,8 +2806,10 @@ def test_model_resolution_order(my_predbat):
         print("ERROR: the apps.yaml default was not used once nothing was remembered")
         failed = True
 
-    # The conversation's own model outranks everything.
-    agent.store.set_model(cid, "conversation/model")
+    # The conversation's own model outranks everything - for the provider it was chosen on. Which
+    # provider that was has to be passed, because the override is per provider like the other two:
+    # see test_a_conversation_model_does_not_survive_a_provider_switch.
+    agent.store.set_model(cid, "conversation/model", agent.active_provider)
     agent.store.set_selected_model("remembered/model", agent.active_provider)
     if agent.resolve_model(cid) != "conversation/model":
         print("ERROR: the conversation's own model did not win, got {}".format(agent.resolve_model(cid)))
@@ -3426,6 +3428,58 @@ def test_providers_accepted_without_the_nesting(my_predbat):
     return failed
 
 
+def test_a_conversation_model_does_not_survive_a_provider_switch(my_predbat):
+    """A conversation's model override belongs to the provider it was chosen for.
+
+    It was the only one of the three sources that was not per provider, and being the most
+    specific it won - so a conversation that had ever picked an OpenRouter model kept sending that
+    name to Ollama, which has never heard of it, for every turn after the switch. The per-provider
+    memory underneath it was already correct and never got a look in.
+    """
+    failed = False
+    print("**** Testing that a conversation's model does not follow a provider switch ****")
+
+    providers = {"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "k", "model": "hosted/default"}, "ollama": {"type": "ollama", "url": "http://192.168.0.33:11434/v1", "model": "gpt-oss:20b"}}
+    agent = _make_agent(my_predbat, providers=providers)
+    agent.select_provider("openrouter")
+    cid = asyncio.run(agent.store.create())
+
+    agent.store.set_model(cid, "vendor/hosted-only", agent.active_provider)
+    agent.store.set_selected_model("vendor/hosted-only", agent.active_provider)
+    if agent.resolve_model(cid) != "vendor/hosted-only":
+        print("ERROR: the override was not used on its own provider: {}".format(agent.resolve_model(cid)))
+        failed = True
+
+    agent.select_provider("ollama")
+    resolved = agent.resolve_model(cid)
+    if resolved == "vendor/hosted-only":
+        print("ERROR: an OpenRouter model followed the switch to Ollama: {}".format(resolved))
+        failed = True
+    if resolved != "gpt-oss:20b":
+        print("ERROR: expected Ollama's own default after the switch, got {}".format(resolved))
+        failed = True
+
+    # Picking one on Ollama does not disturb what OpenRouter remembers.
+    agent.store.set_model(cid, "qwen3:latest", agent.active_provider)
+    agent.store.set_selected_model("qwen3:latest", agent.active_provider)
+    if agent.resolve_model(cid) != "qwen3:latest":
+        print("ERROR: the Ollama choice was not used: {}".format(agent.resolve_model(cid)))
+        failed = True
+    agent.select_provider("openrouter")
+    if agent.resolve_model(cid) != "vendor/hosted-only":
+        print("ERROR: switching back lost the OpenRouter choice: {}".format(agent.resolve_model(cid)))
+        failed = True
+
+    # An override written before the provider was recorded belongs to nobody, so it is not trusted
+    # - and costs nothing, because the same choice sits in the per-provider memory beside it.
+    agent.store.index[cid]["model"] = "vendor/legacy-pick"
+    agent.store.index[cid].pop("model_provider", None)
+    if agent.resolve_model(cid) == "vendor/legacy-pick":
+        print("ERROR: an override with no provider recorded was trusted anyway")
+        failed = True
+    return failed
+
+
 def test_a_working_catalogue_clears_the_previous_failure(my_predbat):
     """A reason from an earlier failed fetch does not outlive it.
 
@@ -3564,6 +3618,7 @@ def run_chat_tests(my_predbat):
     failed = False
     failed |= test_model_catalogue_is_cached_per_endpoint(my_predbat)
     failed |= test_a_working_catalogue_clears_the_previous_failure(my_predbat)
+    failed |= test_a_conversation_model_does_not_survive_a_provider_switch(my_predbat)
     failed |= test_component_gating(my_predbat)
     failed |= test_provider_detection_and_payload(my_predbat)
     failed |= test_model_resolution_order(my_predbat)

@@ -322,6 +322,20 @@ def resolve_provider(api_type, url):
     return name, PROVIDERS.get(name, PROVIDERS["openai"])
 
 
+def conversation_model_for(meta, active_provider):
+    """Return a conversation's model override, but only for the provider it was chosen on.
+
+    A model id only means anything to the endpoint serving it, so an override picked on OpenRouter
+    is not an override at all once Ollama is answering - it is a name that endpoint has never heard
+    of, and every turn fails on it until somebody notices.
+
+    An override with no provider recorded predates this being tracked. Treated as belonging to
+    nobody, which costs nothing: the same choice sits in the store's per-provider memory, written
+    at the moment the override was.
+    """
+    return meta.get("model") if meta.get("model_provider") == active_provider else None
+
+
 def model_cache_name(base_url):
     """Return the cache filename holding one endpoint's model catalogue.
 
@@ -1830,9 +1844,16 @@ class ChatAgent(ComponentBase):
         the active provider's own default - its 'model' in apps.yaml, or the built-in default for
         its type. All three can be empty for an endpoint with no built-in default, which is not an
         error, just a user who has not chosen yet.
+
+        Every one of the three is per provider, including the conversation override: a model id
+        only means anything to the endpoint serving it, so carrying an OpenRouter model across a
+        switch to Ollama produces a turn that fails on a name that endpoint has never heard of.
+        An override with no provider recorded against it predates that being tracked and is
+        treated as belonging to nobody, which costs nothing - the same choice is in the store's
+        per-provider memory, written at the same moment the override was.
         """
-        conversation_model = (self.store.get_meta(conversation_id) or {}).get("model")
-        return conversation_model or self.store.get_selected_model(self.active_provider) or self.default_model or None
+        meta = self.store.get_meta(conversation_id) or {}
+        return conversation_model_for(meta, self.active_provider) or self.store.get_selected_model(self.active_provider) or self.default_model or None
 
     def _report_turn_error(self, conversation_id, message, detail=None):
         """Show a failed turn in the transcript and record it on the conversation.

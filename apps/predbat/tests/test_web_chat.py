@@ -3198,6 +3198,120 @@ def test_settings_script_wires_the_provider_routes(my_predbat):
     return failed
 
 
+def test_history_reports_the_override_only_for_its_own_provider(my_predbat):
+    """The page is not handed a model override belonging to a provider that is not answering.
+
+    The browser sets its current model straight from this field, so a route that returned the raw
+    override would put an OpenRouter model into the picker the moment an Ollama conversation was
+    opened - naming a model every turn would fail on, while resolve_model() quietly used another.
+    """
+    failed = False
+    print("**** Testing that history reports an override only for its own provider ****")
+
+    class ProviderAgent:
+        """An agent on one provider, holding a conversation whose model was chosen on another."""
+
+        active = None
+        active_provider = "ollama"
+
+        def __init__(self, model_provider):
+            """Hold the provider the stored override should claim to belong to."""
+            self.model_provider = model_provider
+            agent = self
+
+            class Store:
+                """The slice of ConversationStore the history route reads."""
+
+                @staticmethod
+                def get_meta(cid):
+                    """Return the one conversation, with its override and that override's owner."""
+                    return {"id": cid, "title": "known", "model": "vendor/hosted-only", "model_provider": agent.model_provider, "usage_total": {"cost": 0}}
+
+                @staticmethod
+                def get_last_error(cid, message_count=None):
+                    """No failed turn recorded."""
+                    return None
+
+                @staticmethod
+                def get_approvals(cid):
+                    """No approvals recorded."""
+                    return []
+
+                @staticmethod
+                async def snapshot(cid):
+                    """An empty transcript is enough - this test is about the model field."""
+                    return []
+
+            self.store = Store()
+
+        @staticmethod
+        async def run_on_agent_loop(coro):
+            """Await inline."""
+            return await coro
+
+        @staticmethod
+        def events_since(cursor, conversation_id):
+            """No events, as a freshly opened conversation would report."""
+            return [], 0, False
+
+    page = _make_web(my_predbat, agent=ProviderAgent("openrouter")).chat_page
+    response = asyncio.run(page.html_chat_history(FakeRequest(query={"conversation": "aaaabbbbccccdddd"})))
+    body = json.loads(response.text)
+    if body.get("model") is not None:
+        print("ERROR: an override from another provider was handed to the page: {}".format(body.get("model")))
+        failed = True
+
+    # And it is still reported for the provider it does belong to - the filter must not swallow
+    # every override, only the ones that are not this endpoint's.
+    page.agent_override = ProviderAgent("ollama")
+    response = asyncio.run(page.html_chat_history(FakeRequest(query={"conversation": "aaaabbbbccccdddd"})))
+    if json.loads(response.text).get("model") != "vendor/hosted-only":
+        print("ERROR: the override was dropped on its own provider: {}".format(response.text))
+        failed = True
+    return failed
+
+
+def test_picker_drops_a_model_the_provider_does_not_serve(my_predbat):
+    """After a provider switch the picker forgets a model the new endpoint has no idea about.
+
+    The server stops sending it - the conversation override is per provider now - but the browser
+    is still holding what it had before the switch, and it also cannot see the case the server
+    cannot: a model genuinely gone from an endpoint that still remembers it. Falling back to "Pick
+    a model to start" beats naming something every turn would fail on.
+    """
+    failed = False
+    print("**** Testing that the picker drops a model the provider does not serve ****")
+
+    script = web_chat.get_chat_script()
+    if "function dropModelsTheProviderDoesNotServe" not in script:
+        print("ERROR: nothing drops a model the provider does not serve")
+        return True
+    body = script[script.index("function dropModelsTheProviderDoesNotServe") : script.index("function populateModelPicker")]
+
+    # Guarded on the catalogue being readable: with no list to check against, "not in the list"
+    # means nothing, and blanking a configured model that works would be the worse mistake.
+    if "state.catalogueAvailable" not in body:
+        print("ERROR: models are dropped even when the catalogue could not be read: {!r}".format(body))
+        failed = True
+    for held in ("state.currentModel", "state.selectedModel"):
+        if held not in body:
+            print("ERROR: {} is not checked against the catalogue".format(held))
+            failed = True
+    if "modelOffered" not in body:
+        print("ERROR: the check does not consult the offered models")
+        failed = True
+
+    # It has to run before the picker is drawn, or the picker shows what was just invalidated.
+    load_body = script[script.index("function loadModels") : script.index("function loadModels") + 900]
+    if "dropModelsTheProviderDoesNotServe()" not in load_body:
+        print("ERROR: loading a catalogue does not re-check the held model")
+        failed = True
+    elif load_body.index("dropModelsTheProviderDoesNotServe()") > load_body.index("populateModelPicker("):
+        print("ERROR: the picker is drawn before the stale model is dropped")
+        failed = True
+    return failed
+
+
 def test_text_inputs_are_hinted_against_password_autofill(my_predbat):
     """No text field on the Chat tab invites a password manager to fill it.
 
@@ -3563,6 +3677,8 @@ def run_web_chat_tests(my_predbat):
     failed |= test_active_provider_is_remembered_across_a_restart(my_predbat)
     failed |= test_chat_page_uses_a_top_bar_and_a_settings_dialog(my_predbat)
     failed |= test_settings_script_wires_the_provider_routes(my_predbat)
+    failed |= test_history_reports_the_override_only_for_its_own_provider(my_predbat)
+    failed |= test_picker_drops_a_model_the_provider_does_not_serve(my_predbat)
     failed |= test_text_inputs_are_hinted_against_password_autofill(my_predbat)
     failed |= test_unavailable_catalogue_says_why(my_predbat)
     failed |= test_switching_provider_writes_nothing_and_restarts_nothing(my_predbat)

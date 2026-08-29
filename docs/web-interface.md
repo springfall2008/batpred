@@ -225,7 +225,13 @@ depends on which model they route your request to. Click it and type to filter -
 several hundred tool-capable models, so it filters on both id and name rather than being a plain
 dropdown. Your choice is remembered per provider as the starting point for new conversations and
 survives a restart, so setting a provider's `model` in `apps.yaml` is optional; if you do set it,
-it is what new conversations use until you pick something else. If the provider's catalogue cannot
+it is what new conversations use until you pick something else.
+
+Everything about the model is per provider, including a choice made inside one conversation. A
+model id only means anything to the endpoint serving it, so switching provider does not carry your
+OpenRouter model over to Ollama - it goes back to whatever you last chose on that provider, or to
+its default. If neither is available, the box says **Pick a model to start** rather than naming
+something the endpoint would reject. Switching back restores what you had. If the provider's catalogue cannot
 be fetched, only the configured model is offered.
 
 Beside it, Predbat shows the token usage and cost of the turn that just completed, the
