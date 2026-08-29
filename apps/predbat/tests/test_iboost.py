@@ -106,6 +106,9 @@ def run_iboost_smart_average_test(my_predbat):
     my_predbat.iboost_smart = False
     my_predbat.iboost_slots = []
     my_predbat.iboost_today = 0
+    my_predbat.iboost_max_energy = my_predbat.get_arg("iboost_max_energy")
+    my_predbat.iboost_max_power = my_predbat.get_arg("iboost_max_power") / (60 * 1000)
+    my_predbat.iboost_smart_min_length = my_predbat.get_arg("iboost_smart_min_length")
     my_predbat.minutes_now = orig_minutes_now
     my_predbat.forecast_minutes = orig_forecast_minutes
 
