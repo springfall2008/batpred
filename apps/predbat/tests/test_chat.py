@@ -3566,6 +3566,15 @@ def test_ollama_cloud_models_are_listed_but_not_free(my_predbat):
         print("ERROR: resolving a hosted provider mutated the shared PROVIDERS table")
         failed = True
 
+    # Only Ollama itself speaks Ollama's native API. 'local' is the generic OpenAI-compatible
+    # option - llama.cpp, LM Studio and the rest - which serve neither /api/tags nor /api/show, so
+    # claiming otherwise would 404 the whole catalogue and leave those endpoints with no models at
+    # all, not merely make some pointless requests.
+    for name, native in (("ollama", True), ("local", False), ("openai", False), ("openrouter", False)):
+        if PROVIDERS[name]["ollama_details"] is not native:
+            print("ERROR: {} has ollama_details={}, expected {}".format(name, PROVIDERS[name]["ollama_details"], native))
+            failed = True
+
     # A local catalogue is what you just changed by pulling something, so it must not be trusted
     # for a day the way a hosted one is - that is exactly "I pulled a model and it never appeared".
     if LOCAL_MODEL_CACHE_MINUTES >= MODEL_CACHE_MINUTES:

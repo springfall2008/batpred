@@ -15,7 +15,7 @@ description: "Use when the user is debugging a bug, tracing an error, or asking 
 
 ## Workflow
 
-```
+```text
 1. query({search_query: "<error or symptom>"})            → Find related execution flows
 2. context({name: "<suspect>"})                    → See callers/callees/processes
 3. READ gitnexus://repo/{name}/process/{name}                → Trace execution flow
@@ -26,7 +26,7 @@ description: "Use when the user is debugging a bug, tracing an error, or asking 
 
 ## Checklist
 
-```
+```text
 - [ ] Understand the symptom (error message, unexpected behavior)
 - [ ] query for error text or related code
 - [ ] Identify the suspect function from returned processes
@@ -51,7 +51,7 @@ description: "Use when the user is debugging a bug, tracing an error, or asking 
 
 **query** — find code related to error:
 
-```
+```text
 query({search_query: "payment validation error"})
 → Processes: CheckoutFlow, ErrorHandling
 → Symbols: validatePayment, handlePaymentError, PaymentException
@@ -59,7 +59,7 @@ query({search_query: "payment validation error"})
 
 **context** — full context for a suspect:
 
-```
+```text
 context({name: "validatePayment"})
 → Incoming calls: processCheckout, webhookHandler
 → Outgoing calls: verifyCard, fetchRates (external API!)
@@ -75,7 +75,7 @@ RETURN [n IN nodes(path) | n.name] AS chain
 
 **trace** — shortest call chain between two symbols ("how does A reach B?"), one call instead of chaining `context` hops:
 
-```
+```text
 trace({ from: "processCheckout", to: "fetchRates" })
 → status: ok, hopCount: 3
 → hops: processCheckout → validatePayment → verifyCard → fetchRates
@@ -86,7 +86,7 @@ When no path exists, `trace` reports the furthest reachable node — exactly whe
 
 ## Example: "Payment endpoint returns 500 intermittently"
 
-```
+```text
 1. query({search_query: "payment error handling"})
    → Processes: CheckoutFlow, ErrorHandling
    → Symbols: validatePayment, handlePaymentError

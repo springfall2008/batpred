@@ -142,7 +142,7 @@ mkdocs serve   # Live preview at http://localhost:8000
 When adding a new doc page, add it to `mkdocs.yml`. The published site at <https://springfall2008.github.io/batpred/> is built automatically from `main` via GitHub Actions.
 
 <!-- gitnexus:start -->
-# GitNexus — Code Intelligence
+## GitNexus — Code Intelligence
 
 This project is indexed by GitNexus as **batpred** (13494 symbols, 38059 relationships, 279 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 

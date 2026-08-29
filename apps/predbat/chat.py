@@ -165,15 +165,19 @@ Prefer the snapshot below for simple facts about the setup, and reach for a tool
 #                     and supported_parameters fields on its model catalogue
 #   stream_usage    - the standard OpenAI stream_options.include_usage, which is how everyone
 #                     else reports token counts (OpenRouter ignores it, Ollama honours it)
-#   ollama_details  - enrich the model list from Ollama's native /api/show, which publishes the
-#                     capabilities and context length its OpenAI-compatible /v1/models omits
+#   ollama_details  - talk to Ollama's own API rather than the OpenAI-compatible one: /api/tags
+#                     for the model list, which is the only place cloud models are marked as
+#                     such, and /api/show per model for the capabilities and context length
+#                     /v1/models omits. True only for Ollama itself - 'local' is the generic
+#                     OpenAI-compatible option (llama.cpp, LM Studio and the rest), and those
+#                     serve neither endpoint, so asking would cost a 404 for the whole catalogue
 #   metered         - somebody bills per token. False for an endpoint running on your own
 #                     hardware, where every model is free however little it says about pricing
 PROVIDERS = {
     "openrouter": {"needs_key": True, "openrouter_ext": True, "stream_usage": False, "ollama_details": False, "metered": True},
     "ollama": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": True, "metered": False},
     "openai": {"needs_key": True, "openrouter_ext": False, "stream_usage": True, "ollama_details": False, "metered": True},
-    "local": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": True, "metered": False},
+    "local": {"needs_key": False, "openrouter_ext": False, "stream_usage": True, "ollama_details": False, "metered": False},
 }
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
