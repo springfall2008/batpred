@@ -46,6 +46,13 @@ DEFAULT_EXPORT_LIMIT_KW = 10.0
 # A typical domestic panel in 2026. Only used to turn a panel count into kWp.
 DEFAULT_PANEL_WATTS = 400.0
 
+# A kWp figure above this in the solar config is far more likely Watts typed by
+# mistake - "6000" meaning 6,000 Wp - than a real array; even a large domestic
+# roof rarely reaches 30 kWp. Deliberately a warning, not a rejection: commercial
+# installations genuinely exceed it (see GH#4858), so the value is accepted and
+# modelled as typed, with config_warnings() flagging the likely mix-up.
+SOLAR_KWP_SOFT_LIMIT = 100.0
+
 # The Open-Meteo ERA5 archive, which the weather module draws on, starts in 1940.
 MINIMUM_YEAR = 1940
 
@@ -474,6 +481,42 @@ def validate_config(config, today=None):
         "pv10_derate_fallback": _require_number(raw.get("pv10_derate_fallback", DEFAULT_PV10_DERATE_FALLBACK), "annual.pv10_derate_fallback", minimum=0, exclusive_minimum=True, maximum=1),
         "raw": scrub_secrets(raw),
     }
+
+
+def config_warnings(config):
+    """Return a list of non-fatal sanity warnings about a config, for surfacing in the web form.
+
+    Unlike validate_config() these never block a run or a save. The case they exist
+    for is GH#4858: a peak power entered in Watts - "6000" meaning 6,000 Wp - in a
+    field that reads as kWp. Nothing downstream sees anything wrong, every derived
+    figure is merely very large rather than implausible, and only the total reads
+    as a 6 MWp roof. Accepts the same wrapped or bare mapping validate_config()
+    does, and is deliberately tolerant of input validate_config() will reject: a
+    malformed value gets its own AnnualConfigError, so warning about it here as
+    well would be noise. Warns only on the kWp field; the panels route (a count
+    times a per-panel wattage) cannot be mistaken for a single Wp figure.
+    """
+    if not isinstance(config, dict):
+        return []
+    raw = config.get("annual", config)
+    if not isinstance(raw, dict):
+        return []
+
+    warnings = []
+    solar = raw.get("solar")
+    if isinstance(solar, dict):
+        solar = [solar]
+    if isinstance(solar, list):
+        for index, array in enumerate(solar):
+            if not isinstance(array, dict):
+                continue
+            kwp = array.get("kwp")
+            # bool is an int subclass, and True/False as a peak power is validation's problem.
+            if isinstance(kwp, bool) or not isinstance(kwp, (int, float)):
+                continue
+            if kwp > SOLAR_KWP_SOFT_LIMIT:
+                warnings.append("annual.solar[{}]: peak power {} kWp is far larger than a typical home array. If you entered Watts (Wp) rather than kWp, that is {:g} kWp.".format(index, round(kwp, 2), kwp / 1000.0))
+    return warnings
 
 
 # Minimal apps.yaml for a headless run. PredBat's Hass base class reads this at

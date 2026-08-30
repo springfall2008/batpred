@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 from aiohttp import web as aiohttp_web
 
-from annual import AnnualConfigError, validate_config
+from annual import AnnualConfigError, config_warnings, validate_config
 from annual_store import list_runs, load_run, save_run
 from tariff_catalogue import BASELINE_DEFAULT_IMPORT_ID, CUSTOM_ID, EXPORT_TARIFFS, IMPORT_TARIFFS, NO_EXPORT_ID, PRICE_CAP_IMPORT_P
 from web import WebInterface
@@ -992,6 +992,26 @@ def test_web_annual_form(my_predbat):
             failed = True
         if 'value="3800"' not in html_with_error.replace("'", '"'):
             print("  ERROR: the form should stay populated when an error is shown")
+            failed = True
+
+        print("Test: an oversized kWp figure renders a warning; a sane figure renders none")
+        # The Wp-instead-of-kWp mix-up (GH#4858) is shown as a non-blocking note: the
+        # value stands as typed and the form stays runnable.
+        oversized = copy.deepcopy(config)
+        oversized["solar"] = [{"kwp": 6000}]
+        warning_html = page.render_form(oversized, errors=None, warnings=config_warnings(oversized))
+        if "annual-warning" not in warning_html or "6 kWp" not in warning_html:
+            print("  ERROR: an oversized kWp array should render a warning naming the kWp conversion")
+            failed = True
+        if "6000 kWp" not in warning_html:
+            print("  ERROR: the warning should echo the entered figure, got no 6000 kWp in the form")
+            failed = True
+        calm_html = page.render_form(config, warnings=config_warnings(config))
+        if "annual-warning" in calm_html:
+            print("  ERROR: a sane system size should not render a warning")
+            failed = True
+        if page.render_form(config) != page.render_form(config, warnings=None):
+            print("  ERROR: render_form with no warnings should render identically to the no-warnings default")
             failed = True
 
         print("Test: config_from_post rebuilds a config the engine accepts")

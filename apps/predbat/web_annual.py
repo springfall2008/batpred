@@ -25,7 +25,7 @@ import sys
 import yaml
 from aiohttp import web
 
-from annual import INCLUDED_STATUSES, AnnualConfigError, validate_config
+from annual import INCLUDED_STATUSES, SOLAR_KWP_SOFT_LIMIT, AnnualConfigError, config_warnings, validate_config
 from annual_costs import DEFAULT_COSTS, build_costs, resolve_costs
 from annual_job import AnnualJob
 from annual_store import backfill_summaries, delete_run, list_runs, load_plan, load_run, save_run
@@ -410,12 +410,15 @@ class AnnualPage:
         """Return the export catalogue id matching this tariff, or Custom, or None if unset."""
         return cls._selected_side_id(tariff, catalogue, "export_octopus_url", "rates_export")
 
-    def render_form(self, config, errors=None):
+    def render_form(self, config, errors=None, warnings=None):
         """Return the configuration form as HTML, populated from ``config``.
 
         ``errors`` is displayed above the form with every field left as the user
         entered it - losing their input on a validation failure would be worse
-        than the failure.
+        than the failure. ``warnings`` is a list of config_warnings() messages
+        shown the same way in a non-blocking style: sanity checks like kWp
+        entered in Watts are worth surfacing loudly, but the values are accepted
+        exactly as typed.
         """
         # An ABSENT solar key means "not configured yet", so offer one blank array to fill
         # in. An explicitly EMPTY list means the user removed them all, which is a valid
@@ -433,6 +436,8 @@ class AnnualPage:
 
         if errors:
             text += '<div class="annual-error"><strong>Could not run:</strong> {}</div>\n'.format(html.escape(str(errors), quote=True))
+        for warning in warnings or []:
+            text += '<div class="annual-warning"><strong>Note:</strong> {}</div>\n'.format(html.escape(str(warning), quote=True))
 
         if not self.is_configured():
             text += '<div class="annual-banner">Predbat isn\'t configured yet — these are <strong>example values</strong>, edit them to match your home.</div>\n'
@@ -933,7 +938,7 @@ class AnnualPage:
         text += "<body>\n"
         text += self.render_css()
         text += self.render_nav("config")
-        text += self.render_form(config, errors=error)
+        text += self.render_form(config, errors=error, warnings=config_warnings(config))
         text += self.render_script()
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -1858,10 +1863,11 @@ annualLoadPlan();
    nowrap (which keeps its columns intact while it scrolls) is untouched.
    The max-width is for readability: prose set across an ultra-wide monitor is hard to
    track from the end of one line back to the start of the next. */
-.annual-form-wrap p, .annual-results p, .annual-compare-scroll p, .annual-banner, .annual-note, .annual-error, .annual-caveats li { white-space: normal; }
-.annual-banner, .annual-error, .annual-caveats li, .annual-form-wrap > p, .annual-results > p { max-width: 80ch; }
+.annual-form-wrap p, .annual-results p, .annual-compare-scroll p, .annual-banner, .annual-note, .annual-error, .annual-warning, .annual-caveats li { white-space: normal; }
+.annual-banner, .annual-error, .annual-warning, .annual-caveats li, .annual-form-wrap > p, .annual-results > p { max-width: 80ch; }
 .annual-banner { border-left: 4px solid #D55E00; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
 .annual-error { border-left: 4px solid #b00020; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
+.annual-warning { border-left: 4px solid #b8860b; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
 .annual-progress { margin: 1rem 0; }
 .annual-bar { height: 1.25rem; border: 1px solid var(--md-border, #cbd5e1); }
 .annual-bar-fill { height: 100%; background: #0072B2; width: 0%; }
@@ -1912,7 +1918,13 @@ table.annual-compare th, table.annual-compare td { padding: 4px 8px 4px 4px; }
 
     def render_script(self):
         """Return the polling and tariff-picker script."""
-        return """<script>
+        # The soft limit is injected from annual.py rather than hardcoded in the JavaScript,
+        # so this live hint and the server's config_warnings() warning cannot drift apart.
+        return (
+            """<script>
+var ANNUAL_SOLAR_KWP_SOFT_LIMIT = """
+            + str(SOLAR_KWP_SOFT_LIMIT)
+            + """;
 function annualTariffChanged(field) {
   // Import and export are independent, so each select drives only its own URL box.
   var sides = {
@@ -1959,9 +1971,15 @@ function annualUpdateSolarTotal() {
   if (!note) { return; }
   // The panel count is shown only when EVERY array was entered as panels. A partial
   // count would read as the whole system's, which is worse than not showing one.
-  note.textContent = allPanels && totalPanels > 0
+  var label = allPanels && totalPanels > 0
     ? 'Total: ' + totalKwp.toFixed(2) + ' kWp across ' + totalPanels + ' panels'
     : 'Total: ' + totalKwp.toFixed(2) + ' kWp';
+  // A peak power this large usually means Watts were typed into the kWp field (GH#4858).
+  // Non-blocking: the value stands as entered, the hint just questions it.
+  if (totalKwp > ANNUAL_SOLAR_KWP_SOFT_LIMIT) {
+    label = label + ' — this looks like Watts (Wp) rather than kWp; if so it is ' + (totalKwp / 1000).toFixed(2) + ' kWp';
+  }
+  note.textContent = label;
 }
 function annualSolarTotalKwp() {
   var total = 0, index = 0;
@@ -2084,3 +2102,4 @@ function annualPoll() {
 annualPoll();
 </script>
 """
+        )
