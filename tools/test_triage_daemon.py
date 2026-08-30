@@ -230,6 +230,18 @@ class DuplicateGuardTests(unittest.TestCase):
         self.assertIn("--repo", args)
         self.assertEqual(args[args.index("--repo") + 1], "springfall2008/batpred")
 
+    @patch("triage_daemon.subprocess.run")
+    def test_find_pr_number_for_issue_returns_the_number(self, mock_run):
+        """A matching search result's PR number is returned, not just a bool."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742}]))
+        self.assertEqual(triage_daemon.find_pr_number_for_issue(4720), 4742)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_find_pr_number_for_issue_returns_none_when_no_match(self, mock_run):
+        """An empty search result means no PR exists yet for this issue."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([]))
+        self.assertIsNone(triage_daemon.find_pr_number_for_issue(4720))
+
 
 class IsActionableTests(unittest.TestCase):
     """Tests for is_actionable(), new - guards against implementing a closed,
@@ -288,10 +300,11 @@ class LabelSwapTests(unittest.TestCase):
     @patch("triage_daemon.subprocess.run")
     def test_mark_pr_opened_swaps_labels(self, mock_run):
         """Removes BOT_PR and adds BOT_PR_OPENED, scoped to the configured repo."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742}]))
         triage_daemon.mark_pr_opened(4720)
-        args = mock_run.call_args[0][0]
+        first_call_args = mock_run.call_args_list[0].args[0]
         self.assertEqual(
-            args,
+            first_call_args,
             [
                 "gh",
                 "issue",
@@ -305,6 +318,26 @@ class LabelSwapTests(unittest.TestCase):
                 "BOT_PR_OPENED",
             ],
         )
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_flags_the_pr_for_review(self, mock_run):
+        """Once the issue's label is swapped, the PR itself is found and flagged
+        BOT_REVIEW - /issue-pr's own quality gate is pre-commit and a targeted test,
+        not an LLM review of the diff, so this is what actually triggers one."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742}]))
+        triage_daemon.mark_pr_opened(4720)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW"], calls)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_skips_flagging_when_no_pr_found(self, mock_run):
+        """Defensive path: an empty PR search (e.g. a race with the PR being closed
+        between the caller's has_existing_pr() check and this call) must not crash
+        trying to flag a PR number that doesn't exist."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([]))
+        triage_daemon.mark_pr_opened(4720)  # must not raise
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any(call[:3] == ["gh", "pr", "edit"] for call in calls))
 
     @patch("triage_daemon.subprocess.run")
     def test_mark_pr_failed_swaps_labels(self, mock_run):
@@ -326,6 +359,17 @@ class LabelSwapTests(unittest.TestCase):
                 "BOT_PR_FAILED",
             ],
         )
+
+
+class FlagPrForReviewTests(unittest.TestCase):
+    """Tests for flag_pr_for_review(), new - adds BOT_REVIEW to a PR directly."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_adds_bot_review_to_the_pr_scoped_to_repo(self, mock_run):
+        """Adds the label to the PR (not the issue), scoped to the configured repo."""
+        triage_daemon.flag_pr_for_review(4742)
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args, ["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW"])
 
 
 class PermissionModelTests(unittest.TestCase):
@@ -691,6 +735,210 @@ class SyncRepoTests(unittest.TestCase):
         self.assertLess(calls.index(checkout_call), calls.index(reset_call))
 
 
+class EffectiveOllamaModelTests(unittest.TestCase):
+    """Tests for effective_ollama_model(), new - the priority logic behind --ollama
+    (every claude invocation) vs --ollama_review (review-only invocations)."""
+
+    def setUp(self):
+        """Every test starts from the no-flag default, regardless of test order."""
+        for name in ("OLLAMA_MODEL", "OLLAMA_REVIEW_MODEL"):
+            patcher = patch.object(triage_daemon, name, None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_none_by_default(self):
+        """With neither flag set, every invocation uses the default Claude model."""
+        self.assertIsNone(triage_daemon.effective_ollama_model())
+        self.assertIsNone(triage_daemon.effective_ollama_model(review_only=True))
+
+    def test_ollama_applies_regardless_of_review_only(self):
+        """--ollama (OLLAMA_MODEL) covers every invocation, including PR creation."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.effective_ollama_model(review_only=False), "glm-5.3-flash:cloud")
+            self.assertEqual(triage_daemon.effective_ollama_model(review_only=True), "glm-5.3-flash:cloud")
+
+    def test_ollama_review_only_applies_when_review_only_is_true(self):
+        """--ollama_review (OLLAMA_REVIEW_MODEL) is ignored unless the caller marks
+        this invocation review_only - this is what keeps PR creation (which never
+        passes review_only=True) on the default Claude model."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            self.assertIsNone(triage_daemon.effective_ollama_model(review_only=False))
+            self.assertEqual(triage_daemon.effective_ollama_model(review_only=True), "glm-5.3-flash:cloud")
+
+    def test_ollama_takes_precedence_over_ollama_review(self):
+        """If both somehow end up set, the blanket --ollama model wins."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "full-model"), patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "review-model"):
+            self.assertEqual(triage_daemon.effective_ollama_model(review_only=True), "full-model")
+
+
+class ClaudeModelArgsTests(unittest.TestCase):
+    """Tests for claude_model_args(), new - the --ollama/--ollama_review-to---model
+    plumbing shared by every 'claude' invocation (triage, triage_followup, create_pr,
+    review_pr, cleanup_pr)."""
+
+    def setUp(self):
+        """Every test starts from the no-flag default, regardless of test order."""
+        for name in ("OLLAMA_MODEL", "OLLAMA_REVIEW_MODEL"):
+            patcher = patch.object(triage_daemon, name, None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_empty_by_default(self):
+        """With no --ollama, no --model flag is added to any claude invocation."""
+        self.assertEqual(triage_daemon.claude_model_args(), [])
+
+    def test_selects_the_configured_model(self):
+        """--ollama's model name is passed straight through as --model, :cloud suffix included."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_model_args(), ["--model", "glm-5.3-flash:cloud"])
+
+    def test_review_only_model_used_when_review_only_true(self):
+        """claude_model_args(review_only=True) picks up --ollama_review when set -
+        the call form triage()/triage_followup()/review_pr()/cleanup_pr() use."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_model_args(review_only=True), ["--model", "glm-5.3-flash:cloud"])
+
+    def test_review_only_model_ignored_by_default(self):
+        """claude_model_args() with no argument - the form create_pr() uses - ignores
+        --ollama_review, so PR creation is unaffected by it."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_model_args(), [])
+
+
+class ClaudeEnvTests(unittest.TestCase):
+    """Tests for claude_env(), new - the Anthropic-compatible env overrides Ollama's
+    Claude Code integration documents (https://docs.ollama.com/integrations/claude-code)."""
+
+    def setUp(self):
+        """Every test starts from the no-flag default, regardless of test order."""
+        for name in ("OLLAMA_MODEL", "OLLAMA_REVIEW_MODEL"):
+            patcher = patch.object(triage_daemon, name, None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_none_by_default(self):
+        """With no --ollama, env=None so subprocess.run() inherits the daemon's own
+        environment unchanged - no ANTHROPIC_* overrides pointing at Ollama."""
+        self.assertIsNone(triage_daemon.claude_env())
+
+    def test_adds_the_documented_overrides_when_configured(self):
+        """--ollama sets exactly the three env vars Ollama's integration guide documents."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"):
+            env = triage_daemon.claude_env()
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+        self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "ollama")
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "")
+
+    def test_preserves_the_rest_of_the_process_environment(self):
+        """The overrides sit on top of the daemon's own environment, not a bare dict -
+        the gh/git subcommands inside the claude session still need PATH, HOME, etc."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"), patch.dict("os.environ", {"SOME_OTHER_VAR": "keep-me"}):
+            env = triage_daemon.claude_env()
+        self.assertEqual(env.get("SOME_OTHER_VAR"), "keep-me")
+
+    def test_review_only_env_used_when_review_only_true(self):
+        """claude_env(review_only=True) picks up --ollama_review when set."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            env = triage_daemon.claude_env(review_only=True)
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    def test_review_only_env_ignored_by_default(self):
+        """claude_env() with no argument - the form create_pr() uses - ignores --ollama_review."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            env = triage_daemon.claude_env()
+        self.assertIsNone(env)
+
+
+class ParseArgsTests(unittest.TestCase):
+    """Tests for parse_args(), new - the --ollama/--ollama_review CLI flags."""
+
+    def test_defaults_to_no_ollama_model(self):
+        """Without either flag, both args are None - every claude invocation uses the default model."""
+        with patch("sys.argv", ["triage_daemon.py"]):
+            args = triage_daemon.parse_args()
+        self.assertIsNone(args.ollama)
+        self.assertIsNone(args.ollama_review)
+
+    def test_parses_the_ollama_model_flag(self):
+        """--ollama <model> is captured verbatim, :cloud suffix included."""
+        with patch("sys.argv", ["triage_daemon.py", "--ollama", "glm-5.3-flash:cloud"]):
+            args = triage_daemon.parse_args()
+        self.assertEqual(args.ollama, "glm-5.3-flash:cloud")
+        self.assertIsNone(args.ollama_review)
+
+    def test_parses_the_ollama_review_model_flag(self):
+        """--ollama_review <model> is captured verbatim, separately from --ollama."""
+        with patch("sys.argv", ["triage_daemon.py", "--ollama_review", "glm-5.3-flash:cloud"]):
+            args = triage_daemon.parse_args()
+        self.assertEqual(args.ollama_review, "glm-5.3-flash:cloud")
+        self.assertIsNone(args.ollama)
+
+    def test_ollama_and_ollama_review_are_mutually_exclusive(self):
+        """Passing both is a usage error rather than a silently-resolved precedence -
+        --ollama already covers every flow --ollama_review does, so combining them
+        would just be ambiguous about which one the user actually meant."""
+        with patch("sys.argv", ["triage_daemon.py", "--ollama", "model-a", "--ollama_review", "model-b"]):
+            with self.assertRaises(SystemExit):
+                triage_daemon.parse_args()
+
+
+class TriageTests(DaemonPathsTestCase):
+    """Tests for triage(), exercised directly here for the first time - previously
+    only covered indirectly through the orchestrators, which mock it out."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_invokes_claude_with_the_triage_permission_set(self, mock_run):
+        """Runs the /issue-triage skill with the read-only allow/deny lists."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("/issue-triage 4720", cmd[2])
+        self.assertIn(triage_daemon.ALLOWED_TOOLS, cmd)
+        self.assertIn(triage_daemon.DISALLOWED_TOOLS, cmd)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_no_model_flag_or_env_override_by_default(self, mock_run):
+        """Without --ollama, the invocation is unchanged: no --model flag, env=None
+        so the claude subprocess talks to Anthropic's API as normal."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("--model", cmd)
+        self.assertIsNone(mock_run.call_args.kwargs["env"])
+
+    @patch("triage_daemon.subprocess.run")
+    def test_adds_the_ollama_model_flag_and_env_when_configured(self, mock_run):
+        """--ollama appends --model <name> to the cmd and routes the subprocess at
+        Ollama's Claude Code compatible endpoint via the env overrides."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_ollama_review_model_also_applies_to_triage(self, mock_run):
+        """--ollama_review covers first-pass triage too, not just the blanket --ollama."""
+        self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_writes_a_log_file(self, mock_run):
+        """A per-issue log file is created under LOG_DIR."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        self.assertTrue((self.log_dir / "issue-4720.log").exists())
+
+
 class CreatePrTests(DaemonPathsTestCase):
     """Tests for create_pr(), new in the bot PR flow."""
 
@@ -719,6 +967,29 @@ class CreatePrTests(DaemonPathsTestCase):
         mock_run.return_value = MagicMock(returncode=0)
         triage_daemon.create_pr(4720)
         self.assertTrue((self.log_dir / "issue-4720-pr.log").exists())
+
+    @patch("triage_daemon.subprocess.run")
+    def test_adds_the_ollama_model_flag_and_env_when_configured(self, mock_run):
+        """Same --ollama wiring as triage() - this flow also shells out to 'claude'."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_ollama_review_model_does_not_apply_to_pr_creation(self, mock_run):
+        """--ollama_review is scoped to the review-only flows - PR creation must still
+        run on the default Claude model even when --ollama_review is set."""
+        self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("--model", cmd)
+        self.assertIsNone(mock_run.call_args.kwargs["env"])
 
 
 class ProcessBotPrIssueTests(unittest.TestCase):
@@ -900,6 +1171,30 @@ class TriageFollowupTests(DaemonPathsTestCase):
         mock_run.return_value = MagicMock(returncode=0)
         triage_daemon.triage_followup(4720)
         self.assertTrue((self.log_dir / "issue-4720-followup.log").exists())
+
+    @patch("triage_daemon.subprocess.run")
+    def test_adds_the_ollama_model_flag_and_env_when_configured(self, mock_run):
+        """Same --ollama wiring as triage() - this flow also shells out to 'claude'."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage_followup(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_ollama_review_model_also_applies_to_followup(self, mock_run):
+        """--ollama_review covers the follow-up review too."""
+        self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage_followup(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
 
 
 class ProcessBotReviewIssueTests(unittest.TestCase):
@@ -1089,6 +1384,30 @@ class ReviewPrTests(DaemonPathsTestCase):
         triage_daemon.review_pr(4742)
         self.assertTrue((self.log_dir / "pr-4742-review.log").exists())
 
+    @patch("triage_daemon.subprocess.run")
+    def test_adds_the_ollama_model_flag_and_env_when_configured(self, mock_run):
+        """Same --ollama wiring as triage() - this flow also shells out to 'claude'."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.review_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_ollama_review_model_also_applies_to_pr_review(self, mock_run):
+        """--ollama_review covers PR review too - it's one of the review-only flows."""
+        self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.review_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
 
 class ProcessBotReviewPrTests(unittest.TestCase):
     """Tests for process_bot_review_pr(), new - the BOT_REVIEW-on-PR orchestrator."""
@@ -1225,6 +1544,30 @@ class CleanupPrTests(DaemonPathsTestCase):
         mock_run.return_value = MagicMock(returncode=0)
         triage_daemon.cleanup_pr(4742)
         self.assertTrue((self.log_dir / "pr-4742-cleanup.log").exists())
+
+    @patch("triage_daemon.subprocess.run")
+    def test_adds_the_ollama_model_flag_and_env_when_configured(self, mock_run):
+        """Same --ollama wiring as triage() - this flow also shells out to 'claude'."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.cleanup_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_ollama_review_model_also_applies_to_cleanup(self, mock_run):
+        """--ollama_review covers PR cleanup too - it's one of the review-only flows."""
+        self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.cleanup_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
 
 
 class ProcessBotCleanupPrTests(unittest.TestCase):
