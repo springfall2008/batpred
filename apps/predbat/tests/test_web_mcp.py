@@ -1369,6 +1369,15 @@ def test_mcp_get_log_byte_budget(my_predbat):
             print("  ERROR: expected truncated_reason max_bytes, got {}".format(data.get("truncated_reason")))
             failed = True
 
+        print("Test: matched_lines still counts every match, not just the ones that fitted")
+        # The description says "the most recent X of Y matching lines". Stopping the count at the
+        # budget makes Y a tally of what fitted rather than what matched, which understates how
+        # much was left out - the opposite of what that sentence is for. max_lines already keeps
+        # counting past its cap, so the two truncation paths must agree.
+        if data["matched_lines"] != 400:
+            print("  ERROR: expected all 400 matches counted, got {}".format(data["matched_lines"]))
+            failed = True
+
         print("Test: the newest lines are the ones kept")
         if "Info:" not in data["lines"][-1]["line"]:
             print("  ERROR: unexpected last line {!r}".format(data["lines"][-1]["line"][:60]))

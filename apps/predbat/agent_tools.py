@@ -255,6 +255,7 @@ def scan_predbat_log(filter_type, search_term, pattern, start_time, end_time, ma
     truncated_reason = None
     matched_lines = 0
     used = 0
+    budget_spent = False
 
     for lineno in range(total_lines - 1, -1, -1):
         line = loglines[lineno]
@@ -278,20 +279,26 @@ def scan_predbat_log(filter_type, search_term, pattern, start_time, end_time, ma
             continue
 
         matched_lines += 1
-        if len(result_lines) >= max_lines:
+        # Both caps stop the response growing but neither stops the count: the description reports
+        # "the most recent X of Y matching lines", and a Y that stopped at the cap would tally what
+        # fitted rather than what matched, understating exactly what it exists to convey. So the
+        # walk continues to the end of the window either way, appending nothing further.
+        if budget_spent or len(result_lines) >= max_lines:
             truncated = True
-            truncated_reason = truncated_reason or "max_lines"
+            truncated_reason = truncated_reason or ("max_bytes" if budget_spent else "max_lines")
             continue
 
         text, dropped = truncate_log_line(line, lineno)
-        # Budget checked against the truncated text, which is what actually goes back, and only
-        # once at least one line is in hand - a single line over the whole budget is still more
-        # use to the caller than an empty result.
-        used += len(text)
-        if used > MCP_LOG_DEFAULT_MAX_BYTES and result_lines:
+        # Measured against the truncated text, which is what actually goes back, and tested before
+        # the line is counted in so a line that does not fit is not billed for. Only once at least
+        # one line is in hand - a single line larger than the whole budget is still more use to the
+        # caller than an empty result.
+        if used + len(text) > MCP_LOG_DEFAULT_MAX_BYTES and result_lines:
+            budget_spent = True
             truncated = True
             truncated_reason = "max_bytes"
-            break
+            continue
+        used += len(text)
 
         entry = {"line_number": lineno, "type": line_type, "line": text}
         if dropped:
