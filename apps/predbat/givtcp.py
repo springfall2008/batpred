@@ -35,6 +35,7 @@ that owns it now rather than Inverter.
 import asyncio
 
 from component_base import ComponentBase
+from utils import dp4
 from givtcp_rest import GivTCPRest, InverterRestState
 
 # Every minute of the day, matching GivTCP's own slot resolution. This has to be the full 1440
@@ -108,6 +109,9 @@ GIVTCP_SENSORS = {
     "battery_rate_max": {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:battery-arrow-up"},
     "inverter_limit": {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:transmission-tower"},
     "battery_calibration": {"icon": "mdi:battery-sync"},
+    "battery_soh": {"icon": "mdi:battery-heart-variant"},
+    "battery_dod": {"icon": "mdi:battery-arrow-down-outline"},
+    "battery_dod_soh": {"icon": "mdi:battery-heart-outline"},
 }
 
 # Discovery values Inverter.__init__ used to read straight off the REST blob. Published as sensors
@@ -164,6 +168,15 @@ GIVTCP_AUTO_CONFIG_CHARGE_ENABLE_KEYS = [
     "charge_limit_enable",
 ]
 
+# battery_scaling points at the combined depth-of-discharge x state-of-health sensor, the same shape
+# GE Cloud uses (battery_dod_soh). Inverter computes soc_max = nominal_capacity * battery_scaling, so
+# with soc_max carrying the design capacity this yields the true usable size while leaving
+# nominal_capacity as the nameplate figure that battery_scaling_auto measures degradation against.
+# Claimed only when a design capacity was actually reported - see publish_data().
+GIVTCP_AUTO_CONFIG_SCALING_KEYS = [
+    "battery_scaling",
+]
+
 # Power/voltage keys are auto-configured separately: givtcp_rest_power_ignore opts out of them.
 GIVTCP_AUTO_CONFIG_POWER_KEYS = [
     "battery_power",
@@ -187,7 +200,7 @@ class GivTCPComponent(ComponentBase):
         rest_urls = rest_urls if isinstance(rest_urls, list) else [rest_urls]
         self.rest = []
         for n, url in enumerate(rest_urls):
-            state = InverterRestState(id=n, rest_api=url, battery_rate_max_charge=1.0, battery_rate_max_discharge=1.0)
+            state = InverterRestState(id=n, rest_api=url)
             self.rest.append(GivTCPRest(self.base, state))
         self.automatic_config_done = False
         # givtcp_rest is the key that enables this component, but its length says nothing about how
@@ -378,17 +391,38 @@ class GivTCPComponent(ComponentBase):
             # GivTCP actually reports it, so a missing one falls back to the user's own apps.yaml
             # value rather than being published as a zero that would look authoritative.
             #
-            # soc_max carries the nominal (nameplate) capacity instead of the reported capacity when
-            # battery_capacity_nominal is on: Inverter multiplies whatever it reads here by
-            # battery_scaling, so choosing the source here reproduces both branches of the old code.
-            soc_max = rest.battery_capacity_kwh()
-            nominal_capacity = rest.nominal_capacity()
-            if self.get_arg("battery_capacity_nominal", default=False) and nominal_capacity:
-                if soc_max and abs(soc_max - nominal_capacity) > 1.0:
-                    self.log("Warn: GivTCP: inverter {} reports Battery Capacity {}kWh but nominal indicates {}kWh - using nominal".format(n, soc_max, nominal_capacity))
-                soc_max = nominal_capacity
+            # soc_max carries the DESIGN capacity and battery health is expressed through
+            # battery_scaling, matching GE Cloud (battery_size + battery_dod_soh). Inverter computes
+            # soc_max = nominal_capacity * battery_scaling and measures degradation against
+            # nominal_capacity, so publishing the already-degraded reported capacity here would
+            # collapse trimmed_mean/nominal to ~1.0 and hide exactly what battery_scaling_auto
+            # exists to find. Net usable size is unchanged: design x (reported/design) == reported.
+            reported_capacity = rest.battery_capacity_kwh()
+            design_capacity = rest.nominal_capacity()
+            soh = rest.battery_soh()
+
+            if soh is not None and self.get_arg("battery_capacity_nominal", default=False):
+                # main's expert switch meant "size the battery from the nameplate, not the reported
+                # capacity". soc_max is already the nameplate here, so the switch now suppresses the
+                # health derate - which produces the same capacity it did before.
+                if abs(reported_capacity - design_capacity) > 1.0:
+                    self.log("Warn: GivTCP: inverter {} reports Battery Capacity {}kWh but nominal indicates {}kWh - using nominal".format(n, reported_capacity, design_capacity))
+                soh = 1.0
+
+            # No design capacity means no health figure can be derived, so fall back to the reported
+            # capacity and claim no scaling rather than displacing the user's own with a fabricated 1.0.
+            soc_max = design_capacity or reported_capacity
             if soc_max:
                 self.dashboard_item(self._entity_id("sensor", n, "soc_max"), state=soc_max, attributes=GIVTCP_SENSORS["soc_max"], app="givtcp")
+
+            if soh is not None:
+                # GivTCP does not report depth of discharge, so it defaults to 1.0 and can be supplied
+                # per inverter with givtcp_battery_dod. Inverter applies one scaling factor, so the
+                # combined product is what battery_scaling has to point at.
+                dod = float(self.get_arg("givtcp_battery_dod", default=1.0, index=n))
+                self.dashboard_item(self._entity_id("sensor", n, "battery_soh"), state=soh, attributes=GIVTCP_SENSORS["battery_soh"], app="givtcp")
+                self.dashboard_item(self._entity_id("sensor", n, "battery_dod"), state=dod, attributes=GIVTCP_SENSORS["battery_dod"], app="givtcp")
+                self.dashboard_item(self._entity_id("sensor", n, "battery_dod_soh"), state=dp4(soh * dod), attributes=GIVTCP_SENSORS["battery_dod_soh"], app="givtcp")
 
             battery_temperature = rest.battery_temperature()
             if battery_temperature is not None:
@@ -446,6 +480,11 @@ class GivTCPComponent(ComponentBase):
 
         keys += GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS
 
+        if all(self.rest[n].battery_soh() is not None for n in discovered):
+            keys += GIVTCP_AUTO_CONFIG_SCALING_KEYS
+        else:
+            self.log("Info: GivTCP: no design capacity reported by every inverter - leaving battery_scaling to your apps.yaml config")
+
         if all(self.rest[n].charge_target_enabled is not None for n in discovered):
             keys += GIVTCP_AUTO_CONFIG_CHARGE_ENABLE_KEYS
         else:
@@ -459,6 +498,9 @@ class GivTCPComponent(ComponentBase):
         for key in keys:
             domain, _, _ = GIVTCP_CONTROLS.get(key, (None, None, None))
             domain = domain or "sensor"
+            if key == "battery_scaling":
+                self.set_arg_auto(key, [self._entity_id("sensor", n, "battery_dod_soh") for n in discovered])
+                continue
             # Indexed by REST endpoint, not by position: _parse_entity feeds self.rest[n] on every
             # write, so renumbering would route the surviving inverter's writes at a dead client.
             self.set_arg_auto(key, [self._entity_id(domain, n, key) for n in discovered])

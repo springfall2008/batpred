@@ -1059,6 +1059,131 @@ def test_charge_limit_enable_withheld_when_the_register_is_absent(my_predbat=Non
     return 0
 
 
+def _capacity_blob(reported=9.5, design=10.0, v3=True):
+    """A status blob carrying both capacity figures GivTCP reports."""
+    blob = _rest_data_blob()
+    blob["Invertor_Details"] = {"Battery_Capacity_kWh": reported}
+    blob["raw"] = {"invertor": {"battery_nominal_capacity": design if v3 else design * 19.53125}}
+    return blob
+
+
+def test_soc_max_carries_the_design_capacity(my_predbat=None):
+    """
+    soc_max is the design (nameplate) capacity, and health is expressed through battery_scaling.
+
+    Inverter computes soc_max = nominal_capacity * battery_scaling and derives degradation from
+    nominal_capacity, so nominal has to be the design figure. Publishing the already-degraded
+    reported capacity as soc_max makes trimmed_mean/nominal collapse to ~1.0 and hides the
+    degradation battery_scaling_auto exists to measure.
+    """
+    base, component = _make_component()
+    component.rest[0].inverter.rest_v3 = True
+    component.rest[0].inverter.rest_data = _capacity_blob(reported=9.5, design=10.0)
+    run_async(component.publish_data())
+
+    assert base.entities["sensor.predbat_givtcp_0_soc_max"]["state"] == 10.0, f"soc_max should be the design capacity, got {base.entities['sensor.predbat_givtcp_0_soc_max']['state']}"
+    print("PASS: soc_max carries the design capacity, not the degraded reported one")
+    return 0
+
+
+def test_battery_soh_dod_and_combined_scaling_are_published(my_predbat=None):
+    """
+    SoH, DoD and their product are published, mirroring GE Cloud's battery_dod_soh.
+
+    Inverter applies exactly one scaling factor, so the combined sensor is what battery_scaling
+    must point at - publishing only the parts would make the caller choose, and the true usable
+    size is design x soh x dod.
+    """
+    base, component = _make_component()
+    component.rest[0].inverter.rest_v3 = True
+    component.rest[0].inverter.rest_data = _capacity_blob(reported=9.0, design=10.0)
+    run_async(component.publish_data())
+
+    assert base.entities["sensor.predbat_givtcp_0_battery_soh"]["state"] == 0.9, f"Expected soh 0.9, got {base.entities['sensor.predbat_givtcp_0_battery_soh']['state']}"
+    assert base.entities["sensor.predbat_givtcp_0_battery_dod"]["state"] == 1.0, "DoD defaults to 1.0 when GivTCP does not report one"
+    assert base.entities["sensor.predbat_givtcp_0_battery_dod_soh"]["state"] == 0.9, f"Expected combined 0.9, got {base.entities['sensor.predbat_givtcp_0_battery_dod_soh']['state']}"
+    print("PASS: soh, dod and the combined scaling factor are published")
+    return 0
+
+
+def test_battery_dod_override_is_folded_into_the_scaling(my_predbat=None):
+    """givtcp_battery_dod lets a user supply a depth of discharge GivTCP does not report."""
+    base, component = _make_component()
+    base.args["givtcp_battery_dod"] = 0.8
+    component.rest[0].inverter.rest_v3 = True
+    component.rest[0].inverter.rest_data = _capacity_blob(reported=9.0, design=10.0)
+    run_async(component.publish_data())
+
+    assert base.entities["sensor.predbat_givtcp_0_battery_dod"]["state"] == 0.8
+    assert base.entities["sensor.predbat_givtcp_0_battery_dod_soh"]["state"] == 0.72, f"Expected 0.9 * 0.8 = 0.72, got {base.entities['sensor.predbat_givtcp_0_battery_dod_soh']['state']}"
+    print("PASS: a DoD override is folded into the combined scaling factor")
+    return 0
+
+
+def test_battery_scaling_is_auto_configured_from_the_combined_sensor(my_predbat=None):
+    """
+    battery_scaling points at the combined sensor, via set_arg_auto.
+
+    set_arg_auto rather than set_arg so a user who set battery_scaling by hand gets the one-time
+    note that auto-discovery has displaced it, instead of it changing silently.
+    """
+    base, component = _make_component()
+    _mark_discovered(component)
+    component.rest[0].inverter.rest_v3 = True
+    component.rest[0].inverter.rest_data = _capacity_blob()
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    assert base.args["battery_scaling"] == ["sensor.predbat_givtcp_0_battery_dod_soh"], f"Expected battery_scaling bound to the combined sensor, got {base.args.get('battery_scaling')}"
+    assert base.args["soc_max"] == ["sensor.predbat_givtcp_0_soc_max"]
+    print("PASS: battery_scaling is auto-configured from the combined dod/soh sensor")
+    return 0
+
+
+def test_no_design_capacity_falls_back_to_the_reported_one(my_predbat=None):
+    """
+    Without the nominal register there is no design figure, so soc_max keeps the reported capacity
+    and no scaling is claimed - the previous behaviour, rather than a divide by zero or a 1.0 that
+    would displace the user's own battery_scaling with a meaningless value.
+    """
+    base, component = _make_component()
+    _mark_discovered(component)
+    blob = _capacity_blob(reported=9.5, design=10.0)
+    del blob["raw"]["invertor"]["battery_nominal_capacity"]
+    component.rest[0].inverter.rest_data = blob
+
+    run_async(component.publish_data())
+    assert base.entities["sensor.predbat_givtcp_0_soc_max"]["state"] == 9.5, "soc_max should fall back to the reported capacity"
+    assert "sensor.predbat_givtcp_0_battery_soh" not in base.entities, "No SoH can be computed without a design capacity"
+
+    run_async(component.automatic_config())
+    assert "battery_scaling" not in base.args, f"battery_scaling must be left to the user, got {base.args.get('battery_scaling')}"
+    print("PASS: a missing design capacity falls back cleanly and claims no scaling")
+    return 0
+
+
+def test_rate_write_tolerance_uses_the_real_max_rate(my_predbat=None):
+    """
+    The write-verification tolerance is sized from the discovered max battery rate.
+
+    It used to come from an InverterRestState placeholder of 1.0, giving
+    1.0 * MINUTE_WATT / 12 = 5000W instead of 2600/12 = 217W - so a rate the inverter never applied
+    verified as successful, logged as such, and counted as a register write.
+    """
+    base, component = _make_component()
+    blob = _rest_data_blob(charge_rate=3000)
+    blob["Invertor_Details"] = {"Invertor_Max_Bat_Rate": 2600}
+    component.rest[0].inverter.rest_data = blob
+    component.rest[0].post_command = MagicMock(return_value=None)
+    component.rest[0].run_all = MagicMock(return_value=blob)
+
+    # asking for 200W while the inverter stays at 3000W is a 2800W miss: inside the old 5000W
+    # tolerance, well outside the correct 217W one
+    assert component.rest[0].set_charge_rate(200) is False, "A 2800W miss must not verify as a successful write"
+    print("PASS: rate write tolerance is sized from the real max battery rate")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1119,6 +1244,12 @@ def test_givtcp_component(my_predbat=None):
         ("charge_enable_config", test_charge_limit_enable_is_auto_configured, "charge_limit_enable auto-configured (#4141)"),
         ("charge_enable_write", test_charge_limit_enable_write_hits_the_enable_register, "enable switch writes the enable register"),
         ("charge_enable_absent", test_charge_limit_enable_withheld_when_the_register_is_absent, "enable switch withheld when unreported"),
+        ("soc_max_design", test_soc_max_carries_the_design_capacity, "soc_max is the design capacity"),
+        ("soh_dod_publish", test_battery_soh_dod_and_combined_scaling_are_published, "soh/dod/combined published"),
+        ("dod_override", test_battery_dod_override_is_folded_into_the_scaling, "givtcp_battery_dod override"),
+        ("scaling_config", test_battery_scaling_is_auto_configured_from_the_combined_sensor, "battery_scaling auto-configured"),
+        ("no_design_cap", test_no_design_capacity_falls_back_to_the_reported_one, "missing design capacity falls back"),
+        ("rate_tolerance", test_rate_write_tolerance_uses_the_real_max_rate, "rate write tolerance uses real max rate"),
     ]
 
     passed = 0

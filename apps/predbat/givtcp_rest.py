@@ -31,28 +31,30 @@ import time
 
 import requests
 
-from const import MINUTE_WATT, INVERTER_MAX_RETRY_REST, INVERTER_REST_TIMEOUT
-from utils import dp2, dp3, time_string_to_stamp
+from const import INVERTER_MAX_RETRY_REST, INVERTER_REST_TIMEOUT
+from utils import dp2, dp3, dp4, time_string_to_stamp
 
 
 class InverterRestState:
     """
     Minimal stand-in for the subset of Inverter that GivTCPRest depends on: id, rest_api (the
-    configured URL), rest_data (mutable last-read snapshot), rest_v3, the two battery rate limits
-    used to size write-verification tolerance, a register-write counter, and a blocking sleep().
+    configured URL), rest_data (mutable last-read snapshot), rest_v3, a register-write counter,
+    and a blocking sleep().
 
     Lets a caller that isn't a real Inverter (e.g. GivTCPComponent, which has no Inverter object
     to hand GivTCPRest) construct one of these instead, so GivTCPRest itself stays unchanged.
+
+    battery_scaling stays 1.0 here and must not be plumbed through from the user's config: Inverter
+    applies battery_scaling itself when it reads soc_kw (inverter.py), so passing the real value
+    would apply it twice. What this object exposes is the unscaled reading.
     """
 
-    def __init__(self, id, rest_api, battery_rate_max_charge, battery_rate_max_discharge, battery_scaling=1.0):
+    def __init__(self, id, rest_api, battery_scaling=1.0):
         self.id = id
         self.rest_api = rest_api
         self.rest_data = None
         self.rest_v3 = False
         self.battery_scaling = battery_scaling
-        self.battery_rate_max_charge = battery_rate_max_charge
-        self.battery_rate_max_discharge = battery_rate_max_discharge
         self.count_register_writes = 0
 
     def sleep(self, seconds):
@@ -236,6 +238,28 @@ class GivTCPRest:
             if key in details:
                 return float(details[key])
         return None
+
+    def write_tolerance_watts(self):
+        """
+        Reference rate in W for sizing rate write verification.
+
+        Falls back to Inverter's own 2600W default when GivTCP reports no maximum, so an
+        undiscovered rate behaves as it did before rather than accepting any write within 5kW.
+        """
+        return self.max_battery_rate() or 2600.0
+
+    def battery_soh(self):
+        """
+        State of health as reported capacity / design capacity, or None if either is unavailable.
+
+        Clamped at 1.0 like GE Cloud's equivalent - a battery reporting more than its nameplate is
+        a reporting quirk, not spare capacity Predbat should plan to use.
+        """
+        reported = self.battery_capacity_kwh()
+        design = self.nominal_capacity()
+        if not reported or not design:
+            return None
+        return min(dp4(reported / design), 1.0)
 
     def max_inverter_rate(self):
         """Maximum inverter throughput in W, or None if GivTCP does not report one."""
@@ -426,7 +450,9 @@ class GivTCPRest:
             r = self.post_command(url, json=data)
             inverter.rest_data = self.run_all(inverter.rest_data)
             new = int(inverter.rest_data["Control"]["Battery_Charge_Rate"])
-            if abs(new - rate) < (inverter.battery_rate_max_charge * MINUTE_WATT / 12):
+            # Sized from the rate GivTCP reports, not a stored copy: the old form divided the rate by
+            # MINUTE_WATT and multiplied it straight back, and the stored copy is what left this at 5000W.
+            if abs(new - rate) < (self.write_tolerance_watts() / 12):
                 inverter.count_register_writes += 1
                 self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(inverter.id, rate, retry))
                 return True
@@ -448,7 +474,7 @@ class GivTCPRest:
             r = self.post_command(url, json=data)
             inverter.rest_data = self.run_all(inverter.rest_data)
             new = int(inverter.rest_data["Control"]["Battery_Discharge_Rate"])
-            if abs(new - rate) < (inverter.battery_rate_max_discharge * MINUTE_WATT / 25):
+            if abs(new - rate) < (self.write_tolerance_watts() / 25):
                 inverter.count_register_writes += 1
                 self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(inverter.id, rate, retry))
                 return True

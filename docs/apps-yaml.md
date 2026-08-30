@@ -1351,6 +1351,10 @@ This requires at least several days of historical data with charging periods of 
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set).
+- **givtcp_battery_dod** - Optional depth of discharge for a GivTCP (REST) battery, one per inverter, default 1.0.
+GivTCP does not report DoD, so set this if your battery cannot use its full nameplate capacity (e.g. 0.8 for an 80% DoD
+battery). Predbat publishes `battery_soh` (reported capacity / design capacity) and combines it with this value into
+`battery_dod_soh`, which `battery_scaling` is pointed at - so the planned battery size is design capacity x SoH x DoD.
 - **battery_calibration** - Optional sensor name reporting whether the battery is currently being calibrated (`on`/`off`).
 A calibration cycle deliberately drives the battery outside its normal SoC range, so while one is running any plan would be
 wrong and Predbat disables itself for that inverter. Leave unset if your inverter does not report this - an absent sensor
