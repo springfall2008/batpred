@@ -29,6 +29,8 @@ from web_mcp import (
     LOG_FILTER_TYPES,
     MCP_LOG_DEFAULT_LINES,
     MCP_LOG_MAX_LINES,
+    MCP_LOG_MAX_LINE_CHARS,
+    MCP_LOG_DEFAULT_MAX_BYTES,
     parse_bool_argument,
     json_safe_value,
     summarise_state_value,
@@ -1027,6 +1029,9 @@ def run_web_mcp_tests(my_predbat):
     failed |= test_mcp_get_log(my_predbat)
     failed |= test_mcp_get_log_pattern(my_predbat)
     failed |= test_mcp_get_log_time_bounds(my_predbat)
+    failed |= test_mcp_get_log_truncates_long_lines(my_predbat)
+    failed |= test_mcp_get_log_line_number_read_back(my_predbat)
+    failed |= test_mcp_get_log_byte_budget(my_predbat)
     failed |= test_state_value_helpers(my_predbat)
     failed |= test_debug_excluded_keys(my_predbat)
     failed |= test_mcp_get_state(my_predbat)
@@ -1196,4 +1201,170 @@ def test_mcp_get_log_time_bounds(my_predbat):
 
     if not failed:
         print("✓ Test passed: get_log start/end bounds")
+    return failed
+
+
+def _fat_log():
+    """Return a log whose entries include one very long line, as a GraphQL dump produces."""
+    stamp = datetime.now().replace(microsecond=0)
+    lines = [
+        "{}: Info: short line before".format(stamp - timedelta(minutes=3)),
+        "{}: OctopusAPI: Fetched saving sessions data from GraphQL API: {}".format(stamp - timedelta(minutes=2), "x" * 20000),
+        "{}: Info: short line after".format(stamp - timedelta(minutes=1)),
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def test_mcp_get_log_truncates_long_lines(my_predbat):
+    """A single huge log line is cut to a budget and says how much was left off (#4840)."""
+    failed = False
+    print("**** Testing MCP get_log long-line truncation ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_reader = agent_tools.read_predbat_log
+    try:
+        agent_tools.read_predbat_log = lambda: _fat_log()
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all"})
+        if not result.get("success"):
+            print("  ERROR: get_log failed: {}".format(result.get("error")))
+            return True
+        lines = result["data"]["lines"]
+
+        print("Test: the whole response is bounded, not just the line count")
+        size = len(json.dumps(result["data"]))
+        if size > MCP_LOG_DEFAULT_MAX_BYTES + 4096:
+            print("  ERROR: expected the response under the byte budget, got {} bytes".format(size))
+            failed = True
+
+        fat = [line for line in lines if "GraphQL" in line["line"]]
+        if len(fat) != 1:
+            print("  ERROR: expected the long line to still be present, got {}".format(len(fat)))
+            return True
+        fat = fat[0]
+
+        print("Test: the long line is cut to the per-line budget")
+        if len(fat["line"]) > MCP_LOG_MAX_LINE_CHARS + 200:
+            print("  ERROR: expected the line cut to ~{} chars, got {}".format(MCP_LOG_MAX_LINE_CHARS, len(fat["line"])))
+            failed = True
+
+        print("Test: it says how many characters were left off, and how to get them")
+        if fat.get("truncated_chars", 0) <= 0:
+            print("  ERROR: expected truncated_chars to be set, got {}".format(fat.get("truncated_chars")))
+            failed = True
+        if "line_number" not in fat["line"]:
+            print("  ERROR: expected the marker to name the read-back argument, got {!r}".format(fat["line"][-120:]))
+            failed = True
+
+        print("Test: a short line is untouched and carries no truncation field")
+        short = [line for line in lines if "short line before" in line["line"]][0]
+        if "truncated_chars" in short:
+            print("  ERROR: an intact line should carry no truncated_chars, got {}".format(short))
+            failed = True
+        if not short["line"].endswith("short line before"):
+            print("  ERROR: expected the short line intact, got {!r}".format(short["line"]))
+            failed = True
+    finally:
+        agent_tools.read_predbat_log = saved_reader
+
+    if not failed:
+        print("✓ Test passed: get_log long-line truncation")
+    return failed
+
+
+def test_mcp_get_log_line_number_read_back(my_predbat):
+    """A truncated line can be fetched in full afterwards by its line number (#4840)."""
+    failed = False
+    print("**** Testing MCP get_log line_number read-back ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_reader = agent_tools.read_predbat_log
+    try:
+        agent_tools.read_predbat_log = lambda: _fat_log()
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all"})
+        fat = [line for line in result["data"]["lines"] if "GraphQL" in line["line"]][0]
+        target = fat["line_number"]
+
+        print("Test: reading that line number back returns it in full")
+        result, _ = _call_tool(mcp, "get_log", {"line_number": target})
+        if not result.get("success"):
+            print("  ERROR: read-back failed: {}".format(result.get("error")))
+            return True
+        lines = result["data"]["lines"]
+        if len(lines) != 1:
+            print("  ERROR: expected exactly the one line, got {}".format(len(lines)))
+            failed = True
+        elif len(lines[0]["line"]) < 20000:
+            print("  ERROR: expected the untruncated line, got {} chars".format(len(lines[0]["line"])))
+            failed = True
+        elif lines[0].get("truncated_chars"):
+            print("  ERROR: a read-back line should not be marked truncated, got {}".format(lines[0].get("truncated_chars")))
+            failed = True
+
+        print("Test: context returns the neighbouring lines too")
+        result, _ = _call_tool(mcp, "get_log", {"line_number": target, "context": 1})
+        lines = result["data"]["lines"]
+        if len(lines) != 3:
+            print("  ERROR: expected 3 lines with context=1, got {}".format(len(lines)))
+            failed = True
+        elif not any("short line before" in line["line"] for line in lines) or not any("short line after" in line["line"] for line in lines):
+            print("  ERROR: expected both neighbours, got {}".format([line["line"][:40] for line in lines]))
+            failed = True
+
+        print("Test: the filters are ignored on a read-back, so the line always comes back")
+        result, _ = _call_tool(mcp, "get_log", {"line_number": target, "filter": "errors", "search": "nothing-matches-this"})
+        if result["data"]["returned_lines"] != 1:
+            print("  ERROR: expected the read-back to ignore the filters, got {}".format(result["data"]["returned_lines"]))
+            failed = True
+
+        print("Test: an out-of-range line number is a named argument error")
+        result, _ = _call_tool(mcp, "get_log", {"line_number": 999999})
+        if result.get("success") or "line_number" not in (result.get("error") or ""):
+            print("  ERROR: expected an error naming line_number, got {}".format(result))
+            failed = True
+    finally:
+        agent_tools.read_predbat_log = saved_reader
+
+    if not failed:
+        print("✓ Test passed: get_log line_number read-back")
+    return failed
+
+
+def test_mcp_get_log_byte_budget(my_predbat):
+    """The response stops at a total byte budget even when max_lines would allow more (#4840)."""
+    failed = False
+    print("**** Testing MCP get_log byte budget ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_reader = agent_tools.read_predbat_log
+    try:
+        # Every line sits just under the per-line cap, so only the total budget can stop this.
+        stamp = datetime.now().replace(microsecond=0)
+        many = ["{}: Info: {}".format(stamp - timedelta(minutes=i), "y" * (MCP_LOG_MAX_LINE_CHARS - 100)) for i in range(400, 0, -1)]
+        agent_tools.read_predbat_log = lambda: "\n".join(many) + "\n"
+
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "max_lines": 400})
+        data = result["data"]
+        size = len(json.dumps(data))
+        if size > MCP_LOG_DEFAULT_MAX_BYTES + 8192:
+            print("  ERROR: expected the response bounded by the byte budget, got {} bytes".format(size))
+            failed = True
+        if data["returned_lines"] >= 400:
+            print("  ERROR: expected the budget to stop accumulation before max_lines, got {}".format(data["returned_lines"]))
+            failed = True
+        if not data.get("truncated"):
+            print("  ERROR: expected truncated to be flagged when the budget stops it")
+            failed = True
+        if data.get("truncated_reason") != "max_bytes":
+            print("  ERROR: expected truncated_reason max_bytes, got {}".format(data.get("truncated_reason")))
+            failed = True
+
+        print("Test: the newest lines are the ones kept")
+        if "Info:" not in data["lines"][-1]["line"]:
+            print("  ERROR: unexpected last line {!r}".format(data["lines"][-1]["line"][:60]))
+            failed = True
+    finally:
+        agent_tools.read_predbat_log = saved_reader
+
+    if not failed:
+        print("✓ Test passed: get_log byte budget")
     return failed
