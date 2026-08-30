@@ -408,7 +408,7 @@ def find_pr_number_for_issue(issue_number):
     """
     query = build_duplicate_search_query(issue_number)
     result = subprocess.run(
-        ["gh", "pr", "list", "--repo", REPO, "--search", query, "--state", "all", "--json", "number"],
+        ["gh", "pr", "list", "--repo", REPO, "--search", query, "--state", "all", "--json", "number", "--limit", "100"],
         capture_output=True,
         text=True,
         check=True,
