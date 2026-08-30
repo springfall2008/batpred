@@ -2844,17 +2844,25 @@ function hideBanner() {
     banner.innerHTML = '';
 }
 
+// The banner exists to say a reply is happening SOMEWHERE ELSE, and to offer a way there. On the
+// conversation already open it would be telling the user about the thing in front of them and
+// offering to switch to where they already are - the transcript is the status there.
+//
+// Every caller goes through here rather than reaching for showBanner/hideBanner itself, because
+// the rule was previously restated at each call site and handleTitle restated it inverted: it
+// raised the banner precisely when the busy conversation WAS the one on screen (#4840).
+function refreshBanner() {
+    if (state.busy && state.busy.conversation_id && state.busy.conversation_id !== state.conversation) {
+        showBanner(state.busy.conversation_id, state.busy.title);
+    } else {
+        hideBanner();
+    }
+}
+
 function setBusy(conversationId, title, turnId) {
     state.busy = { conversation_id: conversationId, title: title, turn_id: turnId };
     setComposerDisabled(true);
-    // The banner exists to say a reply is happening SOMEWHERE ELSE, and to offer a way there.
-    // On the conversation already open it was telling the user about the thing in front of them
-    // and offering to switch to where they already are. The transcript is the status here.
-    if (conversationId && conversationId === state.conversation) {
-        hideBanner();
-    } else {
-        showBanner(conversationId, title);
-    }
+    refreshBanner();
     byId('chat-stop').classList.add('visible');
 }
 
@@ -3452,9 +3460,21 @@ function handleTitle(data) {
             setTitleText(titleNode, data.title || '');
         }
     }
-    if (state.busy && state.busy.conversation_id === state.conversation) {
-        showBanner(state.busy.conversation_id, data.title);
+    // The header reads its title from state.titles (updateChatTitle), which nothing updated on a
+    // title event - so it went on saying 'New chat' until the user switched away and back, while
+    // the row in the list already showed the real name.
+    if (state.conversation) {
+        state.titles = state.titles || {};
+        state.titles[state.conversation] = data.title || '';
+        updateChatTitle();
     }
+    // A title event is scoped by the server to the conversation being viewed, so it can only ever
+    // rename the one on screen. Keep the busy record in step so that switching away afterwards
+    // shows the banner with the name the conversation now has, then let refreshBanner decide.
+    if (state.busy && state.busy.conversation_id === state.conversation) {
+        state.busy.title = data.title;
+    }
+    refreshBanner();
 }
 
 // Cached-token counts are diagnostic (proof prompt caching is actually landing hits, not merely
