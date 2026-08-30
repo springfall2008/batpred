@@ -513,7 +513,7 @@ CONFIG_ITEMS = [
         "type": "input_number",
         "min": 0,
         "max": 2.0,
-        "step": 0.1,
+        "step": 0.01,
         "unit": "*",
         "icon": "mdi:multiplication",
         "enable": "expert_mode",
