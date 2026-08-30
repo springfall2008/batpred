@@ -68,6 +68,11 @@ GIVTCP_INVERTER_MODES = ["Eco", "Eco (Paused)", "Timed Export", "Timed Charge", 
 # background refresh (e.g. Ohme's device/session poll).
 GIVTCP_POLL_SECONDS = 60
 
+# How often to re-probe endpoints that have never answered, so an inverter that was unreachable at
+# startup (GivTCP still booting, a network blip) or one added since is picked up without a Predbat
+# restart. Only endpoints not already being managed are probed, and only ever to add them.
+GIVTCP_REDISCOVER_SECONDS = 3600
+
 # control name -> (domain, GivTCPRest write method name, HA entity attributes)
 GIVTCP_CONTROLS = {
     "charge_rate": ("number", "set_charge_rate", {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:battery-charging", "min": 0, "max": 20000, "step": 100}),
@@ -180,6 +185,9 @@ class GivTCPComponent(ComponentBase):
         # holds the indices that actually answered, and is what drives automatic_config().
         self.discovered = []
         self.discovery_done = False
+        # The discovered set automatic_config() was last run against, so a fleet that grows on a
+        # later re-probe reconfigures rather than staying at its startup size.
+        self.configured_for = []
         # publish_data() runs every poll; the unsupported-model notice is per inverter and only
         # worth saying once rather than every 60 seconds for the life of the process
         self.discharge_target_warned = {}
@@ -189,6 +197,10 @@ class GivTCPComponent(ComponentBase):
         return await asyncio.get_event_loop().run_in_executor(None, func, *args)
 
     async def run(self, seconds, first):
+        # Captured before the poll block so the pass that performs initial discovery does not also
+        # immediately re-probe. Only worth doing while something is still unaccounted for.
+        rediscover = self.discovery_done and len(self.discovered) < len(self.rest) and (seconds % GIVTCP_REDISCOVER_SECONDS) == 0
+
         if first or (seconds % GIVTCP_POLL_SECONDS) == 0:
             # Probe every configured URL until discovery settles, then only the ones that answered:
             # read_data() retries with 20s then 40s sleeps, so re-probing a placeholder URL every
@@ -228,12 +240,41 @@ class GivTCPComponent(ComponentBase):
             self.log("Warn: GivTCP: no data read from any configured REST endpoint yet")
             return False
 
-        if not self.automatic_config_done:
+        if rediscover:
+            await self.rediscover()
+
+        # Re-runs when the fleet has grown. Deliberately not when it shrinks: self.discovered is
+        # append-only, because dropping an inverter that stopped answering would rebuild Predbat's
+        # inverter list for a smaller fleet and leave a real battery uncontrolled at whatever
+        # settings it last had. Leaving it in makes Inverter.__init__ fail visibly instead.
+        if self.discovered != self.configured_for:
             await self.automatic_config()
+            self.configured_for = list(self.discovered)
             self.automatic_config_done = True
 
         self.update_success_timestamp()
         return True
+
+    async def rediscover(self):
+        """Re-probe endpoints that have never answered, adopting any inverter that has appeared."""
+        for n in range(len(self.rest)):
+            if n in self.discovered:
+                continue
+            rest = self.rest[n]
+            # A single cheap GET, unlike startup discovery: read_data()'s 20s/40s retry ladder is
+            # there for a GivTCP that might merely be booting, and spending ~100s on a placeholder
+            # URL that will never answer would outlast the poll interval this runs on.
+            data = await self._run_blocking(rest.read_data, "readData", False)
+            if not data:
+                continue
+            rest.inverter.rest_data = data
+            version = data.get("Stats", {}).get("GivTCP_Version", "Unknown")
+            rest.inverter.rest_v3 = version.startswith("3")
+            # Appended, never inserted. The order of self.discovered is Predbat's inverter
+            # numbering, so moving an existing entry would repoint a running inverter at different
+            # physical hardware mid-flight.
+            self.discovered.append(n)
+            self.log("GivTCP: inverter at {} answered on re-probe - now managing {} inverter(s)".format(rest.inverter.rest_api, len(self.discovered)))
 
     def _entity_id(self, domain, n, control):
         return "{}.{}_givtcp_{}_{}".format(domain, self.prefix, n, control)

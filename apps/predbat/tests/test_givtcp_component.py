@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 from tests.test_infra import run_async
 from mock_base import MockBase
-from givtcp import GivTCPComponent, GIVTCP_POLL_SECONDS, DISCHARGE_TARGET_UNSUPPORTED_MODELS
+from givtcp import GivTCPComponent, GIVTCP_POLL_SECONDS, GIVTCP_REDISCOVER_SECONDS, DISCHARGE_TARGET_UNSUPPORTED_MODELS
 
 
 def _rest_data_blob(
@@ -724,10 +724,12 @@ def test_automatic_config_skipped_when_nothing_was_discovered(my_predbat=None):
 
 def test_dead_endpoint_is_not_polled_after_discovery(my_predbat=None):
     """
-    Once discovery has settled, an endpoint that never answered is not polled again.
+    Once discovery has settled, an endpoint that never answered is left out of the normal poll.
 
-    read_data() retries with 20s then 40s sleeps, so re-probing the template's placeholder URL
-    would spend longer failing than the 60s poll interval it is running on.
+    read_data() retries with 20s then 40s sleeps, so probing the template's placeholder URL on the
+    60s poll cadence would spend longer failing than the interval it is running on. It is still
+    re-probed on the much slower GIVTCP_REDISCOVER_SECONDS boundary, cheaply - see
+    test_rediscovery_uses_a_cheap_single_probe.
     """
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://dead:6345"])
     component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
@@ -736,10 +738,11 @@ def test_dead_endpoint_is_not_polled_after_discovery(my_predbat=None):
     run_async(component.run(seconds=0, first=True))
     assert component.rest[1].read_data.call_count == 1, "the dead endpoint should be probed once during discovery"
 
-    run_async(component.run(seconds=0, first=True))
-    assert component.rest[1].read_data.call_count == 1, f"the dead endpoint must not be re-polled, got {component.rest[1].read_data.call_count} calls"
+    # a normal poll tick, deliberately not a re-probe boundary
+    run_async(component.run(seconds=GIVTCP_POLL_SECONDS, first=False))
+    assert component.rest[1].read_data.call_count == 1, f"the dead endpoint must not be polled on the normal cadence, got {component.rest[1].read_data.call_count} calls"
     assert component.rest[0].read_data.call_count == 2, f"the live endpoint must keep being polled, got {component.rest[0].read_data.call_count} calls"
-    print("PASS: a dead endpoint is dropped after discovery instead of re-probed every poll")
+    print("PASS: a dead endpoint is left out of the normal poll cadence after discovery")
     return 0
 
 
@@ -759,6 +762,121 @@ def test_pause_keys_gated_on_discovered_inverters_only(my_predbat=None):
     run_async(component.run(seconds=0, first=True))
     assert base.args.get("pause_mode") == ["select.predbat_givtcp_0_pause_mode"], f"Expected pause claimed for the live v3 inverter, got {base.args.get('pause_mode')}"
     print("PASS: the v3 pause gate ignores endpoints that were never discovered")
+    return 0
+
+
+def test_rediscovery_picks_up_an_inverter_that_was_down_at_startup(my_predbat=None):
+    """
+    An endpoint that was unreachable at startup is re-probed and adopted when it comes back.
+
+    automatic_config() only ever ran once, so before this a GivTCP restart or a network blip
+    during Predbat startup cost the user that inverter until they restarted Predbat.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = MagicMock(return_value=None)
+
+    run_async(component.run(seconds=0, first=True))
+    assert base.args["num_inverters"] == 1, f"Expected 1 inverter at startup, got {base.args.get('num_inverters')}"
+
+    # the second inverter comes back, and the hourly re-probe finds it
+    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
+
+    assert component.discovered == [0, 1], f"Expected both endpoints discovered, got {component.discovered}"
+    assert base.args["num_inverters"] == 2, f"Expected automatic_config re-run for 2 inverters, got {base.args.get('num_inverters')}"
+    assert base.args["charge_rate"] == ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"]
+    print("PASS: an inverter that was down at startup is adopted on re-probe")
+    return 0
+
+
+def test_rediscovery_appends_so_running_inverters_keep_their_identity(my_predbat=None):
+    """
+    A late arrival is appended, never inserted.
+
+    self.discovered's order *is* Predbat's inverter numbering. Inserting endpoint 0 ahead of the
+    endpoint already running as inverter 0 would silently repoint inverter 0 at different physical
+    hardware - its SoC, rates and charge windows would start following the wrong battery.
+    """
+    base, component = _make_component(rest_urls=["http://dead:6345", "http://givtcp1:6345"])
+    component.rest[0].read_data = MagicMock(return_value=None)
+    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+
+    run_async(component.run(seconds=0, first=True))
+    assert component.discovered == [1], f"Expected only endpoint 1 discovered, got {component.discovered}"
+    first_inverter_entity = base.args["charge_rate"][0]
+
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
+
+    assert component.discovered == [1, 0], f"Expected the late endpoint appended, got {component.discovered}"
+    assert base.args["charge_rate"][0] == first_inverter_entity, "Predbat inverter 0 must keep addressing the same physical inverter"
+    assert base.args["charge_rate"] == ["number.predbat_givtcp_1_charge_rate", "number.predbat_givtcp_0_charge_rate"]
+    assert base.args["num_inverters"] == 2
+    print("PASS: a late inverter is appended, leaving running inverter identities untouched")
+    return 0
+
+
+def test_rediscovery_never_drops_an_inverter_that_stops_answering(my_predbat=None):
+    """
+    Losing a discovered inverter is a health problem, not a reconfiguration.
+
+    Shrinking num_inverters would rebuild Predbat's inverter list for a smaller fleet and leave a
+    real battery uncontrolled at whatever settings it last had, then thrash when it returned.
+    Leaving it in place makes Inverter.__init__ fail loudly instead.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    for rest in component.rest:
+        rest.read_data = MagicMock(return_value=_rest_data_blob())
+
+    run_async(component.run(seconds=0, first=True))
+    assert component.discovered == [0, 1] and base.args["num_inverters"] == 2
+
+    # inverter 1 goes offline and stays offline across a re-probe boundary
+    component.rest[1].read_data = MagicMock(return_value=None)
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
+
+    assert component.discovered == [0, 1], f"A discovered inverter must never be dropped, got {component.discovered}"
+    assert base.args["num_inverters"] == 2, f"num_inverters must not shrink, got {base.args.get('num_inverters')}"
+    print("PASS: an inverter that stops answering is kept, not silently dropped")
+    return 0
+
+
+def test_rediscovery_uses_a_cheap_single_probe(my_predbat=None):
+    """
+    Re-probing must not use read_data()'s retry ladder.
+
+    Startup discovery keeps the 20s/40s retries because GivTCP may still be booting, but an hourly
+    re-probe of a placeholder URL that will never answer has to cost one GET, not ~100s of sleeps.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://dead:6345"])
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = MagicMock(return_value=None)
+
+    run_async(component.run(seconds=0, first=True))
+    assert component.rest[1].read_data.call_args == (("readData",), {}) or component.rest[1].read_data.call_args == ((), {}), f"Discovery should use the retrying read, got {component.rest[1].read_data.call_args}"
+
+    component.rest[1].read_data.reset_mock()
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
+    assert component.rest[1].read_data.call_count == 1, f"Expected exactly one re-probe, got {component.rest[1].read_data.call_count}"
+    assert component.rest[1].read_data.call_args == (("readData", False), {}), f"Re-probe must disable the retry ladder, got {component.rest[1].read_data.call_args}"
+    print("PASS: re-probing uses a single cheap GET, not the retry ladder")
+    return 0
+
+
+def test_rediscovery_skipped_once_every_endpoint_is_discovered(my_predbat=None):
+    """No re-probe work at all when every configured endpoint is already being managed."""
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    for rest in component.rest:
+        rest.read_data = MagicMock(return_value=_rest_data_blob())
+
+    run_async(component.run(seconds=0, first=True))
+    calls = [rest.read_data.call_count for rest in component.rest]
+
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
+    # exactly one extra poll each - the normal poll, with no additional re-probe on top
+    assert [rest.read_data.call_count for rest in component.rest] == [c + 1 for c in calls], "Expected no extra re-probe when the fleet is complete"
+    print("PASS: no re-probe once every configured endpoint is discovered")
     return 0
 
 
@@ -809,6 +927,11 @@ def test_givtcp_component(my_predbat=None):
         ("discovered_none", test_automatic_config_skipped_when_nothing_was_discovered, "no config when nothing discovered"),
         ("discovery_drops_dead", test_dead_endpoint_is_not_polled_after_discovery, "dead endpoint dropped after discovery"),
         ("discovered_pause_gate", test_pause_keys_gated_on_discovered_inverters_only, "pause gate ignores undiscovered endpoints"),
+        ("rediscover_late", test_rediscovery_picks_up_an_inverter_that_was_down_at_startup, "late inverter adopted on re-probe"),
+        ("rediscover_append", test_rediscovery_appends_so_running_inverters_keep_their_identity, "re-probe appends, preserving identity"),
+        ("rediscover_no_shrink", test_rediscovery_never_drops_an_inverter_that_stops_answering, "discovered inverters are never dropped"),
+        ("rediscover_cheap", test_rediscovery_uses_a_cheap_single_probe, "re-probe uses a single cheap GET"),
+        ("rediscover_complete", test_rediscovery_skipped_once_every_endpoint_is_discovered, "no re-probe when fleet is complete"),
     ]
 
     passed = 0
