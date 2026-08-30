@@ -313,8 +313,8 @@ def test_alphaess_rate_zero_is_freeze():
     """Zero charge power disables charging; zero discharge power requests a hold.
 
     Live AlphaESS hardware ignores discharge scheduling enabled with no periods, so the
-    adapter must translate the generic zero-discharge signal into a charge profile below
-    current SOC instead.
+    adapter must translate the generic zero-discharge signal into a fixed 10% charge
+    profile instead.
     """
     failed = False
     client = _client()
@@ -351,7 +351,7 @@ def test_alphaess_both_rates_zero_still_holds_the_battery():
     charge rate (execute.py:532/538 - AlphaESSCloud has has_timed_pause False, so the "else"
     branch fires) together with a car-charging-from-battery-disable (execute.py:564) or
     iboost_prevent_discharge (execute.py:591) hold zeroing the discharge rate in the same
-    pass. The hold is realised as a charge profile below SOC, not the empty discharge
+    pass. The hold is realised as a fixed 10% charge profile, not the empty discharge
     schedule AlphaESS ignores. Stranding a genuinely unconfigured system is prevented
     elsewhere by the control_active gate in _reconcile_control, which only re-applies once
     a serial's write button has been pressed.
@@ -1381,7 +1381,7 @@ def test_alphaess_periodic_charge_limit_floor_is_clamped():
 
 
 def test_alphaess_periodic_rate_zero_is_freeze_not_demand_mode():
-    """Periodic zero discharge must use the same target-below-SOC charge profile."""
+    """Periodic zero discharge must use the same fixed 10% charge profile."""
     failed = False
     client = _client()
     client._periodic_ok["AL70"] = True
