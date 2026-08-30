@@ -1374,7 +1374,11 @@ class ChatAgent(ComponentBase):
         timeout = aiohttp.ClientTimeout(total=OLLAMA_DETAIL_TIMEOUT_SECONDS)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                loaded_context = await self._ollama_loaded_context(session, base)
+                # Only a locally loaded model can have been capped, so a catalogue with nothing
+                # local in it has nothing /api/ps could override. Ollama Cloud refuses that
+                # endpoint anyway - 401 with or without a key, because "loaded" is a local-server
+                # idea - so asking would spend a round trip to learn nothing.
+                loaded_context = {} if all(model.get("remote") for model in models) else await self._ollama_loaded_context(session, base)
                 for model in models:
                     try:
                         async with session.post("{}/api/show".format(base), json={"model": model["id"]}) as response:

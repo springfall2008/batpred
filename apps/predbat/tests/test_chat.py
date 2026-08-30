@@ -3977,11 +3977,119 @@ def test_ollama_context_length_is_what_the_server_will_actually_give(my_predbat)
     return failed
 
 
+def test_ollama_context_length_survives_a_server_that_cannot_answer(my_predbat):
+    """A server that will not serve /api/ps must leave every model on its own ceiling.
+
+    Ollama Cloud answers /api/ps with 401 while serving /api/show unauthenticated, and an older
+    local server may not have the endpoint at all. Neither may cost the catalogue its context
+    lengths - the fallback is exactly the behaviour from before /api/ps was consulted.
+    """
+    failed = False
+    print("**** Testing Ollama context length survives an unavailable /api/ps ****")
+
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "https://ollama.com/v1"}})
+    agent.select_provider("ollama")
+
+    class _ShowResponse:
+        """An /api/show answer carrying the model's own ceiling."""
+
+        status = 200
+
+        async def json(self):
+            """Return the canned body."""
+            return {"capabilities": ["tools"], "model_info": {"qwen35.context_length": 262144}}
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    class _Unauthorized:
+        """What ollama.com returns for /api/ps without a key.
+
+        The body deliberately carries a models array as well as the error. A refusal is not always
+        an empty envelope - a proxy or captive portal can answer with a plausible-looking payload -
+        and without the status check the values in it would be trusted. A body with nothing usable
+        in it would let that check be deleted with every test still passing.
+        """
+
+        status = 401
+
+        async def json(self):
+            """Return an error body that would poison the result if the status were ignored."""
+            return {"error": "unauthorized", "models": [{"model": "qwen3.8:27b", "context_length": 4096}]}
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    class _Session:
+        """Serves /api/show but refuses /api/ps, as Ollama Cloud does."""
+
+        def __init__(self, ps_raises=False):
+            self.ps_raises = ps_raises
+
+        def post(self, url, json=None):
+            """Answer the /api/show POST."""
+            return _ShowResponse()
+
+        def get(self, url):
+            """Refuse the /api/ps GET, by status or by raising."""
+            if self.ps_raises:
+                raise chat.aiohttp.ClientError("connection refused")
+            return _Unauthorized()
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    original_session = chat.aiohttp.ClientSession
+    try:
+        for label, raises in (("401", False), ("a transport error", True)):
+            chat.aiohttp.ClientSession = lambda *args, **kwargs: _Session(ps_raises=raises)
+            models = asyncio.run(agent._add_ollama_details([{"id": "qwen3.8:27b"}]))
+            context = models[0].get("context_length") if models else None
+            if context != 262144:
+                print("ERROR: /api/ps answering {} should leave the model on its 262144 ceiling, got {}".format(label, context))
+                failed = True
+
+        # Ollama Cloud refuses /api/ps with or without a key - verified against ollama.com, where a
+        # key good enough for /v1/models and /api/tags still gets a 401 here, because "loaded" is a
+        # local-server idea. A catalogue with nothing local in it has nothing the endpoint could
+        # override, so it should not spend a round trip finding that out.
+        asked = _Session()
+        calls = []
+        asked.get = lambda url: calls.append(url) or _Unauthorized()
+        chat.aiohttp.ClientSession = lambda *args, **kwargs: asked
+        asyncio.run(agent._add_ollama_details([{"id": "gpt-oss:120b-cloud", "remote": True}]))
+        if calls:
+            print("ERROR: a cloud-only catalogue should not call /api/ps, but it called {}".format(calls))
+            failed = True
+    finally:
+        chat.aiohttp.ClientSession = original_session
+
+    if not failed:
+        print("✓ Test passed: an unavailable /api/ps leaves the ceiling in place")
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
     failed |= test_model_catalogue_is_cached_per_endpoint(my_predbat)
     failed |= test_ollama_context_length_is_what_the_server_will_actually_give(my_predbat)
+    failed |= test_ollama_context_length_survives_a_server_that_cannot_answer(my_predbat)
     failed |= test_a_working_catalogue_clears_the_previous_failure(my_predbat)
     failed |= test_local_models_are_free_however_little_pricing_they_publish(my_predbat)
     failed |= test_stop_reaches_a_turn_that_is_still_streaming(my_predbat)
