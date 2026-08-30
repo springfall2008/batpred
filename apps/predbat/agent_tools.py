@@ -196,7 +196,7 @@ def read_predbat_log_lines(line_number, context):
 
     Runs on an executor thread rather than the event loop - see the caller.
     """
-    loglines = read_predbat_log().split("\n")
+    loglines = read_predbat_log().splitlines()
     total_lines = len(loglines)
     if line_number < 0 or line_number >= total_lines:
         raise MCPArgumentError("'line_number' {} is outside the log, which has {} lines".format(line_number, total_lines))
