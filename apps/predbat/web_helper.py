@@ -155,6 +155,7 @@ def get_entity_detailed_row_js():
             timeCell.innerHTML = timeCell.innerHTML.replace('\u25b6', '\u25bc');
         }
     }
+    // toggleTimeSelection is defined in the plan override JS.
     </script>
     """
     return text
@@ -6034,6 +6035,11 @@ def get_plan_css():
         position: relative;
         background-color: #FFC0CB !important; /* Light pink */
     }
+    .clickable-time-cell.batch-selected {
+        outline: 2px solid #1976d2;
+        outline-offset: -2px;
+        box-shadow: inset 0 0 0 1px rgba(25, 118, 210, 0.35);
+    }
     body.dark-mode .override-active {
         background-color: #93264c !important; /* Dark pink */
     }
@@ -6281,6 +6287,46 @@ def get_plan_css():
         }
     }
 
+    function openDropdown(id) {
+        closeDropdowns();
+        const dropdown = document.getElementById(id);
+        if (!dropdown) return;
+
+        // Keep the batch action in sync with the runtime batch state and
+        // ensure only one action is present at a time.
+        try {
+            const batchActive = getBatchActive();
+            const timeCell = dropdown.closest('td');
+            const timeDisplay = timeCell ? timeCell.getAttribute('data-time-display') || '' : '';
+            dropdown.querySelectorAll('a.batch-select-action, a.period-select-action, a.cancel-batch').forEach(n => n.remove());
+
+            const a = document.createElement('a');
+            if (batchActive) {
+                a.className = 'cancel-batch';
+                a.setAttribute('onclick', 'event.stopPropagation(); clearSelectedTimeOverrides()');
+                a.textContent = 'Cancel Batch';
+            } else {
+                a.className = 'batch-select-action';
+                a.setAttribute('onclick', `event.stopPropagation(); addToBatchSelection('${timeDisplay}', '${id}')`);
+                a.textContent = 'Batch select';
+                dropdown.insertBefore(a, dropdown.firstChild || null);
+
+                const periodAction = document.createElement('a');
+                periodAction.className = 'period-select-action';
+                periodAction.setAttribute('onclick', `event.stopPropagation(); startPeriodSelection('${timeDisplay}')`);
+                periodAction.textContent = 'Select period';
+                dropdown.insertBefore(periodAction, dropdown.firstChild || null);
+                dropdown.style.display = 'block';
+                return;
+            }
+            dropdown.insertBefore(a, dropdown.firstChild || null);
+        } catch (e) {
+            // ignore
+        }
+
+        dropdown.style.display = 'block';
+    }
+
     // Function to show error message as a modal popup
     function showErrorMessage(message) {
         // Create modal overlay
@@ -6496,15 +6542,131 @@ def get_plan_css():
     }
 
 
-    // Handle option selection
-    function handleTimeOverride(time, action) {
+    function normalizeSelectedTimeOverrides(times) {
+        if (!Array.isArray(times)) {
+            times = [];
+        }
+        return [...new Set(times.filter(Boolean).map(String))];
+    }
 
-        // Create a form data object to send the override parameters
+    // In-memory batch state (does not persist across page reloads)
+    // Use module-scoped variables so refreshing the page clears the batch.
+    var _predbatSelectedTimeOverrides = null; // null = not initialised
+    var _predbatBatchActive = false;
+    var _predbatPeriodStart = null;
+    var _predbatBatchAnchor = null;
+
+    function getSelectedTimeOverrides() {
+        // If already initialised in-memory, return that.
+        if (Array.isArray(_predbatSelectedTimeOverrides)) {
+            return _predbatSelectedTimeOverrides.slice();
+        }
+
+        // First-time initialisation: prefer data attribute from server-rendered HTML
+        const selectedTimesAttr = document.body.getAttribute('data-selected-times');
+        const attrTimes = selectedTimesAttr ? selectedTimesAttr.split(',').filter(Boolean) : [];
+        _predbatSelectedTimeOverrides = normalizeSelectedTimeOverrides(attrTimes);
+        return _predbatSelectedTimeOverrides.slice();
+    }
+
+    function setSelectedTimeOverrides(times) {
+        const normalizedTimes = normalizeSelectedTimeOverrides(times);
+        _predbatSelectedTimeOverrides = normalizedTimes;
+        document.body.setAttribute('data-selected-times', normalizedTimes.join(','));
+
+        document.querySelectorAll('td.clickable-time-cell[data-time-display]').forEach(cell => {
+            const timeValue = cell.getAttribute('data-time-display');
+            cell.classList.toggle('batch-selected', normalizedTimes.includes(timeValue));
+        });
+    }
+
+    // Batch active flag (true when user started batching)
+    function getBatchActive() {
+        return !!_predbatBatchActive;
+    }
+
+    function setBatchActive(val) {
+        _predbatBatchActive = !!val;
+    }
+
+    function toggleTimeSelection(time, dropdownId, clickEvent) {
+        clickEvent = clickEvent || window.event;
+        if (_predbatPeriodStart !== null) {
+            selectPeriod(_predbatPeriodStart, time);
+            openDropdown(dropdownId);
+            return;
+        }
+        // Only toggle selection when batch mode is active. Otherwise just open
+        // the dropdown to allow the user to start batching explicitly.
+        if (getBatchActive()) {
+            if (clickEvent && clickEvent.shiftKey && _predbatBatchAnchor !== null) {
+                selectPeriod(_predbatBatchAnchor, time, true);
+                openDropdown(dropdownId);
+                return;
+            }
+            const selectedTimes = getSelectedTimeOverrides();
+            const key = time;
+            const updated = selectedTimes.includes(key)
+                ? selectedTimes.filter(item => item !== key)
+                : selectedTimes.concat(key);
+            setSelectedTimeOverrides(updated);
+            _predbatBatchAnchor = time;
+        }
+        openDropdown(dropdownId);
+    }
+
+    function clearSelectedTimeOverrides() {
+        setSelectedTimeOverrides([]);
+        setBatchActive(false);
+        _predbatPeriodStart = null;
+        _predbatBatchAnchor = null;
+    }
+
+    function startPeriodSelection(time) {
+        _predbatPeriodStart = time;
+        _predbatBatchAnchor = time;
+        setSelectedTimeOverrides([time]);
+        setBatchActive(true);
+        closeDropdowns();
+    }
+
+    function selectPeriod(startTime, endTime, append) {
+        const cells = Array.from(document.querySelectorAll('td.clickable-time-cell[data-time-display]'));
+        const startIndex = cells.findIndex(cell => cell.getAttribute('data-time-display') === startTime);
+        const endIndex = cells.findIndex(cell => cell.getAttribute('data-time-display') === endTime);
+        if (startIndex < 0 || endIndex < 0) {
+            _predbatPeriodStart = null;
+            return;
+        }
+        const firstIndex = Math.min(startIndex, endIndex);
+        const lastIndex = Math.max(startIndex, endIndex);
+        const periodTimes = cells.slice(firstIndex, lastIndex + 1).map(cell => cell.getAttribute('data-time-display'));
+        const selectedTimes = append ? getSelectedTimeOverrides().concat(periodTimes) : periodTimes;
+        setSelectedTimeOverrides(selectedTimes);
+        _predbatPeriodStart = null;
+        _predbatBatchAnchor = endTime;
+    }
+
+    function addToBatchSelection(time, dropdownId) {
+        const selectedTimes = getSelectedTimeOverrides();
+        const key = time;
+        if (!selectedTimes.includes(key)) {
+            setSelectedTimeOverrides(selectedTimes.concat(key));
+        }
+        setBatchActive(true);
+        _predbatBatchAnchor = time;
+        // Start batching and close the dropdown so the user sees the updated
+        // UI state (other dropdowns will show Cancel Batch when opened).
+        closeDropdowns();
+    }
+
+    function handleTimeOverride(time, action) {
+        const selectedTimes = getSelectedTimeOverrides();
+        const timeValue = selectedTimes.length ? selectedTimes.join(',') : time;
         const formData = new FormData();
-        formData.append('time', time);
+        formData.append('time', timeValue);
         formData.append('action', action);
 
-        // Send the override request to the server
         fetch('./plan_override', {
             method: 'POST',
             body: formData
@@ -6512,9 +6674,9 @@ def get_plan_css():
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                // Show success message
                 const messageElement = document.createElement('div');
-                messageElement.textContent = `${action} override set for ${time}`;
+                const timesLabel = selectedTimes.length > 1 ? `${selectedTimes.length} slots` : selectedTimes.length === 1 ? selectedTimes[0] : time;
+                messageElement.textContent = `${action} override set for ${timesLabel}`;
                 messageElement.style.position = 'fixed';
                 messageElement.style.top = '65px';
                 messageElement.style.right = '10px';
@@ -6525,14 +6687,13 @@ def get_plan_css():
                 messageElement.style.zIndex = '1000';
                 document.body.appendChild(messageElement);
 
-                // Auto-remove message after 3 seconds
                 setTimeout(() => {
                     messageElement.style.opacity = '0';
                     messageElement.style.transition = 'opacity 0.5s';
                     setTimeout(() => messageElement.remove(), 500);
                 }, 3000);
 
-                // Reload the page to show the updated plan
+                clearSelectedTimeOverrides();
                 setTimeout(() => location.reload(), 1000);
             } else {
                 showErrorMessage(data.message || 'Unknown error');
@@ -6543,7 +6704,6 @@ def get_plan_css():
             showErrorMessage(error.message);
         });
 
-        // Close dropdown after selection
         closeDropdowns();
     }
 
@@ -7077,29 +7237,35 @@ def get_plan_renderer_js():
             overrideClass = 'override-freeze-export';
         }
 
-        let html = `<td bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell ${overrideClass}">`;
+        let html = `<td bgcolor=${bgColor} onclick="toggleTimeSelection('${timeDisplay}', '${dropdownId}', event)" class="clickable-time-cell ${overrideClass}" data-time-display="${timeDisplay}">`;
         html += timeDisplay;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
 
-        // Add dropdown options
+        const batchActive = getBatchActive();
+        if (batchActive) {
+            html += `<a class="cancel-batch" onclick="event.stopPropagation(); clearSelectedTimeOverrides()">Cancel Batch</a>`;
+        } else {
+            html += `<a class="batch-select-action" onclick="event.stopPropagation(); addToBatchSelection('${timeDisplay}', '${dropdownId}')">Batch select</a>`;
+            html += `<a class="period-select-action" onclick="event.stopPropagation(); startPeriodSelection('${timeDisplay}')">Select period</a>`;
+        }
         if (manualTimes.includes(minutesFromMidnight)) {
-            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Clear')">Clear</a>`;
+            html += `<a onclick="event.stopPropagation(); handleTimeOverride('${timeDisplay}', 'Clear')">Clear</a>`;
         }
         if (!overrides.manual_demand_times.includes(minutesFromMidnight)) {
-            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Demand')">Manual Demand</a>`;
+            html += `<a onclick="event.stopPropagation(); handleTimeOverride('${timeDisplay}', 'Manual Demand')">Manual Demand</a>`;
         }
         if (!overrides.manual_charge_times.includes(minutesFromMidnight)) {
-            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Charge')">Manual Charge</a>`;
+            html += `<a onclick="event.stopPropagation(); handleTimeOverride('${timeDisplay}', 'Manual Charge')">Manual Charge</a>`;
         }
         if (!overrides.manual_export_times.includes(minutesFromMidnight)) {
-            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Export')">Manual Export</a>`;
+            html += `<a onclick="event.stopPropagation(); handleTimeOverride('${timeDisplay}', 'Manual Export')">Manual Export</a>`;
         }
         if (!overrides.manual_freeze_charge_times.includes(minutesFromMidnight)) {
-            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Freeze Charge')">Manual Freeze Charge</a>`;
+            html += `<a onclick="event.stopPropagation(); handleTimeOverride('${timeDisplay}', 'Manual Freeze Charge')">Manual Freeze Charge</a>`;
         }
         if (!overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
-            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Freeze Export')">Manual Freeze Export</a>`;
+            html += `<a onclick="event.stopPropagation(); handleTimeOverride('${timeDisplay}', 'Manual Freeze Export')">Manual Freeze Export</a>`;
         }
 
         html += '</div></div></td>';
@@ -7240,9 +7406,9 @@ def get_plan_renderer_js():
         html += `<div id="${dropdownId}" class="dropdown-content">`;
         html += `<label>Override ${type} rate:</label>`;
         html += `<input type="number" id="rate_${dropdownId}" value="${inputValue}" step="0.1">`;
-        html += `<button onclick="handleRateOverride('${timeDisplay}', '${type}', '${dropdownId}')">Set Override</button>`;
+        html += `<button onclick="event.stopPropagation(); handleRateOverride('${timeDisplay}', '${type}', '${dropdownId}')">Set Override</button>`;
         if (isOverride) {
-            html += `<a onclick="handleRateOverride('${timeDisplay}', '${type}', null, true)">Clear</a>`;
+            html += `<a onclick="event.stopPropagation(); handleRateOverride('${timeDisplay}', '${type}', null, true)">Clear</a>`;
         }
         html += '</div></div></td>';
         return html;
@@ -7267,9 +7433,9 @@ def get_plan_renderer_js():
         html += `<div id="${dropdownId}" class="dropdown-content">`;
         html += '<label>Adjust load (kWh):</label>';
         html += `<input type="number" id="load_${dropdownId}" value="${defaultLoadValue}" step="0.1">`;
-        html += `<button onclick="handleLoadOverride('${timeDisplay}', '${dropdownId}')">Set Adjustment</button>`;
+        html += `<button onclick="event.stopPropagation(); handleLoadOverride('${timeDisplay}', '${dropdownId}')">Set Adjustment</button>`;
         if (isOverride) {
-            html += `<a onclick="handleLoadOverride('${timeDisplay}', null, true)">Clear</a>`;
+            html += `<a onclick="event.stopPropagation(); handleLoadOverride('${timeDisplay}', null, true)">Clear</a>`;
         }
         html += '</div></div></td>';
         return html;
@@ -7568,6 +7734,7 @@ def get_plan_renderer_js():
         // future predictions with no corresponding capture.
         const showHistoryLinks = (currentView === 'yesterday');
         container.innerHTML = renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
+        setSelectedTimeOverrides(getSelectedTimeOverrides());
 
         // Apply dark mode colors if needed
         updateTableColors();
@@ -8523,9 +8690,12 @@ function stopStatusUpdates() {
 }
 
 // Initialise menu on page load
-document.addEventListener("DOMContentLoaded", function() {
-setActiveMenuItem();
-startStatusUpdates();
+    document.addEventListener("DOMContentLoaded", function() {
+    // Initialise in-memory batch state (ensures a fresh state on each load)
+    _predbatSelectedTimeOverrides = null;
+    _predbatBatchActive = false;
+    setActiveMenuItem();
+    startStatusUpdates();
 
 // For each menu item, add click handler to set it as active
 const menuLinks = document.querySelectorAll('.menu-bar a');

@@ -14,6 +14,29 @@ import os
 import shutil
 import tempfile
 from components import Components
+from web_helper import get_plan_css, get_plan_renderer_js
+
+
+def test_plan_renderer_renders_batch_controls():
+    """
+    Ensure the plan renderer exposes the batch selection controls and syncs
+    the runtime batch state.
+    """
+    renderer_js = get_plan_renderer_js()
+    assert "toggleTimeSelection('${timeDisplay}', '${dropdownId}', event)" in renderer_js
+    assert "const batchActive = getBatchActive();" in renderer_js
+    assert "addToBatchSelection('${timeDisplay}', '${dropdownId}')" in renderer_js
+    assert 'class="cancel-batch"' in renderer_js
+    assert "startPeriodSelection('${timeDisplay}')" in renderer_js
+    assert "clickEvent = clickEvent || window.event;" in get_plan_css()
+    assert "clickEvent.shiftKey" in get_plan_css()
+    assert "selectPeriod(_predbatBatchAnchor, time, true)" in get_plan_css()
+    assert "const selectedTimes = append ? getSelectedTimeOverrides().concat(periodTimes) : periodTimes;" in get_plan_css()
+
+    plan_css = get_plan_css()
+    assert "function startPeriodSelection(time)" in plan_css
+    assert "selectPeriod(_predbatPeriodStart, time)" in plan_css
+    assert "cells.slice(firstIndex, lastIndex + 1)" in plan_css
 
 
 def run_test_web_if(my_predbat):
@@ -22,6 +45,12 @@ def run_test_web_if(my_predbat):
     """
     failed = 0
     print("**** Running web interface test ****\n")
+
+    try:
+        test_plan_renderer_renders_batch_controls()
+    except AssertionError as error:
+        print(f"ERROR: Plan renderer batch control test failed: {error}")
+        failed = 1
 
     # Create temp directory and copy apps.yaml
     original_dir = os.getcwd()
@@ -242,6 +271,16 @@ def run_test_web_if(my_predbat):
             accessed_endpoints.add(("POST", "/plan_override"))
         else:
             print("ERROR: Unexpected response from /plan_override: {} - {}".format(res.status_code, res.text))
+            failed = 1
+
+        print("Test POST /plan_override with multiple times")
+        address = "http://127.0.0.1:5052/plan_override"
+        data = {"time": "00:00,01:00", "action": "Manual Demand"}
+        res = requests.post(address, data=data)
+        if res.status_code in [200]:
+            accessed_endpoints.add(("POST", "/plan_override"))
+        else:
+            print("ERROR: Unexpected response from /plan_override with multiple times: {} - {}".format(res.status_code, res.text))
             failed = 1
 
         # Test /rate_override POST
