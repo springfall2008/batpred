@@ -190,7 +190,7 @@ Example usage in VSCode
 | `get_config` | Every Predbat setting, with its current value and its default |
 | `get_apps` | Your `apps.yaml` configuration, with credentials redacted |
 | `get_apps_config` | The current value of one `apps.yaml` key, with a credential-like value redacted |
-| `get_log` | Lines from `predbat.log`, filtered by level, search term and age |
+| `get_log` | Lines from `predbat.log`, filtered by level, search term, regular expression and time window |
 | `get_state` | Predbat's internal state variables - the same data a debug yaml carries |
 | `get_entities` | All Predbat entities and their states |
 | `search_entities` | Search *every* Home Assistant entity id with a regular expression, not just Predbat's own - requires `switch.predbat_ai_ha_state_enable` |
@@ -212,8 +212,27 @@ look wrong"*, or *"find the warnings in the last 24 hours of my log and explain 
 | -------- | ----------- |
 | `filter` | `all`, `info`, `warnings` (the default) or `errors` |
 | `search` | Only return lines containing this text, case-insensitive |
+| `pattern` | Only return lines matching this Python regular expression, case-insensitive |
 | `hours` | Only return lines written in the last N hours |
+| `start` | Only return lines at or after this point in time |
+| `end` | Only return lines at or before this point in time |
 | `max_lines` | How many lines to return - the most recent matches are the ones kept, but they come back oldest-first (default 500, maximum 5000) |
+
+All of these narrow the result together rather than replacing one another, so
+`filter: errors` with `pattern: "inverter [12]"` returns only the errors that also mention those
+inverters.
+
+`start` and `end` each accept a date, a time, or both:
+
+| Value | Means |
+| ----- | ----- |
+| `2026-08-28` | As `start`, the beginning of that day; as `end`, the end of it - so `end: 2026-08-28` includes everything that happened that day |
+| `17:00` or `17:00:30` | That time today |
+| `2026-08-28 17:00` | Exactly that moment |
+
+`hours` still works and can be combined with `start`, in which case the narrower of the two wins.
+A line with no timestamp of its own - the second and later lines of a traceback - belongs to the
+entry above it, so a multi-line entry is kept or dropped as a whole.
 
 `get_state` exposes the same internal state a `predbat_debug.yaml` carries, but a variable at a
 time rather than as a 5MB file. Called with no arguments it returns every variable small enough

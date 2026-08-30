@@ -1025,6 +1025,8 @@ def run_web_mcp_tests(my_predbat):
     failed |= test_mcp_get_apps(my_predbat)
     failed |= test_mcp_get_apps_config(my_predbat)
     failed |= test_mcp_get_log(my_predbat)
+    failed |= test_mcp_get_log_pattern(my_predbat)
+    failed |= test_mcp_get_log_time_bounds(my_predbat)
     failed |= test_state_value_helpers(my_predbat)
     failed |= test_debug_excluded_keys(my_predbat)
     failed |= test_mcp_get_state(my_predbat)
@@ -1032,4 +1034,166 @@ def run_web_mcp_tests(my_predbat):
     failed |= test_log_encoding(my_predbat)
     failed |= test_mcp_tools_list(my_predbat)
     failed |= test_web_api_log_unchanged(my_predbat)
+    return failed
+
+
+def _dated_log():
+    """Return a synthetic predbat.log with absolute stamps, for exercising the start/end bounds."""
+    today = datetime.now().replace(microsecond=0)
+    yesterday = today - timedelta(days=1)
+    lines = [
+        "{}: Warn: yesterday early".format(yesterday.replace(hour=1, minute=0, second=0)),
+        "{}: Warn: yesterday late".format(yesterday.replace(hour=23, minute=30, second=0)),
+        "{}: Error: today midday failure".format(today.replace(hour=12, minute=0, second=0)),
+        "Traceback (most recent call last):",  # continuation of the line above, no stamp of its own
+        "{}: Warn: today afternoon".format(today.replace(hour=14, minute=0, second=0)),
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def test_mcp_get_log_pattern(my_predbat):
+    """get_log's pattern argument filters by regex, ANDs with the other filters, and rejects bad patterns."""
+    failed = False
+    print("**** Testing MCP get_log pattern ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_reader = agent_tools.read_predbat_log
+    try:
+        agent_tools.read_predbat_log = lambda: _sample_log()
+
+        print("Test: a regex with alternation matches across lines that no single substring would")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "pattern": "(iboost|Octopus) "})
+        if not result.get("success"):
+            print("  ERROR: get_log with a pattern failed: {}".format(result.get("error")))
+            return True
+        lines = [line["line"] for line in result["data"]["lines"]]
+        if len(lines) != 2:
+            print("  ERROR: expected 2 lines matching the alternation, got {}".format(lines))
+            failed = True
+
+        print("Test: pattern is case-insensitive, like search")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "pattern": "IBOOST"})
+        if result["data"]["returned_lines"] != 1:
+            print("  ERROR: expected a case-insensitive match, got {}".format(result["data"]["returned_lines"]))
+            failed = True
+
+        print("Test: pattern ANDs with filter and search rather than replacing them")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "errors", "pattern": "iboost"})
+        if result["data"]["returned_lines"] != 0:
+            print("  ERROR: an errors-only view should not return the iboost warning, got {}".format(result["data"]["lines"]))
+            failed = True
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "search": "iboost", "pattern": "Octopus"})
+        if result["data"]["returned_lines"] != 0:
+            print("  ERROR: search and pattern should AND, got {}".format(result["data"]["lines"]))
+            failed = True
+
+        print("Test: the pattern is echoed back so the caller can see what was applied")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "pattern": "iboost"})
+        if result["data"].get("pattern") != "iboost":
+            print("  ERROR: expected the pattern echoed in data, got {}".format(result["data"].get("pattern")))
+            failed = True
+
+        print("Test: an invalid regex is reported as a named argument error, not a traceback")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "pattern": "Warn(["})
+        if result.get("success") or "pattern" not in (result.get("error") or ""):
+            print("  ERROR: expected an error naming the pattern argument, got {}".format(result))
+            failed = True
+
+        print("Test: a pathological pattern is rejected before it can be compiled")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "pattern": "(a+)+$"})
+        if result.get("success"):
+            print("  ERROR: expected a nested-quantifier pattern to be rejected")
+            failed = True
+    finally:
+        agent_tools.read_predbat_log = saved_reader
+
+    if not failed:
+        print("✓ Test passed: get_log pattern")
+    return failed
+
+
+def test_mcp_get_log_time_bounds(my_predbat):
+    """get_log's start/end bounds accept a date, a time or both, and combine with hours."""
+    failed = False
+    print("**** Testing MCP get_log start/end bounds ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_reader = agent_tools.read_predbat_log
+    today = datetime.now()
+    yesterday = today - timedelta(days=1)
+    try:
+        agent_tools.read_predbat_log = lambda: _dated_log()
+
+        print("Test: a bare date as end covers the whole of that day, not midnight")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "end": yesterday.strftime("%Y-%m-%d")})
+        if not result.get("success"):
+            print("  ERROR: get_log with an end bound failed: {}".format(result.get("error")))
+            return True
+        lines = [line["line"] for line in result["data"]["lines"]]
+        if len(lines) != 2 or not any("yesterday late" in line for line in lines):
+            print("  ERROR: expected both of yesterday's lines including the 23:30 one, got {}".format(lines))
+            failed = True
+
+        print("Test: a bare date as start begins at the start of that day")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "start": today.strftime("%Y-%m-%d")})
+        lines = [line["line"] for line in result["data"]["lines"]]
+        if any("yesterday" in line for line in lines):
+            print("  ERROR: expected yesterday's lines excluded, got {}".format(lines))
+            failed = True
+
+        print("Test: a bare time means that time today")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "start": "13:00"})
+        lines = [line["line"] for line in result["data"]["lines"]]
+        if len(lines) != 1 or "afternoon" not in lines[0]:
+            print("  ERROR: expected only the 14:00 line, got {}".format(lines))
+            failed = True
+
+        print("Test: date and time together bound both ends")
+        result, _ = _call_tool(
+            mcp,
+            "get_log",
+            {"filter": "all", "start": today.strftime("%Y-%m-%d") + " 11:00", "end": today.strftime("%Y-%m-%d") + " 13:00"},
+        )
+        lines = [line["line"] for line in result["data"]["lines"]]
+        if not any("midday failure" in line for line in lines) or any("afternoon" in line for line in lines):
+            print("  ERROR: expected only the midday entry inside the window, got {}".format(lines))
+            failed = True
+
+        print("Test: a continuation line is kept with the stamped entry above it inside a window")
+        if not any("Traceback" in line for line in lines):
+            print("  ERROR: expected the traceback to travel with its parent entry, got {}".format(lines))
+            failed = True
+
+        print("Test: start and hours combine, with the narrower lower bound winning")
+        # _sample_log()'s stamps are relative to now, so this exercises the intersection without
+        # depending on what time of day the suite happens to run. The start bound is deliberately
+        # wide (two days back); hours=4 is the narrower of the two and should win.
+        agent_tools.read_predbat_log = lambda: _sample_log()
+        two_days_back = (today - timedelta(days=2)).strftime("%Y-%m-%d")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "start": two_days_back, "hours": 4})
+        lines = [line["line"] for line in result["data"]["lines"]]
+        if any("two days ago" in line or "before the window" in line for line in lines):
+            print("  ERROR: hours should narrow the wider start bound, got {}".format(lines))
+            failed = True
+        if len(lines) != 6:
+            print("  ERROR: expected the same 6 lines the hours filter alone returns, got {}".format(len(lines)))
+            failed = True
+        agent_tools.read_predbat_log = lambda: _dated_log()
+
+        print("Test: the bounds are echoed back so the caller can see what was applied")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "start": "13:00"})
+        if not result["data"].get("start"):
+            print("  ERROR: expected start echoed in data, got {}".format(result["data"]))
+            failed = True
+
+        print("Test: an unparseable bound is a named argument error")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "start": "last tuesday"})
+        if result.get("success") or "start" not in (result.get("error") or ""):
+            print("  ERROR: expected an error naming the start argument, got {}".format(result))
+            failed = True
+    finally:
+        agent_tools.read_predbat_log = saved_reader
+
+    if not failed:
+        print("✓ Test passed: get_log start/end bounds")
     return failed

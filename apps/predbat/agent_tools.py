@@ -159,6 +159,70 @@ def measure_state_value(value, max_bytes):
     return True, safe, size
 
 
+def scan_predbat_log(filter_type, search_term, pattern, start_time, end_time, max_lines):
+    """
+    Read predbat.log and return (lines, total_lines, matched_lines, truncated) for one get_log call.
+
+    Walks newest-first so max_lines keeps the most recent entries, as the web log view does, then
+    returns them oldest-first because that is how a log reads. Lines with no parseable stamp
+    (tracebacks and other continuation lines) inherit the timestamp of the entry they continue, so
+    a multi-line entry is kept or dropped as a whole.
+
+    Runs on an executor thread rather than the event loop - see the caller.
+    """
+    logdata = read_predbat_log()
+    loglines = logdata.split("\n")
+    total_lines = len(loglines)
+
+    # Resolve each line's effective time in a forward pass. A line with no stamp of its own is a
+    # continuation of the entry above it - the second line of a traceback belongs to the error that
+    # printed it - so it inherits that entry's time and the whole entry is kept or dropped together.
+    # This has to run forwards: the selection loop below walks newest-first, where a continuation
+    # line's parent has not been visited yet.
+    effective_times = [None] * total_lines
+    last_timestamp = None
+    for lineno in range(total_lines):
+        timestamp = parse_log_timestamp(loglines[lineno])
+        if timestamp:
+            last_timestamp = timestamp
+        effective_times[lineno] = last_timestamp
+
+    result_lines = []
+    truncated = False
+    matched_lines = 0
+
+    for lineno in range(total_lines - 1, -1, -1):
+        line = loglines[lineno]
+        if not line.strip():
+            continue
+
+        effective_time = effective_times[lineno]
+
+        if start_time and effective_time and effective_time < start_time:
+            # Walking newest-first, so everything below this point is older still
+            break
+        if end_time and effective_time and effective_time > end_time:
+            continue
+
+        line_type = classify_log_line(line)
+        if not log_line_included(line_type, filter_type):
+            continue
+        if search_term and search_term not in line.lower():
+            continue
+        if pattern and not pattern.search(line):
+            continue
+
+        matched_lines += 1
+        if len(result_lines) >= max_lines:
+            truncated = True
+            continue
+
+        result_lines.append({"line_number": lineno, "type": line_type, "line": line})
+
+    result_lines.reverse()
+    return result_lines, total_lines, matched_lines, truncated
+
+
 class MCPArgumentError(ValueError):
     """Raised when a tool argument is the wrong type or shape, so it can be reported clearly."""
 
@@ -186,6 +250,54 @@ def parse_number_argument(value, name, default, minimum=None, maximum=None, as_f
     if maximum is not None:
         value = min(maximum, value)
     return value
+
+
+# The shapes a get_log start/end bound may take. A bare date leaves the time open, so which end
+# of that day is meant depends on which bound it is; a bare time leaves the date open and means
+# today. Ordered longest-first so "2026-08-28 17:00:30" is not matched by the date-only format.
+LOG_TIME_BOUND_FORMATS = (
+    ("%Y-%m-%d %H:%M:%S", False, False),
+    ("%Y-%m-%d %H:%M", False, False),
+    ("%Y-%m-%d", True, False),
+    ("%H:%M:%S", False, True),
+    ("%H:%M", False, True),
+)
+
+
+def parse_log_time_bound(value, name="start", end_of_range=False):
+    """
+    Parse a get_log start/end bound into a naive datetime, or None when no bound was given.
+
+    Accepts a date ("2026-08-28"), a time ("17:00" or "17:00:30") or both. A bare date covers the
+    whole day - the start of it for a lower bound, the last microsecond of it for an upper bound -
+    so asking for end="2026-08-28" does not silently exclude everything that happened that day. A
+    bare time means that time today.
+
+    Bounds are naive local times because predbat.log stamps are written with a naive
+    datetime.now(), so parse_log_timestamp() returns naive values to compare against.
+
+    Raises MCPArgumentError rather than letting strptime's ValueError escape, because the caller is
+    an AI assistant that can only correct itself if told which argument was wrong.
+    """
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise MCPArgumentError("'{}' must be a date and/or time string, got {!r}".format(name, value))
+
+    text = value.strip()
+    for time_format, date_only, time_only in LOG_TIME_BOUND_FORMATS:
+        try:
+            parsed = datetime.strptime(text, time_format)
+        except ValueError:
+            continue
+        if time_only:
+            today = datetime.now()
+            return parsed.replace(year=today.year, month=today.month, day=today.day)
+        if date_only and end_of_range:
+            return parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return parsed
+
+    raise MCPArgumentError("'{}' must be a date (2026-08-28), a time (17:00) or both (2026-08-28 17:00), got {!r}".format(name, value))
 
 
 # The longest regex a tool argument may carry, and a detector for the nested-quantifier shape
@@ -217,7 +329,7 @@ def reject_pathological_pattern(value, name="filter"):
         raise MCPArgumentError("'{}' contains a quantifier applied to a group that already contains one (such as '(a+)+'), which can take effectively forever to match; rewrite it without the nested quantifier".format(name))
 
 
-def compile_filter_argument(value, name="filter"):
+def compile_filter_argument(value, name="filter", flags=0):
     """
     Compile a regex tool argument, or return None when no filter was given.
 
@@ -238,7 +350,7 @@ def compile_filter_argument(value, name="filter"):
         raise MCPArgumentError("'{}' must be a string regular expression, got {!r}".format(name, value))
     reject_pathological_pattern(value, name)
     try:
-        return re.compile(value)
+        return re.compile(value, flags)
     except re.error as error:
         raise MCPArgumentError("'{}' is not a valid regular expression: {}".format(name, error))
 
@@ -976,59 +1088,31 @@ class PredbatTools:
                 return {"success": False, "error": "Unknown filter '{}', expected one of {}".format(filter_type, ", ".join(LOG_FILTER_TYPES)), "data": None}
 
             search_term = str(arguments.get("search", "") or "").lower().strip()
+            pattern = compile_filter_argument(arguments.get("pattern", None), name="pattern", flags=re.IGNORECASE)
             max_lines = parse_number_argument(arguments.get("max_lines", None), "max_lines", MCP_LOG_DEFAULT_LINES, minimum=1, maximum=MCP_LOG_MAX_LINES)
             hours = parse_number_argument(arguments.get("hours", None), "hours", None, minimum=0, as_float=True)
+            start_time = parse_log_time_bound(arguments.get("start", None), "start")
+            end_time = parse_log_time_bound(arguments.get("end", None), "end", end_of_range=True)
 
             # Offloaded to an executor: read_predbat_log() does a synchronous open().read() on a
             # file that reaches 10MB before rotation, plus the rotated previous log. The MCP
             # server can afford to block its own thread on that, but the chat agent runs its
             # tools on the web loop, where a multi-second synchronous read would freeze the web
             # server and stop the SSE stream mid-token.
+            # The lower bound is whichever of hours and start is narrower - they are two ways of
+            # saying the same thing, so the caller gets the intersection rather than an error.
+            if hours:
+                hours_start = datetime.now() - timedelta(hours=hours)
+                start_time = max(start_time, hours_start) if start_time else hours_start
+
+            # Offloaded to an executor: read_predbat_log() does a synchronous open().read() on a
+            # file that reaches 10MB before rotation, plus the rotated previous log, and the scan
+            # then walks every line of it applying a caller-supplied regex. The MCP server can
+            # afford to block its own thread on that, but the chat agent runs its tools on the web
+            # loop, where a multi-second synchronous pass would freeze the web server and stop the
+            # SSE stream mid-token.
             loop = asyncio.get_running_loop()
-            logdata = await loop.run_in_executor(None, read_predbat_log)
-            loglines = logdata.split("\n")
-            total_lines = len(loglines)
-
-            # Cut-off for the hours filter. Lines with no parseable stamp (tracebacks and other
-            # continuation lines) inherit the timestamp of the newer line above them, so a
-            # multi-line entry is kept or dropped as a whole.
-            cutoff = (datetime.now() - timedelta(hours=hours)) if hours else None
-            last_timestamp = None
-
-            result_lines = []
-            truncated = False
-            matched_lines = 0
-
-            # Walk newest-first so max_lines keeps the most recent entries, as the web log view does
-            for lineno in range(total_lines - 1, -1, -1):
-                line = loglines[lineno]
-                if not line.strip():
-                    continue
-
-                timestamp = parse_log_timestamp(line)
-                if timestamp:
-                    last_timestamp = timestamp
-                if cutoff:
-                    effective_time = timestamp or last_timestamp
-                    if effective_time and effective_time < cutoff:
-                        # Everything below this point is older still
-                        break
-
-                line_type = classify_log_line(line)
-                if not log_line_included(line_type, filter_type):
-                    continue
-                if search_term and search_term not in line.lower():
-                    continue
-
-                matched_lines += 1
-                if len(result_lines) >= max_lines:
-                    truncated = True
-                    continue
-
-                result_lines.append({"line_number": lineno, "type": line_type, "line": line})
-
-            # Return oldest-first, which reads the way a log does
-            result_lines.reverse()
+            result_lines, total_lines, matched_lines, truncated = await loop.run_in_executor(None, scan_predbat_log, filter_type, search_term, pattern, start_time, end_time, max_lines)
 
             data = {
                 "lines": result_lines,
@@ -1038,6 +1122,9 @@ class PredbatTools:
                 "truncated": truncated,
                 "filter": filter_type,
                 "search": search_term,
+                "pattern": pattern.pattern if pattern else None,
+                "start": start_time.isoformat() if start_time else None,
+                "end": end_time.isoformat() if end_time else None,
                 "hours": hours,
             }
             description = "The Predbat log filtered to '{}' level".format(filter_type)
@@ -1535,13 +1622,16 @@ TOOL_DEFS = [
     },
     {
         "name": "get_log",
-        "description": "Get the Predbat log (predbat.log), filtered by level, search term and age - use this to diagnose warnings and errors. Lines are returned oldest-first.",
+        "description": "Get the Predbat log (predbat.log), filtered by level, search term, regex and time window - use this to diagnose warnings and errors. Lines are returned oldest-first.",
         "parameters": {
             "type": "object",
             "properties": {
                 "filter": {"type": "string", "description": "Log level to return: all, info, warnings or errors (default warnings)", "enum": list(LOG_FILTER_TYPES)},
                 "search": {"type": "string", "description": "Only return lines containing this text, case-insensitive (optional)"},
+                "pattern": {"type": "string", "description": "Only return lines matching this Python regular expression, case-insensitive (optional). Combined with 'search' and 'filter' rather than replacing them"},
                 "hours": {"type": "number", "description": "Only return lines written in the last N hours (optional)"},
+                "start": {"type": "string", "description": "Only return lines at or after this point: a date (2026-08-28), a time today (17:00 or 17:00:30) or both (2026-08-28 17:00). Combined with 'hours' if both are given, narrower wins (optional)"},
+                "end": {"type": "string", "description": "Only return lines at or before this point, same formats as 'start'. A bare date covers the whole of that day (optional)"},
                 "max_lines": {
                     "type": "integer",
                     "description": "Maximum number of lines to return. The most recent matching lines are the ones kept, but they are returned oldest-first (default {}, maximum {})".format(MCP_LOG_DEFAULT_LINES, MCP_LOG_MAX_LINES),
