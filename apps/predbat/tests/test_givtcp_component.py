@@ -62,6 +62,18 @@ def _make_component(rest_urls="http://givtcp:6345"):
     return base, component
 
 
+def _mark_discovered(component, indices=None):
+    """
+    Stand in for run()'s discovery pass.
+
+    automatic_config() is driven by which endpoints actually answered, not by how many URLs are
+    configured, so a test calling it directly has to establish that precondition itself.
+    """
+    component.discovered = list(range(len(component.rest))) if indices is None else list(indices)
+    component.discovery_done = True
+    return component
+
+
 def test_initialize_scalar(my_predbat=None):
     """A single URL (not a list) creates exactly one GivTCPRest instance."""
     base, component = _make_component(rest_urls="http://givtcp:6345")
@@ -146,6 +158,7 @@ def test_publish_data_sensors(my_predbat=None):
 def test_automatic_config_single_inverter(my_predbat=None):
     """automatic_config() points every standard apps.yaml key at this component's own entities."""
     base, component = _make_component(rest_urls="http://givtcp:6345")
+    _mark_discovered(component)
     run_async(component.automatic_config())
 
     assert base.args["num_inverters"] == 1, f"Expected num_inverters 1, got {base.args['num_inverters']}"
@@ -161,6 +174,7 @@ def test_automatic_config_single_inverter(my_predbat=None):
 def test_automatic_config_two_inverters(my_predbat=None):
     """automatic_config() produces one indexed entity per inverter, in order, for multi-inverter setups."""
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    _mark_discovered(component)
     run_async(component.automatic_config())
 
     assert base.args["num_inverters"] == 2, f"Expected num_inverters 2, got {base.args['num_inverters']}"
@@ -331,6 +345,7 @@ def test_select_event_pause_start_time_preserves_end(my_predbat=None):
 def test_automatic_config_pause_keys_need_v3_everywhere(my_predbat=None):
     """Pause keys are only claimed when every inverter is v3, mirroring the power_ignore rule."""
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    _mark_discovered(component)
     for rest in component.rest:
         rest.inverter.rest_data = _rest_data_blob()
 
@@ -624,6 +639,7 @@ def test_automatic_config_respects_power_ignore(my_predbat=None):
     exactly the config it exists to protect.
     """
     base, component = _make_component()
+    _mark_discovered(component)
     base.args["givtcp_rest_power_ignore"] = True
     run_async(component.automatic_config())
 
@@ -643,11 +659,106 @@ def test_automatic_config_uses_soc_kw_not_percent(my_predbat=None):
     a whole percent (~0.1kWh steps on a 9.5kWh battery) while SOC_kWh carries 3 decimal places.
     """
     base, component = _make_component()
+    _mark_discovered(component)
     run_async(component.automatic_config())
 
     assert base.args["soc_kw"] == ["sensor.predbat_givtcp_0_soc_kw"], f"Expected soc_kw to be bound, got {base.args.get('soc_kw')}"
     assert "soc_percent" not in base.args, "soc_percent must not be bound - it would take precedence and lose precision"
     print("PASS: SoC is bound via the precise soc_kw sensor, not whole-percent soc_percent")
+    return 0
+
+
+def test_automatic_config_counts_discovered_inverters_not_configured_urls(my_predbat=None):
+    """
+    num_inverters comes from how many endpoints answered, not how many URLs are configured.
+
+    The shipped apps.yaml pairs num_inverters: 1 with a two-entry givtcp_rest list, the same
+    over-provisioning every other per-inverter key in that template uses. Counting the list would
+    build Inverter(id=1) against a host that does not exist and plan against a phantom battery.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = MagicMock(return_value=None)
+
+    result = run_async(component.run(seconds=0, first=True))
+    assert result is True, "run() should succeed when at least one endpoint answered"
+    assert base.args["num_inverters"] == 1, f"Expected num_inverters 1 from one live endpoint, got {base.args.get('num_inverters')}"
+    assert base.args["inverter_type"] == ["GE"], f"Expected one inverter_type entry, got {base.args.get('inverter_type')}"
+    assert base.args["charge_rate"] == ["number.predbat_givtcp_0_charge_rate"], f"Expected only the live endpoint's entity, got {base.args.get('charge_rate')}"
+    print("PASS: num_inverters counts discovered inverters, not configured URLs")
+    return 0
+
+
+def test_automatic_config_maps_predbat_inverter_to_the_live_endpoint(my_predbat=None):
+    """
+    When an earlier endpoint is dead, the surviving one still drives Predbat inverter 0.
+
+    Entity ids stay pinned to the REST endpoint index because _parse_entity feeds self.rest[n] on
+    every write - renumbering them would route inverter 0's writes at the dead client.
+    """
+    base, component = _make_component(rest_urls=["http://dead:6345", "http://givtcp1:6345"])
+    component.rest[0].read_data = MagicMock(return_value=None)
+    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+
+    run_async(component.run(seconds=0, first=True))
+    assert base.args["num_inverters"] == 1, f"Expected num_inverters 1, got {base.args.get('num_inverters')}"
+    assert base.args["charge_rate"] == ["number.predbat_givtcp_1_charge_rate"], f"Expected the live endpoint's own index, got {base.args.get('charge_rate')}"
+
+    # and that entity must still route a write back to the live client
+    n, control = component._parse_entity(base.args["charge_rate"][0])
+    assert component.rest[n] is component.rest[1], "Predbat inverter 0's entity must address the live REST client"
+    print("PASS: a dead leading endpoint leaves the live one driving Predbat inverter 0")
+    return 0
+
+
+def test_automatic_config_skipped_when_nothing_was_discovered(my_predbat=None):
+    """automatic_config() must claim nothing at all when no endpoint answered."""
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    run_async(component.automatic_config())
+
+    assert "num_inverters" not in base.args, f"Expected no config with nothing discovered, got num_inverters={base.args.get('num_inverters')}"
+    assert "charge_rate" not in base.args, "Expected the user's own apps.yaml keys left untouched"
+    print("PASS: automatic_config claims nothing when no inverter was discovered")
+    return 0
+
+
+def test_dead_endpoint_is_not_polled_after_discovery(my_predbat=None):
+    """
+    Once discovery has settled, an endpoint that never answered is not polled again.
+
+    read_data() retries with 20s then 40s sleeps, so re-probing the template's placeholder URL
+    would spend longer failing than the 60s poll interval it is running on.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://dead:6345"])
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = MagicMock(return_value=None)
+
+    run_async(component.run(seconds=0, first=True))
+    assert component.rest[1].read_data.call_count == 1, "the dead endpoint should be probed once during discovery"
+
+    run_async(component.run(seconds=0, first=True))
+    assert component.rest[1].read_data.call_count == 1, f"the dead endpoint must not be re-polled, got {component.rest[1].read_data.call_count} calls"
+    assert component.rest[0].read_data.call_count == 2, f"the live endpoint must keep being polled, got {component.rest[0].read_data.call_count} calls"
+    print("PASS: a dead endpoint is dropped after discovery instead of re-probed every poll")
+    return 0
+
+
+def test_pause_keys_gated_on_discovered_inverters_only(my_predbat=None):
+    """
+    The all-v3 pause gate considers discovered inverters only.
+
+    An endpoint that never answered has rest_v3 False by default, so counting it would withhold
+    pause control from a fleet whose live inverters are all v3.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://dead:6345"])
+    live = _rest_data_blob()
+    live["Stats"] = {"GivTCP_Version": "3.2.1"}
+    component.rest[0].read_data = MagicMock(return_value=live)
+    component.rest[1].read_data = MagicMock(return_value=None)
+
+    run_async(component.run(seconds=0, first=True))
+    assert base.args.get("pause_mode") == ["select.predbat_givtcp_0_pause_mode"], f"Expected pause claimed for the live v3 inverter, got {base.args.get('pause_mode')}"
+    print("PASS: the v3 pause gate ignores endpoints that were never discovered")
     return 0
 
 
@@ -693,6 +804,11 @@ def test_givtcp_component(my_predbat=None):
         ("power_ignore", test_automatic_config_respects_power_ignore, "automatic_config respects power_ignore"),
         ("soc_kw_binding", test_automatic_config_uses_soc_kw_not_percent, "automatic_config binds soc_kw"),
         ("write_exception", test_write_event_exception_does_not_propagate, "write exception contained"),
+        ("discovered_count", test_automatic_config_counts_discovered_inverters_not_configured_urls, "num_inverters counts discovered inverters"),
+        ("discovered_mapping", test_automatic_config_maps_predbat_inverter_to_the_live_endpoint, "live endpoint drives inverter 0"),
+        ("discovered_none", test_automatic_config_skipped_when_nothing_was_discovered, "no config when nothing discovered"),
+        ("discovery_drops_dead", test_dead_endpoint_is_not_polled_after_discovery, "dead endpoint dropped after discovery"),
+        ("discovered_pause_gate", test_pause_keys_gated_on_discovered_inverters_only, "pause gate ignores undiscovered endpoints"),
     ]
 
     passed = 0

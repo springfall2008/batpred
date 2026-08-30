@@ -139,8 +139,9 @@ GIVTCP_AUTO_CONFIG_KEYS = [
 
 # Pause control is GivTCP v3 only - v2 has no /setBatteryPauseMode endpoint, and
 # Inverter.adjust_pause_mode's REST path was gated on rest_v3 for the same reason. Auto-configured
-# only when every configured inverter reports v3, so a mixed fleet leaves these to the user rather
-# than pointing half of them at entities that can never be written.
+# only when every discovered inverter reports v3, so a mixed fleet leaves these to the user rather
+# than pointing half of them at entities that can never be written. Endpoints that never answered
+# are excluded - they default to rest_v3 False and would otherwise veto a wholly-v3 live fleet.
 GIVTCP_AUTO_CONFIG_PAUSE_KEYS = [
     "pause_mode",
     "pause_start_time",
@@ -173,6 +174,12 @@ class GivTCPComponent(ComponentBase):
             state = InverterRestState(id=n, rest_api=url, battery_rate_max_charge=1.0, battery_rate_max_discharge=1.0)
             self.rest.append(GivTCPRest(self.base, state))
         self.automatic_config_done = False
+        # givtcp_rest is the key that enables this component, but its length says nothing about how
+        # many inverters exist - the shipped apps.yaml pairs num_inverters: 1 with a two-entry list,
+        # the same over-provisioning every other per-inverter key in that template uses. discovered
+        # holds the indices that actually answered, and is what drives automatic_config().
+        self.discovered = []
+        self.discovery_done = False
         # publish_data() runs every poll; the unsupported-model notice is per inverter and only
         # worth saying once rather than every 60 seconds for the life of the process
         self.discharge_target_warned = {}
@@ -183,7 +190,13 @@ class GivTCPComponent(ComponentBase):
 
     async def run(self, seconds, first):
         if first or (seconds % GIVTCP_POLL_SECONDS) == 0:
-            for n, rest in enumerate(self.rest):
+            # Probe every configured URL until discovery settles, then only the ones that answered:
+            # read_data() retries with 20s then 40s sleeps, so re-probing a placeholder URL every
+            # cycle would spend longer failing than the poll interval it runs on.
+            poll = range(len(self.rest)) if not self.discovery_done else self.discovered
+            answered = []
+            for n in poll:
+                rest = self.rest[n]
                 data = await self._run_blocking(rest.read_data)
                 if data:
                     rest.inverter.rest_data = data
@@ -191,6 +204,19 @@ class GivTCPComponent(ComponentBase):
                     # trusts GivTCP's own Battery_Voltage field once this is set.
                     version = data.get("Stats", {}).get("GivTCP_Version", "Unknown")
                     rest.inverter.rest_v3 = version.startswith("3")
+                    answered.append(n)
+
+            # Settle discovery on the first pass that finds anything. A pass where nothing answers
+            # leaves it open so the next cycle re-probes every URL, rather than locking in an empty
+            # fleet because GivTCP happened to be starting up.
+            if not self.discovery_done and answered:
+                self.discovered = answered
+                self.discovery_done = True
+                self.log("GivTCP: discovered {} inverter(s) from {} configured REST endpoint(s)".format(len(answered), len(self.rest)))
+                missing = [self.rest[n].inverter.rest_api for n in range(len(self.rest)) if n not in answered]
+                if missing:
+                    self.log("Warn: GivTCP: no inverter answered at {} - those endpoints will not be managed. Restart Predbat once they are reachable if that is wrong.".format(", ".join(missing)))
+
             await self.publish_data()
 
         # Report failure while nothing has ever been read, so ComponentBase.start() keeps retrying
@@ -198,7 +224,7 @@ class GivTCPComponent(ComponentBase):
         # automatic_config(): pointing Predbat's apps.yaml keys at entities that were never
         # published would override the user's own working config with unavailable entities, and
         # it only ever runs once.
-        if not any(rest.inverter.rest_data for rest in self.rest):
+        if not self.discovered:
             self.log("Warn: GivTCP: no data read from any configured REST endpoint yet")
             return False
 
@@ -320,7 +346,16 @@ class GivTCPComponent(ComponentBase):
 
     async def automatic_config(self):
         """Point Predbat's standard entity-based apps.yaml keys at the entities this component publishes."""
-        n_inverters = len(self.rest)
+        # Driven by the endpoints that answered discovery, not by the length of the configured
+        # givtcp_rest list - counting the list would have Predbat build an Inverter against a URL
+        # with nothing behind it and then plan and execute against a phantom battery.
+        discovered = self.discovered
+        if not discovered:
+            self.log("Warn: GivTCP automatic_config: no inverters discovered, skipping configuration")
+            return
+
+        n_inverters = len(discovered)
+        self.log("GivTCP: configuring Predbat for {} discovered inverter(s)".format(n_inverters))
         self.set_arg_auto("inverter_type", ["GE" for _ in range(n_inverters)])
         self.set_arg_auto("num_inverters", n_inverters)
 
@@ -331,14 +366,14 @@ class GivTCPComponent(ComponentBase):
         # power sensors (see docs/apps-yaml.md). Claiming those keys here would silently override
         # exactly the config they set it to protect. It is a per-inverter arg, but these keys are
         # written as one whole list, so any inverter opting out leaves all of them to the user.
-        if any(self.get_arg("givtcp_rest_power_ignore", default=False, index=n) for n in range(n_inverters)):
+        if any(self.get_arg("givtcp_rest_power_ignore", default=False, index=n) for n in discovered):
             self.log("Info: GivTCP: givtcp_rest_power_ignore is set - leaving power/voltage entities to your apps.yaml config")
         else:
             keys += GIVTCP_AUTO_CONFIG_POWER_KEYS
 
         keys += GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS
 
-        if all(rest.inverter.rest_v3 for rest in self.rest):
+        if all(self.rest[n].inverter.rest_v3 for n in discovered):
             keys += GIVTCP_AUTO_CONFIG_PAUSE_KEYS
         else:
             self.log("Info: GivTCP: pause control needs GivTCP v3 on every inverter - leaving pause_mode/pause_start_time/pause_end_time to your apps.yaml config")
@@ -346,7 +381,9 @@ class GivTCPComponent(ComponentBase):
         for key in keys:
             domain, _, _ = GIVTCP_CONTROLS.get(key, (None, None, None))
             domain = domain or "sensor"
-            self.set_arg_auto(key, [self._entity_id(domain, n, key) for n in range(n_inverters)])
+            # Indexed by REST endpoint, not by position: _parse_entity feeds self.rest[n] on every
+            # write, so renumbering would route the surviving inverter's writes at a dead client.
+            self.set_arg_auto(key, [self._entity_id(domain, n, key) for n in discovered])
 
     def _parse_entity(self, entity_id):
         """entity_id -> (inverter index, control name), or (None, None) if it doesn't match."""
