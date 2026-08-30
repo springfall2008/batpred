@@ -647,8 +647,8 @@ class GhApiFormPromptTests(unittest.TestCase):
         automated - and it doubles as a belt-and-braces backup for /pr-cleanup's replies,
         which already ask for disclosure directly in their own SKILL.md."""
         prompt = triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT
-        self.assertIn("disclosing", prompt)
-        self.assertIn("automated", prompt)
+        self.assertIn("must open with", prompt)
+        self.assertIn("Automated comment from the triage bot", prompt)
 
 
 class PrReviewActivityCountTests(unittest.TestCase):

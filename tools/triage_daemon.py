@@ -272,7 +272,7 @@ GH_API_ENDPOINT_FIRST_PROMPT = (
     "to printing the comments you would have posted. "
     "Every comment or reply you post in this session - an inline review comment, a review-thread reply - must open with a "
     "short line disclosing it is automated, e.g. '_Automated comment from the triage bot._', so a maintainer can tell "
-    "bot-authored feedback from a human reviewer's without checking the author field."
+    "bot-authored feedback apart from a human reviewer's, without needing to check the author field."
 )
 
 
