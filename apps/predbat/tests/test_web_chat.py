@@ -3832,6 +3832,74 @@ def test_title_event_does_not_offer_to_switch_to_the_open_conversation(my_predba
 
     if not failed:
         print("✓ Test passed: a title event leaves the banner alone and refreshes the header")
+def test_own_message_is_shown_without_waiting_for_the_server_echo(my_predbat):
+    """Hitting send must render your own message immediately, not only when the SSE echo lands.
+
+    The bubble was previously drawn solely by handleUser(), from the server's 'user' event. Miss
+    that one event - createAndSend() sends before openStream() has run, and the history snapshot
+    and event cursor are taken under different locks on different threads - and the message was
+    gone from the transcript until a conversation switch rebuilt it from history, which is exactly
+    what users hit. Drawing it on send removes the dependency entirely.
+
+    The echo must then not draw it a second time, so handleUser() adopts the pending bubble when
+    there is one, and still appends when there is not - a second browser watching the same
+    conversation never sent anything and must render the message normally.
+    """
+    failed = False
+    print("**** Testing own message renders without the server echo ****")
+    script = web_chat.get_chat_script()
+
+    send = _extract_function_body(script, "sendMessage")
+    if send is None:
+        print("ERROR: no sendMessage function found")
+        return True
+    if "appendBubble('user'" not in send:
+        print("ERROR: sendMessage does not draw the user bubble itself: {!r}".format(send))
+        failed = True
+
+    handle = _extract_function_body(script, "handleUser")
+    if handle is None:
+        print("ERROR: no handleUser function found")
+        return True
+    # Must still append when nothing is pending, or a second browser shows no message at all.
+    if "appendBubble" not in handle:
+        print("ERROR: handleUser must still append when no local bubble is pending: {!r}".format(handle))
+        failed = True
+    if "pendingUserBubble" not in handle:
+        print("ERROR: handleUser does not adopt the locally drawn bubble, so the echo duplicates it: {!r}".format(handle))
+        failed = True
+
+    # renderHistory() rebuilds the transcript from scratch; a pending marker surviving that would
+    # make the next echo adopt a bubble that is no longer in the document.
+    render = _extract_function_body(script, "renderHistory")
+    if render is None or "pendingUserBubble" not in render:
+        print("ERROR: renderHistory does not clear the pending user bubble: {!r}".format(render))
+        failed = True
+
+    # The send must not race the stream being opened for a brand new conversation.
+    create = _extract_function_body(script, "createAndSend")
+    if create is None:
+        print("ERROR: no createAndSend function found")
+        return True
+    if "selectConversation(payload.id).then(" not in create:
+        print("ERROR: createAndSend does not chain the send off the conversation load, so it still races openStream(): {!r}".format(create))
+        failed = True
+
+    # A send that never landed must take its optimistic bubble back down, or the transcript shows
+    # a message the server never stored - the mirror of the bug this fixes, visible until a reload.
+    send_fn = _extract_function_body(script, "doSend")
+    if send_fn is None or "pendingUserBubble" not in send_fn:
+        print("ERROR: doSend leaves the optimistic bubble up when the send fails: {!r}".format(send_fn))
+        failed = True
+
+    # selectConversation() has to hand the promise back for that chaining to be possible at all.
+    select = _extract_function_body(script, "selectConversation")
+    if select is None or "return loadConversationData(" not in select:
+        print("ERROR: selectConversation does not return its load promise: {!r}".format(select))
+        failed = True
+
+    if not failed:
+        print("✓ Test passed: your own message renders on send and the echo does not duplicate it")
     return failed
 
 
@@ -3840,6 +3908,7 @@ def run_web_chat_tests(my_predbat):
     failed = False
     failed |= test_routes_always_registered_handlers_404_unconfigured(my_predbat)
     failed |= test_title_event_does_not_offer_to_switch_to_the_open_conversation(my_predbat)
+    failed |= test_own_message_is_shown_without_waiting_for_the_server_echo(my_predbat)
     failed |= test_chat_routes_survive_the_real_phase_order(my_predbat)
     failed |= test_send_is_busy_and_unknown_is_404(my_predbat)
     failed |= test_delete_refuses_the_active_conversation(my_predbat)

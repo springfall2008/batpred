@@ -19,7 +19,9 @@ import os
 import re
 import time
 
-from agent_tools import TOOL_DEFS, PredbatTools, format_plan_rows_table, mcp_tool_list, openai_tool_list, slim_plan, slim_plan_rows, compile_filter_argument, MCPArgumentError, FILTER_PATTERN_MAX
+from datetime import datetime
+
+from agent_tools import TOOL_DEFS, PredbatTools, format_plan_rows_table, mcp_tool_list, openai_tool_list, slim_plan, slim_plan_rows, compile_filter_argument, MCPArgumentError, FILTER_PATTERN_MAX, parse_log_time_bound
 from components import Components
 from utils import mask_secret_args
 from web_mcp import MCPServerWrapper
@@ -1371,4 +1373,65 @@ def run_agent_tools_tests(my_predbat):
     failed |= test_set_config_rejects_fractional_value_for_step_one(my_predbat)
     failed |= test_pathological_regex_arguments_are_rejected(my_predbat)
     failed |= test_get_entity_history_does_not_block_the_event_loop(my_predbat)
+    failed |= test_parse_log_time_bound_accepts_date_time_or_both(my_predbat)
+    failed |= test_parse_log_time_bound_rejects_junk(my_predbat)
+    return failed
+
+
+def test_parse_log_time_bound_accepts_date_time_or_both(my_predbat):
+    """parse_log_time_bound() accepts a bare date, a bare time, or both, and defaults the missing half."""
+    print("**** Testing parse_log_time_bound accepts date, time or both ****")
+    failed = False
+
+    today = datetime.now().date()
+
+    cases = [
+        # (value, end_of_range, expected datetime)
+        ("2026-08-28", False, datetime(2026, 8, 28, 0, 0, 0)),
+        ("2026-08-28", True, datetime(2026, 8, 28, 23, 59, 59, 999999)),
+        ("2026-08-28 17:00", False, datetime(2026, 8, 28, 17, 0, 0)),
+        ("2026-08-28 17:00:30", False, datetime(2026, 8, 28, 17, 0, 30)),
+        # A bare time means that time today, whichever bound it is
+        ("17:00", False, datetime(today.year, today.month, today.day, 17, 0, 0)),
+        ("17:00", True, datetime(today.year, today.month, today.day, 17, 0, 0)),
+        ("17:00:30", False, datetime(today.year, today.month, today.day, 17, 0, 30)),
+    ]
+
+    for value, end_of_range, expected in cases:
+        got = parse_log_time_bound(value, "start", end_of_range=end_of_range)
+        if got != expected:
+            print("ERROR: parse_log_time_bound({!r}, end_of_range={}) returned {}, expected {}".format(value, end_of_range, got, expected))
+            failed = True
+
+    # No bound given is not an error - it just means "unbounded"
+    for empty in (None, ""):
+        if parse_log_time_bound(empty, "start") is not None:
+            print("ERROR: parse_log_time_bound({!r}) should return None".format(empty))
+            failed = True
+
+    if not failed:
+        print("✓ Test passed: parse_log_time_bound accepts date, time or both")
+    return failed
+
+
+def test_parse_log_time_bound_rejects_junk(my_predbat):
+    """parse_log_time_bound() raises a named MCPArgumentError rather than a bare traceback."""
+    print("**** Testing parse_log_time_bound rejects junk ****")
+    failed = False
+
+    for value in ("not-a-date", "2026-13-45", "25:99", 12345, "2026-08-28T17:00:00Z"):
+        try:
+            parse_log_time_bound(value, "start")
+            print("ERROR: parse_log_time_bound({!r}) should have raised MCPArgumentError".format(value))
+            failed = True
+        except MCPArgumentError as e:
+            if "start" not in str(e):
+                print("ERROR: MCPArgumentError for {!r} should name the argument, got {}".format(value, e))
+                failed = True
+        except Exception as e:
+            print("ERROR: parse_log_time_bound({!r}) raised {} not MCPArgumentError".format(value, type(e).__name__))
+            failed = True
+
+    if not failed:
+        print("✓ Test passed: parse_log_time_bound rejects junk with a named error")
     return failed

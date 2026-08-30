@@ -267,10 +267,19 @@ class WebChat:
     async def _snapshot_and_cursor(agent, conversation_id):
         """Return a message snapshot and the event cursor as of the same instant.
 
-        events_since() is synchronous and lock-guarded, so calling it immediately after awaiting
-        snapshot() - both inside this one coroutine - leaves no gap in which a concurrently
-        running turn could append a message and emit its event between the two. See the comment
-        at the call site in html_chat_history for why that gap mattered.
+        events_since() is synchronous and lock-guarded, and no await separates it from snapshot()
+        returning, so nothing on this loop can run between the two. That is narrower than it
+        sounds: the two halves take different locks - the store's and the agent's - and a turn
+        appends its message from the component thread, so a genuine thread interleave between
+        list(messages) and events_since() can still yield a snapshot without the message whose
+        event is already below the returned cursor. Such a message is neither rendered from
+        history nor replayed from the stream.
+
+        The window is tiny and closing it properly means one lock over both, which is a wider
+        change than it is worth here: the Chat tab no longer depends on this for the user's own
+        message, which it now draws on send rather than waiting for the echoed event (see
+        sendMessage() and handleUser() in get_chat_script()). See the comment at the call site in
+        html_chat_history for the gap this does close.
         """
         messages = await agent.store.snapshot(conversation_id)
         _, cursor, _ = agent.events_since(0, conversation_id)
@@ -3341,7 +3350,18 @@ function handleRetry(data) {
     startRetryCountdown(data);
 }
 
+// The bubble sendMessage() drew for a message this browser has sent but not yet seen echoed
+// back. Held so the echo can adopt it instead of drawing a second copy; null at every other time.
+var pendingUserBubble = null;
+
 function handleUser(data) {
+    // This browser already drew it on send, so consume that bubble rather than appending a
+    // duplicate. Another browser watching the same conversation has nothing pending and appends
+    // normally, which is why the echo is still what renders it there.
+    if (pendingUserBubble) {
+        pendingUserBubble = null;
+        return;
+    }
     appendBubble('user', data.text || '');
 }
 
@@ -3569,6 +3589,10 @@ function renderHistory(payload) {
     confirmCards = {};
     pendingBubble = null;
     pendingText = '';
+    // The transcript this pointed into has just been thrown away, and the rebuilt history already
+    // contains the message. Leaving it set would make the next echo adopt a detached node and
+    // swallow a message this browser had not drawn.
+    pendingUserBubble = null;
     (payload.messages || []).forEach(function (message) {
         if (message.role === 'user') {
             appendBubble('user', message.content || '');
@@ -3804,7 +3828,9 @@ function selectConversation(id) {
     highlightActiveRow(id);
     updateChatTitle();
     setConversationPanel(false);
-    loadConversationData(id).catch(function (error) { console.error('Failed to load chat history', error); });
+    // Returned, not just fired: createAndSend() has to wait for this before sending, because
+    // openStream() runs at the end of it and a send that beats it races the event cursor.
+    return loadConversationData(id).catch(function (error) { console.error('Failed to load chat history', error); });
 }
 
 function handleReload() {
@@ -4034,6 +4060,13 @@ function doSend(conversationId, text) {
         })
         .then(function () { refreshConversations(); })
         .catch(function (error) {
+            // The message never landed, so take the bubble sendMessage() drew back down rather
+            // than leaving the transcript claiming something was said that the server never
+            // stored - a 409 because a turn is already running is the common way here.
+            if (pendingUserBubble) {
+                pendingUserBubble.remove();
+                pendingUserBubble = null;
+            }
             if (!error || error.message !== 'busy') {
                 console.error('Failed to send message', error);
             }
@@ -4044,9 +4077,14 @@ function createAndSend(text) {
     fetch('./chat/conversations', { method: 'POST' })
         .then(function (response) { return response.json(); })
         .then(function (payload) {
-            selectConversation(payload.id);
-            doSend(payload.id, text);
-            refreshConversations();
+            // Chained rather than fired alongside: selectConversation() opens the event stream at
+            // the end of its load, and sending before that leaves the turn's own events arriving
+            // with nothing listening, recoverable only through the cursor.
+            return selectConversation(payload.id).then(function () {
+                pendingUserBubble = appendBubble('user', text);
+                doSend(payload.id, text);
+                refreshConversations();
+            });
         })
         .catch(function (error) { console.error('Failed to start conversation', error); });
 }
@@ -4062,6 +4100,10 @@ function sendMessage() {
         createAndSend(text);
         return;
     }
+    // Drawn here rather than waiting for the server to echo it back as a 'user' event. That echo
+    // is a single event, and a single missed event left the message invisible until a conversation
+    // switch rebuilt the transcript from history - see handleUser().
+    pendingUserBubble = appendBubble('user', text);
     doSend(state.conversation, text);
 }
 
