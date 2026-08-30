@@ -2006,6 +2006,12 @@ class OctopusAPI(ComponentBase):
                 if token_response.status == 403 and is_edge_block_body(await token_response.text()):
                     self.failures_total += 1
                     self.start_token_mint_backoff()
+                    # The block says nothing about the token already held, so do not fail this
+                    # call as well: the backoff guard above would hand the same token to the very
+                    # next caller anyway. Re-read the clock rather than reusing the one sampled
+                    # before the request, which may have been seconds ago.
+                    if expiry and expiry > datetime.now():
+                        return self.graphql_token
                     return None
 
                 token_response_body = await self.async_read_response_retry(token_response, url)

@@ -7,7 +7,7 @@ import base64
 import json
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
-from octopus import OctopusAPI, TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS
+from octopus import OctopusAPI, TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 
 
 def test_octopus_refresh_token_wrapper(my_predbat):
@@ -32,6 +32,7 @@ async def test_octopus_refresh_token(my_predbat):
     - Test 12: A non-CDN 403 does not start a backoff
     - Test 13: An elapsed backoff deadline reopens the mint without touching the state
     - Test 14: A token inside the proactive-refresh window is still used while backing off
+    - Test 15: The backoff reason is repeated but throttled
     """
     print("**** Running Octopus async_refresh_token tests ****")
     failed = False
@@ -439,8 +440,10 @@ async def test_octopus_refresh_token(my_predbat):
 
     result = await api.async_refresh_token()
 
-    if result is not None:
-        print(f"ERROR: The proactive mint should have been refused, got {result}")
+    # The refused mint must not fail this call either - the token it already holds is fine,
+    # and the backoff guard would hand that same token to the very next caller regardless.
+    if result != near_expiry:
+        print(f"ERROR: Expected the still-valid token from the call that hit the block, got {result}")
         failed = True
     elif api.token_mint_blocked_until is None:
         print("ERROR: Expected a backoff to be started by the refused mint")
@@ -467,6 +470,49 @@ async def test_octopus_refresh_token(my_predbat):
             failed = True
         else:
             print("PASS: An expired token is not reused during the backoff")
+
+        # An undecodable token has no provable life left, so it must not be served either
+        api.graphql_token = "not.a.valid.jwt"
+        result = await api.async_refresh_token()
+        if result is not None:
+            print(f"ERROR: An undecodable token must not be handed out during the backoff, got {result}")
+            failed = True
+        else:
+            print("PASS: An undecodable token is not reused during the backoff")
+
+    # Test 15: the backoff reason is repeated, but throttled
+    print("\n*** Test 15: The backoff reason is repeated but throttled ***")
+    api = OctopusAPI(my_predbat, key="test-api-key-15", account_id="test-account-15", automatic=False)
+    api.graphql_token = None
+    api.save_octopus_cache = AsyncMock()
+    api.api.async_create_client_session = AsyncMock(return_value=create_mock_session(403, cloudfront_body))
+    api.async_read_response_retry = AsyncMock(return_value=None)
+
+    logged = []
+    api.log = lambda message: logged.append(message)
+
+    await api.async_refresh_token()  # starts the backoff, logs once
+    first_count = len(logged)
+    for _ in range(5):
+        await api.async_refresh_token()  # all suppressed, all inside the throttle window
+
+    if len(logged) != first_count:
+        print(f"ERROR: Expected suppressed calls inside the throttle window to stay quiet, got {len(logged) - first_count} extra lines")
+        failed = True
+    else:
+        # Pretend the throttle interval has elapsed; the reason should be restated exactly once
+        api.token_mint_backoff_logged_at = datetime.now() - timedelta(seconds=TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS + 1)
+        await api.async_refresh_token()
+        await api.async_refresh_token()
+
+        if len(logged) != first_count + 1:
+            print(f"ERROR: Expected exactly one restated line after the throttle interval, got {len(logged) - first_count}")
+            failed = True
+        elif "still edge/WAF blocked" not in logged[-1]:
+            print(f"ERROR: Expected the restated line to name the block, got {logged[-1]}")
+            failed = True
+        else:
+            print("PASS: The backoff reason is restated once per throttle interval, not per call")
 
     # Summary
     if failed:
