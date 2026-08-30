@@ -391,34 +391,34 @@ class GivTCPComponent(ComponentBase):
             # GivTCP actually reports it, so a missing one falls back to the user's own apps.yaml
             # value rather than being published as a zero that would look authoritative.
             #
-            # soc_max carries the DESIGN capacity and battery health is expressed through
-            # battery_scaling, matching GE Cloud (battery_size + battery_dod_soh). Inverter computes
-            # soc_max = nominal_capacity * battery_scaling and measures degradation against
-            # nominal_capacity, so publishing the already-degraded reported capacity here would
-            # collapse trimmed_mean/nominal to ~1.0 and hide exactly what battery_scaling_auto
-            # exists to find. Net usable size is unchanged: design x (reported/design) == reported.
-            reported_capacity = rest.battery_capacity_kwh()
-            design_capacity = rest.nominal_capacity()
+            # soc_max carries the design capacity - Battery_Capacity_kWh already is that, the same
+            # figure raw.invertor.battery_nominal_capacity gives in Ah - and battery health is
+            # expressed separately through battery_scaling, matching GE Cloud (battery_size +
+            # battery_dod_soh). Inverter computes soc_max = nominal_capacity * battery_scaling and
+            # measures degradation against nominal_capacity, so the design figure has to stay here
+            # and the derate has to live in the scaling.
+            design_capacity = rest.battery_capacity_kwh() or rest.nominal_capacity()
+
+            # Real state of health, from the per-module Battery_Capacity vs Battery_Design_Capacity
+            # the BMS reports. Predbat has never used these for GivTCP: battery_scaling stayed at
+            # the user's manual value and degradation was left for battery_scaling_auto to infer
+            # from history.
             soh = rest.battery_soh()
 
             if soh is not None and self.get_arg("battery_capacity_nominal", default=False):
-                # main's expert switch meant "size the battery from the nameplate, not the reported
-                # capacity". soc_max is already the nameplate here, so the switch now suppresses the
-                # health derate - which produces the same capacity it did before.
-                if abs(reported_capacity - design_capacity) > 1.0:
-                    self.log("Warn: GivTCP: inverter {} reports Battery Capacity {}kWh but nominal indicates {}kWh - using nominal".format(n, reported_capacity, design_capacity))
+                # main's expert switch meant "size the battery from the nameplate". Suppressing the
+                # health derate is what that means once health is a separate factor.
+                self.log("Info: GivTCP: inverter {} battery_capacity_nominal is set - using the full design capacity and ignoring the reported state of health {}".format(n, soh))
                 soh = 1.0
 
-            # No design capacity means no health figure can be derived, so fall back to the reported
-            # capacity and claim no scaling rather than displacing the user's own with a fabricated 1.0.
-            soc_max = design_capacity or reported_capacity
+            soc_max = design_capacity
             if soc_max:
                 self.dashboard_item(self._entity_id("sensor", n, "soc_max"), state=soc_max, attributes=GIVTCP_SENSORS["soc_max"], app="givtcp")
 
             if soh is not None:
-                # GivTCP does not report depth of discharge, so it defaults to 1.0 and can be supplied
-                # per inverter with givtcp_battery_dod. Inverter applies one scaling factor, so the
-                # combined product is what battery_scaling has to point at.
+                # GivTCP reports no depth of discharge anywhere in a full /readData dump, so it
+                # defaults to 1.0 and can be supplied per inverter with givtcp_battery_dod. Inverter
+                # applies one scaling factor, so the combined product is what battery_scaling points at.
                 dod = float(self.get_arg("givtcp_battery_dod", default=1.0, index=n))
                 self.dashboard_item(self._entity_id("sensor", n, "battery_soh"), state=soh, attributes=GIVTCP_SENSORS["battery_soh"], app="givtcp")
                 self.dashboard_item(self._entity_id("sensor", n, "battery_dod"), state=dod, attributes=GIVTCP_SENSORS["battery_dod"], app="givtcp")

@@ -186,9 +186,14 @@ class GivTCPRest:
         """
         Nominal (nameplate) battery capacity in kWh, or None if GivTCP does not report it.
 
-        v2 reports this in raw register units and needs scaling; v3 already reports kWh. The 19.53125
-        divisor is carried over verbatim from Inverter.__init__, where it was back-calculated rather
-        than derived - see the XXX note this replaces.
+        v2 reports this in Ah and needs scaling; v3 already reports kWh. 19.53125 is 1000/51.2, so
+        the divisor converts Ah to kWh at the 51.2V nominal these GE packs use - main carried it as
+        a back-calculated constant with an XXX asking where it came from. The v2 capture confirms
+        it: 186 Ah x 51.2 V / 1000 == 9.5232 kWh == the reported Battery_Capacity_kWh. It assumes a
+        51.2V pack, which is why it is not a general unit conversion.
+
+        This is the design capacity, the same figure Battery_Capacity_kWh reports in kWh - not the
+        battery's current health-adjusted capacity. See battery_soh() for that.
         """
         raw_value = self.inverter.rest_data.get("raw", {}).get("invertor", {}).get("battery_nominal_capacity", None) if self.inverter.rest_data else None
         if not raw_value:
@@ -250,16 +255,43 @@ class GivTCPRest:
 
     def battery_soh(self):
         """
-        State of health as reported capacity / design capacity, or None if either is unavailable.
+        Battery state of health as full capacity / design capacity, or None if not reported.
 
-        Clamped at 1.0 like GE Cloud's equivalent - a battery reporting more than its nameplate is
-        a reporting quirk, not spare capacity Predbat should plan to use.
+        GivTCP reports both per battery module under Battery_Details, in Ah: flat on v2
+        (Battery_Details/<serial>), nested one level under Battery_Stack_N on v3. Summed across
+        modules and clamped at 1.0, matching GE Cloud's equivalent - a pack reporting above its
+        nameplate is a BMS quirk, not spare capacity Predbat should plan to use.
+
+        Deliberately NOT Battery_Capacity_kWh vs raw.invertor.battery_nominal_capacity: those are
+        the same design figure in different units (Ah / 19.53125 == kWh), so their ratio is always
+        1.0 and would silently pin scaling at 100%.
         """
-        reported = self.battery_capacity_kwh()
-        design = self.nominal_capacity()
-        if not reported or not design:
+        rest_data = self.inverter.rest_data
+        if not rest_data:
             return None
-        return min(dp4(reported / design), 1.0)
+
+        full = 0.0
+        design = 0.0
+        stack = [rest_data.get("Battery_Details", {})]
+        while stack:
+            node = stack.pop()
+            if not isinstance(node, dict):
+                continue
+            if "Battery_Capacity" in node and "Battery_Design_Capacity" in node:
+                try:
+                    module_full = float(node["Battery_Capacity"])
+                    module_design = float(node["Battery_Design_Capacity"])
+                except (ValueError, TypeError):
+                    continue
+                if module_full > 0 and module_design > 0:
+                    full += module_full
+                    design += module_design
+                continue
+            stack.extend(node.values())
+
+        if full <= 0 or design <= 0:
+            return None
+        return min(dp4(full / design), 1.0)
 
     def max_inverter_rate(self):
         """Maximum inverter throughput in W, or None if GivTCP does not report one."""
