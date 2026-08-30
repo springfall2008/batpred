@@ -818,7 +818,6 @@ class OhmeApiClient:
         self._close_session = True
         return self._session
 
-
     async def async_login(self) -> bool:
         """Refresh the user auth token from the stored credentials."""
         self._ensure_session()
