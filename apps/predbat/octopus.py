@@ -118,7 +118,7 @@ TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS = 600
 
 
 def token_mint_backoff_seconds(block_count):
-    """Backoff delay in seconds for the block_count'th consecutive CDN block on a token mint.
+    """Backoff delay in seconds after this many consecutive CDN blocks on a token mint.
 
     Doubles per consecutive block from TOKEN_MINT_BACKOFF_BASE_SECONDS, capped at
     TOKEN_MINT_BACKOFF_MAX_SECONDS so a block that lifts is still picked up within the hour.

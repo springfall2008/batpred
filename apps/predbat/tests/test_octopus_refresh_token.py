@@ -26,6 +26,7 @@ async def test_octopus_refresh_token(my_predbat):
     - Test 5: Token refresh handles API failure gracefully
     - Test 6: Token refresh handles timeout gracefully
     - Test 7: Token expiry decoding from JWT
+    - Test 8: Invalid token formats handled gracefully
     - Test 9: A CDN/WAF 403 on the mint backs off instead of re-minting every poll
     - Test 10: No HTTP request is made at all while the mint backoff is active
     - Test 11: Backoff grows per block, is capped, and a success clears it
