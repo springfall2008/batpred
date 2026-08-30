@@ -175,6 +175,7 @@ from tests.test_octopus_refresh_token import test_octopus_refresh_token_wrapper
 from tests.test_octopus_misc import test_octopus_misc_wrapper
 from tests.test_octopus_read_response import test_octopus_read_response_wrapper
 from tests.test_octopus_read_response_retry import test_octopus_read_response_retry_wrapper
+from tests.test_octopus_saving_event_type import test_octopus_saving_event_type
 from tests.test_octopus_waf_block import test_octopus_waf_block_wrapper
 from tests.test_octopus_catalogue_cache import test_octopus_catalogue_cache_wrapper
 from tests.test_octopus_rate_limit import test_octopus_rate_limit_wrapper
@@ -452,6 +453,7 @@ def main():
         ("octopus_misc", test_octopus_misc_wrapper, "Octopus misc API tests (set intelligent schedule, join saving sessions)", False),
         ("octopus_read_response", test_octopus_read_response_wrapper, "Octopus read response tests", False),
         ("octopus_read_response_retry", test_octopus_read_response_retry_wrapper, "Octopus read response retry with exponential backoff tests", False),
+        ("octopus_saving_event_type", test_octopus_saving_event_type, "Octopus savingSessions eventType classification tests (issue #4851)", False),
         ("octopus_waf_block", test_octopus_waf_block_wrapper, "Octopus CloudFront/WAF 403 handling tests", False),
         ("octopus_catalogue_cache", test_octopus_catalogue_cache_wrapper, "Octopus EV catalogue caching tests", False),
         ("octopus_rate_limit", test_octopus_rate_limit_wrapper, "Octopus API rate limit tests", False),
