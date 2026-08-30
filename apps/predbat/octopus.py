@@ -19,7 +19,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
 from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
+from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
 import aiohttp
@@ -95,79 +95,10 @@ def parse_date_time(dt_str):
         return None
 
 
-CDN_BLOCK_MARKERS = ("cloudfront", "request blocked", "the request could not be satisfied")
-HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
 # A generic "403 Forbidden" page is indistinguishable from a WAF page, so after this many
 # consecutive edge blocks fall back to refreshing the token in case the credential really
 # was revoked. Without this the component could never recover from a misclassification.
 EDGE_BLOCK_REFRESH_AFTER = 5
-# The token mint is behind the same CDN as the queries, so an edge block can catch it too.
-# Unlike a query there is no cached result to fall back on: once the JWT expires every
-# authenticated call fails, so without a backoff the component re-mints on every poll and
-# keeps hammering an endpoint that is already refusing it. Back off exponentially instead,
-# capped so a block that clears is still noticed within the hour.
-TOKEN_MINT_BACKOFF_BASE_SECONDS = 300
-TOKEN_MINT_BACKOFF_MAX_SECONDS = 3600
-# Bound the exponent so a long block cannot grow 2 ** block_count without limit; the delay
-# is capped well before this, so the clamp only stops the arithmetic running away.
-TOKEN_MINT_BACKOFF_MAX_DOUBLINGS = 16
-# While suppressed the mint makes no request and so logs nothing, which leaves a reader of a
-# short log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason
-# at most this often.
-TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS = 600
-
-
-def token_mint_backoff_seconds(block_count):
-    """Backoff delay in seconds for the block_count'th consecutive CDN block on a token mint.
-
-    Doubles per consecutive block from TOKEN_MINT_BACKOFF_BASE_SECONDS, capped at
-    TOKEN_MINT_BACKOFF_MAX_SECONDS so a block that lifts is still picked up within the hour.
-
-    Args:
-        block_count: Number of consecutive blocks so far, 1 for the first.
-
-    Returns:
-        int: Delay in seconds.
-    """
-    exponent = min(max(block_count - 1, 0), TOKEN_MINT_BACKOFF_MAX_DOUBLINGS)
-    return min(TOKEN_MINT_BACKOFF_BASE_SECONDS * (2**exponent), TOKEN_MINT_BACKOFF_MAX_SECONDS)
-
-
-def is_edge_block_body(text):
-    """Return True if a 403 body is positively identifiable as a CDN/WAF error page.
-
-    Kraken reports authentication problems as a JSON GraphQL error body (normally with
-    HTTP 200) or as a 401. A 403 carrying an HTML error page - e.g. CloudFront's
-    "Request blocked" - is edge rate limiting, not a credential problem, so the cached
-    token must be kept rather than discarded and immediately re-minted.
-
-    Two conditions must both hold: the body must not parse as JSON (anything the API
-    itself produces is JSON), and it must look like an HTML document or name a known CDN.
-    Matching on wording alone would misclassify a genuine JSON error that happens to say
-    something like "access denied", which would keep an invalid token forever - the same
-    permanent lockout this check exists to prevent, arrived at from the other direction.
-
-    Detection is deliberately conservative: a 403 we cannot identify as a CDN page keeps
-    the existing "refresh the token and retry" behaviour, which recovers genuinely revoked
-    tokens without needing a restart.
-
-    Args:
-        text: The raw response body.
-
-    Returns:
-        bool: True if the body carries a known CDN/WAF block signature.
-    """
-    if not isinstance(text, str) or not text:
-        return False
-    try:
-        json.loads(text)
-    except (ValueError, TypeError):
-        pass
-    else:
-        # A parseable JSON body came from the API, not from an edge appliance
-        return False
-    stripped = text.lstrip().lower()
-    return stripped.startswith(HTML_DOCUMENT_PREFIXES) or any(marker in stripped for marker in CDN_BLOCK_MARKERS)
 
 
 api_token_query = """mutation {{

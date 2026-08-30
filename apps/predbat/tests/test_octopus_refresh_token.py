@@ -7,7 +7,8 @@ import base64
 import json
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
-from octopus import OctopusAPI, TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
+from octopus import OctopusAPI
+from utils import TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 
 
 def test_octopus_refresh_token_wrapper(my_predbat):
