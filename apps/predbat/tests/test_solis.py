@@ -54,6 +54,9 @@ class MockSolisAPI(SolisAPI):
         self.base_url = "https://api.soliscloud.com"
         self.automatic = False
         self.session = None
+        # Entity callbacks queue here for the component loop to drain; the real
+        # __init__ (skipped above) sets this.
+        self.queued_events = []
         self.nominal_voltage = 48.0
         self.nominal_voltage_last_known = {}
         self.nominal_pack_voltage = None
@@ -1403,6 +1406,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_encode_decode_roundtrip_variant1())
         failed |= asyncio.run(test_encode_decode_roundtrip_variant2())
         failed |= asyncio.run(test_publish_entities())
+        failed |= asyncio.run(test_event_queued_not_executed_on_calling_loop())
+        failed |= asyncio.run(test_queued_event_failure_does_not_stop_the_queue())
         failed |= asyncio.run(test_select_event_storage_mode())
         failed |= asyncio.run(test_select_event_charge_time())
         failed |= asyncio.run(test_select_event_discharge_time())
@@ -3527,7 +3532,7 @@ async def test_select_event_storage_mode():
     entity_id = f"select.predbat_solis_{inverter_sn}_storage_mode"
     value = "Self-Use"  # Text value from SOLIS_STORAGE_MODES (note: with hyphen, not "Self Use")
 
-    await api.select_event(entity_id, value)
+    await api.select_event_handler(entity_id, value)
 
     # Verify set_storage_mode_if_needed was called
     assert len(api.set_storage_mode_calls) == 1, "set_storage_mode_if_needed should be called once"
@@ -3559,7 +3564,7 @@ async def test_select_event_charge_time():
     entity_id = f"select.predbat_solis_{inverter_sn}_charge_slot1_start_time"
     value = "02:00:00"  # HH:MM:SS format from select
 
-    await api.select_event(entity_id, value)
+    await api.select_event_handler(entity_id, value)
 
     # Verify time was updated (should strip seconds)
     slot_data = api.charge_discharge_time_windows[inverter_sn][1]
@@ -3569,7 +3574,7 @@ async def test_select_event_charge_time():
     entity_id = f"select.predbat_solis_{inverter_sn}_charge_slot1_end_time"
     value = "05:30:00"
 
-    await api.select_event(entity_id, value)
+    await api.select_event_handler(entity_id, value)
 
     # Verify end time was updated
     slot_data = api.charge_discharge_time_windows[inverter_sn][1]
@@ -3597,7 +3602,7 @@ async def test_select_event_discharge_time():
     entity_id = f"select.predbat_solis_{inverter_sn}_discharge_slot2_start_time"
     value = "16:00:00"
 
-    await api.select_event(entity_id, value)
+    await api.select_event_handler(entity_id, value)
 
     # Verify time was updated
     slot_data = api.charge_discharge_time_windows[inverter_sn][2]
@@ -3607,7 +3612,7 @@ async def test_select_event_discharge_time():
     entity_id = f"select.predbat_solis_{inverter_sn}_discharge_slot2_end_time"
     value = "19:30:00"
 
-    await api.select_event(entity_id, value)
+    await api.select_event_handler(entity_id, value)
 
     # Verify end time was updated
     slot_data = api.charge_discharge_time_windows[inverter_sn][2]
@@ -3628,7 +3633,7 @@ async def test_select_event_unknown_inverter():
     entity_id = "select.predbat_solis_888888_charge_slot1_start_time"  # 888888 is unknown
     value = "02:00:00"
 
-    await api.select_event(entity_id, value)
+    await api.select_event_handler(entity_id, value)
 
     # Verify warning was logged
     warn_log = any("Unknown inverter" in msg and "888888" in msg for msg in api.log_messages)
@@ -3655,23 +3660,23 @@ async def test_switch_event_charge_enable():
 
     # Test turn_on service
     entity_id = f"switch.predbat_solis_{inverter_sn}_charge_slot1_enable"
-    await api.switch_event(entity_id, "turn_on")
+    await api.switch_event_handler(entity_id, "turn_on")
 
     # Verify enable was updated in cache
     assert api.charge_discharge_time_windows[inverter_sn][1]["charge_enable"] == 1, "Charge enable should be 1 after turn_on"
 
     # Test turn_off service
-    await api.switch_event(entity_id, "turn_off")
+    await api.switch_event_handler(entity_id, "turn_off")
     assert api.charge_discharge_time_windows[inverter_sn][1]["charge_enable"] == 0, "Charge enable should be 0 after turn_off"
 
     # Test toggle service - update cached_values to reflect current state
     api.cached_values[inverter_sn][enable_cid] = "0"
-    await api.switch_event(entity_id, "toggle")
+    await api.switch_event_handler(entity_id, "toggle")
     assert api.charge_discharge_time_windows[inverter_sn][1]["charge_enable"] == 1, "Charge enable should be 1 after toggle from 0"
 
     # Toggle again
     api.cached_values[inverter_sn][enable_cid] = "1"
-    await api.switch_event(entity_id, "toggle")
+    await api.switch_event_handler(entity_id, "toggle")
     assert api.charge_discharge_time_windows[inverter_sn][1]["charge_enable"] == 0, "Charge enable should be 0 after toggle from 1"
 
     print("PASSED: Charge slot enable switch handled correctly")
@@ -3695,13 +3700,13 @@ async def test_switch_event_discharge_enable():
 
     # Test turn_off service
     entity_id = f"switch.predbat_solis_{inverter_sn}_discharge_slot2_enable"
-    await api.switch_event(entity_id, "turn_off")
+    await api.switch_event_handler(entity_id, "turn_off")
 
     # Verify enable was updated in cache
     assert api.charge_discharge_time_windows[inverter_sn][2]["discharge_enable"] == 0, "Discharge enable should be 0 after turn_off"
 
     # Test turn_on service
-    await api.switch_event(entity_id, "turn_on")
+    await api.switch_event_handler(entity_id, "turn_on")
     assert api.charge_discharge_time_windows[inverter_sn][2]["discharge_enable"] == 1, "Discharge enable should be 1 after turn_on"
 
     print("PASSED: Discharge slot enable switch handled correctly")
@@ -3732,7 +3737,7 @@ async def test_switch_event_battery_reserve():
 
     # Test turn_on service (set bit 4)
     entity_id = f"switch.predbat_solis_{inverter_sn}_battery_reserve"
-    await api.switch_event(entity_id, "turn_on")
+    await api.switch_event_handler(entity_id, "turn_on")
 
     # Verify read_and_write_cid was called with correct value
     assert len(api.read_and_write_cid_calls) == 1, "read_and_write_cid should be called once"
@@ -3743,7 +3748,7 @@ async def test_switch_event_battery_reserve():
 
     # Test turn_off service (clear bit 4) - after turn_on, cached value is 49
     api.read_and_write_cid_calls = []
-    await api.switch_event(entity_id, "turn_off")
+    await api.switch_event_handler(entity_id, "turn_off")
 
     call = api.read_and_write_cid_calls[0]
     expected_value = 49 & ~(1 << SOLIS_BIT_BACKUP_MODE)  # Clear bit 4: 49 & ~16 = 33
@@ -3751,7 +3756,7 @@ async def test_switch_event_battery_reserve():
 
     # Test toggle service - after turn_off, cached value is 33
     api.read_and_write_cid_calls = []
-    await api.switch_event(entity_id, "toggle")
+    await api.switch_event_handler(entity_id, "toggle")
 
     call = api.read_and_write_cid_calls[0]
     expected_value = 33 ^ (1 << SOLIS_BIT_BACKUP_MODE)  # Toggle bit 4: 33 ^ 16 = 49
@@ -3784,7 +3789,7 @@ async def test_switch_event_allow_grid_charging():
 
     # Test turn_on service (set bit 5)
     entity_id = f"switch.predbat_solis_{inverter_sn}_allow_grid_charging"
-    await api.switch_event(entity_id, "turn_on")
+    await api.switch_event_handler(entity_id, "turn_on")
 
     call = api.read_and_write_cid_calls[0]
     expected_value = 3 | (1 << SOLIS_BIT_GRID_CHARGING)  # Set bit 5: 3 | 32 = 35
@@ -3817,7 +3822,7 @@ async def test_switch_event_time_of_use():
 
     # Test turn_on service (set bit 1)
     entity_id = f"switch.predbat_solis_{inverter_sn}_time_of_use"
-    await api.switch_event(entity_id, "turn_on")
+    await api.switch_event_handler(entity_id, "turn_on")
 
     call = api.read_and_write_cid_calls[0]
     expected_value = 33 | (1 << SOLIS_BIT_TOU_MODE)  # Set bit 1: 33 | 2 = 35
@@ -3850,21 +3855,21 @@ async def test_switch_event_allow_export():
 
     # Test turn_on service (should set to "0" = allow export)
     entity_id = f"switch.predbat_solis_{inverter_sn}_allow_export"
-    await api.switch_event(entity_id, "turn_on")
+    await api.switch_event_handler(entity_id, "turn_on")
 
     call = api.read_and_write_cid_calls[0]
     assert call["value"] == SOLIS_ALLOW_EXPORT_ON, f"Expected {SOLIS_ALLOW_EXPORT_ON}, got {call['value']}"
 
     # Test turn_off service (should set to "1" = block export)
     api.read_and_write_cid_calls = []
-    await api.switch_event(entity_id, "turn_off")
+    await api.switch_event_handler(entity_id, "turn_off")
 
     call = api.read_and_write_cid_calls[0]
     assert call["value"] == SOLIS_ALLOW_EXPORT_OFF, f"Expected {SOLIS_ALLOW_EXPORT_OFF}, got {call['value']}"
 
     # Test toggle service
     api.read_and_write_cid_calls = []
-    await api.switch_event(entity_id, "toggle")
+    await api.switch_event_handler(entity_id, "toggle")
 
     call = api.read_and_write_cid_calls[0]
     assert call["value"] == SOLIS_ALLOW_EXPORT_ON, f"Expected {SOLIS_ALLOW_EXPORT_ON}, got {call['value']}"
@@ -3890,7 +3895,7 @@ async def test_switch_event_unknown_service():
 
     # Call switch_event with unknown service
     entity_id = f"switch.predbat_solis_{inverter_sn}_charge_slot1_enable"
-    await api.switch_event(entity_id, "unknown_service")
+    await api.switch_event_handler(entity_id, "unknown_service")
 
     # Verify warning was logged
     warn_log = any("Unknown service" in msg and "unknown_service" in msg for msg in api.log_messages)
@@ -3916,7 +3921,7 @@ async def test_number_event_charge_soc():
 
     # Test updating charge SOC
     entity_id = f"number.predbat_solis_{inverter_sn}_charge_slot1_soc"
-    await api.number_event(entity_id, 95)
+    await api.number_event_handler(entity_id, 95)
 
     # Verify SOC was updated
     assert api.charge_discharge_time_windows[inverter_sn][1]["charge_soc"] == 95.0, f"Expected 95.0, got {api.charge_discharge_time_windows[inverter_sn][1]['charge_soc']}"
@@ -3939,7 +3944,7 @@ async def test_number_event_charge_power():
     # Test updating charge power (watts -> amps conversion)
     # nominal_voltage = 48.0V, so 2420W = 50A
     entity_id = f"number.predbat_solis_{inverter_sn}_charge_slot2_power"
-    await api.number_event(entity_id, 2420)
+    await api.number_event_handler(entity_id, 2420)
 
     # Verify current was updated (2420W / 48.0V = 50A)
     expected_amps = int(2420 / 48.0)  # = 50A
@@ -3962,7 +3967,7 @@ async def test_number_event_discharge_soc():
 
     # Test updating discharge SOC
     entity_id = f"number.predbat_solis_{inverter_sn}_discharge_slot3_soc"
-    await api.number_event(entity_id, 15)
+    await api.number_event_handler(entity_id, 15)
 
     # Verify SOC was updated
     assert api.charge_discharge_time_windows[inverter_sn][3]["discharge_soc"] == 15.0, f"Expected 15.0, got {api.charge_discharge_time_windows[inverter_sn][3]['discharge_soc']}"
@@ -3985,7 +3990,7 @@ async def test_number_event_discharge_power():
     # Test updating discharge power (watts -> amps conversion)
     # nominal_voltage = 48.0V, so 1452W = 30A
     entity_id = f"number.predbat_solis_{inverter_sn}_discharge_slot4_power"
-    await api.number_event(entity_id, 1452)
+    await api.number_event_handler(entity_id, 1452)
 
     # Verify current was updated (1452W / 48.0V = 30A)
     expected_amps = float(round(1452 / 48.0, 1))  # = 30.2A
@@ -4018,7 +4023,7 @@ async def test_number_event_battery_soc_limits():
 
     # Test reserve_soc
     entity_id = f"number.predbat_solis_{inverter_sn}_reserve_soc"
-    await api.number_event(entity_id, 10)
+    await api.number_event_handler(entity_id, 10)
 
     assert len(api.read_and_write_cid_calls) == 1, "Should call read_and_write_cid once"
     call = api.read_and_write_cid_calls[0]
@@ -4028,7 +4033,7 @@ async def test_number_event_battery_soc_limits():
     # Test over_discharge_soc
     api.read_and_write_cid_calls = []
     entity_id = f"number.predbat_solis_{inverter_sn}_over_discharge_soc"
-    await api.number_event(entity_id, 5)
+    await api.number_event_handler(entity_id, 5)
 
     call = api.read_and_write_cid_calls[0]
     assert call["cid"] == SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, f"Expected CID {SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC}, got {call['cid']}"
@@ -4062,7 +4067,7 @@ async def test_number_event_max_power():
     # Test max_charge_power (watts -> amps conversion)
     # nominal_voltage = 48.0V, so 4840W = 100A
     entity_id = f"number.predbat_solis_{inverter_sn}_max_charge_power"
-    await api.number_event(entity_id, 4840)
+    await api.number_event_handler(entity_id, 4840)
 
     assert len(api.read_and_write_cid_calls) == 1, "Should call read_and_write_cid once"
     call = api.read_and_write_cid_calls[0]
@@ -4099,7 +4104,7 @@ async def test_number_event_power_controls():
 
     # Test power_limit (no unit conversion — value sent as-is)
     entity_id = f"number.predbat_solis_{inverter_sn}_power_limit"
-    await api.number_event(entity_id, 3000)
+    await api.number_event_handler(entity_id, 3000)
 
     assert len(api.read_and_write_cid_calls) == 1, "Should call read_and_write_cid once"
     call = api.read_and_write_cid_calls[0]
@@ -4109,7 +4114,7 @@ async def test_number_event_power_controls():
     # Test max_export_power: HA sends watts, inverter expects 100W units (÷100)
     api.read_and_write_cid_calls = []
     entity_id = f"number.predbat_solis_{inverter_sn}_max_export_power"
-    await api.number_event(entity_id, 5000)  # 5000 W → 50 (100W units)
+    await api.number_event_handler(entity_id, 5000)  # 5000 W → 50 (100W units)
 
     assert len(api.read_and_write_cid_calls) == 1, "Should call read_and_write_cid once for max_export_power"
     call = api.read_and_write_cid_calls[0]
@@ -4118,14 +4123,14 @@ async def test_number_event_power_controls():
 
     # Test with a value that truncates (e.g. 550W → 5 in 100W units, not 5.5)
     api.read_and_write_cid_calls = []
-    await api.number_event(entity_id, 550)
+    await api.number_event_handler(entity_id, 550)
     call = api.read_and_write_cid_calls[0]
     assert call["value"] == "5", f"Expected '5' (550÷100 truncated), got {call['value']}"
 
     # Test with an invalid value — str(int(value)) at the top of number_event raises
     # ValueError before reaching the max_export_power branch; caught by outer except handler.
     api.read_and_write_cid_calls = []
-    await api.number_event(entity_id, "not_a_number")
+    await api.number_event_handler(entity_id, "not_a_number")
     assert len(api.read_and_write_cid_calls) == 0, "Should not write CID for invalid max_export_power value"
     assert any("number_event failed" in msg for msg in api.log_messages), "Should log error for invalid value"
 
@@ -4142,7 +4147,7 @@ async def test_number_event_unknown_inverter():
 
     # Call number_event with unknown inverter
     entity_id = "number.predbat_solis_888888_charge_slot1_soc"
-    await api.number_event(entity_id, 95)
+    await api.number_event_handler(entity_id, 95)
 
     # Verify warning was logged
     warn_log = any("Unknown inverter" in msg and "888888" in msg for msg in api.log_messages)
@@ -5455,3 +5460,74 @@ async def test_get_solis_mode_enum_compute_roundtrip():
         print(f"PASSED: Roundtrip with backup {expected_str} -> {reg_value} -> {decoded_str}")
 
     return False
+
+
+async def test_event_queued_not_executed_on_calling_loop():
+    """Entity callbacks must not perform API work on the caller's event loop.
+
+    They are invoked from the HA component's loop, while the ClientSession belongs
+    to the Solis component's loop. Doing the work inline issues requests from a
+    foreign loop; aiohttp raises, the handler swallows it, and the user is told a
+    write succeeded that never reached the inverter. The callback must only queue.
+    """
+    api = MockSolisAPI()
+
+    executed = []
+
+    async def spy(*args):
+        executed.append(args)
+
+    api.select_event_handler = spy
+    api.number_event_handler = spy
+    api.switch_event_handler = spy
+
+    await api.select_event("select.predbat_solis_x_storage_mode", "Self Use")
+    await api.number_event("number.predbat_solis_x_battery_reserve", 20)
+    await api.switch_event("switch.predbat_solis_x_charge_enable", "turn_on")
+
+    if executed:
+        print("ERROR: callback executed API work on the calling loop: {}".format(executed))
+        return 1
+    if len(api.queued_events) != 3:
+        print("ERROR: expected 3 queued events, got {}".format(len(api.queued_events)))
+        return 1
+
+    # Draining — which run() does on the Solis loop — is what performs the work.
+    while api.queued_events:
+        handler, *args = api.queued_events.pop(0)
+        await handler(*args)
+
+    if len(executed) != 3:
+        print("ERROR: expected 3 handlers run on drain, got {}".format(len(executed)))
+        return 1
+    return 0
+
+
+async def test_queued_event_failure_does_not_stop_the_queue():
+    """One failing event must not strand the rest of the queue.
+
+    The queue is in memory only, so anything dropped here is lost outright.
+    """
+    api = MockSolisAPI()
+    ran = []
+
+    async def boom(*args):
+        raise RuntimeError("inverter offline")
+
+    async def ok(*args):
+        ran.append(args)
+
+    api.queued_events.append((boom, "a"))
+    api.queued_events.append((ok, "b"))
+
+    while api.queued_events:
+        handler, *args = api.queued_events.pop(0)
+        try:
+            await handler(*args)
+        except Exception:
+            pass
+
+    if len(ran) != 1:
+        print("ERROR: a failing event stranded the rest of the queue: {}".format(ran))
+        return 1
+    return 0

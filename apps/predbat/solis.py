@@ -381,6 +381,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.base_url = SOLIS_OAUTH_BASE_URL if self.auth_method == "oauth" else base_url
         self.automatic = automatic
         self.session = None
+        self.queued_events = []
         # Fallback used only when an inverter has never reported a live batteryVoltage - matches
         # the previous hard-coded assumption (issue #4493). get_nominal_voltage() below is the
         # real source of truth once live data is available.
@@ -2596,7 +2597,24 @@ class SolisAPI(ComponentBase, OAuthMixin):
         else:
             return None
 
+    # Event stubs: queue for the Solis component loop.
+    #
+    # These are invoked from the HA component's loop (ha.py -> trigger_callback),
+    # not this component's. Doing the API work here would issue requests from a
+    # foreign loop against a ClientSession bound to ours — aiohttp raises, the
+    # handler swallows it, and the user is told a write succeeded that never
+    # reached the inverter. Queue instead, and let run() do the work on the loop
+    # that owns the session. Same approach as Ohme and Octopus.
     async def select_event(self, entity_id, value):
+        self.queued_events.append((self.select_event_handler, entity_id, value))
+
+    async def number_event(self, entity_id, value):
+        self.queued_events.append((self.number_event_handler, entity_id, value))
+
+    async def switch_event(self, entity_id, service):
+        self.queued_events.append((self.switch_event_handler, entity_id, service))
+
+    async def select_event_handler(self, entity_id, value):
         """Handle select entity changes"""
         try:
             # Parse entity_id: select.{prefix}_solis_{sn}_{field}
@@ -2700,7 +2718,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         except Exception as e:
             self.log(f"Error: Solis API select_event failed for {entity_id}: {e}")
 
-    async def number_event(self, entity_id, value):
+    async def number_event_handler(self, entity_id, value):
         """Handle number entity changes"""
         try:
             # Parse entity_id: number.{prefix}_solis_{sn}_{field}
@@ -2909,7 +2927,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         except Exception as e:
             self.log(f"Error: Solis API number_event failed for {entity_id}: {e}")
 
-    async def switch_event(self, entity_id, service):
+    async def switch_event_handler(self, entity_id, service):
         """Handle switch entity changes"""
         try:
             # Parse entity_id: switch.{prefix}_solis_{sn}_{field}
@@ -3255,6 +3273,14 @@ class SolisAPI(ComponentBase, OAuthMixin):
     async def run(self, seconds, first):
         """Main run cycle called every 5 seconds"""
         poll_success = True
+
+        # Process events queued by the entity callbacks, on this loop.
+        while self.queued_events:
+            handler, *args = self.queued_events.pop(0)
+            try:
+                await handler(*args)
+            except Exception as e:
+                self.log("Warn: Solis API: Event handler error: {}".format(e))
 
         # One-time startup configuration
         if first:
