@@ -52,7 +52,7 @@ class KrakenAuthMixin:
         now = datetime.now(timezone.utc)
         self.token_mint_blocked_until = now + timedelta(seconds=delay)
         self.token_mint_backoff_logged_at = now
-        self.log(f"Warn: Kraken token mint edge/WAF blocked (block {self.token_mint_block_count}) - this is rate limiting, not a bad credential. Backing off for {delay}s")
+        self.log(f"Warn: Kraken: Token mint edge/WAF blocked (block {self.token_mint_block_count}) - this is rate limiting, not a bad credential. Backing off for {delay}s")
 
     def log_token_mint_backoff(self, now):
         """Repeat the backoff reason occasionally so it stays visible in a short log window"""
