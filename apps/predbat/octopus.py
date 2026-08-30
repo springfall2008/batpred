@@ -1650,7 +1650,8 @@ class OctopusAPI(ComponentBase):
                         utc_offset = self.now_utc_exact.utcoffset()
                         utc_offset_minutes = int(utc_offset.total_seconds() // 60) if utc_offset else 0
                         windows = sorted((*_tou_window_to_local(start_minute, end_minute, utc_offset_minutes), False) for start_minute, end_minute in tou_windows)
-                    self.log("Info: OctopusAPI: Using off-peak windows {} (UTC minutes from midnight) from measurement TOU labels, anchored to {}".format(tou_windows, "UTC" if anchor_utc else "local time"))
+                    applied_windows = [(start_minute, end_minute) for start_minute, end_minute, _ in windows]
+                    self.log("Info: OctopusAPI: Using off-peak windows {} ({} minutes from midnight) from measurement TOU labels, anchored to {}".format(applied_windows, "UTC" if anchor_utc else "local", "UTC" if anchor_utc else "local time"))
             if not windows:
                 window = self._fallback_night_window(tariff_code)
                 start_minute = window["start"][0] * 60 + window["start"][1]
