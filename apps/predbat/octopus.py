@@ -512,6 +512,26 @@ def _merge_minute_windows(minutes):
     return sorted(tuple(window) for window in windows)
 
 
+def _tou_window_to_local(start_minute, end_minute, utc_offset_minutes):
+    """
+    Shift a TOU window given in UTC minutes into wall-clock minutes from local midnight.
+
+    The measurements API labels UTC instants, so a meter whose off-peak period is fixed to local
+    time reports it shifted by whatever offset was in force when it was sampled. Both ends move
+    together so the window keeps its length, and the pair is then normalised as a unit so the start
+    falls within the day while a window crossing midnight keeps an end beyond 1440.
+    """
+    start_minute += utc_offset_minutes
+    end_minute += utc_offset_minutes
+    while start_minute < 0:
+        start_minute += 24 * 60
+        end_minute += 24 * 60
+    while start_minute >= 24 * 60:
+        start_minute -= 24 * 60
+        end_minute -= 24 * 60
+    return start_minute, end_minute
+
+
 def _tou_windows_from_measurements(response_data):
     """
     Derive the meter's off-peak windows from measurement TOU bucket labels.
@@ -1567,9 +1587,13 @@ class OctopusAPI(ComponentBase):
         self.tou_windows = windows
         return windows
 
-    def _fallback_night_window(self, tariff_code):
+    def _fallback_night_window(self, tariff_code, log_unknown=True):
         """
         Pick the hard-wired off-peak window for a tariff code, used when nothing better is known.
+
+        log_unknown is cleared by callers that only want the window's clock anchor rather than its
+        times, so reading the anchor for a tariff we do not recognise does not warn about falling
+        back to a window that is not actually being used.
         """
         if self.is_intelligent_go_tariff(tariff_code):
             return OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
@@ -1577,7 +1601,8 @@ class OctopusAPI(ComponentBase):
             return OCTOPUS_NIGHT_RATE_WINDOWS["go"]
         if tariff_code and tariff_code.startswith("E-2R-"):
             return OCTOPUS_NIGHT_RATE_WINDOWS["eco7"]
-        self.log("Warn: OctopusAPI: Unknown tariff code {}, defaulting to GO night rate window".format(tariff_code))
+        if log_unknown:
+            self.log("Warn: OctopusAPI: Unknown tariff code {}, defaulting to GO night rate window".format(tariff_code))
         return OCTOPUS_NIGHT_RATE_WINDOWS["go"]
 
     async def async_get_day_night_rates(self, url, product_code="", tariff_code=""):
@@ -1603,11 +1628,29 @@ class OctopusAPI(ComponentBase):
             windows = _windows_from_night_times(self.get_arg("octopus_night_times", [], indirect=False), log=self.log)
             if windows:
                 self.log("Info: OctopusAPI: Using off-peak windows {} from octopus_night_times".format(windows))
+            elif self.is_intelligent_go_tariff(tariff_code):
+                # On Intelligent GO the off-peak buckets cover the guaranteed overnight window plus
+                # whichever ad-hoc dispatch slots Octopus granted on the nights sampled. Dispatches are
+                # decided night by night, so a slot that merely recurred across the sample is not a
+                # schedule - baking it in invents a cheap half-hour the customer has not been given, and
+                # Predbat then plans a battery charge into it while the meter bills the full day rate.
+                # The guaranteed window taken below is the only fixed part of an IOG day.
+                self.log("Info: OctopusAPI: Tariff {} is Intelligent GO, its off-peak periods are dispatch-driven so the TOU labels are not read as a schedule".format(tariff_code))
             else:
                 tou_windows = await self.async_get_tou_night_windows()
                 if tou_windows:
-                    windows = [(start_minute, end_minute, True) for start_minute, end_minute in tou_windows]
-                    self.log("Info: OctopusAPI: Using off-peak windows {} (UTC minutes from midnight) from measurement TOU labels".format(tou_windows))
+                    # The labels are UTC instants, but only some meters are on a UTC-fixed schedule.
+                    # Anchor them to whichever clock this tariff's off-peak period is really fixed to,
+                    # converting the offsets to wall-clock minutes for a local one - holding a
+                    # summer-sampled window at its UTC offset would run it an hour early through winter.
+                    anchor_utc = self._fallback_night_window(tariff_code, log_unknown=False).get("utc", False)
+                    if anchor_utc:
+                        windows = sorted((start_minute, end_minute, True) for start_minute, end_minute in tou_windows)
+                    else:
+                        utc_offset = self.now_utc_exact.utcoffset()
+                        utc_offset_minutes = int(utc_offset.total_seconds() // 60) if utc_offset else 0
+                        windows = sorted((*_tou_window_to_local(start_minute, end_minute, utc_offset_minutes), False) for start_minute, end_minute in tou_windows)
+                    self.log("Info: OctopusAPI: Using off-peak windows {} (UTC minutes from midnight) from measurement TOU labels, anchored to {}".format(tou_windows, "UTC" if anchor_utc else "local time"))
             if not windows:
                 window = self._fallback_night_window(tariff_code)
                 start_minute = window["start"][0] * 60 + window["start"][1]
