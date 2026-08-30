@@ -70,6 +70,16 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     my_predbat.rate_max_base = 0
     my_predbat.rate_export_max_forward = {}
     my_predbat.read_debug_yaml(debug_file)
+    # A dump taken with switch.predbat_debug_enable off ships the 5-minute step arrays as {} -
+    # update_pred() frees them at the end of every cycle unless debug is on, and only
+    # calculate_plan()'s recompute branch refills them. Replaying one raised KeyError on minute 0
+    # from run_prediction(). Predbat now rebuilds them when the dump is created, but every dump
+    # already attached to a bug report predates that, so rebuild here too rather than crash. Only
+    # the load model is rebuilt - not rates or Octopus slots - so the replay stays faithful to what
+    # the reporter saw, unlike --redo.
+    if not redo and not my_predbat.pv_forecast_minute_step:
+        print("Step data missing from the debug file (taken with debug disabled) - rebuilding the load model")
+        reset_load_model = True
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
     my_predbat.load_user_config()

@@ -304,6 +304,7 @@ from tests.test_annual_export_sweep import (
 )
 from tests.test_debug_history import test_debug_history
 from tests.test_debug_history_capture import test_debug_history_capture, test_debug_history_capture_slot_alignment
+from tests.test_debug_yaml_step_data import test_debug_yaml_step_data
 
 # Mock the components and plugin system
 
@@ -724,6 +725,7 @@ def main():
         ("debug_history", test_debug_history, "Rolling debug-history snapshot buffer tests", False),
         ("debug_history_capture", test_debug_history_capture, "Debug history capture throttle/force-capture tests", False),
         ("debug_history_capture_alignment", test_debug_history_capture_slot_alignment, "Debug history capture timestamp is floored to the plan slot grid", False),
+        ("debug_yaml_step_data", test_debug_yaml_step_data, "Debug yaml carries the 5-minute step arrays even when update_pred freed them", False),
     ]
 
     # Parse command line arguments

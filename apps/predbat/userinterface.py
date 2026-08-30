@@ -751,6 +751,67 @@ class UserInterface:
                     current["value"] = item.get("value", None)
         self.log("Restored debug settings - minutes now {}".format(self.minutes_now))
 
+    def rebuild_debug_step_data(self):
+        """
+        Rebuild the 5-minute step arrays for the debug yaml if update_pred() has freed them
+
+        update_pred() drops load_minutes_step, load_minutes_step10, pv_forecast_minute_step and
+        pv_forecast_minute10_step at the end of every cycle to free memory, unless debug_enable is
+        on. They are only ever repopulated by calculate_plan()'s recompute branch, so a debug yaml
+        taken with the switch off ships them as {} - and a dump without them cannot be replayed at
+        all, since run_prediction() indexes pv_forecast_minute_step directly and raises KeyError on
+        minute 0. That is exactly the dump most bug reports carry, because the reporter downloads it
+        from the web interface without turning the switch on first.
+
+        Rebuilt from the same inputs calculate_plan() uses, so the dump is self-contained however it
+        was taken. Cheap enough to do unconditionally - it is a handful of step_data_history() calls
+        on an operation a user triggers by hand - and skipped when the arrays are already populated.
+
+        A failure here must never cost the user their dump, which is the whole point of the exercise
+        and is still useful without the step data, so anything going wrong is logged and swallowed.
+        The inputs come from fetch_config_options(), so they are all present on a running install but
+        not necessarily on one that has not completed a cycle yet.
+        """
+        if self.pv_forecast_minute_step and self.load_minutes_step:
+            return
+
+        try:
+            self.log("Rebuilding step data for the debug yaml as it was freed after the last plan")
+            self._rebuild_debug_step_data()
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            self.log("Warn: Could not rebuild step data for the debug yaml ({}) - the dump will not replay without --redo".format(error))
+
+    def _rebuild_debug_step_data(self):
+        """Rebuild the step arrays, mirroring calculate_plan()'s own construction of them."""
+        self.load_minutes_step = self.step_data_history(
+            self.load_minutes,
+            self.minutes_now,
+            forward=False,
+            scale_today=self.load_inday_adjustment,
+            scale_fixed=self.load_scaling,
+            type_load=True,
+            load_forecast=self.load_forecast,
+            load_scaling_dynamic=self.load_scaling_dynamic,
+            cloud_factor=self.metric_load_divergence,
+            load_adjust=self.manual_load_adjust,
+            load_baseline=self.dynamic_load_baseline,
+        )
+        self.load_minutes_step10 = self.step_data_history(
+            self.load_minutes,
+            self.minutes_now,
+            forward=False,
+            scale_today=self.load_inday_adjustment,
+            scale_fixed=self.load_scaling10,
+            type_load=True,
+            load_forecast=self.load_forecast,
+            load_scaling_dynamic=self.load_scaling_dynamic,
+            cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
+            load_adjust=self.manual_load_adjust,
+            load_baseline=self.dynamic_load_baseline,
+        )
+        self.pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
+        self.pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None, flip=True)
+
     def create_debug_yaml(self, write_file=True):
         """
         Write out a debug info yaml
@@ -762,6 +823,7 @@ class UserInterface:
         filename_p = self.config_root_p + basename
 
         os.makedirs(os.path.dirname(filename), exist_ok=True)
+        self.rebuild_debug_step_data()
         debug = {}
 
         # Store all predbat member variables into debug
