@@ -169,6 +169,22 @@ def measure_state_value(value, max_bytes):
     return True, safe, size
 
 
+def split_predbat_log(logdata):
+    """Split raw log text into lines, the one way both get_log paths must agree on.
+
+    Shared rather than repeated because the scan and the line_number read-back index into the same
+    numbering: if they split the log differently, a marker pointing at line N reads back a
+    different line. They briefly did, which is what this function exists to make impossible.
+
+    splitlines() rather than split("\n") so the trailing newline every log ends with does not
+    leave a phantom final entry - total_lines counted a line that was not there, and the last line
+    number read back as "". It also splits on \v, \f, \x85 and \u2028, which a logged third-party
+    API payload could in principle contain; measured against a real 57,400-line predbat.log the
+    difference was exactly the one trailing empty, so that risk is theoretical while this is not.
+    """
+    return logdata.splitlines()
+
+
 def truncate_log_line(line, lineno):
     """Return (text, characters_dropped) for one log line, cut to the per-line budget.
 
@@ -196,7 +212,7 @@ def read_predbat_log_lines(line_number, context):
 
     Runs on an executor thread rather than the event loop - see the caller.
     """
-    loglines = read_predbat_log().splitlines()
+    loglines = split_predbat_log(read_predbat_log())
     total_lines = len(loglines)
     if line_number < 0 or line_number >= total_lines:
         raise MCPArgumentError("'line_number' {} is outside the log, which has {} lines".format(line_number, total_lines))
@@ -208,7 +224,8 @@ def read_predbat_log_lines(line_number, context):
 
 def scan_predbat_log(filter_type, search_term, pattern, start_time, end_time, max_lines):
     """
-    Read predbat.log and return (lines, total_lines, matched_lines, truncated) for one get_log call.
+    Read predbat.log and return (lines, total_lines, matched_lines, truncated, truncated_reason)
+    for one get_log call.
 
     Walks newest-first so max_lines keeps the most recent entries, as the web log view does, then
     returns them oldest-first because that is how a log reads. Lines with no parseable stamp
@@ -217,8 +234,7 @@ def scan_predbat_log(filter_type, search_term, pattern, start_time, end_time, ma
 
     Runs on an executor thread rather than the event loop - see the caller.
     """
-    logdata = read_predbat_log()
-    loglines = logdata.split("\n")
+    loglines = split_predbat_log(read_predbat_log())
     total_lines = len(loglines)
 
     # Resolve each line's effective time in a forward pass. A line with no stamp of its own is a
