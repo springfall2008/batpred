@@ -4084,12 +4084,84 @@ def test_ollama_context_length_survives_a_server_that_cannot_answer(my_predbat):
     return failed
 
 
+def test_ollama_zero_context_length_is_treated_as_absent(my_predbat):
+    """A context length of zero means "unknown", not "a zero-token window".
+
+    Characterisation test, not a new behaviour: it pins a deliberate choice a reviewer read as an
+    accidental truthiness bug (#4859). No model has a zero-token context, so a 0 from either
+    endpoint is a placeholder or a bug, and letting it through would replace a perfectly good
+    figure with a useless one. The whole chain already agrees - _ollama_loaded_context() keeps only
+    truthy values, and on the client contextLengthForModel() returns `context_length || null` while
+    renderContextUsage() shows the token count alone when the limit is falsy.
+    """
+    failed = False
+    print("**** Testing a zero Ollama context length is treated as absent ****")
+
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "http://127.0.0.1:11434/v1"}})
+    agent.select_provider("ollama")
+
+    class _Response:
+        """Minimal aiohttp response stand-in."""
+
+        def __init__(self, payload):
+            self.status = 200
+            self._payload = payload
+
+        async def json(self):
+            """Return the canned body."""
+            return self._payload
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    class _Session:
+        """A server reporting a zero context for a loaded model."""
+
+        def post(self, url, json=None):
+            """Answer /api/show with a real ceiling."""
+            return _Response({"capabilities": ["tools"], "model_info": {"qwen35.context_length": 262144}})
+
+        def get(self, url):
+            """Answer /api/ps with a zero, as a placeholder or a bug would."""
+            return _Response({"models": [{"model": "qwen3.8:27b", "context_length": 0}]})
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    original_session = chat.aiohttp.ClientSession
+    chat.aiohttp.ClientSession = lambda *args, **kwargs: _Session()
+    try:
+        models = asyncio.run(agent._add_ollama_details([{"id": "qwen3.8:27b"}]))
+    finally:
+        chat.aiohttp.ClientSession = original_session
+
+    context = models[0].get("context_length") if models else None
+    if context != 262144:
+        print("ERROR: a zero from /api/ps should not replace the 262144 ceiling, got {}".format(context))
+        failed = True
+
+    if not failed:
+        print("✓ Test passed: a zero context length falls back rather than propagating")
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
     failed |= test_model_catalogue_is_cached_per_endpoint(my_predbat)
     failed |= test_ollama_context_length_is_what_the_server_will_actually_give(my_predbat)
     failed |= test_ollama_context_length_survives_a_server_that_cannot_answer(my_predbat)
+    failed |= test_ollama_zero_context_length_is_treated_as_absent(my_predbat)
     failed |= test_a_working_catalogue_clears_the_previous_failure(my_predbat)
     failed |= test_local_models_are_free_however_little_pricing_they_publish(my_predbat)
     failed |= test_stop_reaches_a_turn_that_is_still_streaming(my_predbat)

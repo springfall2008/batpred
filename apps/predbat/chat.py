@@ -1395,7 +1395,13 @@ class ChatAgent(ComponentBase):
                     info = body.get("model_info") or {}
                     context = next((value for key, value in info.items() if key.endswith("context_length")), None)
                     context = context or model.get("context_length")
-                    # The server's own figure wins where it has one - see the docstring.
+                    # The server's own figure wins where it has one - see the docstring. Falsy is
+                    # deliberately "no answer" rather than an answer of zero throughout: no model
+                    # has a zero-token window, so a 0 from either endpoint is a placeholder or a
+                    # bug, and taking it would replace a usable figure with one that tells the user
+                    # nothing. The client agrees - contextLengthForModel() returns
+                    # `context_length || null` and renderContextUsage() shows the token count alone
+                    # when the limit is falsy.
                     effective = loaded_context.get(model["id"])
                     detailed.append(dict(model, context_length=effective or context))
         except (aiohttp.ClientError, asyncio.TimeoutError):
@@ -1421,6 +1427,8 @@ class ChatAgent(ComponentBase):
         for entry in (body or {}).get("models") or []:
             name = entry.get("model") or entry.get("name")
             context = entry.get("context_length")
+            # A zero is filtered out here rather than downstream, so it can never win over a
+            # model's own figure - see the note beside that comparison.
             if name and context:
                 loaded[name] = context
         return loaded
