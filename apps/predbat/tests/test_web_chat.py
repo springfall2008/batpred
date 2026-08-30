@@ -2642,10 +2642,19 @@ def test_busy_banner_only_points_at_another_conversation(my_predbat):
         print("ERROR: refreshBanner() cannot both show and hide the banner: {!r}".format(body))
         failed = True
 
-    caller = _extract_function_body(script, "setBusy")
-    if caller is None or "refreshBanner" not in caller:
-        print("ERROR: setBusy() no longer routes the banner decision through refreshBanner(): {!r}".format(caller))
-        failed = True
+    for name in ("setBusy", "setIdle"):
+        caller = _extract_function_body(script, name)
+        if caller is None or "refreshBanner" not in caller:
+            print("ERROR: {}() no longer routes the banner decision through refreshBanner(): {!r}".format(name, caller))
+            failed = True
+        # A direct hideBanner()/showBanner() call is the shape the inverted rule grew in: whoever
+        # calls one decides for themselves, and that decision drifted. refreshBanner() is the only
+        # place allowed to choose. Comments are stripped first - naming the old call while
+        # explaining why it is no longer made must not read as making it.
+        code = re.sub(r"//[^\n]*", "", caller or "")
+        if "hideBanner" in code or "showBanner" in code:
+            print("ERROR: {}() still reaches for the banner directly instead of leaving the decision to refreshBanner(): {!r}".format(name, caller))
+            failed = True
 
     return failed
 

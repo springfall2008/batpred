@@ -2848,9 +2848,10 @@ function hideBanner() {
 // conversation already open it would be telling the user about the thing in front of them and
 // offering to switch to where they already are - the transcript is the status there.
 //
-// Every caller goes through here rather than reaching for showBanner/hideBanner itself, because
-// the rule was previously restated at each call site and handleTitle restated it inverted: it
-// raised the banner precisely when the busy conversation WAS the one on screen (#4840).
+// This is the only place that decides between the two. Callers set state.busy - or clear it - and
+// then ask; none of them call showBanner/hideBanner themselves. The rule used to be restated at
+// each call site, and handleTitle restated it inverted, raising the banner precisely when the busy
+// conversation WAS the one on screen (#4840). One owner is what stops that recurring.
 function refreshBanner() {
     if (state.busy && state.busy.conversation_id && state.busy.conversation_id !== state.conversation) {
         showBanner(state.busy.conversation_id, state.busy.title);
@@ -2869,7 +2870,9 @@ function setBusy(conversationId, title, turnId) {
 function setIdle() {
     state.busy = null;
     setComposerDisabled(false);
-    hideBanner();
+    // Reached with state.busy already cleared, so this takes the hide branch - the same outcome as
+    // the direct call it replaces, but without a second place that decides for itself.
+    refreshBanner();
     byId('chat-stop').classList.remove('visible');
     // Every caller of setIdle() - the 'idle' SSE event, reconcileBusy() correcting a stale banner
     // on reconnect, and the no-active-turn branch of loadConversationData() - means the server has
