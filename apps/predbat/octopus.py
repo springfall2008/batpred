@@ -1223,6 +1223,15 @@ class OctopusAPI(ComponentBase):
                 event_reward[event_id] = reward
                 event_code[event_id] = code
                 event_type[event_id] = event.get("eventType", None)
+            # A Weekend Happy Hour cannot be joined through the API - Octopus either allocates one
+            # or the user books it on the website - so listing it as available only produces join
+            # attempts the API rejects (#4593/#4595) and clutters the join selector with options
+            # that cannot be selected. BottleCapDave's integration stopped passing these through in
+            # v19.0.1 for the same reason; match that. The reward/code/type maps are populated above
+            # first, because a joined Happy Hour takes its event type from this list.
+            if event.get("eventType", None) == "WEEKEND_HAPPY_HOUR":
+                self.log("OctopusAPI: Not offering Weekend Happy Hour event code {} as available - it cannot be joined through the API".format(code))
+                continue
             target_regions = [region.get("regionId") for region in (event.get("targetRegion", None) or []) if region]
             if target_regions and account_region_id not in target_regions:
                 self.log("OctopusAPI: Skipping saving event code {} - not eligible for account region {} (event targets regions {})".format(code, account_region_id, target_regions))
