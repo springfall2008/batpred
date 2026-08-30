@@ -131,6 +131,12 @@ class AlphaESSAPI(ComponentBase):
         # allowance every time.
         self.write_burst_start = {}
         self.write_burst_writes = {}
+        # Target latched for the lifetime of one generic discharge hold. AlphaESS ignores
+        # an enabled discharge schedule with no periods, so a hold is expressed as a charge
+        # profile whose target is already below the battery SOC. Latching stops rising solar
+        # SOC from changing the target and consuming another cloud write for every 1% gained.
+        self.hold_target_soc = {}
+        self._hold_power_warned = set()
         # Serials Predbat has actually been asked to drive, i.e. ones whose write button has
         # been pressed at least once. The reconcile loop only re-applies for these, so a
         # startup cycle can never clobber an inverter before there is a plan to apply.
@@ -1020,6 +1026,102 @@ class AlphaESSAPI(ComponentBase):
         except (TypeError, ValueError):
             return low
 
+    def _window_active_now(self, window):
+        """Return whether a stored window covers Predbat's current minute.
+
+        The generic hold-charge path disables the charge-enable switch after deciding the
+        target has been reached, but deliberately leaves the start/end entities intact. The
+        times therefore retain the missing intent needed by this adapter. Hours above 24 are
+        accepted because Predbat represents a window crossing midnight as (for example)
+        23:00-25:00 before the AlphaESS boundary splits it.
+        """
+        start = hm_to_minutes(window.get("start"))
+        end = hm_to_minutes(window.get("end"))
+        if start == end:
+            return False
+        now = int(getattr(self.base, "minutes_now", 0)) % (24 * 60)
+        if end > 24 * 60 and now < start:
+            now += 24 * 60
+        if start < end:
+            return start <= now < end
+        return now >= start or now < end
+
+    def _hold_charge_window(self, sn, schedule):
+        """Translate Predbat's generic discharge hold into an AlphaESS charge profile.
+
+        Predbat represents every no-discharge hold (freeze charge, EV/iBoost hold and other
+        generic callers) by writing discharge power zero. AlphaESS ignores the previous
+        translation, discharge scheduling enabled with no periods. Live SMILE G3 testing in
+        GH#4725 established that an enabled CHARGE profile whose target is below current SOC
+        is the working device primitive instead.
+
+        A planned hold charge can arrive with normal discharge power: execute_plan has
+        already disabled its charge-enable switch and raised the reserve, while the original
+        target and times remain. A currently-active window at/below SOC recovers that intent.
+        A real charge target above SOC is kept verbatim even if another feature also asks for
+        a discharge hold; charging already prevents the battery feeding the load.
+
+        Returns a copied, enabled charge window while a hold is requested, otherwise None.
+        """
+        charge = schedule.get("charge", {}) or {}
+        export = schedule.get("export", {}) or {}
+        current_soc = self._as_float(self.device_values.get(sn, {}).get("soc"), 0.0)
+        charge_target = self._as_float(charge.get("soc"), 0.0)
+        charge_power = int(self._as_float(charge.get("power"), 0.0))
+        export_power = self._as_float(export.get("power"), 0.0)
+
+        discharge_hold = export_power <= 0
+        # A disabled window is only a generic hold while its computed charge rate is zero.
+        # Once execute_plan releases the hold it restores the rate before the old target/time
+        # entities are necessarily replaced; requiring zero prevents those stale fields from
+        # extending the hold. An explicitly enabled target-at/below-SOC profile is itself a
+        # hold regardless of the valid non-zero power it carries.
+        charge_window_hold = charge_target > 0 and charge_target <= current_soc and self._window_active_now(charge) and (bool(charge.get("enable")) or charge_power <= 0)
+        if not discharge_hold and not charge_window_hold:
+            self.hold_target_soc.pop(sn, None)
+            self._hold_power_warned.discard(sn)
+            return None
+
+        # Do not replace a genuine charge just because an EV/iBoost hold is present too.
+        # The active grid charge already prevents discharge and its requested target/rate
+        # must survive unchanged.
+        if bool(charge.get("enable")) and charge_target > current_soc and charge_power > 0:
+            self.hold_target_soc.pop(sn, None)
+            self._hold_power_warned.discard(sn)
+            return dict(charge)
+
+        power = charge_power if charge_power > 0 else int(self.battery_rate_max(sn))
+        if power <= 0:
+            if sn not in self._hold_power_warned:
+                self._hold_power_warned.add(sn)
+                self.log("Warn: AlphaESS {} cannot create its hold charge profile because neither the schedule nor the inverter rating supplies a positive power; keeping the legacy hold payload".format(sn))
+            return None
+        self._hold_power_warned.discard(sn)
+
+        if sn not in self.hold_target_soc:
+            below_current = self._clamp_percent(current_soc - 1, low=10, high=100)
+            # A genuine planned hold target is already below current SOC and should remain
+            # the target. Freeze charge and demand-mode holds carry an equal/empty target,
+            # so they use current SOC minus one instead.
+            if 10 <= charge_target < current_soc and charge_window_hold:
+                target = self._clamp_percent(charge_target, low=10, high=100)
+            else:
+                target = below_current
+            self.hold_target_soc[sn] = target
+
+        if charge_window_hold:
+            start = charge.get("start", "00:00:00")
+            end = charge.get("end", "23:45:00")
+        else:
+            # Generic demand-mode holds carry no end time. A stable daily profile avoids a
+            # rolling boundary that would change the payload and spend an AlphaESS cloud
+            # write every 15 minutes; reconciliation removes it as soon as the hold signal
+            # clears on the next Predbat cycle.
+            start = "00:00:00"
+            end = "23:45:00"
+
+        return {"enable": True, "soc": self.hold_target_soc[sn], "power": power, "start": start, "end": end}
+
     def split_window(self, start, end):
         """Split a window at midnight, returning ((start1, end1), (start2, end2)) in HH:mm.
 
@@ -1073,7 +1175,7 @@ class AlphaESSAPI(ComponentBase):
         A FULL REPLACEMENT, not a patch: all seven fields are always present, because the
         endpoint silently resets anything omitted.
         """
-        window = schedule.get("charge", {}) or {}
+        window = self._hold_charge_window(sn, schedule) or (schedule.get("charge", {}) or {})
         enabled = bool(window.get("enable"))
         # charge_rate zero is Predbat signalling freeze charge / no cross-charging. There
         # is no pause endpoint, so a zeroed rate is the only signal available and it
@@ -1113,15 +1215,23 @@ class AlphaESSAPI(ComponentBase):
         reserve = self._clamp_percent(schedule.get("reserve", 0))
         export_rate = self._as_float(window.get("power"), 0.0)
 
-        # discharge_rate zero means hold SOC (freeze export): discharge time control ON
-        # with no permitted period, so the battery cannot discharge at all. This does NOT
-        # depend on the charge rate - Predbat reaches discharge_rate == 0 together with
-        # charge_rate == 0 through ordinary, reachable combinations (set_freeze_export_during_demand
-        # zeroing the charge rate while a car-charging-from-battery hold or
-        # iboost_prevent_discharge zeroes the discharge rate in the same pass), and that
-        # combination is an explicit hold, not an absence of a plan. Treating it as "no plan"
-        # would let the battery discharge into the EV or iBoost load against the hold Predbat
-        # asked for.
+        # The working AlphaESS no-discharge primitive is the charge profile built by
+        # build_charge_payload, not an empty discharge programme. Leave discharge time
+        # control off so the ignored empty schedule cannot compete with that profile.
+        if self._hold_charge_window(sn, schedule):
+            return {
+                "sysSn": sn,
+                "ctrDis": 0,
+                "timeDisf1": ALPHAESS_TIME_DISABLED,
+                "timeDise1": ALPHAESS_TIME_DISABLED,
+                "timeDisf2": ALPHAESS_TIME_DISABLED,
+                "timeDise2": ALPHAESS_TIME_DISABLED,
+                "batUseCap": reserve,
+            }
+
+        # Fallback only: reached when a hold was requested but no positive charge-profile
+        # power could be derived. Hardware testing says AlphaESS ignores this empty schedule,
+        # but retaining it is safer than silently returning to demand when no rating is available.
         if export_rate <= 0:
             return {
                 "sysSn": sn,
@@ -1519,7 +1629,8 @@ class AlphaESSAPI(ComponentBase):
         holds schedule["reserve"] rather than an arbitrary constant - see
         build_discharge_payload for the same one-field-two-purposes rule on the legacy pair.
         """
-        charge = schedule.get("charge", {}) or {}
+        hold_charge = self._hold_charge_window(sn, schedule)
+        charge = hold_charge or (schedule.get("charge", {}) or {})
         export = schedule.get("export", {}) or {}
         reserve = schedule.get("reserve", 10)
         charge_rate = self._as_float(charge.get("power"), 0.0)
@@ -1531,14 +1642,10 @@ class AlphaESSAPI(ComponentBase):
             charge_on = False
         charge_list = [self._periodic_entry(charge_start, charge_end, charge.get("soc", 100), charge_rate)] if charge_on else [self._periodic_entry(ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED, 10, 0)]
 
-        # export_rate zero means hold SOC (freeze export), exactly as build_discharge_payload:
-        # discharge time control ON with no permitted period, so the battery cannot discharge
-        # at all. Decided before, and independently of, the window/enable check - Predbat
-        # reaches export_rate == 0 through ordinary, reachable combinations (see
-        # build_discharge_payload's comment), and that is an explicit hold, not the absence of
-        # a plan. Getting this wrong lets the battery discharge into the EV or iBoost load
-        # against the hold Predbat asked for; ctrDisCycle 0 here is DEMAND MODE, not a hold.
-        export_hold = export_rate <= 0
+        # While the hold charge profile is active it is the whole control action. Suppress
+        # any export schedule and leave discharge time control in demand mode; AlphaESS
+        # ignores the former ctrDisCycle=1 plus empty-period representation.
+        export_hold = hold_charge is not None
         if export_hold:
             export_on = False
         else:
@@ -1572,11 +1679,9 @@ class AlphaESSAPI(ComponentBase):
             "chargeTimeList": charge_list,
             "dischargeTimeList": discharge_list,
             "gridChargeCycle": 1 if charge_on else 0,
-            # export_hold sets this ON (1) with no permitted period - the hard hold.
-            # export_on sets it ON for a real scheduled window. Otherwise it is OFF (0),
-            # demand mode, where the battery covers the house down to the reserve floor
-            # carried by the idle discharge entry above.
-            "ctrDisCycle": 1 if (export_on or export_hold) else 0,
+            # A real export uses discharge time control. Hold charge deliberately leaves it
+            # off: the enabled charge profile is what prevents discharge on AlphaESS.
+            "ctrDisCycle": 1 if export_on else 0,
         }
 
     async def apply_settings(self, sn, schedule, force=False):
