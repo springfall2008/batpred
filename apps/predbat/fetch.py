@@ -199,7 +199,12 @@ class Fetch:
         # Simple divergence model keeps the same total but brings PV/Load up and down every 5 minutes
         if cloud_factor and cloud_factor > 0:
             for minute in range(0, self.forecast_minutes, step):
-                cloud_on = (int((minute + self.minutes_now) / 5) + 1 if flip else 0) % 2
+                # The inner parentheses matter: a conditional expression binds looser than "+", so
+                # "int(...) + 1 if flip else 0" is "(int(...) + 1) if flip else 0" - which is a
+                # constant 0 whenever flip is False, leaving every non-flipped caller unmodulated.
+                # flip only means anything as an antiphase to a modulated base, so it is the offset
+                # that is conditional, not the whole expression.
+                cloud_on = (int((minute + self.minutes_now) / 5) + (1 if flip else 0)) % 2
                 if cloud_on > 0:
                     cloud_diff += min(values[minute] * cloud_factor, values.get(minute + 5, 0) * cloud_factor)
                     values[minute] += cloud_diff

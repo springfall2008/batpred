@@ -477,9 +477,16 @@ def test_pv90_load_scaling_clamp_is_a_noop_at_defaults(my_predbat):
     up as the pv90 and pv10 load totals collapsing onto nominal rather than sitting either side of it.
     """
     failed = False
-    saved = {name: getattr(my_predbat, name) for name in ("load_scaling", "load_scaling10", "load_scaling90", "load_minutes", "load_forecast_only")}
+    saved = {name: getattr(my_predbat, name) for name in ("load_scaling", "load_scaling10", "load_scaling90", "load_minutes", "load_forecast_only", "metric_load_divergence_enable")}
     try:
         my_predbat.load_forecast_only = False
+        # The nominal and PV10 load arrays take different divergence factors (the PV10 one is
+        # +0.5), and the divergence model does not redistribute exactly - what it adds to a step it
+        # can only take back off the next one if that step is large enough. So with divergence on,
+        # the two totals are no longer in the pure load_scaling ratio this check asserts. Turn it
+        # off at the enable, since calculate_plan() re-derives the factor itself every recompute.
+        # This test is about the clamp, not about divergence.
+        my_predbat.metric_load_divergence_enable = False
         my_predbat.load_minutes = {minute: (1440 - minute) * 0.02 for minute in range(0, 1441)}
         my_predbat.load_scaling = 1.05
         my_predbat.load_scaling10 = 1.1
