@@ -423,10 +423,14 @@ class AnnualPage:
         # An ABSENT solar key means "not configured yet", so offer one blank array to fill
         # in. An explicitly EMPTY list means the user removed them all, which is a valid
         # battery-only run - collapsing the two with `or [{}]` made it impossible to get
-        # to zero arrays through the form.
+        # to zero arrays through the form. A single array may also be saved as a bare
+        # mapping (the wrapped YAML form validate_config accepts), which must be normalised
+        # to a one-element list here or the iteration below would walk the dict's keys.
         solar = config.get("solar")
         if solar is None:
             solar = [{}]
+        elif isinstance(solar, dict):
+            solar = [solar]
         battery = config.get("battery") or {}
         load = config.get("load") or {}
         tariff = config.get("tariff") or {}
@@ -1954,6 +1958,7 @@ function annualSolarModeChanged(index) {
 }
 function annualUpdateSolarTotal() {
   var totalKwp = 0, totalPanels = 0, allPanels = true, index = 0;
+  var hints = [];
   while (document.getElementById('solar_mode_' + index)) {
     var mode = document.getElementById('solar_mode_' + index).value;
     if (mode === 'panels') {
@@ -1963,7 +1968,17 @@ function annualUpdateSolarTotal() {
       totalKwp += count * watts / 1000;
     } else {
       allPanels = false;
-      totalKwp += parseFloat(document.getElementById('solar_kwp_' + index).value) || 0;
+      var kwpValue = parseFloat(document.getElementById('solar_kwp_' + index).value) || 0;
+      totalKwp += kwpValue;
+      // A peak power this large usually means Watts were typed into the kWp field
+      // (GH#4858). Per array, and kWp fields only, matching the server's
+      // config_warnings(): testing the sum instead would question systems the
+      // server deliberately accepts (two genuine 60 kWp arrays, or any panels-mode
+      // array), and dividing the total by 1000 would give every array the wrong
+      // suggested figure. Non-blocking: the value stands, the hint just questions it.
+      if (kwpValue > ANNUAL_SOLAR_KWP_SOFT_LIMIT) {
+        hints.push('Array ' + (index + 1) + ' is ' + kwpValue + ' kWp — if that is Watts (Wp) it would be ' + parseFloat((kwpValue / 1000).toFixed(2)) + ' kWp');
+      }
     }
     index += 1;
   }
@@ -1974,10 +1989,8 @@ function annualUpdateSolarTotal() {
   var label = allPanels && totalPanels > 0
     ? 'Total: ' + totalKwp.toFixed(2) + ' kWp across ' + totalPanels + ' panels'
     : 'Total: ' + totalKwp.toFixed(2) + ' kWp';
-  // A peak power this large usually means Watts were typed into the kWp field (GH#4858).
-  // Non-blocking: the value stands as entered, the hint just questions it.
-  if (totalKwp > ANNUAL_SOLAR_KWP_SOFT_LIMIT) {
-    label = label + ' — this looks like Watts (Wp) rather than kWp; if so it is ' + (totalKwp / 1000).toFixed(2) + ' kWp';
+  if (hints.length) {
+    label = label + ' — ' + hints.join('; ');
   }
   note.textContent = label;
 }

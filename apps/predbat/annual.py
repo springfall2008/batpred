@@ -122,8 +122,17 @@ def _require_number(value, field, minimum=None, maximum=None, integer=False, exc
         raise AnnualConfigError("{} must be a whole number, got {}".format(field, value))
     try:
         number = int(value) if integer else float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: a value over the float ceiling (a digit-only paste of hundreds
+        # of digits) fails only at conversion, and must surface as this config error
+        # like any other, not as a bare traceback in the caller's except clause.
         raise AnnualConfigError("{} must be a number, got {!r}".format(field, value))
+    # NaN passes every comparison (NaN <= 0 is False), and inf clears a lower bound, so
+    # neither is caught by the range checks below: a YAML "kwp: .nan" would otherwise
+    # validate, flow into the model and render every derived figure as nan/inf - the
+    # most implausible value of all surviving a validation pass that rejects 0 and -3.
+    if not math.isfinite(number):
+        raise AnnualConfigError("{} must be a finite number, got {}".format(field, number))
     if minimum is not None:
         if exclusive_minimum and number <= minimum:
             raise AnnualConfigError("{} must be greater than {}, got {}".format(field, minimum, number))
@@ -149,11 +158,8 @@ def _coerce_bool(value):
 
 def _validate_solar(raw):
     """Normalise the solar array list, applying defaults and rejecting arrays without kwp."""
+    raw = _solar_entries(raw)
     if raw is None:
-        return []
-    if isinstance(raw, dict):
-        raw = [raw]
-    if not isinstance(raw, list):
         raise AnnualConfigError("annual.solar must be a list of arrays")
 
     arrays = []
@@ -483,6 +489,41 @@ def validate_config(config, today=None):
     }
 
 
+def _solar_entries(raw):
+    """Return solar entries as a list, or None when the value is neither a mapping nor a list of them.
+
+    validate_config accepts a single array as a bare mapping (the wrapped YAML form
+    ``solar: {kwp: ...}``) as well as a list; every reader of this field wants the
+    same normalisation, so it lives here rather than being re-derived per caller.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        return [raw]
+    if isinstance(raw, list):
+        return raw
+    return None
+
+
+def _numeric_or_none(value):
+    """Return the value as a finite float, or None when it is not numeric.
+
+    Mirrors _require_number()'s coercion (numeric strings like the quoted figures a
+    hand-edited YAML or a stored form round-trip can carry are accepted) but instead
+    of raising, anything unusable returns None for the caller to skip: this is a
+    warning pass, and a value validation will reject has its own AnnualConfigError.
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: an absurd integer (a digit-only paste of hundreds of digits)
+        # is over the float ceiling before it converts, not a conversion failure.
+        return None
+    return number if math.isfinite(number) else None
+
+
 def config_warnings(config):
     """Return a list of non-fatal sanity warnings about a config, for surfacing in the web form.
 
@@ -503,19 +544,18 @@ def config_warnings(config):
         return []
 
     warnings = []
-    solar = raw.get("solar")
-    if isinstance(solar, dict):
-        solar = [solar]
-    if isinstance(solar, list):
-        for index, array in enumerate(solar):
-            if not isinstance(array, dict):
-                continue
-            kwp = array.get("kwp")
-            # bool is an int subclass, and True/False as a peak power is validation's problem.
-            if isinstance(kwp, bool) or not isinstance(kwp, (int, float)):
-                continue
-            if kwp > SOLAR_KWP_SOFT_LIMIT:
-                warnings.append("annual.solar[{}]: peak power {} kWp is far larger than a typical home array. If you entered Watts (Wp) rather than kWp, that is {:g} kWp.".format(index, round(kwp, 2), kwp / 1000.0))
+    solar = _solar_entries(raw.get("solar"))
+    if solar is None:
+        return []
+    for index, array in enumerate(solar):
+        if not isinstance(array, dict):
+            continue
+        kwp = _numeric_or_none(array.get("kwp"))
+        if kwp is None or kwp <= SOLAR_KWP_SOFT_LIMIT:
+            continue
+        # The form labels arrays from 1 while the config indexes them from 0: name
+        # both, so the note can be matched to the field it is talking about.
+        warnings.append("annual.solar[{}] (Array {} in the form): peak power {:g} kWp is far larger than a typical home array. If you entered Watts (Wp) rather than kWp, that is {:g} kWp.".format(index, index + 1, kwp, kwp / 1000.0))
     return warnings
 
 

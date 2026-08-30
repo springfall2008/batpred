@@ -1014,6 +1014,37 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: render_form with no warnings should render identically to the no-warnings default")
             failed = True
 
+        print("Test: dict-form solar (a single saved mapping) renders instead of crashing the page")
+        # validate_config accepts a lone array as a bare mapping; the form used to walk
+        # its keys and raise AttributeError on the first string it met.
+        dict_form = copy.deepcopy(config)
+        dict_form["solar"] = {"kwp": 6000}
+        dict_html = page.render_form(dict_form, errors=None, warnings=config_warnings(dict_form))
+        if "annual-warning" not in dict_html or 'id="solar_kwp_0"' not in dict_html:
+            print("  ERROR: dict-form solar should render one array with its warning, not crash")
+            failed = True
+
+        print("Test: the script injects the server's soft limit and thresholds each kWp field")
+        # The live hint exists only through these lines: the injected constant and the
+        # per-array check. Asserting both pins them against a refactor that drops the
+        # concatenation (a missing constant would ReferenceError in every browser while
+        # every test stayed green).
+        script = page.render_script()
+        if "var ANNUAL_SOLAR_KWP_SOFT_LIMIT = 100" not in script:
+            print("  ERROR: render_script should inject the server's SOLAR_KWP_SOFT_LIMIT into the page")
+            failed = True
+        if "kwpValue > ANNUAL_SOLAR_KWP_SOFT_LIMIT" not in script or "Array ' + (index + 1)" not in script:
+            print("  ERROR: the live hint should threshold each kWp field and name its 1-based array")
+            failed = True
+
+        print("Test: html_annual passes config_warnings through to the rendered page")
+        # The only production call site for config_warnings: if this stops being wired
+        # up, the form silently loses the warning while every unit test above stays green.
+        response = asyncio.run(page.html_annual(FakeRequest(), config=copy.deepcopy(oversized)))
+        if "annual-warning" not in response.text:
+            print("  ERROR: the annual page should render the warning from the config it was handed")
+            failed = True
+
         print("Test: config_from_post rebuilds a config the engine accepts")
         postdata = {
             "postcode": "SW1A 1AA",
