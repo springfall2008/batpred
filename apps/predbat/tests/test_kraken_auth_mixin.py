@@ -272,28 +272,23 @@ def test_token_request_mutation_has_no_payload_subfields():
 
 
 def run_kraken_auth_mixin_tests(my_predbat=None):
-    """Run all KrakenAuthMixin tests. Returns True on failure, False on success."""
-    tests = [
-        test_init_api_key_mode,
-        test_init_email_mode,
-        test_obtain_token_api_key,
-        test_obtain_token_email,
-        test_refresh_uses_refresh_token,
-        test_valid_token_not_refreshed,
-        test_refresh_failure_retries_with_credentials,
-        test_total_auth_failure_sets_oauth_failed,
-        test_handle_oauth_401_clears_and_reobtains,
-        test_oauth_failed_short_circuits,
-        test_token_request_parses_scalar_payload_dict,
-        test_token_request_parses_scalar_payload_string,
-        test_token_request_mutation_has_no_payload_subfields,
-    ]
+    """Run all KrakenAuthMixin tests. Returns True on failure, False on success.
+
+    Tests are discovered rather than listed. The runner used to carry a hardcoded list, so
+    any test added below it was silently skipped by unit_test.py - which invokes this runner,
+    not pytest discovery - and a whole feature could regress with the suite still green.
+    """
+    module = sys.modules[__name__]
+    # dir() gives a stable alphabetical order; these tests are independent of each other.
+    tests = [obj for name in dir(module) if name.startswith("test_") and callable(obj := getattr(module, name))]
+
     for test_func in tests:
         try:
             test_func()
         except Exception as e:
             print(f"  FAIL: {test_func.__name__}: {e}")
             import traceback
+
             traceback.print_exc()
             return True
         print(f"  OK: {test_func.__name__}")
@@ -443,3 +438,20 @@ def test_genuine_auth_failure_still_latches_oauth_failed():
     assert result is False
     assert mixin.oauth_failed is True
     assert mixin.token_mint_blocked_until is None
+
+
+def test_edge_block_with_a_refresh_token_held():
+    """A block must not burn the refresh token or recurse into the same block."""
+    mixin = make_mixin(auth_method="api_key", key="sk_live_test123")
+    mixin.refresh_token = "still-good-refresh"
+    mixin.token_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    mixin._kraken_token_request = edge_blocked_request(mixin)
+
+    result = asyncio.run(mixin.check_and_refresh_oauth_token())
+
+    assert result is False
+    assert mixin.oauth_failed is False
+    assert mixin.refresh_token == "still-good-refresh", "the refresh token is not what the CDN objected to"
+    assert mixin._kraken_token_request.call_count == 1, "must not recurse into the same block"
+    assert mixin.token_mint_blocked_until is not None
+    assert mixin._refresh_in_progress is False

@@ -120,7 +120,10 @@ class KrakenAuthMixin:
                 # Retrying with primary credentials would just hit the same block, so back off
                 # instead and keep whatever token we still hold.
                 self.start_token_mint_backoff()
-                return bool(self.access_token and self.token_expires_at and self.token_expires_at > now)
+                # Re-read the clock: `now` was sampled before the request, which may have taken
+                # long enough for a token that was valid then to have expired by now. Returning
+                # True here promises the caller a usable token.
+                return bool(self.access_token and self.token_expires_at and self.token_expires_at > datetime.now(timezone.utc))
 
             if self.refresh_token:
                 # Refresh token is stale — clear it and retry with primary credentials
