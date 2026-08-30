@@ -27,7 +27,7 @@ Work on the PR's own branch, not a new one — you're pushing back to it directl
 - CI status: `gh pr checks <pr-number>`. For any failing check, read its actual log (`gh run view <run-id> --job <job-id> --log`, or fetch the job log directly) to find the real failure, not just the pass/fail summary.
 - Skip anything already resolved: a review thread that already has a reply from you addressing it, or a check that's since gone green.
 
-If there is genuinely nothing new to address — every thread already has a reply, every check is green — say so in a brief comment and stop; this is a normal, successful outcome, not a failure.
+If there is genuinely nothing new to address — every thread already has a reply, every check is green — post a brief comment saying so, opening with a line disclosing this is an automated cleanup check (nothing for a maintainer to act on), and stop; this is a normal, successful outcome, not a failure.
 
 ## 3. Evaluate before implementing
 
@@ -58,15 +58,15 @@ git commit -m "<one-line summary of the fixes>"
 git push
 ```
 
-Reply to each review thread you addressed, in the thread itself, not as a new top-level comment:
+Reply to each review thread you addressed, in the thread itself, not as a new top-level comment. Open every reply with a short line disclosing it is an automated reply from the triage bot, then state what changed:
 
 ```bash
 gh api repos/springfall2008/batpred/pulls/<pr-number>/comments/<comment-id>/replies -f body="..."
 ```
 
-State what changed, or push back with your reasoning if you didn't implement the suggestion — never a bare "done" with no explanation. If anything is unclear, technically wrong, or you can't verify a suggestion, say so in the reply rather than guessing or implementing something you don't understand.
+Or push back with your reasoning if you didn't implement the suggestion — never a bare "done" with no explanation. If anything is unclear, technically wrong, or you can't verify a suggestion, say so in the reply rather than guessing or implementing something you don't understand.
 
-If step 5's quality gate never passed, post one summary comment via `gh pr comment <pr-number> --body "..."` explaining what's still failing and why you didn't push, instead of doing the commit/push/reply steps above.
+If step 5's quality gate never passed, post one summary comment via `gh pr comment <pr-number> --body "..."`, opening with the same automated-reply disclosure line, explaining what's still failing and why you didn't push, instead of doing the commit/push/reply steps above.
 
 ## Guardrails
 

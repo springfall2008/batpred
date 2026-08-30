@@ -257,7 +257,10 @@ DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if 
 # above: the allowlist covers the spellings we enumerated, this keeps the agent on the one
 # spelling that is certain to be covered, and asks it to say so loudly when a call is denied
 # anyway - #4758 quietly degraded to printing the comments it could not post, which reads like
-# a finished review in the log.
+# a finished review in the log. Also carries the bot-disclosure requirement for these two flows:
+# /code-review's own instructions live in a skill we don't own, so this prompt is the only
+# lever available for it; /pr-cleanup's SKILL.md already asks for disclosure directly, and
+# this is the belt-and-braces backup for it, same reasoning as the endpoint-first steer.
 GH_API_ENDPOINT_FIRST_PROMPT = (
     "Permission rules in this session match a literal command prefix, so `gh api` calls are only permitted when the current allowlist covers the exact spelling you use. "
     "Prefer the endpoint-first, unquoted form (endpoint immediately after `gh api`) and put flags after the endpoint - for example "
@@ -266,7 +269,10 @@ GH_API_ENDPOINT_FIRST_PROMPT = (
     "Keep each call to a single command: piping into head/tail/grep is fine, but redirecting output anywhere outside "
     f"{SCRATCH_DIR} or the repository clone - /tmp included - is denied as well. "
     "If a call is denied regardless, state that plainly in your final message and name the command; do not quietly fall back "
-    "to printing the comments you would have posted."
+    "to printing the comments you would have posted. "
+    "Every comment or reply you post in this session - an inline review comment, a review-thread reply - must open with a "
+    "short line disclosing it is automated, e.g. '_Automated comment from the triage bot._', so a maintainer can tell "
+    "bot-authored feedback from a human reviewer's without checking the author field."
 )
 
 
@@ -427,7 +433,7 @@ def mark_pr_not_actionable(issue_number):
             "--repo",
             REPO,
             "--body",
-            "`BOT_PR` was added but this issue isn't actionable for an automated implementation " "(closed, or not classified `bug`/`enhancement`) - not attempting a PR. Remove `BOT_PR_FAILED` " "and re-add `BOT_PR` once the classification changes.",
+            "Automated PR creation skipped: `BOT_PR` was added but this issue isn't actionable for an automated implementation " "(closed, or not classified `bug`/`enhancement`). Remove `BOT_PR_FAILED` and re-add `BOT_PR` once the classification changes.",
         ],
         check=True,
     )

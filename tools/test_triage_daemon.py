@@ -641,6 +641,15 @@ class GhApiFormPromptTests(unittest.TestCase):
         completed review in the log. The prompt asks for a denial to be stated plainly."""
         self.assertIn("denied", triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT)
 
+    def test_requires_disclosure_on_every_posted_comment_or_reply(self):
+        """/code-review's own instructions live in a skill we don't own, so this appended
+        prompt is the only lever available to make its inline comments disclose they're
+        automated - and it doubles as a belt-and-braces backup for /pr-cleanup's replies,
+        which already ask for disclosure directly in their own SKILL.md."""
+        prompt = triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT
+        self.assertIn("disclosing", prompt)
+        self.assertIn("automated", prompt)
+
 
 class PrReviewActivityCountTests(unittest.TestCase):
     """Tests for pr_review_activity_count(), new - the evidence check behind verify-then-label."""
@@ -1261,6 +1270,44 @@ class ProcessBotCleanupPrTests(unittest.TestCase):
         printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
         self.assertIn("Add confirmed findings", printed)
         self.assertIn("https://github.com/springfall2008/batpred/pull/4742", printed)
+
+
+class CommentDisclosureTests(unittest.TestCase):
+    """Regression tests ensuring every comment triage_daemon.py posts directly (as
+    opposed to a comment an LLM invocation composes at runtime - those get their own
+    disclosure instructions in the relevant SKILL.md, or in GH_API_ENDPOINT_FIRST_PROMPT
+    for /code-review, which is covered by GhApiFormPromptTests instead) opens with a
+    plain "Automated ..." disclosure, so a maintainer never mistakes one for a human's."""
+
+    @staticmethod
+    def _body_of_first_comment_call(mock_run):
+        """Return the --body argument of the first `gh issue/pr comment` call made,
+        skipping any subsequent label-edit calls the same function also makes."""
+        for call in mock_run.call_args_list:
+            args = call.args[0]
+            if args[:2] in (["gh", "issue"], ["gh", "pr"]) and "comment" in args:
+                return args[args.index("--body") + 1]
+        raise AssertionError(f"no comment call found among {mock_run.call_args_list}")
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_not_actionable_discloses(self, mock_run):
+        triage_daemon.mark_pr_not_actionable(4720)
+        self.assertTrue(self._body_of_first_comment_call(mock_run).startswith("Automated"))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_review_failed_discloses(self, mock_run):
+        triage_daemon.mark_review_failed(3100)
+        self.assertTrue(self._body_of_first_comment_call(mock_run).startswith("Automated"))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_review_failed_discloses(self, mock_run):
+        triage_daemon.mark_pr_review_failed(4742)
+        self.assertTrue(self._body_of_first_comment_call(mock_run).startswith("Automated"))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_cleanup_failed_discloses(self, mock_run):
+        triage_daemon.mark_pr_cleanup_failed(4742)
+        self.assertTrue(self._body_of_first_comment_call(mock_run).startswith("Automated"))
 
 
 if __name__ == "__main__":
