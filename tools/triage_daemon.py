@@ -37,6 +37,31 @@ Setup (one-time, on whichever always-on machine will run this):
 
        python3 tools/triage_daemon.py
 
+   Add --ollama <model> to run every 'claude' invocation against an Ollama
+   model instead of the default Claude model, e.g.:
+
+       python3 tools/triage_daemon.py --ollama glm-5.3-flash:cloud
+
+   Or add --ollama_review <model> to use Ollama only for the read-only/
+   review-ish flows - first-pass triage, follow-up review, PR review, PR
+   cleanup - while PR creation (/issue-pr, the flow that actually writes
+   the fix) still runs on the default Claude model:
+
+       python3 tools/triage_daemon.py --ollama_review glm-5.3-flash:cloud
+
+   --ollama and --ollama_review are mutually exclusive - --ollama already
+   covers every flow --ollama_review does, plus PR creation, so pass at
+   most one.
+
+   Both point the CLI at Ollama's Claude Code compatible endpoint
+   (https://docs.ollama.com/integrations/claude-code), served locally at
+   OLLAMA_BASE_URL (http://localhost:11434 by default) - so it needs a
+   local `ollama serve` running, and, for a :cloud-suffixed model, an
+   `ollama signin` on this machine. --max-budget-usd's cost estimate is
+   priced for Anthropic's API, so treat it as meaningless (not a real
+   cap) for whichever flows are running against Ollama; --max-turns is
+   the limit that still holds for them.
+
 What it does per new issue: syncs the dedicated clone to origin/main,
 empties the scratch directory used for issue attachments, then runs
 `claude -p "/issue-triage <number> scratch=<dir>"` (the skill at
@@ -66,7 +91,9 @@ you wouldn't hand to an issue reporter. DISALLOWED_TOOLS is a backstop
 against the obvious mistakes, not a sandbox boundary.
 """
 
+import argparse
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -79,6 +106,14 @@ SCRATCH_DIR = BASE_DIR / "scratch"
 LOG_DIR = BASE_DIR / "logs"
 STATE_FILE = BASE_DIR / "state.json"
 POLL_SECONDS = 300
+# Set from --ollama/--ollama_review by main() - see effective_ollama_model() for how the
+# two interact. OLLAMA_BASE_URL is Ollama's own Claude Code compatible endpoint
+# (https://docs.ollama.com/integrations/claude-code); a :cloud-suffixed model is still
+# routed through it, forwarded using the machine's `ollama signin` credentials rather
+# than a separate API key.
+OLLAMA_MODEL = None
+OLLAMA_REVIEW_MODEL = None
+OLLAMA_BASE_URL = "http://localhost:11434"
 
 EDIT_SCOPE = f"//{CLONE_DIR.relative_to('/')}/**"
 SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to('/')}/**"
@@ -367,16 +402,24 @@ def build_duplicate_search_query(issue_number):
     return f'"Fixes #{issue_number}" in:body'
 
 
-def has_existing_pr(issue_number):
-    """Return True if a PR already references this issue, in any state."""
+def find_pr_number_for_issue(issue_number):
+    """Return the number of the PR referencing this issue (matching the exact
+    "Fixes #N" phrase /issue-pr always includes), or None if none exists yet.
+    """
     query = build_duplicate_search_query(issue_number)
     result = subprocess.run(
-        ["gh", "pr", "list", "--repo", REPO, "--search", query, "--state", "all", "--json", "number"],
+        ["gh", "pr", "list", "--repo", REPO, "--search", query, "--state", "all", "--json", "number", "--limit", "100"],
         capture_output=True,
         text=True,
         check=True,
     )
-    return len(json.loads(result.stdout)) > 0
+    prs = json.loads(result.stdout)
+    return prs[0]["number"] if prs else None
+
+
+def has_existing_pr(issue_number):
+    """Return True if a PR already references this issue, in any state."""
+    return find_pr_number_for_issue(issue_number) is not None
 
 
 def is_actionable(issue_number):
@@ -398,12 +441,26 @@ def is_actionable(issue_number):
     return bool(label_names & {"bug", "enhancement"})
 
 
+def flag_pr_for_review(pr_number):
+    """Add BOT_REVIEW to a PR, so the next poll cycle runs /code-review against it.
+    Idempotent - adding a label the PR already carries is a no-op, not an error.
+    """
+    subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--add-label", "BOT_REVIEW"], check=True)
+
+
 def mark_pr_opened(issue_number):
-    """Swap BOT_PR for BOT_PR_OPENED once the draft PR has been confirmed open."""
+    """Swap BOT_PR for BOT_PR_OPENED once the draft PR has been confirmed open, and
+    flag the PR itself with BOT_REVIEW so a code review runs against it automatically -
+    /issue-pr's own quality gate (step 4 of its SKILL.md) is pre-commit and a targeted
+    test, not an LLM review of the diff.
+    """
     subprocess.run(
         ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_PR", "--add-label", "BOT_PR_OPENED"],
         check=True,
     )
+    pr_number = find_pr_number_for_issue(issue_number)
+    if pr_number is not None:
+        flag_pr_for_review(pr_number)
 
 
 def mark_pr_failed(issue_number):
@@ -454,6 +511,47 @@ def reset_scratch():
     SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def effective_ollama_model(review_only=False):
+    """Return the Ollama model this claude invocation should use, or None to use the
+    default Claude model. --ollama (OLLAMA_MODEL) always wins and applies to every
+    invocation, including PR creation. --ollama_review (OLLAMA_REVIEW_MODEL) applies
+    only when the caller passes review_only=True - triage(), triage_followup(),
+    review_pr() and cleanup_pr() do; create_pr() never does, so PR creation still runs
+    on the full Claude model even when --ollama_review is set.
+    """
+    if OLLAMA_MODEL:
+        return OLLAMA_MODEL
+    if review_only and OLLAMA_REVIEW_MODEL:
+        return OLLAMA_REVIEW_MODEL
+    return None
+
+
+def claude_model_args(review_only=False):
+    """Return the extra 'claude' CLI args selecting the Ollama model for this
+    invocation, or [] to use the default Claude model. Appended to every claude
+    invocation's cmd list below.
+    """
+    model = effective_ollama_model(review_only)
+    return ["--model", model] if model else []
+
+
+def claude_env(review_only=False):
+    """Return the subprocess environment for a 'claude' invocation: None (inherit
+    the daemon's own environment unchanged) unless this invocation is using an
+    Ollama model, in which case add the Anthropic-compatible overrides Ollama's
+    Claude Code integration documents, so the CLI talks to the local Ollama server
+    instead of Anthropic's API.
+    """
+    model = effective_ollama_model(review_only)
+    if not model:
+        return None
+    env = os.environ.copy()
+    env["ANTHROPIC_BASE_URL"] = OLLAMA_BASE_URL
+    env["ANTHROPIC_AUTH_TOKEN"] = "ollama"
+    env["ANTHROPIC_API_KEY"] = ""
+    return env
+
+
 def triage(issue_number):
     cmd = [
         "claude",
@@ -480,7 +578,7 @@ def triage(issue_number):
         # file reads plus a test run.
         "--max-budget-usd",
         "10.00",
-    ]
+    ] + claude_model_args(review_only=True)
     log_path = LOG_DIR / f"issue-{issue_number}.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[triage] issue #{issue_number}: starting, logging to {log_path}", flush=True)
@@ -489,7 +587,7 @@ def triage(issue_number):
     with log_path.open("a") as log_handle:
         log_handle.write(f"\n==== issue #{issue_number} started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
         log_handle.flush()
-        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== issue #{issue_number} exited {result.returncode} ====\n")
     if result.returncode != 0:
         raise subprocess.CalledProcessError(result.returncode, cmd)
@@ -518,14 +616,14 @@ def triage_followup(issue_number):
         "60",
         "--max-budget-usd",
         "10.00",
-    ]
+    ] + claude_model_args(review_only=True)
     log_path = LOG_DIR / f"issue-{issue_number}-followup.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[review] issue #{issue_number}: starting follow-up, logging to {log_path}", flush=True)
     with log_path.open("a") as log_handle:
         log_handle.write(f"\n==== issue #{issue_number} follow-up started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
         log_handle.flush()
-        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== issue #{issue_number} follow-up exited {result.returncode} ====\n")
     if result.returncode != 0:
         raise subprocess.CalledProcessError(result.returncode, cmd)
@@ -557,14 +655,14 @@ def create_pr(issue_number):
         "150",
         "--max-budget-usd",
         "25.00",
-    ]
+    ] + claude_model_args()
     log_path = LOG_DIR / f"issue-{issue_number}-pr.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[pr] issue #{issue_number}: starting, logging to {log_path}", flush=True)
     with log_path.open("a") as log_handle:
         log_handle.write(f"\n==== issue #{issue_number} PR flow started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
         log_handle.flush()
-        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env())
         log_handle.write(f"==== issue #{issue_number} PR flow exited {result.returncode} ====\n")
     print(f"[pr] issue #{issue_number}: exited {result.returncode}", flush=True)
 
@@ -778,14 +876,14 @@ def review_pr(pr_number):
         "100",
         "--max-budget-usd",
         "20.00",
-    ]
+    ] + claude_model_args(review_only=True)
     log_path = LOG_DIR / f"pr-{pr_number}-review.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[review-pr] PR #{pr_number}: starting, logging to {log_path}", flush=True)
     with log_path.open("a") as log_handle:
         log_handle.write(f"\n==== PR #{pr_number} review started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
         log_handle.flush()
-        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== PR #{pr_number} review exited {result.returncode} ====\n")
     if result.returncode != 0:
         raise subprocess.CalledProcessError(result.returncode, cmd)
@@ -871,14 +969,14 @@ def cleanup_pr(pr_number):
         "150",
         "--max-budget-usd",
         "25.00",
-    ]
+    ] + claude_model_args(review_only=True)
     log_path = LOG_DIR / f"pr-{pr_number}-cleanup.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[cleanup-pr] PR #{pr_number}: starting, logging to {log_path}", flush=True)
     with log_path.open("a") as log_handle:
         log_handle.write(f"\n==== PR #{pr_number} cleanup started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
         log_handle.flush()
-        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== PR #{pr_number} cleanup exited {result.returncode} ====\n")
     if result.returncode != 0:
         raise subprocess.CalledProcessError(result.returncode, cmd)
@@ -903,9 +1001,41 @@ def process_bot_cleanup_pr(pr):
     remove_pr_cleanup_label(pr_number)
 
 
+def parse_args():
+    """Parse the daemon's CLI arguments - --ollama and --ollama_review, to run
+    'claude' invocations against an Ollama model instead of the default Claude model.
+    """
+    parser = argparse.ArgumentParser(description="Poll batpred issues/PRs and triage them with Claude Code.")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--ollama",
+        metavar="MODEL",
+        help="Run every 'claude' invocation against an Ollama model served at "
+        f"{OLLAMA_BASE_URL} instead of the default Claude model - e.g. --ollama glm-5.3-flash:cloud. "
+        "Uses Ollama's Claude Code compatible endpoint (https://docs.ollama.com/integrations/claude-code); "
+        "a :cloud-suffixed model is still routed through the local Ollama server, forwarded using this "
+        "machine's `ollama signin` credentials rather than a separate API key.",
+    )
+    group.add_argument(
+        "--ollama_review",
+        metavar="MODEL",
+        help="Like --ollama, but only for the read-only/review-ish flows - first-pass " "triage, follow-up review, PR review, PR cleanup. PR creation (/issue-pr, the " "flow that writes the actual fix) still runs on the default Claude model.",
+    )
+    return parser.parse_args()
+
+
 def main():
+    global OLLAMA_MODEL, OLLAMA_REVIEW_MODEL
+    args = parse_args()
+    OLLAMA_MODEL = args.ollama
+    OLLAMA_REVIEW_MODEL = args.ollama_review
+
     if not CLONE_DIR.exists():
         raise SystemExit(f"Expected a git clone at {CLONE_DIR} - see setup steps before running this daemon.")
+    if OLLAMA_MODEL:
+        print(f"[triage] using Ollama model {OLLAMA_MODEL!r} via {OLLAMA_BASE_URL} for every claude invocation", flush=True)
+    elif OLLAMA_REVIEW_MODEL:
+        print(f"[triage] using Ollama model {OLLAMA_REVIEW_MODEL!r} via {OLLAMA_BASE_URL} for review flows only (PR creation still uses Claude)", flush=True)
 
     state = load_state()
     while True:

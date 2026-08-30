@@ -484,6 +484,18 @@ def test_web_annual_form(my_predbat):
                 print("  ERROR: {} should be rendered as a wide field".format(field))
                 failed = True
 
+        print("Test: the Octopus API key is masked like a password field")
+        # It is a secret credential, so it should not be readable as plain text
+        # over someone's shoulder or in a screen share, unlike the account id.
+        key_row = re.search(r'<label for="load_octopus_api_key".*?</div>', wide_form, re.S)
+        if not key_row or 'type="password"' not in key_row.group(0) or 'autocomplete="off"' not in key_row.group(0):
+            print('  ERROR: load_octopus_api_key should render as type="password" with autocomplete="off"')
+            failed = True
+        account_row = re.search(r'<label for="load_octopus_account_id".*?</div>', wide_form, re.S)
+        if not account_row or 'type="text"' not in account_row.group(0) or "autocomplete" in account_row.group(0):
+            print('  ERROR: load_octopus_account_id should still render as a plain type="text" field, unaffected by the API key masking')
+            failed = True
+
         print("Test: selecting a basic-rates tariff uses THAT tariff, not the price-cap default")
         # The bug this pins: the dropdown only ever populated the URL boxes, and
         # config_from_post read the boxes. A basic-rates entry has no URL, so both boxes

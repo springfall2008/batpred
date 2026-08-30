@@ -45,7 +45,7 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
     original_slot_1_kwh = my_predbat.car_charging_slots[1][0]["kwh"]
 
     # Call dynamic_load
-    status_changed = my_predbat.dynamic_load()
+    my_predbat.dynamic_load()
 
     # Verify high load status
     if my_predbat.load_last_status != "high":
@@ -71,7 +71,7 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
     my_predbat.car_charging_slots[1] = [{"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 45, "kwh": 8.0}]
 
     # Call dynamic_load
-    status_changed = my_predbat.dynamic_load()
+    my_predbat.dynamic_load()
 
     # Verify low load status
     if my_predbat.load_last_status != "low":
@@ -99,7 +99,7 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
     my_predbat.car_charging_slots[1] = [{"start": my_predbat.minutes_now - 60, "end": my_predbat.minutes_now - 30, "kwh": 8.0}]
 
     # Call dynamic_load
-    status_changed = my_predbat.dynamic_load()
+    my_predbat.dynamic_load()
 
     if my_predbat.car_charging_slots[0][0]["kwh"] != 10.0:
         print(f"ERROR: Car slot 0 should not have been cancelled, kwh = {my_predbat.car_charging_slots[0][0]['kwh']}")
@@ -119,7 +119,7 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
     my_predbat.car_charging_slots[1] = [{"start": my_predbat.minutes_now - 60, "end": my_predbat.minutes_now - 30, "kwh": 8.0}]
 
     # Call dynamic_load
-    status_changed = my_predbat.dynamic_load()
+    my_predbat.dynamic_load()
 
     if my_predbat.car_charging_slots[0][0]["kwh"] != 0:
         print(f"ERROR: Car slot 0 should have been cancelled, kwh = {my_predbat.car_charging_slots[0][0]['kwh']}")
@@ -140,7 +140,7 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
     my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 25, "kwh": 10.0}]
 
     # Call dynamic_load
-    status_changed = my_predbat.dynamic_load()
+    my_predbat.dynamic_load()
 
     # Verify slots were NOT cancelled (due to midnight exclusion)
     if my_predbat.car_charging_slots[0][0]["kwh"] != 10.0:
@@ -158,7 +158,7 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
     my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now - 5, "end": my_predbat.minutes_now + 25, "kwh": 10.0}]
 
     # Call dynamic_load
-    status_changed = my_predbat.dynamic_load()
+    my_predbat.dynamic_load()
 
     # Verify slots were NOT cancelled (feature disabled)
     if my_predbat.car_charging_slots[0][0]["kwh"] != 10.0:

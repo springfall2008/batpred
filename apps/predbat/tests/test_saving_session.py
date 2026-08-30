@@ -151,7 +151,6 @@ def test_saving_session_null_octopoints(my_predbat):
     print("Test saving session with null octopoints_per_kwh (issue #3079)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -227,6 +226,53 @@ friendly_name: Octopus Intelligent Saving Sessions
         failed = True
 
     print("PASS: Null octopoints_per_kwh handled correctly - no TypeError raised, events ignored")
+    return failed
+
+
+def test_octopus_free_session_null_code(my_predbat):
+    """
+    Test that octopus_free_session accepts booked/auto-joined events published with code: null
+    (e.g. Weekend Happy Hours) - issue #4835. Only "available to join" events carry a code, so
+    gating on it dropped genuine, already-booked free periods.
+    """
+    print("Test octopus_free_session with code: null (issue #4835)")
+    ha = my_predbat.ha_interface
+    failed = False
+
+    free_session_events = """
+events:
+    - id: 5798
+      code: null
+      start: '2026-08-30T12:00:00+01:00'
+      end: '2026-08-30T13:00:00+01:00'
+      duration_in_minutes: 60
+    - id: 5800
+      code: 'OCTOPLUS-99999'
+      start: '2026-08-30T14:00:00+01:00'
+      end: '2026-08-30T15:00:00+01:00'
+      duration_in_minutes: 60
+"""
+    ha.dummy_items["event.octopus_energy_a_12345678_octoplus_free_electricity_session_events"] = yaml.safe_load(free_session_events)
+    my_predbat.args["octopus_free_session"] = "event.octopus_energy_a_12345678_octoplus_free_electricity_session_events"
+    if "octopus_saving_session" in my_predbat.args:
+        del my_predbat.args["octopus_saving_session"]
+    if "octopus_free_url" in my_predbat.args:
+        del my_predbat.args["octopus_free_url"]
+    if "octopus_free_electricity" in my_predbat.args:
+        del my_predbat.args["octopus_free_electricity"]
+
+    octopus_free_slots, octopus_saving_slots = my_predbat.fetch_octopus_sessions()
+
+    expected_free = [
+        {"start": "2026-08-30T12:00:00+01:00", "end": "2026-08-30T13:00:00+01:00", "rate": 0},
+        {"start": "2026-08-30T14:00:00+01:00", "end": "2026-08-30T15:00:00+01:00", "rate": 0},
+    ]
+    if octopus_free_slots != expected_free:
+        print("ERROR: Expected free slots {} got {}".format(expected_free, octopus_free_slots))
+        failed = True
+
+    if not failed:
+        print("PASS: code: null free-session event is accepted, same as one with a real code")
     return failed
 
 
@@ -1199,7 +1245,6 @@ def test_saving_session_default_rate(my_predbat):
     ha = my_predbat.ha_interface
     failed = False
     date_today = datetime.now().strftime("%Y-%m-%d")
-    date_yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -1305,5 +1350,136 @@ def test_saving_session_entity_regex_power_rename(my_predbat):
                 failed = True
             else:
                 print(f"PASS: {description} resolved to {resolved}")
+
+    return failed
+
+
+def test_saving_session_zero_octopoints_joined_is_free_slot(my_predbat):
+    """
+    Test that the free/saving split is driven by eventType, not by the reward value.
+    Covers GitHub issue #4851.
+
+    Octopus publishes Power Up and Power Down through the same savingSessions feed and tells them
+    apart with eventType: TURN_DOWN (reduce, rewarded), WEEKEND_HAPPY_HOUR (earned free import hour,
+    reward 0), TURN_UP (increase, rewarded). Only WEEKEND_HAPPY_HOUR is free.
+
+    The reward value cannot stand in for the type: a TURN_DOWN reporting 0 would be zeroed on IMPORT,
+    making Predbat grid-charge through a session where the user is meant to be reducing import.
+    """
+    print("Test joined session free/saving split keys on eventType (issue #4851)")
+    ha = my_predbat.ha_interface
+    failed = False
+    date_today = datetime.now().strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
+
+    session_binary = """
+state: off
+current_joined_event_start: null
+current_joined_event_end: null
+current_joined_event_duration_in_minutes: null
+next_joined_event_start: null
+next_joined_event_end: null
+next_joined_event_duration_in_minutes: null
+icon: mdi:leaf
+friendly_name: Octoplus Saving Session
+"""
+
+    def run(joined_yaml):
+        session_sensor = f"""
+state: '2025-01-23T12:10:11.108+{tz_offset}:00'
+event_types: octopus_energy_all_octoplus_saving_sessions
+event_type: octopus_energy_all_octoplus_saving_sessions
+account_id: A-4DD6C5EE
+available_events: []
+joined_events:
+{joined_yaml}
+friendly_name: Octoplus Saving Session Events
+"""
+        ha.dummy_items.clear()
+        ha.dummy_items["binary_sensor.octopus_energy_test_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
+        ha.dummy_items["event.octopus_energy_test_octoplus_saving_session_event"] = yaml.safe_load(session_sensor)
+        ha.dummy_items["sensor.octopus_free_session"] = {}
+        my_predbat.args["octopus_saving_session"] = "event.octopus_energy_test_octoplus_saving_session_event"
+        my_predbat.args["octopus_free_session"] = "sensor.octopus_free_session"
+        if "octopus_free_url" in my_predbat.args:
+            del my_predbat.args["octopus_free_url"]
+        my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 10
+        return my_predbat.fetch_octopus_sessions()
+
+    happy_hour = f"""    - id: 5797
+      start: '{date_today}T11:00:00+{tz_offset}:00'
+      end: '{date_today}T12:00:00+{tz_offset}:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: 0
+      event_type: WEEKEND_HAPPY_HOUR"""
+    turn_down_rewarded = f"""    - id: 5798
+      start: '{date_today}T17:00:00+{tz_offset}:00'
+      end: '{date_today}T18:00:00+{tz_offset}:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: 500
+      event_type: TURN_DOWN"""
+
+    # Test 1: a joined Happy Hour becomes a free slot; a rewarded TURN_DOWN alongside it stays a
+    # saving slot. Both arrive in the same joined_events list.
+    print("  Test 1: WEEKEND_HAPPY_HOUR is free, TURN_DOWN is a saving slot")
+    octopus_free_slots, octopus_saving_slots = run(happy_hour + "\n" + turn_down_rewarded)
+
+    expected_free = [{"start": "{}T11:00:00+{}:00".format(date_today, tz_offset), "end": "{}T12:00:00+{}:00".format(date_today, tz_offset), "rate": 0}]
+    expected_saving = [{"start": "{}T17:00:00+{}:00".format(date_today, tz_offset), "end": "{}T18:00:00+{}:00".format(date_today, tz_offset), "rate": 50.0, "state": False}]
+    if json.dumps(octopus_free_slots) != json.dumps(expected_free):
+        print("ERROR: Expecting free slots {} got {}".format(expected_free, octopus_free_slots))
+        failed = 1
+    if json.dumps(octopus_saving_slots) != json.dumps(expected_saving):
+        print("ERROR: Expecting saving slots {} got {}".format(expected_saving, octopus_saving_slots))
+        failed = 1
+
+    # The free slot must zero the import rate for exactly its hour and nothing else
+    rate_import_replicated = {}
+    my_predbat.rate_import = {n: 30.0 for n in range(-24 * 60, 48 * 60)}
+    my_predbat.load_free_slot(octopus_free_slots, my_predbat.rate_import, export=False, rate_replicate=rate_import_replicated)
+    zeroed = sorted(minute for minute in range(-24 * 60, 48 * 60) if my_predbat.rate_import[minute] == 0)
+    others = [minute for minute in range(-24 * 60, 48 * 60) if my_predbat.rate_import[minute] not in (0, 30.0)]
+    if len(zeroed) != 60:
+        print("ERROR: Free slot - expecting 60 minutes at rate 0, got {}".format(len(zeroed)))
+        failed = 1
+    elif zeroed != list(range(zeroed[0], zeroed[0] + 60)):
+        print("ERROR: Free slot - expecting one contiguous hour, got a gap in {}".format(zeroed))
+        failed = 1
+    elif others:
+        print("ERROR: Free slot - minutes outside the session were changed: {}".format(others[:5]))
+        failed = 1
+    elif rate_import_replicated.get(zeroed[0]) != "saving":
+        print("ERROR: Free slot - expecting the replicate reason to be marked, got {}".format(rate_import_replicated.get(zeroed[0])))
+        failed = 1
+
+    # Test 2: a TURN_DOWN reporting 0 must NOT be treated as free. This is the case the reward value
+    # alone cannot distinguish, and getting it wrong makes Predbat import at full price believing it
+    # is free, through a session where it should be reducing import.
+    print("  Test 2: A TURN_DOWN reporting zero reward is not free")
+    zero_turn_down = happy_hour.replace("event_type: WEEKEND_HAPPY_HOUR", "event_type: TURN_DOWN")
+    octopus_free_slots, _ = run(zero_turn_down)
+    if octopus_free_slots:
+        print("ERROR: A zero-reward TURN_DOWN must not become a free slot, got {}".format(octopus_free_slots))
+        failed = 1
+
+    # Test 3: TURN_UP is a rewarded increase event, not free import
+    print("  Test 3: TURN_UP is not free")
+    turn_up = turn_down_rewarded.replace("event_type: TURN_DOWN", "event_type: TURN_UP")
+    octopus_free_slots, _ = run(turn_up)
+    if octopus_free_slots:
+        print("ERROR: TURN_UP must not become a free slot, got {}".format(octopus_free_slots))
+        failed = 1
+
+    # Test 4: no eventType at all (older API, or a feed that does not carry it) - fall through to the
+    # existing behaviour rather than guessing from the reward
+    print("  Test 4: A missing eventType does not create a free slot")
+    no_type = happy_hour.replace("\n      event_type: WEEKEND_HAPPY_HOUR", "")
+    octopus_free_slots, _ = run(no_type)
+    if octopus_free_slots:
+        print("ERROR: A missing eventType must not become a free slot, got {}".format(octopus_free_slots))
+        failed = 1
 
     return failed

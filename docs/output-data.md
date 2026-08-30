@@ -606,6 +606,8 @@ They are used in the carbon chart - see [creating the Predbat charts](creating-c
 - predbat.carbon_best - Predicted Carbon intensity in g for your home under the best plan based on grid imports, grid exports and the grid's projected carbon intensity
 - predbat.carbon_now - A sensor that gives the current Grid Carbon intensity in g/kWh
 - predbat.carbon_today - A sensor that tracks your home's Carbon impact today in g based on your grid import minus your grid export
+- predbat.carbon_yesterday - A sensor that gives your home's total Carbon impact in g for yesterday (00:00-23:59 on the previous day)
+- predbat.carbon_total - A running total in g of the above carbon_yesterday sensor, with attribute of the total in kg. Only published when **carbon_enable** is set
 
 ## Cost saving data
 

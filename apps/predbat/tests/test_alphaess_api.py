@@ -301,7 +301,6 @@ def test_alphaess_response_code_is_logged_even_with_debug_on():
     with patch("alphaess.aiohttp.ClientSession", return_value=session):
         run_async_local(client._post("update_charge_config", body={"sysSn": "AL70"}))
     # Check that the response code 6008 was logged (not masked as ***)
-    response_logs = [msg for msg in client.log_messages if "response" in msg.lower() or "6008" in msg]
     if not any("6008" in msg for msg in client.log_messages):
         print(f"ERROR: code 6008 not logged, got {client.log_messages}")
         failed = True

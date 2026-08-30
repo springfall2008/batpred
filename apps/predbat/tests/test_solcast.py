@@ -528,7 +528,7 @@ def test_cache_get_url_metrics_forecast_solar(my_predbat):
             return test_api.mock_aiohttp_session()
 
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
-            result = run_async(test_api.solar.cache_get_url(url, params, max_age=60))
+            run_async(test_api.solar.cache_get_url(url, params, max_age=60))
 
         # Should increment forecast_solar metrics, not solcast
         if test_api.solar.forecast_solar_requests_total != 1:
@@ -3142,9 +3142,6 @@ def test_pv_calibration_power_conversion(my_predbat):
     try:
         solar = test_api.solar
         base = test_api.mock_base
-
-        plan_interval = base.plan_interval_minutes  # 5
-        minutes_now = base.minutes_now  # 720 (12:00)
 
         # Build synthetic cumulative pv_today history.
         # We represent 5 previous days.  Each day, the panel produces 2 kWh between
