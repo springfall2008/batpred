@@ -188,6 +188,11 @@ class GivTCPComponent(ComponentBase):
         # The discovered set automatic_config() was last run against, so a fleet that grows on a
         # later re-probe reconfigures rather than staying at its startup size.
         self.configured_for = []
+        # Whether the most recent poll read every inverter being managed. run() withholds the
+        # success timestamp while this is False, which is what eventually puts the component into
+        # error - a failed read otherwise leaves stale entities republishing as though nothing
+        # were wrong.
+        self.poll_healthy = False
         # publish_data() runs every poll; the unsupported-model notice is per inverter and only
         # worth saying once rather than every 60 seconds for the life of the process
         self.discharge_target_warned = {}
@@ -229,6 +234,14 @@ class GivTCPComponent(ComponentBase):
                 if missing:
                     self.log("Warn: GivTCP: no inverter answered at {} - those endpoints will not be managed. Restart Predbat once they are reachable if that is wrong.".format(", ".join(missing)))
 
+            # An endpoint that has never been adopted is not a failure - the shipped apps.yaml
+            # over-provisions givtcp_rest, so a placeholder entry is the normal case. Only the
+            # inverters actually being managed count against the component's health.
+            failed = [n for n in self.discovered if n not in answered]
+            for n in failed:
+                self.log("Warn: GivTCP: inverter {} at {} did not respond - its entities are now stale, and the component will go into error if this continues".format(n, self.rest[n].inverter.rest_api))
+            self.poll_healthy = not failed
+
             await self.publish_data()
 
         # Report failure while nothing has ever been read, so ComponentBase.start() keeps retrying
@@ -252,7 +265,11 @@ class GivTCPComponent(ComponentBase):
             self.configured_for = list(self.discovered)
             self.automatic_config_done = True
 
-        self.update_success_timestamp()
+        # Deliberately still True: a failed poll should not tear the component down and restart it
+        # over a transient blip. Withholding the timestamp lets ComponentManager's staleness check
+        # mark it not-alive once the failure persists.
+        if self.poll_healthy:
+            self.update_success_timestamp()
         return True
 
     async def rediscover(self):

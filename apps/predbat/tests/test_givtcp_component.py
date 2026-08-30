@@ -880,6 +880,103 @@ def test_rediscovery_skipped_once_every_endpoint_is_discovered(my_predbat=None):
     return 0
 
 
+def _capture_logs(component):
+    """
+    Collect log lines so a test can assert on what the component reported.
+
+    Patches the component's own bound log rather than base.log - ComponentBase copies base.log
+    into self.log at construction, so replacing it on the base afterwards has no effect.
+    """
+    messages = []
+    component.log = lambda message, quiet=True: messages.append(str(message))
+    return messages
+
+
+def test_failed_poll_withholds_the_success_timestamp_and_warns(my_predbat=None):
+    """
+    A failed poll must not refresh the success timestamp.
+
+    read_data() leaves the previous snapshot in place on failure, so publish_data() keeps
+    republishing frozen values with a fresh HA last_updated. Nothing about the entities themselves
+    reveals that GivTCP died. Withholding the timestamp lets ComponentManager's 60 minute staleness
+    check (components.py) put the component into error instead.
+    """
+    base, component = _make_component()
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    run_async(component.run(seconds=0, first=True))
+    healthy_at = component.last_success_timestamp
+    assert healthy_at is not None, "a successful poll should record a success timestamp"
+
+    component.rest[0].read_data = MagicMock(return_value=None)
+    messages = _capture_logs(component)
+    result = run_async(component.run(seconds=GIVTCP_POLL_SECONDS, first=False))
+
+    assert result is True, "a failed poll should not restart the component - the health timeout handles it"
+    assert component.last_success_timestamp == healthy_at, "the success timestamp must not advance on a failed poll"
+    assert any("did not respond" in m for m in messages), f"Expected a warning naming the unresponsive inverter, got {messages}"
+    print("PASS: a failed poll warns and withholds the success timestamp")
+    return 0
+
+
+def test_success_timestamp_resumes_once_the_poll_recovers(my_predbat=None):
+    """Once GivTCP answers again the component reports healthy without needing a restart."""
+    base, component = _make_component()
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    run_async(component.run(seconds=0, first=True))
+
+    component.rest[0].read_data = MagicMock(return_value=None)
+    run_async(component.run(seconds=GIVTCP_POLL_SECONDS, first=False))
+    stalled_at = component.last_success_timestamp
+
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    run_async(component.run(seconds=GIVTCP_POLL_SECONDS * 2, first=False))
+
+    assert component.last_success_timestamp > stalled_at, "the success timestamp should advance again after recovery"
+    print("PASS: the success timestamp resumes once polling recovers")
+    return 0
+
+
+def test_one_failing_inverter_withholds_success_for_the_whole_component(my_predbat=None):
+    """
+    A partly-dead fleet is still a degraded component.
+
+    Predbat cannot control the battery behind the endpoint that stopped answering, and its entities
+    are frozen, so reporting the component healthy would hide a real loss of control.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    for rest in component.rest:
+        rest.read_data = MagicMock(return_value=_rest_data_blob())
+    run_async(component.run(seconds=0, first=True))
+    healthy_at = component.last_success_timestamp
+
+    component.rest[1].read_data = MagicMock(return_value=None)
+    run_async(component.run(seconds=GIVTCP_POLL_SECONDS, first=False))
+
+    assert component.last_success_timestamp == healthy_at, "one failing inverter must withhold the whole component's success"
+    print("PASS: one failing inverter withholds success for the whole component")
+    return 0
+
+
+def test_an_endpoint_never_discovered_does_not_withhold_success(my_predbat=None):
+    """
+    A URL that never had an inverter behind it is not a failure.
+
+    The shipped apps.yaml over-provisions givtcp_rest, so a placeholder entry is the normal case -
+    holding the component in error for it would make the default config permanently unhealthy.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://placeholder:6345"])
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = MagicMock(return_value=None)
+    run_async(component.run(seconds=0, first=True))
+    first_success = component.last_success_timestamp
+    assert first_success is not None, "discovery of one live inverter should report success"
+
+    run_async(component.run(seconds=GIVTCP_POLL_SECONDS, first=False))
+    assert component.last_success_timestamp > first_success, "the never-discovered placeholder must not withhold success"
+    print("PASS: an endpoint that never had an inverter does not hold the component in error")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -932,6 +1029,10 @@ def test_givtcp_component(my_predbat=None):
         ("rediscover_no_shrink", test_rediscovery_never_drops_an_inverter_that_stops_answering, "discovered inverters are never dropped"),
         ("rediscover_cheap", test_rediscovery_uses_a_cheap_single_probe, "re-probe uses a single cheap GET"),
         ("rediscover_complete", test_rediscovery_skipped_once_every_endpoint_is_discovered, "no re-probe when fleet is complete"),
+        ("poll_fail_health", test_failed_poll_withholds_the_success_timestamp_and_warns, "failed poll warns and withholds success"),
+        ("poll_recover", test_success_timestamp_resumes_once_the_poll_recovers, "success resumes after recovery"),
+        ("poll_partial_fail", test_one_failing_inverter_withholds_success_for_the_whole_component, "one failing inverter degrades the component"),
+        ("poll_placeholder_ok", test_an_endpoint_never_discovered_does_not_withhold_success, "undiscovered placeholder does not degrade"),
     ]
 
     passed = 0
