@@ -3832,6 +3832,7 @@ def test_title_event_does_not_offer_to_switch_to_the_open_conversation(my_predba
 
     if not failed:
         print("✓ Test passed: a title event leaves the banner alone and refreshes the header")
+    return failed
 
 
 def test_own_message_is_shown_without_waiting_for_the_server_echo(my_predbat):
