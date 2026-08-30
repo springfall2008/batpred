@@ -366,6 +366,7 @@ class OctopusEnergyApiClient:
         self.timeout = aiohttp.ClientTimeout(total=None, sock_connect=timeout_in_seconds, sock_read=timeout_in_seconds)
 
         self.session = None
+        self._session_loop = None
         self.saving_sessions_to_join = []
 
     async def async_close(self):
@@ -373,10 +374,26 @@ class OctopusEnergyApiClient:
             await self.session.close()
 
     async def async_create_client_session(self):
+        # An aiohttp.ClientSession is bound to the event loop that created it: its
+        # connector and transports live on that loop. Reusing one from a different
+        # loop raises at request time, and callers that swallow the error see the
+        # request silently do nothing.
+        #
+        # This component's own poll runs on one loop, but entity callbacks
+        # (switch/number/select events) can be dispatched from another, so the
+        # session is not guaranteed to be used on the loop that made it. Rebind if
+        # the loop has changed; the common case still reuses the connection.
+        running = asyncio.get_running_loop()
         if self.session is not None:
-            return self.session
+            if self._session_loop is running:
+                return self.session
+            # Different loop: the old session cannot be closed from here (that too
+            # would touch the wrong loop), so drop the reference and let its owner
+            # loop finalise it.
+            self.session = None
 
         self.session = aiohttp.ClientSession(headers=self.default_headers, skip_auto_headers=["User-Agent"])
+        self._session_loop = running
         return self.session
 
 

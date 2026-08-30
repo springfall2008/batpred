@@ -793,15 +793,35 @@ class OhmeApiClient:
         self._close_session = False
         self._timeout = 10
         self._last_rule: dict[str, Any] = {}
+        self._session_loop = None
         self.last_success_timestamp = None
 
     # Auth methods
 
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        """Return a ClientSession owned by the currently running event loop.
+
+        A ClientSession is bound to the loop that created it — its connector and
+        transports live there — so reusing one from a different loop raises at
+        request time, and a caller that swallows the error sees the request
+        silently do nothing. This component's own poll runs on one loop, but entity
+        callbacks can be dispatched from another, so rebind when the loop changes.
+        The common case still reuses the connection.
+        """
+        running = asyncio.get_running_loop()
+        if self._session is not None and self._session_loop is running:
+            return self._session
+        # A session from another loop cannot be closed from here without touching
+        # that loop; drop the reference and let its owner finalise it.
+        self._session = aiohttp.ClientSession()
+        self._session_loop = running
+        self._close_session = True
+        return self._session
+
+
     async def async_login(self) -> bool:
         """Refresh the user auth token from the stored credentials."""
-        if self._session is None:
-            self._session = aiohttp.ClientSession()
-            self._close_session = True
+        self._ensure_session()
 
         async with asyncio.timeout(self._timeout):
             async with self._session.post(
@@ -831,9 +851,7 @@ class OhmeApiClient:
         if time.time() - self._token_birth < 2700:
             return True
 
-        if self._session is None:
-            self._session = aiohttp.ClientSession()
-            self._close_session = True
+        self._ensure_session()
 
         async with asyncio.timeout(self._timeout):
             async with self._session.post(
@@ -879,9 +897,7 @@ class OhmeApiClient:
         """Make an HTTP request."""
         await self._async_refresh_session()
 
-        if self._session is None:
-            self._session = aiohttp.ClientSession()
-            self._close_session = True
+        self._ensure_session()
 
         async with asyncio.timeout(self._timeout):
             try:

@@ -381,6 +381,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.base_url = SOLIS_OAUTH_BASE_URL if self.auth_method == "oauth" else base_url
         self.automatic = automatic
         self.session = None
+        self._session_loop = None
         # Fallback used only when an inverter has never reported a live batteryVoltage - matches
         # the previous hard-coded assumption (issue #4493). get_nominal_voltage() below is the
         # real source of truth once live data is available.
@@ -491,6 +492,26 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
     # ==================== Core API Methods ====================
 
+    def _ensure_session(self):
+        """Return a ClientSession owned by the currently running event loop.
+
+        A ClientSession is bound to the loop that created it — its connector and
+        transports live there — so reusing one from a different loop raises at
+        request time, and a caller that swallows the error sees the request
+        silently do nothing. The poll cycle runs on one loop, but entity callbacks
+        can be dispatched from another, so rebind when the loop changes. The common
+        case still reuses the connection.
+        """
+        running = asyncio.get_running_loop()
+        if self.session is not None and self._session_loop is running:
+            return self.session
+        # A session from another loop cannot be closed from here without touching
+        # that loop; drop the reference and let its owner finalise it.
+        timeout = aiohttp.ClientTimeout(total=SOLIS_REQUEST_TIMEOUT)
+        self.session = aiohttp.ClientSession(timeout=timeout)
+        self._session_loop = running
+        return self.session
+
     async def _execute_request(self, endpoint, payload):
         """Execute HTTP POST request to Solis API"""
         # OAuth reads/control live in a different route namespace (see SOLIS_OAUTH_ENDPOINTS).
@@ -513,7 +534,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         try:
             async with asyncio.timeout(SOLIS_REQUEST_TIMEOUT):
-                async with self.session.post(url, headers=headers, json=payload) as response:
+                async with self._ensure_session().post(url, headers=headers, json=payload) as response:
                     # Check HTTP status
                     if response.status != 200:
                         error_text = await response.text()
@@ -3258,9 +3279,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         # One-time startup configuration
         if first:
-            # Create aiohttp session
-            timeout = aiohttp.ClientTimeout(total=SOLIS_REQUEST_TIMEOUT)
-            self.session = aiohttp.ClientSession(timeout=timeout)
+            # Session is created lazily by _ensure_session(), which binds it to
+            # whichever loop is actually running the request.
 
             # Discover inverters - always scan, filter by inverter_sn if specified
             try:
