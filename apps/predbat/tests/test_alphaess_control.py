@@ -327,13 +327,13 @@ def test_alphaess_rate_zero_is_freeze():
         print(f"ERROR: gridCharge {charge.get('gridCharge')} should be 0 when charge_rate is 0")
         failed = True
 
-    # discharge_rate == 0 -> a valid daily charge profile at current SOC minus one, with
+    # discharge_rate == 0 -> a valid daily charge profile at a fixed 10%, with
     # ordinary demand-mode discharge settings. The charge profile is the hardware hold.
     frozen_export = _schedule(reserve=10, export_power=0)
     hold_charge = client.build_charge_payload("AL70", frozen_export)
     discharge = client.build_discharge_payload("AL70", frozen_export)
-    if hold_charge.get("gridCharge") != 1 or hold_charge.get("batHighCap") != 49:
-        print(f"ERROR: zero-discharge hold did not create a 49% charge profile: {hold_charge}")
+    if hold_charge.get("gridCharge") != 1 or hold_charge.get("batHighCap") != 10:
+        print(f"ERROR: zero-discharge hold did not create a 10% charge profile: {hold_charge}")
         failed = True
     if hold_charge.get("timeChaf1") != "00:00" or hold_charge.get("timeChae1") != "23:45":
         print(f"ERROR: hold profile should cover the stable daily period, got {hold_charge}")
@@ -361,8 +361,8 @@ def test_alphaess_both_rates_zero_still_holds_the_battery():
     schedule = _schedule(reserve=15, charge_power=0, export_power=0)
     charge = client.build_charge_payload("AL70", schedule)
     discharge = client.build_discharge_payload("AL70", schedule)
-    if charge.get("gridCharge") != 1 or charge.get("batHighCap") != 49:
-        print(f"ERROR: both-zero hold did not create a target-below-SOC charge profile: {charge}")
+    if charge.get("gridCharge") != 1 or charge.get("batHighCap") != 10:
+        print(f"ERROR: both-zero hold did not create a 10% charge profile: {charge}")
         failed = True
     if discharge.get("ctrDis") != 0:
         print(f"ERROR: both-zero hold left discharge time control enabled: {discharge}")
@@ -373,8 +373,8 @@ def test_alphaess_both_rates_zero_still_holds_the_battery():
 def test_alphaess_disabled_planned_hold_recovers_the_charge_window():
     """Generic Hold charging disables the switch but leaves target and times intact.
 
-    Recover that active window and preserve its already-lower planned target instead of
-    turning a target-reached charge back into demand mode.
+    Recover that active window and use the fixed hold target instead of turning a
+    target-reached charge back into demand mode.
     """
     failed = False
     client = _client()
@@ -382,8 +382,8 @@ def test_alphaess_disabled_planned_hold_recovers_the_charge_window():
     schedule = _schedule(reserve=41, charge={"enable": False, "soc": 40, "power": 0, "start": "01:00:00", "end": "05:00:00"})
     charge = client.build_charge_payload("AL70", schedule)
     discharge = client.build_discharge_payload("AL70", schedule)
-    if charge.get("gridCharge") != 1 or charge.get("batHighCap") != 40:
-        print(f"ERROR: planned 40% hold was not recovered: {charge}")
+    if charge.get("gridCharge") != 1 or charge.get("batHighCap") != 10:
+        print(f"ERROR: planned hold was not converted to the fixed 10% profile: {charge}")
         failed = True
     if charge.get("timeChaf1") != "01:00" or charge.get("timeChae1") != "05:00":
         print(f"ERROR: recovered hold did not retain its planned times: {charge}")
@@ -409,29 +409,26 @@ def test_alphaess_restored_rate_releases_a_disabled_planned_hold():
     if second.get("gridCharge") != 0:
         print(f"ERROR: restored charge power did not release stale hold fields: {second}")
         failed = True
-    if "AL70" in client.hold_target_soc:
-        print(f"ERROR: released hold left its target latch behind: {client.hold_target_soc}")
-        failed = True
     assert not failed, "test_alphaess_restored_rate_releases_a_disabled_planned_hold"
 
 
-def test_alphaess_hold_target_is_latched_while_soc_rises():
-    """Solar gain during a hold must not consume one cloud write for every SOC percent."""
+def test_alphaess_hold_profile_is_constant_while_soc_changes():
+    """The fixed hold target must not follow live SOC or inverter rating."""
     failed = False
     client = _client()
     schedule = _schedule(reserve=15, export_power=0)
     first = client.build_charge_payload("AL70", schedule)
     client.device_values["AL70"]["soc"] = 55.0
     second = client.build_charge_payload("AL70", schedule)
-    if first.get("batHighCap") != 49 or second.get("batHighCap") != 49:
-        print(f"ERROR: hold target ratcheted with SOC: first={first} second={second}")
+    if first.get("batHighCap") != 10 or second.get("batHighCap") != 10:
+        print(f"ERROR: hold target changed with SOC: first={first} second={second}")
         failed = True
     client.build_charge_payload("AL70", _schedule(reserve=15))
     third = client.build_charge_payload("AL70", schedule)
-    if third.get("batHighCap") != 54:
-        print(f"ERROR: a new hold kept the old latched target: {third}")
+    if third.get("batHighCap") != 10:
+        print(f"ERROR: a new hold did not use the fixed target: {third}")
         failed = True
-    assert not failed, "test_alphaess_hold_target_is_latched_while_soc_rises"
+    assert not failed, "test_alphaess_hold_profile_is_constant_while_soc_changes"
 
 
 def test_alphaess_real_charge_survives_a_simultaneous_discharge_hold():
@@ -1394,11 +1391,11 @@ def test_alphaess_periodic_rate_zero_is_freeze_not_demand_mode():
         print(f"ERROR: hold cycle flags should be charge=1/discharge=0, got {payload}")
         failed = True
     entry = (payload.get("chargeTimeList") or [{}])[0]
-    if entry.get("beginTime") != "00:00" or entry.get("endTime") != "23:45" or entry.get("chargeLimit") != 49:
+    if entry.get("beginTime") != "00:00" or entry.get("endTime") != "23:45" or entry.get("chargeLimit") != 10:
         print(f"ERROR: periodic hold charge profile is wrong: {entry}")
         failed = True
-    if entry.get("chargePower") != 3000:
-        print(f"ERROR: periodic hold should retain the valid 3000W schedule power, got {entry}")
+    if entry.get("chargePower") != 100:
+        print(f"ERROR: periodic hold should use the fixed 100W power, got {entry}")
         failed = True
     assert not failed, "test_alphaess_periodic_rate_zero_is_freeze_not_demand_mode"
 
@@ -1413,7 +1410,7 @@ def test_alphaess_periodic_both_rates_zero_still_holds_the_battery():
     if payload.get("ctrDisCycle") != 0:
         print(f"ERROR: ctrDisCycle {payload.get('ctrDisCycle')} should be 0 while charge profile holds")
         failed = True
-    if payload.get("gridChargeCycle") != 1 or payload["chargeTimeList"][0].get("chargeLimit") != 49:
+    if payload.get("gridChargeCycle") != 1 or payload["chargeTimeList"][0].get("chargeLimit") != 10 or payload["chargeTimeList"][0].get("chargePower") != 100:
         print(f"ERROR: both-zero periodic intent did not create the hold profile: {payload}")
         failed = True
     assert not failed, "test_alphaess_periodic_both_rates_zero_still_holds_the_battery"
@@ -1811,7 +1808,7 @@ def run_alphaess_control_tests(my_predbat):
         ("both_rates_zero_still_holds", test_alphaess_both_rates_zero_still_holds_the_battery),
         ("disabled_planned_hold_recovers_window", test_alphaess_disabled_planned_hold_recovers_the_charge_window),
         ("restored_rate_releases_hold", test_alphaess_restored_rate_releases_a_disabled_planned_hold),
-        ("hold_target_latched", test_alphaess_hold_target_is_latched_while_soc_rises),
+        ("hold_profile_constant", test_alphaess_hold_profile_is_constant_while_soc_changes),
         ("real_charge_survives_hold", test_alphaess_real_charge_survives_a_simultaneous_discharge_hold),
         ("snap_inward", test_alphaess_times_snap_inward_to_the_15_minute_grid),
         ("collapsed_disabled", test_alphaess_window_collapsed_by_snapping_is_disabled_not_wrapped),
