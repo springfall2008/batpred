@@ -80,6 +80,7 @@ GIVTCP_CONTROLS = {
     "charge_limit": ("number", "set_charge_target", {"unit_of_measurement": "%", "device_class": "battery", "icon": "mdi:battery-charging-100", "min": 4, "max": 100, "step": 1}),
     "reserve": ("number", "set_reserve", {"unit_of_measurement": "%", "device_class": "battery", "icon": "mdi:battery-low", "min": 4, "max": 100, "step": 1}),
     "discharge_target_soc": ("number", "set_discharge_target", {"unit_of_measurement": "%", "device_class": "battery", "icon": "mdi:battery-arrow-down", "min": 4, "max": 100, "step": 1}),
+    "charge_limit_enable": ("switch", "enable_charge_target", {"icon": "mdi:battery-charging-100"}),
     "scheduled_charge_enable": ("switch", "enable_charge_schedule", {"icon": "mdi:battery-charging"}),
     "scheduled_discharge_enable": ("switch", "enable_discharge_schedule", {"icon": "mdi:battery-arrow-down"}),
     "charge_start_time": ("select", "_set_charge_slot", {"icon": "mdi:clock-start", "options": GIVTCP_TIME_OPTIONS}),
@@ -151,6 +152,16 @@ GIVTCP_AUTO_CONFIG_PAUSE_KEYS = [
     "pause_mode",
     "pause_start_time",
     "pause_end_time",
+]
+
+# The Enable_Charge_Target register (reg 20) gates whether the inverter acts on Target_SOC at all,
+# so Predbat has to set it alongside the limit or the battery charges to 100% regardless (#4141).
+# Claimed only when every discovered inverter actually reports the register - enable_charge_target()
+# verifies its write by reading that field back, so publishing a control for a register GivTCP never
+# reports would burn the retry ladder on every charge limit change, and would displace the user's
+# own apps.yaml charge_limit_enable that could have done the job.
+GIVTCP_AUTO_CONFIG_CHARGE_ENABLE_KEYS = [
+    "charge_limit_enable",
 ]
 
 # Power/voltage keys are auto-configured separately: givtcp_rest_power_ignore opts out of them.
@@ -332,6 +343,10 @@ class GivTCPComponent(ComponentBase):
                 if discharge_target is not None:
                     self.dashboard_item(self._entity_id("number", n, "discharge_target_soc"), state=discharge_target, attributes=GIVTCP_CONTROLS["discharge_target_soc"][2], app="givtcp")
 
+            # Only when GivTCP reports it: see GivTCPRest.charge_target_enabled
+            charge_target_enabled = rest.charge_target_enabled
+            if charge_target_enabled is not None:
+                self.dashboard_item(self._entity_id("switch", n, "charge_limit_enable"), state="on" if charge_target_enabled else "off", attributes=GIVTCP_CONTROLS["charge_limit_enable"][2], app="givtcp")
             self.dashboard_item(self._entity_id("switch", n, "scheduled_charge_enable"), state="on" if rest.charge_enable_time else "off", attributes=GIVTCP_CONTROLS["scheduled_charge_enable"][2], app="givtcp")
             self.dashboard_item(self._entity_id("switch", n, "scheduled_discharge_enable"), state="on" if rest.discharge_enable_time else "off", attributes=GIVTCP_CONTROLS["scheduled_discharge_enable"][2], app="givtcp")
 
@@ -430,6 +445,11 @@ class GivTCPComponent(ComponentBase):
             keys += GIVTCP_AUTO_CONFIG_POWER_KEYS
 
         keys += GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS
+
+        if all(self.rest[n].charge_target_enabled is not None for n in discovered):
+            keys += GIVTCP_AUTO_CONFIG_CHARGE_ENABLE_KEYS
+        else:
+            self.log("Info: GivTCP: Enable_Charge_Target is not reported by every inverter - leaving charge_limit_enable to your apps.yaml config")
 
         if all(self.rest[n].inverter.rest_v3 for n in discovered):
             keys += GIVTCP_AUTO_CONFIG_PAUSE_KEYS

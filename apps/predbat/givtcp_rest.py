@@ -89,6 +89,28 @@ class GivTCPRest:
         return rest_data["Control"]["Enable_Charge_Schedule"] == "enable"
 
     @property
+    def charge_target_enabled(self):
+        """
+        Whether the inverter will act on Target_SOC, or None if GivTCP does not report the register.
+
+        GivTCP's setChargeTarget writes CHARGE_TARGET_SOC (reg 116) but never enables
+        ENABLE_CHARGE_TARGET (reg 20). With reg 20 off - GivTCP's default - the inverter ignores the
+        SOC limit and charges to 100%, which was the root cause of Hold Charge not holding on AIO
+        inverters (#4141). None distinguishes "reported as off" from "not reported at all", so a
+        GivTCP without the field gets no control published rather than one whose write can never
+        verify.
+        """
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return None
+        value = rest_data.get("Control", {}).get("Enable_Charge_Target", None)
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value.lower() in ("enable", "on", "true")
+        return bool(value)
+
+    @property
     def discharge_enable_time(self):
         """Whether GivTCP's scheduled discharge is enabled, or None if no status has been read yet."""
         rest_data = self.inverter.rest_data

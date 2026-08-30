@@ -30,6 +30,7 @@ def _rest_data_blob(
     pause_mode="Disabled",
     pause_start="00:00:00",
     pause_end="00:00:00",
+    charge_target_enable="enable",
 ):
     """A realistic-shaped GivTCP /readData response, sized to what publish_data() reads."""
     return {
@@ -43,6 +44,7 @@ def _rest_data_blob(
             "Discharge_Target_SOC_1": 20,
             "Mode": mode,
             "Battery_pause_mode": pause_mode,
+            "Enable_Charge_Target": charge_target_enable,
         },
         "Power": {"Power": {"SOC_kWh": soc_kwh, "SOC": soc_percent, "Battery_Power": 100.0, "PV_Power": 200.0, "Grid_Power": -50.0, "Load_Power": 250.0, "Battery_Voltage": 51.2}},
         "Timeslots": {
@@ -977,6 +979,86 @@ def test_an_endpoint_never_discovered_does_not_withhold_success(my_predbat=None)
     return 0
 
 
+def test_charge_limit_enable_switch_is_published(my_predbat=None):
+    """
+    The Enable_Charge_Target register (reg 20) is published as a switch.
+
+    GivTCP's setChargeTarget writes CHARGE_TARGET_SOC (reg 116) but never enables reg 20, and with
+    reg 20 off - GivTCP's default - the inverter ignores the SOC limit and charges to 100%. That
+    was the root cause of Hold Charge not holding on AIO inverters (#4141).
+    """
+    base, component = _make_component()
+    component.rest[0].inverter.rest_data = _rest_data_blob(charge_target_enable="enable")
+    run_async(component.publish_data())
+    assert base.entities["switch.predbat_givtcp_0_charge_limit_enable"]["state"] == "on", f"Expected the enable switch on, got {base.entities.get('switch.predbat_givtcp_0_charge_limit_enable')}"
+
+    component.rest[0].inverter.rest_data = _rest_data_blob(charge_target_enable="disable")
+    run_async(component.publish_data())
+    assert base.entities["switch.predbat_givtcp_0_charge_limit_enable"]["state"] == "off", "Expected the enable switch to follow the register"
+    print("PASS: the charge target enable register is published as a switch")
+    return 0
+
+
+def test_charge_limit_enable_is_auto_configured(my_predbat=None):
+    """
+    automatic_config claims charge_limit_enable, which is what closes #4141 for REST users.
+
+    Inverter.adjust_battery_target already writes charge_limit_enable straight after charge_limit
+    when the key resolves - it was simply never populated for a GivTCP REST user, so the enable
+    step main performed via rest_enableChargeTarget() was silently lost.
+    """
+    base, component = _make_component()
+    _mark_discovered(component)
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    run_async(component.automatic_config())
+
+    assert base.args["charge_limit_enable"] == ["switch.predbat_givtcp_0_charge_limit_enable"], f"Expected charge_limit_enable claimed, got {base.args.get('charge_limit_enable')}"
+    print("PASS: charge_limit_enable is auto-configured so Inverter enables the target")
+    return 0
+
+
+def test_charge_limit_enable_write_hits_the_enable_register(my_predbat=None):
+    """A write to the enable switch calls enable_charge_target, not set_charge_target."""
+    base, component = _make_component()
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    component.rest[0].enable_charge_target = MagicMock(return_value=True)
+
+    run_async(component.switch_event("switch.predbat_givtcp_0_charge_limit_enable", "turn_on"))
+    component.rest[0].enable_charge_target.assert_called_once_with(True)
+
+    component.rest[0].enable_charge_target.reset_mock()
+    run_async(component.switch_event("switch.predbat_givtcp_0_charge_limit_enable", "turn_off"))
+    component.rest[0].enable_charge_target.assert_called_once_with(False)
+    print("PASS: the enable switch writes the charge target enable register")
+    return 0
+
+
+def test_charge_limit_enable_withheld_when_the_register_is_absent(my_predbat=None):
+    """
+    A GivTCP that does not report Enable_Charge_Target gets no switch and no claimed key.
+
+    enable_charge_target() verifies the write by reading that field back, so publishing a control
+    for a register GivTCP never reports would burn the full retry ladder and record_status on every
+    charge limit change. Claiming only what is actually published also leaves the user's own
+    apps.yaml charge_limit_enable in place as the fallback.
+    """
+    base, component = _make_component()
+    _mark_discovered(component)
+    blob = _rest_data_blob()
+    del blob["Control"]["Enable_Charge_Target"]
+    component.rest[0].inverter.rest_data = blob
+
+    run_async(component.publish_data())
+    assert "switch.predbat_givtcp_0_charge_limit_enable" not in base.entities, "No enable switch should be published when the register is not reported"
+
+    run_async(component.automatic_config())
+    assert "charge_limit_enable" not in base.args, f"charge_limit_enable must be left to the user, got {base.args.get('charge_limit_enable')}"
+    # the rest of the config is unaffected
+    assert base.args["charge_limit"] == ["number.predbat_givtcp_0_charge_limit"]
+    print("PASS: the enable switch is withheld when GivTCP does not report the register")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1033,6 +1115,10 @@ def test_givtcp_component(my_predbat=None):
         ("poll_recover", test_success_timestamp_resumes_once_the_poll_recovers, "success resumes after recovery"),
         ("poll_partial_fail", test_one_failing_inverter_withholds_success_for_the_whole_component, "one failing inverter degrades the component"),
         ("poll_placeholder_ok", test_an_endpoint_never_discovered_does_not_withhold_success, "undiscovered placeholder does not degrade"),
+        ("charge_enable_publish", test_charge_limit_enable_switch_is_published, "charge target enable published as a switch"),
+        ("charge_enable_config", test_charge_limit_enable_is_auto_configured, "charge_limit_enable auto-configured (#4141)"),
+        ("charge_enable_write", test_charge_limit_enable_write_hits_the_enable_register, "enable switch writes the enable register"),
+        ("charge_enable_absent", test_charge_limit_enable_withheld_when_the_register_is_absent, "enable switch withheld when unreported"),
     ]
 
     passed = 0
