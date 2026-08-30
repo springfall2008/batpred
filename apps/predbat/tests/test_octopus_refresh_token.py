@@ -7,7 +7,7 @@ import base64
 import json
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
-from octopus import OctopusAPI, TOKEN_MINT_BACKOFF_MAX_SECONDS
+from octopus import OctopusAPI, TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS
 
 
 def test_octopus_refresh_token_wrapper(my_predbat):
@@ -30,6 +30,8 @@ async def test_octopus_refresh_token(my_predbat):
     - Test 10: No HTTP request is made at all while the mint backoff is active
     - Test 11: Backoff grows per block, is capped, and a success clears it
     - Test 12: A non-CDN 403 does not start a backoff
+    - Test 13: An elapsed backoff deadline reopens the mint without touching the state
+    - Test 14: A token inside the proactive-refresh window is still used while backing off
     """
     print("**** Running Octopus async_refresh_token tests ****")
     failed = False
@@ -338,15 +340,12 @@ async def test_octopus_refresh_token(my_predbat):
         await api.async_refresh_token()
         delays.append((api.token_mint_blocked_until - before).total_seconds())
 
-    # Measured off datetime.now(), so allow a second of jitter when comparing neighbours
-    if any(delays[i] > delays[i + 1] + 1 for i in range(len(delays) - 1)):
-        print(f"ERROR: Expected non-decreasing backoff delays, got {delays}")
-        failed = True
-    elif delays[0] >= delays[1]:
-        print(f"ERROR: Expected the backoff to grow between blocks, got {delays}")
-        failed = True
-    elif delays[-1] > TOKEN_MINT_BACKOFF_MAX_SECONDS + 1:
-        print(f"ERROR: Backoff exceeded the cap of {TOKEN_MINT_BACKOFF_MAX_SECONDS}s, got {delays[-1]}")
+    # Assert the exact schedule, not just "it grows" - a 1, 2, 2, 2... implementation would
+    # satisfy a monotonicity check while backing off far too little to stop the hammering.
+    expected = [min(TOKEN_MINT_BACKOFF_BASE_SECONDS * (2**i), TOKEN_MINT_BACKOFF_MAX_SECONDS) for i in range(len(delays))]
+    # Measured off datetime.now(), so allow a second of jitter per entry
+    if any(abs(got - want) > 1 for got, want in zip(delays, expected)):
+        print(f"ERROR: Expected backoff schedule {expected}, got {[round(d) for d in delays]}")
         failed = True
     else:
         # A successful mint must clear the backoff so the next expiry refreshes normally
@@ -388,6 +387,86 @@ async def test_octopus_refresh_token(my_predbat):
         failed = True
     else:
         print("PASS: A non-CDN 403 keeps the existing refresh behaviour")
+
+    # Test 13: An elapsed backoff deadline reopens the mint without touching the state
+    print("\n*** Test 13: An elapsed backoff deadline reopens the mint ***")
+    api = OctopusAPI(my_predbat, key="test-api-key-13", account_id="test-account-13", automatic=False)
+    api.graphql_token = None
+    api.save_octopus_cache = AsyncMock()
+
+    # Block once for real, then simulate the window having elapsed by moving the deadline into
+    # the past. The deadline is left SET on purpose - a guard that tests the field for presence
+    # rather than comparing it against the clock would back off forever in production, and
+    # nulling it here would hide exactly that bug.
+    api.api.async_create_client_session = AsyncMock(return_value=create_mock_session(403, cloudfront_body))
+    api.async_read_response_retry = AsyncMock(return_value=None)
+    await api.async_refresh_token()
+
+    if api.token_mint_blocked_until is None:
+        print("ERROR: Expected a backoff deadline to be set before the elapse test")
+        failed = True
+    else:
+        api.token_mint_blocked_until = datetime.now() - timedelta(seconds=1)
+        recovered_token = create_mock_jwt_token(datetime.now() + timedelta(hours=1))
+        api.api.async_create_client_session = AsyncMock(return_value=create_mock_session(200, "{}"))
+        api.async_read_response_retry = AsyncMock(return_value={"data": {"obtainKrakenToken": {"token": recovered_token}}})
+
+        result = await api.async_refresh_token()
+
+        if api.api.async_create_client_session.call_count != 1:
+            print(f"ERROR: Expected the mint to be attempted once the deadline passed, got {api.api.async_create_client_session.call_count} attempts")
+            failed = True
+        elif result != recovered_token:
+            print(f"ERROR: Expected the mint to succeed after the deadline passed, got {result}")
+            failed = True
+        elif api.token_mint_blocked_until is not None or api.token_mint_block_count != 0:
+            print(f"ERROR: Recovery must clear the backoff, got {api.token_mint_blocked_until} / {api.token_mint_block_count}")
+            failed = True
+        else:
+            print("PASS: An elapsed deadline reopens the mint and recovery clears the backoff")
+
+    # Test 14: A token inside the proactive-refresh window is still used while backing off
+    print("\n*** Test 14: A near-expiry token is still used while backing off ***")
+    api = OctopusAPI(my_predbat, key="test-api-key-14", account_id="test-account-14", automatic=False)
+    api.save_octopus_cache = AsyncMock()
+
+    # Expires in 3 minutes: inside the 5 minute proactive refresh window, so a mint is due -
+    # but the token itself has NOT expired. A block must not cost us those 3 minutes.
+    near_expiry = create_mock_jwt_token(datetime.now() + timedelta(minutes=3))
+    api.graphql_token = near_expiry
+    api.api.async_create_client_session = AsyncMock(return_value=create_mock_session(403, cloudfront_body))
+    api.async_read_response_retry = AsyncMock(return_value=None)
+
+    result = await api.async_refresh_token()
+
+    if result is not None:
+        print(f"ERROR: The proactive mint should have been refused, got {result}")
+        failed = True
+    elif api.token_mint_blocked_until is None:
+        print("ERROR: Expected a backoff to be started by the refused mint")
+        failed = True
+    else:
+        # Next caller, still inside the backoff window, with a token good for ~3 more minutes
+        api.api.async_create_client_session = AsyncMock(return_value=create_mock_session(403, cloudfront_body))
+        result = await api.async_refresh_token()
+
+        if result != near_expiry:
+            print(f"ERROR: Expected the still-valid token to be reused during the backoff, got {result}")
+            failed = True
+        elif api.api.async_create_client_session.call_count != 0:
+            print("ERROR: No mint should be attempted while backing off")
+            failed = True
+        else:
+            print("PASS: A still-valid token is reused during the backoff instead of failing")
+
+        # Once it really has expired, the backoff suppresses and returns None
+        api.graphql_token = create_mock_jwt_token(datetime.now() - timedelta(minutes=1))
+        result = await api.async_refresh_token()
+        if result is not None:
+            print(f"ERROR: An expired token must not be handed out during the backoff, got {result}")
+            failed = True
+        else:
+            print("PASS: An expired token is not reused during the backoff")
 
     # Summary
     if failed:

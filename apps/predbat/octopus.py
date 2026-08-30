@@ -108,6 +108,29 @@ EDGE_BLOCK_REFRESH_AFTER = 5
 # capped so a block that clears is still noticed within the hour.
 TOKEN_MINT_BACKOFF_BASE_SECONDS = 300
 TOKEN_MINT_BACKOFF_MAX_SECONDS = 3600
+# Bound the exponent so a long block cannot grow 2 ** block_count without limit; the delay
+# is capped well before this, so the clamp only stops the arithmetic running away.
+TOKEN_MINT_BACKOFF_MAX_DOUBLINGS = 16
+# While suppressed the mint makes no request and so logs nothing, which leaves a reader of a
+# short log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason
+# at most this often.
+TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS = 600
+
+
+def token_mint_backoff_seconds(block_count):
+    """Backoff delay in seconds for the block_count'th consecutive CDN block on a token mint.
+
+    Doubles per consecutive block from TOKEN_MINT_BACKOFF_BASE_SECONDS, capped at
+    TOKEN_MINT_BACKOFF_MAX_SECONDS so a block that lifts is still picked up within the hour.
+
+    Args:
+        block_count: Number of consecutive blocks so far, 1 for the first.
+
+    Returns:
+        int: Delay in seconds.
+    """
+    exponent = min(max(block_count - 1, 0), TOKEN_MINT_BACKOFF_MAX_DOUBLINGS)
+    return min(TOKEN_MINT_BACKOFF_BASE_SECONDS * (2**exponent), TOKEN_MINT_BACKOFF_MAX_SECONDS)
 
 
 def is_edge_block_body(text):
@@ -567,6 +590,7 @@ class OctopusAPI(ComponentBase):
         # Set while the token mint itself is edge blocked - see async_refresh_token
         self.token_mint_blocked_until = None
         self.token_mint_block_count = 0
+        self.token_mint_backoff_logged_at = None
         self.account_data = {}
         self.tariffs = {}
         self.saving_sessions = {}
@@ -1925,9 +1949,18 @@ class OctopusAPI(ComponentBase):
         Each consecutive block doubles the wait, capped at TOKEN_MINT_BACKOFF_MAX_SECONDS.
         """
         self.token_mint_block_count += 1
-        delay = min(TOKEN_MINT_BACKOFF_BASE_SECONDS * (2 ** (self.token_mint_block_count - 1)), TOKEN_MINT_BACKOFF_MAX_SECONDS)
-        self.token_mint_blocked_until = datetime.now() + timedelta(seconds=delay)
+        delay = token_mint_backoff_seconds(self.token_mint_block_count)
+        now = datetime.now()
+        self.token_mint_blocked_until = now + timedelta(seconds=delay)
+        self.token_mint_backoff_logged_at = now
         self.log("Warn: OctopusAPI: Token mint edge/WAF blocked (block {}) - this is rate limiting, not a bad API key. Backing off for {}s".format(self.token_mint_block_count, delay))
+
+    def log_token_mint_backoff(self, now):
+        """Repeat the backoff reason occasionally so it stays visible in a short log window"""
+        if self.token_mint_backoff_logged_at and (now - self.token_mint_backoff_logged_at).total_seconds() < TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS:
+            return
+        self.token_mint_backoff_logged_at = now
+        self.log("Warn: OctopusAPI: Token mint still edge/WAF blocked (block {}) - suppressing mints until {}".format(self.token_mint_block_count, self.token_mint_blocked_until.strftime(TIME_FORMAT)))
 
     def clear_token_mint_backoff(self):
         """Clear the mint backoff after a successful token mint"""
@@ -1935,20 +1968,28 @@ class OctopusAPI(ComponentBase):
             self.log("OctopusAPI: Token mint recovered after {} edge/WAF block(s)".format(self.token_mint_block_count))
         self.token_mint_block_count = 0
         self.token_mint_blocked_until = None
+        self.token_mint_backoff_logged_at = None
 
     async def async_refresh_token(self):
         """
         Refresh the token using JWT expiry from the token itself
         """
         # Check if we have a valid token by decoding its expiry
-        if self.graphql_token:
-            expiry = self.decode_kraken_token_expiry(self.graphql_token)
-            if expiry and expiry > datetime.now() + timedelta(minutes=5):
-                return self.graphql_token
+        now = datetime.now()
+        expiry = self.decode_kraken_token_expiry(self.graphql_token) if self.graphql_token else None
+        if expiry and expiry > now + timedelta(minutes=5):
+            return self.graphql_token
 
-        # The mint is edge blocked and the cached token (if any) has expired. Re-minting now
-        # would only be refused again, so skip the request until the backoff window elapses.
-        if self.token_mint_blocked_until and datetime.now() < self.token_mint_blocked_until:
+        # Re-minting while the mint is edge blocked would only be refused again, so skip the
+        # request until the backoff window elapses. A token inside the five minute proactive
+        # refresh window has NOT actually expired, so keep using it rather than manufacturing
+        # an outage the block itself would not have caused. Callers that hit a genuine auth
+        # failure clear graphql_token before re-minting, so a revoked token is never revived
+        # here - only one we have simply not been able to renew yet.
+        if self.token_mint_blocked_until and now < self.token_mint_blocked_until:
+            if expiry and expiry > now:
+                return self.graphql_token
+            self.log_token_mint_backoff(now)
             return None
 
         client = await self.api.async_create_client_session()
