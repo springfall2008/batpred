@@ -21,7 +21,7 @@ If you get stuck, please read the [FAQs](faq.md) and if necessary raise a [GitHu
 
 ## Home Assistant Pre-requisites
 
-Ensure that the computer (or VM) that is running your Home Assistant has sufficient memory. Predbat (and in particular LoadML if you are using it) can be quite resource intensive and its recommended that your HA computer has at least 3Gb of memory allocated. If Predbat doesn't have sufficient memory then it can crash with few diagnostics.
+Ensure that the computer (or VM) that is running your Home Assistant has sufficient memory. Predbat (and in particular LoadML if you are using it) can be quite resource intensive and it's recommended that your HA computer has at least 3 GB of memory allocated. If Predbat doesn't have sufficient memory then it can crash with few diagnostics.
 
 ## Inverter Control install
 
@@ -78,12 +78,12 @@ Ensure 'start on boot' is enabled and click 'start'.
 
 **Note:** Throughout the rest of the Predbat documentation you will find reference to the Predbat configuration file `apps.yaml` and the Predbat logfile.
 
-These are located under the Home Assistant directory `/apps_configs/6adb4f0d_predbat` which contains:
+These are located under the Home Assistant directory `/app_configs/6adb4f0d_predbat` which contains:
 
 - **predbat.log** - Predbat's active logfile that reports details of what Predbat is doing, and details of any errors
 - **apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.
 
-You can use your file editor (i.e. 'File editor' or 'Studio Code Server' app) to open the directory `/apps_configs/6adb4f0d_predbat` and view these files.
+You can use your file editor (i.e. 'File editor' or 'Studio Code Server' app) to open the directory `/app_configs/6adb4f0d_predbat` and view these files.
 
 The Predbat web interface will work through the Predbat app, you can click on the 'Web UI' button to open it once Predbat is running.
 
@@ -448,7 +448,7 @@ From the Assets list, download the source code (zip) file:
 - Unzip the source code file you have downloaded
 - Navigate to the release sub folder, then `apps`, and finally the `predbat` sub-folder
 - Shutdown Predbat
-- Copy all the .py files from the `predbat` sub-folder into your Predbat application folder in Home Assistant  and overwrite the existing .py files. If you are running the Predbat app then the destination folder will be `/apps_configs/6adb4f0d_predbat`
+- Copy all the .py files from the `predbat` sub-folder into your Predbat application folder in Home Assistant  and overwrite the existing .py files. If you are running the Predbat app then the destination folder will be `/app_configs/6adb4f0d_predbat`
 - Restart Predbat
 
 ## Upgrading from AppDaemon to Predbat app
@@ -474,7 +474,7 @@ The Predbat code that runs is the same and the configuration is exactly the same
     - Click on the existing AppDaemon/AppDaemon-predbat app
     - Click STOP, and untick 'Start on boot'
 
-6. Briefly start the new Predbat app so that it creates the `app_configs` folder and the template `apps.yaml` file:
+6. Briefly start the new Predbat app so that it creates the template `apps.yaml` file:
     - Go to Settings/Apps
     - Click on the Predbat app
     - Click START, wait a minute for the app to initialise itself, then click STOP. A Predbat status warning that you have a template `apps.yaml` file is normal and can be ignored

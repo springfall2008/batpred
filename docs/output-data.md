@@ -476,7 +476,7 @@ These values are read from `apps.yaml` or from the inverters themselves, so unli
 The sensor state is the total AC inverter limit in kW, with the rest of the detail held in the attributes:
 
 | Attribute | Meaning |
-|-----------|---------|
+| ----------- | --------- |
 | inverter_limit | Total AC throughput limit in kW - see [inverter_limit](apps-yaml.md#inverter_limit) |
 | export_limit | Total AC export limit in kW - see [export_limit](apps-yaml.md#export_limit). Note this is your inverter's power cap and is a different thing to the predbat.export_limit plan sensor |
 | pv_ac_limit | Modelled AC output limit of an AC-coupled PV system in kW - see [pv_ac_limit](apps-yaml.md#pv_ac_limit) |
@@ -1027,7 +1027,7 @@ actions:
     then:
       - action: hassio.app_restart
         data:
-          app 6adb4f0d_predbat
+          app: 6adb4f0d_predbat
         alias: Restart Predbat app
 mode: single
 ```

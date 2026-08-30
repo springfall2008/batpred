@@ -68386,7 +68386,7 @@ config_index:
   update: *id110
   version: *id111
 config_root: /config
-config_root_p: /apps_configs/6adb4f0d_predbat
+config_root_p: /app_configs/6adb4f0d_predbat
 cost_today_sofar: 172.64380255000106
 cost_total_car: 0.0
 cost_yesterday_car: 0.0

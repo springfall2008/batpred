@@ -302,7 +302,7 @@ Before enabling ML load prediction:
 2. Optionally configure `pv_today` if you have solar panels
 3. **Recommended**: Enable the Temperature component (Temperature Component in components documentation)
 4. Ensure you have at least 1 day of historical data (7+ days recommended); the database will accumulate history over time beyond what HA retains
-5. Ensure that the computer (or VM) that is running your Home Assistant has sufficient memory. LoadML is quite resource intensive and its recommended that your HA computer has at least 3Gb of memory allocated. If Predbat doesn't have sufficient memory then it can crash with few diagnostics.
+5. Ensure that the computer (or VM) that is running your Home Assistant has sufficient memory. LoadML is quite resource intensive and it's recommended that your HA computer has at least 3 GB of memory allocated. If Predbat doesn't have sufficient memory then it can crash with few diagnostics.
 
 ### Step 2: Enable the Component
 

@@ -4,11 +4,11 @@ The basic Predbat configuration is defined in the `apps.yaml` file.
 
 Depending on how you installed Predbat the `apps.yaml` file will be held in one of three different directories in Home Assistant:
 
-- if you have used the [Predbat app installation method](install.md#predbat-app-install), `apps.yaml` will be in the directory `/apps_configs/6adb4f0d_predbat`,
+- if you have used the [Predbat app installation method](install.md#predbat-app-install), `apps.yaml` will be in the directory `/app_configs/6adb4f0d_predbat`,
 
 - with the deprecated [HACS, Appdaemon app then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`, or
 
-- if the deprecated combined AppDaemon/Predbat app installation method was used, it's in `/apps_configs/46f69597_appdaemon-predbat/apps`.
+- if the deprecated combined AppDaemon/Predbat app installation method was used, it's in `/app_configs/46f69597_appdaemon-predbat/apps`.
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server apps)
 to edit the `apps.yaml` file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
@@ -1630,7 +1630,7 @@ The Solar forecast configuration in `apps.yaml` should be configured for either 
 
 ### Solcast Solar Forecast
 
-As described in the [Predbat installation instructions](install.md#solar-forecast-install, Predbat needs a solar forecast
+As described in the [Predbat installation instructions](install.md#solar-forecast-install), Predbat needs a solar forecast
 in order to predict solar generation and battery charging which can be provided by the Solcast integration.
 
 By default, the template `apps.yaml` is pre-configured to use the [Solcast forecast integration](install.md#solcast-home-assistant-integration-method) for Home Assistant.

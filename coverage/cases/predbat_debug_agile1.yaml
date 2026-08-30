@@ -68233,7 +68233,7 @@ combine_rate_threshold: 0.0
 computed_charge_curve: false
 computed_discharge_curve: false
 config_root: ./
-config_root_p: /apps_configs/6adb4f0d_predbat
+config_root_p: /app_configs/6adb4f0d_predbat
 cost_today_sofar: 705.8050399499946
 cost_total_car: 0.0
 cost_yesterday_car: 0
