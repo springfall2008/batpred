@@ -1356,12 +1356,25 @@ class ChatAgent(ComponentBase):
         One request per model, measured at about 76ms each against a local server, and
         list_models() is cached for a day - but a single slow or missing model must not lose the
         whole catalogue, so a failed lookup keeps the model rather than dropping it.
+
+        /api/show reports the context length baked into the model, which is a ceiling rather than
+        what the model will actually be loaded with: the server caps every model at
+        OLLAMA_CONTEXT_LENGTH - on macOS an Ollama app setting, not an environment variable - and
+        Qwen3.8 27B's 262144 becomes 131072 behind a 128k cap. /api/ps carries the effective value
+        for each loaded model, so it is read once and used in preference. A model the server has
+        never loaded is not listed there and keeps its own ceiling, which is the only answer
+        available and still better than reporting it for everything.
+
+        This matters beyond a wrong number in the picker: the Chat tab's context counter measures
+        fullness against it, so a doubled limit reads half-full at the point the window is really
+        full - which is how a turn overflows with no warning.
         """
         base = ollama_native_url(base_url or self.base_url, "")
         detailed = []
         timeout = aiohttp.ClientTimeout(total=OLLAMA_DETAIL_TIMEOUT_SECONDS)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
+                loaded_context = await self._ollama_loaded_context(session, base)
                 for model in models:
                     try:
                         async with session.post("{}/api/show".format(base), json={"model": model["id"]}) as response:
@@ -1377,10 +1390,36 @@ class ChatAgent(ComponentBase):
                         continue
                     info = body.get("model_info") or {}
                     context = next((value for key, value in info.items() if key.endswith("context_length")), None)
-                    detailed.append(dict(model, context_length=context or model.get("context_length")))
+                    context = context or model.get("context_length")
+                    # The server's own figure wins where it has one - see the docstring.
+                    effective = loaded_context.get(model["id"])
+                    detailed.append(dict(model, context_length=effective or context))
         except (aiohttp.ClientError, asyncio.TimeoutError):
             return models
         return detailed
+
+    @staticmethod
+    async def _ollama_loaded_context(session, base):
+        """Return {model id: context length} for the models the Ollama server has loaded.
+
+        Empty when /api/ps cannot be read or nothing is loaded, which leaves every model on its
+        own ceiling - the same answer as before this existed, so a server too old to serve the
+        endpoint degrades to the previous behaviour rather than losing the catalogue.
+        """
+        try:
+            async with session.get("{}/api/ps".format(base)) as response:
+                if response.status != 200:
+                    return {}
+                body = await response.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+            return {}
+        loaded = {}
+        for entry in (body or {}).get("models") or []:
+            name = entry.get("model") or entry.get("name")
+            context = entry.get("context_length")
+            if name and context:
+                loaded[name] = context
+        return loaded
 
     async def _stream_chunks(self, payload):
         """Yield decoded chunk dicts from the chat-completions endpoint.

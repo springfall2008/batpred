@@ -3889,10 +3889,99 @@ def test_model_catalogue_is_cached_per_endpoint(my_predbat):
     return failed
 
 
+def test_ollama_context_length_is_what_the_server_will_actually_give(my_predbat):
+    """The picker must report the usable context, not the model's architectural ceiling.
+
+    /api/show returns the context length baked into the model - 262144 for Qwen3.8 27B. The
+    server caps every model at OLLAMA_CONTEXT_LENGTH (an Ollama app setting on macOS), so the
+    context the model will actually be loaded with can be half that. Reporting the ceiling makes
+    the Chat tab's context counter measure fullness against a limit that does not exist: it reads
+    50% at the point the window is genuinely full, which is precisely how a turn overflows without
+    warning.
+
+    /api/ps reports context_length for each loaded model, which is the effective value.
+    """
+    failed = False
+    print("**** Testing Ollama context length comes from the server, not the model ****")
+
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "http://127.0.0.1:11434/v1"}})
+    agent.select_provider("ollama")
+
+    shown = {"qwen3.8:27b": 262144, "gpt-oss:20b": 131072, "never-loaded:8b": 262144}
+    loaded = {"qwen3.8:27b": 131072, "gpt-oss:20b": 131072}
+
+    class _Response:
+        """Minimal aiohttp response stand-in for the stubbed session."""
+
+        def __init__(self, payload):
+            self.status = 200
+            self._payload = payload
+
+        async def json(self):
+            """Return the canned body."""
+            return self._payload
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    class _Session:
+        """Stubbed session answering /api/show and /api/ps from the dicts above."""
+
+        def post(self, url, json=None):
+            """Answer an /api/show POST."""
+            model = (json or {}).get("model")
+            return _Response({"capabilities": ["tools"], "model_info": {"qwen35.context_length": shown[model]}})
+
+        def get(self, url):
+            """Answer an /api/ps GET."""
+            return _Response({"models": [{"model": name, "context_length": ctx} for name, ctx in loaded.items()]})
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    original_session = chat.aiohttp.ClientSession
+    chat.aiohttp.ClientSession = lambda *args, **kwargs: _Session()
+    try:
+        models = asyncio.run(agent._add_ollama_details([{"id": name} for name in shown]))
+    finally:
+        chat.aiohttp.ClientSession = original_session
+
+    by_id = {entry["id"]: entry for entry in models}
+
+    if by_id["qwen3.8:27b"].get("context_length") != 131072:
+        print("ERROR: a loaded model should report the server's 131072, not its 262144 ceiling, got {}".format(by_id["qwen3.8:27b"].get("context_length")))
+        failed = True
+
+    if by_id["gpt-oss:20b"].get("context_length") != 131072:
+        print("ERROR: a model whose ceiling already matches the server should be unchanged, got {}".format(by_id["gpt-oss:20b"].get("context_length")))
+        failed = True
+
+    # Nothing is known about a model the server has never loaded, so its own ceiling is the only
+    # answer available - better than inventing one.
+    if by_id["never-loaded:8b"].get("context_length") != 262144:
+        print("ERROR: an unloaded model should fall back to its own ceiling, got {}".format(by_id["never-loaded:8b"].get("context_length")))
+        failed = True
+
+    if not failed:
+        print("✓ Test passed: Ollama context length reflects what the server will give")
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
     failed |= test_model_catalogue_is_cached_per_endpoint(my_predbat)
+    failed |= test_ollama_context_length_is_what_the_server_will_actually_give(my_predbat)
     failed |= test_a_working_catalogue_clears_the_previous_failure(my_predbat)
     failed |= test_local_models_are_free_however_little_pricing_they_publish(my_predbat)
     failed |= test_stop_reaches_a_turn_that_is_still_streaming(my_predbat)
