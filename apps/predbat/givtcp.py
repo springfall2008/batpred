@@ -33,6 +33,7 @@ that owns it now rather than Inverter.
 """
 
 import asyncio
+import re
 
 from component_base import ComponentBase
 from utils import dp4
@@ -60,6 +61,22 @@ GIVTCP_PAUSE_MODES = ["Disabled", "PauseCharge", "PauseDischarge", "PauseBoth"]
 # permanent mismatch and rewrites every cycle. Not publishing the entity at all is what stops that:
 # Inverter.adjust_force_export already leaves a target it cannot read alone.
 DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
+
+# The same inverters identified from Invertor_Type, which is what GivTCP v3 actually reports in
+# words - its raw.invertor.model is a numeric code ('2' on the captured system), so matching that
+# alone left the #4517 guard inert on the version most users are on.
+#
+# Matched on the set of alphanumeric tokens because the two vocabularies disagree on word order and
+# spacing: "Gen 1 Hybrid" against "Hybrid_gen1". Both reduce to {gen, 1, hybrid}.
+#
+# Gen2 Hybrid is deliberately absent. "Hybrid_gen2" above was inferred from a firmware archive
+# rather than observed, and is still honoured where a build reports that exact raw model - but
+# extending it to Invertor_Type would remove export target control from every Gen2 Hybrid on v3 on
+# the strength of that inference. Add it here once an affected Gen2 is actually confirmed.
+DISCHARGE_TARGET_UNSUPPORTED_TYPES = (
+    frozenset({"ac"}),
+    frozenset({"gen", "1", "hybrid"}),
+)
 
 # Control.Mode values. Predbat only ever writes Eco or Timed Export, but the inverter reports the
 # others, and an option list that omitted them could not represent the mode the inverter is in.
@@ -369,12 +386,14 @@ class GivTCPComponent(ComponentBase):
             # Publishing one would restart the every-cycle rewrite loop of #4517, because the write
             # reports success and then silently fails to persist.
             inverter_model = rest.inverter.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
+            inverter_type_tokens = frozenset(re.findall(r"[a-z]+|\d+", rest.inverter_type().lower()))
+            model_unsupported = inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS or inverter_type_tokens in DISCHARGE_TARGET_UNSUPPORTED_TYPES
             if not rest.inverter.rest_v3:
                 # v2 has no /setDischargeTarget - see GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
                 pass
-            elif inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS:
+            elif model_unsupported:
                 if not self.discharge_target_warned.get(n):
-                    self.log("Info: GivTCP: inverter {} is {}, which has no working discharge target register - export target will not be written".format(n, inverter_model))
+                    self.log("Info: GivTCP: inverter {} is {}, which has no working discharge target register - export target will not be written".format(n, rest.inverter_type() or inverter_model))
                     self.discharge_target_warned[n] = True
             else:
                 discharge_target = rest.read_discharge_target()

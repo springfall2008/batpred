@@ -293,6 +293,15 @@ class GivTCPRest:
             return None
         return min(dp4(full / design), 1.0)
 
+    def inverter_type(self):
+        """
+        GivTCP's readable inverter type (e.g. "Gen 1 Hybrid", "Gen2 Hybrid"), or "" if absent.
+
+        Lives in the detail block on both versions, so inverter_details() normalises it. This is the
+        only model identification v3 gives in words - raw.invertor.model is a numeric code there.
+        """
+        return str(self.inverter_details().get("Invertor_Type", "") or "")
+
     def max_inverter_rate(self):
         """Maximum inverter throughput in W, or None if GivTCP does not report one."""
         value = self.inverter_details().get("Invertor_Max_Inv_Rate", None)

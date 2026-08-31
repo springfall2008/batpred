@@ -1414,6 +1414,69 @@ def test_discharge_target_needs_v3_on_every_inverter(my_predbat=None):
     return 0
 
 
+def _typed_blob(invertor_type=None, raw_model=None):
+    """A v3-shaped status blob carrying a readable Invertor_Type and/or a raw model code."""
+    blob = _rest_data_blob()
+    blob["Invertor_Details"] = {"Battery_Capacity_kWh": 9.5232}
+    if invertor_type is not None:
+        blob["Invertor_Details"]["Invertor_Type"] = invertor_type
+    blob["raw"] = {"invertor": {"discharge_target_soc_1": "4"}}
+    if raw_model is not None:
+        blob["raw"]["invertor"]["model"] = raw_model
+    return blob
+
+
+def _publishes_discharge_target(invertor_type=None, raw_model=None):
+    """Whether publish_data emits the export target control for this model identification."""
+    base, component = _make_component()
+    component.rest[0].inverter.rest_v3 = True
+    component.rest[0].inverter.rest_data = _typed_blob(invertor_type, raw_model)
+    run_async(component.publish_data())
+    return "number.predbat_givtcp_0_discharge_target_soc" in base.entities
+
+
+def test_unsupported_model_detected_from_invertor_type(my_predbat=None):
+    """
+    The #4517 guard also reads Invertor_Type, which is what v3 actually reports.
+
+    v3's raw.invertor.model is a numeric code ('2' in the captured system), so matching it against
+    ("Ac", "Hybrid_gen1", ...) never fired there at all - the guard was inert for the version most
+    users are on. Invertor_Type carries the readable name on both versions via inverter_details().
+
+    Word order and spacing differ between the two vocabularies ('Gen 1 Hybrid' vs 'Hybrid_gen1'),
+    so matching is on the set of alphanumeric tokens rather than the literal string.
+    """
+    assert not _publishes_discharge_target(invertor_type="Gen 1 Hybrid"), "a Gen 1 Hybrid must not get an export target control"
+    assert not _publishes_discharge_target(invertor_type="Ac"), "an AC coupled inverter must not get an export target control"
+    print("PASS: unsupported models are detected from Invertor_Type")
+    return 0
+
+
+def test_gen2_hybrid_keeps_its_export_target(my_predbat=None):
+    """
+    Gen2 Hybrid is deliberately NOT matched on Invertor_Type.
+
+    "Hybrid_gen2" was inferred from a firmware archive rather than observed on hardware, and it is
+    still honoured where a GivTCP build reports that exact raw.invertor.model. Extending it to
+    Invertor_Type would newly remove export target control from every Gen2 Hybrid on v3 - the
+    largest group of users - on the strength of that inference.
+    """
+    assert _publishes_discharge_target(invertor_type="Gen2 Hybrid"), "a Gen2 Hybrid should keep its export target control"
+    # but an explicit raw model saying so is still honoured, exactly as before
+    assert not _publishes_discharge_target(invertor_type="Gen2 Hybrid", raw_model="Hybrid_gen2"), "an explicit Hybrid_gen2 raw model must still suppress it"
+    print("PASS: Gen2 Hybrid keeps its export target unless the raw model says otherwise")
+    return 0
+
+
+def test_raw_model_matching_is_unchanged(my_predbat=None):
+    """The original raw.invertor.model signal still works for builds that report names there."""
+    assert not _publishes_discharge_target(raw_model="Hybrid_gen1"), "raw model Hybrid_gen1 must still suppress the control"
+    assert not _publishes_discharge_target(raw_model="Ac"), "raw model Ac must still suppress the control"
+    assert _publishes_discharge_target(raw_model="2"), "a numeric model code identifies nothing and must not suppress"
+    print("PASS: raw.invertor.model matching is unchanged")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1455,6 +1518,9 @@ def test_givtcp_component(my_predbat=None):
         ("dt_not_v2", test_discharge_target_not_published_on_v2, "no discharge target on v2"),
         ("dt_on_v3", test_discharge_target_still_published_on_v3, "discharge target published on v3"),
         ("dt_mixed_fleet", test_discharge_target_needs_v3_on_every_inverter, "discharge target needs v3 everywhere"),
+        ("dt_type_match", test_unsupported_model_detected_from_invertor_type, "unsupported model from Invertor_Type"),
+        ("dt_gen2_kept", test_gen2_hybrid_keeps_its_export_target, "Gen2 Hybrid keeps its export target"),
+        ("dt_raw_model", test_raw_model_matching_is_unchanged, "raw.invertor.model matching unchanged"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),
