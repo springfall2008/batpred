@@ -90,6 +90,7 @@ from tests.test_saving_session import (
     test_saving_session_min_octopoints_threshold,
     test_saving_session_entity_regex_power_rename,
     test_saving_session_select_entity_join_defers_notify,
+    test_saving_session_zero_octopoints_joined_is_free_slot,
 )
 from tests.test_secrets import run_secrets_tests
 from tests.test_ge_cloud import test_ge_cloud
@@ -233,6 +234,7 @@ from tests.test_integer_config import (
     test_config_item_step_min_max_types_consistent,
     test_get_ha_config_normalises_int_default_for_fractional_step,
     test_metric_battery_cycle_fractional_value_not_truncated,
+    test_metric_battery_value_scaling_step_resolves_export_margin,
 )
 from tests.test_predbat_metrics_data_age import test_data_age_metrics_round_trip
 from tests.test_metrics_dashboard_control_conflicts import test_control_conflicts_metrics_round_trip, test_control_conflicts_dashboard_renders_section
@@ -542,6 +544,7 @@ def main():
         ("saving_session_min_octopoints_threshold", test_saving_session_min_octopoints_threshold, "Saving session configurable minimum octopoints threshold test (issue #4595)", False),
         ("saving_session_entity_regex_power_rename", test_saving_session_entity_regex_power_rename, "Saving/free session entity regex Power Down/Up rename test (issue #4548 point 2)", False),
         ("saving_session_select_entity_join_defers_notify", test_saving_session_select_entity_join_defers_notify, "Select-entity join defers the joined notification test (issue #4593)", False),
+        ("saving_session_zero_octopoints_free_slot", test_saving_session_zero_octopoints_joined_is_free_slot, "Joined zero octopoints session becomes a free import slot test (issue #4851)", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
         ("fox_api", run_fox_api_tests, "Fox API tests", False),
         ("deye_const", run_deye_const_tests, "DEYE constants tests", False),
@@ -604,6 +607,7 @@ def main():
         ("config_item_step_min_max_types", test_config_item_step_min_max_types_consistent, "Config item step/min/max type consistency tests", False),
         ("get_ha_config_fractional_default", test_get_ha_config_normalises_int_default_for_fractional_step, "get_ha_config normalises int default to float for fractional-step items (#4296)", False),
         ("metric_battery_cycle_fractional", test_metric_battery_cycle_fractional_value_not_truncated, "metric_battery_cycle fractional value not truncated by get_arg (#4296)", False),
+        ("metric_battery_value_scaling_step", test_metric_battery_value_scaling_step_resolves_export_margin, "metric_battery_value_scaling step resolves the export margin (#4840)", False),
         ("data_age_metrics", test_data_age_metrics_round_trip, "Metrics dashboard data_age_days/data_age_required_days tests", False),
         ("control_conflicts_metrics", test_control_conflicts_metrics_round_trip, "Metrics dashboard control_conflicts round-trip tests", False),
         ("control_conflicts_dashboard", test_control_conflicts_dashboard_renders_section, "Metrics dashboard control_conflicts section render tests", False),

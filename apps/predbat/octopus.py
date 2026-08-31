@@ -19,7 +19,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
 from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
+from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
 import aiohttp
@@ -95,49 +95,10 @@ def parse_date_time(dt_str):
         return None
 
 
-CDN_BLOCK_MARKERS = ("cloudfront", "request blocked", "the request could not be satisfied")
-HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
 # A generic "403 Forbidden" page is indistinguishable from a WAF page, so after this many
 # consecutive edge blocks fall back to refreshing the token in case the credential really
 # was revoked. Without this the component could never recover from a misclassification.
 EDGE_BLOCK_REFRESH_AFTER = 5
-
-
-def is_edge_block_body(text):
-    """Return True if a 403 body is positively identifiable as a CDN/WAF error page.
-
-    Kraken reports authentication problems as a JSON GraphQL error body (normally with
-    HTTP 200) or as a 401. A 403 carrying an HTML error page - e.g. CloudFront's
-    "Request blocked" - is edge rate limiting, not a credential problem, so the cached
-    token must be kept rather than discarded and immediately re-minted.
-
-    Two conditions must both hold: the body must not parse as JSON (anything the API
-    itself produces is JSON), and it must look like an HTML document or name a known CDN.
-    Matching on wording alone would misclassify a genuine JSON error that happens to say
-    something like "access denied", which would keep an invalid token forever - the same
-    permanent lockout this check exists to prevent, arrived at from the other direction.
-
-    Detection is deliberately conservative: a 403 we cannot identify as a CDN page keeps
-    the existing "refresh the token and retry" behaviour, which recovers genuinely revoked
-    tokens without needing a restart.
-
-    Args:
-        text: The raw response body.
-
-    Returns:
-        bool: True if the body carries a known CDN/WAF block signature.
-    """
-    if not isinstance(text, str) or not text:
-        return False
-    try:
-        json.loads(text)
-    except (ValueError, TypeError):
-        pass
-    else:
-        # A parseable JSON body came from the API, not from an edge appliance
-        return False
-    stripped = text.lstrip().lower()
-    return stripped.startswith(HTML_DOCUMENT_PREFIXES) or any(marker in stripped for marker in CDN_BLOCK_MARKERS)
 
 
 api_token_query = """mutation {{
@@ -315,6 +276,7 @@ octoplus_saving_session_query = """query {{
 			startAt
 			endAt
       devEvent
+      eventType
       targetRegion {{
         regionId
       }}
@@ -512,6 +474,26 @@ def _merge_minute_windows(minutes):
     return sorted(tuple(window) for window in windows)
 
 
+def _tou_window_to_local(start_minute, end_minute, utc_offset_minutes):
+    """
+    Shift a TOU window given in UTC minutes into wall-clock minutes from local midnight.
+
+    The measurements API labels UTC instants, so a meter whose off-peak period is fixed to local
+    time reports it shifted by whatever offset was in force when it was sampled. Both ends move
+    together so the window keeps its length, and the pair is then normalised as a unit so the start
+    falls within the day while a window crossing midnight keeps an end beyond 1440.
+    """
+    start_minute += utc_offset_minutes
+    end_minute += utc_offset_minutes
+    while start_minute < 0:
+        start_minute += 24 * 60
+        end_minute += 24 * 60
+    while start_minute >= 24 * 60:
+        start_minute -= 24 * 60
+        end_minute -= 24 * 60
+    return start_minute, end_minute
+
+
 def _tou_windows_from_measurements(response_data):
     """
     Derive the meter's off-peak windows from measurement TOU bucket labels.
@@ -557,6 +539,10 @@ class OctopusAPI(ComponentBase):
         self.graphql_token = None
         self.graphql_expiration = None
         self.consecutive_edge_blocks = 0
+        # Set while the token mint itself is edge blocked - see async_refresh_token
+        self.token_mint_blocked_until = None
+        self.token_mint_block_count = 0
+        self.token_mint_backoff_logged_at = None
         self.account_data = {}
         self.tariffs = {}
         self.saving_sessions = {}
@@ -1186,6 +1172,7 @@ class OctopusAPI(ComponentBase):
         joined_ids = {}
         event_reward = {}
         event_code = {}
+        event_type = {}
 
         # Default saving session rate in octopoints/kWh
         # octopus_saving_session_rate is in p/kWh, convert to octopoints
@@ -1220,6 +1207,7 @@ class OctopusAPI(ComponentBase):
             if event_id:
                 event_reward[event_id] = reward
                 event_code[event_id] = code
+                event_type[event_id] = event.get("eventType", None)
             target_regions = [region.get("regionId") for region in (event.get("targetRegion", None) or []) if region]
             if target_regions and account_region_id not in target_regions:
                 self.log("OctopusAPI: Skipping saving event code {} - not eligible for account region {} (event targets regions {})".format(code, account_region_id, target_regions))
@@ -1227,7 +1215,7 @@ class OctopusAPI(ComponentBase):
             if start and end and event_id not in joined_ids:
                 endDataTime = parse_date_time(end)
                 if endDataTime > self.now_utc_exact:
-                    return_available_events.append({"start": start, "end": end, "octopoints_per_kwh": reward, "code": code, "id": event_id})
+                    return_available_events.append({"start": start, "end": end, "octopoints_per_kwh": reward, "code": code, "id": event_id, "event_type": event.get("eventType", None)})
 
         for event in joined_events:
             start = event.get("startAt", None)
@@ -1237,7 +1225,9 @@ class OctopusAPI(ComponentBase):
             if reward is None:
                 reward = default_octopoints  # Inject default when API doesn't provide reward
             if start and end:
-                return_joined_events.append({"start": start, "end": end, "octopoints_per_kwh": reward, "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None), "id": event_id, "code": event_code.get(event_id, None)})
+                return_joined_events.append(
+                    {"start": start, "end": end, "octopoints_per_kwh": reward, "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None), "id": event_id, "code": event_code.get(event_id, None), "event_type": event_type.get(event_id, None)}
+                )
 
         saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-usd", "joined_events": return_joined_events, "available_events": return_available_events}
 
@@ -1567,9 +1557,13 @@ class OctopusAPI(ComponentBase):
         self.tou_windows = windows
         return windows
 
-    def _fallback_night_window(self, tariff_code):
+    def _fallback_night_window(self, tariff_code, log_unknown=True):
         """
         Pick the hard-wired off-peak window for a tariff code, used when nothing better is known.
+
+        log_unknown is cleared by callers that only want the window's clock anchor rather than its
+        times, so reading the anchor for a tariff we do not recognise does not warn about falling
+        back to a window that is not actually being used.
         """
         if self.is_intelligent_go_tariff(tariff_code):
             return OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
@@ -1577,7 +1571,8 @@ class OctopusAPI(ComponentBase):
             return OCTOPUS_NIGHT_RATE_WINDOWS["go"]
         if tariff_code and tariff_code.startswith("E-2R-"):
             return OCTOPUS_NIGHT_RATE_WINDOWS["eco7"]
-        self.log("Warn: OctopusAPI: Unknown tariff code {}, defaulting to GO night rate window".format(tariff_code))
+        if log_unknown:
+            self.log("Warn: OctopusAPI: Unknown tariff code {}, defaulting to GO night rate window".format(tariff_code))
         return OCTOPUS_NIGHT_RATE_WINDOWS["go"]
 
     async def async_get_day_night_rates(self, url, product_code="", tariff_code=""):
@@ -1603,11 +1598,30 @@ class OctopusAPI(ComponentBase):
             windows = _windows_from_night_times(self.get_arg("octopus_night_times", [], indirect=False), log=self.log)
             if windows:
                 self.log("Info: OctopusAPI: Using off-peak windows {} from octopus_night_times".format(windows))
+            elif self.is_intelligent_go_tariff(tariff_code):
+                # On Intelligent GO the off-peak buckets cover the guaranteed overnight window plus
+                # whichever ad-hoc dispatch slots Octopus granted on the nights sampled. Dispatches are
+                # decided night by night, so a slot that merely recurred across the sample is not a
+                # schedule - baking it in invents a cheap half-hour the customer has not been given, and
+                # Predbat then plans a battery charge into it while the meter bills the full day rate.
+                # The guaranteed window taken below is the only fixed part of an IOG day.
+                self.log("Info: OctopusAPI: Tariff {} is Intelligent GO, its off-peak periods are dispatch-driven so the TOU labels are not read as a schedule".format(tariff_code))
             else:
                 tou_windows = await self.async_get_tou_night_windows()
                 if tou_windows:
-                    windows = [(start_minute, end_minute, True) for start_minute, end_minute in tou_windows]
-                    self.log("Info: OctopusAPI: Using off-peak windows {} (UTC minutes from midnight) from measurement TOU labels".format(tou_windows))
+                    # The labels are UTC instants, but only some meters are on a UTC-fixed schedule.
+                    # Anchor them to whichever clock this tariff's off-peak period is really fixed to,
+                    # converting the offsets to wall-clock minutes for a local one - holding a
+                    # summer-sampled window at its UTC offset would run it an hour early through winter.
+                    anchor_utc = self._fallback_night_window(tariff_code, log_unknown=False).get("utc", False)
+                    if anchor_utc:
+                        windows = sorted((start_minute, end_minute, True) for start_minute, end_minute in tou_windows)
+                    else:
+                        utc_offset = self.now_utc_exact.utcoffset()
+                        utc_offset_minutes = int(utc_offset.total_seconds() // 60) if utc_offset else 0
+                        windows = sorted((*_tou_window_to_local(start_minute, end_minute, utc_offset_minutes), False) for start_minute, end_minute in tou_windows)
+                    applied_windows = [(start_minute, end_minute) for start_minute, end_minute, _ in windows]
+                    self.log("Info: OctopusAPI: Using off-peak windows {} ({} minutes from midnight) from measurement TOU labels, anchored to {}".format(applied_windows, "UTC" if anchor_utc else "local", "UTC" if anchor_utc else "local time"))
             if not windows:
                 window = self._fallback_night_window(tariff_code)
                 start_minute = window["start"][0] * 60 + window["start"][1]
@@ -1909,15 +1923,54 @@ class OctopusAPI(ComponentBase):
         # Return the response as-is - let caller handle other errors (including auth errors that need retry)
         return data_as_json
 
+    def start_token_mint_backoff(self):
+        """Back off from the token mint after a CDN/WAF block.
+
+        Each consecutive block doubles the wait, capped at TOKEN_MINT_BACKOFF_MAX_SECONDS.
+        """
+        self.token_mint_block_count += 1
+        delay = token_mint_backoff_seconds(self.token_mint_block_count)
+        now = datetime.now()
+        self.token_mint_blocked_until = now + timedelta(seconds=delay)
+        self.token_mint_backoff_logged_at = now
+        self.log("Warn: OctopusAPI: Token mint edge/WAF blocked (block {}) - this is rate limiting, not a bad API key. Backing off for {}s".format(self.token_mint_block_count, delay))
+
+    def log_token_mint_backoff(self, now):
+        """Repeat the backoff reason occasionally so it stays visible in a short log window"""
+        if self.token_mint_backoff_logged_at and (now - self.token_mint_backoff_logged_at).total_seconds() < TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS:
+            return
+        self.token_mint_backoff_logged_at = now
+        self.log("Warn: OctopusAPI: Token mint still edge/WAF blocked (block {}) - suppressing mints until {}".format(self.token_mint_block_count, self.token_mint_blocked_until.strftime(TIME_FORMAT)))
+
+    def clear_token_mint_backoff(self):
+        """Clear the mint backoff after a successful token mint"""
+        if self.token_mint_block_count:
+            self.log("OctopusAPI: Token mint recovered after {} edge/WAF block(s)".format(self.token_mint_block_count))
+        self.token_mint_block_count = 0
+        self.token_mint_blocked_until = None
+        self.token_mint_backoff_logged_at = None
+
     async def async_refresh_token(self):
         """
         Refresh the token using JWT expiry from the token itself
         """
         # Check if we have a valid token by decoding its expiry
-        if self.graphql_token:
-            expiry = self.decode_kraken_token_expiry(self.graphql_token)
-            if expiry and expiry > datetime.now() + timedelta(minutes=5):
+        now = datetime.now()
+        expiry = self.decode_kraken_token_expiry(self.graphql_token) if self.graphql_token else None
+        if expiry and expiry > now + timedelta(minutes=5):
+            return self.graphql_token
+
+        # Re-minting while the mint is edge blocked would only be refused again, so skip the
+        # request until the backoff window elapses. A token inside the five minute proactive
+        # refresh window has NOT actually expired, so keep using it rather than manufacturing
+        # an outage the block itself would not have caused. Callers that hit a genuine auth
+        # failure clear graphql_token before re-minting, so a revoked token is never revived
+        # here - only one we have simply not been able to renew yet.
+        if self.token_mint_blocked_until and now < self.token_mint_blocked_until:
+            if expiry and expiry > now:
                 return self.graphql_token
+            self.log_token_mint_backoff(now)
+            return None
 
         client = await self.api.async_create_client_session()
         url = f"{self.api.base_url}/v1/graphql/"
@@ -1926,6 +1979,21 @@ class OctopusAPI(ComponentBase):
 
         try:
             async with client.post(url, headers=headers, json=payload) as token_response:
+                # A 403 carrying a CDN block page is rate limiting, not a revoked credential.
+                # Handled here rather than in async_read_response so it is logged as the edge
+                # block it is - the generic "Unauthenticated request" line reads like a bad
+                # API key and sends anyone diagnosing this down the wrong path.
+                if token_response.status == 403 and is_edge_block_body(await token_response.text()):
+                    self.failures_total += 1
+                    self.start_token_mint_backoff()
+                    # The block says nothing about the token already held, so do not fail this
+                    # call as well: the backoff guard above would hand the same token to the very
+                    # next caller anyway. Re-read the clock rather than reusing the one sampled
+                    # before the request, which may have been seconds ago.
+                    if expiry and expiry > datetime.now():
+                        return self.graphql_token
+                    return None
+
                 token_response_body = await self.async_read_response_retry(token_response, url)
                 if (
                     token_response_body is not None
@@ -1935,6 +2003,7 @@ class OctopusAPI(ComponentBase):
                     and "token" in token_response_body["data"]["obtainKrakenToken"]
                 ):
                     self.graphql_token = token_response_body["data"]["obtainKrakenToken"]["token"]
+                    self.clear_token_mint_backoff()
                     # Save token to cache immediately
                     await self.save_octopus_cache()
                     return self.graphql_token
@@ -3427,6 +3496,35 @@ class Octopus:
                         saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
                     elif default_rate_pence > 0:
                         saving_rate = default_rate_pence  # Use configured default rate
+
+                    # Octopus publishes Power Up and Power Down events through the same savingSessions
+                    # feed and distinguishes them with eventType (#4548 point 5/7):
+                    #   TURN_DOWN           - reduce consumption, rewarded in octopoints
+                    #   WEEKEND_HAPPY_HOUR  - an earned free import hour, reward 0
+                    #   TURN_UP             - increase consumption, rewarded in octopoints
+                    # Only WEEKEND_HAPPY_HOUR is free. TURN_UP is a rewarded increase event, not free
+                    # import, so it stays on the saving path - do not be tempted to fold it in here on
+                    # the grounds that both mean "import more".
+                    #
+                    # The reward value cannot stand in for the type. A TURN_DOWN reporting 0 - an
+                    # unknown reward published as 0 rather than null - would be zeroed on IMPORT,
+                    # making Predbat grid-charge through a session where the user is meant to be
+                    # reducing import. eventType is the only sound discriminator (#4851).
+                    #
+                    # An absent eventType (older API, or a feed that does not carry it) falls through
+                    # to the existing behaviour rather than guessing.
+                    if start and end and event.get("event_type", None) == "WEEKEND_HAPPY_HOUR":
+                        try:
+                            start_time = str2time(start)
+                            end_time = str2time(end)
+                        except (ValueError, TypeError):
+                            self.log("Warn: Bad start time for joined Octopus Weekend Happy Hour: {}-{}".format(start, end))
+                            continue
+                        if abs((start_time - self.now_utc).days) <= 3:
+                            self.log("Octopus: Joined Octopus Weekend Happy Hour {}-{} - treating as a free electricity session".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
+                            octopus_free_slots.append({"start": start, "end": end, "rate": 0})
+                        continue
+
                     # Skip events with no rate info unless default is configured
                     if start and end and (octopoints_kwh is not None or default_rate_pence > 0) and saving_rate > 0:
                         # Save the saving slot?

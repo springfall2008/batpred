@@ -190,7 +190,7 @@ Example usage in VSCode
 | `get_config` | Every Predbat setting, with its current value and its default |
 | `get_apps` | Your `apps.yaml` configuration, with credentials redacted |
 | `get_apps_config` | The current value of one `apps.yaml` key, with a credential-like value redacted |
-| `get_log` | Lines from `predbat.log`, filtered by level, search term and age |
+| `get_log` | Lines from `predbat.log`, filtered by level, search term, regular expression and time window |
 | `get_state` | Predbat's internal state variables - the same data a debug yaml carries |
 | `get_entities` | All Predbat entities and their states |
 | `search_entities` | Search *every* Home Assistant entity id with a regular expression, not just Predbat's own - requires `switch.predbat_ai_ha_state_enable` |
@@ -212,8 +212,48 @@ look wrong"*, or *"find the warnings in the last 24 hours of my log and explain 
 | -------- | ----------- |
 | `filter` | `all`, `info`, `warnings` (the default) or `errors` |
 | `search` | Only return lines containing this text, case-insensitive |
+| `pattern` | Only return lines matching this Python regular expression, case-insensitive |
 | `hours` | Only return lines written in the last N hours |
-| `max_lines` | How many lines to return - the most recent matches are the ones kept, but they come back oldest-first (default 500, maximum 5000) |
+| `start` | Only return lines at or after this point in time |
+| `end` | Only return lines at or before this point in time |
+| `max_lines` | How many lines to return - the most recent matches are the ones kept, but they come back oldest-first (default 200, maximum 5000) |
+| `line_number` | Return this one line in full, ignoring every other filter |
+| `context` | With `line_number`, also return this many lines either side |
+
+All of these narrow the result together rather than replacing one another, so
+`filter: errors` with `pattern: "inverter [12]"` returns only the errors that also mention those
+inverters.
+
+`start` and `end` each accept a date, a time, or both:
+
+| Value | Means |
+| ----- | ----- |
+| `2026-08-28` | As `start`, the beginning of that day; as `end`, the end of it - so `end: 2026-08-28` includes everything that happened that day |
+| `17:00` or `17:00:30` | That time today |
+| `2026-08-28 17:00` | Exactly that moment |
+
+`hours` still works and can be combined with `start`, in which case the narrower of the two wins.
+A line with no timestamp of its own - the second and later lines of a traceback - belongs to the
+entry above it, so a multi-line entry is kept or dropped as a whole.
+
+#### Keeping the response small enough to be useful
+
+`max_lines` bounds how many lines come back, not how big they are, and some Predbat log lines are
+enormous - a single Octopus GraphQL response is one 20KB line. Left unchecked, a few hundred of
+those made a tool result of nearly a megabyte, which overflowed the model's context and cost the
+assistant the rest of the conversation.
+
+So the response has three guards. Beyond `max_lines`, any single line longer than about a thousand
+characters is cut and marked with how much was left off, and the response as a whole stops at a
+total size budget - `truncated_reason` says which of the two ended it. A cut line still tells you
+its number, and passing that back as `line_number` returns it in full:
+
+```text
+2026-08-30 09:58:11: OctopusAPI: Fetched saving sessions... [+19069 chars, get_log line_number=26793]
+```
+
+Line numbers count from the start of the previous (rotated) log through the current one, so they
+stay valid as the log grows but not across a rotation.
 
 `get_state` exposes the same internal state a `predbat_debug.yaml` carries, but a variable at a
 time rather than as a 5MB file. Called with no arguments it returns every variable small enough
