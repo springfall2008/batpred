@@ -1677,6 +1677,34 @@ def test_one_bad_snapshot_does_not_starve_the_rest_of_the_fleet(my_predbat=None)
     return 0
 
 
+def test_update_status_does_no_rest_read(my_predbat=None):
+    """
+    Inverter.update_status() must not re-read GivTCP over REST.
+
+    Nothing consumes the result: rest_data is only read in __init__ (the version/firmware/serial
+    metadata and the raw reserve), which runs before update_status and does its own read. The
+    refresh cost a blocking HTTP GET per inverter on every 5-minute cycle, on top of the component's
+    own 60s poll - and when GivTCP is slow, read_data()'s retry ladder burns 20s + 40s + 40s of
+    Inverter.sleep() inside the main planning loop and records an error, all for data that is then
+    discarded.
+    """
+    import inspect
+    import inverter as inverter_module
+
+    # Matched on the call pattern rather than the bare word, so the explanatory comment left in
+    # update_status does not trip this. A guard against reintroduction, not a behavioural test:
+    # driving a real update_status needs the full Inverter harness in test_inverter.py.
+    source = inspect.getsource(inverter_module.Inverter.update_status)
+    assert "self.givtcp.read_data()" not in source, "update_status must not perform a REST read - nothing consumes it"
+    assert "self.rest_data =" not in source, "update_status must not refresh rest_data"
+
+    # __init__ still does, for the metadata and the raw reserve read that have no entity equivalent
+    init_source = inspect.getsource(inverter_module.Inverter.__init__)
+    assert "self.givtcp.read_data()" in init_source, "__init__ still needs its own REST read"
+    print("PASS: update_status performs no REST read")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1730,6 +1758,7 @@ def test_givtcp_component(my_predbat=None):
         ("missing_control", test_missing_control_field_does_not_abort_the_publish, "missing Control field skipped"),
         ("missing_schedule", test_missing_schedule_flag_is_not_published_as_off, "unknown schedule flag not published"),
         ("fleet_isolation", test_one_bad_snapshot_does_not_starve_the_rest_of_the_fleet, "one bad inverter does not starve others"),
+        ("no_dead_rest_read", test_update_status_does_no_rest_read, "update_status does no REST read"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),

@@ -261,13 +261,13 @@ class Inverter:
         if self.inverter_type != "GE":
             quiet = False
 
-        # Rest API for GivEnergy. Most charge/discharge/reserve/window control now goes via
-        # entities (published by the GivTCPComponent when givtcp_rest is configured), but this
-        # direct REST connection is kept alive for the handful of things that component doesn't
-        # publish yet: battery/capacity discovery and calibration detection below, pause_mode/
-        # inverter_mode (adjust_pause_mode/adjust_inverter_mode - GivTCP-native mode naming has
-        # no entity equivalent), and the #4517 discharge-target unsupported-model check in
-        # adjust_force_export (needs the raw inverter model, which isn't published either).
+        # Rest API for GivEnergy. Charge/discharge/reserve/window control, battery and capacity
+        # discovery, calibration, pause and inverter mode, and the #4517 discharge-target model
+        # check all go through entities published by GivTCPComponent now. This one read remains for
+        # the two things that have no entity behind them: the GivTCP version, firmware and serial
+        # reported below, and the raw Battery_Power_Reserve read further down - which deliberately
+        # differs from the entity path, reporting what the inverter is actually set to without
+        # applying battery_min_soc. update_status() does NOT re-read; nothing would consume it.
         if self.inverter_type == "GE":
             self.rest_api = self.base.get_arg("givtcp_rest", None, indirect=False, index=self.id)
             if self.rest_api:
@@ -1309,9 +1309,12 @@ class Inverter:
         self.load_power = 0
         self.grid_power = 0
 
-        if self.rest_api:
-            self.rest_data = self.givtcp.read_data()
-
+        # Deliberately no REST read here. Everything this used to feed is now published as entities
+        # by GivTCPComponent and read through the ordinary get_arg path below, so refreshing
+        # rest_data served nothing: it is only consumed in __init__, which does its own read. The
+        # refresh cost a blocking GET per inverter per cycle on top of the component's own poll, and
+        # read_data()'s retry ladder put 20s + 40s + 40s of sleep inside the main planning loop
+        # whenever GivTCP was slow.
         self.charge_rate_now = self.get_current_charge_rate() / MINUTE_WATT
         self.discharge_rate_now = self.get_current_discharge_rate() / MINUTE_WATT
 
