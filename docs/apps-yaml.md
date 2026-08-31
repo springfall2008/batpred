@@ -1385,7 +1385,7 @@ e.g:
     - sensor.givtcp_{geserial}_load_power
 ```
 
-NB: If you have a GivEnergy inverter and have [configured REST inverter control](#rest-interface-inverter-control) then the above power data sensors configured in `appa.yaml` will be ignored in preference of using data retrieved from the inverter via REST API calls.  To override this behaviour and use the configured sensors, set **givtcp_rest_power_ignore** to `true`.
+NB: If you have a GivEnergy inverter and have [configured REST inverter control](#rest-interface-inverter-control) then the above power data sensors configured in `apps.yaml` will be ignored in preference of using data retrieved from the inverter via REST API calls.  To override this behaviour and use the configured sensors, set **givtcp_rest_power_ignore** to `true`.
 
 If you are using the LoadML feature of Predbat and have multiple inverters that share the load, you will need to create a template load power sensor in `configuration.yaml` (you can't currently configure time-pattern trigger templates in the UI):
 
