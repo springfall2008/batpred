@@ -646,17 +646,27 @@ class PermissionModelTests(unittest.TestCase):
         self.assertIn("Bash(gh api repos/springfall2008/batpred/*)", cleanup)
 
     def test_cleanup_allowed_tools_grants_write_access(self):
-        """Commit/push/pre-commit, matching the PR flow's write capability."""
+        """Commit/push/merge/pre-commit, matching the PR flow's write capability plus
+        the merge grant that lets it sync a stale branch with main and resolve conflicts."""
         cleanup = set(triage_daemon.ALLOWED_TOOLS_CLEANUP.split(","))
         self.assertTrue(
             {
                 "Bash(git add*)",
                 "Bash(git commit*)",
                 "Bash(git push*)",
+                "Bash(git merge*)",
                 "Bash(./run_pre_commit*)",
                 "Bash(./run_pre_commit)",
             }.issubset(cleanup)
         )
+
+    def test_cleanup_is_the_only_flow_granted_git_merge(self):
+        """git merge is only needed to sync a checked-out PR branch with main - no
+        other flow checks out an existing branch that can be behind, so granting it
+        more broadly would be reach without a use."""
+        self.assertIn("Bash(git merge*)", triage_daemon.ALLOWED_TOOLS_CLEANUP.split(","))
+        for flow in [triage_daemon.ALLOWED_TOOLS, triage_daemon.ALLOWED_TOOLS_PR, triage_daemon.ALLOWED_TOOLS_REVIEW]:
+            self.assertNotIn("Bash(git merge*)", flow.split(","))
 
 
 class GhApiFormPromptTests(unittest.TestCase):

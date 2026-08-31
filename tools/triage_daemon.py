@@ -274,12 +274,18 @@ DISALLOWED_TOOLS_REVIEW = ",".join(item for item in _DISALLOWED_TOOLS_BASE if it
 # committing/pushing/pre-commit and checking out the PR's own branch (the review flow
 # never needs a local checkout, and never gh pr checks/run view - it doesn't touch CI).
 # Deliberately not the full _ALLOWED_TOOLS_PR_EXTRA: no "gh pr create*" - cleanup
-# pushes to the existing PR's branch, it never opens a new one.
+# pushes to the existing PR's branch, it never opens a new one. "git merge*" (not
+# scoped to "origin/main*" - a flag before the ref, e.g. "git merge --no-edit
+# origin/main", would break a literal-prefix match, the same footgun documented
+# against _PR_FORCE_PUSH_DENIALS above) is what lets it sync a stale PR branch with
+# main and resolve conflicts, per pr-cleanup/SKILL.md step 2 - no other flow checks
+# out an existing branch that can be behind, so it's cleanup-only.
 _CLEANUP_EXTRA_GH = ["Bash(gh pr checkout*)", "Bash(gh pr checks*)", "Bash(gh run view*)", "Bash(gh run list*)"]
 _CLEANUP_EXTRA_WRITE = [
     "Bash(git add*)",
     "Bash(git commit*)",
     "Bash(git push*)",
+    "Bash(git merge*)",
     "Bash(./run_pre_commit*)",
     "Bash(./run_pre_commit)",
 ]

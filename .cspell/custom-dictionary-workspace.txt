@@ -211,6 +211,7 @@ fline
 FLOMASTA
 fontsize
 fontweight
+footgun
 Forestfire
 formaction
 formmethod
