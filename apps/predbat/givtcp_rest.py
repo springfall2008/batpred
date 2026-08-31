@@ -146,10 +146,14 @@ class GivTCPRest:
         if not rest_data or "Power" not in rest_data or "Power" not in rest_data["Power"]:
             return None
         ppdetails = rest_data["Power"]["Power"]
-        if self.inverter.rest_v3:
-            battery_voltage = float(ppdetails.get("Battery_Voltage", 0.0))
-        else:
-            battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.inverter.id, required_unit="V")
+        # None when GivTCP does not report it - v2's Power block has no Battery_Voltage at all.
+        # main filled that gap with get_arg("battery_voltage"), which read the user's own sensor.
+        # Here that key is auto-configured to the sensor this value feeds, so reading it back would
+        # close a loop: from the second poll onwards the component would republish its own last
+        # value and the reading would freeze. The caller publishes nothing instead, leaving the
+        # user's apps.yaml voltage sensor in place.
+        battery_voltage = ppdetails.get("Battery_Voltage", None)
+        battery_voltage = float(battery_voltage) if battery_voltage is not None else None
         return {
             "battery_power": float(ppdetails.get("Battery_Power", 0.0)),
             "pv_power": float(ppdetails.get("PV_Power", 0.0)),

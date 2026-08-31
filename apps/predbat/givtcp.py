@@ -208,6 +208,12 @@ GIVTCP_AUTO_CONFIG_POWER_KEYS = [
     "pv_power",
     "grid_power",
     "load_power",
+]
+
+# Split from the power keys because only GivTCP v3 reports Battery_Voltage - v2's Power block has
+# none. Claimed only where every managed inverter actually published one, so a v2 fleet keeps the
+# user's own voltage sensor rather than having the key pointed at an entity nothing can fill.
+GIVTCP_AUTO_CONFIG_VOLTAGE_KEYS = [
     "battery_voltage",
 ]
 
@@ -518,7 +524,9 @@ class GivTCPComponent(ComponentBase):
                 self.dashboard_item(self._entity_id("sensor", n, "pv_power"), state=power["pv_power"], attributes=GIVTCP_SENSORS["pv_power"], app="givtcp")
                 self.dashboard_item(self._entity_id("sensor", n, "grid_power"), state=power["grid_power"], attributes=GIVTCP_SENSORS["grid_power"], app="givtcp")
                 self.dashboard_item(self._entity_id("sensor", n, "load_power"), state=power["load_power"], attributes=GIVTCP_SENSORS["load_power"], app="givtcp")
-                self.dashboard_item(self._entity_id("sensor", n, "battery_voltage"), state=power["battery_voltage"], attributes=GIVTCP_SENSORS["battery_voltage"], app="givtcp")
+                if power["battery_voltage"] is not None:
+                    self.dashboard_item(self._entity_id("sensor", n, "battery_voltage"), state=power["battery_voltage"], attributes=GIVTCP_SENSORS["battery_voltage"], app="givtcp")
+                    published.add("battery_voltage")
 
     async def automatic_config(self):
         """Point Predbat's standard entity-based apps.yaml keys at the entities this component publishes."""
@@ -546,6 +554,10 @@ class GivTCPComponent(ComponentBase):
             self.log("Info: GivTCP: givtcp_rest_power_ignore is set - leaving power/voltage entities to your apps.yaml config")
         else:
             keys += GIVTCP_AUTO_CONFIG_POWER_KEYS
+            if all("battery_voltage" in self.published_discovery.get(n, set()) for n in discovered):
+                keys += GIVTCP_AUTO_CONFIG_VOLTAGE_KEYS
+            else:
+                self.log("Info: GivTCP: battery voltage is only reported by GivTCP v3 - leaving battery_voltage to your apps.yaml config")
 
         # Discovery keys are claimed per key, and only where every managed inverter actually
         # published that sensor. Claiming one that was never published leaves the arg pointing at a

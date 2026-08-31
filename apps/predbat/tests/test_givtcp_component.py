@@ -1535,6 +1535,70 @@ def test_reserve_entity_min_is_never_raised_above_the_floor(my_predbat=None):
     return 0
 
 
+def test_battery_voltage_not_published_or_claimed_on_v2(my_predbat=None):
+    """
+    GivTCP v2 reports no Battery_Voltage, so the component publishes none and claims nothing.
+
+    v2's Power block genuinely has no Battery_Voltage (confirmed absent in cases/rest_v2.json), and
+    power_readings() fell back to get_arg("battery_voltage"). On main that read the user's own
+    sensor. Here automatic_config points that same key at the component's sensor, which
+    power_readings feeds - so from the second poll onwards it reads back its own last publication
+    and freezes, at 52.0 if the user had configured nothing.
+    """
+    base, component = _make_component()
+    component.rest[0].inverter.rest_v3 = False
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    del component.rest[0].inverter.rest_data["Power"]["Power"]["Battery_Voltage"]
+    _mark_discovered(component)
+
+    run_async(component.publish_data())
+    assert "sensor.predbat_givtcp_0_battery_voltage" not in base.entities, "v2 must not publish a battery voltage it cannot read"
+    # the other power sensors are unaffected
+    assert "sensor.predbat_givtcp_0_battery_power" in base.entities
+
+    run_async(component.automatic_config())
+    assert "battery_voltage" not in base.args, f"v2 must leave battery_voltage to the user, got {base.args.get('battery_voltage')}"
+    assert base.args["battery_power"] == ["sensor.predbat_givtcp_0_battery_power"], "other power keys are still claimed"
+    print("PASS: no battery voltage published or claimed on GivTCP v2")
+    return 0
+
+
+def test_battery_voltage_published_and_claimed_on_v3(my_predbat=None):
+    """v3 reports Battery_Voltage directly, so it is published and claimed as before."""
+    base, component = _make_component()
+    component.rest[0].inverter.rest_v3 = True
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component)
+
+    run_async(component.publish_data())
+    assert base.entities["sensor.predbat_givtcp_0_battery_voltage"]["state"] == 51.2
+
+    run_async(component.automatic_config())
+    assert base.args["battery_voltage"] == ["sensor.predbat_givtcp_0_battery_voltage"]
+    print("PASS: battery voltage is published and claimed on GivTCP v3")
+    return 0
+
+
+def test_battery_voltage_never_reads_back_its_own_entity(my_predbat=None):
+    """
+    Regression guard for the self-referential loop.
+
+    Repeated polls with the key already auto-configured must not converge on the component's own
+    published value - which is what made the reading freeze rather than track the battery.
+    """
+    base, component = _make_component()
+    component.rest[0].inverter.rest_v3 = False
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    del component.rest[0].inverter.rest_data["Power"]["Power"]["Battery_Voltage"]
+    base.args["battery_voltage"] = "sensor.predbat_givtcp_0_battery_voltage"
+
+    for _ in range(3):
+        run_async(component.publish_data())
+    assert "sensor.predbat_givtcp_0_battery_voltage" not in base.entities, "the component must never feed its own voltage entity"
+    print("PASS: battery voltage is never read back from the component's own entity")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1582,6 +1646,9 @@ def test_givtcp_component(my_predbat=None):
         ("reserve_min_default", test_reserve_entity_min_defaults_to_the_ge_floor, "reserve entity min defaults to 4"),
         ("reserve_min_lower", test_reserve_entity_min_respects_a_lower_battery_min_soc, "lower battery_min_soc respected"),
         ("reserve_min_no_raise", test_reserve_entity_min_is_never_raised_above_the_floor, "higher floor does not raise min"),
+        ("voltage_v2", test_battery_voltage_not_published_or_claimed_on_v2, "no battery voltage on v2"),
+        ("voltage_v3", test_battery_voltage_published_and_claimed_on_v3, "battery voltage published on v3"),
+        ("voltage_no_loop", test_battery_voltage_never_reads_back_its_own_entity, "no self-referential voltage loop"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),
