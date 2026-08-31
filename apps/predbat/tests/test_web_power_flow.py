@@ -461,6 +461,57 @@ def run_web_power_flow_tests(my_predbat):
     my_predbat.validate_config()
 
     # -------------------------------------------------------------------------
+    # car_charging_power is a list of chargers, not one entry per car, and its entries are summed.
+    # Two cars sharing one charger listed once per car therefore reports double the real draw
+    # (#4879). num_chargers lets a household state how many it has so that can be caught; unset it
+    # must change nothing, since no existing apps.yaml has the key.
+    print("Test: num_chargers catches a charger listed more times than there are chargers")
+    saved_chargers = my_predbat.args.get("num_chargers", None)
+    my_predbat.args.pop("num_chargers", None)
+    my_predbat.args["car_charging_power"] = ["sensor.car_charger_power", "sensor.car_charger_power"]
+    errors_unset = my_predbat.validate_config()
+    if errors_unset != baseline_errors:
+        print(f"  ERROR: with num_chargers unset a duplicated charger changed the error count by {errors_unset - baseline_errors}")
+        failed += 1
+
+    my_predbat.args["num_chargers"] = 1
+    errors_one_charger = my_predbat.validate_config()
+    if errors_one_charger <= baseline_errors:
+        print("  ERROR: two entries against num_chargers 1 should be a configuration error - this is the #4879 doubling")
+        failed += 1
+
+    print("Test: the same list is accepted once the charger count matches")
+    my_predbat.args["num_chargers"] = 2
+    errors_two_chargers = my_predbat.validate_config()
+    if errors_two_chargers != baseline_errors:
+        print(f"  ERROR: two chargers declared and two listed should validate, error count moved by {errors_two_chargers - baseline_errors}")
+        failed += 1
+
+    print("Test: fewer entries than chargers is tolerated, an incomplete list is not an error")
+    my_predbat.args["car_charging_power"] = ["sensor.car_charger_power"]
+    errors_short = my_predbat.validate_config()
+    if errors_short != baseline_errors:
+        print(f"  ERROR: listing fewer chargers than declared should be tolerated, error count moved by {errors_short - baseline_errors}")
+        failed += 1
+
+    print("Test: a bad sensor is still type-checked when num_chargers is unset")
+    # required_entries of 0 used to truncate the list away before the item type check ran, so a
+    # nonsense entity slipped through unvalidated the moment this key gained an entries rule.
+    my_predbat.args.pop("num_chargers", None)
+    my_predbat.args["car_charging_power"] = ["sensor.car_charger_nonsense"]
+    errors_unchecked = my_predbat.validate_config()
+    if errors_unchecked <= baseline_errors:
+        print("  ERROR: a non-numeric charger sensor was not validated with num_chargers unset")
+        failed += 1
+
+    my_predbat.args.pop("car_charging_power", None)
+    if saved_chargers is None:
+        my_predbat.args.pop("num_chargers", None)
+    else:
+        my_predbat.args["num_chargers"] = saved_chargers
+    my_predbat.validate_config()
+
+    # -------------------------------------------------------------------------
     print("Test: car charging power is published as a sensor for upstream consumers")
     my_predbat.args["car_charging_power"] = "sensor.car_charger_power"
     my_predbat.update_car_charging_power()

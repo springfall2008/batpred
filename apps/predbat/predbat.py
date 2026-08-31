@@ -1449,6 +1449,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     else:
                         required_entries = int(entries)
 
+                    # Truncation below trims a list to required_entries before type-checking its
+                    # items, so a count key that is simply unset (0) must not silently trim it to
+                    # nothing and validate no items at all - hence "if required_entries" there
+                    # rather than "is not None".
                     if isinstance(value, list):
                         if len(value) < required_entries:
                             if not optional_entries:
@@ -1456,6 +1460,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 self.arg_errors[name] = "Invalid number of entries, expected {}".format(required_entries)
                                 errors += 1
                                 continue
+                        # Too many entries is only an error where the spec asks for it. Every other
+                        # key here has always tolerated extras, and newly rejecting them would fail
+                        # working installs; but for a list that is summed rather than indexed, an
+                        # extra entry silently inflates the total instead of being ignored (#4879).
+                        elif len(value) > required_entries and required_entries > 0 and spec.get("entries_exact", False):
+                            self.log("Warn: Validation of apps.yaml found configuration item '{}' has {} entries, expected exactly {} based on {}".format(name, len(value), required_entries, entries))
+                            self.arg_errors[name] = "Too many entries, expected {}".format(required_entries)
+                            errors += 1
+                            continue
                     elif required_entries > 1:
                         if not optional_entries:
                             self.log("Warn: Validation of apps.yaml found configuration item '{}' is not a list, but requires {} entries based on {}".format(name, required_entries, entries))
@@ -1476,7 +1489,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
                         if isinstance(value, list):
                             matches = True
-                            if required_entries is not None and len(value) > required_entries:
+                            if required_entries and len(value) > required_entries:
                                 value = value[:required_entries]
                             for item in value:
                                 if not self.validate_is_int(item):
@@ -1497,7 +1510,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
                         if isinstance(value, list):
                             matches = True
-                            if required_entries is not None and len(value) > required_entries:
+                            if required_entries and len(value) > required_entries:
                                 value = value[:required_entries]
                             for item in value:
                                 if not self.validate_is_float(item):
@@ -1513,7 +1526,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
                         if isinstance(value, list):
                             matches = True
-                            if required_entries is not None and len(value) > required_entries:
+                            if required_entries and len(value) > required_entries:
                                 value = value[:required_entries]
                             for item in value:
                                 if not isinstance(item, str):
@@ -1540,7 +1553,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                             value = self.get_arg(name, [], indirect=False)
 
                         if isinstance(value, list):
-                            if required_entries is not None and len(value) > required_entries:
+                            if required_entries and len(value) > required_entries:
                                 value = value[:required_entries]
                             matches = True
                             for item in value:
@@ -1556,7 +1569,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                             value = self.get_arg(name, [], indirect=False)
 
                         if isinstance(value, list):
-                            if required_entries is not None and len(value) > required_entries:
+                            if required_entries and len(value) > required_entries:
                                 value = value[:required_entries]
 
                             matches = True
@@ -1579,7 +1592,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                         elif expected_type == "dict_list":
                             value = self.get_arg(name, [], indirect=False)
                         if isinstance(value, list):
-                            if required_entries is not None and len(value) > required_entries:
+                            if required_entries and len(value) > required_entries:
                                 value = value[:required_entries]
 
                             matches = True
@@ -1615,7 +1628,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
                         if isinstance(value, list):
                             # Auto trim to length
-                            if required_entries is not None and len(value) > required_entries:
+                            if required_entries and len(value) > required_entries:
                                 value = value[:required_entries]
 
                             matches = True

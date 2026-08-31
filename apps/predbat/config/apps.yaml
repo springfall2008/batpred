@@ -315,6 +315,14 @@ pred_bat:
   # Defines the number of cars modelled by the system, set to 0 for no car
   num_cars: 1
 
+  # Defines the number of physical car chargers, which is not the same as the number of cars -
+  # two cars sharing one charger is still one charger. Only car_charging_power uses this, and it
+  # is the one car_charging_* setting that is a list of chargers rather than one entry per car:
+  # its entries are added together, so listing a charger twice doubles the power Predbat reports.
+  # Set this and Predbat will check car_charging_power has no more entries than you have chargers.
+  # Leave it unset to skip that check entirely.
+  num_chargers: 1
+
   # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
   # This should not be needed if you use Intelligent Octopus slots which will take priority if enabled
   # The list of possible values is in car_charging_planned_response

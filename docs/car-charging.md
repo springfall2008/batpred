@@ -102,6 +102,19 @@ Like car_charging_energy it can be a list of sensors, one per line, if you have 
     - sensor.wallbox_charging_power
 ```
 
+**This list describes chargers, not cars** - it is the one `car_charging_*` setting that is not one entry per car,
+and **num_cars** has no bearing on it. List each physical charger exactly once, however many cars you have.
+Two cars sharing a single charger is still a single entry: the entries are added together, so listing the same
+charger twice - directly, or via two template sensors that both read it - reports double the power your charger
+is actually drawing.
+
+Set **num_chargers** in `apps.yaml` to the number of physical chargers you have and Predbat will check
+**car_charging_power** against it, rather than silently summing a repeated entry. Leave **num_chargers** unset
+to skip that check.
+
+To confirm what Predbat is reading, compare the **predbat.car_charging_power** sensor against your charger's own
+app or display while a car is charging - if it reads double, an entry is repeated.
+
 If your car charger has no live power sensor, leave **car_charging_power** commented out in `apps.yaml`; the power flow diagram then shows the same four items it always has, and no **predbat.car_charging_power** sensor is published.<BR>
 If you use one of the supported charger integrations (Ohme, myenergi Zappi, GivEnergy EV charger, AlphaESS EV charger or the Predbat gateway) then this is configured automatically and you do not need an `apps.yaml` entry of your own.
 
