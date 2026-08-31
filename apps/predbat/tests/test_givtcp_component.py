@@ -1239,6 +1239,32 @@ def test_soh_is_not_derived_from_the_two_design_figures(my_predbat=None):
     return 0
 
 
+def test_rate_entities_omit_max_when_the_rate_is_unknown(my_predbat=None):
+    """
+    With no reported maximum rate, no "max" attribute is published at all.
+
+    Inverter derives battery_rate_max_raw for a GE inverter from this attribute
+    (get_arg("charge_rate", attribute="max", default=2600.0)), and an absent attribute returns that
+    2600 default - which is exactly what main fell back to when REST reported no rate. Publishing
+    GIVTCP_CONTROLS' generic 20000 ceiling instead tells Predbat the battery can take 20kW, and
+    battery_rate_max_charge/discharge/export are all sized from it.
+
+    inverter_details() returns {} whenever neither Invertor_Details nor the v3 serial-named block
+    resolves, so this is the same path that loses capacity, inverter limit and time together.
+    """
+    base, component = _make_component()
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    assert component.rest[0].max_battery_rate() is None, "fixture should report no max battery rate"
+    run_async(component.publish_data())
+
+    for entity_id in ("number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_0_discharge_rate"):
+        attributes = base.entities[entity_id]["attributes"]
+        assert "max" not in attributes, f"{entity_id}: expected no max when the rate is unknown, got {attributes.get('max')}"
+
+    print("PASS: no max is advertised when GivTCP reports no maximum rate")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1272,6 +1298,7 @@ def test_givtcp_component(my_predbat=None):
         ("discovery_captures", test_discovery_parsing_against_real_captures, "discovery parsed from real GivTCP captures"),
         ("calibration", test_calibration_detected_per_version, "calibration detected on both versions"),
         ("rate_max_attr", test_rate_entities_carry_the_real_max, "rate entities carry the real max"),
+        ("rate_max_unknown", test_rate_entities_omit_max_when_the_rate_is_unknown, "no max advertised when rate unknown"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),

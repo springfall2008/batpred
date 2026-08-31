@@ -336,6 +336,14 @@ class GivTCPComponent(ComponentBase):
             if max_battery_rate:
                 charge_rate_attributes["max"] = max_battery_rate
                 discharge_rate_attributes["max"] = max_battery_rate
+            else:
+                # Nothing reported: publish no max at all rather than the generic ceiling. Inverter
+                # reads this attribute as ground truth, and an absent one falls back to its own
+                # 2600W default (ha.py get_state returns the caller's default for a missing
+                # attribute) - which is precisely what main did when REST reported no rate.
+                # Leaving 20000 in place claims a 20kW battery instead.
+                charge_rate_attributes.pop("max", None)
+                discharge_rate_attributes.pop("max", None)
 
             self.dashboard_item(self._entity_id("number", n, "charge_rate"), state=rest.inverter.rest_data.get("Control", {}).get("Battery_Charge_Rate", 0), attributes=charge_rate_attributes, app="givtcp")
             self.dashboard_item(self._entity_id("number", n, "discharge_rate"), state=rest.inverter.rest_data.get("Control", {}).get("Battery_Discharge_Rate", 0), attributes=discharge_rate_attributes, app="givtcp")
