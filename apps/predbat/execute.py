@@ -17,7 +17,7 @@ reserve level adjustments, and multi-inverter balancing.
 
 from datetime import timedelta, datetime
 from const import MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
-from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
+from utils import dp0, dp2, dp3, calc_percent_limit, calc_percent_limit_floor, find_charge_rate
 from predbat_metrics import metrics
 from inverter import Inverter
 import time
@@ -248,7 +248,7 @@ class Execute:
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
                         is_freeze_charge = self.is_freeze_charge(self.charge_limit_best[0])
-                        target_soc = calc_percent_limit(self.charge_limit_best[0], self.soc_max) if not is_freeze_charge else calc_percent_limit(inverter.soc_kw, inverter.soc_max)
+                        target_soc = calc_percent_limit(self.charge_limit_best[0], self.soc_max) if not is_freeze_charge else calc_percent_limit_floor(inverter.soc_kw, inverter.soc_max)
                         inv_target_soc_percent = self.adjust_battery_target_multi(inverter, target_soc, True, False, check=True, isFreezeCharge=is_freeze_charge)
 
                         current_charge_rate = inverter.get_current_charge_rate()
@@ -307,7 +307,7 @@ class Execute:
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
                                 if self.set_reserve_enable and (not inverter.inv_has_timed_pause):
-                                    inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                    inverter.adjust_reserve(inverter.hold_reserve_percent())
                                     resetReserve = False
                             else:
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
@@ -344,7 +344,7 @@ class Execute:
 
                                         # Hold on reserve if we can't pause or won't pause the discharge (due to higher battery level)
                                         if self.set_reserve_enable and (not inverter.inv_has_timed_pause or (inverter.soc_percent > inv_target_soc_percent)):
-                                            inverter.adjust_reserve(min(inv_target_soc_percent + 1, 100, inverter.reserve_max))
+                                            inverter.adjust_reserve(min(inverter.hold_reserve_percent(inv_target_soc_percent), inverter.reserve_max))
                                             resetReserve = False
                                     else:
                                         inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
@@ -594,7 +594,7 @@ class Execute:
                                     # inverter returns to demand and the hold starts to mean something. The sibling
                                     # iBoost hold below already sits out a charge for the same reason.
                                     if self.set_reserve_enable and status != "Charging":
-                                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                        inverter.adjust_reserve(inverter.hold_reserve_percent())
                                         resetReserve = False
                                 carHolding = True
                                 self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
@@ -621,7 +621,7 @@ class Execute:
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
                         if self.set_reserve_enable:
-                            inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                            inverter.adjust_reserve(inverter.hold_reserve_percent())
                             resetReserve = False
                     boostHolding = True
                     self.log("Disabling battery discharge whilst iBoost is running")
@@ -670,7 +670,7 @@ class Execute:
                         # In charge freeze hold the target SoC at the current value
                         if self.is_freeze_charge(self.charge_limit_best[0]):
                             if isCharging:
-                                inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(self.soc_kw, self.soc_max), isCharging, isExporting, isFreezeCharge=True)
+                                inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit_floor(self.soc_kw, self.soc_max), isCharging, isExporting, isFreezeCharge=True)
                                 self.log("Inverter {} within charge freeze setting target SoC to SoC {} global target {}".format(inverter.id, dp0(inv_target_soc_percent), dp0(self.soc_kw)))
                                 if inverter.soc_kw >= inverter.reserve:
                                     inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
@@ -737,7 +737,7 @@ class Execute:
                     # Charge immediate
                     if isCharging:
                         if self.is_freeze_charge(self.charge_limit_best[0]):
-                            inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(self.soc_kw, self.soc_max), isCharging, isExporting, check=True, isFreezeCharge=True)
+                            inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit_floor(self.soc_kw, self.soc_max), isCharging, isExporting, check=True, isFreezeCharge=True)
                             inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
                         else:
                             inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(max(self.charge_limit_best[0], self.reserve), self.soc_max), isCharging, isExporting, check=True)
@@ -792,7 +792,8 @@ class Execute:
         soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 
         if isFreezeCharge:
-            new_soc_percent = calc_percent_limit(max(inverter.soc_kw, inverter.reserve), inverter.soc_max)
+            # Round down: a freeze target is a level to hold, and rounding up asks the inverter to charge
+            new_soc_percent = calc_percent_limit_floor(max(inverter.soc_kw, inverter.reserve), inverter.soc_max)
             if not check:
                 self.log("Inverter {} adjust target SoC for hold to {}% based on requested all inverter SoC {}%".format(inverter.id, dp0(new_soc_percent), soc))
         elif soc == 100.0:

@@ -9,7 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 from tests.test_infra import reset_inverter
-from utils import calc_percent_limit
+from inverter import Inverter
+from utils import calc_percent_limit, calc_percent_limit_floor
 
 
 class ActiveTestInverter:
@@ -42,6 +43,7 @@ class ActiveTestInverter:
         self.inv_has_target_soc = True
         self.inv_has_charge_enable_time = True
         self.inv_has_timed_pause = True
+        self.inv_reserve_is_charge_target = False
         self.inv_has_discharge_enable_time = True
         self.inv_has_ge_eco_toggle = False
         self.inv_has_ge_inverter_mode = False
@@ -131,8 +133,17 @@ class ActiveTestInverter:
         self.force_export = force_export
         self.changed_start_end = changed_start_end
 
+    # Bind the production implementation rather than re-stating it here, so these tests exercise the
+    # real hold arithmetic. It only reads soc_percent and inv_reserve_is_charge_target, both set above.
+    hold_reserve_percent = Inverter.hold_reserve_percent
+
     def adjust_reserve(self, reserve):
         self.reserve_last = reserve
+        # Mirror the production clamp in Inverter.adjust_reserve: an inverter that charges towards its
+        # reserve must never be left holding above the actual SoC
+        if self.inv_reserve_is_charge_target and reserve > self.soc_percent:
+            reserve = max(int(self.soc_percent), self.reserve_percent)
+            self.reserve_last = reserve
         self.reserve_current = max(reserve, self.reserve)
         self.reserve_percent_current = calc_percent_limit(self.reserve_current, self.soc_max)
 
@@ -225,6 +236,7 @@ def run_execute_test(
     assert_immediate_charge_soc_freeze_array=[],
     pv_forecast=0.0,
     set_charge_freeze_only=False,
+    reserve_is_charge_target=False,
 ):
     print("> Run scenario {}".format(name))
     my_predbat.log("> Run scenario {}".format(name))
@@ -277,6 +289,7 @@ def run_execute_test(
         inverter.battery_rate_max_discharge = my_predbat.battery_rate_max_discharge / total_inverters
         inverter.battery_rate_max_export = my_predbat.battery_rate_max_export / total_inverters
         inverter.inv_has_timed_pause = has_timed_pause
+        inverter.inv_reserve_is_charge_target = reserve_is_charge_target
         inverter.inv_has_target_soc = has_target_soc
         inverter.inv_has_charge_enable_time = has_charge_enable_time
         inverter.inv_has_ge_eco_toggle = has_ge_eco_toggle
@@ -566,10 +579,48 @@ def test_export_target_soc_percent(my_predbat):
     return failed
 
 
+def test_calc_percent_limit_floor():
+    """
+    Test that calc_percent_limit_floor never rounds a hold level up, unlike calc_percent_limit
+    """
+    print("  - test_calc_percent_limit_floor")
+    failed = False
+    cases = [
+        # (kwh, soc_max, floor, nearest)
+        (6.16, 10, 61, 62),
+        (6.14, 10, 61, 61),
+        (5.0, 10, 50, 50),
+        (0.0, 10, 0, 0),
+        (10.0, 10, 100, 100),
+        (11.0, 10, 100, 100),
+    ]
+    for charge_limit, soc_max, expect_floor, expect_nearest in cases:
+        got_floor = calc_percent_limit_floor(charge_limit, soc_max)
+        got_nearest = calc_percent_limit(charge_limit, soc_max)
+        if got_floor != expect_floor:
+            print("ERROR: calc_percent_limit_floor({}, {}) should be {} got {}".format(charge_limit, soc_max, expect_floor, got_floor))
+            failed = True
+        if got_nearest != expect_nearest:
+            print("ERROR: calc_percent_limit({}, {}) should be {} got {}".format(charge_limit, soc_max, expect_nearest, got_nearest))
+            failed = True
+
+    if calc_percent_limit_floor([6.16, 5.0], 10) != [61, 50]:
+        print("ERROR: calc_percent_limit_floor list form should be [61, 50] got {}".format(calc_percent_limit_floor([6.16, 5.0], 10)))
+        failed = True
+    if calc_percent_limit_floor(5.0, 0) != 0:
+        print("ERROR: calc_percent_limit_floor with zero soc_max should be 0")
+        failed = True
+    if calc_percent_limit_floor([5.0], 0) != [0]:
+        print("ERROR: calc_percent_limit_floor list form with zero soc_max should be [0]")
+        failed = True
+    return failed
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
 
     failed = test_export_target_soc_percent(my_predbat)
+    failed |= test_calc_percent_limit_floor()
     failed |= test_fetch_inverter_data_extra_pv_sensors(my_predbat)
     failed |= test_fetch_inverter_data_extra_pv_sensors_invalid_value(my_predbat)
     failed |= test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters(my_predbat)
@@ -1754,6 +1805,28 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
+
+    # Same for a hold (target below SoC) rather than a freeze: hold at the target, not one above it
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold2b_charge_target",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=5,
+        assert_pause_discharge=False,
+        assert_status="Hold charging",
+        assert_discharge_rate=0,
+        assert_reserve=50,
+        assert_soc_target=100,
+        assert_immediate_soc_target=50,
+        has_timed_pause=False,
+        reserve_is_charge_target=True,
+    )
+    if failed:
+        return failed
     failed |= run_execute_test(
         my_predbat,
         "charge_freeze1a",
@@ -1788,6 +1861,71 @@ def run_execute_tests(my_predbat):
         assert_soc_target=100,
         assert_immediate_soc_target=100,
         has_timed_pause=False,
+    )
+    if failed:
+        return failed
+
+    # An inverter with no timed pause holds by raising the reserve above the current SoC. On hardware
+    # that charges towards its reserve (Powerwall) that is a grid-import request, so hold exactly at SoC.
+    # These two scenarios are identical apart from the capability flag.
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_reserve_passive",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_frz,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=5,
+        assert_pause_discharge=False,
+        assert_status="Freeze charging",
+        assert_discharge_rate=0,
+        assert_reserve=51,
+        assert_soc_target=100,
+        assert_immediate_soc_target=50,
+        has_timed_pause=False,
+        reserve_is_charge_target=False,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_reserve_charge_target",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_frz,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=5,
+        assert_pause_discharge=False,
+        assert_status="Freeze charging",
+        assert_discharge_rate=0,
+        assert_reserve=50,
+        assert_soc_target=100,
+        assert_immediate_soc_target=50,
+        has_timed_pause=False,
+        reserve_is_charge_target=True,
+    )
+    if failed:
+        return failed
+
+    # A freeze target is a level to hold, so 61.6% must floor to 61 rather than rounding up to 62 -
+    # rounding up is the same off-by-one grid charge by another route
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_target_rounds_down",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_frz,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=6.16,
+        assert_pause_discharge=True,
+        assert_status="Freeze charging",
+        assert_reserve=0,
+        assert_soc_target=100,
+        assert_immediate_soc_target=61,
     )
     if failed:
         return failed
@@ -2375,6 +2513,46 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=100,
         car_charging_from_battery=False,
         car_energy_reported_load=False,
+    )
+    if failed:
+        return failed
+
+    # Hold-for-car with no timed pause falls back to the reserve, and must obey the same rule:
+    # holding one percent above SoC on a Powerwall is what made "Hold for car" import from the grid
+    failed |= run_execute_test(
+        my_predbat,
+        "no_discharge_car_demand_reserve_passive",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=5,
+        assert_status="Hold for car",
+        assert_pause_discharge=False,
+        assert_discharge_rate=0,
+        assert_reserve=51,
+        car_slot=charge_window_best_slot,
+        assert_immediate_soc_target=50,
+        car_charging_from_battery=False,
+        has_timed_pause=False,
+        reserve_is_charge_target=False,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "no_discharge_car_demand_reserve_charge_target",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=5,
+        assert_status="Hold for car",
+        assert_pause_discharge=False,
+        assert_discharge_rate=0,
+        assert_reserve=50,
+        car_slot=charge_window_best_slot,
+        assert_immediate_soc_target=50,
+        car_charging_from_battery=False,
+        has_timed_pause=False,
+        reserve_is_charge_target=True,
     )
     if failed:
         return failed
