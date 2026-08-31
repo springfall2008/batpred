@@ -94,13 +94,15 @@ so the Car hangs off the House and its power is subtracted from the House figure
 with it off the charger is outside the clamp and was never part of your house load, so the Car hangs off the Grid instead and the House figure is left alone
 - Predbat publishes a **predbat.car_charging_power** sensor (in kW) which you can graph or use in your own automations
 
-Like car_charging_energy it can be a list of sensors, one per line, if you have more than one charger - they are added together:
+Like car_charging_energy it can be a list of sensors, one per line per car charger, if you have more than one charger - they are added together in Predbat:
 
 ```yaml
   car_charging_power:
     - sensor.zappi_charge_power
     - sensor.wallbox_charging_power
 ```
+
+If you have multiple cars sharing one charger, then only include a single entry for the charger.
 
 If your car charger has no live power sensor, leave **car_charging_power** commented out in `apps.yaml`; the power flow diagram then shows the same four items it always has, and no **predbat.car_charging_power** sensor is published.<BR>
 If you use one of the supported charger integrations (Ohme, myenergi Zappi, GivEnergy EV charger, AlphaESS EV charger or the Predbat gateway) then this is configured automatically and you do not need an `apps.yaml` entry of your own.
