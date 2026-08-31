@@ -172,13 +172,36 @@ class Hass:
     and file change detection for development hot-reload.
     """
 
+    def write_log_line(self, message):
+        """
+        Write one line to the logfile, without ever raising
+
+        Logging must not be able to kill its caller. Rotation runs on the main thread and swaps
+        self.logfile underneath every other thread, so a component thread can be holding a handle that
+        has just been closed - which raises ValueError out of write() and takes the whole thread down.
+        That is how the load ML training thread used to die: it never came back, and Predbat then
+        reported itself unhealthy for the rest of the run because is_all_alive() failed.
+
+        One retry is enough for that case: by the time it runs, rotation has published the replacement
+        handle. Anything still failing after that (a full disk, a shutdown mid-write) goes to stderr
+        rather than up the stack, because a lost log line is always cheaper than a lost thread.
+        """
+        for attempt in range(2):
+            try:
+                logfile = self.logfile
+                logfile.write(message)
+                logfile.flush()
+                return
+            except (ValueError, OSError) as e:
+                if attempt:
+                    print("Warn: unable to write to the Predbat logfile ({}): {}".format(e, message), end="", file=sys.stderr)
+
     def log(self, msg, quiet=True):
         """
         Log a message to the logfile
         """
         message = "{}: {}\n".format(datetime.now(), msg)
-        self.logfile.write(message)
-        self.logfile.flush()
+        self.write_log_line(message)
         msg_lower = msg.lower()
         if not quiet or msg_lower.startswith("error") or msg_lower.startswith("warn") or msg_lower.startswith("info"):
             print(message, end="")
@@ -186,19 +209,40 @@ class Hass:
         # maximum number of historic logfiles to retain
         max_logs = 9
 
-        log_size = self.logfile.tell()
+        try:
+            log_size = self.logfile.tell()
+        except (ValueError, OSError):
+            # Another thread's view of the handle can be closed here just as it can in the write above
+            return
         if log_size > 10000000 and threading.current_thread() is threading.main_thread():
-            # Only rotate from the main thread to avoid race conditions with
-            # component threads that also call log().
+            # Only rotate from the main thread so two rotations cannot interleave. A Threading.Lock
+            # cannot be used to close the remaining gap: Pool() forks, so a lock held by a component
+            # thread at that instant is inherited already-locked by every worker, and the first worker
+            # to log would block forever. write_log_line() absorbs the gap instead.
             for num_logs in range(max_logs - 1, 0, -1):
                 filename = "predbat." + format(num_logs) + ".log"
                 if os.path.isfile(filename):
                     newfile = "predbat." + format(num_logs + 1) + ".log"
                     os.rename(filename, newfile)
 
-            self.logfile.close()
-            os.rename("predbat.log", "predbat.1.log")
-            self.logfile = open("predbat.log", "w")
+            old_logfile = self.logfile
+            # Rename before reopening, and publish the new handle before closing the old one. POSIX is
+            # happy to rename a file that is still open, so a thread that read self.logfile a moment ago
+            # writes into the rotated file - which is harmless, and far better than writing to a closed
+            # one. This leaves only the gap between another thread's read and its write, which is what
+            # the retry in write_log_line() is for.
+            try:
+                os.rename("predbat.log", "predbat.1.log")
+                self.logfile = open("predbat.log", "w")
+            except OSError as e:
+                # Do not allow logfile rotation failures (e.g. disk full) to raise out of log()
+                self.logfile = old_logfile
+                print("Warn: logfile rotation failed ({}).".format(e), file=sys.stderr)
+                return
+            try:
+                old_logfile.close()
+            except OSError as e:
+                print("Warn: unable to close rotated logfile ({}).".format(e), file=sys.stderr)
 
     async def run_in_executor(self, callback, *args):
         """
@@ -239,7 +283,17 @@ class Hass:
 
         for t in self.threads:
             t.join(5 * 60)
-        self.logfile.close()
+
+        # Only close the logfile once nothing is left that might still write to it. The join above
+        # gives up after five minutes and a thread can easily outlive that - an ML training run is
+        # tens of minutes - and closing underneath one leaves it writing to a closed handle for the
+        # rest of its life. Nothing is leaked by skipping it: the process is on its way out and the
+        # OS closes every descriptor regardless.
+        if not any(t.is_alive() for t in self.threads):
+            self.logfile.close()
+        else:
+            alive = [t.name for t in self.threads if t.is_alive()]
+            self.log("Warn: leaving the logfile open, {} still running after the join timeout: {}".format(len(alive), ", ".join(alive)), quiet=False)
 
     def load_secrets(self):
         """
