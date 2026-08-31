@@ -1313,6 +1313,48 @@ def test_discovery_keys_still_claimed_when_reported(my_predbat=None):
     return 0
 
 
+def test_slot_write_before_any_status_is_refused_not_fabricated(my_predbat=None):
+    """
+    A window write with no status snapshot must be refused, not completed with a made-up end.
+
+    /setChargeSlot1 takes both ends, so the component fills in the one it was not given from
+    rest_data. With no snapshot it defaulted that to "00:00:00" - programming a zero-length or
+    midnight-terminated window on real hardware. There is no safe default for the half of a window
+    you do not know.
+
+    Reachable after a user restarts the component from the web UI (web.py): restart() re-runs
+    initialize(), so rest_data is None again, while Predbat's args still point at these entities
+    from the previous automatic_config.
+    """
+    base, component = _make_component()
+    component.rest[0].inverter.rest_data = None
+    component.rest[0].set_charge_slot1 = MagicMock(return_value=True)
+    component.rest[0].set_discharge_slot1 = MagicMock(return_value=True)
+    messages = _capture_logs(component)
+
+    run_async(component.select_event("select.predbat_givtcp_0_charge_start_time", "09:00:00"))
+    component.rest[0].set_charge_slot1.assert_not_called()
+
+    run_async(component.select_event("select.predbat_givtcp_0_discharge_end_time", "19:00:00"))
+    component.rest[0].set_discharge_slot1.assert_not_called()
+
+    assert any("no status" in m for m in messages), f"Expected the refusal to be logged, got {messages}"
+    print("PASS: a slot write with no status snapshot is refused rather than fabricated")
+    return 0
+
+
+def test_slot_write_still_works_once_status_is_known(my_predbat=None):
+    """The normal path is unchanged: the other end comes from the last status snapshot."""
+    base, component = _make_component()
+    component.rest[0].inverter.rest_data = _rest_data_blob(charge_start="00:30:00", charge_end="04:30:00")
+    component.rest[0].set_charge_slot1 = MagicMock(return_value=True)
+
+    run_async(component.select_event("select.predbat_givtcp_0_charge_start_time", "01:00:00"))
+    component.rest[0].set_charge_slot1.assert_called_once_with("01:00:00", "04:30:00")
+    print("PASS: a slot write preserves the other end from the last status")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1349,6 +1391,8 @@ def test_givtcp_component(my_predbat=None):
         ("rate_max_unknown", test_rate_entities_omit_max_when_the_rate_is_unknown, "no max advertised when rate unknown"),
         ("discovery_unpublished", test_discovery_keys_are_only_claimed_when_actually_published, "unpublished discovery keys not claimed"),
         ("discovery_published", test_discovery_keys_still_claimed_when_reported, "reported discovery keys still claimed"),
+        ("slot_no_status", test_slot_write_before_any_status_is_refused_not_fabricated, "slot write refused with no status"),
+        ("slot_with_status", test_slot_write_still_works_once_status_is_known, "slot write preserves the other end"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),

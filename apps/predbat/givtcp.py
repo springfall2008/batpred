@@ -550,29 +550,49 @@ class GivTCPComponent(ComponentBase):
             return None, None
         return n, parts[1]
 
+    def _window_for_write(self, rest, entity_id, control, start_control, start_key, end_key, value):
+        """
+        The (start, end) pair to program, or None when the other end is not known.
+
+        GivTCP's slot endpoints take both ends, but a write only carries one of them, so the other
+        has to come from the last status snapshot. Defaulting it would program a made-up window -
+        a zero-length or midnight-terminated one - on real hardware. Refusing instead leaves
+        Inverter's write-and-poll to notice the entity never changed and report it the usual way.
+
+        Reachable after a component restart from the web UI: restart() re-runs initialize(), so
+        rest_data is None again while Predbat's args still point at these entities.
+        """
+        timeslots = (rest.inverter.rest_data or {}).get("Timeslots", {})
+        other_key = end_key if control == start_control else start_key
+        other = timeslots.get(other_key, None)
+        if other is None:
+            self.log("Warn: GivTCP: refusing write to {} - no status for {} yet, so the other end of the window is unknown".format(entity_id, other_key))
+            return None
+        return (value, other) if control == start_control else (other, value)
+
     async def _set_charge_slot(self, entity_id, value):
         n, control = self._parse_entity(entity_id)
         rest = self.rest[n]
-        timeslots = rest.inverter.rest_data.get("Timeslots", {}) if rest.inverter.rest_data else {}
-        start = value if control == "charge_start_time" else timeslots.get("Charge_start_time_slot_1", "00:00:00")
-        end = value if control == "charge_end_time" else timeslots.get("Charge_end_time_slot_1", "00:00:00")
-        await self._run_blocking(rest.set_charge_slot1, start, end)
+        window = self._window_for_write(rest, entity_id, control, "charge_start_time", "Charge_start_time_slot_1", "Charge_end_time_slot_1", value)
+        if window is None:
+            return
+        await self._run_blocking(rest.set_charge_slot1, window[0], window[1])
 
     async def _set_discharge_slot(self, entity_id, value):
         n, control = self._parse_entity(entity_id)
         rest = self.rest[n]
-        timeslots = rest.inverter.rest_data.get("Timeslots", {}) if rest.inverter.rest_data else {}
-        start = value if control == "discharge_start_time" else timeslots.get("Discharge_start_time_slot_1", "00:00:00")
-        end = value if control == "discharge_end_time" else timeslots.get("Discharge_end_time_slot_1", "00:00:00")
-        await self._run_blocking(rest.set_discharge_slot1, start, end)
+        window = self._window_for_write(rest, entity_id, control, "discharge_start_time", "Discharge_start_time_slot_1", "Discharge_end_time_slot_1", value)
+        if window is None:
+            return
+        await self._run_blocking(rest.set_discharge_slot1, window[0], window[1])
 
     async def _set_pause_slot(self, entity_id, value):
         n, control = self._parse_entity(entity_id)
         rest = self.rest[n]
-        timeslots = rest.inverter.rest_data.get("Timeslots", {}) if rest.inverter.rest_data else {}
-        start = value if control == "pause_start_time" else timeslots.get("Battery_pause_start_time_slot", "00:00:00")
-        end = value if control == "pause_end_time" else timeslots.get("Battery_pause_end_time_slot", "00:00:00")
-        await self._run_blocking(rest.set_pause_slot, start, end)
+        window = self._window_for_write(rest, entity_id, control, "pause_start_time", "Battery_pause_start_time_slot", "Battery_pause_end_time_slot", value)
+        if window is None:
+            return
+        await self._run_blocking(rest.set_pause_slot, window[0], window[1])
 
     async def _handle_write(self, entity_id, value, is_switch=False, is_number=False):
         """
