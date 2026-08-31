@@ -217,6 +217,11 @@ class GivTCPComponent(ComponentBase):
         # error - a failed read otherwise leaves stale entities republishing as though nothing
         # were wrong.
         self.poll_healthy = False
+        # Which discovery sensors each inverter actually published. automatic_config claims a
+        # discovery key only when every managed inverter reported it - claiming one that was never
+        # published points the arg at a non-existent entity, and get_arg then returns its default
+        # instead of the user's own apps.yaml value.
+        self.published_discovery = {}
         # publish_data() runs every poll; the unsupported-model notice is per inverter and only
         # worth saying once rather than every 60 seconds for the life of the process
         self.discharge_target_warned = {}
@@ -325,6 +330,7 @@ class GivTCPComponent(ComponentBase):
         for n, rest in enumerate(self.rest):
             if not rest.inverter.rest_data:
                 continue
+            published = self.published_discovery.setdefault(n, set())
 
             # The rate entities carry the inverter's real maximum rate as their "max" attribute, not
             # the generic ceiling in GIVTCP_CONTROLS. Inverter.__init__ derives battery_rate_max_raw
@@ -422,6 +428,7 @@ class GivTCPComponent(ComponentBase):
             soc_max = design_capacity
             if soc_max:
                 self.dashboard_item(self._entity_id("sensor", n, "soc_max"), state=soc_max, attributes=GIVTCP_SENSORS["soc_max"], app="givtcp")
+                published.add("soc_max")
 
             if soh is not None:
                 # GivTCP reports no depth of discharge anywhere in a full /readData dump, so it
@@ -435,10 +442,12 @@ class GivTCPComponent(ComponentBase):
             battery_temperature = rest.battery_temperature()
             if battery_temperature is not None:
                 self.dashboard_item(self._entity_id("sensor", n, "battery_temperature"), state=battery_temperature, attributes=GIVTCP_SENSORS["battery_temperature"], app="givtcp")
+                published.add("battery_temperature")
 
             inverter_time = rest.inverter_time()
             if inverter_time:
                 self.dashboard_item(self._entity_id("sensor", n, "inverter_time"), state=inverter_time, attributes=GIVTCP_SENSORS["inverter_time"], app="givtcp")
+                published.add("inverter_time")
 
             if max_battery_rate:
                 self.dashboard_item(self._entity_id("sensor", n, "battery_rate_max"), state=max_battery_rate, attributes=GIVTCP_SENSORS["battery_rate_max"], app="givtcp")
@@ -446,10 +455,12 @@ class GivTCPComponent(ComponentBase):
             max_inverter_rate = rest.max_inverter_rate()
             if max_inverter_rate:
                 self.dashboard_item(self._entity_id("sensor", n, "inverter_limit"), state=max_inverter_rate, attributes=GIVTCP_SENSORS["inverter_limit"], app="givtcp")
+                published.add("inverter_limit")
 
             # Always published, unlike the values above: "not calibrating" is a real answer that
             # Predbat needs, and an absent entity would be indistinguishable from one
             self.dashboard_item(self._entity_id("sensor", n, "battery_calibration"), state="on" if rest.in_calibration() else "off", attributes=GIVTCP_SENSORS["battery_calibration"], app="givtcp")
+            published.add("battery_calibration")
 
             power = rest.power_readings()
             if power:
@@ -486,7 +497,17 @@ class GivTCPComponent(ComponentBase):
         else:
             keys += GIVTCP_AUTO_CONFIG_POWER_KEYS
 
-        keys += GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS
+        # Discovery keys are claimed per key, and only where every managed inverter actually
+        # published that sensor. Claiming one that was never published leaves the arg pointing at a
+        # non-existent entity, so get_arg falls through to its own default rather than to the user's
+        # apps.yaml value - for soc_max that default is 0.0, which walks Inverter all the way to its
+        # "using 8 kWh default ... you must set soc_max in apps.yaml" fallback, advice the user may
+        # well have already followed before auto-config overwrote it.
+        for key in GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS:
+            if all(key in self.published_discovery.get(n, set()) for n in discovered):
+                keys.append(key)
+            else:
+                self.log("Info: GivTCP: {} is not reported by every inverter - leaving it to your apps.yaml config".format(key))
 
         if all(self.rest[n].battery_soh() is not None for n in discovered):
             keys += GIVTCP_AUTO_CONFIG_SCALING_KEYS

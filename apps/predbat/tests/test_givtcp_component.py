@@ -1265,6 +1265,54 @@ def test_rate_entities_omit_max_when_the_rate_is_unknown(my_predbat=None):
     return 0
 
 
+def test_discovery_keys_are_only_claimed_when_actually_published(my_predbat=None):
+    """
+    A discovery key is claimed only if its sensor was published.
+
+    publish_data emits soc_max/battery_temperature/inverter_time/inverter_limit/battery_calibration
+    only when GivTCP reports them, and its comment says a missing one "falls back to the user's own
+    apps.yaml value". It could not: automatic_config claimed every key unconditionally, so the arg
+    pointed at an entity that was never created. get_arg then returns its default, and for soc_max
+    that is 0.0 - which walks Inverter through battery_scaling_auto to the "Unable to determine
+    battery size ... using 8 kWh default" fallback, whose advice is to set soc_max in apps.yaml.
+    The user may well have done exactly that, and auto-config overwrote it.
+    """
+    base, component = _make_component()
+    _mark_discovered(component)
+    base.args["soc_max"] = [12.0]
+    # a status blob with no Invertor_Details and no raw nominal: nothing to discover
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+
+    run_async(component.publish_data())
+    assert "sensor.predbat_givtcp_0_soc_max" not in base.entities, "fixture should publish no soc_max"
+
+    run_async(component.automatic_config())
+    assert base.args["soc_max"] == [12.0], f"soc_max must be left as the user configured it, got {base.args.get('soc_max')}"
+    assert "inverter_time" not in base.args, f"inverter_time must not be claimed unpublished, got {base.args.get('inverter_time')}"
+    # battery_calibration is the exception: in_calibration() returns a definite False when GivTCP
+    # reports nothing, so the sensor is always published and "not calibrating" is the correct
+    # default - unlike soc_max, where a default is actively wrong.
+    assert base.args["battery_calibration"] == ["sensor.predbat_givtcp_0_battery_calibration"], f"battery_calibration is always published, so it should still be claimed, got {base.args.get('battery_calibration')}"
+    # controls are unaffected - those are always published
+    assert base.args["charge_rate"] == ["number.predbat_givtcp_0_charge_rate"]
+    print("PASS: discovery keys are claimed only when their sensor was published")
+    return 0
+
+
+def test_discovery_keys_still_claimed_when_reported(my_predbat=None):
+    """The normal case is unchanged: a reported discovery value is still auto-configured."""
+    base, component = _rest_from_fixture("cases/rest_v2.json")
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    assert base.args["soc_max"] == ["sensor.predbat_givtcp_0_soc_max"], f"Expected soc_max claimed, got {base.args.get('soc_max')}"
+    assert base.args["inverter_limit"] == ["sensor.predbat_givtcp_0_inverter_limit"]
+    assert base.args["battery_temperature"] == ["sensor.predbat_givtcp_0_battery_temperature"]
+    print("PASS: reported discovery values are still auto-configured")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1299,6 +1347,8 @@ def test_givtcp_component(my_predbat=None):
         ("calibration", test_calibration_detected_per_version, "calibration detected on both versions"),
         ("rate_max_attr", test_rate_entities_carry_the_real_max, "rate entities carry the real max"),
         ("rate_max_unknown", test_rate_entities_omit_max_when_the_rate_is_unknown, "no max advertised when rate unknown"),
+        ("discovery_unpublished", test_discovery_keys_are_only_claimed_when_actually_published, "unpublished discovery keys not claimed"),
+        ("discovery_published", test_discovery_keys_still_claimed_when_reported, "reported discovery keys still claimed"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),
