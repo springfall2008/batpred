@@ -1460,6 +1460,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 self.arg_errors[name] = "Invalid number of entries, expected {}".format(required_entries)
                                 errors += 1
                                 continue
+                            # optional_entries means a short list is allowed, not that it goes
+                            # unremarked - a charger with no live power sensor is a real and
+                            # documented setup, so this must not force a false count, but an entry
+                            # deleted by accident under-reports just as quietly as a repeated one
+                            # over-reports. Warn without recording an arg_error, so a legitimate
+                            # setup is not left showing "apps.yaml has errors" forever.
+                            if required_entries:
+                                self.log("Warn: Validation of apps.yaml found configuration item '{}' lists {} of the {} declared by {} - only the entries listed are used".format(name, len(value), required_entries, entries))
                         # Too many entries is only an error where the spec asks for it. Every other
                         # key here has always tolerated extras, and newly rejecting them would fail
                         # working installs; but for a list that is summed rather than indexed, an

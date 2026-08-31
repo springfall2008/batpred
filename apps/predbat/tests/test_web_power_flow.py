@@ -487,11 +487,26 @@ def run_web_power_flow_tests(my_predbat):
         print(f"  ERROR: two chargers declared and two listed should validate, error count moved by {errors_two_chargers - baseline_errors}")
         failed += 1
 
-    print("Test: fewer entries than chargers is tolerated, an incomplete list is not an error")
+    print("Test: fewer entries than chargers warns but is not an error")
+    # A charger with no live power sensor is a real, documented setup, so a short list must not
+    # force a false num_chargers - but an entry deleted by accident under-reports just as quietly
+    # as a repeated one over-reports, so it should not pass in silence either.
     my_predbat.args["car_charging_power"] = ["sensor.car_charger_power"]
-    errors_short = my_predbat.validate_config()
+    logged = []
+    original_log = my_predbat.log
+    my_predbat.log = lambda message, *args, **kwargs: (logged.append(message), original_log(message, *args, **kwargs))[1]
+    try:
+        errors_short = my_predbat.validate_config()
+    finally:
+        my_predbat.log = original_log
     if errors_short != baseline_errors:
         print(f"  ERROR: listing fewer chargers than declared should be tolerated, error count moved by {errors_short - baseline_errors}")
+        failed += 1
+    if my_predbat.arg_errors.get("car_charging_power"):
+        print(f"  ERROR: a short list recorded an arg_error, which would leave the install showing apps.yaml errors: {my_predbat.arg_errors.get('car_charging_power')}")
+        failed += 1
+    if not any("lists 1 of the 2" in message for message in logged):
+        print("  ERROR: a short car_charging_power list passed without any warning")
         failed += 1
 
     print("Test: a bad sensor is still type-checked when num_chargers is unset")
