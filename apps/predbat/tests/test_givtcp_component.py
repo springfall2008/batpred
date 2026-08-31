@@ -110,6 +110,8 @@ def test_publish_data_controls(my_predbat=None):
     """publish_data() turns a GivTCP snapshot into the expected control entities/states."""
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob()
+    # v3: the discharge target control below is version gated, v2 has no /setDischargeTarget
+    component.rest[0].inverter.rest_v3 = True
     run_async(component.publish_data())
 
     checks = {
@@ -387,6 +389,8 @@ def test_discharge_target_not_published_for_unsupported_models(my_predbat=None):
         base, component = _make_component()
         component.rest[0].inverter.rest_data = _rest_data_blob()
         component.rest[0].inverter.rest_data["raw"] = {"invertor": {"model": model, "discharge_target_soc_1": "4"}}
+        # the model check is a v3-only concern now: v2 publishes no discharge target at all
+        component.rest[0].inverter.rest_v3 = True
         run_async(component.publish_data())
         assert entity_id not in base.entities, f"model={model!r} must not publish a discharge target entity"
 
@@ -396,6 +400,8 @@ def test_discharge_target_not_published_for_unsupported_models(my_predbat=None):
         base, component = _make_component()
         component.rest[0].inverter.rest_data = _rest_data_blob()
         component.rest[0].inverter.rest_data["raw"] = {"invertor": {"model": model, "discharge_target_soc_1": "4"}}
+        # the model check is a v3-only concern now: v2 publishes no discharge target at all
+        component.rest[0].inverter.rest_v3 = True
         run_async(component.publish_data())
         assert entity_id in base.entities, f"model={model!r} should still publish a discharge target entity"
 
@@ -1355,6 +1361,59 @@ def test_slot_write_still_works_once_status_is_known(my_predbat=None):
     return 0
 
 
+def test_discharge_target_not_published_on_v2(my_predbat=None):
+    """
+    GivTCP v2 has no /setDischargeTarget endpoint, so no entity is published for it.
+
+    main gated the whole export-target block on "self.rest_data and self.rest_v3". Dropping the
+    version half means a v2 install publishes the control - raw.invertor.discharge_target_soc_1 is
+    present in real v2 captures, and read_discharge_target() returns 0 rather than None - so every
+    force-export cycle POSTs to an endpoint that does not exist, burning the retry ladder and
+    recording an error each time. That is the every-cycle rewrite loop #4517 was meant to end.
+    """
+    base, component = _rest_from_fixture("cases/rest_v2.json")
+    component.rest[0].inverter.rest_v3 = False
+    run_async(component.publish_data())
+
+    assert "number.predbat_givtcp_0_discharge_target_soc" not in base.entities, "v2 must not publish a discharge target control"
+
+    _mark_discovered(component)
+    run_async(component.automatic_config())
+    assert "discharge_target_soc" not in base.args, f"v2 must not claim discharge_target_soc, got {base.args.get('discharge_target_soc')}"
+    print("PASS: no discharge target control on GivTCP v2")
+    return 0
+
+
+def test_discharge_target_still_published_on_v3(my_predbat=None):
+    """v3 does have the endpoint, so the control is published and claimed as before."""
+    base, component = _rest_from_fixture("cases/rest_v3.json")
+    component.rest[0].inverter.rest_v3 = True
+    run_async(component.publish_data())
+
+    assert "number.predbat_givtcp_0_discharge_target_soc" in base.entities, "v3 should publish the discharge target control"
+
+    _mark_discovered(component)
+    run_async(component.automatic_config())
+    assert base.args["discharge_target_soc"] == ["number.predbat_givtcp_0_discharge_target_soc"]
+    print("PASS: the discharge target control is still published on GivTCP v3")
+    return 0
+
+
+def test_discharge_target_needs_v3_on_every_inverter(my_predbat=None):
+    """A mixed fleet leaves discharge_target_soc to the user, mirroring the pause-key rule."""
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    _mark_discovered(component)
+    for rest in component.rest:
+        rest.inverter.rest_data = _rest_data_blob()
+    component.rest[0].inverter.rest_v3 = True
+    component.rest[1].inverter.rest_v3 = False
+
+    run_async(component.automatic_config())
+    assert "discharge_target_soc" not in base.args, f"a mixed fleet must not claim discharge_target_soc, got {base.args.get('discharge_target_soc')}"
+    print("PASS: discharge target needs v3 on every inverter")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1393,6 +1452,9 @@ def test_givtcp_component(my_predbat=None):
         ("discovery_published", test_discovery_keys_still_claimed_when_reported, "reported discovery keys still claimed"),
         ("slot_no_status", test_slot_write_before_any_status_is_refused_not_fabricated, "slot write refused with no status"),
         ("slot_with_status", test_slot_write_still_works_once_status_is_known, "slot write preserves the other end"),
+        ("dt_not_v2", test_discharge_target_not_published_on_v2, "no discharge target on v2"),
+        ("dt_on_v3", test_discharge_target_still_published_on_v3, "discharge target published on v3"),
+        ("dt_mixed_fleet", test_discharge_target_needs_v3_on_every_inverter, "discharge target needs v3 everywhere"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),

@@ -136,7 +136,6 @@ GIVTCP_AUTO_CONFIG_KEYS = [
     "discharge_rate",
     "charge_limit",
     "reserve",
-    "discharge_target_soc",
     "scheduled_charge_enable",
     "scheduled_discharge_enable",
     "charge_start_time",
@@ -145,6 +144,15 @@ GIVTCP_AUTO_CONFIG_KEYS = [
     "discharge_end_time",
     "inverter_mode",
     "soc_kw",
+]
+
+# The discharge (export) target is GivTCP v3 only - v2 has no /setDischargeTarget endpoint, which is
+# why main gated its whole export-target block on "self.rest_data and self.rest_v3". Publishing the
+# control on v2 restarts the every-cycle rewrite loop of #4517: real v2 captures do carry
+# raw.invertor.discharge_target_soc_1, so read_discharge_target() returns a value rather than None,
+# and every force-export cycle then POSTs to an endpoint that does not exist.
+GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS = [
+    "discharge_target_soc",
 ]
 
 # Pause control is GivTCP v3 only - v2 has no /setBatteryPauseMode endpoint, and
@@ -361,7 +369,10 @@ class GivTCPComponent(ComponentBase):
             # Publishing one would restart the every-cycle rewrite loop of #4517, because the write
             # reports success and then silently fails to persist.
             inverter_model = rest.inverter.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
-            if inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS:
+            if not rest.inverter.rest_v3:
+                # v2 has no /setDischargeTarget - see GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
+                pass
+            elif inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS:
                 if not self.discharge_target_warned.get(n):
                     self.log("Info: GivTCP: inverter {} is {}, which has no working discharge target register - export target will not be written".format(n, inverter_model))
                     self.discharge_target_warned[n] = True
@@ -518,6 +529,11 @@ class GivTCPComponent(ComponentBase):
             keys += GIVTCP_AUTO_CONFIG_CHARGE_ENABLE_KEYS
         else:
             self.log("Info: GivTCP: Enable_Charge_Target is not reported by every inverter - leaving charge_limit_enable to your apps.yaml config")
+
+        if all(self.rest[n].inverter.rest_v3 for n in discovered):
+            keys += GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
+        else:
+            self.log("Info: GivTCP: the export target register needs GivTCP v3 on every inverter - leaving discharge_target_soc to your apps.yaml config")
 
         if all(self.rest[n].inverter.rest_v3 for n in discovered):
             keys += GIVTCP_AUTO_CONFIG_PAUSE_KEYS
