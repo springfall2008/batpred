@@ -163,6 +163,9 @@ def test_automatic_config_single_inverter(my_predbat=None):
     """automatic_config() points every standard apps.yaml key at this component's own entities."""
     base, component = _make_component(rest_urls="http://givtcp:6345")
     _mark_discovered(component)
+    # publish first: the schedule switches are only claimed where GivTCP actually reported them
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    run_async(component.publish_data())
     run_async(component.automatic_config())
 
     assert base.args["num_inverters"] == 1, f"Expected num_inverters 1, got {base.args['num_inverters']}"
@@ -1599,6 +1602,81 @@ def test_battery_voltage_never_reads_back_its_own_entity(my_predbat=None):
     return 0
 
 
+def test_missing_control_field_does_not_abort_the_publish(my_predbat=None):
+    """
+    A Control field GivTCP does not report is skipped, not raised.
+
+    read_data() only checks that a top-level "Control" key exists, not its contents, so a version or
+    partial response missing Target_SOC used to raise a KeyError straight out of publish_data. Every
+    entity after that point went unpublished - the reserve, the window selects, soc_kw, the power
+    block - and so did every later inverter in the fleet.
+    """
+    base, component = _make_component()
+    _mark_discovered(component)
+    blob = _rest_data_blob()
+    del blob["Control"]["Target_SOC"]
+    component.rest[0].inverter.rest_data = blob
+
+    run_async(component.publish_data())
+
+    assert "number.predbat_givtcp_0_charge_limit" not in base.entities, "the unreadable control is skipped"
+    # everything published after it still lands
+    assert "number.predbat_givtcp_0_reserve" in base.entities, "the reserve must still be published"
+    assert "select.predbat_givtcp_0_charge_start_time" in base.entities, "the window selects must still be published"
+    assert "sensor.predbat_givtcp_0_soc_kw" in base.entities, "soc_kw must still be published"
+    assert "sensor.predbat_givtcp_0_battery_power" in base.entities, "the power block must still be published"
+    print("PASS: a missing Control field skips one entity rather than aborting the publish")
+    return 0
+
+
+def test_missing_schedule_flag_is_not_published_as_off(my_predbat=None):
+    """
+    An unreported schedule flag publishes nothing rather than a fabricated "off".
+
+    "on" if rest.charge_enable_time else "off" turns an unknown into a confident "off", which tells
+    Predbat the scheduled charge is disabled and has it write to enable it. Leaving the entity
+    unpublished keeps the user's own apps.yaml switch in play instead.
+    """
+    base, component = _make_component()
+    _mark_discovered(component)
+    blob = _rest_data_blob()
+    del blob["Control"]["Enable_Charge_Schedule"]
+    component.rest[0].inverter.rest_data = blob
+
+    run_async(component.publish_data())
+    assert "switch.predbat_givtcp_0_scheduled_charge_enable" not in base.entities, "an unknown schedule flag must not publish as off"
+    assert base.entities["switch.predbat_givtcp_0_scheduled_discharge_enable"]["state"] == "off", "the reported one is still published"
+
+    run_async(component.automatic_config())
+    assert "scheduled_charge_enable" not in base.args, f"an unpublished switch must not be claimed, got {base.args.get('scheduled_charge_enable')}"
+    assert base.args["scheduled_discharge_enable"] == ["switch.predbat_givtcp_0_scheduled_discharge_enable"]
+    print("PASS: an unreported schedule flag is not published as a fabricated off")
+    return 0
+
+
+def test_one_bad_snapshot_does_not_starve_the_rest_of_the_fleet(my_predbat=None):
+    """
+    An unexpected error publishing one inverter must not stop the others.
+
+    publish_data walks the fleet in order with no isolation, so anything raising part-way through
+    inverter 0 left inverters 1..N with nothing published at all that cycle - and the failure
+    surfaced as a bare component error rather than naming the inverter.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    _mark_discovered(component)
+    for rest in component.rest:
+        rest.inverter.rest_data = _rest_data_blob()
+    component.rest[0].power_readings = MagicMock(side_effect=RuntimeError("boom"))
+    messages = _capture_logs(component)
+
+    run_async(component.publish_data())
+
+    assert "sensor.predbat_givtcp_1_battery_power" in base.entities, "the healthy inverter must still be published"
+    assert any("inverter 0" in m for m in messages), f"the failure should name the inverter, got {messages}"
+    print("PASS: one failing inverter does not starve the rest of the fleet")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1649,6 +1727,9 @@ def test_givtcp_component(my_predbat=None):
         ("voltage_v2", test_battery_voltage_not_published_or_claimed_on_v2, "no battery voltage on v2"),
         ("voltage_v3", test_battery_voltage_published_and_claimed_on_v3, "battery voltage published on v3"),
         ("voltage_no_loop", test_battery_voltage_never_reads_back_its_own_entity, "no self-referential voltage loop"),
+        ("missing_control", test_missing_control_field_does_not_abort_the_publish, "missing Control field skipped"),
+        ("missing_schedule", test_missing_schedule_flag_is_not_published_as_off, "unknown schedule flag not published"),
+        ("fleet_isolation", test_one_bad_snapshot_does_not_starve_the_rest_of_the_fleet, "one bad inverter does not starve others"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),

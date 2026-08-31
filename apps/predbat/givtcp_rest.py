@@ -88,7 +88,13 @@ class GivTCPRest:
         rest_data = self.inverter.rest_data
         if not rest_data:
             return None
-        return rest_data["Control"]["Enable_Charge_Schedule"] == "enable"
+        # None distinguishes "not reported" from "reported off": read_data only checks that a
+        # top-level Control block exists, not its contents. Publishing an unknown as "off" would
+        # tell Predbat the schedule is disabled and have it write to enable it.
+        value = rest_data.get("Control", {}).get("Enable_Charge_Schedule", None)
+        if value is None:
+            return None
+        return value == "enable"
 
     @property
     def charge_target_enabled(self):
@@ -118,7 +124,13 @@ class GivTCPRest:
         rest_data = self.inverter.rest_data
         if not rest_data:
             return None
-        return rest_data["Control"]["Enable_Discharge_Schedule"] == "enable"
+        # None distinguishes "not reported" from "reported off": read_data only checks that a
+        # top-level Control block exists, not its contents. Publishing an unknown as "off" would
+        # tell Predbat the schedule is disabled and have it write to enable it.
+        value = rest_data.get("Control", {}).get("Enable_Discharge_Schedule", None)
+        if value is None:
+            return None
+        return value == "enable"
 
     @property
     def soc_kwh(self):
@@ -137,7 +149,13 @@ class GivTCPRest:
         rest_data = self.inverter.rest_data
         if not rest_data:
             return None
-        return float(rest_data["Control"]["Target_SOC"])
+        value = rest_data.get("Control", {}).get("Target_SOC", None)
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
 
     def power_readings(self):
         """Battery/PV/grid/load power and battery voltage from GivTCP's Power block, or None if
