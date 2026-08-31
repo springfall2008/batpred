@@ -57,10 +57,11 @@ Setup (one-time, on whichever always-on machine will run this):
    (https://docs.ollama.com/integrations/claude-code), served locally at
    OLLAMA_BASE_URL (http://localhost:11434 by default) - so it needs a
    local `ollama serve` running, and, for a :cloud-suffixed model, an
-   `ollama signin` on this machine. --max-budget-usd's cost estimate is
-   priced for Anthropic's API, so treat it as meaningless (not a real
-   cap) for whichever flows are running against Ollama; --max-turns is
-   the limit that still holds for them.
+   `ollama signin` on this machine. --max-budget-usd is omitted entirely
+   for whichever flows are running against Ollama (see claude_budget_args()) -
+   its cost estimate is priced for Anthropic's API and was observed to fire
+   falsely against an Ollama model regardless of the real (near-zero) spend
+   (issue #4881); --max-turns is the limit that still holds for them.
 
 What it does per new issue: syncs the dedicated clone to origin/main,
 empties the scratch directory used for issue attachments, then runs
@@ -274,8 +275,24 @@ DISALLOWED_TOOLS_REVIEW = ",".join(item for item in _DISALLOWED_TOOLS_BASE if it
 # committing/pushing/pre-commit and checking out the PR's own branch (the review flow
 # never needs a local checkout, and never gh pr checks/run view - it doesn't touch CI).
 # Deliberately not the full _ALLOWED_TOOLS_PR_EXTRA: no "gh pr create*" - cleanup
-# pushes to the existing PR's branch, it never opens a new one.
+# pushes to the existing PR's branch, it never opens a new one. The merge grant below
+# is what lets it sync a stale PR branch with main and resolve conflicts, per
+# pr-cleanup/SKILL.md step 2 - no other flow checks out an existing branch that can
+# be behind, so it's cleanup-only.
 _CLEANUP_EXTRA_GH = ["Bash(gh pr checkout*)", "Bash(gh pr checks*)", "Bash(gh run view*)", "Bash(gh run list*)"]
+# Enumerated spellings rather than a bare "git merge*" - unscoped, that would let the
+# agent merge any ref, not just origin/main, contradicting pr-cleanup/SKILL.md's own
+# guardrail ("Only ever merge origin/main into the branch, never any other ref"). One
+# entry has to cover a flag ahead of the ref too: "git merge --no-edit origin/main"
+# (SKILL.md's own example command, chosen to avoid hanging on an interactive editor
+# prompt for the merge commit message) - prefix-glob matching is literal, so a bare
+# "git merge origin/main*" rule would not match it, the same footgun already
+# documented against _PR_FORCE_PUSH_DENIALS and the gh api endpoint-first form above.
+_CLEANUP_EXTRA_MERGE = [
+    "Bash(git merge origin/main*)",
+    "Bash(git merge --no-edit origin/main*)",
+    "Bash(git merge --abort)",
+]
 _CLEANUP_EXTRA_WRITE = [
     "Bash(git add*)",
     "Bash(git commit*)",
@@ -283,7 +300,7 @@ _CLEANUP_EXTRA_WRITE = [
     "Bash(./run_pre_commit*)",
     "Bash(./run_pre_commit)",
 ]
-ALLOWED_TOOLS_CLEANUP = ",".join(_ALLOWED_GH_PR_READ + _CLEANUP_EXTRA_GH + _ALLOWED_TOOLS_NON_GH + _CLEANUP_EXTRA_WRITE + _REVIEW_EXTRA_ALLOWED)
+ALLOWED_TOOLS_CLEANUP = ",".join(_ALLOWED_GH_PR_READ + _CLEANUP_EXTRA_GH + _ALLOWED_TOOLS_NON_GH + _CLEANUP_EXTRA_MERGE + _CLEANUP_EXTRA_WRITE + _REVIEW_EXTRA_ALLOWED)
 _CLEANUP_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)"} | _REVIEW_REMOVED_DENIALS
 DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _CLEANUP_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
 # The other half of the #4758 fix. /code-review is a built-in skill, so the command form it
@@ -552,33 +569,50 @@ def claude_env(review_only=False):
     return env
 
 
+def claude_budget_args(amount, review_only=False):
+    """Return the extra 'claude' CLI args capping spend at `amount` USD, or [] when
+    this invocation is running against an Ollama model. --max-budget-usd's cost
+    estimate is priced for Anthropic's API, and has been observed to fire falsely
+    against an Ollama model regardless: issue #4881's first triage attempt completed
+    its real work (comment posted, BOT_TRIAGED applied) and then kept running until
+    the estimate crossed $10, aborting with a non-zero exit that made the daemon
+    retry an already-finished issue. --max-turns is the circuit-breaker that still
+    applies in Ollama mode.
+    """
+    if effective_ollama_model(review_only):
+        return []
+    return ["--max-budget-usd", amount]
+
+
 def triage(issue_number):
-    cmd = [
-        "claude",
-        "-p",
-        f"/issue-triage {issue_number} scratch={SCRATCH_DIR}",
-        "--permission-mode",
-        "dontAsk",
-        "--allowedTools",
-        ALLOWED_TOOLS,
-        "--disallowedTools",
-        DISALLOWED_TOOLS,
-        # Turn-by-turn trace rather than just the final message, so the per-issue
-        # log below shows which tool calls ran and which were denied.
-        "--verbose",
-        # Downloads land outside the clone, so the session needs the scratch
-        # directory in scope for Read/Grep as well as for the Bash rules above.
-        "--add-dir",
-        str(SCRATCH_DIR),
-        "--max-turns",
-        "60",
-        # Client-side token-usage estimate, not a real spend cap under subscription
-        # auth (see agent-sdk/cost-tracking) - just a circuit-breaker against a
-        # runaway invocation, sized generously since one issue can need several
-        # file reads plus a test run.
-        "--max-budget-usd",
-        "10.00",
-    ] + claude_model_args(review_only=True)
+    cmd = (
+        [
+            "claude",
+            "-p",
+            f"/issue-triage {issue_number} scratch={SCRATCH_DIR}",
+            "--permission-mode",
+            "dontAsk",
+            "--allowedTools",
+            ALLOWED_TOOLS,
+            "--disallowedTools",
+            DISALLOWED_TOOLS,
+            # Turn-by-turn trace rather than just the final message, so the per-issue
+            # log below shows which tool calls ran and which were denied.
+            "--verbose",
+            # Downloads land outside the clone, so the session needs the scratch
+            # directory in scope for Read/Grep as well as for the Bash rules above.
+            "--add-dir",
+            str(SCRATCH_DIR),
+            "--max-turns",
+            "60",
+            # Client-side token-usage estimate, not a real spend cap under subscription
+            # auth (see agent-sdk/cost-tracking) - just a circuit-breaker against a
+            # runaway invocation, sized generously since one issue can need several
+            # file reads plus a test run.
+        ]
+        + claude_model_args(review_only=True)
+        + claude_budget_args("10.00", review_only=True)
+    )
     log_path = LOG_DIR / f"issue-{issue_number}.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[triage] issue #{issue_number}: starting, logging to {log_path}", flush=True)
@@ -599,24 +633,26 @@ def triage_followup(issue_number):
     information added since the original triage, under the same triage permission
     set as first-pass /issue-triage (no commits, pushes, or PR creation).
     """
-    cmd = [
-        "claude",
-        "-p",
-        f"/issue-triage-followup {issue_number} scratch={SCRATCH_DIR}",
-        "--permission-mode",
-        "dontAsk",
-        "--allowedTools",
-        ALLOWED_TOOLS,
-        "--disallowedTools",
-        DISALLOWED_TOOLS,
-        "--verbose",
-        "--add-dir",
-        str(SCRATCH_DIR),
-        "--max-turns",
-        "60",
-        "--max-budget-usd",
-        "10.00",
-    ] + claude_model_args(review_only=True)
+    cmd = (
+        [
+            "claude",
+            "-p",
+            f"/issue-triage-followup {issue_number} scratch={SCRATCH_DIR}",
+            "--permission-mode",
+            "dontAsk",
+            "--allowedTools",
+            ALLOWED_TOOLS,
+            "--disallowedTools",
+            DISALLOWED_TOOLS,
+            "--verbose",
+            "--add-dir",
+            str(SCRATCH_DIR),
+            "--max-turns",
+            "60",
+        ]
+        + claude_model_args(review_only=True)
+        + claude_budget_args("10.00", review_only=True)
+    )
     log_path = LOG_DIR / f"issue-{issue_number}-followup.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[review] issue #{issue_number}: starting follow-up, logging to {log_path}", flush=True)
@@ -638,24 +674,26 @@ def create_pr(issue_number):
     a claude -p session that completes normally exits 0 whether it opened a PR or
     decided the quality gate failed and posted a comment instead.
     """
-    cmd = [
-        "claude",
-        "-p",
-        f"/issue-pr {issue_number} scratch={SCRATCH_DIR}",
-        "--permission-mode",
-        "dontAsk",
-        "--allowedTools",
-        ALLOWED_TOOLS_PR,
-        "--disallowedTools",
-        DISALLOWED_TOOLS_PR,
-        "--verbose",
-        "--add-dir",
-        str(SCRATCH_DIR),
-        "--max-turns",
-        "150",
-        "--max-budget-usd",
-        "25.00",
-    ] + claude_model_args()
+    cmd = (
+        [
+            "claude",
+            "-p",
+            f"/issue-pr {issue_number} scratch={SCRATCH_DIR}",
+            "--permission-mode",
+            "dontAsk",
+            "--allowedTools",
+            ALLOWED_TOOLS_PR,
+            "--disallowedTools",
+            DISALLOWED_TOOLS_PR,
+            "--verbose",
+            "--add-dir",
+            str(SCRATCH_DIR),
+            "--max-turns",
+            "150",
+        ]
+        + claude_model_args()
+        + claude_budget_args("25.00")
+    )
     log_path = LOG_DIR / f"issue-{issue_number}-pr.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[pr] issue #{issue_number}: starting, logging to {log_path}", flush=True)
@@ -857,26 +895,28 @@ def review_pr(pr_number):
     """Run /code-review against a PR at the "high" effort level, posting findings as
     inline PR comments. Read-only otherwise: no code changes, no push, no PR actions.
     """
-    cmd = [
-        "claude",
-        "-p",
-        f"/code-review {pr_number} high --comment",
-        "--append-system-prompt",
-        GH_API_ENDPOINT_FIRST_PROMPT,
-        "--permission-mode",
-        "dontAsk",
-        "--allowedTools",
-        ALLOWED_TOOLS_REVIEW,
-        "--disallowedTools",
-        DISALLOWED_TOOLS_REVIEW,
-        "--verbose",
-        "--add-dir",
-        str(SCRATCH_DIR),
-        "--max-turns",
-        "100",
-        "--max-budget-usd",
-        "20.00",
-    ] + claude_model_args(review_only=True)
+    cmd = (
+        [
+            "claude",
+            "-p",
+            f"/code-review {pr_number} high --comment",
+            "--append-system-prompt",
+            GH_API_ENDPOINT_FIRST_PROMPT,
+            "--permission-mode",
+            "dontAsk",
+            "--allowedTools",
+            ALLOWED_TOOLS_REVIEW,
+            "--disallowedTools",
+            DISALLOWED_TOOLS_REVIEW,
+            "--verbose",
+            "--add-dir",
+            str(SCRATCH_DIR),
+            "--max-turns",
+            "100",
+        ]
+        + claude_model_args(review_only=True)
+        + claude_budget_args("20.00", review_only=True)
+    )
     log_path = LOG_DIR / f"pr-{pr_number}-review.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[review-pr] PR #{pr_number}: starting, logging to {log_path}", flush=True)
@@ -950,26 +990,28 @@ def cleanup_pr(pr_number):
     """Run the /pr-cleanup skill against a PR: address review feedback and CI
     failures, then commit and push - under the write-capable cleanup permission set.
     """
-    cmd = [
-        "claude",
-        "-p",
-        f"/pr-cleanup {pr_number} scratch={SCRATCH_DIR}",
-        "--append-system-prompt",
-        GH_API_ENDPOINT_FIRST_PROMPT,
-        "--permission-mode",
-        "dontAsk",
-        "--allowedTools",
-        ALLOWED_TOOLS_CLEANUP,
-        "--disallowedTools",
-        DISALLOWED_TOOLS_CLEANUP,
-        "--verbose",
-        "--add-dir",
-        str(SCRATCH_DIR),
-        "--max-turns",
-        "150",
-        "--max-budget-usd",
-        "25.00",
-    ] + claude_model_args(review_only=True)
+    cmd = (
+        [
+            "claude",
+            "-p",
+            f"/pr-cleanup {pr_number} scratch={SCRATCH_DIR}",
+            "--append-system-prompt",
+            GH_API_ENDPOINT_FIRST_PROMPT,
+            "--permission-mode",
+            "dontAsk",
+            "--allowedTools",
+            ALLOWED_TOOLS_CLEANUP,
+            "--disallowedTools",
+            DISALLOWED_TOOLS_CLEANUP,
+            "--verbose",
+            "--add-dir",
+            str(SCRATCH_DIR),
+            "--max-turns",
+            "150",
+        ]
+        + claude_model_args(review_only=True)
+        + claude_budget_args("25.00", review_only=True)
+    )
     log_path = LOG_DIR / f"pr-{pr_number}-cleanup.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[cleanup-pr] PR #{pr_number}: starting, logging to {log_path}", flush=True)

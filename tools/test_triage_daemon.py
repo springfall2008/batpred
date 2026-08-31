@@ -646,7 +646,9 @@ class PermissionModelTests(unittest.TestCase):
         self.assertIn("Bash(gh api repos/springfall2008/batpred/*)", cleanup)
 
     def test_cleanup_allowed_tools_grants_write_access(self):
-        """Commit/push/pre-commit, matching the PR flow's write capability."""
+        """Commit/push/pre-commit, matching the PR flow's write capability - the
+        merge grant is checked separately below, since it's a set of enumerated
+        spellings rather than a single entry."""
         cleanup = set(triage_daemon.ALLOWED_TOOLS_CLEANUP.split(","))
         self.assertTrue(
             {
@@ -657,6 +659,33 @@ class PermissionModelTests(unittest.TestCase):
                 "Bash(./run_pre_commit)",
             }.issubset(cleanup)
         )
+
+    def test_cleanup_is_the_only_flow_granted_git_merge(self):
+        """git merge is only needed to sync a checked-out PR branch with main - no
+        other flow checks out an existing branch that can be behind, so granting it
+        more broadly would expand the permission surface with no matching use-case."""
+        cleanup = triage_daemon.ALLOWED_TOOLS_CLEANUP.split(",")
+        for entry in triage_daemon._CLEANUP_EXTRA_MERGE:
+            self.assertIn(entry, cleanup)
+        for flow in [triage_daemon.ALLOWED_TOOLS, triage_daemon.ALLOWED_TOOLS_PR, triage_daemon.ALLOWED_TOOLS_REVIEW]:
+            merge_entries = [entry for entry in flow.split(",") if entry.startswith("Bash(git merge")]
+            self.assertEqual(merge_entries, [])
+
+    def test_cleanup_merge_grant_is_scoped_to_origin_main(self):
+        """Regression test for the Copilot review on PR #4882: a bare "Bash(git
+        merge*)" would let the agent merge any ref, contradicting pr-cleanup/SKILL.md's
+        guardrail that it should only ever merge origin/main. Every enumerated entry
+        must name origin/main explicitly, or be the exact --abort escape hatch."""
+        for entry in triage_daemon._CLEANUP_EXTRA_MERGE:
+            self.assertTrue("origin/main" in entry or entry == "Bash(git merge --abort)", entry)
+
+    def test_cleanup_merge_grant_covers_a_flag_before_the_ref(self):
+        """Regression test for the same Copilot review comment: prefix-glob matching
+        is literal, so "git merge --no-edit origin/main" - the exact form SKILL.md's
+        step 2 instructs, to avoid hanging on an interactive editor prompt - needs its
+        own entry rather than relying on a bare "git merge origin/main*" rule to cover
+        a flag that comes before the ref."""
+        self.assertIn("Bash(git merge --no-edit origin/main*)", triage_daemon._CLEANUP_EXTRA_MERGE)
 
 
 class GhApiFormPromptTests(unittest.TestCase):
@@ -849,6 +878,47 @@ class ClaudeEnvTests(unittest.TestCase):
         self.assertIsNone(env)
 
 
+class ClaudeBudgetArgsTests(unittest.TestCase):
+    """Tests for claude_budget_args(), new - regression tests for issue #4881: a
+    triage run against an Ollama model completed its real work and then kept running
+    until Claude Code's (Anthropic-priced) cost estimate crossed --max-budget-usd,
+    aborting with a false failure that made the daemon retry an already-finished issue."""
+
+    def setUp(self):
+        """Every test starts from the no-flag default, regardless of test order."""
+        for name in ("OLLAMA_MODEL", "OLLAMA_REVIEW_MODEL"):
+            patcher = patch.object(triage_daemon, name, None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_caps_spend_by_default(self):
+        """With no --ollama flag, the budget cap applies as before."""
+        self.assertEqual(triage_daemon.claude_budget_args("10.00"), ["--max-budget-usd", "10.00"])
+
+    def test_omitted_when_ollama_is_active(self):
+        """--ollama's cost estimate is meaningless for a non-Anthropic model, so the
+        cap is dropped entirely rather than left in place to fire falsely."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_budget_args("10.00", review_only=True), [])
+
+    def test_omitted_when_ollama_review_is_active_for_a_review_only_call(self):
+        """Same as --ollama, for the review-only flows --ollama_review covers."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_budget_args("10.00", review_only=True), [])
+
+    def test_still_applies_to_pr_creation_under_ollama_review(self):
+        """--ollama_review never touches create_pr() (review_only=False there) - it
+        still runs on the real Claude model, so its budget cap must still apply."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_budget_args("25.00"), ["--max-budget-usd", "25.00"])
+
+    def test_omitted_from_pr_creation_under_the_blanket_ollama_flag(self):
+        """Unlike --ollama_review, --ollama covers every invocation including
+        create_pr() - its budget cap is dropped there too."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_budget_args("25.00"), [])
+
+
 class ParseArgsTests(unittest.TestCase):
     """Tests for parse_args(), new - the --ollama/--ollama_review CLI flags."""
 
@@ -938,6 +1008,16 @@ class TriageTests(DaemonPathsTestCase):
         triage_daemon.triage(4720)
         self.assertTrue((self.log_dir / "issue-4720.log").exists())
 
+    @patch("triage_daemon.subprocess.run")
+    def test_drops_the_budget_cap_when_ollama_is_configured(self, mock_run):
+        """Regression test for issue #4881: --max-budget-usd's cost estimate fired
+        falsely against an Ollama model, so it must not be passed at all in that mode."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("--max-budget-usd", cmd)
+
 
 class CreatePrTests(DaemonPathsTestCase):
     """Tests for create_pr(), new in the bot PR flow."""
@@ -990,6 +1070,27 @@ class CreatePrTests(DaemonPathsTestCase):
         cmd = mock_run.call_args[0][0]
         self.assertNotIn("--model", cmd)
         self.assertIsNone(mock_run.call_args.kwargs["env"])
+
+    @patch("triage_daemon.subprocess.run")
+    def test_budget_cap_still_applies_under_ollama_review(self, mock_run):
+        """--ollama_review never touches PR creation - it still runs on the real
+        Claude model, so its budget cap (a real spend control there) must stay."""
+        self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--max-budget-usd", cmd)
+        self.assertEqual(cmd[cmd.index("--max-budget-usd") + 1], "25.00")
+
+    @patch("triage_daemon.subprocess.run")
+    def test_budget_cap_dropped_under_the_blanket_ollama_flag(self, mock_run):
+        """Unlike --ollama_review, --ollama covers PR creation too, so its budget
+        cap - meaningless against a non-Anthropic model - is dropped here as well."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("--max-budget-usd", cmd)
 
 
 class ProcessBotPrIssueTests(unittest.TestCase):
