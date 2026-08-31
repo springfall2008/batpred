@@ -999,7 +999,7 @@ and you will need to manually set geserial in `apps.yaml` to your inverter seria
 ```
 
 *TIP:* If you have a single GivEnergy AIO, all control is directly to the AIO and the gateway is not required.<BR>
-Check the GivTCP configuration to determine whether inverter 1 (the givtcp sensors) is the AIO or the gateway, or inverter 2 (the givtcp2 sensors) is the AIO or gateway.<BR>
+Check the GivTCP configuration to determine whether inverter 1 (the 'givtcp' sensors) is the AIO or the gateway, or inverter 2 (the 'givtcp2' sensors) is the AIO or gateway.<BR>
 Then in `apps.yaml` comment out the lines corresponding to the gateway, leaving just the givtcp or givtcp2 lines for the AIO.
 Also, delete the [appropriate givtcp_rest inverter control line](#rest-interface-inverter-control) corresponding to the gateway so that Predbat controls the AIO directly.
 
@@ -1007,7 +1007,7 @@ Also, delete the [appropriate givtcp_rest inverter control line](#rest-interface
 geserial should be manually configured to be your AIO gateway serial number 'gwNNNNgZZZ' and all the geserial2 lines should be commented out in `apps.yaml`.
 You should also delete the [second givtcp_rest inverter control line](#rest-interface-inverter-control) so that Predbat controls the AIOs via the gateway.
 
-GivTCP version 3 is required for multiple AIOs or a 3-phase inverter.
+GivTCP version 3 is required for multiple AIOs or a 3-phase inverter, but it should be noted that GivTCP there are still compatibility issues between GivTCP and the 3-phase inverters.
 
 ## Historical data
 
@@ -1385,6 +1385,8 @@ e.g:
     - sensor.givtcp_{geserial}_load_power
 ```
 
+NB: If you have a GivEnergy inverter and have [configured REST inverter control](#rest-interface-inverter-control) then the above power data sensors configured in `appa.yaml` will be ignored in preference of using data retrieved from the inverter via REST API calls.  To override this behaviour and use the configured sensors, set **givtcp_rest_power_ignore** to `true`.
+
 If you are using the LoadML feature of Predbat and have multiple inverters that share the load, you will need to create a template load power sensor in `configuration.yaml` (you can't currently configure time-pattern trigger templates in the UI):
 
 ```yaml
@@ -1429,7 +1431,7 @@ And configure your **load_power** entry in `apps.yaml` to use this sensor:
 
 The dummy '0' entry is required to stop Predbat reporting an `apps.yaml` validation error from **load_power** as it is expecting one sensor per inverter.
 
-If you have multiple GivEnergy inverters and are using REST mode, then also set **givtcp_rest_power_ignore** to `true` in `apps.yaml` for both inverters so Predbat uses your custom power sensor (and not the inverter sensors via REST):
+If you have multiple GivEnergy inverters and are using REST mode, then you should set **givtcp_rest_power_ignore** to `true` in `apps.yaml` for both inverters so Predbat uses your custom load power sensor (and not the inverter sensors via REST which will be incorrect):
 
 ```yaml
   givtcp_rest_power_ignore:
@@ -1437,7 +1439,7 @@ If you have multiple GivEnergy inverters and are using REST mode, then also set 
     - true
 ```
 
-If you have multiple inverters then you need to configure both battery and PV powers in `apps.yaml`, but only a single **grid_power** sensor with a dummy '0' value to prevent an `apps.yaml` validation error:
+If you have multiple inverters then you need to configure both battery and PV powers in `apps.yaml`, but only a single **grid_power** sensor with a dummy '0' value to prevent an `apps.yaml` validation error, e.g.:
 
 ```yaml
   battery_power:
@@ -1534,7 +1536,7 @@ To check your REST is working open up the readData API point in a Web browser e.
 
 If you get a bunch of inverter information back then it's working!
 
-Note that Predbat will still retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
+Note that Predbat will always retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
 
 - **givtcp_rest_power_ignore** - Optional, defaults to false. When set to `true` for a given inverter, Predbat will use the configured sensor entities
 (load_power, pv_power, grid_power, battery_power) instead of reading power values from the GivTCP REST API.
