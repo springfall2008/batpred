@@ -646,15 +646,15 @@ class PermissionModelTests(unittest.TestCase):
         self.assertIn("Bash(gh api repos/springfall2008/batpred/*)", cleanup)
 
     def test_cleanup_allowed_tools_grants_write_access(self):
-        """Commit/push/merge/pre-commit, matching the PR flow's write capability plus
-        the merge grant that lets it sync a stale branch with main and resolve conflicts."""
+        """Commit/push/pre-commit, matching the PR flow's write capability - the
+        merge grant is checked separately below, since it's a set of enumerated
+        spellings rather than a single entry."""
         cleanup = set(triage_daemon.ALLOWED_TOOLS_CLEANUP.split(","))
         self.assertTrue(
             {
                 "Bash(git add*)",
                 "Bash(git commit*)",
                 "Bash(git push*)",
-                "Bash(git merge*)",
                 "Bash(./run_pre_commit*)",
                 "Bash(./run_pre_commit)",
             }.issubset(cleanup)
@@ -663,10 +663,29 @@ class PermissionModelTests(unittest.TestCase):
     def test_cleanup_is_the_only_flow_granted_git_merge(self):
         """git merge is only needed to sync a checked-out PR branch with main - no
         other flow checks out an existing branch that can be behind, so granting it
-        more broadly would be reach without a use."""
-        self.assertIn("Bash(git merge*)", triage_daemon.ALLOWED_TOOLS_CLEANUP.split(","))
+        more broadly would expand the permission surface with no matching use-case."""
+        cleanup = triage_daemon.ALLOWED_TOOLS_CLEANUP.split(",")
+        for entry in triage_daemon._CLEANUP_EXTRA_MERGE:
+            self.assertIn(entry, cleanup)
         for flow in [triage_daemon.ALLOWED_TOOLS, triage_daemon.ALLOWED_TOOLS_PR, triage_daemon.ALLOWED_TOOLS_REVIEW]:
-            self.assertNotIn("Bash(git merge*)", flow.split(","))
+            merge_entries = [entry for entry in flow.split(",") if entry.startswith("Bash(git merge")]
+            self.assertEqual(merge_entries, [])
+
+    def test_cleanup_merge_grant_is_scoped_to_origin_main(self):
+        """Regression test for the Copilot review on PR #4882: a bare "Bash(git
+        merge*)" would let the agent merge any ref, contradicting pr-cleanup/SKILL.md's
+        guardrail that it should only ever merge origin/main. Every enumerated entry
+        must name origin/main explicitly, or be the exact --abort escape hatch."""
+        for entry in triage_daemon._CLEANUP_EXTRA_MERGE:
+            self.assertTrue("origin/main" in entry or entry == "Bash(git merge --abort)", entry)
+
+    def test_cleanup_merge_grant_covers_a_flag_before_the_ref(self):
+        """Regression test for the same Copilot review comment: prefix-glob matching
+        is literal, so "git merge --no-edit origin/main" - the exact form SKILL.md's
+        step 2 instructs, to avoid hanging on an interactive editor prompt - needs its
+        own entry rather than relying on a bare "git merge origin/main*" rule to cover
+        a flag that comes before the ref."""
+        self.assertIn("Bash(git merge --no-edit origin/main*)", triage_daemon._CLEANUP_EXTRA_MERGE)
 
 
 class GhApiFormPromptTests(unittest.TestCase):

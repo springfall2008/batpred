@@ -275,22 +275,32 @@ DISALLOWED_TOOLS_REVIEW = ",".join(item for item in _DISALLOWED_TOOLS_BASE if it
 # committing/pushing/pre-commit and checking out the PR's own branch (the review flow
 # never needs a local checkout, and never gh pr checks/run view - it doesn't touch CI).
 # Deliberately not the full _ALLOWED_TOOLS_PR_EXTRA: no "gh pr create*" - cleanup
-# pushes to the existing PR's branch, it never opens a new one. "git merge*" (not
-# scoped to "origin/main*" - a flag before the ref, e.g. "git merge --no-edit
-# origin/main", would break a literal-prefix match, the same footgun documented
-# against _PR_FORCE_PUSH_DENIALS above) is what lets it sync a stale PR branch with
-# main and resolve conflicts, per pr-cleanup/SKILL.md step 2 - no other flow checks
-# out an existing branch that can be behind, so it's cleanup-only.
+# pushes to the existing PR's branch, it never opens a new one. The merge grant below
+# is what lets it sync a stale PR branch with main and resolve conflicts, per
+# pr-cleanup/SKILL.md step 2 - no other flow checks out an existing branch that can
+# be behind, so it's cleanup-only.
 _CLEANUP_EXTRA_GH = ["Bash(gh pr checkout*)", "Bash(gh pr checks*)", "Bash(gh run view*)", "Bash(gh run list*)"]
+# Enumerated spellings rather than a bare "git merge*" - unscoped, that would let the
+# agent merge any ref, not just origin/main, contradicting pr-cleanup/SKILL.md's own
+# guardrail ("Only ever merge origin/main into the branch, never any other ref"). One
+# entry has to cover a flag ahead of the ref too: "git merge --no-edit origin/main"
+# (SKILL.md's own example command, chosen to avoid hanging on an interactive editor
+# prompt for the merge commit message) - prefix-glob matching is literal, so a bare
+# "git merge origin/main*" rule would not match it, the same footgun already
+# documented against _PR_FORCE_PUSH_DENIALS and the gh api endpoint-first form above.
+_CLEANUP_EXTRA_MERGE = [
+    "Bash(git merge origin/main*)",
+    "Bash(git merge --no-edit origin/main*)",
+    "Bash(git merge --abort)",
+]
 _CLEANUP_EXTRA_WRITE = [
     "Bash(git add*)",
     "Bash(git commit*)",
     "Bash(git push*)",
-    "Bash(git merge*)",
     "Bash(./run_pre_commit*)",
     "Bash(./run_pre_commit)",
 ]
-ALLOWED_TOOLS_CLEANUP = ",".join(_ALLOWED_GH_PR_READ + _CLEANUP_EXTRA_GH + _ALLOWED_TOOLS_NON_GH + _CLEANUP_EXTRA_WRITE + _REVIEW_EXTRA_ALLOWED)
+ALLOWED_TOOLS_CLEANUP = ",".join(_ALLOWED_GH_PR_READ + _CLEANUP_EXTRA_GH + _ALLOWED_TOOLS_NON_GH + _CLEANUP_EXTRA_MERGE + _CLEANUP_EXTRA_WRITE + _REVIEW_EXTRA_ALLOWED)
 _CLEANUP_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)"} | _REVIEW_REMOVED_DENIALS
 DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _CLEANUP_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
 # The other half of the #4758 fix. /code-review is a built-in skill, so the command form it

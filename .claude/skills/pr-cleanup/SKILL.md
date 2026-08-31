@@ -24,16 +24,18 @@ Work on the PR's own branch, not a new one — you're pushing back to it directl
 ## 2. Sync with main and resolve conflicts
 
 ```bash
-git merge origin/main
+git merge --no-edit origin/main
 ```
+
+`--no-edit` avoids hanging on an interactive editor prompt for the merge commit message - there's no one here to dismiss it.
 
 If it says "Already up to date", there's nothing to do here — move on to step 3.
 
-Otherwise the merge either completes cleanly (a fast-forward or an automatic merge — the merge commit already exists locally, and there is now something to push even if step 3 turns up no other feedback) or stops with conflicts. For conflicts, resolve each conflicted file by hand:
+Otherwise the merge either completes cleanly (a fast-forward, which creates no new commit, or an automatic merge, which does — either way there is now something to push even if step 3 turns up no other feedback) or stops with conflicts. For conflicts, resolve each conflicted file by hand:
 
 - Read both sides of every `<<<<<<<`/`=======`/`>>>>>>>` block and understand *why* each side changed — `git log`/`git diff` on the conflicting commits on both this branch and `main` — before writing the resolution. Never resolve by blindly keeping "ours" or "theirs" wholesale; combine the intent of both sides.
 - After editing, confirm no conflict markers remain anywhere: `git grep -n -e '^<<<<<<<' -e '^=======' -e '^>>>>>>>'` should find nothing.
-- `git add` the resolved files and `git commit` (the default merge commit message is fine) to complete the merge.
+- `git add` the resolved files and `git commit --no-edit` (the default merge commit message is fine) to complete the merge.
 
 If the conflicts are extensive enough that a safe resolution would mean re-implementing significant logic, or you are not confident the resolution preserves both sides' intent, do not guess: run `git merge --abort` to return to a clean state, then post one comment on the PR explaining the branch needs a manual rebase and naming what changed upstream that makes it non-trivial. Then stop, the same way as an unpassable quality gate (step 6) — do not attempt any further steps.
 
