@@ -1708,10 +1708,14 @@ class Inverter:
 
         reserve_entity = self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="%")
         if reserve_entity:
-            # Some components (e.g. GE Cloud) publish the inverter's own register bounds onto the entity's
-            # min/max attributes; respect them so we never ask for a value the device will silently clamp
-            # and confirm - otherwise write_and_poll_value's poll-back never matches the un-clamped target
+            # Components publish the bounds the inverter will accept onto the entity's min/max
+            # attributes; respect them so we never ask for a value the device will silently clamp and
+            # confirm - otherwise write_and_poll_value's poll-back never matches the un-clamped target
             # and the same failing write retries forever (GH#4826).
+            #
+            # Not always discovered from the device: where an API reports no bound the component
+            # publishes the model's known floor instead (GivTCP does this with GE's 4%), so a user
+            # who has configured battery_min_soc lower has that reflected in what is published.
             device_min = self.base.get_state_wrapper(reserve_entity, attribute="min", default=None)
             device_max = self.base.get_state_wrapper(reserve_entity, attribute="max", default=None)
             if device_min not in (None, ""):

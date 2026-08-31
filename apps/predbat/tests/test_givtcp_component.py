@@ -1477,6 +1477,64 @@ def test_raw_model_matching_is_unchanged(my_predbat=None):
     return 0
 
 
+def test_reserve_entity_min_defaults_to_the_ge_floor(my_predbat=None):
+    """
+    The reserve entity advertises 4%, GE's practical minimum.
+
+    Inverter clamps its reserve target to this attribute (GH#4826) so it never asks for a value the
+    device will silently clamp-and-confirm, which would leave write_and_poll_value retrying forever.
+    GivTCP reports no reserve bound to discover: battery_discharge_min_power_reserve mirrors the
+    current setting rather than a limit on it, so using that would pin reserve to wherever it
+    already is and stop it ever coming down.
+    """
+    base, component = _make_component()
+    component.rest[0].inverter.rest_data = _rest_data_blob(reserve=10)
+    run_async(component.publish_data())
+
+    assert base.entities["number.predbat_givtcp_0_reserve"]["attributes"]["min"] == 4, "expected the 4% GE floor by default"
+    print("PASS: the reserve entity advertises the 4% GE floor by default")
+    return 0
+
+
+def test_reserve_entity_min_respects_a_lower_battery_min_soc(my_predbat=None):
+    """
+    A user who has explicitly configured a lower floor is not silently overridden.
+
+    battery_min_soc is how a user tells Predbat their battery can go below 4%, and set_reserve_min
+    allows 0 (config.py). Publishing an unconditional 4 would floor them there with no way back -
+    the clamp would raise every target to 4 while claiming to respect "the inverter's own register
+    bounds".
+    """
+    base, component = _make_component()
+    # scalar rather than the per-inverter list apps.yaml uses: MockBase.get_arg ignores index= and
+    # returns the raw value, so a list would not be indexed here the way real get_arg indexes it
+    base.args["battery_min_soc"] = 0
+    component.rest[0].inverter.rest_data = _rest_data_blob(reserve=10)
+    run_async(component.publish_data())
+
+    assert base.entities["number.predbat_givtcp_0_reserve"]["attributes"]["min"] == 0, f"expected the configured floor of 0, got {base.entities['number.predbat_givtcp_0_reserve']['attributes']['min']}"
+    print("PASS: an explicitly configured lower floor is respected")
+    return 0
+
+
+def test_reserve_entity_min_is_never_raised_above_the_floor(my_predbat=None):
+    """
+    A higher battery_min_soc does not raise the entity's min.
+
+    The attribute states what the hardware will accept; keeping a target above a policy floor is
+    Inverter's own reserve_percent/reserve_min job. Raising it here would put the same policy in two
+    places that can disagree.
+    """
+    base, component = _make_component()
+    base.args["battery_min_soc"] = 20
+    component.rest[0].inverter.rest_data = _rest_data_blob(reserve=10)
+    run_async(component.publish_data())
+
+    assert base.entities["number.predbat_givtcp_0_reserve"]["attributes"]["min"] == 4, "a higher policy floor must not raise the hardware minimum"
+    print("PASS: a higher battery_min_soc does not raise the entity minimum")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1521,6 +1579,9 @@ def test_givtcp_component(my_predbat=None):
         ("dt_type_match", test_unsupported_model_detected_from_invertor_type, "unsupported model from Invertor_Type"),
         ("dt_gen2_kept", test_gen2_hybrid_keeps_its_export_target, "Gen2 Hybrid keeps its export target"),
         ("dt_raw_model", test_raw_model_matching_is_unchanged, "raw.invertor.model matching unchanged"),
+        ("reserve_min_default", test_reserve_entity_min_defaults_to_the_ge_floor, "reserve entity min defaults to 4"),
+        ("reserve_min_lower", test_reserve_entity_min_respects_a_lower_battery_min_soc, "lower battery_min_soc respected"),
+        ("reserve_min_no_raise", test_reserve_entity_min_is_never_raised_above_the_floor, "higher floor does not raise min"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),

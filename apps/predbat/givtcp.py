@@ -381,7 +381,27 @@ class GivTCPComponent(ComponentBase):
             target_soc = rest.target_soc
             if target_soc is not None:
                 self.dashboard_item(self._entity_id("number", n, "charge_limit"), state=target_soc, attributes=GIVTCP_CONTROLS["charge_limit"][2], app="givtcp")
-            self.dashboard_item(self._entity_id("number", n, "reserve"), state=rest.inverter.rest_data.get("Control", {}).get("Battery_Power_Reserve", 0), attributes=GIVTCP_CONTROLS["reserve"][2], app="givtcp")
+            # Inverter clamps its reserve target to this entity's min/max (GH#4826) so it never asks
+            # for a value the device silently clamps and confirms, which would leave
+            # write_and_poll_value retrying forever - set_reserve() verifies an exact match.
+            #
+            # 4 is GE's practical floor rather than a bound discovered from GivTCP: nothing in a
+            # readData dump reports one. battery_discharge_min_power_reserve looks like a candidate
+            # but is the discharge floor *setting*, not a limit on it, so using it would pin reserve
+            # to wherever it already sits and stop it ever coming down.
+            #
+            # battery_min_soc is how a user states their battery goes lower (set_reserve_min allows
+            # 0), so it lowers the advertised minimum. It never raises it: keeping a target above a
+            # policy floor is Inverter's own reserve_percent job, and duplicating that here would put
+            # the same rule in two places that can disagree.
+            reserve_attributes = dict(GIVTCP_CONTROLS["reserve"][2])
+            battery_min_soc = self.get_arg("battery_min_soc", default=None, index=n)
+            if battery_min_soc is not None:
+                try:
+                    reserve_attributes["min"] = min(reserve_attributes["min"], int(float(battery_min_soc)))
+                except (ValueError, TypeError):
+                    pass
+            self.dashboard_item(self._entity_id("number", n, "reserve"), state=rest.inverter.rest_data.get("Control", {}).get("Battery_Power_Reserve", 0), attributes=reserve_attributes, app="givtcp")
             # An unsupported model gets no entity at all - see DISCHARGE_TARGET_UNSUPPORTED_MODELS.
             # Publishing one would restart the every-cycle rewrite loop of #4517, because the write
             # reports success and then silently fails to persist.
