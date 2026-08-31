@@ -2949,13 +2949,11 @@ class Inverter:
         hash_index = domain
         last_service_hash = self.base.last_service_hash.get(hash_index, "")
         this_service_hash = hash(str(service) + "_" + str(data) + "_" + str(extra_data))
+        service_repeat = last_service_hash == this_service_hash
 
-        if last_service_hash == this_service_hash:
-            service_repeat = True
-        else:
-            # Record the last service called
-            self.base.last_service_hash[hash_index] = this_service_hash
-            service_repeat = False
+        # Whether every call this template actually made was accepted. The hash that suppresses a
+        # repeat is only recorded at the end, and only if this holds - see the note below.
+        service_calls_ok = True
 
         for service_template in service_list:
             service_data = {}
@@ -2989,10 +2987,27 @@ class Inverter:
             elif service_name:
                 service_name = service_name.replace(".", "/")
                 self.log("Inverter {} Calling service {} domain {} service_name {} with data {}".format(self.id, service, domain, service_name, service_data))
-                self.base.call_service_wrapper(service_name, **service_data)
+                if not self.base.call_service_wrapper(service_name, **service_data):
+                    self.log("Warn: Inverter {} service {} domain {} service_name {} was not accepted, it will be retried next cycle".format(self.id, service, domain, service_name))
+                    service_calls_ok = False
             else:
                 self.log("Warn: Inverter {} unable to find service name for {}".format(self.id, service))
 
+        # Only remember the call once it has actually been accepted. Recording it up front - as this
+        # used to, before the calls were even made - meant a service that silently failed was
+        # deduplicated away on every subsequent cycle ("Skipped service ... as it was previously
+        # called"), so Predbat believed it had set a control it had not. #4876 saw predbat.status
+        # read Charging while the inverter's own display still showed its idle program, until the
+        # identical call was re-sent by hand. Dropping the record instead lets the next cycle reissue
+        # it naturally, without needing "repeat: True" on the template in apps.yaml.
+        if service_calls_ok:
+            self.base.last_service_hash[hash_index] = this_service_hash
+        else:
+            self.base.last_service_hash.pop(hash_index, None)
+
+        # Deliberately not reporting the call result here: callers use this return value to choose a
+        # fallback service (e.g. "if not charge_freeze_service: charge_stop_service"), so reporting a
+        # transient failure would silently downgrade a freeze into a stop rather than retrying it.
         return True
 
     def adjust_charge_immediate(self, target_soc, freeze=False):
