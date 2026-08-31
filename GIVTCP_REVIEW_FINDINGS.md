@@ -5,7 +5,7 @@ Run at `xhigh` effort, scoped to *correctness vs main*: this is meant to be a be
 refactor, so anything that changes runtime behaviour is a finding.
 
 **Verification status:** 15 findings were raised. The two that are closed were verified against the
-code in detail before being fixed. **The 13 below have _not_ been independently verified** — they are
+code in detail before being fixed. **The 13 below have *not* been independently verified** — they are
 review claims with specific line references, produced at an effort level that explicitly admits
 uncertain findings. Confirm each before acting on it. The full test suite is green on this branch, so
 every finding here is also a test-coverage gap.
@@ -392,7 +392,6 @@ now publishes as entities.
 
 **Fix direction:** drop the read (keeping whatever `__init__` genuinely needs) and correct the
 comment. Lowest risk of the remaining set, and removes blocking I/O from the planning loop.
-
 
 ---
 
