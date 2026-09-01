@@ -141,7 +141,6 @@ mkdocs serve   # Live preview at http://localhost:8000
 
 When adding a new doc page, add it to `mkdocs.yml`. The published site at <https://springfall2008.github.io/batpred/> is built automatically from `main` via GitHub Actions.
 
-
 ## Anti-Clipping Requirements
 
 When developing features, fixing bugs, or reviewing PRs related to the `clipping-cloud-model` or legacy `clipping-buffer` branches, **you MUST always consult the requirements validation document**:
@@ -193,4 +192,3 @@ This project is indexed by GitNexus as **batpred** (13494 symbols, 38059 relatio
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
-
