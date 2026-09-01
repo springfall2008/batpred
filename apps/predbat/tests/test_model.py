@@ -2396,8 +2396,8 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         ignore_failed=True,
     )
     # The penalty should make the metric less negative (higher) than without
-    metric_no_penalty = round(pred_no_penalty.predict_metric_best[max(pred_no_penalty.predict_metric_best.keys())] / 100.0, 2) if pred_no_penalty.predict_metric_best else 0
-    metric_with_penalty = round(pred_with_penalty.predict_metric_best[max(pred_with_penalty.predict_metric_best.keys())] / 100.0, 2) if pred_with_penalty.predict_metric_best else 0
+    metric_no_penalty = getattr(pred_no_penalty, "final_metric", 0)
+    metric_with_penalty = getattr(pred_with_penalty, "final_metric", 0)
     if metric_with_penalty <= metric_no_penalty:
         print("ERROR: clipping_peak_with_penalty metric {} should be > {} (penalty should increase metric)".format(metric_with_penalty, metric_no_penalty))
         failed = True
