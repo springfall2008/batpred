@@ -20,7 +20,7 @@ call to the C++ prediction kernel, which is where the threading now lives.
 
 from datetime import datetime, timedelta
 from multiprocessing import cpu_count
-from const import CLIPPING_BUFFER_DEFAULT_FRACTION, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import CLIPPING_BUFFER_DEFAULT_FRACTION, CLIPPING_BUFFER_EPISODE_GAP, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
 
 from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
 from prediction import Prediction
@@ -1384,11 +1384,26 @@ class Plan:
         # a user who wants the full forecast requirement can raise the cap.
         max_buffer = self.clipping_buffer_max_kwh if self.clipping_buffer_max_kwh > 0 else self.soc_max * CLIPPING_BUFFER_DEFAULT_FRACTION
 
-        # Reverse running maximum: the headroom a slot must leave is the deepest the buffer still
-        # gets after it, not how full it happens to be at that moment.
+        # Reverse running maximum, reset at each episode boundary: the headroom a slot must leave is
+        # the deepest the buffer gets during the NEXT clipping episode, not the worst of every
+        # episode left in the plan. Without the reset a second sunny day keeps the first day's
+        # headroom pinned all night, reserving space at 3am for a risk that arrives the next
+        # afternoon - and the battery is discharged and recharged in between anyway, so holding it
+        # across the gap buys nothing.
         needed = 0.0
+        gap = 0
         for minute in range(self.forecast_minutes - PREDICT_STEP, -1, -PREDICT_STEP):
-            needed = max(needed, held.get(minute, 0.0))
+            occupancy = held.get(minute, 0.0)
+            if occupancy > 0:
+                # Walking backwards into a new, earlier episode: drop what the later one needed.
+                # The gap itself keeps carrying the next episode's requirement, because a charge
+                # window ending shortly before dawn still has to leave room for that day.
+                if gap >= CLIPPING_BUFFER_EPISODE_GAP:
+                    needed = 0.0
+                needed = max(needed, occupancy)
+                gap = 0
+            else:
+                gap += PREDICT_STEP
             if needed <= 0:
                 continue
             capped = min(needed, max_buffer)

@@ -78,6 +78,10 @@ EXPORT_LIMIT_IDLE = 100.0  # Export window disabled entirely
 # Clipping buffer headroom to reserve when clipping_buffer_max_kwh is left at zero ("size it for me")
 CLIPPING_BUFFER_DEFAULT_FRACTION = 0.10
 
+# A clipping-free stretch this long ends one clipping episode and starts another, so the buffer is
+# released rather than held across it (e.g. overnight between two sunny days)
+CLIPPING_BUFFER_EPISODE_GAP = 120
+
 # Create an array of times in the day in 5-minute intervals
 BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M:%S")) for minute in range(0, 24 * 60, 5)]

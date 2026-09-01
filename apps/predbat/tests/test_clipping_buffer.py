@@ -64,6 +64,7 @@ def _run_clipping_buffer_tests(my_predbat):
     failed |= test_soc_max_ceiling_applied(my_predbat)
     failed |= test_no_limit_configured_is_inert(my_predbat)
     failed |= test_zero_max_derives_a_default(my_predbat)
+    failed |= test_second_episode_does_not_pin_the_first(my_predbat)
     return failed
 
 
@@ -213,4 +214,35 @@ def test_zero_max_derives_a_default(my_predbat):
     setup(my_predbat, flat(9.0, 600, 900), max_kwh=0.5, soc_max=16.77)
     my_predbat.calculate_clipping_buffer()
     failed |= check("test_zero_max_derives_a_default explicit", my_predbat.clipping_buffer_kwh, 0.5)
+    return failed
+
+
+def test_second_episode_does_not_pin_the_first(my_predbat):
+    """Two clipping episodes are sized independently, with the gap carrying the later one.
+
+    A charge window before the small episode only has to leave room for that one; anything after it
+    has to leave room for the big one that follows. Without the reset the big episode's headroom
+    would be held from the very start of the plan, reserving space long before it is any use.
+    """
+
+    def two_humps(minute):
+        if 600 <= minute < 630:
+            return 6.5  # small, early
+        if 2000 <= minute < 2240:
+            return 8.0  # big, next day
+        return 0.0
+
+    setup(my_predbat, two_humps, max_kwh=20, horizon=2400)
+    my_predbat.calculate_clipping_buffer()
+    small = my_predbat.soc_max - my_predbat.clipping_buffer_soc_max(500)
+    gap = my_predbat.soc_max - my_predbat.clipping_buffer_soc_max(1500)
+    failed = False
+    if not small < gap:
+        print("**** ERROR: test_second_episode_does_not_pin_the_first - early {} should be below gap {}".format(small, gap))
+        failed = True
+    # The gap must carry the later episode, not release to nothing - a charge ending there still
+    # has to leave room for the day that follows
+    if gap <= 0:
+        print("**** ERROR: test_second_episode_does_not_pin_the_first - gap released the buffer entirely")
+        failed = True
     return failed
