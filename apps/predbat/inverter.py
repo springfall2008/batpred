@@ -1833,12 +1833,33 @@ class Inverter:
         # Clamp reserve at max setting
         reserve = min(reserve, self.reserve_max)
 
+        reserve_entity = None
+        if not self.rest_data:
+            reserve_entity = self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="%")
+            if reserve_entity:
+                # Some components (e.g. GE Cloud) publish the inverter's own register bounds onto the entity's
+                # min/max attributes; respect them so we never ask for a value the device will silently clamp
+                # and confirm - otherwise write_and_poll_value's poll-back never matches the un-clamped target
+                # and the same failing write retries forever (GH#4826).
+                device_min = self.base.get_state_wrapper(reserve_entity, attribute="min", default=None)
+                device_max = self.base.get_state_wrapper(reserve_entity, attribute="max", default=None)
+                if device_min not in (None, ""):
+                    try:
+                        reserve = max(reserve, int(float(device_min) + 0.5))
+                    except (ValueError, TypeError):
+                        pass
+                if device_max not in (None, ""):
+                    try:
+                        reserve = min(reserve, int(float(device_max)))
+                    except (ValueError, TypeError):
+                        pass
+
         if current_reserve != reserve:
             self.base.log("Inverter {} Current Reserve is {}% and new target is {}%".format(self.id, dp0(current_reserve), dp0(reserve)))
             if self.rest_data:
                 self.rest_setReserve(reserve)
             else:
-                self.write_and_poll_value("reserve", self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="%"), reserve)
+                self.write_and_poll_value("reserve", reserve_entity, reserve)
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Target Reserve has been changed to {}% at {}".format(self.id, dp0(reserve), self.base.time_now_str()))
             self.mqtt_message(topic="set/reserve", payload=reserve)

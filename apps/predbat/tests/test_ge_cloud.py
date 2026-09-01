@@ -1863,7 +1863,7 @@ def _test_async_send_evc_command(my_predbat):
             if result != mock_success_response:
                 print("ERROR: Expected success response {}, got {}".format(mock_success_response, result))
                 return 1
-            if result["success"] != True:
+            if result["success"] is not True:
                 print("ERROR: Expected success=True in response")
                 return 1
 
@@ -2157,7 +2157,7 @@ def _test_async_get_evc_device(my_predbat):
             if result["serial_number"] != "EVC123456":
                 print(f"ERROR: Expected serial_number EVC123456, got {result['serial_number']}")
                 return 1
-            if result["online"] != True:
+            if result["online"] is not True:
                 print(f"ERROR: Expected online True, got {result['online']}")
                 return 1
             if result["status"] != "charging":
@@ -2186,7 +2186,7 @@ def _test_async_get_evc_device(my_predbat):
 
             result = await ge_cloud.async_get_evc_device(test_uuid, {})
 
-            if result["online"] != False:
+            if result["online"] is not False:
                 print(f"ERROR: Expected online False, got {result['online']}")
                 return 1
             if result["went_offline_at"] != "2025-12-24T10:30:00Z":
@@ -3446,7 +3446,7 @@ def _test_switch_event(my_predbat):
             if len(write_calls) != 1:
                 print("ERROR: Expected 1 write call, got {}".format(len(write_calls)))
                 return 1
-            if write_calls[0]["value"] != True:
+            if write_calls[0]["value"] is not True:
                 print("ERROR: Expected value=True for turn_on, got {}".format(write_calls[0]["value"]))
                 return 1
 
@@ -3456,7 +3456,7 @@ def _test_switch_event(my_predbat):
             if len(write_calls) != 2:
                 print("ERROR: Expected 2 write calls, got {}".format(len(write_calls)))
                 return 1
-            if write_calls[1]["value"] != False:
+            if write_calls[1]["value"] is not False:
                 print("ERROR: Expected value=False for turn_off, got {}".format(write_calls[1]["value"]))
                 return 1
 
@@ -4682,10 +4682,10 @@ def _test_enable_default_options(my_predbat):
         if not result:
             print("ERROR: enable_default_options should return True when enabling real-time control")
             return 1
-        if write_calls[0]["value"] != True:
+        if write_calls[0]["value"] is not True:
             print("ERROR: Expected value=True for real-time control, got {}".format(write_calls[0]["value"]))
             return 1
-        if registers[105]["value"] != True:
+        if registers[105]["value"] is not True:
             print("ERROR: Register value should be updated to True, got {}".format(registers[105]["value"]))
             return 1
 

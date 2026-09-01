@@ -170,6 +170,11 @@ class TestHAInterface:
         self.service_store = []
         self.service_store_fail = set()
         self.db_primary = False
+        # Set by create_predbat() so set_state_external() can route a CONFIG_ITEMS entity's
+        # change through the real switch/input_number/select service simulation, the same way
+        # HAInterface.set_state_external() does. None for the handful of narrower component
+        # tests that build a TestHAInterface() directly without a base to wire it to.
+        self.base = None
 
     def get_service_store(self):
         stored_service = self.service_store
@@ -186,9 +191,9 @@ class TestHAInterface:
             history.append({"state": state, "last_changed": point})
         self.history = history
 
-    def get_state(self, entity_id, default=None, attribute=None, refresh=False, raw=False):
+    def get_state(self, entity_id=None, default=None, attribute=None, refresh=False, raw=False):
         if not entity_id:
-            return {}
+            return self.get_all_state()
         elif entity_id in self.dummy_items:
             result = self.dummy_items[entity_id]
             if raw:
@@ -206,6 +211,31 @@ class TestHAInterface:
         else:
             # print("Getting state: {} attribute {} => default {} ".format(entity_id, attribute, default))
             return default
+
+    def get_all_state(self):
+        """
+        Build the whole-state dict shape the real HAInterface.get_state() returns when called
+        with no entity_id: {entity_id: {"state", "attributes", "last_changed"}}.
+
+        dummy_items stores each entity as either a bare state value, or (via set_state()/the
+        test 'set_entity' helpers) a dict with 'state' plus every attribute as a flat sibling key
+        - not nested under an 'attributes' key the way the real interface stores it. This
+        reshapes each entry into the real shape on the way out, so callers of get_state() with no
+        entity_id (e.g. agent_tools.py's search_entities/get_entity_state) see the same contract
+        in tests as they do against a live Predbat.
+        """
+        all_state = {}
+        for entity_id, item in self.dummy_items.items():
+            if isinstance(item, dict):
+                state = item.get("state")
+                attributes = {key: value for key, value in item.items() if key not in ("state", "last_changed")}
+                last_changed = item.get("last_changed")
+            else:
+                state = item
+                attributes = {}
+                last_changed = None
+            all_state[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
+        return all_state
 
     def call_service(self, service, **kwargs):
         print("Calling service: {} {}".format(service, kwargs))
@@ -266,6 +296,45 @@ class TestHAInterface:
             self.dummy_items[entity_id] = state
         # print("Item now: {}".format(self.dummy_items[entity_id]))
         return None
+
+    async def set_state_external(self, entity_id, state, attributes=None):
+        """
+        Mirror HAInterface.set_state_external(): when entity_id names a CONFIG_ITEMS entity,
+        route the change through the same switch/input_number/select service-call simulation
+        production code uses (self.base.trigger_callback), so a config switch flipped this way in
+        a test actually updates config_index[name]["value"] - what get_ha_config() reads - the
+        same way a real turn_on/turn_off service call would, rather than only ever touching the
+        entity's raw display state the way set_state() does.
+
+        Anything that is not a CONFIG_ITEMS entity, or when self.base was never wired up (the
+        narrower component tests that build a TestHAInterface() directly, with no base), falls
+        back to set_state()'s plain state write.
+        """
+        if self.base is not None:
+            for item in getattr(self.base, "CONFIG_ITEMS", []):
+                if item.get("entity") != entity_id:
+                    continue
+                old_value = item.get("value")
+                if old_value is None:
+                    old_value = item.get("default")
+                if old_value == state:
+                    return
+                item_type = item.get("type", "")
+                service_data = {"domain": item_type}
+                if item_type == "switch":
+                    service_data["service"] = "turn_on" if state else "turn_off"
+                    service_data["service_data"] = {"entity_id": entity_id}
+                elif item_type == "input_number":
+                    service_data["service"] = "set_value"
+                    service_data["service_data"] = {"entity_id": entity_id, "value": state}
+                elif item_type == "select":
+                    service_data["service"] = "select_option"
+                    service_data["service_data"] = {"entity_id": entity_id, "option": state}
+                else:
+                    break
+                await self.base.trigger_callback(service_data)
+                return
+        self.set_state(entity_id, state, attributes)
 
     def get_history(self, entity_id, now=None, days=30):
         # print("Getting history for {}".format(entity_id))

@@ -16,8 +16,10 @@ def test_fetch_octopus_rates(my_predbat):
     Test the fetch_octopus_rates function
 
     Tests various sensor formats and attribute combinations:
-    - Legacy sensor with all_rates attribute
     - New event-based sensor with rates attribute
+    - A `_current_rate`-pattern entity whose day-rate events are missing (no legacy
+      'all_rates' fallback - see #1699, that attribute has not existed on any
+      BottlecapDave Octopus Energy integration sensor for a very long time)
     - Current rate sensor with previous/current/next day rates
     - Nordpool sensor with raw_today/raw_tomorrow
     - Different rate key formats (rate, value_inc_vat, value, price)
@@ -38,8 +40,8 @@ def test_fetch_octopus_rates(my_predbat):
     # Clear dummy_items from previous tests
     my_predbat.ha_interface.dummy_items.clear()
 
-    # Test 1: Legacy sensor with all_rates attribute
-    print("*** Test 1: Legacy sensor with all_rates attribute")
+    # Test 1: Current-day-rates event with a 'rates' attribute
+    print("*** Test 1: Current-day-rates event with a 'rates' attribute")
     entity_id = "sensor.octopus_energy_electricity_abc123_current_rate"
 
     # Mock the sensor data - standard Octopus format
@@ -75,7 +77,7 @@ def test_fetch_octopus_rates(my_predbat):
             print("ERROR: Expected rate 16.2 at minute 30, got {}".format(rate_data[30]))
             failed = True
 
-        print("Test 1 passed - legacy sensor format works")
+        print("Test 1 passed - current-day-rates event format works")
 
     # Test 2: New event-based sensor with previous, current, and next rates
     print("*** Test 2: Event-based sensor with previous/current/next rates")
@@ -201,6 +203,32 @@ def test_fetch_octopus_rates(my_predbat):
     else:
         print("ERROR: Expected minute 0 to be marked as intelligent adjusted")
         failed = True
+
+    # Test 5b: Missing day-rate events - no legacy 'all_rates' sensor fallback (#1699)
+    print("*** Test 5b: Missing previous/current day-rate events warn about 'rates', not 'all_rates'")
+
+    entity_id_no_events = "sensor.octopus_energy_electricity_missing_current_rate"
+    log_messages = []
+    orig_log = my_predbat.log
+    my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+    try:
+        rate_data = my_predbat.fetch_octopus_rates(entity_id_no_events)
+    finally:
+        my_predbat.log = orig_log
+
+    if rate_data != {}:
+        print("ERROR: Expected empty dict when day-rate events are missing, got {}".format(rate_data))
+        failed = True
+
+    if any("all_rates" in msg for msg in log_messages):
+        print("ERROR: A warning still references the dead 'all_rates' attribute: {}".format(log_messages))
+        failed = True
+
+    if not any("attribute 'rates'" in msg for msg in log_messages):
+        print("ERROR: Expected a warning about the missing 'rates' attribute, got {}".format(log_messages))
+        failed = True
+    else:
+        print("Test 5b passed - no 'all_rates' fallback attempted, warning references 'rates'")
 
     # Test 6: Empty entity_id
     print("*** Test 6: Empty entity_id returns empty dict")

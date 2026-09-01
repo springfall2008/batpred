@@ -88,7 +88,10 @@ to multiply the **car_charging_energy** sensor data by if required (e.g. set to 
 This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary in `apps.yaml` for your charger sensor.<BR>
 Unlike **car_charging_energy** this is display only - it has no effect at all on the Predbat plan. When it is set:
 
-- the [web interface](web-interface.md) power flow diagram gains a Car showing what the charger is drawing, and the House figure becomes the household load with the car charging subtracted from it
+- the [web interface](web-interface.md) power flow diagram gains a Car showing what the charger is drawing.
+What the Car is drawn as being fed from follows **switch.predbat_car_energy_reported_load**: with it on (the default) your charger sits inside the house CT clamp,
+so the Car hangs off the House and its power is subtracted from the House figure to stop the car being counted twice;
+with it off the charger is outside the clamp and was never part of your house load, so the Car hangs off the Grid instead and the House figure is left alone
 - Predbat publishes a **predbat.car_charging_power** sensor (in kW) which you can graph or use in your own automations
 
 Like car_charging_energy it can be a list of sensors, one per line, if you have more than one charger - they are added together:
@@ -119,9 +122,8 @@ If you are on the Octopus Intelligent Tariff set the following entries in `apps.
 
 - **octopus_slot_low_rate** - Default is `true`, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If `false` the existing rates only will be used which is only suitable for tariffs other than IOG.
 
-- **octopus_slot_max** - Default is 48 (disabled). Sets the maximum number of 30-minute cheap rate slots per 24-hour period.
-Octopus Intelligent users may be from March 2026 limited to 6 hours of cheap charging per day. Slots beyond this limit will use standard rates.
-It's recommended you set this to 12 (for 6 hours) once Octopus enforce this Octopus Intelligent limit.
+- **octopus_slot_max** - Sets the maximum number of 30-minute cheap rate slots per 24-hour period. Slots beyond this limit will use standard rates.
+If unset, Predbat defaults this to 12 (6 hours) automatically for tariffs that Octopus enforces the 6-hour Intelligent cap on (tariff codes containing `IOG-SMB`), and to 48 (disabled) for other tariffs such as the older `INTELLI-VAR`. Set this explicitly to override the automatic default in either direction.
 
 If you are using Octopus-led charging with the [Octopus Energy integration](energy-rates.md#octopus-energy-home-assistant-integration):
 

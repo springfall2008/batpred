@@ -1247,6 +1247,62 @@ def _test_missing_cost_today_history(my_predbat, failed):
     return failed
 
 
+def _test_carbon_yesterday(my_predbat, failed):
+    """Test: with carbon_enable on, carbon_yesterday is read back from predbat.carbon_today's
+    own history (#2830) the same way cost_yesterday reads predbat.cost_today, and published as
+    predbat.carbon_yesterday. With carbon_enable off, neither is computed nor published."""
+    print("calculate_yesterday: Test - carbon_yesterday read back from carbon_today history")
+    now_utc = _setup_base(my_predbat)
+    my_predbat.carbon_enable = True
+
+    carbon_hist = _make_constant_history(456.0, now_utc)
+    base_history = _make_history_mock(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
+
+    def _get_history_wrapper(entity_id, days=30, required=True, tracked=True):
+        if entity_id == my_predbat.prefix + ".carbon_today":
+            return carbon_hist
+        return base_history(entity_id, days=days, required=required, tracked=tracked)
+
+    captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
+    my_predbat.get_history_wrapper = _get_history_wrapper
+
+    my_predbat.calculate_yesterday()
+
+    if my_predbat.carbon_yesterday != 456.0:
+        print("ERROR: carbon_yesterday should be 456.0, got {}".format(my_predbat.carbon_yesterday))
+        failed = True
+
+    entity_id = my_predbat.prefix + ".carbon_yesterday"
+    state = my_predbat.get_state_wrapper(entity_id)
+    if state != 456.0:
+        print("ERROR: entity {} should be 456.0, got {}".format(entity_id, state))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+
+    # Now with carbon_enable off - carbon_yesterday must not be recomputed from the (still
+    # present) mock history, and the entity must not be published.
+    my_predbat.carbon_enable = False
+    my_predbat.carbon_yesterday = 0.0
+    captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
+    my_predbat.get_history_wrapper = _get_history_wrapper
+
+    my_predbat.calculate_yesterday()
+
+    if my_predbat.carbon_yesterday != 0.0:
+        print("ERROR: carbon_yesterday should stay 0.0 with carbon_enable off, got {}".format(my_predbat.carbon_yesterday))
+        failed = True
+    if my_predbat.get_state_wrapper(entity_id) is not None:
+        print("ERROR: entity {} should not be published with carbon_enable off".format(entity_id))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
 def _test_yesterday_slot_is_exporting(my_predbat, failed):
     """Test: yesterday_slot_is_exporting() recognises Cross-charging as export activity.
 
@@ -1298,6 +1354,7 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)
     failed = _test_soc_kw_h0_fallback(my_predbat, failed)
     failed = _test_missing_cost_today_history(my_predbat, failed)
+    failed = _test_carbon_yesterday(my_predbat, failed)
     failed = _test_yesterday_slot_is_exporting(my_predbat, failed)
     failed = _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed)
 

@@ -1513,7 +1513,7 @@ async def test_write_setting_from_event(my_predbat):
     entity_id = f"switch.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_enable"
     await solax_api.switch_event(entity_id, "turn_on")
 
-    if solax_api.controls[test_plant_id]["charge"]["enable"] != True:
+    if solax_api.controls[test_plant_id]["charge"]["enable"] is not True:
         print(f"**** ERROR: Charge enable not set to True ****")
         failed = True
     else:
@@ -1522,7 +1522,7 @@ async def test_write_setting_from_event(my_predbat):
     # Test 8: Update charge enable (switch - turn_off service)
     await solax_api.switch_event(entity_id, "turn_off")
 
-    if solax_api.controls[test_plant_id]["charge"]["enable"] != False:
+    if solax_api.controls[test_plant_id]["charge"]["enable"] is not False:
         print(f"**** ERROR: Charge enable not set to False ****")
         failed = True
     else:
@@ -1610,7 +1610,7 @@ async def test_write_setting_from_event(my_predbat):
     entity_id = f"switch.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_export_enable"
     await solax_api.switch_event(entity_id, "turn_on")
 
-    if solax_api.controls[test_plant_id]["export"]["enable"] != True:
+    if solax_api.controls[test_plant_id]["export"]["enable"] is not True:
         print(f"**** ERROR: Export enable not set to True ****")
         failed = True
     else:
@@ -1619,7 +1619,7 @@ async def test_write_setting_from_event(my_predbat):
     # Test 17: Update export enable (switch - toggle service)
     await solax_api.switch_event(entity_id, "toggle")
 
-    if solax_api.controls[test_plant_id]["export"]["enable"] != False:
+    if solax_api.controls[test_plant_id]["export"]["enable"] is not False:
         print(f"**** ERROR: Export enable not toggled to False ****")
         failed = True
     else:
@@ -1684,7 +1684,7 @@ async def test_fetch_controls(solax_api, test_plant_id):
     else:
         print("✓ Charge end_time fetched correctly (06:00:00)")
 
-    if charge_controls.get("enable") != True:
+    if charge_controls.get("enable") is not True:
         print(f"**** ERROR: Charge enable not fetched correctly. Expected True, got {charge_controls.get('enable')} ****")
         failed = True
     else:
@@ -1716,7 +1716,7 @@ async def test_fetch_controls(solax_api, test_plant_id):
     else:
         print("✓ Export end_time fetched correctly (19:00:00)")
 
-    if export_controls.get("enable") != False:
+    if export_controls.get("enable") is not False:
         print(f"**** ERROR: Export enable not fetched correctly. Expected False, got {export_controls.get('enable')} ****")
         failed = True
     else:
@@ -3280,7 +3280,7 @@ async def test_fetch_single_result(my_predbat):
     if result is None:
         print(f"**** ERROR: Expected result, got None ****")
         failed = True
-    elif result.get("success") != True:
+    elif result.get("success") is not True:
         print(f"**** ERROR: Result data mismatch ****")
         failed = True
     elif request_id != "req-789":
@@ -7841,7 +7841,7 @@ async def test_fetch_controls_value_conversion_main():
     if api3.controls[plant_id]["charge"]["start_time"] != "00:00":
         print(f"**** ERROR: Expected default start_time 00:00, got {api3.controls[plant_id]['charge']['start_time']} ****")
         failed = True
-    elif api3.controls[plant_id]["charge"]["enable"] != False:
+    elif api3.controls[plant_id]["charge"]["enable"] is not False:
         print(f"**** ERROR: Expected default enable False, got {api3.controls[plant_id]['charge']['enable']} ****")
         failed = True
     elif api3.controls[plant_id]["charge"]["target_soc"] != 100:

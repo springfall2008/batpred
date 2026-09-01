@@ -265,7 +265,7 @@ def test_adjust_charge_window(
         expect_data = [["dummy/setChargeSlot1", {"start": charge_start_time[0:5], "finish": charge_end_time[0:5]}]]
     else:
         expect_data = []
-    if prev_enable_charge != True:
+    if prev_enable_charge is not True:
         expect_data.append(["dummy/enableChargeSchedule", {"state": "enable"}])
 
     if json.dumps(expect_data) != json.dumps(rest_command):
@@ -317,6 +317,31 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
         expect_data = []
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
+        failed = True
+
+    return failed
+
+
+def test_adjust_reserve_device_bounds(test_name, ha, inv, prev_reserve, reserve, device_min, device_max, expect_reserve, reserve_min=4, reserve_max=100):
+    """
+    Test
+       inv.adjust_reserve(self, reserve) clamps its target against a component-published register
+       floor/ceiling (e.g. GE Cloud's "between:" validation rule surfaced onto the entity's min/max
+       attributes), rather than asking for a value the device will silently clamp-and-confirm to
+       something else forever (GH#4826)
+    """
+    failed = False
+    inv.reserve_percent = reserve_min
+    inv.reserve_min = reserve_min
+    inv.reserve_max = reserve_max
+
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    ha.dummy_items["number.reserve"] = {"state": prev_reserve, "min": device_min, "max": device_max}
+    inv.adjust_reserve(reserve)
+    if ha.get_state("number.reserve") != expect_reserve:
+        print("ERROR: Reserve should be {} got {}".format(expect_reserve, ha.get_state("number.reserve")))
         failed = True
 
     return failed
@@ -1465,7 +1490,7 @@ def test_charge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1505,7 +1530,7 @@ def test_charge_window_none_value(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1602,7 +1627,7 @@ def test_charge_window_rest_configured_but_no_data_yet(test_name, my_predbat, du
         return failed
 
     # Should set the same safe defaults as the "value is None" case
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1672,7 +1697,7 @@ def test_charge_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
         return True
 
     # Should set the same safe defaults as the REST case
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1749,7 +1774,7 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
         return True
 
     # Same safe defaults the discharge_start-is-None path already sets
-    if inv.discharge_enable_time != False:
+    if inv.discharge_enable_time is not False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
     # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
@@ -1844,7 +1869,7 @@ def test_discharge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.discharge_enable_time != False:
+    if inv.discharge_enable_time is not False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
     # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
@@ -1884,7 +1909,7 @@ def test_charge_window_invalid_format_time(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1924,7 +1949,7 @@ def test_discharge_window_invalid_format_time(test_name, my_predbat, dummy_items
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.discharge_enable_time != False:
+    if inv.discharge_enable_time is not False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
     # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
@@ -1966,7 +1991,7 @@ def test_discharge_window_none_value(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.discharge_enable_time != False:
+    if inv.discharge_enable_time is not False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
     # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
@@ -3239,6 +3264,15 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_reserve("adjust_reserve3", ha, inv, dummy_rest, 20, 100, reserve_max=100)
     failed |= test_adjust_reserve("adjust_reserve4", ha, inv, dummy_rest, 20, 100, 98, reserve_min=4, reserve_max=98)
     failed |= test_adjust_reserve("adjust_reserve5", ha, inv, dummy_rest, 50, 0, 0, reserve_min=0, reserve_max=100)
+    if failed:
+        return failed
+
+    # GH#4826: a device-published register floor above Predbat's requested target must be honoured
+    # so the write converges instead of retrying the unreachable target forever
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_min1", ha, inv, 5, 4, device_min=5, device_max=100, expect_reserve=5)
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_min2", ha, inv, 3, 4, device_min=5, device_max=100, expect_reserve=5)
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_max1", ha, inv, 10, 80, device_min=4, device_max=50, expect_reserve=50)
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_no_bounds", ha, inv, 4, 10, device_min=None, device_max=None, expect_reserve=10)
     if failed:
         return failed
 

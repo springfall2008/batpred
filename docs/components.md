@@ -11,6 +11,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Home Assistant History (ha_history)](#home-assistant-history-ha_history)
     - [Web Interface (web)](#web-interface-web)
     - [MCP Server (mcp)](#mcp-server-mcp)
+    - [AI Chat Agent (chat)](#ai-chat-agent-chat)
     - [GivEnergy Cloud Direct (gecloud)](#givenergy-cloud-direct-gecloud)
     - [GivEnergy Cloud Data (gecloud_data)](#givenergy-cloud-data-gecloud_data)
     - [Octopus Energy Direct (octopus)](#octopus-energy-direct-octopus)
@@ -185,12 +186,16 @@ Example usage in VSCode
 | Tool | What it returns or does |
 | ---- | ----------------------- |
 | `get_status` | Current system status - mode, SoC, live power figures |
-| `get_plan` | The current battery plan, with forecasts and costs |
+| `get_plan` | The current battery plan, with forecasts and costs. Returned as a markdown table with the same columns as the plan page, plus a legend describing each one |
 | `get_config` | Every Predbat setting, with its current value and its default |
 | `get_apps` | Your `apps.yaml` configuration, with credentials redacted |
-| `get_log` | Lines from `predbat.log`, filtered by level, search term and age |
+| `get_apps_config` | The current value of one `apps.yaml` key, with a credential-like value redacted |
+| `get_log` | Lines from `predbat.log`, filtered by level, search term, regular expression and time window |
 | `get_state` | Predbat's internal state variables - the same data a debug yaml carries |
 | `get_entities` | All Predbat entities and their states |
+| `search_entities` | Search *every* Home Assistant entity id with a regular expression, not just Predbat's own - requires `switch.predbat_ai_ha_state_enable` |
+| `get_entity_state` | The current state (and optionally attributes) of one Home Assistant entity - requires `switch.predbat_ai_ha_state_enable` |
+| `get_entity_history` | One Home Assistant entity's history over a time window, bucketed into fixed-width time slots - requires `switch.predbat_ai_ha_state_enable` |
 | `set_config` | Change a Predbat setting |
 | `set_plan_override` | Override the plan for one 30 minute period |
 
@@ -207,8 +212,48 @@ look wrong"*, or *"find the warnings in the last 24 hours of my log and explain 
 | -------- | ----------- |
 | `filter` | `all`, `info`, `warnings` (the default) or `errors` |
 | `search` | Only return lines containing this text, case-insensitive |
+| `pattern` | Only return lines matching this Python regular expression, case-insensitive |
 | `hours` | Only return lines written in the last N hours |
-| `max_lines` | How many lines to return - the most recent matches are the ones kept, but they come back oldest-first (default 500, maximum 5000) |
+| `start` | Only return lines at or after this point in time |
+| `end` | Only return lines at or before this point in time |
+| `max_lines` | How many lines to return - the most recent matches are the ones kept, but they come back oldest-first (default 200, maximum 5000) |
+| `line_number` | Return this one line in full, ignoring every other filter |
+| `context` | With `line_number`, also return this many lines either side |
+
+All of these narrow the result together rather than replacing one another, so
+`filter: errors` with `pattern: "inverter [12]"` returns only the errors that also mention those
+inverters.
+
+`start` and `end` each accept a date, a time, or both:
+
+| Value | Means |
+| ----- | ----- |
+| `2026-08-28` | As `start`, the beginning of that day; as `end`, the end of it - so `end: 2026-08-28` includes everything that happened that day |
+| `17:00` or `17:00:30` | That time today |
+| `2026-08-28 17:00` | Exactly that moment |
+
+`hours` still works and can be combined with `start`, in which case the narrower of the two wins.
+A line with no timestamp of its own - the second and later lines of a traceback - belongs to the
+entry above it, so a multi-line entry is kept or dropped as a whole.
+
+#### Keeping the response small enough to be useful
+
+`max_lines` bounds how many lines come back, not how big they are, and some Predbat log lines are
+enormous - a single Octopus GraphQL response is one 20KB line. Left unchecked, a few hundred of
+those made a tool result of nearly a megabyte, which overflowed the model's context and cost the
+assistant the rest of the conversation.
+
+So the response has three guards. Beyond `max_lines`, any single line longer than about a thousand
+characters is cut and marked with how much was left off, and the response as a whole stops at a
+total size budget - `truncated_reason` says which of the two ended it. A cut line still tells you
+its number, and passing that back as `line_number` returns it in full:
+
+```text
+2026-08-30 09:58:11: OctopusAPI: Fetched saving sessions... [+19069 chars, get_log line_number=26793]
+```
+
+Line numbers count from the start of the previous (rotated) log through the current one, so they
+stay valid as the log grows but not across a rotation.
 
 `get_state` exposes the same internal state a `predbat_debug.yaml` carries, but a variable at a
 time rather than as a 5MB file. Called with no arguments it returns every variable small enough
@@ -229,7 +274,210 @@ with `max_bytes`.
 keys are not sent to your AI provider; pass `masked: false` if you deliberately want the raw
 values. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
 return anything a debug dump would not - credentials, the Home Assistant interface, loaded
-secrets and the URL caches are not reachable through it at all.
+secrets and the URL caches are not reachable through it at all. `get_apps_config` uses the same
+credential check as `get_apps`, but with no `masked: false` escape hatch at all - there is no
+legitimate reason for an assistant to ever see one raw credential value, so it is simply never
+offered.
+
+`get_apps_config` and `set_apps_config` let an assistant read, and change, one `apps.yaml` setting
+at a time - either a top-level key or, using a dotted path such as `forecast_solar[0].azimuth`,
+one value inside a nested structure. Both halves accept the same paths, so the model can read back
+what it just wrote, and a path that does not exist is answered with the keys that do - see [`set_apps_config`](#available-tools-chat) below for the write side, which is
+chat-only.
+
+#### Reading Home Assistant state (mcp)
+
+Every other tool above reads *Predbat's own* entities and configuration. `search_entities`,
+`get_entity_state` and `get_entity_history` are different: they can read **any** entity in your
+Home Assistant install - presence sensors, device names, anything else in the state machine -
+not just the ones Predbat publishes itself. That is a materially larger disclosure to whichever
+third-party model is asking than everything else on this page, so all three are off by default
+and gated behind `switch.predbat_ai_ha_state_enable`. With the switch off, each tool still
+appears in the tool list but returns a clean failure naming the switch, rather than vanishing -
+so an assistant can tell you which switch to turn on instead of just failing silently. The
+switch is prefixed `ai_`, not `chat_`: it controls this for MCP as well as the Chat tab, since an
+MCP client is no less a third party than a chat model is.
+
+`search_entities` returns only `entity_id`, `state` and `last_changed` - never attributes, which
+can be bulky on a large install - capped at `limit` matches (default 50, maximum 200) with the
+true match count reported separately so a capped result is visibly capped.
+
+`get_entity_history` fetches one entity's history between `start` and `end` (ISO-8601
+timestamps, assumed UTC if no offset is given) and aggregates it into `bucket_minutes`-wide
+buckets (default 30). The lookback is capped at 30 days before `end`, and the bucket count is
+capped at 500 by pulling `end` in rather than widening the buckets - both are reported in the
+response (`lookback_clamped`, `range_truncated`) when they bite. Pass `attribute` to bucket a
+named attribute instead of the entity's state. Numeric data (including `on`/`off`/`true`/`false`,
+which map to 1/0) is bucketed as `min`/`max`/`mean`/`count`/`unavailable`; anything else is
+bucketed as `first`/`last`/`changes`, since a most-common value would hide a sensor that flipped
+once and stayed there. Which mode applies is decided once per request and reported as `mode`.
+
+---
+
+### AI Chat Agent (chat)
+
+**Can be restarted:** Yes
+
+#### What it does (chat)
+
+Adds a Chat tab to the web interface, backed by a large language model served through
+[OpenRouter](https://openrouter.ai). The model can call the same read-only tools the MCP server
+exposes, plus a handful of chat-only tools for searching Predbat's documentation and its own
+installed source code, and can propose the same two write actions MCP has - each one held for
+your approval before it runs when `switch.predbat_chat_confirm_writes` is on (the default). See
+[the Chat tab](web-interface.md#chat-view) for how to use it day to day.
+
+Each conversation's system prompt (your Predbat snapshot plus the agent's instructions) is
+captured once, when the conversation starts, and replayed byte-for-byte on every later turn rather
+than being rebuilt from live state each time. It is also sent with an explicit prompt-caching
+breakpoint. Together this means a provider that supports prompt caching only charges full price
+for that prompt on the first turn - later turns charge a fraction of it, since the cached portion
+is billed at a steep discount rather than as fresh input. The first turn itself costs slightly
+*more* than it otherwise would, because writing the prompt into the cache is itself a billed
+operation. A provider with no prompt-caching support simply ignores the breakpoint and is
+unaffected either way. Measured against `anthropic/claude-sonnet-5` on OpenRouter, with a roughly
+2,600-token system prompt: an uncached turn cost $0.005282, and a turn that hit the cache cost
+$0.000580 - about a ninth as much. Treat those figures as an illustration of the mechanism, not a
+guarantee - the actual saving depends on the model, the provider and the size of your own prompt.
+
+#### When to enable (chat)
+
+- You want a conversational way to ask about your Predbat setup, without running an MCP client
+- You are comfortable with log lines and configuration being sent to a third-party AI provider
+- You have (or are willing to create) an OpenRouter account and API key
+
+#### Security note (chat)
+
+***CAUTION*** The web UI has **no authentication** of its own. Anyone who can reach port 5052 can
+open the Chat tab, read every saved conversation, and spend your OpenRouter credit - the same
+caution about exposing the web/MCP port outside your home network applies here, more so.
+
+- Tool results - including log lines and configuration - are sent to OpenRouter, and on to
+  whichever provider serves the model you selected. `get_apps` always redacts credential-like
+  values before they leave; unlike MCP, chat cannot ask for the unmasked `masked: false` form.
+- Conversations are stored on disk and expire after `chat_expiry_days` of inactivity. Deleting a
+  conversation hides it immediately, but Predbat's storage layer has no delete operation -
+  deletion is a flag, not a removal - so **its stored copy remains readable to anyone with
+  filesystem access until it expires**.
+- The agent can read its own installed source (`search_source`, `read_source`), but the allowlist
+  is by file extension, not by directory: `apps.yaml`, `secrets.yaml`, `predbat.log` and cached
+  OAuth tokens can all sit in the same directory as the source being searched. `get_apps` and
+  `get_log` are the only routes to that content, and both redact and filter what they return.
+- `chat_web_search` costs roughly $0.001-0.015 per request. It is an OpenRouter-only plugin - if
+  the active provider is not OpenRouter it is not sent at all, and a warning is logged
+  once.
+- `fetch_url` can only reach a small allowlist of hosts (the Predbat docs site and GitHub). This
+  is deliberate, not a limitation to work around.
+- `search_entities`, `get_entity_state` and `get_entity_history` can read **any** Home Assistant
+  entity, not just Predbat's own - see [Reading Home Assistant state](#reading-home-assistant-state-mcp)
+  above. They sit behind `switch.predbat_ai_ha_state_enable`, which is on by default. That is a
+  materially larger disclosure than everything else on this page, so if you would rather the model
+  saw only Predbat's own data, this is the switch to turn off.
+
+#### Configuration Options (chat)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| Setting | Type | Default | Description |
+| ------- | ---- | ------- | ----------- |
+| `providers` | Dict | - | Named endpoints, each `{url, api_key, type, model}` - see [apps.yaml](apps-yaml.md#ai-chat-agent). Configuring one is what enables chat; there is no separate `chat_enable` setting. `model` sits on the provider rather than here, since a model id only means anything to the endpoint serving it |
+| `max_tokens` | Integer | 0 | Maximum tokens per completion; `0` leaves it to the model/provider's own default |
+| `max_tool_rounds` | Integer | 32 | Maximum model round trips (completions) within one turn before Predbat stops and asks you to continue. Every tool call the model makes inside one round trip still runs - this bounds round trips, not tool calls |
+| `max_history` | Integer | 0 | Maximum recent messages sent to the model each turn, trimmed at a user-message boundary so a tool call and its reply are never split apart. Bounds cost, not how much is stored. `0` means unlimited |
+| `max_conversations` | Integer | 20 | Conversations kept before the least recently updated are pruned |
+| `expiry_days` | Integer | 30 | Days of inactivity before a conversation's stored copy expires |
+| `turn_timeout` | Integer | 1800 | Seconds a whole turn may run, across every round trip |
+| `request_timeout` | Integer | 300 | Seconds one completion request may take |
+| `fetch_allowlist` | String list | docs site, `github.com`, `raw.githubusercontent.com` | Hosts `fetch_url` may reach |
+
+All of these live inside the single `chat:` block in `apps.yaml`, which is the component's only
+argument - the defaults above come from `CHAT_DEFAULTS` in `chat.py` rather than the component
+registry, so each sits beside the code that reads it.
+
+Three switches also control the chat agent. All three appear both under
+[Config](web-interface.md#config-view) and in the Chat tab's own footer, so you can change your
+mind about a permission without leaving the conversation:
+
+| Entity | Default | Description |
+| ------ | ------- | ----------- |
+| `switch.predbat_chat_confirm_writes` | On | Hold every `set_config`, `set_plan_override` and `set_apps_config` call for your Approve/Reject before it runs |
+| `switch.predbat_chat_web_search` | Off | Let the model search the wider web through OpenRouter's plugin - costs money per request, see above. The only one of the three that costs anything, and the only one off by default. Predbat's own `search_docs` does not go through it |
+| `switch.predbat_ai_ha_state_enable` | On | Let `search_entities`, `get_entity_state` and `get_entity_history` read Home Assistant state - see [Reading Home Assistant state](#reading-home-assistant-state-mcp) above. Unlike the other two, this is `ai_`-prefixed rather than `chat_`-prefixed: it also gates the MCP server, not just this tab |
+
+#### Available tools (chat)
+
+Thirteen tools are shared with the [MCP server](#mcp-server-mcp) - see
+[its tool table](#available-commands-mcp) above for what each one returns or does:
+
+`get_status`, `get_plan`, `get_config`, `get_apps`, `get_apps_config`, `get_log`, `get_state`,
+`get_entities`, `search_entities`, `get_entity_state`, `get_entity_history`, `set_config`,
+`set_plan_override`
+
+`search_entities`, `get_entity_state` and `get_entity_history` are the three that read arbitrary
+Home Assistant state rather than just Predbat's own, and are off by default behind
+`switch.predbat_ai_ha_state_enable` - see the Security note above and
+[Reading Home Assistant state](#reading-home-assistant-state-mcp) in the MCP section. The Chat
+tab's footer carries a live toggle for this switch, next to the model picker.
+
+`set_config` and `set_plan_override` are two of the tools that write. With
+`switch.predbat_chat_confirm_writes` on (the default), each one pauses in the transcript for your
+Approve or Reject before it runs, showing the tool name and the exact arguments the model wants to
+call it with. `set_apps_config`, below, is the third - and the only one of the three that is
+chat-only rather than shared with MCP.
+
+Six more tools only exist in chat:
+
+| Tool | What it returns or does |
+| ---- | ------------------------ |
+| `set_chat_title` | Sets the conversation's title - the agent calls this itself, early in a new conversation |
+| `search_docs` | Searches the published Predbat documentation, returning matching **sections** with an excerpt, a section id and its length (up to 10 results). Internal design documents under `superpowers/` are excluded |
+| `read_docs` | Reads one documentation section in full by its section id, paged at 8,000 characters. Served from the cached search index, so it needs no network call - and returns just that section rather than a whole page of navigation and unrelated content |
+| `search_source` | Searches Predbat's own installed source code - the exact version that is running - with a Python regular expression. Covers `.py`, `.cpp`, `.h`, `.hpp`, `.proto`, `.sh` and `.md` files only (up to 100 matches, five-second scan budget) |
+| `read_source` | Reads a numbered slice of one source file found by `search_source` (up to 400 lines at a time) |
+| `fetch_url` | Fetches a web page as text, restricted to the hosts in `fetch_allowlist` |
+| `set_apps_config` | Changes one `apps.yaml` key - see below |
+
+#### Changing apps.yaml from chat (chat)
+
+`set_apps_config` changes a single `apps.yaml` setting - the same file the
+[web apps.yaml editor](web-interface.md#apps-view) edits, through the same mechanism: it loads
+the file with `ruamel.yaml`, so your comments and formatting survive, and writes it back with only
+the one key changed.
+
+It is deliberately narrow:
+
+- **It can only change a key that already exists.** This is not a way to add new configuration -
+  ask a key that is not already in your `apps.yaml` and the tool refuses, the same way the web
+  editor does.
+- **It refuses any credential-like key outright** - anything matching the same `_key`, `password`,
+  `secret` or `token` heuristic `get_apps` masks. Neither the model nor an instruction hidden in
+  something it read (a fetched web page, a documentation search result) can use this tool to set
+  or swap an API key. The check runs on every part of a nested path, so
+  `forecast_solar[0].api_key` is refused just as `ha_key` is.
+- **It refuses the keys that decide where your credentials are sent** - `ha_url`,
+  `openrouter_base_url` and anything ending `_url`, `_host` or `_endpoint`. Guarding the
+  credential alone is not enough: repointing `ha_url` leaves `ha_key` untouched while sending it
+  to somewhere else entirely.
+- **It can change one value inside a nested structure**, using a path such as
+  `forecast_solar[0].azimuth` - the same dotted-path syntax the web editor uses. This is how you
+  change one roof's direction without rewriting the whole `forecast_solar` list. It matters for
+  more than convenience: credentials are masked when the model reads them, so if it wrote a whole
+  list back it would carry that mask into the file and overwrite the real key. Writing a
+  container whose credential has been replaced by the mask is refused for exactly that reason,
+  with an error pointing at the nested path instead.
+- **It checks the new value's type against `apps.yaml`'s schema** where the key has one, so a
+  value that would stop Predbat parsing its own configuration next start-up is refused before it
+  is written, not discovered after a restart.
+- **It backs up your `apps.yaml` to `apps.yaml.backup` first**, every time - the same safety net
+  the raw whole-file editor gives you, extended to this tool too.
+
+Because it is one of the three tools that write, `set_apps_config` is held for your Approve or
+Reject when `switch.predbat_chat_confirm_writes` is on (the default, see above) - and unlike the
+other two, the confirmation card shows the key's **current** value alongside the **proposed** one,
+so you can see the actual change rather than just the model's intent. It also warns you there,
+before you approve, that **saving restarts Predbat to apply the change**: the restart drops the
+chat's live connection and ends that turn abruptly, but your conversation is not lost - it is
+saved to Predbat's storage and is still there once Predbat has reconnected.
 
 ---
 

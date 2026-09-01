@@ -681,11 +681,24 @@ sequence:
     then:
       - stop: "No change — same action already applied, skipping API call"
   - variables:
-      start_seconds: "{{ (now() - now().replace(hour=0, minute=0, second=0, microsecond=0)).seconds }}"
-      tct_start: "{{ start_seconds if act == 'charge_start' else 0 }}"
-      tct_end: "{{ 39600 if act == 'charge_start' else 0 }}"      # 11:00:00
-      tdt_start: "{{ start_seconds if act == 'discharge_start' else 0 }}"
-      tdt_end: "{{ 86340 if act == 'discharge_start' else 0 }}"   # 23:59:00
+      # Convert HH:MM:SS time strings from Predbat sensors to seconds since midnight
+      charge_start_seconds: >-
+        {% set t = states('sensor.predbat_HC_0_charge_start_time').split(':') %}
+        {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+      charge_end_seconds: >-
+        {% set t = states('sensor.predbat_HC_0_charge_end_time').split(':') %}
+        {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+      discharge_start_seconds: >-
+        {% set t = states('sensor.predbat_HC_0_discharge_start_time').split(':') %}
+        {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+      discharge_end_seconds: >-
+        {% set t = states('sensor.predbat_HC_0_discharge_end_time').split(':') %}
+        {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+      # Set slot values based on action — zeroise inactive slots
+      tct_start: "{{ charge_start_seconds if act == 'charge_start' else 0 }}"
+      tct_end: "{{ charge_end_seconds if act == 'charge_start' else 0 }}"
+      tdt_start: "{{ discharge_start_seconds if act == 'discharge_start' else 0 }}"
+      tdt_end: "{{ discharge_end_seconds if act == 'discharge_start' else 0 }}"
   - action: hanchuess.device_control
     data:
       sn: YOURSERIAL
