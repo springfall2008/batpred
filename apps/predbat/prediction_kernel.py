@@ -739,6 +739,9 @@ def kernel_supported(pred, save, step):
     the Python engine falls back to for speed - so kernel runs are both faster and more accurate
     than a coarse-step Python run, never an approximation of what was asked for.
     """
+    if getattr(pred, "clipping_buffer_enable", False) and getattr(pred, "clipping_cost_weight", 0) > 0:
+        return False
+
     return not save and not pred.debug_enable and getattr(pred, "kernel_handle", 0) != 0
 
 
