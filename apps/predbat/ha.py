@@ -968,6 +968,8 @@ class HAInterface(ComponentBase):
                         continue
                     history.append(item)
             cursor = window_end
+            if cursor < end:
+                time.sleep(0.5)  # Backoff to avoid flooding HA SQLite and causing 502s
 
         return [history] if history else None
 
@@ -1125,37 +1127,47 @@ class HAInterface(ComponentBase):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        try:
-            if post:
-                if data_in:
-                    response = requests.post(url, headers=headers, json=data_in, timeout=TIMEOUT)
+        data = None
+        for attempt in range(4):  # 0, 1, 2, 3
+            try:
+                if post:
+                    if data_in:
+                        response = requests.post(url, headers=headers, json=data_in, timeout=TIMEOUT)
+                    else:
+                        response = requests.post(url, headers=headers, timeout=TIMEOUT)
                 else:
-                    response = requests.post(url, headers=headers, timeout=TIMEOUT)
-            else:
-                if data_in:
-                    response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
-                else:
-                    response = requests.get(url, headers=headers, timeout=TIMEOUT)
-            data = response.json()
-            self.api_errors = 0
-        except requests.exceptions.JSONDecodeError:
-            if not silent:  # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)
-                self.log("Warn: Failed to decode response {} from {}".format(response, url))
-                self.api_errors += 1
+                    if data_in:
+                        response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
+                    else:
+                        response = requests.get(url, headers=headers, timeout=TIMEOUT)
 
-            data = None
-        except (requests.Timeout, requests.exceptions.ReadTimeout):
-            self.log("Warn: Timeout from {}".format(url))
-            self.api_errors += 1
-            data = None
-        except requests.exceptions.ConnectionError as e:
-            if not silent:
-                self.log("Warn: Connection error from {}: {}".format(url, e))
-            self.api_errors += 1
-            data = None
+                if response.status_code in [502, 503, 504]:
+                    if not silent:
+                        self.log("Warn: {} from {}, retrying...".format(response.status_code, url))
+                    raise requests.exceptions.ConnectionError("{} Server Error".format(response.status_code))
+
+                data = response.json()
+                self.api_errors = 0
+                break
+            except requests.exceptions.JSONDecodeError:
+                if not silent:  # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)
+                    self.log("Warn: Failed to decode response {} from {}".format(response, url))
+                self.api_errors += 1
+            except (requests.Timeout, requests.exceptions.ReadTimeout):
+                self.log("Warn: Timeout from {}".format(url))
+                self.api_errors += 1
+            except requests.exceptions.ConnectionError as e:
+                if not silent:
+                    self.log("Warn: Connection error from {}: {}".format(url, e))
+                self.api_errors += 1
+            
+            if attempt < 3:
+                time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
 
         if self.api_errors >= 10:
-            self.log("Error: Too many API errors, stopping")
-            self.fatal_error_occurred()
+            self.log("Error: Too many API errors (>=10). Resting and resetting counter to avoid permanent fatal error and websocket drop.")
+            self.api_errors = 0
+            time.sleep(10)
+            # Intentionally NOT calling self.fatal_error_occurred() here to allow HA WebSocket to recover
 
         return data
