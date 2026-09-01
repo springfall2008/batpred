@@ -229,6 +229,12 @@ struct PkContext {
     int32_t iboost_on_export;
     int32_t has_rate_gas;
     int32_t has_iboost_plan;
+
+    // Clipping Buffer properties
+    int32_t clipping_buffer_enable;
+    double clipping_buffer_kwh;
+    double clipping_cost_weight;
+    const double *pv_forecast_peak;
 };
 
 // Per-scenario inputs; field order MUST match the ctypes Structure in prediction_kernel.py.
@@ -673,6 +679,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     double battery_cycle = 0;
     double metric_keep = 0;
     double metric = c->cost_today_sofar;
+    double clipping_penalty_total = 0;
     double carbon_g = c->carbon_today_sofar;
     double iboost_today_kwh = c->iboost_today;
     bool four_hour_rule = true;
@@ -804,6 +811,27 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double pv_now = pv_step[k];
         double load_yesterday = load_step[k];
 
+        // Clipping Buffer penalty - prediction.py:819
+        if (c->clipping_cost_weight > 0.0) {
+            if (c->clipping_buffer_enable || c->clipping_buffer_kwh > 0) {
+                // manual buffer logic not implemented in C++ (rare), we'll do the automatic pv_forecast_peak logic
+                double peak_pv = c->pv_forecast_peak[k];
+                double clipping_limit_step = c->inverter_limit / 60.0 * step;
+                if (clipping_limit_step > 0 && peak_pv > clipping_limit_step) {
+                    double potential_clip = peak_pv - clipping_limit_step;
+                    double battery_headroom = std::max(soc_max - soc, 0.0) * battery_loss;
+                    double max_charge_step = battery_rate_max_charge * battery_rate_max_scaling * step;
+                    double absorbable = std::min(battery_headroom, max_charge_step);
+                    double unmitigated_clip = std::max(potential_clip - absorbable, 0.0);
+                    if (unmitigated_clip > 0.0) {
+                        double clipping_penalty = unmitigated_clip * std::max(export_rate, 0.1) * c->clipping_cost_weight;
+                        metric += clipping_penalty;
+                        clipping_penalty_total += clipping_penalty;
+                    }
+                }
+            }
+        }
+        
         // Clip PV for AC-coupled inverters with a PV AC limit - prediction.py:664-668
         if (!inverter_hybrid && pv_ac_limit > 0 && pv_now > pv_ac_limit) {
             pv_now = pv_ac_limit;
@@ -1194,7 +1222,14 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid);
             if (total_inverted > inverter_limit) {
                 const double over_limit = total_inverted - inverter_limit;
+                double pv_ac_before = pv_ac;
                 pv_ac = std::max(pv_ac - over_limit * inverter_loss, 0.0);
+                if (c->clipping_cost_weight > 0.0 && (c->clipping_buffer_enable || c->clipping_buffer_kwh > 0.0)) {
+                    double pv_ac_no_loss = std::max(pv_ac_before - over_limit, 0.0);
+                    double penalty = (pv_ac_before - pv_ac_no_loss) * std::max(export_rate, 0.0) * c->clipping_cost_weight * 5.0;
+                    metric += penalty;
+                    clipping_penalty_total += penalty;
+                }
             }
         } else {
             const double total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid);
@@ -1212,7 +1247,13 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp);
         if (diff < 0 && std::fabs(diff) > export_limit) {
             const double over_limit = std::fabs(diff) - export_limit;
+            double pv_ac_before = pv_ac;
             pv_ac = std::max(pv_ac - over_limit, 0.0);
+            if (c->clipping_cost_weight > 0.0 && (c->clipping_buffer_enable || c->clipping_buffer_kwh > 0.0)) {
+                double penalty = (pv_ac_before - pv_ac) * std::max(export_rate, 0.0) * c->clipping_cost_weight * 5.0;
+                metric += penalty;
+                clipping_penalty_total += penalty;
+            }
         }
 
         // Adjust battery soc - prediction.py:1060-1064

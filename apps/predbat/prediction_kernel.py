@@ -135,6 +135,10 @@ class PkContext(ctypes.Structure):
         ("iboost_on_export", ctypes.c_int32),
         ("has_rate_gas", ctypes.c_int32),
         ("has_iboost_plan", ctypes.c_int32),
+        ("clipping_buffer_enable", ctypes.c_int32),
+        ("clipping_buffer_kwh", ctypes.c_double),
+        ("clipping_cost_weight", ctypes.c_double),
+        ("pv_forecast_peak", ctypes.POINTER(ctypes.c_double)),
     ]
 
 
@@ -532,6 +536,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
     pv = []
     pv10 = []
     pv90 = []
+    pv_peak = []
     temp_charge_cap = []
     temp_discharge_cap = []
     carbon = []
@@ -554,6 +559,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
         pv.append(pred.pv_forecast_minute_step[minute])
         pv10.append(pred.pv_forecast_minute10_step[minute])
         pv90.append(pred.pv_forecast_minute90_step[minute])
+        pv_peak.append(pred.pv_forecast_peak_step.get(minute, 0) if getattr(pred, 'pv_forecast_peak_step', None) else 0.0)
         # Pre-compute the temperature rate cap base (before the min against the max rate,
         # which the kernel applies per lookup) - mirrors utils.py find_battery_temperature_cap
         battery_temperature = pred.battery_temperature_prediction.get(minute, pred.battery_temperature)
@@ -580,7 +586,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
     charge_curve = [get_curve_value(pred.battery_charge_power_curve, percent, 1.0) for percent in range(101)]
     discharge_curve = [get_curve_value(pred.battery_discharge_power_curve, percent, 1.0) for percent in range(101)]
 
-    return (rate_import, rate_export, alert_keep, io_flag, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve)
+    return (rate_import, rate_export, alert_keep, io_flag, pv, pv10, pv90, pv_peak, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve)
 
 
 def create_kernel_context(pred, static_cache=None):
@@ -629,7 +635,7 @@ def create_kernel_context(pred, static_cache=None):
             static = (shape, build_static_context_arrays(pred, n_steps, minutes_now, num_cars))
             if static_cache is not None:
                 static_cache["arrays"] = static
-        (rate_import, rate_export, alert_keep, io_flag, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve) = static[1]
+        (rate_import, rate_export, alert_keep, io_flag, pv, pv10, pv90, pv_peak, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve) = static[1]
 
         ctx = PkContext()
         ctx.rate_import = double_array(rate_import)
@@ -720,6 +726,10 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_on_export = 1 if pred.iboost_on_export else 0
         ctx.has_rate_gas = 1 if pred.rate_gas else 0
         ctx.has_iboost_plan = 1 if pred.iboost_plan else 0
+        ctx.clipping_buffer_enable = 1 if getattr(pred, "clipping_buffer_enable", False) else 0
+        ctx.clipping_buffer_kwh = getattr(pred, "clipping_buffer_kwh", 0.0)
+        ctx.clipping_cost_weight = getattr(pred, "clipping_cost_weight", 0.0)
+        ctx.pv_forecast_peak = double_array(pv_peak)
 
         handle = lib.pk_context_create(ctypes.byref(ctx))
         if handle:
@@ -739,9 +749,6 @@ def kernel_supported(pred, save, step):
     the Python engine falls back to for speed - so kernel runs are both faster and more accurate
     than a coarse-step Python run, never an approximation of what was asked for.
     """
-    if getattr(pred, "clipping_buffer_enable", False) and getattr(pred, "clipping_cost_weight", 0) > 0:
-        return False
-
     return not save and not pred.debug_enable and getattr(pred, "kernel_handle", 0) != 0
 
 
