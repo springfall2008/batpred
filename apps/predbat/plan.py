@@ -1316,6 +1316,101 @@ class Plan:
             p90_signature = p50_signature
         self.pv_forecast_minute90_signatures = (p50_signature, p90_signature)
 
+    def calculate_clipping_limit(self):
+        """
+        Work out the effective clipping limit in kWh per minute.
+
+        The most restrictive of the configured constraints wins, matching the two ceilings the
+        prediction itself applies - inverter_limit caps total AC output, export_limit caps net grid
+        flow. A non-zero clipping_buffer_limit_override replaces both.
+        """
+        if self.clipping_buffer_limit_override:
+            return self.clipping_buffer_limit_override / MINUTE_WATT
+
+        limits = [limit for limit in (self.inverter_limit, self.export_limit) if limit and limit > 0]
+        return min(limits) if limits else 0.0
+
+    def calculate_clipping_buffer(self):
+        """
+        Work out how much battery headroom to hold back so that PV the inverter cannot pass through
+        is stored rather than clipped.
+
+        Unlike a plain "reserve N kWh" this is time-varying: it simulates the headroom actually
+        occupied minute by minute, letting the buffer drain back out into spare export capacity
+        between spikes, then takes the running maximum backwards so that a charge window is only
+        held down by clipping that is still ahead of it.
+
+        Sets self.clipping_limit, self.clipping_buffer_kwh (the peak, for reporting) and
+        self.clipping_buffer_forecast_kwh (absolute minute -> headroom still needed from then on).
+        """
+        self.clipping_buffer_forecast_kwh = {}
+        self.clipping_buffer_kwh = 0.0
+        self.clipping_limit = 0.0
+
+        if not self.clipping_buffer_enable:
+            return
+
+        self.clipping_limit = self.calculate_clipping_limit()
+        if self.clipping_limit <= 0:
+            self.log("Warn: Clipping buffer enabled but no inverter or export limit is set - buffer disabled")
+            return
+
+        # Size against the same stepped curve the planner simulates, so the headroom held back and the
+        # clipping the plan is scored on come from one forecast rather than two. Since #4870 those
+        # curves carry the cloud divergence model's intra-slot variance, which is what puts
+        # cloud-spike clipping into the forecast at all - a smooth half-hourly interpolation hides
+        # exactly the peaks a smoothing buffer exists to catch.
+        pv_step = self.pv_forecast_minute90_step if self.clipping_buffer_forecast == "pv_estimate90" else self.pv_forecast_minute_step
+
+        # Walk forward accumulating what the inverter cannot pass through, draining the buffer back
+        # out whenever there is spare capacity below the limit.
+        step_limit = self.clipping_limit * PREDICT_STEP
+        occupancy = 0.0
+        held = {}
+        for minute in range(0, self.forecast_minutes, PREDICT_STEP):
+            pv_step_kwh = pv_step.get(minute, 0.0)
+            excess = pv_step_kwh - step_limit
+            if excess > 0:
+                occupancy += excess * self.battery_loss
+            elif occupancy > 0:
+                spare = step_limit - pv_step_kwh
+                occupancy = max(occupancy - spare, 0.0)
+            held[minute] = occupancy
+
+        # Reverse running maximum: the headroom a slot must leave is the deepest the buffer still
+        # gets after it, not how full it happens to be at that moment.
+        needed = 0.0
+        for minute in range(self.forecast_minutes - PREDICT_STEP, -1, -PREDICT_STEP):
+            needed = max(needed, held.get(minute, 0.0))
+            if needed <= 0:
+                continue
+            capped = needed
+            if self.clipping_buffer_max_kwh > 0:
+                capped = min(capped, self.clipping_buffer_max_kwh)
+            capped = max(capped, self.clipping_buffer_min_kwh)
+            capped = min(capped, self.soc_max)
+            self.clipping_buffer_forecast_kwh[self.minutes_now + minute] = dp3(capped)
+            self.clipping_buffer_kwh = max(self.clipping_buffer_kwh, capped)
+
+        if self.clipping_buffer_kwh > 0:
+            self.log("Clipping buffer holding back up to {}kWh of {}kWh, limit {}kW from {}".format(dp2(self.clipping_buffer_kwh), dp2(self.soc_max), dp2(self.clipping_limit * 60), self.clipping_buffer_forecast))
+        else:
+            self.log("Clipping buffer enabled but no clipping forecast against a {}kW limit".format(dp2(self.clipping_limit * 60)))
+
+    def clipping_buffer_soc_max(self, minute):
+        """
+        The highest SoC a charge finishing at this minute may target, given the headroom the
+        clipping buffer still needs after it. Returns soc_max when the buffer is inactive.
+        """
+        if not self.clipping_buffer_forecast_kwh:
+            return self.soc_max
+
+        # Snap to the step grid the buffer was computed on, rounding up so a charge that ends
+        # mid-step is held to the headroom the step it lands in requires.
+        snapped = int(minute / PREDICT_STEP) * PREDICT_STEP
+        buffer_kwh = self.clipping_buffer_forecast_kwh.get(snapped, 0.0)
+        return max(self.soc_max - buffer_kwh, 0.0)
+
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
@@ -1484,6 +1579,10 @@ class Plan:
         self.pv_forecast_minute_step = pv_forecast_minute_step
         self.pv_forecast_minute10_step = pv_forecast_minute10_step
         self.pv_forecast_minute90_step = pv_forecast_minute90_step
+
+        # Work out any clipping-buffer headroom before the optimiser runs, so the charge search is
+        # bounded by it rather than being clamped afterwards
+        self.calculate_clipping_buffer()
 
         # Yesterday data
         if recompute and self.calculate_savings and publish:
@@ -1907,6 +2006,15 @@ class Plan:
         # Start the loop at the max soc setting
         if self.best_soc_max > 0:
             loop_soc = min(loop_soc, self.best_soc_max)
+
+        # Hold back headroom for PV the inverter could not otherwise pass through. Applied as a
+        # ceiling on the search rather than a clamp on the result, so the plan that gets scored is
+        # the plan that gets executed. With all_n the windows are set together, so the tightest
+        # ceiling of the group wins.
+        if self.clipping_buffer_forecast_kwh:
+            windows = all_n if all_n else [window_n]
+            clip_soc_max = min(self.clipping_buffer_soc_max(charge_window[n]["end"]) for n in windows)
+            loop_soc = min(loop_soc, clip_soc_max)
 
         # Create min/max SoC to avoid simulating SoC that are not going have any impact
         # Can't do this for anything but a single window as the winder SoC impact isn't known

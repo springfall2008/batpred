@@ -2828,6 +2828,11 @@ class Fetch:
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_min = self.get_arg("best_soc_min")
         self.best_soc_max = self.get_arg("best_soc_max")
+        self.clipping_buffer_enable = self.get_arg("clipping_buffer_enable")
+        self.clipping_buffer_forecast = self.get_arg("clipping_buffer_forecast")
+        self.clipping_buffer_min_kwh = self.get_arg("clipping_buffer_min_kwh")
+        self.clipping_buffer_max_kwh = self.get_arg("clipping_buffer_max_kwh")
+        self.clipping_buffer_limit_override = self.get_arg("clipping_buffer_limit_override")
         self.best_soc_keep = self.get_arg("best_soc_keep")
         self.best_soc_keep_weight = self.get_arg("best_soc_keep_weight")
         self.set_soc_minutes = self.plan_interval_minutes

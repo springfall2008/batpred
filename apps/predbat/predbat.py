@@ -407,6 +407,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.inverter_set_charge_before = True
         self.best_soc_min = 0
         self.best_soc_max = 0
+        self.clipping_buffer_enable = False
+        self.clipping_buffer_forecast = "pv_estimate90"
+        self.clipping_buffer_min_kwh = 0.0
+        self.clipping_buffer_max_kwh = 0.0
+        self.clipping_buffer_limit_override = 0
+        self.clipping_limit = 0.0
+        self.clipping_buffer_kwh = 0.0
+        self.clipping_buffer_forecast_kwh = {}
         self.best_soc_keep = 0
         self.best_soc_keep_weight = 0.5
         self.rate_min = 0
