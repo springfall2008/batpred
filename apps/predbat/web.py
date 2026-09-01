@@ -3330,6 +3330,23 @@ chart.render();
             load_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_power", 7, required=False))
             load_power = prune_today(load_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
 
+            # Car charging, and the house with it taken back out. load_power is whatever the inverter
+            # reports as house load, and on a charger inside the CT clamp that includes the car - while
+            # the ML forecast it is plotted against has the car subtracted out (car_charging_hold in
+            # load_ml_component). Comparing the two directly makes every charging session look like a
+            # forecast miss the model was never trying to make. Both series are shown rather than only
+            # the corrected one: the car draw is real and worth seeing, it just is not what the model
+            # is predicting. Absent when no charger is configured, in which case neither series is
+            # drawn and the chart is exactly as it was.
+            car_charging_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".car_charging_power", 7, required=False))
+            car_charging_power = prune_today(car_charging_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
+            load_power_no_car = {}
+            if car_charging_power:
+                for stamp, value in load_power.items():
+                    # Clamped at zero: the two readings come from different sensors on their own
+                    # cadences, so a momentary skew must not paint a negative house load
+                    load_power_no_car[stamp] = dp4(max(value - car_charging_power.get(stamp, 0), 0))
+
             # Get ML predicted load energy (cumulative) and convert to power (kW)
             load_ml_forecast_energy = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
             load_ml_forecast_power = {}
@@ -3371,6 +3388,8 @@ chart.render();
 
             series_data = [
                 {"name": "Load Power (Actual)", "data": load_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kW"},
+                {"name": "Load Power (Actual, less car)", "data": load_power_no_car, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#2ca02c", "unit": "kW"},
+                {"name": "Car Charging Power", "data": car_charging_power, "opacity": "0.6", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e377c2", "unit": "kW"},
                 {"name": "Load Power (ML Predicted Future)", "data": load_ml_forecast_power, "opacity": "0.5", "stroke_width": "3", "chart_type": "area", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kW"},
                 {"name": "Load Power ML History", "data": power_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#eb2323"},
                 {"name": "Load Power ML History +1h", "data": power_today_h1, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#716d63"},
