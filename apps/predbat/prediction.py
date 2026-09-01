@@ -177,6 +177,7 @@ class Prediction(PredictionBatch):
             self.clipping_buffer_kwh = clipping_buffer_kwh
             self.clipping_buffer_start = clipping_buffer_start
             self.clipping_buffer_end = clipping_buffer_end
+            self.clipping_buffer_enable = getattr(base, "clipping_buffer_enable", False)
             self.pv_forecast_peak_step = pv_forecast_peak_step
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
