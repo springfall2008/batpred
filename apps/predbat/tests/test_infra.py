@@ -990,6 +990,7 @@ def simple_scenario(
         prediction.iboost_running = iboost_running
         prediction.iboost_running_solar = iboost_running_solar
         prediction.iboost_running_full = iboost_running_full
+    prediction.final_metric = round(metric / 100.0, 2)
     metric = round(metric / 100.0, 2)
     final_soc = round(final_soc, 2)
     final_iboost = round(final_iboost, 2)
