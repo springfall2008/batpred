@@ -988,7 +988,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_export, c->temp_discharge_cap[k], c->discharge_curve, battery_rate_min) * battery_rate_max_scaling_discharge;
             discharge_rate_now_curve_step = discharge_rate_now_curve * step;
 
-            battery_draw = std::min(discharge_rate_now_curve_step, battery_to_min);
+            const double battery_to_discharge_min = std::max(soc - discharge_min, 0.0) * battery_loss_discharge;
+            battery_draw = std::min(discharge_rate_now_curve_step, battery_to_discharge_min);
             pv_ac = pv_now * inverter_loss_ac;
             pv_dc = 0;
 
