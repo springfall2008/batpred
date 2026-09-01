@@ -559,7 +559,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
         pv.append(pred.pv_forecast_minute_step[minute])
         pv10.append(pred.pv_forecast_minute10_step[minute])
         pv90.append(pred.pv_forecast_minute90_step[minute])
-        pv_peak.append(pred.pv_forecast_peak_step.get(minute, 0) if getattr(pred, 'pv_forecast_peak_step', None) else 0.0)
+        pv_peak.append(pred.pv_forecast_peak_step.get(minute, 0) if getattr(pred, "pv_forecast_peak_step", None) else 0.0)
         # Pre-compute the temperature rate cap base (before the min against the max rate,
         # which the kernel applies per lookup) - mirrors utils.py find_battery_temperature_cap
         battery_temperature = pred.battery_temperature_prediction.get(minute, pred.battery_temperature)

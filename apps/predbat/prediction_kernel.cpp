@@ -831,7 +831,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 }
             }
         }
-        
+
         // Clip PV for AC-coupled inverters with a PV AC limit - prediction.py:664-668
         if (!inverter_hybrid && pv_ac_limit > 0 && pv_now > pv_ac_limit) {
             pv_now = pv_ac_limit;
