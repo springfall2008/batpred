@@ -234,6 +234,7 @@ struct PkContext {
     int32_t clipping_buffer_enable;
     double clipping_buffer_kwh;
     double clipping_cost_weight;
+    double clipping_limit;
     const double *pv_forecast_peak;
 };
 
@@ -817,7 +818,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         if (c->clipping_cost_weight > 0.0) {
             // manual buffer logic not implemented in C++ (rare), we'll do the automatic pv_forecast_peak logic
             double peak_pv = c->pv_forecast_peak[k];
-            double clipping_limit_step = inverter_limit;  // already scaled to kWh/step at line 714
+            double clipping_limit_step = (c->clipping_limit > 0.0) ? (c->clipping_limit * (step / 60.0)) : 0.0;
             if (clipping_limit_step > 0 && peak_pv > clipping_limit_step) {
                 double potential_clip = peak_pv - clipping_limit_step;
                 double battery_headroom = std::max(soc_max - soc, 0.0) * battery_loss;
