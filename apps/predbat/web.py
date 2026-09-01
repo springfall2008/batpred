@@ -986,7 +986,7 @@ class WebInterface(ComponentBase):
         text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
-        text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all (.tgz)</a></td></tr>\n"
+        text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
         # The HA Companion app's embedded webview does not act on Content-Disposition: attachment,
         # so it renders these downloads inline instead of saving them - a client limitation with no
@@ -2954,10 +2954,25 @@ chart.render();
             return web.Response(content_type="text/html", text="No debug-history snapshots found", status=404)
 
         archive_bytes = debug_history.build_archive(named_snapshots)
+        # The trailing .dmp is load-bearing, not decoration. Browsers that unarchive downloads
+        # whose extension they recognise - on by default in more than one - turn a .tgz into a
+        # bare .tar on the way down, and that is fatal here twice over: .tar is not a file type
+        # GitHub accepts as an attachment, and a real 15-snapshot history is ~32MB expanded
+        # against a 25MB attachment limit, where the archive itself is under 5MB. Compression is
+        # doing essential work, so the download has to reach the user still compressed.
+        #
+        # There is no server-side way to decline the unarchiving - it keys on the extension, not
+        # on the content type or Content-Disposition, both of which are set correctly below and
+        # were not enough on their own. So the file is named with an extension those browsers
+        # leave alone and GitHub still accepts. The body is an ordinary gzip tarball and
+        # "tar xzf" reads it whatever it is called, so nothing needs renaming to open it.
         return web.Response(
-            content_type="application/gzip",
+            content_type="application/octet-stream",
             body=archive_bytes,
-            headers={"Content-Disposition": "attachment; filename=predbat_debug_history.tgz"},
+            headers={
+                "Content-Disposition": 'attachment; filename="predbat_debug_history.tgz.dmp"',
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     async def html_file_load(self, filename, also_file=None, as_file=None):

@@ -139,11 +139,31 @@ def test_web_debug_history_routes(my_predbat):
 
         print("Test: download-all bundles every retained snapshot into one archive")
         resp = asyncio.run(w.html_debug_history_download_all(FakeRequest()))
-        if resp.status != 200 or resp.content_type != "application/gzip":
-            print("  ERROR: expected a 200 gzip response from download-all, got status={} content_type={}".format(resp.status, resp.content_type))
+        if resp.status != 200:
+            print("  ERROR: expected a 200 response from download-all, got status={}".format(resp.status))
             failed = True
         if not resp.body or len(resp.body) == 0:
             print("  ERROR: expected a non-empty archive body")
+            failed = True
+
+        print("Test: download-all is served as opaque binary so browsers don't decompress it to a .tar")
+        if resp.content_type != "application/octet-stream":
+            print("  ERROR: a gzip content type gets the body decompressed on save by some browsers, leaving a .tar GitHub will not accept - got {}".format(resp.content_type))
+            failed = True
+        if resp.headers.get("X-Content-Type-Options") != "nosniff":
+            print("  ERROR: expected nosniff so the content type cannot be sniffed back to gzip, got {!r}".format(resp.headers.get("X-Content-Type-Options")))
+            failed = True
+        # Browsers that unarchive do it by extension, so a name ending .tgz arrives as a bare .tar - a type
+        # GitHub will not accept, at a size (~32MB for a real 15-snapshot history) over its 25MB
+        # limit. The trailing .dmp is what keeps the archive compressed on the way down.
+        disposition = resp.headers.get("Content-Disposition", "")
+        if not disposition.endswith('.tgz.dmp"'):
+            print("  ERROR: expected the filename to end .tgz.dmp so browsers leave it packed, got {!r}".format(disposition))
+            failed = True
+
+        print("Test: the archive body really is gzip, whatever content type it is served under")
+        if resp.body[:2] != b"\x1f\x8b":
+            print("  ERROR: expected a gzip magic number at the start of the archive body, got {!r}".format(resp.body[:2]))
             failed = True
 
     finally:
