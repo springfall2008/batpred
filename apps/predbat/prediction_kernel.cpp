@@ -296,6 +296,7 @@ struct PkBatchJob {
     const double *export_limits;
     const int32_t *export_start;
     const int32_t *export_end;
+    const int32_t *export_flags;
     double *soc_out; // optional, null to skip
 
     int32_t n_charge;
@@ -1441,6 +1442,7 @@ static void run_batch_job(const ContextStore *c, const PkBatchJob &job, PkBatchR
     scenario.export_limits = job.export_limits;
     scenario.export_start = job.export_start;
     scenario.export_end = job.export_end;
+    scenario.export_flags = job.export_flags;
     scenario.soc_out = job.soc_out;
     scenario.n_charge = job.n_charge;
     scenario.n_export = job.n_export;

@@ -197,6 +197,7 @@ class PkBatchJob(ctypes.Structure):
         ("export_limits", ctypes.POINTER(ctypes.c_double)),
         ("export_start", ctypes.POINTER(ctypes.c_int32)),
         ("export_end", ctypes.POINTER(ctypes.c_int32)),
+        ("export_flags", ctypes.POINTER(ctypes.c_int32)),
         ("soc_out", ctypes.POINTER(ctypes.c_double)),
         ("n_charge", ctypes.c_int32),
         ("n_export", ctypes.c_int32),
@@ -849,7 +850,7 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
 
     for index, job in enumerate(jobs):
         charge_start, charge_end, _ = window_arrays(job.charge_window)
-        export_start, export_end, _ = window_arrays(job.export_window)
+        export_start, export_end, export_flags = window_arrays(job.export_window)
         charge_limit = double_array(job.charge_limit)
         export_limits = double_array(job.export_limits)
         buffers.append((charge_limit, export_limits))
@@ -861,6 +862,7 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
         pk_job.export_limits = export_limits
         pk_job.export_start = export_start
         pk_job.export_end = export_end
+        pk_job.export_flags = export_flags
         pk_job.soc_out = None
         pk_job.n_charge = len(job.charge_window)
         pk_job.n_export = len(job.export_window)
