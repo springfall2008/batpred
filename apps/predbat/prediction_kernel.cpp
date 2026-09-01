@@ -368,7 +368,7 @@ static PkScratch &thread_scratch()
 // Deep-copied context storage so Python-side buffers can be freed after create
 struct ContextStore {
     std::vector<double> rate_import, rate_export, alert_keep;
-    std::vector<double> pv, load, pv10, load10, pv90, load90;
+    std::vector<double> pv, load, pv10, load10, pv90, load90, pv_forecast_peak;
     std::vector<double> temp_charge_cap, temp_discharge_cap;
     std::vector<int32_t> io_flag;
     std::vector<double> charge_curve, discharge_curve;
@@ -563,6 +563,7 @@ int64_t pk_context_create(const PkContext *in)
     store->load10.assign(in->load10, in->load10 + n);
     store->pv90.assign(in->pv90, in->pv90 + n);
     store->load90.assign(in->load90, in->load90 + n);
+    store->pv_forecast_peak.assign(in->pv_forecast_peak, in->pv_forecast_peak + n);
     store->temp_charge_cap.assign(in->temp_charge_cap, in->temp_charge_cap + n);
     store->temp_discharge_cap.assign(in->temp_discharge_cap, in->temp_discharge_cap + n);
     store->io_flag.assign(in->io_flag, in->io_flag + n);
@@ -586,6 +587,7 @@ int64_t pk_context_create(const PkContext *in)
     store->ctx.load10 = store->load10.data();
     store->ctx.pv90 = store->pv90.data();
     store->ctx.load90 = store->load90.data();
+    store->ctx.pv_forecast_peak = store->pv_forecast_peak.data();
     store->ctx.temp_charge_cap = store->temp_charge_cap.data();
     store->ctx.temp_discharge_cap = store->temp_discharge_cap.data();
     store->ctx.io_flag = store->io_flag.data();
