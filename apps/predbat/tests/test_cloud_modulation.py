@@ -15,16 +15,11 @@ assuming PV exactly blankets load. It is selected on per-array: pv_forecast_minu
 load array take it plain, pv_forecast_minute10_step takes it with flip=True so the 10% scenario
 diverges in antiphase.
 
-The phase was written as "int(...) + 1 if flip else 0", and a conditional expression binds looser
-than "+", so that is "(int(...) + 1) if flip else 0" - a constant 0 whenever flip is False. Every
-caller that did not pass flip therefore got no modulation at all, which is all of them except the
-PV10 one: metric_cloud_enable only ever perturbed the 10% scenario, and metric_load_divergence did
-nothing whatsoever. Nothing asserted that either knob had an effect, so the whole suite passed.
+Nothing previously asserted that either knob had an effect, so the whole suite passed while the
+model was inert for every caller but the PV10 one - see step_data_history() in fetch.py for why.
 """
 
-from const import PREDICT_STEP
-
-CLOUD_FACTOR = 0.2
+from const import CLOUD_FACTOR_PV10, PREDICT_STEP
 
 
 def _flat_forward_series(my_predbat, cloud_factor=None, flip=False, value=1.0):
@@ -34,19 +29,75 @@ def _flat_forward_series(my_predbat, cloud_factor=None, flip=False, value=1.0):
     return my_predbat.step_data_history(item, minutes_now, forward=True, cloud_factor=cloud_factor, flip=flip)
 
 
+def run_cloud_modulation_tests(my_predbat):
+    """Run every divergence-model test."""
+    failed = False
+    failed |= test_cloud_modulation(my_predbat)
+    failed |= test_cloud_modulation_non_flat(my_predbat)
+    return failed
+
+
+def _forward_series(my_predbat, item, cloud_factor=None, flip=False, load_baseline={}):
+    """Run step_data_history() forward over a caller-supplied series."""
+    return my_predbat.step_data_history(item, my_predbat.minutes_now, forward=True, cloud_factor=cloud_factor, flip=flip, load_baseline=load_baseline)
+
+
+def test_cloud_modulation_non_flat(my_predbat):
+    """The properties that matter on a series the model can actually distort.
+
+    On a flat series the model is exactly net-zero by construction - an on-step borrows
+    min(v, v_next) * cf and the next off-step repays all of it - so a flat fixture cannot see the
+    behaviour that matters. A trough shallower than the borrow can only repay part of it, which is
+    where the model stops conserving and where a load_baseline floor can be breached.
+    """
+    failed = False
+    print("**** Testing cloud/load divergence on a non-flat series ****")
+
+    minutes_now = my_predbat.minutes_now
+    horizon = my_predbat.forecast_minutes + 2 * PREDICT_STEP
+
+    # A high plateau with a narrow trough - the trough is far smaller than the borrow taken off the
+    # step before it, so it cannot repay in full
+    def value_at(minute):
+        return 0.02 if (minute - minutes_now) % (4 * PREDICT_STEP) == PREDICT_STEP else 1.0
+
+    item = {minute: value_at(minute) for minute in range(minutes_now, minutes_now + horizon)}
+    baseline = _forward_series(my_predbat, item)
+    modulated = _forward_series(my_predbat, item, cloud_factor=CLOUD_FACTOR_PV10)
+
+    print("Test: modulation never inflates the total")
+    total_before, total_after = sum(baseline.values()), sum(modulated.values())
+    if total_after > total_before + 1e-6:
+        print("  ERROR: total rose from {} to {} - the model may under-repay a borrow, but must never create energy".format(total_before, total_after))
+        failed = True
+
+    print("Test: no step is driven negative")
+    negative = [minute for minute, value in modulated.items() if value < 0]
+    if negative:
+        print("  ERROR: {} step(s) went negative, first at minute {}".format(len(negative), negative[0]))
+        failed = True
+
+    print("Test: the dynamic load baseline floor survives the subtract")
+    floor = 4.5
+    floored = _forward_series(my_predbat, item, cloud_factor=CLOUD_FACTOR_PV10, load_baseline={minute: floor for minute in item})
+    # Only where the floor was actually applied - the stepped series runs a plan interval past the
+    # supplied data, and those tail steps legitimately have no baseline
+    breached = [minute for minute, value in floored.items() if value < floor - 1e-6 and (minutes_now + minute) in item]
+    if breached:
+        print("  ERROR: {} step(s) fell below the load_baseline floor of {}, first at minute {} ({})".format(len(breached), floor, breached[0], floored[breached[0]]))
+        failed = True
+
+    return failed
+
+
 def test_cloud_modulation(my_predbat):
     """Verify the divergence model actually modulates, on both the plain and flipped arrays."""
     failed = False
     print("**** Testing cloud/load divergence modulation ****")
 
     baseline = _flat_forward_series(my_predbat)
-    plain = _flat_forward_series(my_predbat, cloud_factor=CLOUD_FACTOR)
-    flipped = _flat_forward_series(my_predbat, cloud_factor=CLOUD_FACTOR, flip=True)
-
-    print("Test: no cloud factor leaves the series untouched")
-    if _flat_forward_series(my_predbat, cloud_factor=0) != baseline:
-        print("  ERROR: cloud_factor of 0 changed the series")
-        failed = True
+    plain = _flat_forward_series(my_predbat, cloud_factor=CLOUD_FACTOR_PV10)
+    flipped = _flat_forward_series(my_predbat, cloud_factor=CLOUD_FACTOR_PV10, flip=True)
 
     print("Test: a cloud factor modulates the plain (non-flipped) series")
     # The regression: every caller that does not pass flip - the central PV forecast and every load
