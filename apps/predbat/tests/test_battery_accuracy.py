@@ -108,61 +108,64 @@ def run_battery_accuracy_tests(my_predbat):
     return failed
 
 
-def subtract_car_from_load(load_power, car_charging_power):
-    """The LoadMLPower chart's house-minus-car arithmetic, lifted out so it can be tested.
-
-    Mirrors web.py: subtract the car reading at the matching timestamp and clamp at zero. Kept in step
-    with the chart by test_load_power_less_car_matches_chart below, which reads the real source.
-    """
-    from utils import dp4
-
-    result = {}
-    if car_charging_power:
-        for stamp, value in load_power.items():
-            result[stamp] = dp4(max(value - car_charging_power.get(stamp, 0), 0))
-    return result
-
-
 def test_load_power_less_car(my_predbat):
-    """House load with the car taken out, for comparing against a forecast that excludes it.
+    """House load with the car taken out, matched on time rather than on exact timestamp.
 
     The inverter reports house load including anything inside the CT clamp, so a charger on that side
-    shows as a 7kW spike. The ML forecast has car charging subtracted (car_charging_hold), so plotting
-    the two against each other makes every charging session look like a forecast miss the model was
-    never attempting.
+    shows as a 7kW spike, while the ML forecast it is plotted against has car charging subtracted
+    (car_charging_hold). Plotting the two against each other makes every session look like a forecast
+    miss the model was never attempting.
+
+    The timestamps here are deliberately offset by a few seconds, because that is the real case: the
+    two entities are recorded by Home Assistant independently and prune_today() keys each result on
+    its own source timestamp. An earlier version of this test used identical keys, so it exercised the
+    arithmetic and not the alignment - and passed while the chart drew two identical lines.
     """
     print("  - test_load_power_less_car")
+    from web import subtract_series
+
     failed = False
+    base = my_predbat.midnight_utc + timedelta(hours=12)
 
-    load = {"t1": 8.0, "t2": 1.2, "t3": 5.0}
-    car = {"t1": 7.0, "t2": 0.0, "t3": 7.0}
-    out = subtract_car_from_load(load, car)
+    def stamp(seconds):
+        """A timestamp the given number of seconds after noon."""
+        return (base + timedelta(seconds=seconds)).isoformat()
 
-    if out.get("t1") != 1.0:
-        print("ERROR: 8kW load with 7kW of car should leave 1kW of house, got {}".format(out.get("t1")))
+    # Car samples land a few seconds off the load samples, as they do in production
+    load = {stamp(0): 8.0, stamp(300): 1.2, stamp(600): 5.0}
+    car = {stamp(3): 7.0, stamp(303): 0.0, stamp(597): 7.0}
+    out = subtract_series(load, car)
+
+    if len(out) != len(load):
+        print("ERROR: the corrected series should have one point per load sample, got {}".format(len(out)))
+        return True
+
+    # 8kW of load against the 7kW the car was drawing a moment earlier
+    if abs(out[stamp(600)] - 0) > 0.001:
+        print("ERROR: a car reading above the load reading should clamp to 0, got {}".format(out[stamp(600)]))
         failed = True
-    if out.get("t2") != 1.2:
-        print("ERROR: with the car idle the house figure is unchanged, got {}".format(out.get("t2")))
-        failed = True
-
-    # The two readings come from different sensors on their own cadences, so the car can briefly
-    # exceed the load reading. That must read as zero house load, never as negative power.
-    if out.get("t3") != 0:
-        print("ERROR: a car reading above the load reading should clamp to 0, got {}".format(out.get("t3")))
+    if abs(out[stamp(300)] - 1.2) > 0.001:
+        print("ERROR: with the car idle the house figure is unchanged, got {}".format(out[stamp(300)]))
         failed = True
     if any(value < 0 for value in out.values()):
         print("ERROR: the series must never go negative, got {}".format(out))
         failed = True
 
-    # A timestamp the car sensor never reported is treated as no car draw rather than dropped, so the
-    # corrected series stays the same length as the one it is drawn beside
-    partial = subtract_car_from_load({"t1": 3.0, "t9": 2.0}, {"t1": 1.0})
-    if partial.get("t9") != 2.0 or len(partial) != 2:
-        print("ERROR: a missing car sample should leave the load untouched, got {}".format(partial))
+    # Jitter either way is still the same moment: a car sample just after a load sample counts
+    after = subtract_series({stamp(0): 4.0}, {stamp(3): 3.0})
+    if abs(after[stamp(0)] - 1.0) > 0.001:
+        print("ERROR: a car sample 3s later is the same cycle and should be subtracted, got {}".format(after[stamp(0)]))
+        failed = True
+
+    # But a sample from far outside the cycle is not evidence of anything, or a car sensor that
+    # dropped out hours ago would keep being subtracted from every later point
+    stale = subtract_series({stamp(7200): 4.0}, {stamp(0): 3.0})
+    if abs(stale[stamp(7200)] - 4.0) > 0.001:
+        print("ERROR: a car sample two hours away must not be subtracted, got {}".format(stale[stamp(7200)]))
         failed = True
 
     # No charger configured: no series at all, so the chart is exactly as it was before
-    if subtract_car_from_load(load, {}):
+    if subtract_series(load, {}):
         print("ERROR: with no car data there should be no corrected series")
         failed = True
 
@@ -183,8 +186,8 @@ def test_load_power_less_car_matches_chart(my_predbat):
     with open(web_py) as handle:
         source = handle.read()
 
-    if "load_power_no_car[stamp] = dp4(max(value - car_charging_power.get(stamp, 0), 0))" not in source:
-        print("ERROR: web.py no longer computes the house-minus-car series the way this test assumes")
+    if "load_power_no_car = subtract_series(load_power, car_charging_power)" not in source:
+        print("ERROR: the LoadMLPower chart no longer builds its house-minus-car series with subtract_series()")
         failed = True
     for name in ('"Load Power (Actual, less car)"', '"Car Charging Power"'):
         if name not in source:

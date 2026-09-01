@@ -30,6 +30,7 @@ import shutil
 import html as html_module
 import urllib.parse
 import traceback
+import bisect
 import threading
 import io
 from io import StringIO
@@ -248,6 +249,57 @@ def resolve_group_unit_and_name(entity_id, dashboard_values, live_unit=None, liv
         unit = live_unit or ""
         friendly_name = live_friendly_name or ""
     return unit or "(no unit)", friendly_name or entity_id
+
+
+def subtract_series(base, subtract, max_gap_seconds=300):
+    """Subtract one time series from another, matching on nearest time rather than on exact timestamp.
+
+    The two series come from different entities, which Home Assistant records independently - their
+    samples land a moment apart and prune_today() keys each result on its own source timestamp, so a
+    dict lookup by key misses essentially every time and silently subtracts nothing, leaving two
+    identical lines on the chart.
+
+    Nearest rather than most-recent-at-or-before: both are published in the same cycle, so the skew
+    between them is jitter rather than a real time difference, and it falls either way. Taking only
+    the earlier sample would pair a load reading with a car value from the previous cycle whenever the
+    jitter went the wrong way - visible the moment the car stops, where a stale reading would wipe out
+    the whole house figure for one point.
+
+    Clamped at zero: the two sensors run on their own cadences, so one can momentarily exceed the
+    other, and that has to read as nothing left rather than as negative power.
+
+    Matching is bounded by max_gap_seconds, one publish cycle. Beyond that the nearest sample is not
+    evidence of anything - a car sensor that stopped reporting hours ago would otherwise keep being
+    subtracted from every later point, wiping out the house figure for as long as it stayed away.
+
+    Args:
+    - base: {timestamp: value} to subtract from
+    - subtract: {timestamp: value} to subtract, may be empty
+    - max_gap_seconds: how far a sample may be from a base point and still count
+
+    Returns:
+    - dict: same keys as base, or empty when there is nothing to subtract
+    """
+    if not base or not subtract:
+        return {}
+    points = sorted((str2time(stamp), value) for stamp, value in subtract.items())
+    times = [point[0] for point in points]
+    result = {}
+    for stamp, value in base.items():
+        when = str2time(stamp)
+        index = bisect.bisect_left(times, when)
+        candidates = []
+        if index < len(points):
+            candidates.append(points[index])
+        if index > 0:
+            candidates.append(points[index - 1])
+        other = 0
+        if candidates:
+            nearest = min(candidates, key=lambda point: abs((point[0] - when).total_seconds()))
+            if abs((nearest[0] - when).total_seconds()) <= max_gap_seconds:
+                other = nearest[1]
+        result[stamp] = dp4(max(value - other, 0))
+    return result
 
 
 class WebInterface(ComponentBase):
@@ -3340,12 +3392,7 @@ chart.render();
             # drawn and the chart is exactly as it was.
             car_charging_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".car_charging_power", 7, required=False))
             car_charging_power = prune_today(car_charging_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
-            load_power_no_car = {}
-            if car_charging_power:
-                for stamp, value in load_power.items():
-                    # Clamped at zero: the two readings come from different sensors on their own
-                    # cadences, so a momentary skew must not paint a negative house load
-                    load_power_no_car[stamp] = dp4(max(value - car_charging_power.get(stamp, 0), 0))
+            load_power_no_car = subtract_series(load_power, car_charging_power)
 
             # Get ML predicted load energy (cumulative) and convert to power (kW)
             load_ml_forecast_energy = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
