@@ -159,7 +159,11 @@ Figures of around 0p-2p are recommended, the default is 0p per kWh.
 **input_number.predbat_metric_battery_value_scaling** (_expert mode_) A percentage value that can be used to scale the value of the energy in the battery at the end of the plan.
 The battery value is accounted for in the optimisations at the lowest future import rate including charging and inverter losses.
 A value of 1.0 (the default) means no change to this, while lower than 1.0 means to value future battery levels less,
-greater than 1.0 will value it more (and hence hold more charge at the end of the plan).
+greater than 1.0 will value it more (and hence hold more charge at the end of the plan).<BR>
+_NB: Take care reducing this below 1.0 if your export rate is close to your cheapest import rate._ Predbat only holds charge rather than exporting it while
+the stored energy is worth more than exporting it would earn. That margin is narrow on a flat export tariff - for example a 10.54p cheapest import against a
+12p export leaves only about 1%, so any value below roughly 0.99 makes Predbat export the battery whenever it can, even though the round trip actually loses
+money. If you see exports you cannot explain, check this setting is at its default before looking elsewhere (see issue #4840).
 
 **input_number.predbat_metric_battery_value_export_scaling** (_expert mode_) Discounts that end-of-plan battery value when you would not be able to sell
 the surplus for what it cost to buy. Valuing the battery at the lowest future import rate assumes the energy can always be redeployed, which holds while
@@ -874,6 +878,8 @@ This file contains a full export of your current Predbat config and is extremely
 
 Predbat automatically turns this switch back Off after 2 hours if it's still on, to bound the raw disk writes it triggers if left on by accident - if you need a longer debug session than that, you'll need to turn it back On again.
 
+**Note:** The **Create**/**Download** links on the web interface's **Debug** panel (including `predbat_debug.yaml`, `predbat.log`, and the debug history `.tgz`) only work from a web browser. The HA Companion app's built-in browser does not save files when you tap them - it just displays the raw content on screen instead. If you're on the Companion app, browse to the `debug/` folder under your Predbat config directory directly (e.g. with the File editor or Samba add-on) and pick the file up from there instead.
+
 The following automation might be useful to automatically turn off Predbat debug mode sooner than that, after turning it on to capture the debug logs:
 
 ```yaml
@@ -914,6 +920,8 @@ Turning on `switch.predbat_debug_enable` only captures debug information from th
 - **switch.predbat_debug_history_force_capture** - turn this on to trigger an immediate snapshot rather than waiting for the next scheduled one, useful from an automation that has just spotted something worth investigating. Predbat resets the switch back off itself once the snapshot has been taken, and still takes the snapshot even if `debug_history_enable` is off.
 
 Retained snapshots can all be downloaded together as a single `.tgz` archive from a link on the web interface's dashboard **Debug** panel, or individually from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
+
+Each snapshot is written as a plain `predbat_debug_<timestamp>.yaml` file into the same `debug/` folder as the `switch.predbat_debug_enable` output described above - useful in its own right (a full rolling history sitting on disk, not just what the switch happened to catch), and it's the way to get a snapshot to attach to a GitHub issue from the HA Companion app, where the `.tgz`/single-file download links above don't work (see the note above). These files are pruned in step with the ring buffer itself, so there are never more of them on disk than `debug_history_count` snapshots.
 
 ## Updating Predbat
 

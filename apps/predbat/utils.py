@@ -16,12 +16,14 @@ dictionaries, time string parsing, data filtering/pruning, rounding,
 and historical data extraction from incrementing energy counters.
 """
 
+import re
 import array
 import os
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 import copy
+import json
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -40,6 +42,10 @@ SECRET_KEY_SUBSTRINGS = ("_key", "password", "secret", "token")
 # token rather than the token itself. An expiry time is exactly what you want to see when
 # debugging "my cloud integration stopped working", so keep it readable.
 SECRET_KEY_EXEMPT_SUFFIXES = ("_expires_at", "_expires", "_expiry", "_expiration", "_birth")
+
+# What a redacted credential is replaced with. Named because find_redacted_secret_overwrite()
+# has to recognise it coming back in on a write, so the writer and the redactor must agree.
+SECRET_MASK = "xxx"
 
 # Use datetime.fromisoformat in str2time rather than strptime, set False to revert to strptime
 STR2TIME_USE_FROMISOFORMAT = True
@@ -148,14 +154,33 @@ def is_secret_key(key):
     return any(substring in key_lower for substring in SECRET_KEY_SUBSTRINGS)
 
 
+def _mask_secrets_in_place(value):
+    """
+    Redact credential-like keys anywhere inside an already-copied structure, in place.
+    """
+    if isinstance(value, dict):
+        for key in value:
+            if is_secret_key(key):
+                value[key] = SECRET_MASK
+            else:
+                _mask_secrets_in_place(value[key])
+    elif isinstance(value, list):
+        for entry in value:
+            _mask_secrets_in_place(entry)
+
+
 def mask_secret_args(args):
     """
     Return a deep copy of an apps.yaml-style args dict with credential-like keys redacted.
+
+    Recurses through nested dicts and lists rather than checking only top-level names. apps.yaml
+    routinely nests credentials one level down - the shipped template documents
+    forecast_solar as a list of dicts each carrying its own api_key - and 'forecast_solar'
+    matches none of SECRET_KEY_SUBSTRINGS, so a top-level-only pass hands that key over intact.
+    That matters because everything this redacts is on its way to a third-party model.
     """
     masked = copy.deepcopy(args)
-    for key in masked:
-        if is_secret_key(key):
-            masked[key] = "xxx"
+    _mask_secrets_in_place(masked)
     return masked
 
 
@@ -299,6 +324,187 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             last_time = timekey
             prev_value = data[key]
     return results
+
+
+def is_data_numerical(history, attribute=None):
+    """
+    Check if history data is numerical (supports both state and attribute checking)
+    Returns True if at least 10% of values are numeric or boolean
+    """
+    count_nums = 0
+    count_total = 0
+
+    if history and len(history) >= 1:
+        for item in history[0]:
+            if attribute:
+                # Check attribute value
+                attr_value = item.get("attributes", {}).get(attribute, None)
+                if attr_value is None:
+                    continue
+                value = str(attr_value)
+            else:
+                # Check state value
+                value = item.get("state", None)
+                if value is None:
+                    continue
+                value = str(value)
+
+            if value.lower() in ["on", "off", "true", "false"]:
+                count_nums += 1
+            else:
+                try:
+                    float(value)
+                    count_nums += 1
+                except (ValueError, TypeError):
+                    pass
+            count_total += 1
+
+    if count_total > 0 and (count_nums / count_total) >= 0.1:
+        return True
+    elif count_total == 0:
+        return True
+    return False
+
+
+# The top-level key apps.yaml wraps its whole Predbat configuration section in. Shared between
+# web.py's apps.yaml editor and the AI tool layer (agent_tools.py/chat_tools.py) so both read and
+# write the same section under one name - moved here, alongside update_nested_yaml_value() below,
+# for the same reason is_data_numerical() was: the tool layer must not import from web.py (#4768).
+ROOT_YAML_KEY = "pred_bat"
+
+# Line width for any dump of apps.yaml. ruamel defaults to 80, which folds a long plain scalar onto
+# a following, more-indented line - so rewriting the file to change one setting silently re-wraps
+# every long value in it, API keys included. That still parses back to the same string, but it
+# turns a one-line edit into a diff across the whole file and leaves credentials looking mangled.
+# Set high enough that nothing Predbat writes ever wraps.
+YAML_DUMP_WIDTH = 4096
+
+
+def parse_yaml_path(path):
+    """
+    Split a dot-notation apps.yaml path into its segments, with "[n]" indexes as their own entry.
+
+    "forecast_solar[0].azimuth" becomes ["forecast_solar", "[0]", "azimuth"]. Shared by
+    update_nested_yaml_value(), resolve_nested_yaml_value() and set_apps_config()'s guards so all
+    three agree on what a path means - a second copy of this parsing would eventually disagree
+    with the writer about which segment is the leaf, which is the segment the credential checks
+    depend on.
+    """
+    keys = []
+    for component in path.split("."):
+        # Split every bracket group into its own key, so a directly nested index - "foo[0][1]" -
+        # becomes "foo", "[0]", "[1]". The earlier version split on the first "[" and unpacked
+        # into two, which raised ValueError on any path with more than one index rather than
+        # returning anything: reachable from set_apps_config, where it surfaced as a failed tool
+        # call against the user's real configuration. Matches WebInterface._split_yaml_path, which
+        # arrived at the same algorithm independently for the apps.yaml editor.
+        for token in re.split(r"(\[[^\[\]]*\])", component):
+            if token:
+                keys.append(token)
+    return keys
+
+
+def resolve_nested_yaml_value(data, path):
+    """
+    Return the value a dot-notation path points at, raising KeyError if any segment is missing.
+
+    The read-only twin of update_nested_yaml_value(), so a caller can confirm a path exists and
+    read its current value *before* taking a backup and writing - update_nested_yaml_value raises
+    part-way through otherwise, after the caller has already committed to the write.
+    """
+    keys = parse_yaml_path(path)
+    current = data
+    for key in keys:
+        if key.startswith("[") and key.endswith("]"):
+            index = int(key[1:-1])
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError("Index '{}' out of range in path '{}'".format(index, path))
+            current = current[index]
+        else:
+            try:
+                contains = key in current
+            except TypeError:
+                contains = False
+            if not contains:
+                raise KeyError("Key '{}' not found in path '{}'".format(key, path))
+            current = current[key]
+    return current
+
+
+def find_redacted_secret_overwrite(previous_value, new_value):
+    """
+    Return the name of a credential a write would replace with the redaction placeholder.
+
+    get_apps_config redacts credentials to "xxx", so a model that reads a container, edits one
+    field and writes the whole thing back would store the literal "xxx" over a live key - the
+    read-modify-write round trip silently destroys the credential it was careful not to read.
+    Returns None when nothing is at risk, so the caller can refuse and point at the nested path
+    instead of the container.
+    """
+    if isinstance(new_value, dict) and isinstance(previous_value, dict):
+        for key, item in new_value.items():
+            if is_secret_key(key) and item == SECRET_MASK and previous_value.get(key) not in (None, SECRET_MASK):
+                return key
+            found = find_redacted_secret_overwrite(previous_value.get(key), item)
+            if found:
+                return found
+    elif isinstance(new_value, list) and isinstance(previous_value, list):
+        for index, item in enumerate(new_value):
+            if index < len(previous_value):
+                found = find_redacted_secret_overwrite(previous_value[index], item)
+                if found:
+                    return found
+    return None
+
+
+def update_nested_yaml_value(data, path, value):
+    """
+    Update a nested value in YAML data using a dot-notation path, e.g. "battery_charge_low.normal"
+    or a plain top-level key such as "num_inverters" (a path with no dots).
+
+    Shared by web.py's apps.yaml batch editor (WebInterface.html_apps_post) and the chat agent's
+    set_apps_config tool (chat_tools.py) - moved here so the tool layer can reuse it without
+    importing from web.py (#4768). Raises KeyError when a key in the path - including the final
+    one - is not already present, which is what gives both callers their "a key must already exist
+    to be changed" rule for free, rather than each having to check it separately.
+    """
+    keys = parse_yaml_path(path)
+
+    current = data
+
+    # Navigate to the parent of the target value
+    for key in keys[:-1]:
+        if key.startswith("[") and key.endswith("]"):
+            # Handle numerical index in square brackets
+            index = int(key[1:-1])
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(f"Index '{index}' out of range in path '{path}'")
+            current = current[index]
+        elif key in current:
+            current = current[key]
+        else:
+            raise KeyError(f"Key '{key}' not found in path '{path}'")
+
+    # Set the final value
+    key = keys[-1]
+    if key.startswith("[") and key.endswith("]"):
+        # Handle numerical index in square brackets
+        index = int(key[1:-1])
+        if not isinstance(current, list) or index >= len(current):
+            raise KeyError(f"Index '{index}' out of range in path '{path}'")
+        current[index] = value
+    elif key in current:
+        current[key] = value
+    else:
+        # If final key is numerical try it as an integer
+        if key.isdigit():
+            key = int(key)
+            if key not in current:
+                raise KeyError(f"Final key '{key}' not found in path '{path}'")
+            else:
+                current[key] = value
+        else:
+            raise KeyError(f"Final key '{key}' not found in path '{path}'")
 
 
 def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False, is_numerical=True):
@@ -1556,3 +1762,75 @@ def find_charge_rate(
         return best_rate, best_rate_real
     else:
         return max_rate, max_rate_real
+
+
+CDN_BLOCK_MARKERS = ("cloudfront", "request blocked", "the request could not be satisfied")
+HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
+# Every Kraken-based provider mints its JWT through the same CDN-fronted endpoint, so an
+# edge block can catch the mint as well as the queries. Unlike a query the mint has no cached
+# result to fall back on: once the JWT expires every authenticated call needs a new one, so
+# without a backoff a component re-mints on every poll and keeps hammering an endpoint that
+# is already refusing it. Back off exponentially instead, capped so a block that lifts is
+# still picked up within the hour.
+TOKEN_MINT_BACKOFF_BASE_SECONDS = 300
+TOKEN_MINT_BACKOFF_MAX_SECONDS = 3600
+# Bound the exponent so a long block cannot grow 2 ** block_count without limit; the delay
+# is capped well before this, so the clamp only stops the arithmetic running away.
+TOKEN_MINT_BACKOFF_MAX_DOUBLINGS = 16
+# While suppressed the mint makes no request and so logs nothing, which leaves a reader of a
+# short log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason
+# at most this often.
+TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS = 600
+
+
+def token_mint_backoff_seconds(block_count):
+    """Backoff delay in seconds for the block_count'th consecutive CDN block on a token mint.
+
+    Doubles per consecutive block from TOKEN_MINT_BACKOFF_BASE_SECONDS, capped at
+    TOKEN_MINT_BACKOFF_MAX_SECONDS so a block that lifts is still picked up within the hour.
+
+    Args:
+        block_count: Number of consecutive blocks so far, 1 for the first.
+
+    Returns:
+        int: Delay in seconds.
+    """
+    exponent = min(max(block_count - 1, 0), TOKEN_MINT_BACKOFF_MAX_DOUBLINGS)
+    return min(TOKEN_MINT_BACKOFF_BASE_SECONDS * (2**exponent), TOKEN_MINT_BACKOFF_MAX_SECONDS)
+
+
+def is_edge_block_body(text):
+    """Return True if a 403 body is positively identifiable as a CDN/WAF error page.
+
+    Kraken reports authentication problems as a JSON GraphQL error body (normally with
+    HTTP 200) or as a 401. A 403 carrying an HTML error page - e.g. CloudFront's
+    "Request blocked" - is edge rate limiting, not a credential problem, so the cached
+    token must be kept rather than discarded and immediately re-minted.
+
+    Two conditions must both hold: the body must not parse as JSON (anything the API
+    itself produces is JSON), and it must look like an HTML document or name a known CDN.
+    Matching on wording alone would misclassify a genuine JSON error that happens to say
+    something like "access denied", which would keep an invalid token forever - the same
+    permanent lockout this check exists to prevent, arrived at from the other direction.
+
+    Detection is deliberately conservative: a 403 we cannot identify as a CDN page keeps
+    the existing "refresh the token and retry" behaviour, which recovers genuinely revoked
+    tokens without needing a restart.
+
+    Args:
+        text: The raw response body.
+
+    Returns:
+        bool: True if the body carries a known CDN/WAF block signature.
+    """
+    if not isinstance(text, str) or not text:
+        return False
+    try:
+        json.loads(text)
+    except (ValueError, TypeError):
+        pass
+    else:
+        # A parseable JSON body came from the API, not from an edge appliance
+        return False
+    stripped = text.lstrip().lower()
+    return stripped.startswith(HTML_DOCUMENT_PREFIXES) or any(marker in stripped for marker in CDN_BLOCK_MARKERS)

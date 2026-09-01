@@ -38,8 +38,10 @@ The initial view is the Dash view which gives a summary of Predbat's status and 
 ![image](images/web-interface-dash-view.png)
 
 The power flow diagram shows the PV, battery, grid and house, with animated arrows whose speed reflects how much power is flowing.
-A car is also shown if you have set [car_charging_power](car-charging.md#configure-appsyaml-for-your-car-charging) in `apps.yaml` (this is automatic for the supported charger integrations);
-the car charging power is then subtracted from the House figure so that it shows the rest of your household load rather than counting the car twice.
+A car is also shown if you have set [car_charging_power](car-charging.md#configure-appsyaml-for-your-car-charging) in `apps.yaml` (this is automatic for the supported charger integrations).
+If **switch.predbat_car_energy_reported_load** is on (the default) then your charger sits inside the house CT clamp, so the car is drawn as being fed from the House
+and its power is subtracted from the House figure, which then shows the rest of your household load rather than counting the car twice.
+If the switch is off then the charger is outside the clamp and its power was never in your house load reading, so the car is drawn as being fed from the Grid and the House figure is shown as it is read.
 
 The Debug panel provides easy access to a number of files that are useful in diagnosing a problem and are usually required if you raise a [Predbat GitHub issue](https://github.com/springfall2008/batpred/issues):
 
@@ -126,6 +128,118 @@ Example PV chart:
 The Compare View provides access to Predbat's [Compare Energy Tariff feature](compare.md) which enables you compare what Predbat predicts it would cost you (or you'd gain from export) on different energy tariffs with your predicted load and solar generation.
 
 ![image](images/web-interface-compare-view.png)
+
+### Chat View
+
+The Chat tab gives you a conversational way to ask about your Predbat setup, backed by a large
+language model. That model can be a hosted one reached through
+[OpenRouter](https://openrouter.ai), or one running on your own machine through
+[Ollama](https://ollama.com) or anything else with an OpenAI-compatible API. Until a provider is
+configured the tab is still there, showing a banner offering to open **Settings** rather than
+vanishing without explanation.
+
+A banner across the top of the page is a standing reminder that tool results - including log
+lines and configuration - are sent to whichever provider you have configured, and on to whoever
+serves the model you choose; dismissing it persists in that browser (via `localStorage`) until its
+site data is cleared, not just for the current session. Read the
+[chat component's security note](components.md#security-note-chat) before enabling the feature -
+in particular, the web interface has no login of its own, so anyone who can reach it can use the
+chat and read every saved conversation.
+
+#### Finding your way around
+
+Across the top of the page are a **Settings** button, a **New chat** button, and the title of the
+conversation you are reading. Click the title to drop down the list of your saved conversations,
+newest first, each showing when it was last updated and its running cost; click one to switch to
+it, or the &#10005; beside it to delete it. The pencil next to the title renames the conversation
+you are in. Deleting hides a conversation immediately, but its stored copy is not removed - it
+remains on disk until it ages out after `chat_expiry_days` of inactivity, the same as any
+conversation you have not touched.
+
+Only one reply runs at a time across the whole installation - not just per conversation - so the
+composer locks itself while a reply is in progress, whichever conversation it belongs to, and a
+banner names the conversation that is busy.
+
+If the model wants to change a setting or override the plan, and
+`switch.predbat_chat_confirm_writes` is on (the default), it does not run immediately: a
+confirmation card appears in the transcript showing the tool name and the exact arguments it wants
+to call it with, and the turn waits for you to **Approve** or **Reject** it. Turn the switch off
+if you would rather the agent act without asking first.
+
+#### Settings
+
+**Settings** is where you tell Predbat which AI providers to use. Each one has a name of your
+choosing, a type (`openrouter`, `ollama`, `openai` or `local`), the URL of its endpoint, an API
+key where the provider needs one, and a default model. Choosing a type fills in the endpoint and a
+sensible default model for you, so adding a local Ollama is usually just picking `ollama` and
+saving.
+
+Pointing this at Ollama on another machine needs two things doing first - Ollama has to be told to
+listen on the network, and the URL has to name that machine rather than `localhost`. See
+[Reaching Ollama from Predbat](apps-yaml.md#reaching-ollama-from-predbat).
+
+**Fetch models** asks that endpoint what it serves and turns the model box into a searchable list,
+which works before the provider has been saved - so you can pick a real model while setting it up
+rather than saving blind and finding out afterwards. Only tool-capable models are offered: a model
+that cannot call tools cannot drive the agent at all, and would answer from its own guesswork
+rather than from your plan. If the endpoint cannot be reached the box stays free text and tells
+you why.
+
+**Save to apps.yaml** writes the
+lot into the `chat:` block of your `apps.yaml` and closes the dialog, putting you back on your
+conversation. Predbat watches that file, so a few seconds later it restarts to pick the change up.
+The Chat tab goes quiet for a moment and then reconnects on its own, and any reply that was in
+progress is cut short; a note above the transcript says so, and your conversations are saved and
+will still be there. Save stays greyed out until you actually change something, so
+closing a dialog you only looked at cannot restart Predbat for nothing.
+
+Switching between providers you have already set up is not done here - it is the dropdown next to
+the model box, described below. That writes nothing and restarts nothing.
+
+Your API keys are never sent to this page - a provider shows only whether a key is set, and
+leaving the key box empty when you edit one keeps the key already in the file, so changing a URL
+cannot wipe your credentials. See [AI Chat Agent](apps-yaml.md#ai-chat-agent) for the file format
+if you would rather edit it by hand.
+
+Below the providers are the agent's three permission toggles - **Confirm writes**, **Web search**
+and **HA state access**. They are the same switches as `switch.predbat_chat_confirm_writes`,
+`switch.predbat_chat_web_search` and `switch.predbat_ai_ha_state_enable` under
+[Config](#config-view), not a per-tab copy of them: a change here takes effect everywhere, which
+for HA state access includes the MCP server, and applies the moment you make it rather than
+waiting for the Save button. See the
+[chat component's switch table](components.md#ai-chat-agent-chat) for what each one allows.
+
+#### Choosing a provider and a model
+
+A dropdown at the bottom left names the provider that is answering - and so also names the
+endpoint the model list beside it came from. With more than one provider configured you can
+change it there, and it takes effect at once: nothing is written to `apps.yaml` and Predbat does
+not restart, because every provider is already in the file and which one answers is only a
+preference. Your choice is remembered across restarts. The model list is refetched when you
+switch, since the models on offer belong to the endpoint rather than to Predbat.
+
+A model search box beside it lets you choose a different model for that one
+conversation. Each result shows its price and context window - the price is US dollars per
+million tokens, input then output, so `$2/$10  1000k` means $2 per million tokens in, $10 per
+million out, with a one-million-token context. Models that cost nothing show `free`, and
+OpenRouter's routing models (`openrouter/auto` and similar) show `varies`, because what they cost
+depends on which model they route your request to. Click it and type to filter - OpenRouter offers
+several hundred tool-capable models, so it filters on both id and name rather than being a plain
+dropdown. Your choice is remembered per provider as the starting point for new conversations and
+survives a restart, so setting a provider's `model` in `apps.yaml` is optional; if you do set it,
+it is what new conversations use until you pick something else.
+
+Everything about the model is per provider, including a choice made inside one conversation. A
+model id only means anything to the endpoint serving it, so switching provider does not carry your
+OpenRouter model over to Ollama - it goes back to whatever you last chose on that provider, or to
+its default. If neither is available, the box says **Pick a model to start** rather than naming
+something the endpoint would reject. Switching back restores what you had. If the provider's catalogue cannot
+be fetched, only the configured model is offered.
+
+Beside it, Predbat shows the token usage and cost of the turn that just completed, the
+conversation's context size against the selected model's limit, and the running total cost for
+the whole conversation - the costs come from the provider's own reported pricing for the model in
+use, where it publishes any.
 
 ### Log View
 

@@ -513,7 +513,7 @@ CONFIG_ITEMS = [
         "type": "input_number",
         "min": 0,
         "max": 2.0,
-        "step": 0.1,
+        "step": 0.01,
         "unit": "*",
         "icon": "mdi:multiplication",
         "enable": "expert_mode",
@@ -1252,6 +1252,24 @@ CONFIG_ITEMS = [
         "type": "switch",
         "default": False,
         "reset_inverter_force": True,
+    },
+    {
+        "name": "chat_confirm_writes",
+        "friendly_name": "Chat confirm before changing settings",
+        "type": "switch",
+        "default": True,
+    },
+    {
+        "name": "chat_web_search",
+        "friendly_name": "Chat web search (costs per request)",
+        "type": "switch",
+        "default": False,
+    },
+    {
+        "name": "ai_ha_state_enable",
+        "friendly_name": "AI: allow reading Home Assistant state",
+        "type": "switch",
+        "default": True,
     },
     {
         "name": "balance_inverters_enable",
@@ -2611,6 +2629,31 @@ APPS_SCHEMA = {
     "ha_key": {"type": "string", "empty": False},
     "load_filter_threshold": {"type": "integer"},
     "web_port": {"type": "integer"},
+    # The chat agent's LLM endpoint. Named chat_api_* rather than openrouter_* because the
+    # endpoint no longer has to be OpenRouter: any OpenAI-compatible API works, including a local
+    # Ollama. The openrouter_* names are still accepted so an existing apps.yaml keeps working.
+    # A block of named LLM endpoints, so more than one can be configured at once and chosen from
+    # the Chat tab. Each entry is {type?, url?, api_key?} keyed by a name of the user's choosing:
+    #   chat:
+    #     openrouter: {api_key: !secret openrouter_key}
+    #     ollama:     {url: 'http://localhost:11434/v1'}
+    # The flat chat_api_* and openrouter_* keys below still work and are read as a single unnamed
+    # provider when no block is present.
+    # Everything the chat agent is configured with lives in one block, rather than a dozen
+    # chat_-prefixed keys scattered through the file. Providers sit under their own sub-key so a
+    # provider named "model" cannot collide with the model setting:
+    #
+    #   chat:
+    #     providers:
+    #       openrouter: {api_key: !secret openrouter_key}
+    #       ollama:     {url: 'http://localhost:11434/v1'}
+    #     model: openai/gpt-4o-mini
+    #     turn_timeout: 1800
+    #
+    # Validated as a dict here; ChatAgent applies the per-setting defaults and ignores anything it
+    # does not recognise. The switches that control chat at runtime (chat_confirm_writes and
+    # friends) are CONFIG_ITEMS entities, not apps.yaml, and are unaffected.
+    "chat": {"type": "dict"},
     "load_today": {"type": "sensor|sensor_list", "sensor_type": "float", "required": True},
     "import_today": {
         "type": "sensor|sensor_list",

@@ -1749,7 +1749,7 @@ async def test_read_and_write_cid():
 
     # Test 1: Value changes - should read, write, then verify
     result = await api.read_and_write_cid(inverter_sn, 103, "80", field_description="battery SOC")
-    assert result == True, "Expected True for successful write"
+    assert result is True, "Expected True for successful write"
     assert len(read_calls) == 2, f"Expected 2 read calls (initial + verify), got {len(read_calls)}"
     assert read_calls[0]["cid"] == 103, f"Expected read CID 103, got {read_calls[0]['cid']}"
     assert len(write_calls) == 1, f"Expected 1 write call, got {len(write_calls)}"
@@ -1763,7 +1763,7 @@ async def test_read_and_write_cid():
     read_calls.clear()
     write_calls.clear()
     result = await api.read_and_write_cid(inverter_sn, 633, "33", field_description="storage mode")
-    assert result == True, "Expected True when value unchanged"
+    assert result is True, "Expected True when value unchanged"
     assert len(read_calls) == 2, f"Expected 2 read calls (initial + verify), got {len(read_calls)}"
     assert len(write_calls) == 1, f"Expected 1 write call, got {len(write_calls)}"
     print("PASSED: read_and_write_cid succeeds when value already matches")
@@ -1772,7 +1772,7 @@ async def test_read_and_write_cid():
     read_calls.clear()
     write_calls.clear()
     result = await api.read_and_write_cid(inverter_sn, 104, "100")
-    assert result == True, "Expected True for successful write"
+    assert result is True, "Expected True for successful write"
     assert len(read_calls) == 2, f"Expected 2 read calls, got {len(read_calls)}"
     assert len(write_calls) == 1, f"Expected 1 write call, got {len(write_calls)}"
     assert write_calls[0]["field_description"] is None, "Expected no field_description when not provided"
@@ -1790,7 +1790,7 @@ async def test_read_and_write_cid():
     api.read_cid = mock_read_cid_fail
 
     result = await api.read_and_write_cid(inverter_sn, 105, "50", field_description="test field")
-    assert result == False, "Expected False when read fails"
+    assert result is False, "Expected False when read fails"
     assert len(write_calls) == 0, f"Expected 0 write calls when read fails, got {len(write_calls)}"
     # Check that warning was logged
     assert any("Failed to read and set test field" in msg for msg in api.log_messages), "Expected warning log message"
@@ -1808,7 +1808,7 @@ async def test_read_and_write_cid():
     api.write_cid = mock_write_cid_fail
 
     result = await api.read_and_write_cid(inverter_sn, 106, "60")
-    assert result == False, "Expected False when write fails"
+    assert result is False, "Expected False when write fails"
     print("PASSED: read_and_write_cid returns False when write fails")
 
     # Test 6: Verify fails (write succeeds but read-back doesn't match) - should return False
@@ -1826,7 +1826,7 @@ async def test_read_and_write_cid():
     cid_state[107] = "10"  # Set initial value
 
     result = await api.read_and_write_cid(inverter_sn, 107, "99", field_description="verify test")
-    assert result == False, "Expected False when verify read doesn't match written value"
+    assert result is False, "Expected False when verify read doesn't match written value"
     assert len(write_calls) == 1, f"Expected 1 write call, got {len(write_calls)}"
     assert any("Failed to verify" in msg for msg in api.log_messages), "Expected verify failure log message"
     print("PASSED: read_and_write_cid returns False when verify read doesn't match")
@@ -1861,7 +1861,7 @@ async def test_write_cid():
 
     # Test 1: Write without old_value verification
     result = await api.write_cid(inverter_sn, 103, "80", field_description="battery SOC")
-    assert result == True, "Expected True for successful write"
+    assert result is True, "Expected True for successful write"
     assert len(execute_calls) == 1, f"Expected 1 API call, got {len(execute_calls)}"
     assert execute_calls[0]["payload"]["inverterSn"] == inverter_sn, "Expected correct inverter SN"
     assert execute_calls[0]["payload"]["cid"] == 103, "Expected correct CID"
@@ -1874,7 +1874,7 @@ async def test_write_cid():
     execute_calls.clear()
     api.log_messages.clear()
     result = await api.write_cid(inverter_sn, 633, "35", old_value="33", field_description="storage mode")
-    assert result == True, "Expected True for successful write"
+    assert result is True, "Expected True for successful write"
     assert len(execute_calls) == 1, f"Expected 1 API call, got {len(execute_calls)}"
     assert execute_calls[0]["payload"]["yuanzhi"] == "33", "Expected old_value in yuanzhi field"
     assert execute_calls[0]["payload"]["value"] == "35", "Expected new value"
@@ -1884,7 +1884,7 @@ async def test_write_cid():
     execute_calls.clear()
     api.log_messages.clear()
     result = await api.write_cid(inverter_sn, 104, "100")
-    assert result == True, "Expected True for successful write"
+    assert result is True, "Expected True for successful write"
     assert any(f"Set CID 104 to 100 on {inverter_sn}" in msg for msg in api.log_messages), "Expected success log without field description"
     print("PASSED: write_cid works without field_description")
 
@@ -1918,7 +1918,7 @@ async def test_write_cid():
     api._execute_request = mock_execute_request_error_code
 
     result = await api.write_cid(inverter_sn, 105, "50", field_description="test field")
-    assert result == False, "Expected False when API returns error code"
+    assert result is False, "Expected False when API returns error code"
     assert any("Failed to set test field" in msg for msg in api.log_messages), "Expected warning log on failure"
     print("PASSED: write_cid handles API error codes correctly")
 
@@ -1933,7 +1933,7 @@ async def test_write_cid():
     api._execute_request = mock_execute_request_no_data
 
     result = await api.write_cid(inverter_sn, 106, "60")
-    assert result == False, "Expected False when API returns None data"
+    assert result is False, "Expected False when API returns None data"
     print("PASSED: write_cid handles missing data field correctly")
 
     # Test 6: API returns non-array data
@@ -1947,7 +1947,7 @@ async def test_write_cid():
     api._execute_request = mock_execute_request_bad_format
 
     result = await api.write_cid(inverter_sn, 107, "70")
-    assert result == False, "Expected False when API returns non-array data"
+    assert result is False, "Expected False when API returns non-array data"
     print("PASSED: write_cid handles non-array data field correctly")
 
     # Test 7: Retry logic - fails twice then succeeds
@@ -1978,7 +1978,7 @@ async def test_write_cid():
     api._execute_request = mock_execute_request_retry
 
     result = await api.write_cid(inverter_sn, 108, "80", field_description="retry test")
-    assert result == True, f"Expected True after retries succeed, got {result}"
+    assert result is True, f"Expected True after retries succeed, got {result}"
     assert call_count[0] == 3, f"Expected 3 attempts, got {call_count[0]}"
     assert any("retry 1" in msg for msg in api.log_messages), "Expected retry warning for attempt 1"
     assert any("retry 2" in msg for msg in api.log_messages), "Expected retry warning for attempt 2"
@@ -1989,7 +1989,7 @@ async def test_write_cid():
     api._execute_request = mock_execute_request_success
 
     result = await api.write_cid(inverter_sn, 109, "90")
-    assert result == True, "Expected True for successful write"
+    assert result is True, "Expected True for successful write"
     assert inverter_sn in api.cached_values, "Expected inverter in cache"
     assert 109 in api.cached_values[inverter_sn], "Expected CID in cache"
     assert api.cached_values[inverter_sn][109] == "90", "Expected cached value to match written value"
@@ -2198,7 +2198,7 @@ async def test_write_time_windows_v2_mode():
     result = await api.write_time_windows_if_changed(inverter_sn)
 
     # Verify results
-    assert result == True, "write_time_windows_if_changed should return True"
+    assert result is True, "write_time_windows_if_changed should return True"
 
     # Check that read_and_write_cid was called with two-pass ordering:
     # Pass 1 (clear disabled slots):
@@ -2321,7 +2321,7 @@ async def test_write_time_windows_v2_stale_slot_clearing():
     }
 
     result = await api.write_time_windows_if_changed(inverter_sn)
-    assert result == True, "write_time_windows_if_changed should return True"
+    assert result is True, "write_time_windows_if_changed should return True"
 
     calls = api.read_and_write_cid_calls
 
@@ -2630,7 +2630,7 @@ async def test_write_time_windows_v2_no_active_slot():
     api.cached_values[inverter_sn] = {}
 
     result = await api.write_time_windows_if_changed(inverter_sn)
-    assert result == True, "write_time_windows_if_changed should return True"
+    assert result is True, "write_time_windows_if_changed should return True"
 
     # Storage mode must use the 'No Timed Charge/Discharge' variant since no slot is active
     storage_mode_calls = api.set_storage_mode_calls
@@ -2695,7 +2695,7 @@ async def test_write_time_windows_v1_mode():
     result = await api.write_time_windows_if_changed(inverter_sn)
 
     # Verify results
-    assert result == True, "write_time_windows_if_changed should return True"
+    assert result is True, "write_time_windows_if_changed should return True"
 
     # Check that read_and_write_cid was called for CID 103 only
     # V1 mode no longer writes global SOC values - it only encodes and writes CID 103
@@ -2758,7 +2758,7 @@ async def test_write_time_windows_v2_no_changes():
     result = await api.write_time_windows_if_changed(inverter_sn)
 
     # Verify results
-    assert result == True, "write_time_windows_if_changed should return True"
+    assert result is True, "write_time_windows_if_changed should return True"
 
     # Check that read_and_write_cid was NOT called (no changes)
     calls = api.read_and_write_cid_calls
@@ -2806,7 +2806,7 @@ async def test_write_time_windows_zero_charge_current():
     result = await api.write_time_windows_if_changed(inverter_sn)
 
     # Verify results
-    assert result == True, "write_time_windows_if_changed should return True"
+    assert result is True, "write_time_windows_if_changed should return True"
 
     # Verify storage mode was set to Feed-in priority (zero charge current)
     storage_mode_calls = api.set_storage_mode_calls
@@ -2869,7 +2869,7 @@ async def test_write_time_windows_v1_slot_detection():
     api._test_now_utc_exact = None
 
     # Verify results
-    assert result == True, "write_time_windows_if_changed should return True"
+    assert result is True, "write_time_windows_if_changed should return True"
 
     # Check that charge_soc_to_write was detected and logged
     charge_log = any("In charge slot" in msg and "95%" in msg for msg in api.log_messages)
@@ -2918,7 +2918,7 @@ async def test_write_time_windows_v1_discharge_slot_detection():
     result = await api.write_time_windows_if_changed(inverter_sn)
     api._test_now_utc_exact = None
 
-    assert result == True, "write_time_windows_if_changed should return True"
+    assert result is True, "write_time_windows_if_changed should return True"
 
     # Must detect we are inside the discharge slot and use 'Self-Use', NOT 'Self-Use - No Timed Charge/Discharge'
     discharge_log = any("In discharge slot" in msg for msg in api.log_messages)
@@ -2971,7 +2971,7 @@ async def test_write_time_windows_v1_local_time_not_utc():
     result_inside = await api.write_time_windows_if_changed(inverter_sn)
     api._test_now_utc_exact = None
 
-    assert result_inside == True
+    assert result_inside is True
     assert any("In discharge slot" in m for m in api.log_messages), "Should detect discharge slot at local 21:43"
     inside_mode = api.set_storage_mode_calls[-1]["mode"]
     assert inside_mode == "Self-Use", f"Expected 'Self-Use' at local 21:43, got '{inside_mode}'"
@@ -2986,7 +2986,7 @@ async def test_write_time_windows_v1_local_time_not_utc():
     result_outside = await api.write_time_windows_if_changed(inverter_sn)
     api._test_now_utc_exact = None
 
-    assert result_outside == True
+    assert result_outside is True
     outside_mode = api.set_storage_mode_calls[-1]["mode"]
     assert outside_mode == "Self-Use - No Timed Charge/Discharge", f"With UTC time 20:43 (outside window) expected 'Self-Use - No Timed Charge/Discharge', got '{outside_mode}'"
 

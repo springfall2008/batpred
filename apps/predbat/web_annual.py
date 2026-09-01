@@ -25,7 +25,7 @@ import sys
 import yaml
 from aiohttp import web
 
-from annual import INCLUDED_STATUSES, AnnualConfigError, validate_config
+from annual import INCLUDED_STATUSES, SOLAR_KWP_SOFT_LIMIT, AnnualConfigError, config_warnings, validate_config
 from annual_costs import DEFAULT_COSTS, build_costs, resolve_costs
 from annual_job import AnnualJob
 from annual_store import backfill_summaries, delete_run, list_runs, load_plan, load_run, save_run
@@ -340,7 +340,7 @@ class AnnualPage:
             name=name, label=label, step=step, value=html.escape(str(value), quote=True) if value is not None else "", suffix=" {}".format(suffix) if suffix else ""
         )
 
-    def _text_field(self, name, label, value, wide=False):
+    def _text_field(self, name, label, value, wide=False, secret=False):
         """Return one labelled text input row.
 
         ``value`` is HTML-escaped before interpolation - it is user-controlled
@@ -349,9 +349,21 @@ class AnnualPage:
         ``wide`` puts the input on its own full-width line beneath the label, for the
         long values - rates URLs and API keys - that are otherwise shown through a
         keyhole and cannot be read or checked without scrolling within the box.
+
+        ``secret`` renders the input as type="password" so the value is masked on
+        screen (a shoulder-surfing / screen-share concern for an API key), while
+        it can still be pasted, selected and submitted like any other text input.
+        It also sets autocomplete="off", since a password-type input is otherwise
+        a candidate for the browser's saved-password manager, which is the wrong
+        prompt for a site API key; other fields are unaffected.
         """
-        return '<div class="annual-field{wide}"><label for="{name}">{label}</label><input type="text" id="{name}" name="{name}" value="{value}"></div>\n'.format(
-            name=name, label=label, wide=" annual-field-wide" if wide else "", value=html.escape(str(value), quote=True) if value is not None else ""
+        return '<div class="annual-field{wide}"><label for="{name}">{label}</label><input type="{type}" id="{name}" name="{name}" value="{value}"{autocomplete}></div>\n'.format(
+            name=name,
+            label=label,
+            wide=" annual-field-wide" if wide else "",
+            type="password" if secret else "text",
+            autocomplete=' autocomplete="off"' if secret else "",
+            value=html.escape(str(value), quote=True) if value is not None else "",
         )
 
     @staticmethod
@@ -398,20 +410,27 @@ class AnnualPage:
         """Return the export catalogue id matching this tariff, or Custom, or None if unset."""
         return cls._selected_side_id(tariff, catalogue, "export_octopus_url", "rates_export")
 
-    def render_form(self, config, errors=None):
+    def render_form(self, config, errors=None, warnings=None):
         """Return the configuration form as HTML, populated from ``config``.
 
         ``errors`` is displayed above the form with every field left as the user
         entered it - losing their input on a validation failure would be worse
-        than the failure.
+        than the failure. ``warnings`` is a list of config_warnings() messages
+        shown the same way in a non-blocking style: sanity checks like kWp
+        entered in Watts are worth surfacing loudly, but the values are accepted
+        exactly as typed.
         """
         # An ABSENT solar key means "not configured yet", so offer one blank array to fill
         # in. An explicitly EMPTY list means the user removed them all, which is a valid
         # battery-only run - collapsing the two with `or [{}]` made it impossible to get
-        # to zero arrays through the form.
+        # to zero arrays through the form. A single array may also be saved as a bare
+        # mapping (the wrapped YAML form validate_config accepts), which must be normalised
+        # to a one-element list here or the iteration below would walk the dict's keys.
         solar = config.get("solar")
         if solar is None:
             solar = [{}]
+        elif isinstance(solar, dict):
+            solar = [solar]
         battery = config.get("battery") or {}
         load = config.get("load") or {}
         tariff = config.get("tariff") or {}
@@ -421,6 +440,8 @@ class AnnualPage:
 
         if errors:
             text += '<div class="annual-error"><strong>Could not run:</strong> {}</div>\n'.format(html.escape(str(errors), quote=True))
+        for warning in warnings or []:
+            text += '<div class="annual-warning"><strong>Note:</strong> {}</div>\n'.format(html.escape(str(warning), quote=True))
 
         if not self.is_configured():
             text += '<div class="annual-banner">Predbat isn\'t configured yet — these are <strong>example values</strong>, edit them to match your home.</div>\n'
@@ -520,7 +541,7 @@ class AnnualPage:
         # _validate_load treats the two as mutually exclusive.
         saved_octopus = load.get("octopus") or {}
         args_key, args_account = self._octopus_from_args()
-        text += self._text_field("load_octopus_api_key", "Octopus API key", saved_octopus.get("api_key") or (args_key if args_key and args_account else "") or "", wide=True)
+        text += self._text_field("load_octopus_api_key", "Octopus API key", saved_octopus.get("api_key") or (args_key if args_key and args_account else "") or "", wide=True, secret=True)
         text += self._text_field("load_octopus_account_id", "Account ID", saved_octopus.get("account_id") or (args_account if args_key and args_account else "") or "", wide=True)
         text += '<p class="annual-note">Your meter readings already include any car charging, so the figures above are not used with this option.</p>\n'
         # An import meter records what was BOUGHT, not what the house used. On a home that
@@ -921,7 +942,7 @@ class AnnualPage:
         text += "<body>\n"
         text += self.render_css()
         text += self.render_nav("config")
-        text += self.render_form(config, errors=error)
+        text += self.render_form(config, errors=error, warnings=config_warnings(config))
         text += self.render_script()
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -1828,7 +1849,7 @@ annualLoadPlan();
    rather than beside it, so they can use the full width without pushing the form wide;
    max-width keeps them inside the column on a narrow screen. */
 .annual-field.annual-field-wide label { display: block; min-width: 0; margin-bottom: 0.15rem; }
-.annual-field-wide input[type="text"] { width: 100%; max-width: 60rem; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; }
+.annual-field-wide input[type="text"], .annual-field-wide input[type="password"] { width: 100%; max-width: 60rem; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; }
 .annual-subgroup { margin-left: 1.5rem; }
 /* Each array is its own block. Without this the Remove button of one array sat directly
    against the "Array N" heading of the next, reading as though it belonged to the array
@@ -1846,10 +1867,11 @@ annualLoadPlan();
    nowrap (which keeps its columns intact while it scrolls) is untouched.
    The max-width is for readability: prose set across an ultra-wide monitor is hard to
    track from the end of one line back to the start of the next. */
-.annual-form-wrap p, .annual-results p, .annual-compare-scroll p, .annual-banner, .annual-note, .annual-error, .annual-caveats li { white-space: normal; }
-.annual-banner, .annual-error, .annual-caveats li, .annual-form-wrap > p, .annual-results > p { max-width: 80ch; }
+.annual-form-wrap p, .annual-results p, .annual-compare-scroll p, .annual-banner, .annual-note, .annual-error, .annual-warning, .annual-caveats li { white-space: normal; }
+.annual-banner, .annual-error, .annual-warning, .annual-caveats li, .annual-form-wrap > p, .annual-results > p { max-width: 80ch; }
 .annual-banner { border-left: 4px solid #D55E00; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
 .annual-error { border-left: 4px solid #b00020; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
+.annual-warning { border-left: 4px solid #b8860b; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
 .annual-progress { margin: 1rem 0; }
 .annual-bar { height: 1.25rem; border: 1px solid var(--md-border, #cbd5e1); }
 .annual-bar-fill { height: 100%; background: #0072B2; width: 0%; }
@@ -1900,7 +1922,13 @@ table.annual-compare th, table.annual-compare td { padding: 4px 8px 4px 4px; }
 
     def render_script(self):
         """Return the polling and tariff-picker script."""
-        return """<script>
+        # The soft limit is injected from annual.py rather than hardcoded in the JavaScript,
+        # so this live hint and the server's config_warnings() warning cannot drift apart.
+        return (
+            """<script>
+var ANNUAL_SOLAR_KWP_SOFT_LIMIT = """
+            + str(SOLAR_KWP_SOFT_LIMIT)
+            + """;
 function annualTariffChanged(field) {
   // Import and export are independent, so each select drives only its own URL box.
   var sides = {
@@ -1930,6 +1958,7 @@ function annualSolarModeChanged(index) {
 }
 function annualUpdateSolarTotal() {
   var totalKwp = 0, totalPanels = 0, allPanels = true, index = 0;
+  var hints = [];
   while (document.getElementById('solar_mode_' + index)) {
     var mode = document.getElementById('solar_mode_' + index).value;
     if (mode === 'panels') {
@@ -1939,7 +1968,17 @@ function annualUpdateSolarTotal() {
       totalKwp += count * watts / 1000;
     } else {
       allPanels = false;
-      totalKwp += parseFloat(document.getElementById('solar_kwp_' + index).value) || 0;
+      var kwpValue = parseFloat(document.getElementById('solar_kwp_' + index).value) || 0;
+      totalKwp += kwpValue;
+      // A peak power this large usually means Watts were typed into the kWp field
+      // (GH#4858). Per array, and kWp fields only, matching the server's
+      // config_warnings(): testing the sum instead would question systems the
+      // server deliberately accepts (two genuine 60 kWp arrays, or any panels-mode
+      // array), and dividing the total by 1000 would give every array the wrong
+      // suggested figure. Non-blocking: the value stands, the hint just questions it.
+      if (kwpValue > ANNUAL_SOLAR_KWP_SOFT_LIMIT) {
+        hints.push('Array ' + (index + 1) + ' is ' + kwpValue + ' kWp — if that is Watts (Wp) it would be ' + parseFloat((kwpValue / 1000).toFixed(2)) + ' kWp');
+      }
     }
     index += 1;
   }
@@ -1947,9 +1986,13 @@ function annualUpdateSolarTotal() {
   if (!note) { return; }
   // The panel count is shown only when EVERY array was entered as panels. A partial
   // count would read as the whole system's, which is worse than not showing one.
-  note.textContent = allPanels && totalPanels > 0
+  var label = allPanels && totalPanels > 0
     ? 'Total: ' + totalKwp.toFixed(2) + ' kWp across ' + totalPanels + ' panels'
     : 'Total: ' + totalKwp.toFixed(2) + ' kWp';
+  if (hints.length) {
+    label = label + ' — ' + hints.join('; ');
+  }
+  note.textContent = label;
 }
 function annualSolarTotalKwp() {
   var total = 0, index = 0;
@@ -2072,3 +2115,4 @@ function annualPoll() {
 annualPoll();
 </script>
 """
+        )

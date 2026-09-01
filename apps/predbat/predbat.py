@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.53.5"
+THIS_VERSION = "v8.54.3"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -548,6 +548,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.savings_last_updated = None
         self.cost_yesterday_car = 0.0
         self.cost_total_car = 0.0
+        self.carbon_yesterday = 0.0
         self.rate_import = {}
         self.rate_import_replicated = {}
         self.rate_export = {}
@@ -1187,6 +1188,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             else:
                 cost_total_car = 0
 
+            if self.carbon_enable:
+                carbon_total = self.load_previous_value_from_ha(self.prefix + ".carbon_total")
+                try:
+                    carbon_total = float(carbon_total)
+                except (ValueError, TypeError):
+                    carbon_total = 0.0
+            else:
+                carbon_total = 0.0
+
             # Increment total at 1am once we have today's data stable (cloud data can lag)
             if self.minutes_now > 60 and savings_total_last_updated and savings_total_last_updated != todays_date and scheduled and not self.set_read_only:
                 savings_total_predbat += self.savings_today_predbat
@@ -1195,6 +1205,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 savings_total_actual += self.savings_today_actual
                 savings_total_last_updated = todays_date
                 cost_total_car += self.cost_yesterday_car
+                if self.carbon_enable:
+                    carbon_total += self.carbon_yesterday
 
             self.dashboard_item(
                 self.prefix + ".savings_total_predbat",
@@ -1257,6 +1269,20 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                         "unit_of_measurement": self.currency_symbols[1],
                         "pounds": dp2(cost_total_car / 100.0),
                         "icon": "mdi:cash-multiple",
+                        "start_date": savings_total_start_date,
+                        "last_updated": savings_total_last_updated,
+                    },
+                )
+            if self.carbon_enable:
+                self.dashboard_item(
+                    self.prefix + ".carbon_total",
+                    state=dp2(carbon_total),
+                    attributes={
+                        "friendly_name": "Total carbon emissions",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "g",
+                        "kg": dp2(carbon_total / 1000.0),
+                        "icon": "mdi:carbon-molecule",
                         "start_date": savings_total_start_date,
                         "last_updated": savings_total_last_updated,
                     },

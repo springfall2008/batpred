@@ -16,11 +16,12 @@ from web import WebInterface
 
 # Where each node is drawn in the diagram's SVG, keyed by the colour of the arm that reaches it
 HOUSE_CENTRE = (300, 200)
+GRID_CENTRE = (450, 300)
 NODE_RADIUS = 50
 NODE_BY_COLOUR = {
     "#F9A825": ("PV", (150, 100)),
     "#43A047": ("Battery", (150, 300)),
-    "#757575": ("Grid", (450, 300)),
+    "#757575": ("Grid", GRID_CENTRE),
     "#E53935": ("Car", (450, 100)),
 }
 
@@ -61,7 +62,7 @@ def distance_from_line(point, line_start, line_end):
     return abs(cross) / math.hypot(run_x, run_y)
 
 
-def check_arm_geometry(html, state_description):
+def check_arm_geometry(html, state_description, car_anchor=("House", HOUSE_CENTRE)):
     """Every arm runs along the line joining the two circles, tail on one edge and point on the other.
 
     Drawn at any other angle the arrow leaves its circle off-centre and its head stops in open
@@ -71,18 +72,22 @@ def check_arm_geometry(html, state_description):
     The point of the arrow is ARROW_HEAD_LENGTH beyond the line's end vertex, so the line has to
     stop short by exactly that much. Ending it on the circle edge instead drives the arrowhead
     inside the circle it is pointing at.
+
+    Every arm joins its node to the House bar one: the car arm leaves the Grid instead when the
+    charger sits outside the CT clamp, so where its far end belongs is passed in as car_anchor.
     """
     failed = 0
     for colour, (x1, y1, x2, y2) in arrow_lines(html):
         name, node_centre = NODE_BY_COLOUR[colour]
+        anchor_name, anchor_centre = car_anchor if name == "Car" else ("House", HOUSE_CENTRE)
         start, end = (x1, y1), (x2, y2)
 
         # marker-end puts the arrowhead on (x2, y2), so the line is always drawn tail first and
         # an arm reversed by the flow direction swaps which circle each end belongs to
         tail, head = start, end
-        tail_at_node = distance(tail, node_centre) < distance(tail, HOUSE_CENTRE)
-        tail_centre, head_centre = (node_centre, HOUSE_CENTRE) if tail_at_node else (HOUSE_CENTRE, node_centre)
-        tail_name, head_name = (name, "House") if tail_at_node else ("House", name)
+        tail_at_node = distance(tail, node_centre) < distance(tail, anchor_centre)
+        tail_centre, head_centre = (node_centre, anchor_centre) if tail_at_node else (anchor_centre, node_centre)
+        tail_name, head_name = (name, anchor_name) if tail_at_node else (anchor_name, name)
 
         tail_gap = distance(tail, tail_centre) - NODE_RADIUS
         if abs(tail_gap) > 1.5:
@@ -103,11 +108,17 @@ def check_arm_geometry(html, state_description):
                 failed += 1
 
         for point in (tail, head):
-            offset = distance_from_line(point, node_centre, HOUSE_CENTRE)
+            offset = distance_from_line(point, node_centre, anchor_centre)
             if offset > 1.5:
-                print(f"  ERROR [{state_description}]: the {name} arm is {offset:.1f}px off the line joining {name} to the House, so it points the wrong way")
+                print(f"  ERROR [{state_description}]: the {name} arm is {offset:.1f}px off the line joining {name} to the {anchor_name}, so it points the wrong way")
                 failed += 1
     return failed
+
+
+def house_reading(html):
+    """The power figure printed inside the House circle, as it appears in the diagram."""
+    match = re.search(r'<text x="300" y="215" text-anchor="middle" dy="\.3em" fill="#fff">([^<]*)</text>', html)
+    return match.group(1) if match else None
 
 
 def power_labels(html):
@@ -278,8 +289,10 @@ def run_power_flow_geometry_tests(my_predbat, web):
     print("Test: every arm runs circle edge to circle edge, whichever way the power is flowing")
 
     saved = (my_predbat.pv_power, my_predbat.load_power, my_predbat.battery_power, my_predbat.grid_power, my_predbat.car_charging_power, my_predbat.car_charging_power_configured)
+    saved_reported = my_predbat.car_energy_reported_load
 
     my_predbat.car_charging_power_configured = True
+    my_predbat.car_energy_reported_load = True
 
     # Importing, battery discharging, PV generating, car charging
     my_predbat.pv_power = 2000
@@ -300,7 +313,21 @@ def run_power_flow_geometry_tests(my_predbat, web):
     failed += check_arm_geometry(html, "exporting, battery charging")
     failed += check_label_clearance(html, "exporting, battery charging")
 
+    # A charger outside the CT clamp hangs its arm off the Grid instead of the House (#4788), so
+    # that arm has a second pair of circles to line up with - checked both charging and idle,
+    # since the two write different label text and a wider label is the one that fouls the arm
+    my_predbat.car_energy_reported_load = False
+    my_predbat.pv_power = 2000
+    my_predbat.battery_power = 1500
+    my_predbat.grid_power = -1000
+    for car_power, description in ((7000, "car outside the CT clamp, charging"), (0, "car outside the CT clamp, idle")):
+        my_predbat.car_charging_power = car_power
+        html = web.get_power_flow_diagram()
+        failed += check_arm_geometry(html, description, car_anchor=("Grid", GRID_CENTRE))
+        failed += check_label_clearance(html, description)
+
     (my_predbat.pv_power, my_predbat.load_power, my_predbat.battery_power, my_predbat.grid_power, my_predbat.car_charging_power, my_predbat.car_charging_power_configured) = saved
+    my_predbat.car_energy_reported_load = saved_reported
     return failed
 
 
@@ -311,6 +338,10 @@ def run_web_power_flow_tests(my_predbat):
 
     original_args = my_predbat.args.copy()
     original_load_power = my_predbat.load_power
+    # The diagram branches on whether the charger sits inside the house CT clamp, and this PredBat
+    # instance is shared with the other test modules, so pin the switch rather than inherit it
+    original_car_energy_reported_load = my_predbat.car_energy_reported_load
+    my_predbat.car_energy_reported_load = True
     web = make_web(my_predbat)
 
     # -------------------------------------------------------------------------
@@ -526,11 +557,53 @@ def run_web_power_flow_tests(my_predbat):
     my_predbat.car_charging_power = 3000
     my_predbat.car_charging_power_configured = True
     html = web.get_power_flow_diagram()
-    if ">0 W<" not in html:
-        print("  ERROR: expected the House remainder to clamp at 0 W rather than go negative")
+    if house_reading(html) != "0 W":
+        print(f"  ERROR: expected the House remainder to clamp at 0 W rather than go negative, got '{house_reading(html)}'")
         failed += 1
     if "-2000 W" in html:
         print("  ERROR: the House circle must never show a negative load")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    # switch.predbat_car_energy_reported_load off means the charger sits outside the house CT
+    # clamp, so its power was never inside load_power in the first place. Subtracting it there
+    # takes the car off a figure that never held it and the clamp above then swallows the entire
+    # house load, showing 0 W next to a house genuinely drawing 542 W (#4788). The reporter's own
+    # readings are used here: a 7363 W charger against 542 W of real household load.
+    print("Test: a charger outside the CT clamp keeps the house load and is fed from the Grid")
+    my_predbat.car_energy_reported_load = False
+    my_predbat.load_power = 542
+    my_predbat.car_charging_power = 7363
+    my_predbat.car_charging_power_configured = True
+    html = web.get_power_flow_diagram()
+    if house_reading(html) != "542 W":
+        print(f"  ERROR: expected the House circle to keep its whole 542 W with the car outside the CT clamp, got '{house_reading(html)}'")
+        failed += 1
+    if ">7363 W<" not in html:
+        print("  ERROR: expected the car charging power to still be labelled on its own arm")
+        failed += 1
+    if "grid-car-path" not in html:
+        print("  ERROR: a charger outside the CT clamp draws from the incoming supply, so its arm should run from the Grid")
+        failed += 1
+    if "house-car-path" in html:
+        print("  ERROR: the car arm should not run from the House when the charger is outside the CT clamp")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    # The same household with the switch back on - the case the subtraction exists for
+    print("Test: a charger inside the CT clamp is still subtracted and drawn from the House")
+    my_predbat.car_energy_reported_load = True
+    my_predbat.load_power = 7905
+    my_predbat.car_charging_power = 7363
+    html = web.get_power_flow_diagram()
+    if house_reading(html) != "542 W":
+        print(f"  ERROR: expected 7905 - 7363 = 542 W in the House circle with the car inside the CT clamp, got '{house_reading(html)}'")
+        failed += 1
+    if "house-car-path" not in html:
+        print("  ERROR: the car arm should run from the House when the charger is behind the CT clamp")
+        failed += 1
+    if "grid-car-path" in html:
+        print("  ERROR: the car arm should not be hung off the Grid when the charger is behind the CT clamp")
         failed += 1
 
     # dashboard_item() records an entity in four separate stores, and a lingering
@@ -549,6 +622,7 @@ def run_web_power_flow_tests(my_predbat):
     my_predbat.load_power = original_load_power
     my_predbat.car_charging_power = 0
     my_predbat.car_charging_power_configured = False
+    my_predbat.car_energy_reported_load = original_car_energy_reported_load
 
     print("**** Web power flow car charging tests completed ****")
     return failed

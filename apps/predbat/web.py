@@ -70,17 +70,17 @@ from web_helper import (
 )
 
 from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, read_predbat_log, classify_log_line, log_line_included
+from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
 import debug_history
 from web_annual import AnnualPage
+from web_chat import WebChat
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
-
-ROOT_YAML_KEY = "pred_bat"
 
 
 def state_as_of_slots(records, slots):
@@ -184,46 +184,6 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch):
     return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
 
 
-def is_data_numerical(history, attribute=None):
-    """
-    Check if history data is numerical (supports both state and attribute checking)
-    Returns True if at least 10% of values are numeric or boolean
-    """
-    count_nums = 0
-    count_total = 0
-
-    if history and len(history) >= 1:
-        for item in history[0]:
-            if attribute:
-                # Check attribute value
-                attr_value = item.get("attributes", {}).get(attribute, None)
-                if attr_value is None:
-                    continue
-                value = str(attr_value)
-            else:
-                # Check state value
-                value = item.get("state", None)
-                if value is None:
-                    continue
-                value = str(value)
-
-            if value.lower() in ["on", "off", "true", "false"]:
-                count_nums += 1
-            else:
-                try:
-                    float(value)
-                    count_nums += 1
-                except (ValueError, TypeError):
-                    pass
-            count_total += 1
-
-    if count_total > 0 and (count_nums / count_total) >= 0.1:
-        return True
-    elif count_total == 0:
-        return True
-    return False
-
-
 def split_entities_for_charting(entities, entity_data_fetch):
     """
     Fetch each entity's history and split a unit group into numeric vs non-numeric entries.
@@ -307,6 +267,7 @@ class WebInterface(ComponentBase):
         self.registered_endpoints = []
 
         self.annual_page = AnnualPage(self)
+        self.chat_page = WebChat(self)
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -431,6 +392,43 @@ class WebInterface(ComponentBase):
         app.router.add_get("/annual_view", self.annual_page.html_annual_view)
         app.router.add_get("/annual_compare", self.annual_page.html_annual_compare)
 
+    def chat_enabled(self):
+        """Return whether the chat component is configured and running."""
+        components = getattr(self.base, "components", None)
+        return bool(components and components.get_component("chat"))
+
+    def _register_chat_routes(self, app):
+        """Register the Chat tab's routes on ``app``, unconditionally.
+
+        Split out of start() the same way the annual routes are, so a test can assert the routes
+        exist against a bare aiohttp Application without opening a socket.
+
+        These must be registered regardless of whether chat is configured yet: phase 0 (which
+        builds this Application and starts the site) runs before phase 1 (which initialises the
+        chat component), so gating on chat_enabled() here would freeze the router with the routes
+        permanently absent. Each handler already checks self.agent and returns 404 "Chat is not
+        configured" when the component is not up yet - that per-request check is what stands in
+        for a boot-time gate.
+        """
+        app.router.add_get("/chat", self.chat_page.html_chat)
+        app.router.add_get("/chat/conversations", self.chat_page.html_chat_conversations)
+        app.router.add_post("/chat/conversations", self.chat_page.html_chat_create)
+        app.router.add_post("/chat/rename", self.chat_page.html_chat_rename)
+        app.router.add_post("/chat/delete", self.chat_page.html_chat_delete)
+        app.router.add_get("/chat/history", self.chat_page.html_chat_history)
+        app.router.add_post("/chat/send", self.chat_page.html_chat_send)
+        app.router.add_get("/chat/stream", self.chat_page.html_chat_stream)
+        app.router.add_post("/chat/confirm", self.chat_page.html_chat_confirm)
+        app.router.add_post("/chat/cancel", self.chat_page.html_chat_cancel)
+        app.router.add_get("/chat/models", self.chat_page.html_chat_models)
+        app.router.add_post("/chat/model", self.chat_page.html_chat_model)
+        app.router.add_get("/chat/status", self.chat_page.html_chat_status)
+        app.router.add_post("/chat/status", self.chat_page.html_chat_status_post)
+        app.router.add_get("/chat/providers", self.chat_page.html_chat_providers)
+        app.router.add_post("/chat/providers", self.chat_page.html_chat_providers_post)
+        app.router.add_post("/chat/providers/models", self.chat_page.html_chat_provider_models)
+        app.router.add_post("/chat/provider", self.chat_page.html_chat_provider_select)
+
     async def start(self):
         # Start the web server
         app = web.Application()
@@ -463,6 +461,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
         self._register_annual_routes(app)
+        self._register_chat_routes(app)
         app.router.add_get("/apps_editor", self.html_apps_editor)
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_get("/apps_editor_checksum", self.html_apps_editor_checksum)
@@ -602,13 +601,18 @@ class WebInterface(ComponentBase):
         load_power = self.base.load_power
 
         # Car charging only appears when a car_charging_power sensor is configured (execute.py
-        # update_car_charging_power). The charger sits on the house side of the meter, so its power
-        # is already inside load_power - subtract it so the House circle reads as the rest of the
+        # update_car_charging_power). Where the charger sits relative to the house CT clamp is what
+        # car_energy_reported_load records. With it on the charger is behind the clamp and its power
+        # is already inside load_power, so subtract it and the House circle reads as the rest of the
         # house rather than counting the car twice. Clamped at zero because the two readings come
         # from different meters and a slow-updating load sensor can briefly read below the car.
+        # With it off the charger is outside the clamp and was never in load_power, so subtracting
+        # would take the car off a figure that never held it and the clamp would then swallow the
+        # whole house load - leave the reading alone and feed the car from the Grid instead (#4788).
         car_configured = self.base.car_charging_power_configured
         car_power = self.base.car_charging_power
-        house_power = max(0, load_power - car_power) if car_configured else load_power
+        car_inside_clamp = self.base.car_energy_reported_load
+        house_power = max(0, load_power - car_power) if (car_configured and car_inside_clamp) else load_power
 
         # Determine flow directions. battery_power is positive when the battery is DISCHARGING
         # (gateway.py negates the firmware's sign for exactly this reason) and grid_power is
@@ -662,52 +666,69 @@ class WebInterface(ComponentBase):
             battery_icon, dp0(house_power)
         )
 
-        # Car charging arm - drawn top right, the corner left free by PV/battery/grid
+        # Car charging arm - drawn top right, the corner left free by PV/battery/grid. It runs from
+        # whichever node is actually feeding the charger: the House when the charger is behind the
+        # CT clamp, otherwise the Grid, since the incoming supply is then the only thing left that
+        # can be feeding it. Both run circle edge to circle edge, stopping short of the Car by the
+        # length of the arrowhead the marker draws past the end of the line.
         if car_configured:
             car_charging = car_power >= 10
+            if car_inside_clamp:
+                car_source = "House"
+                car_line = 'x1="342" y1="172" x2="391" y2="139"'
+                car_path = "M342,172 L391,139"
+                car_label = 'x="356" y="122"'
+            else:
+                car_source = "Grid"
+                car_line = 'x1="450" y1="250" x2="450" y2="170"'
+                car_path = "M450,250 L450,170"
+                car_label = 'x="485" y="205"'
+
             html += """
                 <!-- Car Circle -->
                 <circle cx="450" cy="100" r="50" fill="#E53935"><title>Car</title></circle>
                 <text x="450" y="100" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF010B;</text>
 
                 <defs>
-                    <!-- House to Car path -->
-                    <path id="house-car-path" d="M342,172 L391,139" stroke="transparent" fill="none" />
+                    <!-- {source} to Car path -->
+                    <path id="{source_id}-car-path" d="{path}" stroke="transparent" fill="none" />
                     <marker id="car-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
                     <polygon points="0 0, 10 3.5, 0 7" fill="#E53935"/>
                     </marker>
                 </defs>
-            """
+            """.format(
+                source=car_source, source_id=car_source.lower(), path=car_path
+            )
             if car_charging:
                 # Calculate animation speed based on power flow - faster for higher power
                 car_speed = max(0.5, min(3.0, 2.0 - (abs(car_power) / 3000)))
 
                 html += """
-                <!-- House to Car Arrow -->
-                <line x1="342" y1="172" x2="391" y2="139" stroke="#E53935" stroke-width="2" marker-end="url(#car-arrow)" />
-                <text x="356" y="122" text-anchor="middle" fill="#E53935">{} W</text>
+                <!-- {source} to Car Arrow -->
+                <line {line} stroke="#E53935" stroke-width="2" marker-end="url(#car-arrow)" />
+                <text {label} text-anchor="middle" fill="#E53935">{power} W</text>
 
-                <!-- Moving dots for House to Car -->
+                <!-- Moving dots for {source} to Car -->
                 <circle r="4" fill="#E53935" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,172 L391,139" />
+                    <animateMotion dur="{speed}s" repeatCount="indefinite" path="{path}" />
                 </circle>
                 <circle r="3" fill="#E53935" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,172 L391,139" />
+                    <animateMotion dur="{speed}s" repeatCount="indefinite" begin="0.5s" path="{path}" />
                 </circle>
                 <circle r="2" fill="#E53935" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,172 L391,139" />
+                    <animateMotion dur="{speed}s" repeatCount="indefinite" begin="1.0s" path="{path}" />
                 </circle>
                 """.format(
-                    dp0(car_power), car_speed, car_speed, car_speed
+                    source=car_source, line=car_line, label=car_label, power=dp0(car_power), speed=car_speed, path=car_path
                 )
             else:
                 html += """
-                <!-- House to Car Arrow (dashed) -->
-                <line x1="342" y1="172" x2="391" y2="139" stroke="#E53935" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
-                <text x="356" y="122" text-anchor="middle" fill="#E53935">{} W</text>
+                <!-- {source} to Car Arrow (dashed) -->
+                <line {line} stroke="#E53935" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
+                <text {label} text-anchor="middle" fill="#E53935">{power} W</text>
                 <!-- No moving dot when the car is not charging -->
                 """.format(
-                    dp0(car_power)
+                    source=car_source, line=car_line, label=car_label, power=dp0(car_power)
                 )
 
         # Draw arrows and labels
@@ -967,6 +988,15 @@ class WebInterface(ComponentBase):
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all (.tgz)</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
+        # The HA Companion app's embedded webview does not act on Content-Disposition: attachment,
+        # so it renders these downloads inline instead of saving them - a client limitation with no
+        # server-side fix (see #4720). Rather than try to detect the app (its webview sends no
+        # reliable identifying User-Agent - see #4720 discussion) and grey the links out, which risks
+        # false-positives against a genuine desktop browser, just say so for everyone.
+        text += "<tr><td colspan='2' style='font-size:0.85em; color:var(--text-secondary,#888); padding-top:6px;'>"
+        text += "'Create' and 'Download' above need a web browser - the HA Companion app cannot save files from them. "
+        text += "Companion app users can instead browse to <code>{}/debug/</code>, which also holds the rolling snapshot history as plain, readable files.".format(self.base.config_root_p)
+        text += "</td></tr>\n"
         text += "</table>\n"
         text += "</div>\n"
 
@@ -1695,7 +1725,7 @@ class WebInterface(ComponentBase):
         if self.base.update_pending:
             calculating = True
         self.update_success_timestamp()
-        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror)
+        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror, chat_enabled=self.chat_enabled())
 
     def get_chart_series(self, name, results, chart_type, color):
         """
@@ -4009,6 +4039,7 @@ chart.render();
             apps_yaml_path = "apps.yaml"
             yaml = YAML()
             yaml.preserve_quotes = True
+            yaml.width = YAML_DUMP_WIDTH
 
             try:
                 with open(apps_yaml_path, "r") as f:
@@ -5319,6 +5350,7 @@ document.addEventListener('DOMContentLoaded', function() {
             yaml = YAML()
             yaml.preserve_quotes = True
             yaml.default_flow_style = False
+            yaml.width = YAML_DUMP_WIDTH
 
             try:
                 with open(apps_yaml_path, "r") as f:

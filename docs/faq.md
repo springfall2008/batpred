@@ -253,8 +253,12 @@ recorder:
       - sensor.predbat_temperature
   include:
     entities: #The history of these entities is used by Predbat
+
       - predbat.clipping_remaining
       - predbat.clipping_target_soc
+
+      - predbat.carbon_today
+
       - predbat.cost_today
       - predbat.cost_today_car
       - predbat.cost_yesterday
