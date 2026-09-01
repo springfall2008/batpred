@@ -373,13 +373,14 @@ def test_alphaess_both_rates_zero_still_holds_the_battery():
 def test_alphaess_disabled_planned_hold_recovers_the_charge_window():
     """Generic Hold charging disables the switch but leaves target and times intact.
 
-    Recover that active window and use the fixed hold target instead of turning a
-    target-reached charge back into demand mode.
+    execute.py restores normal/max charge power after disabling the window, so zero power
+    is not a production-realistic hold signature. Recover the active target-reached window
+    with its normal power still present instead of returning AlphaESS to demand mode.
     """
     failed = False
     client = _client()
     client.base.minutes_now = 2 * 60
-    schedule = _schedule(reserve=41, charge={"enable": False, "soc": 40, "power": 0, "start": "01:00:00", "end": "05:00:00"})
+    schedule = _schedule(reserve=41, charge={"enable": False, "soc": 40, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
     charge = client.build_charge_payload("AL70", schedule)
     discharge = client.build_discharge_payload("AL70", schedule)
     if charge.get("gridCharge") != 1 or charge.get("batHighCap") != 10:
@@ -394,22 +395,27 @@ def test_alphaess_disabled_planned_hold_recovers_the_charge_window():
     assert not failed, "test_alphaess_disabled_planned_hold_recovers_the_charge_window"
 
 
-def test_alphaess_restored_rate_releases_a_disabled_planned_hold():
-    """Stale target/times must not extend a hold after execute restores charge power."""
+def test_alphaess_planned_hold_releases_when_its_window_ends():
+    """Normal restored power must not release the hold early, but window end must.
+
+    AlphaESS does not discharge down towards a reached grid-charge target while that period
+    remains enabled. The retained target/time entities therefore recover the hold until the
+    planned window ends; the active-time check prevents stale fields latching it afterwards.
+    """
     failed = False
     client = _client()
     client.base.minutes_now = 2 * 60
-    held = _schedule(reserve=41, charge={"enable": False, "soc": 40, "power": 0, "start": "01:00:00", "end": "05:00:00"})
-    released = _schedule(reserve=10, charge={"enable": False, "soc": 40, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
-    first = client.build_charge_payload("AL70", held)
-    second = client.build_charge_payload("AL70", released)
+    schedule = _schedule(reserve=41, charge={"enable": False, "soc": 40, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    first = client.build_charge_payload("AL70", schedule)
+    client.base.minutes_now = 6 * 60
+    second = client.build_charge_payload("AL70", schedule)
     if first.get("gridCharge") != 1:
         print(f"ERROR: test setup did not enter the recovered hold: {first}")
         failed = True
     if second.get("gridCharge") != 0:
-        print(f"ERROR: restored charge power did not release stale hold fields: {second}")
+        print(f"ERROR: ended planned window did not release stale hold fields: {second}")
         failed = True
-    assert not failed, "test_alphaess_restored_rate_releases_a_disabled_planned_hold"
+    assert not failed, "test_alphaess_planned_hold_releases_when_its_window_ends"
 
 
 def test_alphaess_hold_profile_is_constant_while_soc_changes():
@@ -435,6 +441,7 @@ def test_alphaess_real_charge_survives_a_simultaneous_discharge_hold():
     """An EV/iBoost hold during real grid charging must not lower the charge target."""
     failed = False
     client = _client()
+    client.base.minutes_now = 2 * 60
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"}, export_power=0)
     charge = client.build_charge_payload("AL70", schedule)
     discharge = client.build_discharge_payload("AL70", schedule)
@@ -445,6 +452,28 @@ def test_alphaess_real_charge_survives_a_simultaneous_discharge_hold():
         print(f"ERROR: real charge plus hold should leave discharge time control off: {discharge}")
         failed = True
     assert not failed, "test_alphaess_real_charge_survives_a_simultaneous_discharge_hold"
+
+
+def test_alphaess_future_charge_does_not_satisfy_a_current_discharge_hold():
+    """A configured charge window prevents discharge only while it is active.
+
+    Predbat can publish tonight's grid-charge schedule before it starts. Returning that
+    future profile for an EV/iBoost hold now would set ctrDis to ordinary demand mode while
+    no active charge schedule stops the battery feeding the load.
+    """
+    failed = False
+    client = _client()
+    client.base.minutes_now = 22 * 60
+    schedule = _schedule(reserve=10, charge={"enable": True, "soc": 90, "power": 3000, "start": "23:00:00", "end": "23:45:00"}, export_power=0)
+    charge = client.build_charge_payload("AL70", schedule)
+    discharge = client.build_discharge_payload("AL70", schedule)
+    if charge.get("batHighCap") != 10 or charge.get("timeChaf1") != "00:00" or charge.get("timeChae1") != "23:45":
+        print(f"ERROR: future real charge replaced the current full-day hold: {charge}")
+        failed = True
+    if discharge.get("ctrDis") != 0:
+        print(f"ERROR: current hold should leave discharge time control off: {discharge}")
+        failed = True
+    assert not failed, "test_alphaess_future_charge_does_not_satisfy_a_current_discharge_hold"
 
 
 def test_alphaess_times_snap_inward_to_the_15_minute_grid():
@@ -1044,6 +1073,35 @@ def test_alphaess_persistently_rejected_write_is_paced_not_retried_every_tick():
         print("ERROR: a rejected write was cached as applied")
         failed = True
     assert not failed, "test_alphaess_persistently_rejected_write_is_paced_not_retried_every_tick"
+
+
+def test_alphaess_rejected_hold_charge_defers_legacy_discharge_update():
+    """A rejected hold profile must not be followed by ctrDis=0 demand mode.
+
+    Legacy AlphaESS uses separate charge/discharge endpoints. The enabled charge profile is
+    the only working hold primitive, so sending the companion demand-mode payload after its
+    rejection would actively remove the old attempted hold while installing no replacement.
+    """
+    failed = False
+    client = _writable()
+    client.min_write_interval = 0
+    schedule = _schedule(reserve=10, export_power=0)
+    rejected = create_aiohttp_mock_response(status=200, json_data=_envelope(6008, None, msg="Set failed"))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(rejected)) as session:
+        result = run_async_local(client.apply_settings("AL70", schedule))
+    if result:
+        print(f"ERROR: rejected hold transition returned {result!r}, should be falsy")
+        failed = True
+    if session.return_value.post.call_count != 1:
+        print(f"ERROR: rejected hold charge was followed by {session.return_value.post.call_count - 1} additional POST(s)")
+        failed = True
+    if client.applied_payload.get("AL70", {}).get("discharge") is not None:
+        print(f"ERROR: discharge payload was applied after hold charge rejection: {client.applied_payload}")
+        failed = True
+    if not any("discharge update deferred" in message.lower() for message in client.log_messages):
+        print(f"ERROR: deferred legacy discharge transition was not logged: {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_rejected_hold_charge_defers_legacy_discharge_update"
 
 
 def test_alphaess_held_write_is_not_reported_as_applied():
@@ -1807,9 +1865,10 @@ def run_alphaess_control_tests(my_predbat):
         ("rate_zero_is_freeze", test_alphaess_rate_zero_is_freeze),
         ("both_rates_zero_still_holds", test_alphaess_both_rates_zero_still_holds_the_battery),
         ("disabled_planned_hold_recovers_window", test_alphaess_disabled_planned_hold_recovers_the_charge_window),
-        ("restored_rate_releases_hold", test_alphaess_restored_rate_releases_a_disabled_planned_hold),
+        ("planned_hold_releases_at_window_end", test_alphaess_planned_hold_releases_when_its_window_ends),
         ("hold_profile_constant", test_alphaess_hold_profile_is_constant_while_soc_changes),
         ("real_charge_survives_hold", test_alphaess_real_charge_survives_a_simultaneous_discharge_hold),
+        ("future_charge_does_not_satisfy_hold", test_alphaess_future_charge_does_not_satisfy_a_current_discharge_hold),
         ("snap_inward", test_alphaess_times_snap_inward_to_the_15_minute_grid),
         ("collapsed_disabled", test_alphaess_window_collapsed_by_snapping_is_disabled_not_wrapped),
         ("midnight_end_snaps", test_alphaess_midnight_end_snaps_to_the_maximum),
@@ -1835,6 +1894,7 @@ def run_alphaess_control_tests(my_predbat):
         ("6053_backoff", test_alphaess_6053_backs_off_rather_than_counting_as_a_failure),
         ("6053_paces_the_retry", test_alphaess_6053_backs_off_the_retry_via_min_write_interval),
         ("persistent_rejection_paced", test_alphaess_persistently_rejected_write_is_paced_not_retried_every_tick),
+        ("rejected_hold_charge_defers_discharge", test_alphaess_rejected_hold_charge_defers_legacy_discharge_update),
         ("held_write_not_applied", test_alphaess_held_write_is_not_reported_as_applied),
         ("same_cycle_correction_not_held", test_alphaess_same_cycle_correction_is_not_held_by_the_write_pacer),
         ("correction_burst_capped", test_alphaess_correction_burst_is_capped_so_pacing_still_bounds_the_write_budget),
