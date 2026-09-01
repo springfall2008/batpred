@@ -45,7 +45,7 @@ If the conflicts are extensive enough that a safe resolution would mean re-imple
 - CI status: `gh pr checks <pr-number>`. For any failing check, read its actual log (`gh run view <run-id> --job <job-id> --log`, or fetch the job log directly) to find the real failure, not just the pass/fail summary.
 - Skip anything already resolved: a review thread that already has a reply from you addressing it, or a check that's since gone green.
 
-If there is genuinely nothing new to address — step 2's merge was a no-op, every thread already has a reply, every check is green — post a brief comment saying so, opening with a line disclosing this is an automated cleanup check (nothing for a maintainer to act on), 
+If there is genuinely nothing new to address — step 2's merge was a no-op, every thread already has a reply, every check is green — post a brief comment saying so, opening with a line disclosing this is an automated cleanup check (nothing for a maintainer to act on),
 and stop; this is a normal, successful outcome, not a failure.
 
 ## 4. Evaluate before implementing
@@ -54,12 +54,12 @@ Per `receiving-code-review`: for each remaining item, verify it's technically co
 
 ## 5. Implement confirmed fixes
 
-Same conventions as `/issue-pr`: `CLAUDE.md` (already loaded automatically for this session), `lower_case_with_underscores` naming, 256-character line length, a one-line docstring on every new function or class, 
+Same conventions as `/issue-pr`: `CLAUDE.md` (already loaded automatically for this session), `lower_case_with_underscores` naming, 256-character line length, a one-line docstring on every new function or class,
 and a unit test for any new code.
 
 ## 6. Quality gate
 
-Both of these must pass before you push anything - this covers step 2's merge as much as any fix from step 5, so run it even if step 5 had nothing to do. `run_pre_commit` must run with `coverage/` as the working directory 
+Both of these must pass before you push anything - this covers step 2's merge as much as any fix from step 5, so run it even if step 5 had nothing to do. `run_pre_commit` must run with `coverage/` as the working directory
 (it sources `coverage/setup.csh` internally); `tools/triage_test.sh` must run from the repo root:
 
 ```bash
@@ -69,8 +69,8 @@ cd ..
 tools/triage_test.sh <name> <scratch>/test.log
 ```
 
-Use the test module the changed area maps to in `TEST_REGISTRY` (`apps/predbat/unit_test.py`), or `./run_all --quick` (from `coverage/`, same as above) if there's no clean single-module mapping. 
-If either still fails, go to step 7 and report what's still broken — do not push a change that doesn't pass its own quality gate, 
+Use the test module the changed area maps to in `TEST_REGISTRY` (`apps/predbat/unit_test.py`), or `./run_all --quick` (from `coverage/`, same as above) if there's no clean single-module mapping.
+If either still fails, go to step 7 and report what's still broken — do not push a change that doesn't pass its own quality gate,
 even if step 2's merge commit already exists locally: an unpushed local commit is discarded automatically the next time this runs.
 
 ## 7. Commit, push, and reply
@@ -90,7 +90,7 @@ gh api repos/springfall2008/batpred/pulls/<pr-number>/comments/<comment-id>/repl
 
 Or push back with your reasoning if you didn't implement the suggestion — never a bare "done" with no explanation. If anything is unclear, technically wrong, or you can't verify a suggestion, say so in the reply rather than guessing or implementing something you don't understand.
 
-If step 6's quality gate never passed, post one summary comment via `gh pr comment <pr-number> --body "..."` opening with the same automated-reply disclosure line, explaining what's still failing and why you didn't push, 
+If step 6's quality gate never passed, post one summary comment via `gh pr comment <pr-number> --body "..."` opening with the same automated-reply disclosure line, explaining what's still failing and why you didn't push,
 instead of doing the commit/push/reply steps above.
 
 ## Guardrails
