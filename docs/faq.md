@@ -253,6 +253,7 @@ recorder:
       - sensor.predbat_temperature
   include:
     entities: #The history of these entities is used by Predbat
+      - predbat.car_charging_power
       - predbat.carbon_today
       - predbat.cost_today
       - predbat.cost_today_car
@@ -270,6 +271,7 @@ recorder:
       - predbat.pv_power
       - predbat.rates
       - predbat.rates_export
+      - predbat.soc_kw_best
       - predbat.soc_kw_h0
       - predbat.savings_yesterday_predbat
       - predbat.savings_yesterday_pvbat
