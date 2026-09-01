@@ -813,21 +813,19 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
         // Clipping Buffer penalty - prediction.py:819
         if (c->clipping_cost_weight > 0.0) {
-            if (c->clipping_buffer_enable || c->clipping_buffer_kwh > 0) {
-                // manual buffer logic not implemented in C++ (rare), we'll do the automatic pv_forecast_peak logic
-                double peak_pv = c->pv_forecast_peak[k];
-                double clipping_limit_step = c->inverter_limit / 60.0 * step;
-                if (clipping_limit_step > 0 && peak_pv > clipping_limit_step) {
-                    double potential_clip = peak_pv - clipping_limit_step;
-                    double battery_headroom = std::max(soc_max - soc, 0.0) * battery_loss;
-                    double max_charge_step = battery_rate_max_charge * battery_rate_max_scaling * step;
-                    double absorbable = std::min(battery_headroom, max_charge_step);
-                    double unmitigated_clip = std::max(potential_clip - absorbable, 0.0);
-                    if (unmitigated_clip > 0.0) {
-                        double clipping_penalty = unmitigated_clip * std::max(export_rate, 0.1) * c->clipping_cost_weight;
-                        metric += clipping_penalty;
-                        clipping_penalty_total += clipping_penalty;
-                    }
+            // manual buffer logic not implemented in C++ (rare), we'll do the automatic pv_forecast_peak logic
+            double peak_pv = c->pv_forecast_peak[k];
+            double clipping_limit_step = c->inverter_limit / 60.0 * step;
+            if (clipping_limit_step > 0 && peak_pv > clipping_limit_step) {
+                double potential_clip = peak_pv - clipping_limit_step;
+                double battery_headroom = std::max(soc_max - soc, 0.0) * battery_loss;
+                double max_charge_step = battery_rate_max_charge * battery_rate_max_scaling * step;
+                double absorbable = std::min(battery_headroom, max_charge_step);
+                double unmitigated_clip = std::max(potential_clip - absorbable, 0.0);
+                if (unmitigated_clip > 0.0) {
+                    double clipping_penalty = unmitigated_clip * std::max(export_rate, 0.1) * c->clipping_cost_weight;
+                    metric += clipping_penalty;
+                    clipping_penalty_total += clipping_penalty;
                 }
             }
         }
