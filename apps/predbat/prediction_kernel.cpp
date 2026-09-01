@@ -1198,25 +1198,24 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
             // Clip battery discharge back - prediction.py:1015-1031
             double total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid);
-            if (inverter_hybrid) {
-                if (total_inverted > inverter_limit) {
-                    double reduce_by = total_inverted - inverter_limit;
-                    if (reduce_by > battery_draw) {
-                        reduce_by -= battery_draw;
-                        battery_draw = 0.0;
-                        if (c->inverter_can_charge_during_export) {
-                            const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
-                            const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step;
-                            battery_draw = std::max({-reduce_by, -battery_to_max, -charge_rate_now_curve_dc_step});
-                        }
-                    } else {
-                        battery_draw -= reduce_by;
-                    }
+            if (total_inverted > inverter_limit && (battery_draw + pv_dc) > 0) {
+                double over_limit = total_inverted - inverter_limit;
+                if (battery_draw + pv_dc > 0) {
+                    battery_draw = std::max(battery_draw - over_limit, 0.0);
+                }
 
-                    if (battery_draw < 0.0) {
-                        pv_dc = std::min(std::fabs(battery_draw), pv_now);
-                        pv_ac = (pv_now - pv_dc) * inverter_loss_ac;
+                if (battery_draw == 0) {
+                    total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid);
+                    over_limit = 0;
+                    if (total_inverted > inverter_limit) {
+                        over_limit = total_inverted - inverter_limit;
                     }
+                    battery_draw = std::max({-over_limit * inverter_loss, -charge_rate_now_curve_step, -battery_to_max, -pv_ac});
+                }
+
+                if (battery_draw < 0) {
+                    pv_dc = std::min(std::fabs(battery_draw), pv_now);
+                    pv_ac = (pv_now - pv_dc) * inverter_loss_ac;
                 }
             }
 
