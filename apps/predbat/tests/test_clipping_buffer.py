@@ -7,12 +7,50 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
-from const import PREDICT_STEP
+from const import CLIPPING_BUFFER_DEFAULT_FRACTION, PREDICT_STEP
+
+
+# Everything setup() writes onto the shared predbat instance. These tests run against the same
+# object as every other module, so anything left behind changes later plans - a leaked
+# clipping_buffer_forecast_kwh caps the charge search and silently fails optimise_levels.
+_TOUCHED = (
+    "clipping_buffer_enable",
+    "clipping_buffer_forecast",
+    "clipping_buffer_min_kwh",
+    "clipping_buffer_max_kwh",
+    "clipping_buffer_limit_override",
+    "clipping_buffer_forecast_kwh",
+    "clipping_buffer_kwh",
+    "clipping_buffer_scale",
+    "clipping_limit",
+    "inverter_limit",
+    "export_limit",
+    "soc_max",
+    "battery_loss",
+    "forecast_minutes",
+    "minutes_now",
+    "metric_cloud_coverage",
+    "pv_forecast_minute_step",
+    "pv_forecast_minute90_step",
+    "reserve",
+)
 
 
 def run_clipping_buffer_tests(my_predbat):
     """
     Tests for the plan-side clipping buffer (#4036)
+    """
+    saved = {name: getattr(my_predbat, name, None) for name in _TOUCHED}
+    try:
+        return _run_clipping_buffer_tests(my_predbat)
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+def _run_clipping_buffer_tests(my_predbat):
+    """
+    The tests themselves, wrapped by the state restore above.
     """
     failed = False
     failed |= test_disabled_by_default(my_predbat)
@@ -25,6 +63,7 @@ def run_clipping_buffer_tests(my_predbat):
     failed |= test_buffer_released_after_the_peak(my_predbat)
     failed |= test_soc_max_ceiling_applied(my_predbat)
     failed |= test_no_limit_configured_is_inert(my_predbat)
+    failed |= test_zero_max_derives_a_default(my_predbat)
     return failed
 
 
@@ -39,6 +78,7 @@ def setup(my_predbat, pv_kw_by_minute, enable=True, forecast="pv_estimate", inve
     my_predbat.export_limit = export_limit_kw / 60.0
     my_predbat.soc_max = soc_max
     my_predbat.battery_loss = 1.0
+    my_predbat.reserve = 0.0
     my_predbat.forecast_minutes = horizon
     my_predbat.minutes_now = 0
 
@@ -93,7 +133,7 @@ def test_no_clipping_no_buffer(my_predbat):
 
 def test_sustained_overshoot_sized(my_predbat):
     """2 kW over the limit for two hours needs 4 kWh of headroom."""
-    setup(my_predbat, flat(7.5, 600, 720))
+    setup(my_predbat, flat(7.5, 600, 720), max_kwh=20)
     my_predbat.calculate_clipping_buffer()
     return check("test_sustained_overshoot_sized", my_predbat.clipping_buffer_kwh, 4.0)
 
@@ -114,7 +154,7 @@ def test_buffer_raised_by_min(my_predbat):
 
 def test_limit_override_wins(my_predbat):
     """A configured override replaces the inverter and export limits."""
-    setup(my_predbat, flat(7.5, 600, 720), override_w=7000)
+    setup(my_predbat, flat(7.5, 600, 720), override_w=7000, max_kwh=20)
     my_predbat.calculate_clipping_buffer()
     # Only 0.5 kW over a 7 kW override, for two hours
     return check("test_limit_override_wins", my_predbat.clipping_buffer_kwh, 1.0)
@@ -122,14 +162,14 @@ def test_limit_override_wins(my_predbat):
 
 def test_most_restrictive_limit_wins(my_predbat):
     """The tighter of the inverter and export limits sets the clipping point."""
-    setup(my_predbat, flat(7.5, 600, 720), inverter_limit_kw=7.5, export_limit_kw=5.5)
+    setup(my_predbat, flat(7.5, 600, 720), inverter_limit_kw=7.5, export_limit_kw=5.5, max_kwh=20)
     my_predbat.calculate_clipping_buffer()
     return check("test_most_restrictive_limit_wins", my_predbat.clipping_buffer_kwh, 4.0)
 
 
 def test_buffer_released_after_the_peak(my_predbat):
     """Headroom is only demanded ahead of the clipping, not after it."""
-    setup(my_predbat, flat(7.5, 600, 720))
+    setup(my_predbat, flat(7.5, 600, 720), max_kwh=20)
     my_predbat.calculate_clipping_buffer()
     failed = False
     # Before the clipping starts the full buffer is required
@@ -141,7 +181,7 @@ def test_buffer_released_after_the_peak(my_predbat):
 
 def test_soc_max_ceiling_applied(my_predbat):
     """A requirement larger than the battery is clamped to the battery, never negative."""
-    setup(my_predbat, flat(9.0, 0, 24 * 60), soc_max=5.0)
+    setup(my_predbat, flat(9.0, 0, 24 * 60), soc_max=5.0, max_kwh=20)
     my_predbat.calculate_clipping_buffer()
     failed = check("test_soc_max_ceiling_applied buffer", my_predbat.clipping_buffer_kwh, 5.0)
     if my_predbat.clipping_buffer_soc_max(0) < 0:
@@ -158,3 +198,19 @@ def test_no_limit_configured_is_inert(my_predbat):
         print("**** ERROR: test_no_limit_configured_is_inert - buffer reserved with no limit")
         return True
     return False
+
+
+def test_zero_max_derives_a_default(my_predbat):
+    """A zero max means "size it for me" - a fraction of the battery - not "reserve everything".
+
+    Reserving the whole forecast requirement is measurably the wrong default: it costs more in
+    held-back energy than the clipping it saves (#4036 review).
+    """
+    setup(my_predbat, flat(9.0, 600, 900), max_kwh=0, soc_max=16.77)
+    my_predbat.calculate_clipping_buffer()
+    failed = check("test_zero_max_derives_a_default", my_predbat.clipping_buffer_kwh, 16.77 * CLIPPING_BUFFER_DEFAULT_FRACTION)
+    # An explicit cap must still win over the derived one
+    setup(my_predbat, flat(9.0, 600, 900), max_kwh=0.5, soc_max=16.77)
+    my_predbat.calculate_clipping_buffer()
+    failed |= check("test_zero_max_derives_a_default explicit", my_predbat.clipping_buffer_kwh, 0.5)
+    return failed

@@ -20,7 +20,7 @@ call to the C++ prediction kernel, which is where the threading now lives.
 
 from datetime import datetime, timedelta
 from multiprocessing import cpu_count
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import CLIPPING_BUFFER_DEFAULT_FRACTION, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
 
 from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
 from prediction import Prediction
@@ -1377,6 +1377,13 @@ class Plan:
                 occupancy = max(occupancy - spare, 0.0)
             held[minute] = occupancy
 
+        # A zero clipping_buffer_max_kwh means "size it for me", not "no limit". Reserving whatever
+        # the forecast asks for is measurably the wrong default: on the #4865 debug file that is
+        # 4.37kWh and scores worse than holding nothing back, where a small buffer scores better.
+        # CLIPPING_BUFFER_DEFAULT_FRACTION of the battery is a deliberately modest starting point -
+        # a user who wants the full forecast requirement can raise the cap.
+        max_buffer = self.clipping_buffer_max_kwh if self.clipping_buffer_max_kwh > 0 else self.soc_max * CLIPPING_BUFFER_DEFAULT_FRACTION
+
         # Reverse running maximum: the headroom a slot must leave is the deepest the buffer still
         # gets after it, not how full it happens to be at that moment.
         needed = 0.0
@@ -1384,9 +1391,7 @@ class Plan:
             needed = max(needed, held.get(minute, 0.0))
             if needed <= 0:
                 continue
-            capped = needed
-            if self.clipping_buffer_max_kwh > 0:
-                capped = min(capped, self.clipping_buffer_max_kwh)
+            capped = min(needed, max_buffer)
             capped = max(capped, self.clipping_buffer_min_kwh)
             capped = min(capped, self.soc_max)
             self.clipping_buffer_forecast_kwh[self.minutes_now + minute] = dp3(capped)
@@ -1396,6 +1401,28 @@ class Plan:
             self.log("Clipping buffer holding back up to {}kWh of {}kWh, limit {}kW from {}".format(dp2(self.clipping_buffer_kwh), dp2(self.soc_max), dp2(self.clipping_limit * 60), self.clipping_buffer_forecast))
         else:
             self.log("Clipping buffer enabled but no clipping forecast against a {}kW limit".format(dp2(self.clipping_limit * 60)))
+        self.publish_clipping_buffer()
+
+    def publish_clipping_buffer(self):
+        """
+        Publish the headroom the clipping buffer is holding back, so a charge target that stops
+        short of full is explainable rather than mysterious.
+        """
+        self.dashboard_item(
+            self.prefix + ".clipping_buffer_kwh",
+            state=dp2(self.clipping_buffer_kwh),
+            attributes={
+                "friendly_name": "Clipping buffer",
+                "state_class": "measurement",
+                "unit_of_measurement": "kWh",
+                "device_class": "energy",
+                "icon": "mdi:solar-power-variant",
+                "clipping_limit_kw": dp2(self.clipping_limit * 60),
+                "forecast": self.clipping_buffer_forecast if self.clipping_buffer_enable else None,
+                "soc_ceiling_kwh": dp2(self.soc_max - self.clipping_buffer_kwh),
+                "results": self.filtered_times({self.midnight_utc + timedelta(minutes=minute): dp2(kwh) for minute, kwh in self.clipping_buffer_forecast_kwh.items()}) if self.clipping_buffer_forecast_kwh else {},
+            },
+        )
 
     def clipping_buffer_soc_max(self, minute):
         """

@@ -600,6 +600,8 @@ class Output:
         else:
             html += "<th><b>PV kWh</b></th>"
             html += "<th><b>Load kWh</b></th>"
+        if self.clipping_buffer_forecast_kwh:
+            html += "<th><b>Buffer kWh</b></th>"
         if plan_debug and self.load_forecast:
             html += "<th><b>XLoad kWh</b></th>"
         if self.num_cars > 0:
@@ -1622,6 +1624,12 @@ class Output:
             html += "<td id=load data-minute=" + str(minute) + " bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
             if plan_debug:
                 html += "<td id=clip bgcolor=" + clipped_color + ">" + clipped_str + "</td>"
+            if self.clipping_buffer_forecast_kwh:
+                # Headroom this slot is being held below full for, so a charge target that stops
+                # short of 100% can be read straight off the plan
+                buffer_kwh = self.clipping_buffer_forecast_kwh.get(int(minute_relative_start / PREDICT_STEP) * PREDICT_STEP + self.minutes_now, 0.0)
+                buffer_str = "&#9866;" if buffer_kwh <= 0 else str(dp2(buffer_kwh))
+                html += "<td id=buffer bgcolor=" + ("#DDFFDD" if buffer_kwh > 0 else "#FFFFFF") + ">" + buffer_str + "</td>"
             if plan_debug and self.load_forecast:
                 html += "<td id=extra bgcolor=" + extra_color + ">" + str(extra_forecast) + "</td>"
             if self.num_cars > 0:  # Don't display car charging data if there's no car
@@ -1748,6 +1756,8 @@ class Output:
         if plan_debug:
             clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(clipped_amount_end))
+        if self.clipping_buffer_forecast_kwh:
+            html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(self.clipping_buffer_kwh))
         if plan_debug and self.load_forecast:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(xload_total))
         if self.num_cars > 0:

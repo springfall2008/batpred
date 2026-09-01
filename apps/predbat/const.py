@@ -75,6 +75,9 @@ INVERTER_TEST = False  # Run inverter control self test
 EXPORT_LIMIT_FREEZE = 99.0  # Hold SoC, export only genuine PV surplus - no forced discharge
 EXPORT_LIMIT_IDLE = 100.0  # Export window disabled entirely
 
+# Clipping buffer headroom to reserve when clipping_buffer_max_kwh is left at zero ("size it for me")
+CLIPPING_BUFFER_DEFAULT_FRACTION = 0.10
+
 # Create an array of times in the day in 5-minute intervals
 BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M:%S")) for minute in range(0, 24 * 60, 5)]
