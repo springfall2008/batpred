@@ -682,6 +682,8 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+workstream
+workstreams
 writeonly
 wrongsha
 xaxis

@@ -8,14 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from inverter import Inverter
-
-
-def dummy_sleep(seconds):
-    """
-    Dummy sleep function
-    """
-    pass
+from tests.fleet_rig import FleetInverter, setup_fleet
 
 
 def run_balance_inverters_tests(my_predbat):
@@ -107,101 +100,23 @@ def run_balance_inverters_tests(my_predbat):
 
 def setup_two_inverters(my_predbat, soc1=50, soc2=50, reserve1=4, reserve2=4, battery_power1=0, battery_power2=0, pv_power1=0, pv_power2=0, load_power1=500, load_power2=500, charge_rate1=2600, charge_rate2=2600, discharge_rate1=2600, discharge_rate2=2600):
     """
-    Helper function to set up two inverters with specified parameters
+    Helper function to set up two matched 10kWh inverters with specified parameters
+
+    A thin wrapper over the fleet rig, kept for these tests' per-inverter argument style. New
+    multi-inverter tests should call setup_fleet() directly so they can vary the fleet.
     """
-
-    ha = my_predbat.ha_interface
-    ha.service_store_enable = True
-    ha.service_store = []
-
-    # Set up inverter 0
-    ha.dummy_items["sensor.soc_percent"] = soc1
-    ha.dummy_items["sensor.battery_power"] = battery_power1
-    ha.dummy_items["sensor.pv_power"] = pv_power1
-    ha.dummy_items["sensor.load_power"] = load_power1
-    ha.dummy_items["number.charge_rate"] = charge_rate1
-    ha.dummy_items["number.discharge_rate"] = discharge_rate1
-    ha.dummy_items["number.reserve"] = reserve1
-
-    # Set up inverter 1
-    ha.dummy_items["sensor.soc_percent_2"] = soc2
-    ha.dummy_items["sensor.battery_power_2"] = battery_power2
-    ha.dummy_items["sensor.pv_power_2"] = pv_power2
-    ha.dummy_items["sensor.load_power_2"] = load_power2
-    ha.dummy_items["number.charge_rate_2"] = charge_rate2
-    ha.dummy_items["number.discharge_rate_2"] = discharge_rate2
-    ha.dummy_items["number.reserve_2"] = reserve2
-
-    # Common settings
-    ha.dummy_items["sensor.soc_max"] = 10.0
-    ha.dummy_items["sensor.soc_max_2"] = 10.0
-    ha.dummy_items["sensor.battery_rate_max"] = 2600
-
-    # Charge/discharge window settings for inverter 0
-    ha.dummy_items["select.charge_start_time"] = "01:00:00"
-    ha.dummy_items["select.charge_end_time"] = "05:00:00"
-    ha.dummy_items["select.discharge_start_time"] = "00:00:00"
-    ha.dummy_items["select.discharge_end_time"] = "00:00:00"
-    ha.dummy_items["switch.scheduled_charge_enable"] = "off"
-    ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
-
-    # Charge/discharge window settings for inverter 1
-    ha.dummy_items["select.charge_start_time_2"] = "01:00:00"
-    ha.dummy_items["select.charge_end_time_2"] = "05:00:00"
-    ha.dummy_items["select.discharge_start_time_2"] = "00:00:00"
-    ha.dummy_items["select.discharge_end_time_2"] = "00:00:00"
-    ha.dummy_items["switch.scheduled_charge_enable_2"] = "off"
-    ha.dummy_items["switch.scheduled_discharge_enable_2"] = "off"
-
-    ha.dummy_items["sensor.grid_power"] = 0
-    ha.dummy_items["sensor.grid_power_2"] = 0
-
-    # Configure args for my_predbat BEFORE creating inverters
-    my_predbat.args["num_inverters"] = 2
-    my_predbat.num_inverters = 2
-    # Set up entity args for both inverters (lists)
-    my_predbat.args["soc_percent"] = ["sensor.soc_percent", "sensor.soc_percent_2"]
-    my_predbat.args["battery_power"] = ["sensor.battery_power", "sensor.battery_power_2"]
-    my_predbat.args["pv_power"] = ["sensor.pv_power", "sensor.pv_power_2"]
-    my_predbat.args["load_power"] = ["sensor.load_power", "sensor.load_power_2"]
-    my_predbat.args["charge_rate"] = ["number.charge_rate", "number.charge_rate_2"]
-    my_predbat.args["discharge_rate"] = ["number.discharge_rate", "number.discharge_rate_2"]
-    my_predbat.args["grid_power"] = ["sensor.grid_power", "sensor.grid_power_2"]
-    my_predbat.args["reserve"] = ["number.reserve", "number.reserve_2"]
-    my_predbat.args["soc_max"] = ["sensor.soc_max", "sensor.soc_max_2"]
-    my_predbat.args["battery_rate_max"] = ["sensor.battery_rate_max", "sensor.battery_rate_max"]
-    my_predbat.args["charge_start_time"] = ["select.charge_start_time", "select.charge_start_time_2"]
-    my_predbat.args["charge_end_time"] = ["select.charge_end_time", "select.charge_end_time_2"]
-    my_predbat.args["discharge_start_time"] = ["select.discharge_start_time", "select.discharge_start_time_2"]
-    my_predbat.args["discharge_end_time"] = ["select.discharge_end_time", "select.discharge_end_time_2"]
-    my_predbat.args["scheduled_charge_enable"] = ["switch.scheduled_charge_enable", "switch.scheduled_charge_enable_2"]
-    my_predbat.args["scheduled_discharge_enable"] = ["switch.scheduled_discharge_enable", "switch.scheduled_discharge_enable_2"]
-    my_predbat.args["battery_scaling"] = [1.0, 1.0]
-    my_predbat.args["battery_temperature"] = [20.0, 20.0]
-    my_predbat.args["inverter_limit"] = [5000, 5000]
-    my_predbat.args["inverter_battery_rate_min"] = [100, 100]
-    my_predbat.args["inverter_limit_charge"] = [2600, 2600]
-    my_predbat.args["inverter_limit_discharge"] = [2600, 2600]
-    if "pause_mode" in my_predbat.args:
-        # Remove arg
-        del my_predbat.args["pause_mode"]
-    if "inverter_time" in my_predbat.args:
-        # Remove arg
-        del my_predbat.args["inverter_time"]
-    if "soc_kw" in my_predbat.args:
-        # Remove arg
-        del my_predbat.args["soc_kw"]
-    if "battery_power_invert" in my_predbat.args:
-        # Remove arg
-        del my_predbat.args["battery_power_invert"]
-
-    # Create inverters
-    my_predbat.inverters = []
-    for id in range(2):
-        inverter = Inverter(my_predbat, id, quiet=True)
-        inverter.sleep = dummy_sleep
-        inverter.update_status(my_predbat.minutes_now, quiet=True)
-        my_predbat.inverters.append(inverter)
+    setup_fleet(
+        my_predbat,
+        [FleetInverter(10.0), FleetInverter(10.0)],
+        soc=[soc1, soc2],
+        reserve=[reserve1, reserve2],
+        battery_power=[battery_power1, battery_power2],
+        pv_power=[pv_power1, pv_power2],
+        load_power=[load_power1, load_power2],
+        charge_rate=[charge_rate1, charge_rate2],
+        discharge_rate=[discharge_rate1, discharge_rate2],
+        aggregate=False,
+    )
 
 
 def test_balance_discharge_low_soc(my_predbat):
