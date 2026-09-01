@@ -184,7 +184,15 @@ class Compare:
           override_soc_max_kwh                  - battery usable capacity in kWh
           override_battery_rate_max_charge_kw   - max charge rate in kW (also scales battery_rate_max_charge_dc proportionally)
           override_battery_rate_max_discharge_kw - max discharge rate in kW
+          override_battery_rate_max_export_kw   - max discharge rate during export windows in kW (defaults to the discharge override)
           override_inverter_limit_kw            - AC inverter output limit in kW
+
+        The prediction uses battery_rate_max_export, not battery_rate_max_discharge, once an
+        export window is active, so a discharge override on its own left export slots pinned at
+        the real hardware rate (issue #4895). The discharge override therefore carries the export
+        rate with it unless an explicit export override is given, which lets export-limited
+        hardware still be modelled. The grid export connection limit (export_limit) is deliberately
+        left alone - it belongs to the property, not to the modelled inverter.
         """
         if "override_soc_max_kwh" in tariff:
             try:
@@ -206,12 +214,31 @@ class Compare:
             except (ValueError, TypeError):
                 self.log("Warn: Compare tariff {} override_battery_rate_max_charge_kw value '{}' is not numeric, skipping".format(tariff.get("id", ""), tariff["override_battery_rate_max_charge_kw"]))
 
+        discharge_overridden = False
         if "override_battery_rate_max_discharge_kw" in tariff:
             try:
                 my_predbat.battery_rate_max_discharge = float(tariff["override_battery_rate_max_discharge_kw"]) * 1000 / MINUTE_WATT
                 self.log("Compare, override battery_rate_max_discharge to {:.2f} kW".format(tariff["override_battery_rate_max_discharge_kw"]))
+                discharge_overridden = True
             except (ValueError, TypeError):
                 self.log("Warn: Compare tariff {} override_battery_rate_max_discharge_kw value '{}' is not numeric, skipping".format(tariff.get("id", ""), tariff["override_battery_rate_max_discharge_kw"]))
+
+        export_overridden = False
+        if "override_battery_rate_max_export_kw" in tariff:
+            try:
+                my_predbat.battery_rate_max_export = float(tariff["override_battery_rate_max_export_kw"]) * 1000 / MINUTE_WATT
+                self.log("Compare, override battery_rate_max_export to {:.2f} kW".format(tariff["override_battery_rate_max_export_kw"]))
+                export_overridden = True
+            except (ValueError, TypeError):
+                self.log("Warn: Compare tariff {} override_battery_rate_max_export_kw value '{}' is not numeric, skipping".format(tariff.get("id", ""), tariff["override_battery_rate_max_export_kw"]))
+
+        # Without this the modelled hardware discharges at the override rate everywhere except
+        # export windows, which keep the real hardware's export rate and so understate export
+        # earnings (issue #4895). A bad explicit export value falls through to here too, so a
+        # typo can't silently reinstate the real hardware rate.
+        if discharge_overridden and not export_overridden:
+            my_predbat.battery_rate_max_export = my_predbat.battery_rate_max_discharge
+            self.log("Compare, override battery_rate_max_export to {:.2f} kW (following the discharge rate override)".format(my_predbat.battery_rate_max_export * MINUTE_WATT / 1000))
 
         if "override_inverter_limit_kw" in tariff:
             try:
@@ -532,6 +559,7 @@ class Compare:
         save_battery_rate_max_charge = my_predbat.battery_rate_max_charge
         save_battery_rate_max_charge_dc = my_predbat.battery_rate_max_charge_dc
         save_battery_rate_max_discharge = my_predbat.battery_rate_max_discharge
+        save_battery_rate_max_export = my_predbat.battery_rate_max_export
         save_inverter_limit = my_predbat.inverter_limit
 
         # Final reports, cut end_record back to 24 hours to ignore the dump at end of day
@@ -579,6 +607,7 @@ class Compare:
             my_predbat.battery_rate_max_charge = save_battery_rate_max_charge
             my_predbat.battery_rate_max_charge_dc = save_battery_rate_max_charge_dc
             my_predbat.battery_rate_max_discharge = save_battery_rate_max_discharge
+            my_predbat.battery_rate_max_export = save_battery_rate_max_export
             my_predbat.inverter_limit = save_inverter_limit
             # Restore config: overrides after each tariff too, for the same reason - otherwise a
             # tariff's config override stays applied to config_index for every subsequent tariff,
@@ -634,4 +663,5 @@ class Compare:
         my_predbat.battery_rate_max_charge = save_battery_rate_max_charge
         my_predbat.battery_rate_max_charge_dc = save_battery_rate_max_charge_dc
         my_predbat.battery_rate_max_discharge = save_battery_rate_max_discharge
+        my_predbat.battery_rate_max_export = save_battery_rate_max_export
         my_predbat.inverter_limit = save_inverter_limit
