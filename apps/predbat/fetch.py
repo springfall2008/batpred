@@ -2450,6 +2450,7 @@ class Fetch:
         self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
         self.car_charging_solar = self.get_arg("car_charging_solar")
         self.car_charging_solar_excess = self.get_arg("car_charging_solar_excess")
+        self.car_charging_solar_battery_soc = self.get_arg("car_charging_solar_battery_soc")
         self.car_charging_rate_threshold_export = self.get_arg("car_charging_rate_threshold_export")
         self.car_charging_plan_min_soc = self.get_arg("car_charging_plan_min_soc")
 

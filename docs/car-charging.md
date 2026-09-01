@@ -526,6 +526,17 @@ export decision that follows.
     One caveat if you also charge a home battery from solar: Predbat gives the car first call on the surplus, with the battery taking what is left.
 If your equipment prioritises the other way round, the car's share will be over-predicted while both are charging.
 
+- **input_number.predbat_car_charging_solar_battery_soc** decides who gets surplus solar first, as a house-battery percentage.
+It defaults to 0%, meaning the car has first call - the behaviour you get without touching it.
+
+    Raise it and surplus goes to the house battery until it is predicted to reach that level; only above it is the car offered
+a solar slot. Set it to 60% and Predbat banks enough for the evening before letting the car have the rest. Set it to 100% and
+the battery always wins, with the car left to whatever it can buy at cheap rates.
+
+    It is the mirror of **car_charging_plan_min_soc** below: that one caps how much of the car you pay for, this one says how
+much battery you want banked before a kWh is worth more in the car than in the pack. What the battery physically cannot absorb
+in a slot is not held back, since that surplus would otherwise be exported at whatever midday pays.
+
 - **input_number.predbat_car_charging_plan_min_soc** sets how much of the car's charge Predbat will pay for, as a percentage.
 It defaults to 100%, meaning anything solar does not deliver is bought, which is the behaviour if you leave it alone.
 

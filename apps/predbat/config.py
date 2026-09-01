@@ -932,6 +932,18 @@ CONFIG_ITEMS = [
         "enable": "car_charging_solar",
     },
     {
+        "name": "car_charging_solar_battery_soc",
+        "friendly_name": "Car solar battery priority level",
+        "type": "input_number",
+        "min": 0,
+        "max": 100,
+        "step": 5,
+        "unit": "%",
+        "icon": "mdi:home-battery",
+        "default": 0,
+        "enable": "car_charging_solar",
+    },
+    {
         "name": "car_charging_plan_min_soc",
         "friendly_name": "Car minimum charge from any source",
         "type": "input_number",
