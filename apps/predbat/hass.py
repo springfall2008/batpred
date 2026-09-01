@@ -274,7 +274,13 @@ class Hass:
         Creates a new thread to run the task in
         """
         self.log("Creating task: {}".format(task), quiet=False)
-        t1 = threading.Thread(name=name, target=self.task_waiter, args=[task])
+        # Daemon, so a component that outlives the shutdown join cannot hold the process open. Python
+        # waits on every non-daemon thread before exiting, and an ML training run is tens of minutes -
+        # long enough that a restart triggered by an auto-update sat waiting for a curriculum pass that
+        # had already been asked to stop, and then started the next one. stop_all() has already called
+        # stop() on each component and given it five minutes, so anything still going at exit is being
+        # abandoned either way; this only decides whether the process waits around to watch.
+        t1 = threading.Thread(name=name, target=self.task_waiter, args=[task], daemon=True)
         t1.start()
         self.threads.append(t1)
         return t1

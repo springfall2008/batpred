@@ -283,6 +283,72 @@ def test_shutdown_leaves_logfile_open_for_surviving_threads():
     return failed
 
 
+def test_component_threads_are_daemon():
+    """create_task() threads must not hold the process open at exit.
+
+    Python joins every non-daemon thread before the interpreter exits, so a component still working
+    after stop_all() has given up keeps the whole process alive. Observed on an auto-update restart:
+    shutdown completed, then ML training carried on for another ten minutes and began a further
+    curriculum pass, with the restart blocked behind it the entire time.
+
+    Asserted on the flag rather than by timing a shutdown, which would be slow and racy.
+    """
+    print("  - test_component_threads_are_daemon")
+    failed = False
+    created = {}
+
+    class ThreadHarness:
+        """create_task() with the thread class swapped for a fake this test can examine."""
+
+        create_task = Hass.create_task
+
+        def __init__(self):
+            """Collect the threads create_task() makes."""
+            self.threads = []
+
+        def log(self, message, **kwargs):
+            """Swallow the creation log line."""
+            return None
+
+        def task_waiter(self, task):
+            """Never actually run - the fake thread does not start anything."""
+            return None
+
+    class FakeThread:
+        """Records how it was constructed and does nothing when started."""
+
+        def __init__(self, name=None, target=None, args=None, daemon=False):
+            """Capture the daemon flag the caller asked for."""
+            created["daemon"] = daemon
+            created["name"] = name
+            self.name = name
+
+        def start(self):
+            """No-op."""
+            return None
+
+    import threading as threading_module
+
+    real_thread = threading_module.Thread
+    threading_module.Thread = FakeThread
+    try:
+        harness = ThreadHarness()
+        harness.create_task(None, name="load_ml_component_task")
+    finally:
+        threading_module.Thread = real_thread
+
+    if not created:
+        print("ERROR: create_task did not construct a thread, the test harness is wrong")
+        return True
+    if created.get("daemon") is not True:
+        print("ERROR: component threads must be daemon or they block process exit, got daemon={}".format(created.get("daemon")))
+        failed = True
+    if created.get("name") != "load_ml_component_task":
+        print("ERROR: the thread name should be passed through, got {}".format(created.get("name")))
+        failed = True
+    return failed
+
+
 def run_log_rotation_tests(my_predbat):
     """Run every log rotation test."""
     print("**** Running log rotation tests ****\n")
@@ -290,4 +356,5 @@ def run_log_rotation_tests(my_predbat):
     failed |= test_write_retries_onto_the_new_handle()
     failed |= test_rotation_publishes_before_closing()
     failed |= test_shutdown_leaves_logfile_open_for_surviving_threads()
+    failed |= test_component_threads_are_daemon()
     return failed
