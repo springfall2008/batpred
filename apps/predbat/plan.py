@@ -2428,7 +2428,7 @@ class Plan:
             # Bug 27: convert percentage to kWh
             clip_target_kwh = (clip_target / 100.0) * self.soc_max
             # We don't cap loop_soc (so it can search up to soc_max for profitable arbitrage),
-            # but we explicitly inject clip_target_kwh as a candidate to ensure the 
+            # but we explicitly inject clip_target_kwh as a candidate to ensure the
             # exact headroom limit is always evaluated.
             if clip_target_kwh not in try_charge_limit:
                 try_charge_limit.append(clip_target_kwh)
