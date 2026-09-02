@@ -14,6 +14,7 @@ per-tariff plan visualisations.
 """
 
 import os
+import math
 from datetime import datetime
 from const import MINUTE_WATT
 from utils import dp0, dp2
@@ -184,7 +185,9 @@ class Compare:
           override_soc_max_kwh                  - battery usable capacity in kWh
           override_battery_rate_max_charge_kw   - max charge rate in kW (also scales battery_rate_max_charge_dc proportionally)
           override_battery_rate_max_discharge_kw - max discharge rate in kW
-          override_battery_rate_max_export_kw   - max discharge rate during export windows in kW (defaults to the discharge override)
+          override_battery_rate_max_export_kw   - max discharge rate during export windows in kW (follows the discharge
+                                                  override only when one applied successfully; otherwise the real
+                                                  hardware export rate is kept)
           override_inverter_limit_kw            - AC inverter output limit in kW
 
         The prediction uses battery_rate_max_export, not battery_rate_max_discharge, once an
@@ -193,32 +196,44 @@ class Compare:
         rate with it unless an explicit export override is given, which lets export-limited
         hardware still be modelled. The grid export connection limit (export_limit) is deliberately
         left alone - it belongs to the property, not to the modelled inverter.
+
+        These keys replace the fleet-wide totals that execute.py sums across all inverters, so
+        on a multi-inverter system enter the combined figure, not a single inverter's rating.
         """
         if "override_soc_max_kwh" in tariff:
             try:
-                my_predbat.soc_max = float(tariff["override_soc_max_kwh"])
+                value = float(tariff["override_soc_max_kwh"])
+                if not math.isfinite(value):
+                    raise ValueError
+                my_predbat.soc_max = value
                 # Clamp starting SoC to new capacity
                 my_predbat.soc_kw = min(my_predbat.soc_kw, my_predbat.soc_max)
-                self.log("Compare, override soc_max to {:.2f} kWh (soc_kw clamped to {:.2f} kWh)".format(my_predbat.soc_max, my_predbat.soc_kw))
+                self.log("Compare, override soc_max to {:.2f} kWh (soc_kw clamped to {:.2f} kWh)".format(value, my_predbat.soc_kw))
             except (ValueError, TypeError):
                 self.log("Warn: Compare tariff {} override_soc_max_kwh value '{}' is not numeric, skipping".format(tariff.get("id", ""), tariff["override_soc_max_kwh"]))
 
         if "override_battery_rate_max_charge_kw" in tariff:
             try:
-                new_ac = float(tariff["override_battery_rate_max_charge_kw"]) * 1000 / MINUTE_WATT
+                value = float(tariff["override_battery_rate_max_charge_kw"])
+                if not math.isfinite(value):
+                    raise ValueError
+                new_ac = value * 1000 / MINUTE_WATT
                 # Scale the DC charge rate by the same ratio so hybrid/DC-coupled PV modelling stays consistent
                 if my_predbat.battery_rate_max_charge > 0:
                     my_predbat.battery_rate_max_charge_dc = my_predbat.battery_rate_max_charge_dc * new_ac / my_predbat.battery_rate_max_charge
                 my_predbat.battery_rate_max_charge = new_ac
-                self.log("Compare, override battery_rate_max_charge to {:.2f} kW (battery_rate_max_charge_dc scaled to {:.2f} kW)".format(tariff["override_battery_rate_max_charge_kw"], my_predbat.battery_rate_max_charge_dc * MINUTE_WATT / 1000))
+                self.log("Compare, override battery_rate_max_charge to {:.2f} kW (battery_rate_max_charge_dc scaled to {:.2f} kW)".format(value, my_predbat.battery_rate_max_charge_dc * MINUTE_WATT / 1000))
             except (ValueError, TypeError):
                 self.log("Warn: Compare tariff {} override_battery_rate_max_charge_kw value '{}' is not numeric, skipping".format(tariff.get("id", ""), tariff["override_battery_rate_max_charge_kw"]))
 
         discharge_overridden = False
         if "override_battery_rate_max_discharge_kw" in tariff:
             try:
-                my_predbat.battery_rate_max_discharge = float(tariff["override_battery_rate_max_discharge_kw"]) * 1000 / MINUTE_WATT
-                self.log("Compare, override battery_rate_max_discharge to {:.2f} kW".format(tariff["override_battery_rate_max_discharge_kw"]))
+                value = float(tariff["override_battery_rate_max_discharge_kw"])
+                if not math.isfinite(value):
+                    raise ValueError
+                my_predbat.battery_rate_max_discharge = value * 1000 / MINUTE_WATT
+                self.log("Compare, override battery_rate_max_discharge to {:.2f} kW".format(value))
                 discharge_overridden = True
             except (ValueError, TypeError):
                 self.log("Warn: Compare tariff {} override_battery_rate_max_discharge_kw value '{}' is not numeric, skipping".format(tariff.get("id", ""), tariff["override_battery_rate_max_discharge_kw"]))
@@ -226,24 +241,32 @@ class Compare:
         export_overridden = False
         if "override_battery_rate_max_export_kw" in tariff:
             try:
-                my_predbat.battery_rate_max_export = float(tariff["override_battery_rate_max_export_kw"]) * 1000 / MINUTE_WATT
-                self.log("Compare, override battery_rate_max_export to {:.2f} kW".format(tariff["override_battery_rate_max_export_kw"]))
+                value = float(tariff["override_battery_rate_max_export_kw"])
+                if not math.isfinite(value):
+                    raise ValueError
+                my_predbat.battery_rate_max_export = value * 1000 / MINUTE_WATT
+                self.log("Compare, override battery_rate_max_export to {:.2f} kW".format(value))
                 export_overridden = True
             except (ValueError, TypeError):
                 self.log("Warn: Compare tariff {} override_battery_rate_max_export_kw value '{}' is not numeric, skipping".format(tariff.get("id", ""), tariff["override_battery_rate_max_export_kw"]))
 
         # Without this the modelled hardware discharges at the override rate everywhere except
         # export windows, which keep the real hardware's export rate and so understate export
-        # earnings (issue #4895). A bad explicit export value falls through to here too, so a
-        # typo can't silently reinstate the real hardware rate.
+        # earnings (issue #4895). A bad explicit export value also falls through to here when a
+        # discharge override applied, so a typo can't silently reinstate the real hardware rate -
+        # but with no discharge override there is nothing to fall back to and the real hardware
+        # export rate is kept (pinned by T20).
         if discharge_overridden and not export_overridden:
             my_predbat.battery_rate_max_export = my_predbat.battery_rate_max_discharge
             self.log("Compare, override battery_rate_max_export to {:.2f} kW (following the discharge rate override)".format(my_predbat.battery_rate_max_export * MINUTE_WATT / 1000))
 
         if "override_inverter_limit_kw" in tariff:
             try:
-                my_predbat.inverter_limit = float(tariff["override_inverter_limit_kw"]) * 1000 / MINUTE_WATT
-                self.log("Compare, override inverter_limit to {:.2f} kW".format(tariff["override_inverter_limit_kw"]))
+                value = float(tariff["override_inverter_limit_kw"])
+                if not math.isfinite(value):
+                    raise ValueError
+                my_predbat.inverter_limit = value * 1000 / MINUTE_WATT
+                self.log("Compare, override inverter_limit to {:.2f} kW".format(value))
             except (ValueError, TypeError):
                 self.log("Warn: Compare tariff {} override_inverter_limit_kw value '{}' is not numeric, skipping".format(tariff.get("id", ""), tariff["override_inverter_limit_kw"]))
 
@@ -585,83 +608,87 @@ class Compare:
 
         self.log("Starting comparison of tariffs")
 
-        for tariff in compare_list:
-            prior = results.get(tariff["id"], {})
-            if prior:
-                prior_date = prior.get("date", "")[:10]
-                if prior_date == today_date:
-                    # Same day: reuse the same starting SoC so repeated runs stay consistent
-                    start_soc = prior.get("soc_start", soc_midnight_fallback)
+        try:
+            for tariff in compare_list:
+                prior = results.get(tariff["id"], {})
+                if prior:
+                    prior_date = prior.get("date", "")[:10]
+                    if prior_date == today_date:
+                        # Same day: reuse the same starting SoC so repeated runs stay consistent
+                        start_soc = prior.get("soc_start", soc_midnight_fallback)
+                    else:
+                        # New day: carry forward yesterday's predicted ending SoC as today's start
+                        start_soc = prior.get("soc", soc_midnight_fallback)
                 else:
-                    # New day: carry forward yesterday's predicted ending SoC as today's start
-                    start_soc = prior.get("soc", soc_midnight_fallback)
-            else:
-                # First ever run for this tariff: start from actual midnight SoC
-                start_soc = soc_midnight_fallback
-            self.log("Compare tariff {} starting SoC: {:.2f} kWh".format(tariff.get("id", ""), start_soc))
-            result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=save_car_charging_slots, start_soc=start_soc)
-            if result_data is not None:
-                results[tariff["id"]] = result_data
-            # Restore hardware settings after each tariff so overrides don't bleed into the next tariff
-            my_predbat.soc_max = save_soc_max
-            my_predbat.battery_rate_max_charge = save_battery_rate_max_charge
-            my_predbat.battery_rate_max_charge_dc = save_battery_rate_max_charge_dc
-            my_predbat.battery_rate_max_discharge = save_battery_rate_max_discharge
-            my_predbat.battery_rate_max_export = save_battery_rate_max_export
-            my_predbat.inverter_limit = save_inverter_limit
-            # Restore config: overrides after each tariff too, for the same reason - otherwise a
-            # tariff's config override stays applied to config_index for every subsequent tariff,
-            # even ones with no config block of their own (issue #4156)
+                    # First ever run for this tariff: start from actual midnight SoC
+                    start_soc = soc_midnight_fallback
+                self.log("Compare tariff {} starting SoC: {:.2f} kWh".format(tariff.get("id", ""), start_soc))
+                try:
+                    result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=save_car_charging_slots, start_soc=start_soc)
+                    if result_data is not None:
+                        results[tariff["id"]] = result_data
+                finally:
+                    # Restore hardware settings after each tariff so overrides don't bleed into the next tariff;
+                    # in a finally so a raised run_single() can't leave compare values applied to the live instance
+                    my_predbat.soc_max = save_soc_max
+                    my_predbat.battery_rate_max_charge = save_battery_rate_max_charge
+                    my_predbat.battery_rate_max_charge_dc = save_battery_rate_max_charge_dc
+                    my_predbat.battery_rate_max_discharge = save_battery_rate_max_discharge
+                    my_predbat.battery_rate_max_export = save_battery_rate_max_export
+                    my_predbat.inverter_limit = save_inverter_limit
+                    # Restore config: overrides after each tariff too, for the same reason - otherwise a
+                    # tariff's config override stays applied to config_index for every subsequent tariff,
+                    # even ones with no config block of their own (issue #4156)
+                    if config_snapshot:
+                        for key, orig_value in config_snapshot.items():
+                            item = my_predbat.config_index.get(key)
+                            if item is not None:
+                                item["value"] = orig_value
+                        my_predbat.fetch_config_options()
+                # Save and update comparisons as we go so it is updated in HA
+                self.select_best(compare_list, results)
+                self.comparisons = results
+                self.save_yaml()
+                self.publish_data()
+        finally:
+            # Restore config values overridden by any tariff's fetch_config() call
             if config_snapshot:
                 for key, orig_value in config_snapshot.items():
                     item = my_predbat.config_index.get(key)
                     if item is not None:
                         item["value"] = orig_value
                 my_predbat.fetch_config_options()
-            # Save and update comparisons as we go so it is updated in HA
-            self.select_best(compare_list, results)
-            self.comparisons = results
-            self.save_yaml()
-            self.publish_data()
 
-        # Restore config values overridden by any tariff's fetch_config() call
-        if config_snapshot:
-            for key, orig_value in config_snapshot.items():
-                item = my_predbat.config_index.get(key)
-                if item is not None:
-                    item["value"] = orig_value
-            my_predbat.fetch_config_options()
-
-        # Restore original settings
-        my_predbat.forecast_plan_hours = save_forecast_plan_hours
-        my_predbat.forecast_minutes = save_forecast_minutes
-        my_predbat.forecast_days = save_forecast_days
-        my_predbat.manual_charge_times = save_manual_charge_times
-        my_predbat.manual_export_times = save_manual_export_times
-        my_predbat.manual_freeze_charge_times = save_manual_freeze_charge_times
-        my_predbat.manual_freeze_export_times = save_manual_freeze_export_times
-        my_predbat.manual_demand_times = save_manual_demand_times
-        my_predbat.manual_all_times = save_manual_all_times
-        my_predbat.charge_window_best = save_charge_window_best
-        my_predbat.export_window_best = save_export_window_best
-        my_predbat.export_limits_best = save_export_limits_best
-        my_predbat.charge_limit_best = save_charge_limit_best
-        my_predbat.cost_today_sofar = save_cost_today_sofar
-        my_predbat.carbon_today_sofar = save_carbon_today_sofar
-        my_predbat.iboost_today = save_iboost_today
-        my_predbat.iboost_plan = save_iboost_plan
-        my_predbat.import_today_now = save_import_today_now
-        my_predbat.export_today_now = save_export_today_now
-        my_predbat.octopus_intelligent_charging = save_octopus_intelligent_charging
-        my_predbat.car_charging_limit = save_car_charging_limit
-        my_predbat.car_charging_soc = save_car_charging_soc
-        my_predbat.car_charging_battery_size = save_car_charging_battery_size
-        my_predbat.car_charging_slots = save_car_charging_slots
-        my_predbat.car_charging_plan_smart = save_car_charging_plan_smart
-        my_predbat.soc_kw = save_soc_kw
-        my_predbat.soc_max = save_soc_max
-        my_predbat.battery_rate_max_charge = save_battery_rate_max_charge
-        my_predbat.battery_rate_max_charge_dc = save_battery_rate_max_charge_dc
-        my_predbat.battery_rate_max_discharge = save_battery_rate_max_discharge
-        my_predbat.battery_rate_max_export = save_battery_rate_max_export
-        my_predbat.inverter_limit = save_inverter_limit
+            # Restore original settings
+            my_predbat.forecast_plan_hours = save_forecast_plan_hours
+            my_predbat.forecast_minutes = save_forecast_minutes
+            my_predbat.forecast_days = save_forecast_days
+            my_predbat.manual_charge_times = save_manual_charge_times
+            my_predbat.manual_export_times = save_manual_export_times
+            my_predbat.manual_freeze_charge_times = save_manual_freeze_charge_times
+            my_predbat.manual_freeze_export_times = save_manual_freeze_export_times
+            my_predbat.manual_demand_times = save_manual_demand_times
+            my_predbat.manual_all_times = save_manual_all_times
+            my_predbat.charge_window_best = save_charge_window_best
+            my_predbat.export_window_best = save_export_window_best
+            my_predbat.export_limits_best = save_export_limits_best
+            my_predbat.charge_limit_best = save_charge_limit_best
+            my_predbat.cost_today_sofar = save_cost_today_sofar
+            my_predbat.carbon_today_sofar = save_carbon_today_sofar
+            my_predbat.iboost_today = save_iboost_today
+            my_predbat.iboost_plan = save_iboost_plan
+            my_predbat.import_today_now = save_import_today_now
+            my_predbat.export_today_now = save_export_today_now
+            my_predbat.octopus_intelligent_charging = save_octopus_intelligent_charging
+            my_predbat.car_charging_limit = save_car_charging_limit
+            my_predbat.car_charging_soc = save_car_charging_soc
+            my_predbat.car_charging_battery_size = save_car_charging_battery_size
+            my_predbat.car_charging_slots = save_car_charging_slots
+            my_predbat.car_charging_plan_smart = save_car_charging_plan_smart
+            my_predbat.soc_kw = save_soc_kw
+            my_predbat.soc_max = save_soc_max
+            my_predbat.battery_rate_max_charge = save_battery_rate_max_charge
+            my_predbat.battery_rate_max_charge_dc = save_battery_rate_max_charge_dc
+            my_predbat.battery_rate_max_discharge = save_battery_rate_max_discharge
+            my_predbat.battery_rate_max_export = save_battery_rate_max_export
+            my_predbat.inverter_limit = save_inverter_limit

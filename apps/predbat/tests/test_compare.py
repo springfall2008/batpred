@@ -18,6 +18,8 @@ Covers:
     reported a final SOC larger than the normal battery size)
 """
 
+import inspect
+
 from compare import Compare
 from const import MINUTE_WATT
 
@@ -366,8 +368,6 @@ def test_compare(my_predbat):
     #      closes the gap by checking it's genuinely wired into run_all()
     #      itself, not just demonstrated as a standalone snippet - #4156)
     # ------------------------------------------------------------------
-    import inspect
-
     run_all_source = inspect.getsource(Compare.run_all)
     # The restore block must appear between the "restore hardware settings" comment (which is
     # inside the per-tariff loop) and the loop's closing use of publish_data(), otherwise it's
@@ -545,17 +545,95 @@ def test_compare(my_predbat):
     # ------------------------------------------------------------------
     # T19: run_all() actually saves and restores battery_rate_max_export,
     #      both mid-loop and at the end, so an export override can't bleed
-    #      into the next tariff (T7 only proves the pattern in isolation)
+    #      into the next tariff (T7 only proves the pattern in isolation).
+    #      Positional checks (T12-style) so the snapshot must sit before the
+    #      tariff loop, not just anywhere in the source.
     # ------------------------------------------------------------------
     run_all_source = inspect.getsource(Compare.run_all)
-    if "save_battery_rate_max_export = my_predbat.battery_rate_max_export" not in run_all_source:
-        print("ERROR T19: run_all() does not snapshot battery_rate_max_export before the tariff loop")
+    loop_idx = run_all_source.find("for tariff in compare_list:")
+    snapshot_idx = run_all_source.find("save_battery_rate_max_export = my_predbat.battery_rate_max_export")
+    if loop_idx < 0 or snapshot_idx < 0:
+        print("ERROR T19: could not locate the tariff loop or the battery_rate_max_export snapshot in run_all() source - test may need updating")
+        failed += 1
+    elif not (snapshot_idx < loop_idx):
+        print("ERROR T19: battery_rate_max_export snapshot must appear before the tariff loop in run_all()")
         failed += 1
     elif run_all_source.count("my_predbat.battery_rate_max_export = save_battery_rate_max_export") < 2:
         print("ERROR T19: run_all() must restore battery_rate_max_export both inside the tariff loop and at the end")
         failed += 1
     else:
         print("PASS T19: run_all() snapshots and restores battery_rate_max_export")
+
+    # ------------------------------------------------------------------
+    # T20: apply_hardware_overrides - a non-numeric export override with no
+    #      discharge override leaves the real hardware export rate in place
+    #      (there is nothing to fall back to, and the guard must not regress
+    #      to `not export_overridden`, which would copy the discharge rate)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    real_export = pb.battery_rate_max_export
+    real_discharge = pb.battery_rate_max_discharge
+    cmp.apply_hardware_overrides({"id": "typo", "override_battery_rate_max_export_kw": "twelve"}, pb)
+    if abs(pb.battery_rate_max_export - real_export) > 1e-9:
+        print("ERROR T20: export rate changed to {} on a bad export-only override, expected real hardware {}".format(pb.battery_rate_max_export, real_export))
+        failed += 1
+    elif pb.battery_rate_max_discharge != real_discharge:
+        print("ERROR T20: discharge rate changed to {} on a bad export-only override".format(pb.battery_rate_max_discharge))
+        failed += 1
+    else:
+        print("PASS T20: bad export-only override keeps the real hardware export rate")
+
+    # ------------------------------------------------------------------
+    # T21: apply_hardware_overrides - a numeric-string discharge override
+    #      ("12.0" from a template) parses, applies, and correctly sets the
+    #      flag so the export rate follows it - previously the raw-string log
+    #      format raised and left the flag unset so export kept real hardware
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    cmp.apply_hardware_overrides({"override_battery_rate_max_discharge_kw": "12.0"}, pb)
+    expected = 12.0 * 1000 / MINUTE_WATT
+    if abs(pb.battery_rate_max_discharge - expected) > 1e-9:
+        print("ERROR T21: numeric-string discharge override should apply as {}, got {}".format(expected, pb.battery_rate_max_discharge))
+        failed += 1
+    elif abs(pb.battery_rate_max_export - expected) > 1e-9:
+        print("ERROR T21: numeric-string discharge override must still carry the export rate with it, export got {}".format(pb.battery_rate_max_export))
+        failed += 1
+    else:
+        print("PASS T21: numeric-string discharge override applies and carries the export rate")
+
+    # ------------------------------------------------------------------
+    # T22: apply_hardware_overrides - a numeric-string export override on
+    #      its own applies without raising
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    original_discharge = pb.battery_rate_max_discharge
+    cmp.apply_hardware_overrides({"override_battery_rate_max_export_kw": "7.5"}, pb)
+    expected = 7.5 * 1000 / MINUTE_WATT
+    if abs(pb.battery_rate_max_export - expected) > 1e-9:
+        print("ERROR T22: numeric-string export override should apply as {}, got {}".format(expected, pb.battery_rate_max_export))
+        failed += 1
+    elif pb.battery_rate_max_discharge != original_discharge:
+        print("ERROR T22: discharge rate should be untouched, got {}".format(pb.battery_rate_max_discharge))
+        failed += 1
+    else:
+        print("PASS T22: numeric-string export override applies")
+
+    # ------------------------------------------------------------------
+    # T23: apply_hardware_overrides - non-finite values (nan/inf, which
+    #      float() accepts) are rejected like any other bad value
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    original_discharge = pb.battery_rate_max_discharge
+    original_export = pb.battery_rate_max_export
+    cmp.apply_hardware_overrides({"override_battery_rate_max_discharge_kw": "nan", "override_battery_rate_max_export_kw": "inf"}, pb)
+    if pb.battery_rate_max_discharge != original_discharge:
+        print("ERROR T23: nan discharge override should be skipped, got {}".format(pb.battery_rate_max_discharge))
+        failed += 1
+    elif pb.battery_rate_max_export != original_export:
+        print("ERROR T23: inf export override should be skipped, got {}".format(pb.battery_rate_max_export))
+        failed += 1
+    else:
+        print("PASS T23: non-finite override values are skipped")
 
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))
