@@ -762,7 +762,81 @@ sequence:
 
 The script always writes all four time slot fields (`TCT_START_1`, `TCT_END_1`, `TDT_START_1`, `TDT_END_1`) on every call, zeroing whichever pair is not the active mode. This keeps charge and discharge mutually exclusive on the device without relying on separate stop/start calls landing in the right order.
 
-### Step 3 — Add the soc_kw template sensor
+### Step 3 — Create the mid-window time update automation
+
+Predbat may revise its planned charge or discharge end time mid-window without issuing a new charge_start or discharge_start service call. Without this automation, the Hanchu would continue using the original end time written at the start of the window, potentially stopping charge or discharge earlier than Predbat intended.
+
+Create a new automation (Settings → Automations & Scenes → Automations → Add Automation → Edit in YAML) and paste the following, replacing YOURSERIAL with your device serial number:
+
+```yaml
+alias: Predbat - Update Hanchu Charge/Discharge Window Times
+description: >
+  Watches Predbat's charge and discharge end time sensors and updates the
+  Hanchu time slots when they change mid-window during an active charge or
+  discharge session.
+triggers:
+  - trigger: state
+    entity_id: sensor.predbat_HC_0_charge_end_time
+    id: charge_end_changed
+  - trigger: state
+    entity_id: sensor.predbat_HC_0_discharge_end_time
+    id: discharge_end_changed
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.to_state.state not in ['unknown', 'unavailable', '00:00:00'] }}
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: charge_end_changed
+          - condition: template
+            value_template: >-
+              {{ is_state('input_boolean.predbat_charge_start', 'on') }}
+        sequence:
+          - variables:
+              charge_start_seconds: >-
+                {% set t = states('sensor.predbat_HC_0_charge_start_time').split(':') %}
+                {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+              charge_end_seconds: >-
+                {% set t = trigger.to_state.state.split(':') %}
+                {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+          - action: hanchuess.device_control
+            data:
+              sn: YOURSERIAL
+              dev_type: "2"
+              value:
+                TCT_START_1: "{{ charge_start_seconds }}"
+                TCT_END_1: "{{ charge_end_seconds }}"
+                TDT_START_1: 0
+                TDT_END_1: 0
+      - conditions:
+          - condition: trigger
+            id: discharge_end_changed
+          - condition: template
+            value_template: >-
+              {{ is_state('input_boolean.predbat_discharge_start', 'on') }}
+        sequence:
+          - variables:
+              discharge_start_seconds: >-
+                {% set t = states('sensor.predbat_HC_0_discharge_start_time').split(':') %}
+                {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+              discharge_end_seconds: >-
+                {% set t = trigger.to_state.state.split(':') %}
+                {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+          - action: hanchuess.device_control
+            data:
+              sn: YOURSERIAL
+              dev_type: "2"
+              value:
+                TCT_START_1: 0
+                TCT_END_1: 0
+                TDT_START_1: "{{ discharge_start_seconds }}"
+                TDT_END_1: "{{ discharge_end_seconds }}"
+mode: queued
+```
+
+### Step 4 — Add the soc_kw template sensor
 
 Predbat requires a `soc_kw` sensor reporting battery state of charge in kWh. Add the following to your `configuration.yaml`:
 
@@ -780,7 +854,7 @@ template:
 
 Replace `YOURSERIAL` with your device serial number and `NN.NN` with your total battery capacity in kWh (for example `18.80` for a dual 9.4 kWh system). Restart Home Assistant after adding this.
 
-### Step 4 — Configure apps.yaml
+### Step 5 — Configure apps.yaml
 
 - Replace `YOURSERIAL` throughout the template with your device serial number as it appears in your HA entity IDs
 - Adjust `inverter_limit`, `inverter_limit_charge`, `inverter_limit_discharge`, `inverter_limit_export` and `battery_rate_max` to match your inverter and battery rated capacity in watts
@@ -796,6 +870,7 @@ Replace `YOURSERIAL` with your device serial number and `NN.NN` with your total 
 - **Automation latency:** Start/stop commands are occasionally delayed by up to ~2 minutes due to HA scheduling. This has not caused any practical issues in production use.
 - **No charge/discharge enable toggle:** Hanchu has no explicit enable/disable for charge or discharge. The slot zeroing mechanism (setting both start and end to `00:00:00`) is the disable method.
 - **Min SOC:** Managed via `battery_min_soc` pointing directly to the Hanchu entity — no separate Predbat reserve setting needed.
+- **Mid-window time updates:** Predbat may revise its planned charge or discharge end time mid-window without issuing a new start service call. The mid-window automation above catches these changes and updates the Hanchu time slots accordingly, ensuring the inverter honours Predbat's revised plan rather than the original end time.
 
 ## Huawei
 
