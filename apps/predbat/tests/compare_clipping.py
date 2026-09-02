@@ -177,7 +177,6 @@ def run_comparison(my_predbat):
             assert_final_metric=0,
             assert_final_soc=0,
             clipping_buffer_enable=True,
-            clipping_cost_weight=1.0,
             clipping_amplification=1.0,
             **common_args,
         )

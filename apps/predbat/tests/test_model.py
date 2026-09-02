@@ -2359,7 +2359,6 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         with_battery=False,
         inverter_limit=1.0,
         clipping_buffer_enable=True,
-        clipping_cost_weight=1.0,
     )
 
     # Penalty when peak PV exceeds inverter limit and no battery to absorb
@@ -2391,7 +2390,6 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         with_battery=False,
         inverter_limit=1.0,
         clipping_buffer_enable=True,
-        clipping_cost_weight=1.0,
         return_prediction_handle=True,
         ignore_failed=True,
     )
@@ -2418,7 +2416,6 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         battery_size=100.0,
         inverter_limit=1.0,
         clipping_buffer_enable=True,
-        clipping_cost_weight=1.0,
     )
 
     # Low power charging must not make the plan more expensive when the charge window overlaps PV production.

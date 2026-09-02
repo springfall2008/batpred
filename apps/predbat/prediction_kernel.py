@@ -135,10 +135,6 @@ class PkContext(ctypes.Structure):
         ("iboost_on_export", ctypes.c_int32),
         ("has_rate_gas", ctypes.c_int32),
         ("has_iboost_plan", ctypes.c_int32),
-        ("clipping_buffer_enable", ctypes.c_int32),
-        ("clipping_buffer_kwh", ctypes.c_double),
-        ("clipping_cost_weight", ctypes.c_double),
-        ("clipping_limit", ctypes.c_double),
         ("pv_forecast_peak", ctypes.POINTER(ctypes.c_double)),
     ]
 
@@ -728,10 +724,6 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_on_export = 1 if pred.iboost_on_export else 0
         ctx.has_rate_gas = 1 if pred.rate_gas else 0
         ctx.has_iboost_plan = 1 if pred.iboost_plan else 0
-        ctx.clipping_buffer_enable = 1 if getattr(pred, "clipping_buffer_enable", False) else 0
-        ctx.clipping_buffer_kwh = getattr(pred, "clipping_buffer_kwh", 0.0)
-        ctx.clipping_cost_weight = getattr(pred, "clipping_cost_weight", 0.0)
-        ctx.clipping_limit = getattr(pred, "clipping_limit", 0.0)
         ctx.pv_forecast_peak = double_array(pv_peak)
 
         handle = lib.pk_context_create(ctypes.byref(ctx))
