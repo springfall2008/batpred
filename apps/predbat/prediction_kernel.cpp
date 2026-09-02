@@ -683,7 +683,6 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     double battery_cycle = 0;
     double metric_keep = 0;
     double metric = c->cost_today_sofar;
-    double clipping_penalty_total = 0;
     double carbon_g = c->carbon_today_sofar;
     double iboost_today_kwh = c->iboost_today;
     bool four_hour_rule = true;
@@ -829,7 +828,6 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 if (unmitigated_clip > 0.0) {
                     double clipping_penalty = unmitigated_clip * std::max(export_rate, 0.1) * c->clipping_cost_weight;
                     metric += clipping_penalty;
-                    clipping_penalty_total += clipping_penalty;
                 }
             }
         }
@@ -1231,7 +1229,6 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                     double pv_ac_no_loss = std::max(pv_ac_before - over_limit, 0.0);
                     double penalty = (pv_ac_before - pv_ac_no_loss) * std::max(export_rate, 0.0) * c->clipping_cost_weight * 5.0;
                     metric += penalty;
-                    clipping_penalty_total += penalty;
                 }
             }
         } else {
@@ -1255,7 +1252,6 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             if (c->clipping_cost_weight > 0.0 && (c->clipping_buffer_enable || c->clipping_buffer_kwh > 0.0)) {
                 double penalty = (pv_ac_before - pv_ac) * std::max(export_rate, 0.0) * c->clipping_cost_weight * 5.0;
                 metric += penalty;
-                clipping_penalty_total += penalty;
             }
         }
 
