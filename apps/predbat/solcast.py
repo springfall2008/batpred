@@ -328,7 +328,6 @@ class SolarAPI(ComponentBase):
             hourly = data.get("hourly", {})
             times = hourly.get("time", [])
             gti_values = hourly.get("global_tilted_irradiance", [])
-            cs_gti_values = hourly.get("clear_sky_gti", [])
             temp_values = hourly.get("temperature_2m", [])
             wind_values = hourly.get("wind_speed_10m", [])
 
