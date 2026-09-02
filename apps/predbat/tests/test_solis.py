@@ -66,6 +66,7 @@ class MockSolisAPI(SolisAPI):
         self.verify_settle_seconds = 0
         self.mode_asserted_for = {}
         self.control_enable = True
+        self.configured_inverter_sn = []
         self.inverter_sn = []
 
         # Mock base object for get_arg calls
@@ -1408,6 +1409,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_publish_entities())
         failed |= asyncio.run(test_event_queued_not_executed_on_calling_loop())
         failed |= asyncio.run(test_queued_event_failure_does_not_stop_the_queue())
+        failed |= asyncio.run(test_queued_event_drained_after_startup())
         failed |= asyncio.run(test_select_event_storage_mode())
         failed |= asyncio.run(test_select_event_charge_time())
         failed |= asyncio.run(test_select_event_discharge_time())
@@ -5529,5 +5531,72 @@ async def test_queued_event_failure_does_not_stop_the_queue():
 
     if len(ran) != 1:
         print("ERROR: a failing event stranded the rest of the queue: {}".format(ran))
+        return 1
+    return 0
+
+
+async def test_queued_event_drained_after_startup():
+    """An event queued before the first run() cycle must not drain before startup.
+
+    The handlers need the ClientSession and the discovered inverter list, which the
+    first-cycle startup block creates. Draining before it would run the handler against
+    session=None and an empty inverter list, and the event would be popped and lost.
+    """
+    api = MockSolisAPI()
+    order = []
+
+    async def fake_get_inverter_list():
+        order.append("startup")
+        return [{"sn": "1234567890"}]
+
+    async def fake_poll(*args, **kwargs):
+        return True
+
+    async def fake_noop(*args, **kwargs):
+        pass
+
+    async def fake_write_if_changed(*args, **kwargs):
+        return True
+
+    api.get_inverter_list = fake_get_inverter_list
+    api.fetch_inverter_details = fake_poll
+    api.poll_inverter_data = fake_poll
+    api.decode_time_windows = fake_noop
+    api.decode_time_windows_v2 = fake_noop
+    api.startup_reset_registers = fake_noop
+    api.reset_charge_windows_if_needed = fake_noop
+    api.write_time_windows_if_changed = fake_write_if_changed
+    api.publish_entities = fake_noop
+
+    async def spy(entity_id, value):
+        order.append("event")
+        if api.session is None:
+            print("ERROR: queued event drained before the ClientSession was created")
+            return 1
+        if not api.inverter_sn:
+            print("ERROR: queued event drained before inverters were discovered")
+            return 1
+        return 0
+
+    api.select_event_handler = spy
+
+    # Queue as a real callback would, before the first run() cycle
+    api.queued_events.append((api.select_event_handler, "select.predbat_solis_1234567890_storage_mode", "Self Use"))
+
+    try:
+        result = await api.run(0, True)
+        if not result:
+            print("ERROR: run() returned {} on the first cycle".format(result))
+            return 1
+    finally:
+        if api.session:
+            await api.session.close()
+            api.session = None
+
+    if order != ["startup", "event"]:
+        print("ERROR: expected startup before event drain, got {}".format(order))
+        return 1
+    if api.queued_events:
+        print("ERROR: queue should be empty after a successful run, got {}".format(api.queued_events))
         return 1
     return 0

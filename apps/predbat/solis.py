@@ -3274,14 +3274,6 @@ class SolisAPI(ComponentBase, OAuthMixin):
         """Main run cycle called every 5 seconds"""
         poll_success = True
 
-        # Process events queued by the entity callbacks, on this loop.
-        while self.queued_events:
-            handler, *args = self.queued_events.pop(0)
-            try:
-                await handler(*args)
-            except Exception as e:
-                self.log("Warn: Solis API: Event handler error: {}".format(e))
-
         # One-time startup configuration
         if first:
             # Create aiohttp session
@@ -3322,6 +3314,17 @@ class SolisAPI(ComponentBase, OAuthMixin):
             if not self.inverter_sn:
                 self.log("Error: Solis API: No inverters to manage after discovery")
                 return False  # Stop further processing if no inverters
+
+        # Process events queued by the entity callbacks, on this loop. Drained after the
+        # startup block: the handlers need the ClientSession and the discovered inverter
+        # list, which only exist once the first cycle has completed. On a failed startup
+        # (the return above) the queue is left intact and drained on the next attempt.
+        while self.queued_events:
+            handler, *args = self.queued_events.pop(0)
+            try:
+                await handler(*args)
+            except Exception as e:
+                self.log("Warn: Solis API: Event handler error: {}".format(e))
 
         # Frequent polling (every minute)
         if first or (seconds % 60 == 0):
