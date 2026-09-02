@@ -206,6 +206,68 @@ RETRY_FACTOR = 1
 MAX_THREADS = 2
 MAX_START_TIME = 10 * 60
 
+
+# GivEnergy setting read/write result codes. "retry" mirrors the API documentation's own
+# "Potentially Successful?" column - a code marked False never clears on a repeat attempt, so
+# retrying it only burns the retry budget and its backoff (issue #4896). "reason" is the label
+# the failure is recorded under in the API metrics. -2 is documented as not potentially
+# successful too, but an offline device does come back, so it stays retryable as it always was.
+GE_SETTING_ERROR_CODES = {
+    -1: {"retry": True, "reason": "device_timeout", "text": "the device did not respond before the request timed out"},
+    -2: {"retry": True, "reason": "device_offline", "text": "the device is offline"},
+    -3: {"retry": False, "reason": "device_not_found", "text": "the device does not exist or your account does not have access to it"},
+    -4: {"retry": False, "reason": "validation_error", "text": "there were one or more validation errors"},
+    -5: {"retry": True, "reason": "server_error", "text": "there was a server error"},
+    -6: {"retry": True, "reason": "no_response", "text": "there was no response from the server the device was last connected to"},
+    -7: {"retry": False, "reason": "inverter_locked", "text": "inverter locked - the device is currently locked and cannot be modified"},
+}
+GE_SETTING_TERMINAL_CODES = [code for code, info in GE_SETTING_ERROR_CODES.items() if not info["retry"]]
+GE_SETTING_RETRY_CODES = [code for code, info in GE_SETTING_ERROR_CODES.items() if info["retry"]]
+
+
+def ge_code_message(data, code):
+    """Describe a GivEnergy result code, preferring the plain-English message the API returned."""
+    message = data.get("message", None) if isinstance(data, dict) else None
+    if not message:
+        info = GE_SETTING_ERROR_CODES.get(code, None)
+        message = info["text"] if info else "unknown error"
+    return message
+
+
+def classify_ge_failure(data):
+    """Classify a response body that GivEnergy has flagged as failed.
+
+    GivEnergy reports device-level failures with HTTP 200 and a body carrying success=false, a
+    negative result code in "value" and a plain-English "message" (for example -7 "Inverter
+    Locked"). Returns None when the body reports no failure, otherwise a dict holding the code,
+    its message, the metrics reason and whether the code is worth retrying.
+    """
+    if not isinstance(data, dict) or data.get("success", True):
+        return None
+    code = data.get("value", None)
+    info = GE_SETTING_ERROR_CODES.get(code, None) if isinstance(code, int) and not isinstance(code, bool) else None
+    # An unrecognised failure keeps the caller's existing retry behaviour rather than giving up
+    reason = info["reason"] if info else "api_error"
+    retry = info["retry"] if info else True
+    return {"code": code, "message": ge_code_message(data, code), "reason": reason, "retry": retry}
+
+
+class GECloudTerminalError(Exception):
+    """Raised when the GE Cloud API reports a failure that no retry can clear.
+
+    Only codes GivEnergy documents as never succeeding on a repeat attempt (-3, -4 and -7) are
+    raised. A retryable failure (-1, -2, -5, -6) comes back as None instead, so a caller that
+    catches this can give up immediately without re-checking the code.
+    """
+
+    def __init__(self, code, message, reason):
+        """Record the GivEnergy result code, its message and the metrics failure reason."""
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.reason = reason
+
+
 attribute_table = {
     "time": {"friendly_name": "Time", "icon": "mdi:clock", "unit_of_measurement": "Time", "state_class": "timestamp"},
     "status": {"friendly_name": "Status", "icon": "mdi:alert", "unit_of_measurement": "Status"},
@@ -1642,14 +1704,19 @@ class GECloudDirect(ComponentBase):
         """
         Send a command to the EVC
         """
+        data = None
         for retry in range(RETRIES):
-            data = await self.async_get_inverter_data(
-                GE_API_EVC_SEND_COMMAND,
-                uuid=uuid,
-                command=command,
-                post=True,
-                datain=params,
-            )
+            try:
+                data = await self.async_get_inverter_data(
+                    GE_API_EVC_SEND_COMMAND,
+                    uuid=uuid,
+                    command=command,
+                    post=True,
+                    datain=params,
+                )
+            except GECloudTerminalError as e:
+                self.log("GECloud: Error: EVC command {} was rejected: {} (code {})".format(command, e.message, e.code))
+                return None
             if data and "success" in data:
                 if not data["success"]:
                     data = None
@@ -1679,14 +1746,22 @@ class GECloudDirect(ComponentBase):
                 if pending["setting_id"] == setting_id:
                     return {"value": pending["value"], "context": "predbat"}
 
+        data = None
         for retry in range(RETRIES):
-            data = await self.async_get_inverter_data(GE_API_INVERTER_READ_SETTING, serial, setting_id, post=True)
+            try:
+                data = await self.async_get_inverter_data(GE_API_INVERTER_READ_SETTING, serial, setting_id, post=True)
+            except GECloudTerminalError as e:
+                self.log("GECloud: Warn: Device {} read of setting id {} was rejected: {} (code {})".format(serial, setting_id, e.message, e.code))
+                return None
             data_value = None
             if data:
                 data_value = data.get("value", -1)
-            if data and data_value in [-3, -4, -7]:
-                data = None
-            elif data and data_value in [-1, -2, -5, -6]:
+            if data and data_value in GE_SETTING_TERMINAL_CODES:
+                # GivEnergy documents these codes as never succeeding on a repeat attempt, so give
+                # up now rather than spending the whole retry budget on them (issue #4896)
+                self.log("GECloud: Warn: Device {} read of setting id {} was rejected: {} (code {})".format(serial, setting_id, ge_code_message(data, data_value), data_value))
+                return None
+            elif data and data_value in GE_SETTING_RETRY_CODES:
                 data = None
                 # Inverter timeout, try to spread requests out
                 await asyncio.sleep(random.random() * (3 + retry))
@@ -1701,20 +1776,27 @@ class GECloudDirect(ComponentBase):
         """
         Write a setting to the inverter
         """
+        data = None
         for retry in range(RETRIES):
-            data = await self.async_get_inverter_data(
-                GE_API_INVERTER_WRITE_SETTING,
-                serial,
-                setting_id,
-                post=True,
-                datain={"value": str(value), "context": "predbat"},
-            )
-            if data and "success" in data:
-                if not data["success"]:
-                    data = None
+            try:
+                data = await self.async_get_inverter_data(
+                    GE_API_INVERTER_WRITE_SETTING,
+                    serial,
+                    setting_id,
+                    post=True,
+                    datain={"value": str(value), "context": "predbat"},
+                )
+            except GECloudTerminalError as e:
+                # GivEnergy will never accept this write on a repeat attempt (for example -7
+                # "Inverter Locked"), so abort it here instead of burning the retry budget
+                self.log("GECloud: Error: Device {} write of setting id {} to {} was rejected: {} (code {})".format(serial, setting_id, value, e.message, e.code))
+                return None
             if data:
                 data_value = data.get("value", -1)
-                if data_value in [-1, -2, -5, -6]:
+                if data_value in GE_SETTING_TERMINAL_CODES:
+                    self.log("GECloud: Error: Device {} write of setting id {} to {} was rejected: {} (code {})".format(serial, setting_id, value, ge_code_message(data, data_value), data_value))
+                    return None
+                if data_value in GE_SETTING_RETRY_CODES:
                     data = None
                     # Inverter timeout, try to spread requests out
                     await asyncio.sleep(random.random() * (3 + retry))
@@ -2157,8 +2239,13 @@ class GECloudDirect(ComponentBase):
         """
         Retry API call
         """
+        data = None
         for retry in range(RETRIES):
-            data = await self.async_get_inverter_data(endpoint, serial, setting_id, post, datain, uuid, meter_ids, start_time=start_time, end_time=end_time, command=command, measurands=measurands)
+            try:
+                data = await self.async_get_inverter_data(endpoint, serial, setting_id, post, datain, uuid, meter_ids, start_time=start_time, end_time=end_time, command=command, measurands=measurands)
+            except GECloudTerminalError as e:
+                self.log("GECloud: Warn: Request to {} was rejected: {} (code {}), not retrying".format(endpoint, e.message, e.code))
+                return None
             if data is not None:
                 break
             await asyncio.sleep(RETRY_FACTOR * (retry + 1))
@@ -2233,6 +2320,20 @@ class GECloudDirect(ComponentBase):
         if status in [200, 201]:
             if data is None:
                 data = {}
+            # A 200 does not mean the request reached the device: GivEnergy reports device-level
+            # failures in the body as success=false with a negative code and a message (for
+            # example -7 "Inverter Locked"). Those must not refresh the component health
+            # timestamp or be recorded as a successful API call (issue #4896).
+            failure = classify_ge_failure(data)
+            if failure:
+                self.failures_total += 1
+                record_api_call("givenergy", False, failure["reason"])
+                self.log("GECloud: Warn: Request to {} was rejected: {} (code {})".format(endpoint, failure["message"], failure["code"]))
+                if not failure["retry"]:
+                    # Terminal: raise so the caller aborts rather than retrying
+                    raise GECloudTerminalError(failure["code"], failure["message"], failure["reason"])
+                # Retryable: None drops into the caller's existing retry loop
+                return None
             self.update_success_timestamp()
             record_api_call("givenergy")
             return data
