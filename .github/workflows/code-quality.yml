@@ -45,14 +45,10 @@ jobs:
         version: 0.16.0
     - name: Cross-build prediction kernel binaries
       run: bash apps/predbat/build_kernel_cross.sh
-    - name: Commit updated kernel binaries
-      run: |
-        git add apps/predbat/prediction_kernel_lib_*.so
-        if git diff --cached --quiet; then
-          echo "Kernel binaries unchanged"
-        else
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore: update prediction kernel binaries for all platforms"
-          git push
-        fi
+    - uses: pre-commit-ci/lite-action@v1.1.0
+      if: always()
+    - name: Upload kernel binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-binaries
+        path: apps/predbat/prediction_kernel_lib_*.so
