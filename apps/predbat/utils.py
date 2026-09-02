@@ -144,11 +144,51 @@ def is_debug_excluded_key(key):
     return is_secret_key(key)
 
 
-def is_secret_key(key):
+_REGISTRY_SECRET_NAMES = None
+
+
+def registry_secret_key_names():
     """
-    Return True when an apps.yaml key name looks like it holds a credential.
+    Return the apps.yaml config names components.py explicitly flags with "secret": True.
+
+    utils is imported by every component module, so components cannot be imported at module
+    scope here - it is imported on first use instead. An empty or failed result is not cached,
+    so a redaction that runs while components is still importing (a partially initialised
+    module) resolves properly on the next call rather than silently losing these names for the
+    life of the process. Standalone tools that never import components keep working on the
+    substring heuristic alone.
+    """
+    global _REGISTRY_SECRET_NAMES
+    if _REGISTRY_SECRET_NAMES is None:
+        try:
+            import components
+
+            names = components.secret_config_names()
+        except Exception:
+            names = None
+        if not names:
+            return frozenset()
+        _REGISTRY_SECRET_NAMES = frozenset(names)
+    return _REGISTRY_SECRET_NAMES
+
+
+def is_secret_key(key, registry=True):
+    """
+    Return True when an apps.yaml key name holds a credential and must not be served in the clear.
+
+    An explicit "secret": True flag in the component registry wins over both the substring
+    heuristic and the exempt-suffix list - the registry names a credential the key name alone
+    cannot reveal, such as an account number or a login identifier.
+
+    registry=False drops back to the key-name substrings alone, for callers asking the narrower
+    question "does this grant access?" rather than "must this be redacted?". Only
+    find_unmasked_secret_paths() does: an account number identifies rather than authenticates, so
+    telling every user with an inline octopus_api_account to move it into secrets.yaml would be
+    noise. Redaction is the strict default so a new caller fails safe rather than leaking.
     """
     key_lower = str(key).lower()
+    if registry and key_lower in registry_secret_key_names():
+        return True
     if key_lower.endswith(SECRET_KEY_EXEMPT_SUFFIXES):
         return False
     return any(substring in key_lower for substring in SECRET_KEY_SUBSTRINGS)
@@ -190,6 +230,12 @@ def find_unmasked_secret_paths(node, path=""):
     of every credential-like key (per is_secret_key()) whose value is a plain scalar rather
     than a '!secret' reference into secrets.yaml (loaded as a ruamel TaggedScalar).
 
+    Deliberately asks is_secret_key(registry=False): this drives the "stored in plain text,
+    consider !secret" advice, which is about values that grant access. The registry additionally
+    flags account numbers, meter point numbers and login identifiers so they are redacted out of
+    anything shared, but an inline octopus_api_account is the documented normal setup and
+    warning every user about it would be noise rather than advice.
+
     Only usable against a document loaded with ruamel's round-trip loader - a plain
     yaml.safe_load() has already resolved '!secret' tags to their real value and lost the
     distinction this depends on.
@@ -199,7 +245,7 @@ def find_unmasked_secret_paths(node, path=""):
     if isinstance(node, dict):
         for key, value in node.items():
             key_path = "{}.{}".format(path, key) if path else str(key)
-            if is_secret_key(key):
+            if is_secret_key(key, registry=False):
                 if value not in (None, "") and not isinstance(value, TaggedScalar):
                     yield key_path
             else:

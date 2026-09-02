@@ -23,8 +23,8 @@ import time
 from datetime import datetime
 
 from agent_tools import TOOL_DEFS, PredbatTools, format_plan_rows_table, mcp_tool_list, openai_tool_list, slim_plan, slim_plan_rows, compile_filter_argument, MCPArgumentError, FILTER_PATTERN_MAX, parse_log_time_bound
-from components import Components
-from utils import mask_secret_args
+from components import Components, secret_config_names
+from utils import is_secret_key, mask_secret_args
 from web_mcp import MCPServerWrapper
 
 GOLDEN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_tools_golden.json")
@@ -753,6 +753,131 @@ def test_args_from_apps_yaml_snapshot_is_redacted(my_predbat):
     return failed
 
 
+def test_registry_secret_flags_drive_redaction(my_predbat):
+    """Every arg the component registry flags "secret": True is redacted everywhere.
+
+    SECRET_KEY_SUBSTRINGS can only catch what a key *name* reveals (_key/password/secret/token),
+    so credentials named after what they identify sailed through in the clear: account numbers
+    (octopus_api_account, kraken_account_id), meter point numbers (kraken_mpan), site/system/plant
+    ids, login identifiers (deye_username, kraken_email, ohme_login, and myenergi_hub_serial,
+    which is the digest auth username) and the id half of an id/secret pair (deye_app_id,
+    solax_client_id). components.py now flags these explicitly and is_secret_key() honours it.
+
+    Mutation check: dropping the registry_secret_key_names() consultation from is_secret_key(),
+    or a "secret": True flag from any of the named args, fails an assertion below.
+    """
+    failed = False
+    print("**** Testing registry secret flags drive redaction ****")
+
+    declared = secret_config_names()
+    if not declared:
+        print("ERROR: the registry declared no secret args at all - the flag is not wired up")
+        failed = True
+
+    # The flag is the contract: whatever it marks must redact, or the declaration is a lie.
+    for name in sorted(declared):
+        if not is_secret_key(name):
+            print("ERROR: {} is flagged secret in components.py but is_secret_key() returns False".format(name))
+            failed = True
+
+    # The names that motivated the flag - none of these match any substring.
+    newly_covered = [
+        "octopus_api_account",
+        "kraken_account_id",
+        "kraken_export_account_id",
+        "kraken_mpan",
+        "kraken_export_mpan",
+        "kraken_email",
+        "myenergi_hub_serial",
+        "ohme_login",
+        "deye_username",
+        "deye_app_id",
+        "deye_company_id",
+        "sunsynk_username",
+        "alphaess_app_id",
+        "enphase_username",
+        "enphase_site_id",
+        "axle_site_id",
+        "axle_partner_username",
+        "sigenergy_system_id",
+        "teslemetry_site_id",
+        "solax_client_id",
+        "solax_plant_id",
+    ]
+    for name in newly_covered:
+        if name not in declared:
+            print("ERROR: {} is no longer flagged secret in components.py".format(name))
+            failed = True
+        if not is_secret_key(name):
+            print("ERROR: {} is a credential but is not redacted".format(name))
+            failed = True
+
+    # Over-redaction is its own bug: a serial addresses hardware rather than authenticating it,
+    # and it is what makes an integration bug report diagnosable. Same call as the token-expiry
+    # exemption - these must stay readable.
+    must_stay_visible = [
+        "solis_inverter_sn",
+        "deye_inverter_sn",
+        "alphaess_inverter_sn",
+        "sunsynk_inverter_sn",
+        "fox_inverter_sn",
+        "ge_cloud_serial",
+        "solax_plant_sn",
+        "kraken_base_url",
+        "kraken_provider",
+        "deye_auth_method",
+        "solis_token_expires_at",
+        "carbon_postcode",
+        "battery_size",
+    ]
+    for name in must_stay_visible:
+        if is_secret_key(name):
+            print("ERROR: {} is not a credential but is being redacted, which hides it from bug reports".format(name))
+            failed = True
+
+    # End to end, through what a user downloads and what a model is served.
+    original_args = my_predbat.args
+    try:
+        my_predbat.args = {
+            "octopus_api_account": "A-REAL-ACCOUNT",
+            "kraken_mpan": "9999999999999",
+            "myenergi_hub_serial": "REAL-HUB-SERIAL",
+            "solis_inverter_sn": "SN-STAYS-VISIBLE",
+            "battery_size": 9.5,
+        }
+        masked = mask_secret_args(my_predbat.args)
+        for key in ("octopus_api_account", "kraken_mpan", "myenergi_hub_serial"):
+            if masked[key] != "xxx":
+                print("ERROR: {} survived mask_secret_args: {}".format(key, masked[key]))
+                failed = True
+        if masked["solis_inverter_sn"] != "SN-STAYS-VISIBLE" or masked["battery_size"] != 9.5:
+            print("ERROR: redaction damaged values that must stay readable: {}".format(masked))
+            failed = True
+
+        tools = PredbatTools(my_predbat)
+        result = json.dumps(asyncio.run(tools.execute("get_apps", {})))
+        for secret in ("A-REAL-ACCOUNT", "9999999999999", "REAL-HUB-SERIAL"):
+            if secret in result:
+                print("ERROR: get_apps served {} in the clear".format(secret))
+                failed = True
+    finally:
+        my_predbat.args = original_args
+
+    # The '!secret' advice keeps the narrower scope: it is about values that grant access, and an
+    # inline account number is the documented normal setup, so warning about it would be noise.
+    # Redaction and this advice are deliberately different questions - see is_secret_key(registry=).
+    for name in ("octopus_api_account", "kraken_mpan", "myenergi_hub_serial", "enphase_site_id"):
+        if is_secret_key(name, registry=False):
+            print("ERROR: {} would now raise a plain-text !secret warning for every user who has it inline".format(name))
+            failed = True
+    for name in ("ha_key", "solcast_api_key", "kraken_password", "solis_access_token"):
+        if not is_secret_key(name, registry=False):
+            print("ERROR: {} must still raise the plain-text !secret warning".format(name))
+            failed = True
+
+    return failed
+
+
 def test_pathological_regex_arguments_are_rejected(my_predbat):
     """A nested-quantifier regex is refused before it can be compiled and run.
 
@@ -1438,6 +1563,7 @@ def run_agent_tools_tests(my_predbat):
     failed |= test_get_entity_history_lookback_clamp(my_predbat)
     failed |= test_nested_credentials_are_redacted(my_predbat)
     failed |= test_args_from_apps_yaml_snapshot_is_redacted(my_predbat)
+    failed |= test_registry_secret_flags_drive_redaction(my_predbat)
     failed |= test_get_apps_config_paths(my_predbat)
     failed |= test_get_plan_is_slimmed(my_predbat)
     failed |= test_set_config_refuses_what_it_cannot_change(my_predbat)
