@@ -2486,15 +2486,17 @@ chart.render();
         baseline_timestamp = baseline_json.get("timestamp", None) if baseline_json else None
 
         # Get current manual overrides
-        manual_charge_times = self.base.manual_times("manual_charge")
-        manual_export_times = self.base.manual_times("manual_export")
-        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
-        manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
-        manual_demand_times = self.base.manual_times("manual_demand")
-        manual_import_rates = self.base.manual_rates("manual_import_rates")
-        manual_export_rates = self.base.manual_rates("manual_export_rates")
-        manual_load_adjust = self.base.manual_rates("manual_load_adjust")
-        manual_soc_keep = self.base.manual_rates("manual_soc")
+        # Read-only: these run on the web server's own thread, so writing the decoded
+        # selection back could persist times captured mid-recompute (#4900)
+        manual_charge_times = self.base.manual_times("manual_charge", update=False)
+        manual_export_times = self.base.manual_times("manual_export", update=False)
+        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge", update=False)
+        manual_freeze_export_times = self.base.manual_times("manual_freeze_export", update=False)
+        manual_demand_times = self.base.manual_times("manual_demand", update=False)
+        manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
+        manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
+        manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
+        manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
@@ -2580,15 +2582,17 @@ chart.render();
         baseline_json = self.get_state_wrapper(entity_id=self.prefix + ".savings_yesterday_predbat", attribute="json", default=None)
 
         # Fetch override data
-        manual_charge_times = self.base.manual_times("manual_charge")
-        manual_export_times = self.base.manual_times("manual_export")
-        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
-        manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
-        manual_demand_times = self.base.manual_times("manual_demand")
-        manual_import_rates = self.base.manual_rates("manual_import_rates")
-        manual_export_rates = self.base.manual_rates("manual_export_rates")
-        manual_load_adjust = self.base.manual_rates("manual_load_adjust")
-        manual_soc_keep = self.base.manual_rates("manual_soc")
+        # Read-only: these run on the web server's own thread, so writing the decoded
+        # selection back could persist times captured mid-recompute (#4900)
+        manual_charge_times = self.base.manual_times("manual_charge", update=False)
+        manual_export_times = self.base.manual_times("manual_export", update=False)
+        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge", update=False)
+        manual_freeze_export_times = self.base.manual_times("manual_freeze_export", update=False)
+        manual_demand_times = self.base.manual_times("manual_demand", update=False)
+        manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
+        manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
+        manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
+        manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
@@ -4620,7 +4624,7 @@ chart.render();
 
             # For clear operations, we need to use the actual stored rate value, not the passed rate
             if action == "Clear Import":
-                manual_import_rates = self.base.manual_rates("manual_import_rates")
+                manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
                 actual_rate = manual_import_rates.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_import_rates", clear_option)
@@ -4629,7 +4633,7 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_import_rates", selection_option)
             elif action == "Clear Export":
-                manual_export_rates = self.base.manual_rates("manual_export_rates")
+                manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
                 actual_rate = manual_export_rates.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_export_rates", clear_option)
@@ -4642,7 +4646,7 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_load_adjust", selection_option)
             elif action == "Clear Load":
-                manual_load_adjust = self.base.manual_rates("manual_load_adjust")
+                manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
                 actual_rate = manual_load_adjust.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_load_adjust", clear_option)
@@ -4651,7 +4655,7 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_soc", selection_option)
             elif action == "Clear SOC":
-                manual_soc = self.base.manual_rates("manual_soc")
+                manual_soc = self.base.manual_rates("manual_soc", update=False)
                 actual_rate = manual_soc.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_soc", clear_option)
