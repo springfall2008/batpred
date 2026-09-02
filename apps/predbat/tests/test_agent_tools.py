@@ -812,6 +812,18 @@ def test_registry_secret_flags_drive_redaction(my_predbat):
             print("ERROR: {} is a credential but is not redacted".format(name))
             failed = True
 
+    # The registry ADDS to the substring heuristic, it does not replace it. A key belonging to no
+    # component at all - a plugin's, a new integration's, one Predbat has never heard of - must
+    # still redact on its name alone, or the registry would have narrowed the net rather than
+    # widening it. Mutation check: making is_secret_key() consult only the registry fails here.
+    for name in ("supabase_key", "some_new_integration_api_key", "whatever_password", "custom_secret", "unknown_token"):
+        if name in declared:
+            print("ERROR: test assumption broken - {} is a registry arg, so it proves nothing about unknown keys".format(name))
+            failed = True
+        if not is_secret_key(name):
+            print("ERROR: {} matches a credential substring but is no longer redacted".format(name))
+            failed = True
+
     # Over-redaction is its own bug: a serial addresses hardware rather than authenticating it,
     # and it is what makes an integration bug report diagnosable. Same call as the token-expiry
     # exemption - these must stay readable.

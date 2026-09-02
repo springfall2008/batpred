@@ -20,6 +20,7 @@ import re
 import array
 import os
 from datetime import datetime, timedelta, timezone, time
+from io import StringIO
 from functools import lru_cache
 from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 import copy
@@ -253,6 +254,53 @@ def find_unmasked_secret_paths(node, path=""):
     elif isinstance(node, list):
         for index, item in enumerate(node):
             yield from find_unmasked_secret_paths(item, "{}[{}]".format(path, index))
+
+
+def _mask_secrets_in_yaml_node(node):
+    """
+    Redact credential values in a ruamel round-trip node, in place, leaving layout alone.
+
+    A '!secret name' reference (a TaggedScalar) is left exactly as written: it holds no
+    credential, only the name of one in secrets.yaml, and which secret a key resolves to is
+    what makes a misconfigured integration diagnosable.
+    """
+    from ruamel.yaml.comments import TaggedScalar
+
+    if isinstance(node, dict):
+        for key in node:
+            value = node[key]
+            if is_secret_key(key):
+                if value not in (None, "") and not isinstance(value, TaggedScalar):
+                    node[key] = SECRET_MASK
+            else:
+                _mask_secrets_in_yaml_node(value)
+    elif isinstance(node, list):
+        for item in node:
+            _mask_secrets_in_yaml_node(item)
+
+
+def mask_secret_yaml_text(text):
+    """
+    Return apps.yaml text with credential values redacted, preserving comments and layout.
+
+    mask_secret_args() redacts the parsed args Predbat is running on; this redacts the file as
+    the user wrote it, so a download still reads like their own apps.yaml - comments, ordering,
+    quoting and '!secret' references intact - with only the credential values replaced.
+
+    Raises rather than returning anything on a file that will not parse: the caller asked for
+    a redacted document, and serving unredacted text because the parse failed is exactly the
+    leak this exists to prevent.
+    """
+    from ruamel.yaml import YAML
+
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    yaml.width = YAML_DUMP_WIDTH
+    data = yaml.load(text)
+    _mask_secrets_in_yaml_node(data)
+    buf = StringIO()
+    yaml.dump(data, buf)
+    return buf.getvalue()
 
 
 def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=PREDBAT_LOG_FILE_PREV):
