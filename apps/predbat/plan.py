@@ -2010,7 +2010,6 @@ class Plan:
             for dwindow in self.export_window_best:
                 if "clipping_target_soc_pct" in dwindow:
                     target_soc = dwindow["clipping_target_soc_pct"]
-                    dstart = dwindow["start"]
                     dend = dwindow["end"]
                     # Cap any charge window that occurs before or during this clipping target (within 18 hours lookback)
                     for window_n, window in enumerate(self.charge_window_best):
