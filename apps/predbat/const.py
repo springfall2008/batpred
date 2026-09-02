@@ -68,10 +68,9 @@ INVERTER_TEST = False  # Run inverter control self test
 # Sentinel values for an export window's target SoC/limit (export_limits_best and friends).
 # A real target is any value below EXPORT_LIMIT_FREEZE, expressed as a percentage 0-100
 # (see calc_percent_limit) with the fractional part sometimes encoding a low-power export rate.
-# prediction_kernel.cpp hardcodes the same two literals independently (it can't import this
-# file) - unlike PREDBAT_MAX_CARS/PK_MAX_CARS above, they aren't yet named there too, so a value
-# change here needs the matching literals found and updated by hand, in lockstep with a parity
-# revision bump and a rebuild of all platform binaries.
+# prediction_kernel.cpp defines the same two values independently (it can't import this file) as
+# PK_EXPORT_LIMIT_FREEZE/PK_EXPORT_LIMIT_IDLE, so a value change here needs those updated by hand
+# in lockstep, with a parity revision bump and a rebuild of all platform binaries.
 EXPORT_LIMIT_FREEZE = 99.0  # Hold SoC, export only genuine PV surplus - no forced discharge
 EXPORT_LIMIT_IDLE = 100.0  # Export window disabled entirely
 
