@@ -748,7 +748,6 @@ def simple_scenario(
     assert_clipped=0,
     pv_ac_limit=0,
     clipping_buffer_enable=False,
-    clipping_cost_weight=0,
     clipping_amplification=1.0,
     clipping_limit_override=0,
     pv_hours=None,
@@ -853,7 +852,6 @@ def simple_scenario(
 
     # Clipping peak penalty settings
     my_predbat.clipping_buffer_enable = clipping_buffer_enable
-    my_predbat.clipping_cost_weight = clipping_cost_weight
     my_predbat.clipping_amplification = clipping_amplification
     my_predbat.clipping_limit_override = clipping_limit_override
 
@@ -927,9 +925,6 @@ def simple_scenario(
             pv10_step,
             load_step,
             load10_step,
-            pv_forecast_peak_step=pv_peak_step,
-            clipping_limit=clipping_limit_eff,
-            clipping_cost_weight=clipping_cost_weight if clipping_buffer_enable else 0,
         )
 
     if kernel_eligible and not getattr(prediction, "kernel_handle", 0):

@@ -696,10 +696,16 @@ class Plan:
                                 # Materialise the full limit lists only for scenarios that will run predictions
                                 try_charge_limit = best_limits_reset.copy()
                                 for window_n, freeze in charge_mods.items():
-                                    if not freeze and "clipping_target_soc_pct" in charge_window[window_n]:
-                                        try_charge_limit[window_n] = charge_window[window_n]["clipping_target_soc_pct"]
+                                    if not freeze:
+                                        c_win = charge_window[window_n]
+                                        clip_target = None
+                                        for e_win in getattr(self, "export_window_best", []):
+                                            if e_win.get("clipping_target_soc_pct") is not None and e_win["start"] < c_win["end"] and e_win["end"] > c_win["start"]:
+                                                tgt = e_win["clipping_target_soc_pct"]
+                                                clip_target = min(clip_target, tgt) if clip_target is not None else tgt
+                                        try_charge_limit[window_n] = clip_target if clip_target is not None else self.soc_max
                                     else:
-                                        try_charge_limit[window_n] = self.reserve if freeze else self.soc_max
+                                        try_charge_limit[window_n] = self.reserve
                                 try_export = best_export_limits_reset.copy()
                                 for window_n, freeze in export_mods.items():
                                     if "clipping_target_soc_pct" in export_window[window_n]:
@@ -1965,12 +1971,6 @@ class Plan:
             load_minutes_step10,
             pv_forecast_minute90_step,
             load_minutes_step90,
-            pv_forecast_peak_step=pv_forecast_peak_step,
-            clipping_limit=clipping_limit_effective,
-            clipping_cost_weight=self.clipping_cost_weight if self.clipping_buffer_enable else 0,
-            clipping_buffer_kwh=self.clipping_buffer_kwh,
-            clipping_buffer_start=self.clipping_buffer_start,
-            clipping_buffer_end=self.clipping_buffer_end,
         )
         # The kernel spreads one batched fan-out across threads with the GIL released for the whole
         # call, so these are real cores - unlike a Python ThreadPool, which peaked at 1.15x on two
@@ -2426,7 +2426,13 @@ class Plan:
                         clip_target = min(clip_target, tgt) if clip_target is not None else tgt
 
         if clip_target is not None:
-            loop_soc = min(loop_soc, clip_target)
+            # Bug 27: convert percentage to kWh
+            clip_target_kwh = (clip_target / 100.0) * self.soc_max
+            # We don't cap loop_soc (so it can search up to soc_max for profitable arbitrage),
+            # but we explicitly inject clip_target_kwh as a candidate to ensure the 
+            # exact headroom limit is always evaluated.
+            if clip_target_kwh not in try_charge_limit:
+                try_charge_limit.append(clip_target_kwh)
 
         # Create min/max SoC to avoid simulating SoC that are not going have any impact
         # Can't do this for anything but a single window as the winder SoC impact isn't known
