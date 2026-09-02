@@ -1,0 +1,116 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+# fmt on
+"""Tests for the packed export limit encoding accessors.
+
+An export limit is one double carrying three orthogonal signals - target SoC, export power and
+mode. These tests pin the accessors in utils.py against the decode expressions that are written
+out by hand in Prediction.run_prediction and prediction_kernel.cpp, so the two cannot drift.
+"""
+
+import random
+
+from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from utils import export_mode_of, export_target_of, export_power_of, pack_export_limit
+
+
+def test_export_encoding_roundtrip():
+    """Every representable target/power pair survives a pack/unpack round trip"""
+    failed = 0
+    for target in range(0, 99):
+        for power in (1.0, 0.7, 0.5, 0.3):
+            packed = pack_export_limit(EXPORT_MODE_TARGET, target, power)
+            if export_mode_of(packed) != EXPORT_MODE_TARGET:
+                print("ERROR: packed {} target {} power {} decoded as mode {}".format(packed, target, power, export_mode_of(packed)))
+                failed += 1
+            if export_target_of(packed) != target:
+                print("ERROR: packed {} decoded target {} expected {}".format(packed, export_target_of(packed), target))
+                failed += 1
+            if abs(export_power_of(packed) - power) > 1e-9:
+                print("ERROR: packed {} decoded power {} expected {}".format(packed, export_power_of(packed), power))
+                failed += 1
+    return failed
+
+
+def test_export_encoding_modes():
+    """The two reserved mode values decode as modes and carry no target"""
+    failed = 0
+    for mode, expected in ((EXPORT_MODE_FREEZE, EXPORT_LIMIT_FREEZE), (EXPORT_MODE_IDLE, EXPORT_LIMIT_IDLE)):
+        packed = pack_export_limit(mode)
+        if packed != expected:
+            print("ERROR: mode {} packed to {} expected {}".format(mode, packed, expected))
+            failed += 1
+        if export_mode_of(packed) != mode:
+            print("ERROR: mode {} decoded as {}".format(mode, export_mode_of(packed)))
+            failed += 1
+        # A mode has no target - returning None stops a caller using 99/100 as if it were one
+        if export_target_of(packed) is not None:
+            print("ERROR: mode {} reported a target {}".format(mode, export_target_of(packed)))
+            failed += 1
+        if export_power_of(packed) != 1.0:
+            print("ERROR: mode {} reported power {} expected full rate".format(mode, export_power_of(packed)))
+            failed += 1
+    return failed
+
+
+def test_export_encoding_matches_legacy_decode():
+    """The accessors agree with the hand-written decode expressions they replace.
+
+    prediction.py and prediction_kernel.cpp both spell the decode out inline; this pins the
+    accessors to those expressions so a change to one without the other is caught here.
+    """
+    failed = 0
+    random.seed(2)
+    values = [99.0, 100.0, 98.999, 0.0, 47.3] + [random.uniform(0, 99) for _ in range(5000)]
+    for value in values:
+        # prediction.py:903 / prediction_kernel.cpp:949
+        legacy_power = 1 - (value - int(value)) if value < EXPORT_LIMIT_FREEZE else 1.0
+        if abs(export_power_of(value) - legacy_power) > 1e-12:
+            print("ERROR: value {} power {} legacy {}".format(value, export_power_of(value), legacy_power))
+            failed += 1
+        # prediction.py:1074 - freeze is only ever the exact sentinel today
+        legacy_freeze = value < EXPORT_LIMIT_IDLE and value == EXPORT_LIMIT_FREEZE
+        if (export_mode_of(value) == EXPORT_MODE_FREEZE) != legacy_freeze:
+            print("ERROR: value {} freeze {} legacy {}".format(value, export_mode_of(value) == EXPORT_MODE_FREEZE, legacy_freeze))
+            failed += 1
+        if (export_mode_of(value) == EXPORT_MODE_IDLE) != (value >= EXPORT_LIMIT_IDLE):
+            print("ERROR: value {} idle disagreed with legacy".format(value))
+            failed += 1
+    return failed
+
+
+def test_export_encoding_reserved_interval():
+    """The [99.0, 100.0) interval is unreachable today - pin it so the limitation is explicit.
+
+    Reserving EXPORT_LIMIT_FREEZE while the fraction is live consumes the whole interval, so a
+    low-power export to a 99% target cannot be expressed. This is a known consequence of the
+    packed encoding rather than a property worth keeping; the test records it so that when the
+    representation is split the change of behaviour is visible rather than silent.
+    """
+    failed = 0
+    packed = pack_export_limit(EXPORT_MODE_TARGET, 99, 0.7)
+    # Encoding a 99% target at 70% power lands at 99.3, which reads back as a freeze, not a target
+    if export_mode_of(packed) != EXPORT_MODE_FREEZE:
+        print("ERROR: 99% target at low power decoded as mode {} - the reserved interval changed".format(export_mode_of(packed)))
+        failed += 1
+    return failed
+
+
+def run_export_encoding_tests(my_predbat=None):
+    """Run all export limit encoding tests"""
+    failed = 0
+    print("**** Running export encoding tests ****")
+    failed += test_export_encoding_roundtrip()
+    failed += test_export_encoding_modes()
+    failed += test_export_encoding_matches_legacy_decode()
+    failed += test_export_encoding_reserved_interval()
+    if not failed:
+        print("Test: export limit encoding accessors match the hand-written decode they replace")
+    return failed

@@ -143,6 +143,7 @@ from tests.test_web_annual import (
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests, run_clone_windows_tests, run_window_cache_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
+from tests.test_export_encoding import run_export_encoding_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
@@ -396,6 +397,7 @@ def main():
     # Format: (name, function, description, slow)
     TEST_REGISTRY = [
         ("secrets", run_secrets_tests, "Secrets loading tests", False),
+        ("export_encoding", run_export_encoding_tests, "Packed export limit encoding accessor tests", False),
         ("perf", run_perf_test, "Performance tests", False),
         ("model", run_model_tests, "Model tests", False),
         ("plot", run_plot_tests, "Failure plot display is opt-in (--plot) tests", False),

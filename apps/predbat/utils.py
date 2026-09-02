@@ -21,7 +21,7 @@ import array
 import os
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
-from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
+from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 import copy
 import json
 
@@ -1416,6 +1416,61 @@ def calc_percent_limit(charge_limit, soc_max):
             return 0
         else:
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
+
+
+def export_mode_of(export_limit):
+    """Which of the three export modes a packed export limit represents.
+
+    The limit is a single double carrying three orthogonal signals - target SoC in the integer
+    part, export power in the fraction, and mode as two reserved whole values. Callers should ask
+    this rather than comparing against EXPORT_LIMIT_FREEZE/EXPORT_LIMIT_IDLE themselves: several
+    modules currently do that inconsistently (some test `== 99`, some `< 99`, some `>= 99`), which
+    is how a low-power export to a 99% target became inexpressible.
+
+    Returns EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE or EXPORT_MODE_IDLE.
+    """
+    if export_limit >= EXPORT_LIMIT_IDLE:
+        return EXPORT_MODE_IDLE
+    if export_limit >= EXPORT_LIMIT_FREEZE:
+        return EXPORT_MODE_FREEZE
+    return EXPORT_MODE_TARGET
+
+
+def export_target_of(export_limit):
+    """The target SoC percentage a packed export limit exports down to.
+
+    Only meaningful for EXPORT_MODE_TARGET; the reserved mode values do not carry a target and
+    return None so a caller cannot silently use 99 or 100 as if it were one.
+    """
+    if export_limit >= EXPORT_LIMIT_FREEZE:
+        return None
+    return int(export_limit)
+
+
+def export_power_of(export_limit):
+    """The export power fraction of a packed export limit, 1.0 being full rate.
+
+    Mirrors the decode in Prediction.run_prediction and prediction_kernel.cpp: the stored fraction
+    counts *down* from full power, so 47.3 means 70% rate. Modes have no power level and return
+    full rate, matching what the callers already assume.
+    """
+    if export_limit >= EXPORT_LIMIT_FREEZE:
+        return 1.0
+    return 1 - (export_limit - int(export_limit))
+
+
+def pack_export_limit(mode, target=None, power=1.0):
+    """Build a packed export limit from the three signals it encodes.
+
+    The inverse of export_mode_of/export_target_of/export_power_of, kept beside them so the
+    encoding is written down in exactly one place instead of being re-derived at each call site
+    (see plan.py's ladder, which builds the same values by hand).
+    """
+    if mode == EXPORT_MODE_IDLE:
+        return EXPORT_LIMIT_IDLE
+    if mode == EXPORT_MODE_FREEZE:
+        return EXPORT_LIMIT_FREEZE
+    return int(target) + (1.0 - power)
 
 
 def clone_windows(windows):
