@@ -47,8 +47,12 @@ def run_test_web_if(my_predbat):
         my_predbat.components.start("web")
         ha = my_predbat.ha_interface
 
-        # Inject a fake credential so we can verify live apps.yaml masking below
+        # Inject fake credentials so we can verify live apps.yaml masking below. Two kinds:
+        # one the key-name substrings catch, and one only the component registry's "secret"
+        # flag catches - an account number reads like ordinary config, so before the flag
+        # existed this download served it in the clear.
         my_predbat.args["octopus_api_key"] = "test_secret_value"
+        my_predbat.args["octopus_api_account"] = "test_account_number"
 
         # Define all registered endpoints from web.py
         # Format: (method, path)
@@ -330,15 +334,25 @@ def run_test_web_if(my_predbat):
         if res.status_code != 200 or "test_secret_value" in res.text or "xxx" not in res.text:
             print("ERROR: Default /debug_apps_live request was not masked")
             failed = 1
+        if "test_account_number" in res.text:
+            print("ERROR: Default /debug_apps_live request served a registry-flagged account number in the clear")
+            failed = 1
 
         res = requests.get("http://127.0.0.1:5052/debug_apps_live", params={"masked": "0"})
         if res.status_code != 200 or "test_secret_value" not in res.text:
             print("ERROR: Unmasked /debug_apps_live (masked=0) did not contain the expected credential value")
             failed = 1
+        if "test_account_number" not in res.text:
+            print("ERROR: Unmasked /debug_apps_live (masked=0) dropped the account number - the opt-out must still return everything")
+            failed = 1
 
         res = requests.get("http://127.0.0.1:5052/debug_apps_live", params={"masked": "1"})
         if res.status_code != 200 or "test_secret_value" in res.text or "xxx" not in res.text:
             print("ERROR: Masked /debug_apps_live did not redact the expected credential value")
+            failed = 1
+        # The registry flag has to reach this route too, not just the debug yaml and MCP.
+        if "test_account_number" in res.text:
+            print("ERROR: Masked /debug_apps_live did not redact the registry-flagged account number")
             failed = 1
 
         # Check endpoint coverage
