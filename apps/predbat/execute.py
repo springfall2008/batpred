@@ -1198,6 +1198,40 @@ class Execute:
                 },
             )
 
+        # Power a load could take now without importing or draining the battery.
+        #
+        # The car's own draw is added back so the sensor keeps reading what is available for it
+        # rather than collapsing once the charger starts. Only when the charger is inside the CT
+        # clamp: outside it the grid reading never saw the car, so adding it would invent a surplus
+        # equal to the charger draw. prediction.py branches on the same flag.
+        car_add_back = self.car_charging_power if self.car_energy_reported_load else 0.0
+
+        # Subtracting battery discharge keeps battery power from being reported as solar. Battery
+        # charging is not added back, so a charging battery takes the surplus first.
+        solar_surplus = max(0.0, self.grid_power + car_add_back - max(0.0, self.battery_power))
+
+        # Nothing can be spare that was never generated. A grid sensor wired positive-on-import
+        # without grid_power_invert would otherwise make the surplus track the import, and this
+        # sensor switches real load on.
+        solar_surplus = min(solar_surplus, max(0.0, self.pv_power))
+        self.dashboard_item(
+            self.prefix + ".solar_surplus_power",
+            state=dp3(solar_surplus / 1000.0),
+            attributes={
+                "friendly_name": "Current solar surplus power",
+                "state_class": "measurement",
+                "unit_of_measurement": "kW",
+                "device_class": "power",
+                "icon": "mdi:solar-power",
+                "grid_power": dp3(self.grid_power / 1000.0),
+                "battery_power": dp3(self.battery_power / 1000.0),
+                "pv_power": dp3(self.pv_power / 1000.0),
+                "car_charging_power": dp3(self.car_charging_power / 1000.0),
+                "car_charging_power_configured": self.car_charging_power_configured,
+                "car_charging_power_included": bool(self.car_energy_reported_load),
+            },
+        )
+
     def publish_inverter_config(self):
         """
         Publish the static configuration the prediction runs from, aggregated over all the inverters

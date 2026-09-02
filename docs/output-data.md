@@ -283,10 +283,11 @@ predbat.status additionally has the following attributes that are automatically 
 
 Predbat outputs the values it read from your inverters as totals, this gives the current power flow:
 
-- predbat.load_power - The current house load in Watts
-- predbat.battery_power - The current power of your battery (charging or discharging) in Watts
-- predbat.pv_power - The current power of your PV system in Watts
-- predbat.grid_power - The current grid power flow (import or export) in Watts
+- predbat.load_power - The current house load in kW
+- predbat.battery_power - The current power of your battery in kW, positive when discharging and negative when charging
+- predbat.pv_power - The current power of your PV system in kW
+- predbat.grid_power - The current grid power flow in kW, positive when exporting and negative when importing
+- predbat.solar_surplus_power - The power in kW a flexible load (a car charger, an immersion heater or anything else you can divert to) could take right now without importing or draining the battery, capped at your current PV generation. Attributes give the **grid_power**, **battery_power**, **pv_power** and **car_charging_power** it was calculated from, plus **car_charging_power_configured** and **car_charging_power_included** - see [charging from solar surplus](car-charging.md#charging-from-solar-surplus)
 - predbat.car_charging_power - The current power drawn by your car charger in kW. Only published when **car_charging_power** is set in `apps.yaml`, or wired up automatically by a supported charger integration (Ohme, myenergi Zappi, GivEnergy EV charger, AlphaESS or the Predbat gateway) - see [car charging](car-charging.md#configure-appsyaml-for-your-car-charging)
 
 ## Baseline data
@@ -423,6 +424,9 @@ The following sensors are set based on what Predbat is currently controlling the
 
 - binary_sensor.predbat_charging - Set to 'on' when Predbat is force charging the battery (from solar, or if that is insufficient, from grid import), or 'off' otherwise
 - binary_sensor.predbat_exporting - Set to 'on' when Predbat is force discharging the battery for export income, 'off' otherwise.
+- binary_sensor.predbat_force_export_slot - Set to 'on' when the plan has a force export slot running now, 'off' otherwise.
+Unlike the two sensors above this comes from the plan rather than from what is being commanded, so it stays on for the whole slot,
+includes freeze export slots, and still reports when Predbat is in read-only mode - see [charging from solar surplus](car-charging.md#charging-from-solar-surplus)
 
 These are useful for automations if for example, you want to turn off car charging when the battery is being exported.
 

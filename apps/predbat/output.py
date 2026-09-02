@@ -2932,6 +2932,17 @@ class Output:
         )
         self.dashboard_item("binary_sensor." + self.prefix + "_demand", state="on" if isDemand else "off", attributes={"friendly_name": "Predbat is in demand mode", "icon": "mdi:battery-arrow-up"})
 
+        # Taken from the plan, not from isExporting above. isExporting is off in read only mode,
+        # off during Hold exporting, and only on for the minutes an export is commanded, whereas an
+        # automation needs to know a slot is running for its whole duration including freeze export.
+        export_window_n = self.in_charge_window(self.export_window_best, self.minutes_now)
+        in_export_slot = self.set_export_window and export_window_n >= 0 and self.export_limits_best[export_window_n] < EXPORT_LIMIT_IDLE
+        self.dashboard_item(
+            "binary_sensor." + self.prefix + "_force_export_slot",
+            state="on" if in_export_slot else "off",
+            attributes={"friendly_name": "Predbat is in a force export slot", "icon": "mdi:transmission-tower-export"},
+        )
+
     def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step):
         # Normalize to list for multi-car support
         entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
