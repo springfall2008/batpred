@@ -21,8 +21,8 @@ import copy
 from html import escape as escape_html
 from datetime import timedelta
 from predbat import THIS_VERSION_DISPLAY
-from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, MINUTE_WATT
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate
+from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, pack_export_limit
 from prediction import Prediction
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
@@ -764,7 +764,7 @@ class Output:
         export_window_n = -1
         for minute in range(minutes_now, self.forecast_minutes + minutes_now, PREDICT_STEP):
             export_window_n = self.in_charge_window(self.export_window_best, minute)
-            if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
+            if export_window_n >= 0 and export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_IDLE:
                 export_window_n = -1
             if export_window_n >= 0:
                 break
@@ -776,7 +776,7 @@ class Output:
         """
         if export_window_n >= 0:
             target_export = self.export_window_best[export_window_n].get("target", self.export_limits_best[export_window_n])
-            if self.export_limits_best[export_window_n] == EXPORT_LIMIT_FREEZE:
+            if export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_FREEZE:
                 text = "freeze exporting for the next {}".format(self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))  # don't include target % for freeze exporting as (the 99%) is meaningless
             else:
                 text = "force exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
@@ -819,7 +819,7 @@ class Output:
         """
         Get the export type for the given export limit
         """
-        if export_limit == EXPORT_LIMIT_FREEZE:
+        if export_mode_of(export_limit) == EXPORT_MODE_FREEZE:
             if current:
                 return "freeze exporting"
             else:
@@ -935,7 +935,7 @@ class Output:
             charge_window_n = -1
 
         export_window_n = self.in_charge_window(self.export_window_best, self.minutes_now)
-        if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
+        if export_window_n >= 0 and export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_IDLE:
             export_window_n = -1
 
         charge_export_text = self.get_charge_export_text(self.minutes_now, charge_window_n, export_window_n)
@@ -1133,7 +1133,7 @@ class Output:
 
             for try_minute in range(minute_start, minute_end, PREDICT_STEP):
                 export_window_n = self.in_charge_window(self.export_window_best, try_minute)
-                if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
+                if export_window_n >= 0 and export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_IDLE:
                     export_window_n = -1
                 if export_window_n >= 0:
                     break
@@ -1149,7 +1149,7 @@ class Output:
                 discharge_intersect = -1
                 for try_minute in range(minute_start, charge_end_minute, PREDICT_STEP):
                     discharge_intersect = self.in_charge_window(self.export_window_best, try_minute)
-                    if discharge_intersect >= 0 and self.export_limits_best[discharge_intersect] == EXPORT_LIMIT_IDLE:
+                    if discharge_intersect >= 0 and export_mode_of(self.export_limits_best[discharge_intersect]) == EXPORT_MODE_IDLE:
                         discharge_intersect = -1
                     if discharge_intersect >= 0:
                         break
@@ -1395,7 +1395,7 @@ class Output:
                 if "target" in self.export_window_best[export_window_n]:
                     target = self.export_window_best[export_window_n]["target"]
 
-                if limit == EXPORT_LIMIT_FREEZE:  # freeze exporting
+                if export_mode_of(limit) == EXPORT_MODE_FREEZE:  # freeze exporting
                     if not had_state:
                         state = ""
                     if state:
@@ -1407,7 +1407,7 @@ class Output:
                     raw_state = "FrzExp"
                     show_limit = ""  # suppress displaying the limit (of 99) when freeze exporting as its a meaningless number
                     reason_parts.append({"code": "freeze_export", "params": {}})
-                elif limit < EXPORT_LIMIT_IDLE:
+                elif export_mode_of(limit) != EXPORT_MODE_IDLE:
                     if not had_state:
                         state = ""
                     if state:
@@ -2237,7 +2237,7 @@ class Output:
             window_n = self.in_charge_window(export_window, minute)
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
-            if window_n >= 0 and (export_limits[window_n] < EXPORT_LIMIT_IDLE):
+            if window_n >= 0 and (export_mode_of(export_limits[window_n]) != EXPORT_MODE_IDLE):
                 soc_perc = export_limits[window_n]
                 soc_kw = (soc_perc * self.soc_max) / 100.0
                 if not export_limit_first:
@@ -3306,7 +3306,7 @@ class Output:
                     self.export_window_best.append({"start": export_start_minute, "end": export_end_minute})
                     if "freeze" in export_during_slot:
                         # Assume freeze export
-                        self.export_limits_best.append(EXPORT_LIMIT_FREEZE)
+                        self.export_limits_best.append(pack_export_limit(EXPORT_MODE_FREEZE))
                     else:
                         soc_was = battery_soc_yesterday_array.get(export_end_minute, 0.0)
                         soc_percent = calc_percent_limit(soc_was, self.soc_max)
