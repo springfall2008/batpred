@@ -627,7 +627,7 @@ Copy the template [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfa
 
 Install the [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) integration via HACS and configure it with your Hanchu cloud account credentials. Confirm that inverter and battery sensors are appearing in Home Assistant before proceeding.
 
-### Step 1 — Create helpers
+### Hanchu Step 1 — Create helpers
 
 Create the following helpers in Home Assistant (Settings → Devices & Services → Helpers):
 
@@ -646,7 +646,7 @@ Create the following helpers in Home Assistant (Settings → Devices & Services 
 
 `input_text.hanchu_last_mode_action` tracks the last mode successfully applied so the bridge script can skip a redundant API call when Predbat reasserts a state that is already active.
 
-### Step 2 — Create the bridge script
+### Hanchu Step 2 — Create the bridge script
 
 All four of Predbat's service hooks call the same script, `script.hanchu_set_state_queued`, passing a `mode_action` field to indicate which state to apply. The script runs with `mode: queued` so if Predbat fires two calls close together — for example stopping a discharge and starting a charge in the same plan-evaluation cycle — Home Assistant queues the second call behind the first rather than letting both `device_control` calls race each other.
 
@@ -762,7 +762,7 @@ sequence:
 
 The script always writes all four time slot fields (`TCT_START_1`, `TCT_END_1`, `TDT_START_1`, `TDT_END_1`) on every call, zeroing whichever pair is not the active mode. This keeps charge and discharge mutually exclusive on the device without relying on separate stop/start calls landing in the right order.
 
-### Step 3 — Create the mid-window time update automation
+### Hanchu Step 3 — Create the mid-window time update automation
 
 Predbat may revise its planned charge or discharge end time mid-window without issuing a new charge_start or discharge_start service call. Without this automation, the Hanchu would continue using the original end time written at the start of the window, potentially stopping charge or discharge earlier than Predbat intended.
 
@@ -836,7 +836,7 @@ actions:
 mode: queued
 ```
 
-### Step 4 — Add the soc_kw template sensor
+### Hanchu Step 4 — Add the soc_kw template sensor
 
 Predbat requires a `soc_kw` sensor reporting battery state of charge in kWh. Add the following to your `configuration.yaml`:
 
@@ -854,7 +854,7 @@ template:
 
 Replace `YOURSERIAL` with your device serial number and `NN.NN` with your total battery capacity in kWh (for example `18.80` for a dual 9.4 kWh system). Restart Home Assistant after adding this.
 
-### Step 5 — Configure apps.yaml
+### Hanchu Step 5 — Configure apps.yaml
 
 - Replace `YOURSERIAL` throughout the template with your device serial number as it appears in your HA entity IDs
 - Adjust `inverter_limit`, `inverter_limit_charge`, `inverter_limit_discharge`, `inverter_limit_export` and `battery_rate_max` to match your inverter and battery rated capacity in watts
