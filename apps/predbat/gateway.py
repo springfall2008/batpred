@@ -15,8 +15,8 @@ import ssl
 import time
 import uuid
 import traceback
-from utils import calc_percent_limit
-from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from utils import calc_percent_limit, export_mode_of, export_target_of, export_power_of
+from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 import pytz as _pytz
 
 from component_base import ComponentBase
@@ -364,23 +364,21 @@ class GatewayMQTT(ComponentBase):
         # Convert export/discharge windows to plan entries
         for i, window in enumerate(export_windows or []):
             limit = export_limits[i] if i < len(export_limits or []) else 0
-            if limit >= EXPORT_LIMIT_IDLE:
+            mode = export_mode_of(limit)
+            if mode == EXPORT_MODE_IDLE:
                 continue
-            target_soc = int(limit)
-            export_power_w = discharge_rate_w
-            # Freeze export (export limit == EXPORT_LIMIT_FREEZE): hold SoC and export only surplus PV
-            # rather than force-discharge. There is no freeze mode, so express it as a
-            # discharge entry with rate 0 and target = reserve. Match core's exact ==
-            # check — a fractional limit (e.g. 99.5) is a normal export, not a freeze.
-            if limit == EXPORT_LIMIT_FREEZE:
+            if mode == EXPORT_MODE_FREEZE:
+                # Freeze export: hold SoC and export only surplus PV rather than force-discharge.
+                # There is no freeze mode here, so express it as a discharge entry with rate 0
+                # and target = reserve.
                 target_soc = reserve_percent
                 export_power_w = 0
             else:
-                # Low-power export: the planner encodes the chosen export rate in the
-                # fractional part of the limit (e.g. 5.3 -> 70% of max), and execute applies
-                # rate_scale = 1 - frac (see plan.py / execute.py). With low power off there
-                # is no fraction, so this is full rate.
-                export_power_w = round(discharge_rate_w * (1 - (limit - int(limit))))
+                # Low-power export: the planner encodes the chosen export rate in the limit and
+                # execute applies the same scaling (see plan.py / execute.py). With low power off
+                # there is no fraction, so this is full rate.
+                target_soc = export_target_of(limit)
+                export_power_w = round(discharge_rate_w * export_power_of(limit))
             start_minutes = window.get("start", 0)
             end_minutes = window.get("end", 0)
             # Work out hours and minutes

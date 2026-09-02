@@ -1427,11 +1427,19 @@ def export_mode_of(export_limit):
     modules currently do that inconsistently (some test `== 99`, some `< 99`, some `>= 99`), which
     is how a low-power export to a 99% target became inexpressible.
 
+    The sentinels are matched exactly, not by range. That matters for the [99.0, 100.0) interval,
+    which the packed encoding cannot produce but which the codebase disagrees about: 11 sites test
+    `== EXPORT_LIMIT_FREEZE` (99.5 is a normal export) and 15 test `< EXPORT_LIMIT_FREEZE` (99.5 is
+    not), and prediction.py manages both - line 900 will not force-export it and line 1074 will not
+    freeze it, so it would silently idle. Exact matching preserves the more common reading and
+    keeps this function inert; the disagreement is only truly fixable once the fields are split,
+    since it exists because one number is answering two questions.
+
     Returns EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE or EXPORT_MODE_IDLE.
     """
     if export_limit >= EXPORT_LIMIT_IDLE:
         return EXPORT_MODE_IDLE
-    if export_limit >= EXPORT_LIMIT_FREEZE:
+    if export_limit == EXPORT_LIMIT_FREEZE:
         return EXPORT_MODE_FREEZE
     return EXPORT_MODE_TARGET
 
@@ -1442,7 +1450,7 @@ def export_target_of(export_limit):
     Only meaningful for EXPORT_MODE_TARGET; the reserved mode values do not carry a target and
     return None so a caller cannot silently use 99 or 100 as if it were one.
     """
-    if export_limit >= EXPORT_LIMIT_FREEZE:
+    if export_mode_of(export_limit) != EXPORT_MODE_TARGET:
         return None
     return int(export_limit)
 
@@ -1454,7 +1462,7 @@ def export_power_of(export_limit):
     counts *down* from full power, so 47.3 means 70% rate. Modes have no power level and return
     full rate, matching what the callers already assume.
     """
-    if export_limit >= EXPORT_LIMIT_FREEZE:
+    if export_mode_of(export_limit) != EXPORT_MODE_TARGET:
         return 1.0
     return 1 - (export_limit - int(export_limit))
 

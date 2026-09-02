@@ -77,7 +77,7 @@ def test_export_encoding_matches_legacy_decode():
             failed += 1
         # prediction.py:1074 - freeze is only ever the exact sentinel today
         legacy_freeze = value < EXPORT_LIMIT_IDLE and value == EXPORT_LIMIT_FREEZE
-        if (export_mode_of(value) == EXPORT_MODE_FREEZE) != legacy_freeze:
+        if (export_mode_of(value) == EXPORT_MODE_FREEZE) != legacy_freeze:  # exact match, so these agree everywhere
             print("ERROR: value {} freeze {} legacy {}".format(value, export_mode_of(value) == EXPORT_MODE_FREEZE, legacy_freeze))
             failed += 1
         if (export_mode_of(value) == EXPORT_MODE_IDLE) != (value >= EXPORT_LIMIT_IDLE):
@@ -87,18 +87,33 @@ def test_export_encoding_matches_legacy_decode():
 
 
 def test_export_encoding_reserved_interval():
-    """The [99.0, 100.0) interval is unreachable today - pin it so the limitation is explicit.
+    """A value inside (99.0, 100.0) is read as a normal export, matching the more common convention.
 
-    Reserving EXPORT_LIMIT_FREEZE while the fraction is live consumes the whole interval, so a
-    low-power export to a 99% target cannot be expressed. This is a known consequence of the
-    packed encoding rather than a property worth keeping; the test records it so that when the
-    representation is split the change of behaviour is visible rather than silent.
+    The packed encoding cannot produce this interval - reserving EXPORT_LIMIT_FREEZE while the
+    fraction is live consumes it, so a low-power export to a 99% target is inexpressible. The
+    codebase nonetheless disagrees about what such a value would mean: 11 sites test
+    `== EXPORT_LIMIT_FREEZE` (99.5 is a normal export) and 15 test `< EXPORT_LIMIT_FREEZE` (99.5
+    is not), and prediction.py holds both readings at once - line 900 will not force-export it
+    and line 1074 will not freeze it, so it would silently idle.
+
+    export_mode_of matches the sentinel exactly, preserving the first reading. This test pins
+    that choice so the ambiguity is recorded rather than rediscovered; it is only truly fixable
+    once the fields are split, because it exists solely because one number answers two questions.
     """
     failed = 0
-    packed = pack_export_limit(EXPORT_MODE_TARGET, 99, 0.7)
-    # Encoding a 99% target at 70% power lands at 99.3, which reads back as a freeze, not a target
-    if export_mode_of(packed) != EXPORT_MODE_FREEZE:
-        print("ERROR: 99% target at low power decoded as mode {} - the reserved interval changed".format(export_mode_of(packed)))
+    # Exactly the sentinel is a freeze
+    if export_mode_of(99.0) != EXPORT_MODE_FREEZE:
+        print("ERROR: 99.0 decoded as mode {} expected freeze".format(export_mode_of(99.0)))
+        failed += 1
+    # Just above it is not - it is a 99% target at reduced power
+    if export_mode_of(99.5) != EXPORT_MODE_TARGET:
+        print("ERROR: 99.5 decoded as mode {} expected target".format(export_mode_of(99.5)))
+        failed += 1
+    if export_target_of(99.5) != 99:
+        print("ERROR: 99.5 target {} expected 99".format(export_target_of(99.5)))
+        failed += 1
+    if abs(export_power_of(99.5) - 0.5) > 1e-9:
+        print("ERROR: 99.5 power {} expected 0.5".format(export_power_of(99.5)))
         failed += 1
     return failed
 
