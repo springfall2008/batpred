@@ -15,6 +15,13 @@ Defines COMPONENT_LIST mapping all available components to their classes
 and configuration requirements, and provides the Components class for
 initialising, starting, stopping, and restarting components in the correct
 phase order. Routes HA events to components based on entity prefix filtering.
+
+Each entry in a component's "args" maps a constructor keyword to the apps.yaml key that
+supplies it ("config"), plus how it is resolved ("required", "required_true", "default",
+"indirect", "config_late_resolve", "shared_config"). Mark an arg "secret": True when its
+value is a credential, so it is redacted from debug dumps, downloads and anything served
+to an AI assistant - see secret_config_names() below for what that covers and, importantly,
+what it deliberately does not.
 """
 
 from storage import StorageComponent
@@ -73,7 +80,7 @@ COMPONENT_LIST = {
         "name": "Home Assistant Interface",
         "args": {
             "ha_url": {"required": False, "config": "ha_url", "default": "http://supervisor/core"},
-            "ha_key": {"required": False, "config": "ha_key", "default": os.environ.get("SUPERVISOR_TOKEN", None)},
+            "ha_key": {"required": False, "secret": True, "config": "ha_key", "default": os.environ.get("SUPERVISOR_TOKEN", None)},
             "db_enable": {"required": False, "config": "db_enable", "default": False},
             "db_mirror_ha": {"required": False, "config": "db_mirror_ha", "default": False},
             "db_primary": {"required": False, "config": "db_primary", "default": False},
@@ -95,7 +102,7 @@ COMPONENT_LIST = {
         "name": "MCP Server",
         "args": {
             "mcp_enable": {"required": True, "config": "mcp_enable", "default": False},
-            "mcp_secret": {"required": False, "config": "mcp_secret", "default": "predbat_mcp_secret"},
+            "mcp_secret": {"required": False, "secret": True, "config": "mcp_secret", "default": "predbat_mcp_secret"},
             "mcp_port": {"required": False, "config": "mcp_port", "default": 8199},
         },
         "phase": 1,
@@ -122,7 +129,7 @@ COMPONENT_LIST = {
         "name": "Solar API",
         "args": {
             "solcast_host": {"required": False, "config": "solcast_host", "default": "https://api.solcast.com.au/"},
-            "solcast_api_key": {"required": False, "config": "solcast_api_key"},
+            "solcast_api_key": {"required": False, "secret": True, "config": "solcast_api_key"},
             "solcast_sites": {"required": False, "config": "solcast_sites"},
             "solcast_poll_hours": {"required": False, "config": "solcast_poll_hours", "default": 8},
             "forecast_solar": {"required": False, "config": "forecast_solar", "default": False},
@@ -151,6 +158,7 @@ COMPONENT_LIST = {
             },
             "api_key": {
                 "required": True,
+                "secret": True,
                 "config": "ge_cloud_key",
             },
             "automatic": {
@@ -181,6 +189,7 @@ COMPONENT_LIST = {
             },
             "ge_cloud_key": {
                 "required": True,
+                "secret": True,
                 "config": "ge_cloud_key",
             },
             "ge_cloud_serial": {
@@ -207,10 +216,12 @@ COMPONENT_LIST = {
         "args": {
             "key": {
                 "required": True,
+                "secret": True,
                 "config": "octopus_api_key",
             },
             "account_id": {
                 "required": True,
+                "secret": True,
                 "config": "octopus_api_account",
             },
             "automatic": {
@@ -228,10 +239,12 @@ COMPONENT_LIST = {
         "args": {
             "email": {
                 "required": True,
+                "secret": True,
                 "config": "ohme_login",
             },
             "password": {
                 "required": True,
+                "secret": True,
                 "config": "ohme_password",
             },
             "ohme_automatic": {
@@ -259,11 +272,11 @@ COMPONENT_LIST = {
         "event_filter": "predbat_myenergi_",
         "args": {
             "auth_method": {"required": False, "config": "myenergi_auth_method", "default": "direct"},
-            "hub_serial": {"required": False, "config": "myenergi_hub_serial"},
-            "api_key": {"required": False, "config": "myenergi_api_key"},
-            "key": {"required": False, "config": "myenergi_key"},
+            "hub_serial": {"required": False, "secret": True, "config": "myenergi_hub_serial"},
+            "api_key": {"required": False, "secret": True, "config": "myenergi_api_key"},
+            "key": {"required": False, "secret": True, "config": "myenergi_key"},
             "token_expires_at": {"required": False, "config": "myenergi_token_expires_at"},
-            "token_hash": {"required": False, "config": "myenergi_token_hash"},
+            "token_hash": {"required": False, "secret": True, "config": "myenergi_token_hash"},
             "automatic": {"required": False, "config": "myenergi_automatic", "default": True},
             "enable_controls": {"required": False, "config": "myenergi_enable_controls", "default": True},
             "poll_seconds": {"required": False, "config": "myenergi_poll_seconds", "default": 60},
@@ -288,6 +301,7 @@ COMPONENT_LIST = {
         "args": {
             "key": {
                 "required": True,
+                "secret": True,
                 "config": "fox_key",
             },
             "automatic": {
@@ -315,6 +329,7 @@ COMPONENT_LIST = {
             },
             "token_hash": {
                 "required": False,
+                "secret": True,
                 "config": "fox_token_hash",
             },
         },
@@ -325,20 +340,20 @@ COMPONENT_LIST = {
         "name": "DEYE Cloud",
         "event_filter": "predbat_deye_",
         "args": {
-            "app_id": {"required": False, "config": "deye_app_id"},
-            "app_secret": {"required": False, "config": "deye_app_secret"},
+            "app_id": {"required": False, "secret": True, "config": "deye_app_id"},
+            "app_secret": {"required": False, "secret": True, "config": "deye_app_secret"},
             # In oauth mode OAuthMixin assigns 'key' straight to access_token (see
             # oauth_mixin._init_oauth). Predbat.com injects the access token as deye_key;
             # without this entry it is dropped and DEYE rejects every call as
             # "auth invalid token".
-            "key": {"required": False, "config": "deye_key"},
-            "username": {"required": False, "config": "deye_username"},
-            "password": {"required": False, "config": "deye_password"},
+            "key": {"required": False, "secret": True, "config": "deye_key"},
+            "username": {"required": False, "secret": True, "config": "deye_username"},
+            "password": {"required": False, "secret": True, "config": "deye_password"},
             "data_center": {"required": False, "default": "eu", "config": "deye_data_center"},
-            "company_id": {"required": False, "config": "deye_company_id"},
+            "company_id": {"required": False, "secret": True, "config": "deye_company_id"},
             "auth_method": {"required": False, "default": "app_credentials", "config": "deye_auth_method"},
             "token_expires_at": {"required": False, "config": "deye_token_expires_at"},
-            "token_hash": {"required": False, "config": "deye_token_hash"},
+            "token_hash": {"required": False, "secret": True, "config": "deye_token_hash"},
             "inverter_sn": {"required": False, "config": "deye_inverter_sn"},
             "automatic": {"required": False, "default": False, "config": "deye_automatic"},
             "automatic_ignore_pv": {"required": False, "default": False, "config": "deye_automatic_ignore_pv"},
@@ -361,16 +376,16 @@ COMPONENT_LIST = {
         "name": "Sunsynk Cloud",
         "event_filter": "predbat_sunsynk_",
         "args": {
-            "username": {"required": False, "config": "sunsynk_username"},
-            "password": {"required": False, "config": "sunsynk_password"},
+            "username": {"required": False, "secret": True, "config": "sunsynk_username"},
+            "password": {"required": False, "secret": True, "config": "sunsynk_password"},
             # In oauth mode OAuthMixin assigns 'key' straight to access_token (see
             # oauth_mixin._init_oauth). Predbat.com injects the access token as
             # sunsynk_key; without this entry it is dropped and every call is rejected.
-            "key": {"required": False, "config": "sunsynk_key"},
+            "key": {"required": False, "secret": True, "config": "sunsynk_key"},
             "region": {"required": False, "default": "sunsynk", "config": "sunsynk_region"},
             "auth_method": {"required": False, "default": "password", "config": "sunsynk_auth_method"},
             "token_expires_at": {"required": False, "config": "sunsynk_token_expires_at"},
-            "token_hash": {"required": False, "config": "sunsynk_token_hash"},
+            "token_hash": {"required": False, "secret": True, "config": "sunsynk_token_hash"},
             "inverter_sn": {"required": False, "config": "sunsynk_inverter_sn"},
             "automatic": {"required": False, "default": False, "config": "sunsynk_automatic"},
             "automatic_ignore_pv": {"required": False, "default": False, "config": "sunsynk_automatic_ignore_pv"},
@@ -395,8 +410,8 @@ COMPONENT_LIST = {
         "name": "AlphaESS Cloud API",
         "event_filter": "predbat_alphaess_",
         "args": {
-            "app_id": {"required": False, "config": "alphaess_app_id"},
-            "app_secret": {"required": False, "config": "alphaess_app_secret"},
+            "app_id": {"required": False, "secret": True, "config": "alphaess_app_id"},
+            "app_secret": {"required": False, "secret": True, "config": "alphaess_app_secret"},
             "inverter_sn": {"required": False, "config": "alphaess_inverter_sn"},
             "automatic": {"required": False, "default": False, "config": "alphaess_automatic"},
             "automatic_ignore_pv": {"required": False, "default": False, "config": "alphaess_automatic_ignore_pv"},
@@ -424,14 +439,17 @@ COMPONENT_LIST = {
         "args": {
             "username": {
                 "required": True,
+                "secret": True,
                 "config": "enphase_username",
             },
             "password": {
                 "required": True,
+                "secret": True,
                 "config": "enphase_password",
             },
             "site_id": {
                 "required": False,
+                "secret": True,
                 "config": "enphase_site_id",
             },
             "automatic": {
@@ -458,18 +476,22 @@ COMPONENT_LIST = {
             },
             "account_id": {
                 "required": True,
+                "secret": True,
                 "config": "kraken_account_id",
             },
             "key": {
                 "required": False,
+                "secret": True,
                 "config": "kraken_key",
             },
             "email": {
                 "required": False,
+                "secret": True,
                 "config": "kraken_email",
             },
             "password": {
                 "required": False,
+                "secret": True,
                 "config": "kraken_password",
             },
             "auth_method": {
@@ -483,18 +505,22 @@ COMPONENT_LIST = {
             },
             "token_hash": {
                 "required": False,
+                "secret": True,
                 "config": "kraken_token_hash",
             },
             "mpan": {
                 "required": False,
+                "secret": True,
                 "config": "kraken_mpan",
             },
             "export_account_id": {
                 "required": False,
+                "secret": True,
                 "config": "kraken_export_account_id",
             },
             "export_mpan": {
                 "required": False,
+                "secret": True,
                 "config": "kraken_export_mpan",
             },
             "base_url": {
@@ -542,13 +568,13 @@ COMPONENT_LIST = {
         "name": "Axle Energy",
         "event_filter": "predbat_axle_",
         "args": {
-            "api_key": {"required": False, "config": "axle_api_key"},
+            "api_key": {"required": False, "secret": True, "config": "axle_api_key"},
             "pence_per_kwh": {"required": False, "config": "axle_pence_per_kwh", "default": 100},
             "automatic": {"required": False, "config": "axle_automatic", "default": True},
             "managed_mode": {"required": False, "config": "axle_managed_mode", "default": False},
-            "site_id": {"required": False, "config": "axle_site_id"},
-            "partner_username": {"required": False, "config": "axle_partner_username"},
-            "partner_password": {"required": False, "config": "axle_partner_password"},
+            "site_id": {"required": False, "secret": True, "config": "axle_site_id"},
+            "partner_username": {"required": False, "secret": True, "config": "axle_partner_username"},
+            "partner_password": {"required": False, "secret": True, "config": "axle_partner_password"},
             "api_base_url": {"required": False, "config": "axle_api_base_url", "default": "https://api.axle.energy"},
         },
         "required_or": ["api_key", "managed_mode"],
@@ -559,14 +585,14 @@ COMPONENT_LIST = {
         "name": "Sigenergy Cloud API",
         "event_filter": "predbat_sigenergy_",
         "args": {
-            "system_id": {"required": True, "config": "sigenergy_system_id"},
-            "app_key": {"required": True, "config": "sigenergy_app_key"},
-            "app_secret": {"required": True, "config": "sigenergy_app_secret"},
+            "system_id": {"required": True, "secret": True, "config": "sigenergy_system_id"},
+            "app_key": {"required": True, "secret": True, "config": "sigenergy_app_key"},
+            "app_secret": {"required": True, "secret": True, "config": "sigenergy_app_secret"},
             "base_url": {"required": False, "config": "sigenergy_base_url", "default": "https://openapi-eu.sigencloud.com"},
             "mqtt_host": {"required": False, "config": "sigenergy_mqtt_host"},
             "ca_cert": {"required": False, "config": "sigenergy_ca_pem"},
-            "client_cert": {"required": False, "config": "sigenergy_client_pem"},
-            "client_key": {"required": False, "config": "sigenergy_client_key"},
+            "client_cert": {"required": False, "secret": True, "config": "sigenergy_client_pem"},
+            "client_key": {"required": False, "secret": True, "config": "sigenergy_client_key"},
             "automatic": {"required": False, "config": "sigenergy_automatic", "default": False},
             "enable_controls": {"required": False, "config": "sigenergy_enable_controls", "default": True},
         },
@@ -578,13 +604,13 @@ COMPONENT_LIST = {
         "name": "Tesla Powerwall (Teslemetry)",
         "event_filter": "predbat_teslemetry_",
         "args": {
-            "key": {"required": True, "config": "teslemetry_key"},
-            "site_id": {"required": False, "config": "teslemetry_site_id"},
+            "key": {"required": True, "secret": True, "config": "teslemetry_key"},
+            "site_id": {"required": False, "secret": True, "config": "teslemetry_site_id"},
             "base_url": {"required": False, "config": "teslemetry_base_url", "default": "https://api.teslemetry.com"},
             "automatic": {"required": False, "default": False, "config": "teslemetry_automatic"},
             "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
             "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
-            "token_hash": {"required": False, "config": "teslemetry_token_hash"},
+            "token_hash": {"required": False, "secret": True, "config": "teslemetry_token_hash"},
         },
         "phase": 1,
         "can_restart": True,
@@ -594,9 +620,9 @@ COMPONENT_LIST = {
         "name": "SolaX Cloud API",
         "event_filter": "predbat_solax_",
         "args": {
-            "client_id": {"required": True, "config": "solax_client_id"},
-            "client_secret": {"required": True, "config": "solax_client_secret"},
-            "plant_id": {"required": False, "config": "solax_plant_id"},
+            "client_id": {"required": True, "secret": True, "config": "solax_client_id"},
+            "client_secret": {"required": True, "secret": True, "config": "solax_client_secret"},
+            "plant_id": {"required": False, "secret": True, "config": "solax_plant_id"},
             "region": {"required": False, "config": "solax_region", "default": "eu"},
             "automatic": {"required": False, "config": "solax_automatic", "default": False},
             "enable_controls": {"required": False, "config": "solax_enable_controls", "default": True},
@@ -614,12 +640,12 @@ COMPONENT_LIST = {
         "event_filter": "predbat_solis_",
         "args": {
             # api_key/api_secret (HMAC) OR auth_method=oauth+access_token must be supplied.
-            "api_key": {"required": False, "config": "solis_api_key"},
-            "api_secret": {"required": False, "config": "solis_api_secret"},
+            "api_key": {"required": False, "secret": True, "config": "solis_api_key"},
+            "api_secret": {"required": False, "secret": True, "config": "solis_api_secret"},
             "auth_method": {"required": False, "config": "solis_auth_method", "default": "api_key"},
-            "access_token": {"required": False, "config": "solis_access_token"},
+            "access_token": {"required": False, "secret": True, "config": "solis_access_token"},
             "token_expires_at": {"required": False, "config": "solis_token_expires_at"},
-            "token_hash": {"required": False, "config": "solis_token_hash"},
+            "token_hash": {"required": False, "secret": True, "config": "solis_token_hash"},
             "inverter_sn": {"required": False, "config": "solis_inverter_sn"},
             "automatic": {"required": False, "config": "solis_automatic", "default": False},
             "base_url": {"required": False, "config": "solis_base_url", "default": "https://www.soliscloud.com:13333"},
@@ -654,10 +680,10 @@ if HAS_GATEWAY:
         "name": "PredBat Gateway",
         "event_filter": "predbat_gateway_",
         "args": {
-            "gateway_device_id": {"required": True, "config": "gateway_device_id"},
+            "gateway_device_id": {"required": True, "secret": True, "config": "gateway_device_id"},
             "mqtt_host": {"required": True, "config": "gateway_mqtt_host"},
             "mqtt_port": {"required": False, "config": "gateway_mqtt_port", "default": 8883},
-            "mqtt_token": {"required": True, "config": "gateway_mqtt_token"},
+            "mqtt_token": {"required": True, "secret": True, "config": "gateway_mqtt_token"},
             "gateway_inverter_serial": {"required": False, "config": "gateway_inverter_serial", "default": None},
             "gateway_evc_automatic": {"required": False, "config": "gateway_evc_automatic", "default": False},
             "gateway_evc_control": {"required": False, "config": "gateway_evc_control", "default": False},
@@ -665,6 +691,30 @@ if HAS_GATEWAY:
         "phase": 1,
         "can_restart": True,
     }
+
+
+def secret_config_names():
+    """Return every apps.yaml config name the registry flags with "secret": True.
+
+    Feeds utils.is_secret_key(), so redaction covers the credentials its key-name substrings
+    cannot infer: account numbers (octopus_api_account, kraken_account_id), meter point numbers
+    (kraken_mpan), site/system/plant ids, login identifiers (deye_username, kraken_email,
+    ohme_login, myenergi_hub_serial - the digest auth username) and the id half of an
+    id/secret pair (deye_app_id, solax_client_id). Read from the live dict rather than
+    precomputed, so the conditionally-registered gateway component is included.
+
+    Device serial numbers are deliberately not flagged: they address hardware rather than
+    authenticate it, and they are what makes an integration bug report diagnosable - the same
+    trade-off SECRET_KEY_EXEMPT_SUFFIXES makes for token expiry times.
+    """
+    names = set()
+    for component_info in COMPONENT_LIST.values():
+        for arg_info in component_info.get("args", {}).values():
+            if isinstance(arg_info, dict) and arg_info.get("secret", False):
+                config = arg_info.get("config", None)
+                if config:
+                    names.add(str(config).lower())
+    return frozenset(names)
 
 
 class Components:
