@@ -1481,7 +1481,7 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
                 dend = dwindow["end"]
 
                 # Overlapping window with enabled discharge?
-                if (limit > 0.0) and (dlimit < 100.0) and (dstart < end) and (dend >= start):
+                if (limit > 0.0) and (dlimit < 100.0) and (dstart < end) and (dend > start):
                     if "clipping_target_soc_pct" in dwindow:
                         target_soc = dwindow["clipping_target_soc_pct"]
                         # If the window isn't already capped to this target, we must split and cap the intersection
