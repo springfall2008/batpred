@@ -807,6 +807,17 @@ If this selector is used in an automation you can set the time and SoC together 
 
 The manual SoC target works in conjunction with the [weather alert system](apps-yaml.md#weather-alert-system) - if both are active at the same time, the higher SoC target will be used.
 
+The **select.predbat_manual_soc_max** selector is the opposite of **select.predbat_manual_soc**: it sets a _maximum_ SoC ceiling for a specific time instead of a minimum floor.
+This is useful for a periodic calibration discharge - some batteries benefit from occasionally being run down close to empty just before a known cheap import slot (e.g. an Octopus Intelligent Go midnight slot), so the BMS can re-anchor its SoC estimate, and then Predbat can immediately recharge cheaply. See issue [#1578](https://github.com/springfall2008/batpred/issues/1578) for the discussion that led to this.
+
+The SoC ceiling percentage will be that configured in **input_number.predbat_manual_soc_max_value** (default 0%) which can be adjusted prior to making a selection.
+
+For example, to run the battery down to 4% by 00:00 (just ahead of a midnight cheap slot), set **input_number.predbat_manual_soc_max_value** to 4 and select the 00:00 slot on **select.predbat_manual_soc_max**. Predbat will plan discharging so the battery is at or below that ceiling by that time, preferring to use the energy against load or export rather than simply forcing a fixed-duration export block, so it stays coordinated with the rest of the plan (car charging, existing charge/export windows, etc).
+
+If a manual SoC target (floor) and a manual SoC maximum (ceiling) ever apply to the same time and the ceiling is below the floor, that is a contradiction - the floor wins and the conflicting ceiling is dropped, with a warning logged.
+
+If this selector is used in an automation you can set the time and SoC together by making a selection in the format HH:MM=percentage e.g. 00:00=4
+
 ## Manual API
 
 **select.predbat_manual_api** enables you to overwrite configuration entries normally set in `apps.yaml`, e.g. from an automation.

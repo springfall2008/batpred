@@ -32,7 +32,7 @@ from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 5
-KERNEL_PARITY_REVISION = 10
+KERNEL_PARITY_REVISION = 11
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -53,6 +53,7 @@ class PkContext(ctypes.Structure):
         ("rate_import", ctypes.POINTER(ctypes.c_double)),
         ("rate_export", ctypes.POINTER(ctypes.c_double)),
         ("alert_keep", ctypes.POINTER(ctypes.c_double)),
+        ("alert_keep_max", ctypes.POINTER(ctypes.c_double)),
         ("pv", ctypes.POINTER(ctypes.c_double)),
         ("load", ctypes.POINTER(ctypes.c_double)),
         ("pv10", ctypes.POINTER(ctypes.c_double)),
@@ -527,6 +528,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
     rate_import = []
     rate_export = []
     alert_keep = []
+    alert_keep_max = []
     io_flag = []
     pv = []
     pv10 = []
@@ -549,6 +551,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
         rate_import.append(pred.rate_import.get(minute_absolute, 0))
         rate_export.append(pred.rate_export.get(minute_absolute, 0))
         alert_keep.append(pred.all_active_keep.get(minute_absolute, 0))
+        alert_keep_max.append(pred.all_active_keep_max.get(minute_absolute, 0))
         io_flag.append(1 if pred.io_adjusted.get(minute_absolute, 0) else 0)
         pv.append(pred.pv_forecast_minute_step[minute])
         pv10.append(pred.pv_forecast_minute10_step[minute])
@@ -579,7 +582,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
     charge_curve = [get_curve_value(pred.battery_charge_power_curve, percent, 1.0) for percent in range(101)]
     discharge_curve = [get_curve_value(pred.battery_discharge_power_curve, percent, 1.0) for percent in range(101)]
 
-    return (rate_import, rate_export, alert_keep, io_flag, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve)
+    return (rate_import, rate_export, alert_keep, alert_keep_max, io_flag, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve)
 
 
 def create_kernel_context(pred, static_cache=None):
@@ -628,12 +631,13 @@ def create_kernel_context(pred, static_cache=None):
             static = (shape, build_static_context_arrays(pred, n_steps, minutes_now, num_cars))
             if static_cache is not None:
                 static_cache["arrays"] = static
-        (rate_import, rate_export, alert_keep, io_flag, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve) = static[1]
+        (rate_import, rate_export, alert_keep, alert_keep_max, io_flag, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve) = static[1]
 
         ctx = PkContext()
         ctx.rate_import = double_array(rate_import)
         ctx.rate_export = double_array(rate_export)
         ctx.alert_keep = double_array(alert_keep)
+        ctx.alert_keep_max = double_array(alert_keep_max)
         ctx.pv = double_array(pv)
         ctx.load = double_array(load)
         ctx.pv10 = double_array(pv10)

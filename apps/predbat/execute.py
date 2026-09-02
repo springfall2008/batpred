@@ -141,6 +141,7 @@ class Execute:
 
         in_alert = self.alert_active_keep.get(self.minutes_now, 0) > 0
         in_manual_soc = self.manual_soc_keep.get(self.minutes_now, 0) > 0
+        in_manual_soc_max = self.manual_soc_max_keep.get(self.minutes_now, 0) > 0
 
         # Safeguard for set_charge_freeze_only: the planner never selects a charge target above the
         # reserve while the switch is on, but a plan computed before it was turned on can still be
@@ -780,6 +781,8 @@ class Execute:
             status += " [Alert]"
         if in_manual_soc:
             status += " [Manual SoC]"
+        if in_manual_soc_max:
+            status += " [Manual SoC Max]"
 
         return status, status_extra
 

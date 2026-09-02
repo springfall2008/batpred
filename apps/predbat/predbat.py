@@ -605,7 +605,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.alerts = []
         self.alert_active_keep = {}
         self.manual_soc_keep = {}
+        self.manual_soc_max_keep = {}
         self.all_active_keep = {}
+        self.all_active_keep_max = {}
         self.set_charge_low_power = False
         self.set_export_low_power = False
         self.config_root = "./"
