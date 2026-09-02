@@ -844,13 +844,14 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
         """Marshal a window list's start/end arrays, reusing an earlier job's arrays where possible"""
         entry = window_cache.get(id(windows))
         if entry is None:
-            entry = (int32_array([window["start"] for window in windows]), int32_array([window["end"] for window in windows]), windows)
+            flags = int32_array([1 if "clipping_target_soc_pct" in window else 0 for window in windows])
+            entry = (int32_array([window["start"] for window in windows]), int32_array([window["end"] for window in windows]), flags, windows)
             window_cache[id(windows)] = entry
         return entry
 
     for index, job in enumerate(jobs):
-        charge_start, charge_end, _ = window_arrays(job.charge_window)
-        export_start, export_end, export_flags = window_arrays(job.export_window)
+        charge_start, charge_end, _, _ = window_arrays(job.charge_window)
+        export_start, export_end, export_flags, _ = window_arrays(job.export_window)
         charge_limit = double_array(job.charge_limit)
         export_limits = double_array(job.export_limits)
         buffers.append((charge_limit, export_limits))
