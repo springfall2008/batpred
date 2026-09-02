@@ -35,7 +35,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
     - uses: actions/checkout@v4
       with:
