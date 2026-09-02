@@ -196,15 +196,39 @@ class Fetch:
             if minute_absolute in load_baseline:
                 values[minute] = max(values[minute], load_baseline[minute_absolute])
 
-        # Simple divergence model keeps the same total but brings PV/Load up and down every 5 minutes
+        # Simple divergence model that raises and lowers alternate steps so the planner stops
+        # assuming PV exactly blankets load. It is approximately - not exactly - total-preserving:
+        # a raised step borrows, and the following step repays only what its own value can cover
+        # (`min(cloud_diff, values[minute])`), so a borrow larger than the step that follows it is
+        # not fully given back. Repaying exactly needs the outstanding debt tracked separately from
+        # the next borrow, which is a rewrite of the model rather than a tweak here.
         if cloud_factor and cloud_factor > 0:
+            last_minute = self.forecast_minutes - step
             for minute in range(0, self.forecast_minutes, step):
-                cloud_on = (int((minute + self.minutes_now) / 5) + 1 if flip else 0) % 2
+                # The inner parentheses matter: a conditional expression binds looser than "+", so
+                # "int(...) + 1 if flip else 0" is "(int(...) + 1) if flip else 0" - which is a
+                # constant 0 whenever flip is False, leaving every non-flipped caller unmodulated.
+                # flip only means anything as an antiphase to a modulated base, so it is the offset
+                # that is conditional, not the whole expression.
+                #
+                # Keyed off the minutes_now parameter, not self.minutes_now: every other minute in
+                # this function comes from the parameter, and output.py already calls it with 0.
+                # That also keeps the result a pure function of the inputs, which the replay and
+                # test paths rely on for determinism.
+                cloud_on = (int((minute + minutes_now) / step) + (1 if flip else 0)) % 2
                 if cloud_on > 0:
-                    cloud_diff += min(values[minute] * cloud_factor, values.get(minute + 5, 0) * cloud_factor)
-                    values[minute] += cloud_diff
+                    # Don't borrow on the final step - the fill loop above runs a plan interval
+                    # past forecast_minutes, so values.get(minute + step) finds a real bucket that
+                    # this loop will never reach to repay, leaking that borrow into the total.
+                    if minute < last_minute:
+                        cloud_diff += min(values[minute] * cloud_factor, values.get(minute + step, 0) * cloud_factor)
+                        values[minute] += cloud_diff
                 else:
-                    subtract = min(cloud_diff, values[minute])
+                    # The dynamic load baseline is a floor, applied in the fill loop above. The
+                    # subtract has to respect it or the modulation walks straight back through it -
+                    # only ever an issue since the load arrays started being modulated at all.
+                    floor = load_baseline.get(minute + minutes_now, 0.0) if load_baseline else 0.0
+                    subtract = min(cloud_diff, max(values[minute] - floor, 0.0))
                     values[minute] -= subtract
                     cloud_diff = 0
                 values[minute] = dp4(values[minute])
