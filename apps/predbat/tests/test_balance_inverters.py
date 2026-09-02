@@ -102,6 +102,22 @@ def run_balance_inverters_tests(my_predbat):
     if failed:
         return failed
 
+    # Test 13-15: the reset loop against what the plan actually asked for (#829)
+    print("Test 13: Balancer preserves a rate the plan holds at zero")
+    failed |= test_balance_preserves_plan_hold(my_predbat)
+    if failed:
+        return failed
+
+    print("Test 14: Balancer restores the planned rate, not the maximum")
+    failed |= test_balance_restores_planned_rate(my_predbat)
+    if failed:
+        return failed
+
+    print("Test 15: Balancer resets to maximum when no intent is recorded")
+    failed |= test_balance_reset_without_intent(my_predbat)
+    if failed:
+        return failed
+
     return failed
 
 
@@ -113,6 +129,11 @@ def setup_two_inverters(my_predbat, soc1=50, soc2=50, reserve1=4, reserve2=4, ba
     ha = my_predbat.ha_interface
     ha.service_store_enable = True
     ha.service_store = []
+
+    # These tests exercise the balancer on a fleet they define themselves, so they must not inherit
+    # rate intent recorded by an earlier test's execute_plan on the shared PredBat instance - the
+    # reset loop reads it, and a leftover entry would silently change what "reset" means here.
+    my_predbat.inverter_rate_intent = {}
 
     # Set up inverter 0
     ha.dummy_items["sensor.soc_percent"] = soc1
@@ -841,4 +862,95 @@ def test_balance_insufficient_power(my_predbat):
         return True
 
     print("✓ Test passed: No adjustments made when power insufficient")
+    return False
+
+
+def setup_hold_scenario(my_predbat, intent):
+    """
+    Two balanced inverters, inverter 1 sitting at discharge rate 0 while inverter 0 discharges.
+
+    This is the shape that makes the reset loop reachable: the loop only fires when one inverter
+    reads zero AND the fleet total is non-zero, so a fleet-wide hold cannot trigger it. A hold
+    that applies to only one inverter can - which is ordinary, since freeze charge is decided per
+    inverter on its own SoC against its own reserve.
+    """
+    setup_two_inverters(
+        my_predbat,
+        soc1=50,
+        soc2=50,
+        battery_power1=1000,
+        battery_power2=0,
+    )
+    ha = my_predbat.ha_interface
+    my_predbat.balance_inverters_discharge = True
+    my_predbat.balance_inverters_charge = True
+    my_predbat.balance_inverters_crosscharge = True
+    my_predbat.balance_inverters_threshold_charge = 5
+    my_predbat.balance_inverters_threshold_discharge = 5
+    my_predbat.inverters[1].discharge_rate_now = 0
+    ha.dummy_items["number.discharge_rate_2"] = 0
+    my_predbat.inverter_rate_intent = intent
+    ha.service_store_enable = True
+    ha.get_service_store()
+    my_predbat.balance_inverters(test_mode=True)
+    services = ha.get_service_store()
+    ha.service_store_enable = False
+    return services
+
+
+def discharge_rate_writes(services, entity="number.discharge_rate_2"):
+    """
+    The distinct values written to one discharge rate entity during a balance run.
+
+    Deliberately a set. With the service store enabled the mock records calls without applying
+    them, so write_and_poll_value never sees its value read back and retries to its limit - the
+    number of calls is harness behaviour, but which values were asked for is the real assertion.
+    """
+    return {kwargs.get("value") for service, kwargs in services if service == "number/set_value" and kwargs.get("entity_id") == entity}
+
+
+def test_balance_preserves_plan_hold(my_predbat):
+    """
+    A discharge rate the plan deliberately holds at zero must survive the balancer (#829).
+
+    Zero is how freeze charge and set_discharge_during_charge=off are expressed on any inverter
+    without a timed pause, which is 22 of the 24 supported types. Before this was recorded the
+    balancer could not tell that zero from one of its own and reset it to maximum, undoing the
+    hold until the next plan cycle.
+    """
+    print("Test: balancer preserves a rate the plan holds at zero")
+    services = discharge_rate_writes(setup_hold_scenario(my_predbat, {1: {"discharge": 0}}))
+    if services:
+        print("ERROR: Expected no write to a held discharge rate, got {}".format(services))
+        return True
+    print("✓ Test passed: plan hold preserved")
+    return False
+
+
+def test_balance_restores_planned_rate(my_predbat):
+    """
+    The reset restores the rate the plan asked for, not blindly the inverter maximum.
+    """
+    print("Test: balancer restores the planned rate rather than the maximum")
+    services = discharge_rate_writes(setup_hold_scenario(my_predbat, {1: {"discharge": 1500}}))
+    if services != {1500}:
+        print("ERROR: Expected the planned 1500 to be written and nothing else, got {}".format(services))
+        return True
+    print("✓ Test passed: planned rate restored")
+    return False
+
+
+def test_balance_reset_without_intent(my_predbat):
+    """
+    With no recorded intent the balancer keeps its historic reset to maximum.
+
+    This is the path taken before the first execute_plan of a run, and it is what stops the change
+    from stranding an inverter the balancer itself parked at zero.
+    """
+    print("Test: balancer resets to maximum when the plan has recorded no intent")
+    services = discharge_rate_writes(setup_hold_scenario(my_predbat, {}))
+    if services != {2600}:
+        print("ERROR: Expected the maximum 2600 to be written and nothing else, got {}".format(services))
+        return True
+    print("✓ Test passed: historic reset preserved")
     return False

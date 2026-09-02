@@ -314,6 +314,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.control_ledger_restored = False
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
+        # Charge/discharge rates execute_plan deliberately left set, keyed by inverter id - see
+        # record_rate_intent(). Empty until the first execute_plan, which is what makes the
+        # balancer fall back to its historic behaviour before any plan has been applied.
+        self.inverter_rate_intent = {}
         self.inverters = []
         self.manual_charge_times = []
         self.manual_export_times = []
