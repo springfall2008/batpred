@@ -16,8 +16,8 @@ reserve level adjustments, and multi-inverter balancing.
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import timedelta, datetime
-from const import MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
-from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
+from const import MINUTE_WATT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, export_mode_of, export_power_of
 from predbat_metrics import metrics
 from inverter import Inverter
 import time
@@ -481,10 +481,10 @@ class Execute:
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + export_adjust))  # Add in 1 minute margin to allow Predbat to restore demand mode
                 discharge_soc = max((int(self.export_limits_best[0]) * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
                 self.log("Next export window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.export_limits_best[0]))
-                if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.export_limits_best[0] < EXPORT_LIMIT_IDLE):
-                    if not self.set_export_freeze_only and self.export_limits_best[0] < EXPORT_LIMIT_FREEZE and (self.soc_kw > discharge_soc):
+                if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (export_mode_of(self.export_limits_best[0]) != EXPORT_MODE_IDLE):
+                    if not self.set_export_freeze_only and export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_TARGET and (self.soc_kw > discharge_soc):
                         if self.set_export_low_power:
-                            export_rate_adjust = 1 - (self.export_limits_best[0] - int(self.export_limits_best[0]))
+                            export_rate_adjust = export_power_of(self.export_limits_best[0])
                         else:
                             export_rate_adjust = 1.0
 
@@ -507,7 +507,7 @@ class Execute:
                     else:
                         inverter.adjust_force_export(False)
                         disabled_export = True
-                        if self.set_export_freeze and self.export_limits_best[0] == EXPORT_LIMIT_FREEZE:
+                        if self.set_export_freeze and export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_FREEZE:
                             # In export freeze mode we disable charging during export slots
                             if inverter.inv_charge_discharge_with_rate:
                                 inverter.adjust_charge_rate(0)
@@ -535,7 +535,7 @@ class Execute:
                             self.isExporting_Target = inverter.soc_percent
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                 else:
-                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < EXPORT_LIMIT_FREEZE):
+                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_TARGET):
                         # We can't schedule freeze export only full export
                         # Don't turn off ECO mode for GE inverters except when we are within the export window as it will stop the battery being used
                         ge_inverters = inverter.inv_has_ge_eco_toggle or inverter.inv_has_ge_inverter_mode
@@ -658,7 +658,7 @@ class Execute:
                         self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
 
                     # Immediate controls
-                    if self.set_export_freeze and self.export_limits_best[0] == EXPORT_LIMIT_FREEZE:
+                    if self.set_export_freeze and export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_FREEZE:
                         inverter.adjust_export_immediate(inverter.soc_percent, freeze=True)
                     elif not disabled_export:
                         inverter.adjust_export_immediate(export_target_percent)

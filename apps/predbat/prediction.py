@@ -18,9 +18,9 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
-from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
-from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple
+from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple, export_mode_of, export_power_of
 from prediction_batch import PredictionBatch, prediction_cache_key
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
 
@@ -447,11 +447,16 @@ class Prediction(PredictionBatch):
         """
         charge_window_optimised = {}
         for window_n in range(len(charge_windows)):
+            # Hoisted out of the per-minute loop below: whether a window is active cannot change
+            # within it, and this runs for every minute of every window on the hot path.
+            if is_export:
+                active = export_mode_of(charge_limit[window_n]) != EXPORT_MODE_IDLE
+            else:
+                active = charge_limit[window_n] > 0.0
+            if not active:
+                continue
             for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
-                if is_export and charge_limit[window_n] < EXPORT_LIMIT_IDLE:
-                    charge_window_optimised[minute] = window_n
-                elif not is_export and charge_limit[window_n] > 0.0:
-                    charge_window_optimised[minute] = window_n
+                charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
     def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP, cache=False):
@@ -716,6 +721,7 @@ class Prediction(PredictionBatch):
             charge_window_active = charge_window_n >= 0
             export_window_active = export_window_n >= 0
             export_limit_now = export_limits[export_window_n] if export_window_active else EXPORT_LIMIT_IDLE
+            export_mode_now = export_mode_of(export_limit_now)
 
             # Find charge limit
             charge_limit_n = 0
@@ -897,10 +903,10 @@ class Prediction(PredictionBatch):
             if export_window_active:
                 discharge_min = max(soc_max * export_limit_now / 100.0, reserve, self.best_soc_min)
 
-            if not set_export_freeze_only and export_window_active and export_limit_now < EXPORT_LIMIT_FREEZE and (soc > discharge_min):
+            if not set_export_freeze_only and export_window_active and export_mode_now == EXPORT_MODE_TARGET and (soc > discharge_min):
                 # Discharge enable, capped at export limit
                 if self.set_export_low_power:
-                    export_rate_adjust = 1 - (export_limit_now - int(export_limit_now))
+                    export_rate_adjust = export_power_of(export_limit_now)
                 else:
                     export_rate_adjust = 1.0
                 discharge_rate_now = battery_rate_max_export * export_rate_adjust
@@ -1071,7 +1077,7 @@ class Prediction(PredictionBatch):
                 # parallel branch that has to re-derive the same AC balance. The old duplicate
                 # branch had drifted and pinned battery_draw at 0, wrongly modelling Freeze Export
                 # as Freeze Charge whenever load exceeded PV - see #4676.
-                freeze_export = set_export_freeze and export_window_active and export_limit_now < EXPORT_LIMIT_IDLE and (export_limit_now == EXPORT_LIMIT_FREEZE or set_export_freeze_only)
+                freeze_export = set_export_freeze and export_window_active and export_mode_now != EXPORT_MODE_IDLE and (export_mode_now == EXPORT_MODE_FREEZE or set_export_freeze_only)
 
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
