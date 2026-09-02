@@ -27,9 +27,9 @@ def test_octopus_saving_event_type(my_predbat):
         return api
 
     # A national Happy Hour the account was allocated, three more it was not, and a real Power Down
-    happy_joined = {"id": 5797, "code": "EVENT_56", "rewardPerKwhInOctoPoints": 0, "startAt": "2030-01-05T10:00:00+00:00", "endAt": "2030-01-05T11:00:00+00:00", "eventType": "WEEKEND_HAPPY_HOUR", "targetRegion": []}
-    happy_offered = {"id": 5798, "code": "EVENT_57", "rewardPerKwhInOctoPoints": 0, "startAt": "2030-01-05T11:00:00+00:00", "endAt": "2030-01-05T12:00:00+00:00", "eventType": "WEEKEND_HAPPY_HOUR", "targetRegion": []}
-    power_down = {"id": 5799, "code": "EVENT_58", "rewardPerKwhInOctoPoints": 93, "startAt": "2030-01-06T17:00:00+00:00", "endAt": "2030-01-06T18:00:00+00:00", "eventType": "TURN_DOWN", "targetRegion": []}
+    happy_joined = {"id": 5797, "code": "EVENT_56", "rewardPerKwhInOctoPoints": 0, "startAt": "2099-01-05T10:00:00+00:00", "endAt": "2099-01-05T11:00:00+00:00", "eventType": "WEEKEND_HAPPY_HOUR", "targetRegion": []}
+    happy_offered = {"id": 5798, "code": "EVENT_57", "rewardPerKwhInOctoPoints": 0, "startAt": "2099-01-05T11:00:00+00:00", "endAt": "2099-01-05T12:00:00+00:00", "eventType": "WEEKEND_HAPPY_HOUR", "targetRegion": []}
+    power_down = {"id": 5799, "code": "EVENT_58", "rewardPerKwhInOctoPoints": 93, "startAt": "2099-01-06T17:00:00+00:00", "endAt": "2099-01-06T18:00:00+00:00", "eventType": "TURN_DOWN", "targetRegion": []}
 
     api = make_api(
         [happy_joined, happy_offered, power_down],
