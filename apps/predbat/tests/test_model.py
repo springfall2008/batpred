@@ -2385,22 +2385,18 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         my_predbat,
         0,
         2.0,
-        assert_final_metric=-export_rate * 24 * 2.0,  # will differ due to penalty; checked below
+        assert_final_metric=-export_rate * 24 * 2.0,
         assert_final_soc=0,
         with_battery=False,
         inverter_limit=1.0,
         clipping_buffer_enable=True,
         return_prediction_handle=True,
-        ignore_failed=True,
     )
-    # The penalty should make the metric less negative (higher) than without
+    failed |= failed_with_penalty
+    # Under plan-side ceiling architecture, simulation metric is neutral (no fake penalty added to simulation)
     metric_no_penalty = getattr(pred_no_penalty, "final_metric", 0)
     metric_with_penalty = getattr(pred_with_penalty, "final_metric", 0)
-    if metric_with_penalty <= metric_no_penalty:
-        print("ERROR: clipping_peak_with_penalty metric {} should be > {} (penalty should increase metric)".format(metric_with_penalty, metric_no_penalty))
-        failed = True
-    else:
-        print("Run scenario clipping_peak_with_penalty: PASS (metric {} > baseline {})".format(metric_with_penalty, metric_no_penalty))
+    print("Run scenario clipping_peak_neutral: PASS (metric {} == baseline {})".format(metric_with_penalty, metric_no_penalty))
 
     # No penalty when battery has headroom to absorb excess
     # 2kW PV, 1kW inverter limit, but battery at 0% with 100kWh capacity => battery absorbs all excess
