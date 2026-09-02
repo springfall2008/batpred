@@ -20,7 +20,7 @@ call to the C++ prediction kernel, which is where the threading now lives.
 
 from datetime import datetime, timedelta
 from multiprocessing import cpu_count
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_IDLE, FULL_EXPORT_POWER, LOW_EXPORT_POWER_LEVELS, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
 from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot, export_mode_of, export_power_of, pack_export_limit, export_limit_exports_no_battery
 from prediction import Prediction
@@ -2285,18 +2285,22 @@ class Plan:
         if not self.set_export_freeze:
             allow_freeze = False
 
-        # loop on each export option
+        # The rungs this window is tried at, as (mode, power) rather than a list of floats mixing
+        # the two: EXPORT_MODE_IDLE and EXPORT_MODE_FREEZE are complete instructions carrying no
+        # power level, while a target rung is only half of one - its SoC comes from the clamp
+        # below. Written as bare floats these read as one ladder of six comparable options, which
+        # is what made "is this a low power export?" get asked as "does it have a fraction?".
         if allow_freeze and (freeze_only or self.set_export_freeze_only):
-            loop_options = [pack_export_limit(EXPORT_MODE_IDLE), pack_export_limit(EXPORT_MODE_FREEZE)]
+            loop_options = [(EXPORT_MODE_IDLE, FULL_EXPORT_POWER), (EXPORT_MODE_FREEZE, FULL_EXPORT_POWER)]
         elif allow_freeze and not self.set_export_freeze_only:
-            # If we support freeze, try a 99% option which will freeze at any SoC level below this
-            loop_options = [pack_export_limit(EXPORT_MODE_IDLE), pack_export_limit(EXPORT_MODE_FREEZE), 0.0]
+            # If we support freeze, try a freeze option which will hold at any SoC level below this
+            loop_options = [(EXPORT_MODE_IDLE, FULL_EXPORT_POWER), (EXPORT_MODE_FREEZE, FULL_EXPORT_POWER), (EXPORT_MODE_TARGET, FULL_EXPORT_POWER)]
             if self.set_export_low_power:
-                loop_options.extend([0.3, 0.5, 0.7])
+                loop_options.extend([(EXPORT_MODE_TARGET, power) for power in LOW_EXPORT_POWER_LEVELS])
         else:
-            loop_options = [pack_export_limit(EXPORT_MODE_IDLE), 0.0]
+            loop_options = [(EXPORT_MODE_IDLE, FULL_EXPORT_POWER), (EXPORT_MODE_TARGET, FULL_EXPORT_POWER)]
             if self.set_export_low_power:
-                loop_options.extend([0.3, 0.5, 0.7])
+                loop_options.extend([(EXPORT_MODE_TARGET, power) for power in LOW_EXPORT_POWER_LEVELS])
 
         # Collect all options
         results = []
@@ -2304,11 +2308,10 @@ class Plan:
         results90 = []
         run_pv90 = self.pv_metric90_weight > 0
         try_options = []
-        for loop_limit in loop_options:
+        for loop_mode, loop_power in loop_options:
             # Loop on window size
             loop_start = window["end"] - 5  # Minimum export window size 5 minutes
             while loop_start >= window["start"]:
-                this_export_limit = loop_limit
                 start = loop_start
 
                 # Move the loop start back to full size
@@ -2324,16 +2327,16 @@ class Plan:
                     continue
 
                 # Don't allow slow export for small windows
-                if this_export_limit > int(this_export_limit) and (try_export_window[window_n]["end"] - start) < 15:
+                if loop_power < FULL_EXPORT_POWER and (try_export_window[window_n]["end"] - start) < 15:
                     continue
 
                 # Don't optimise start of disabled windows or freeze only windows, just for export ones
-                if (export_mode_of(this_export_limit) != EXPORT_MODE_TARGET) and (start != window["start"]):
+                if loop_mode != EXPORT_MODE_TARGET and (start != window["start"]):
                     continue
 
-                # Never go below the minimum level
-                this_export_limit = max(calc_percent_limit(self.best_soc_min, self.soc_max), int(this_export_limit))
-                this_export_limit = this_export_limit + loop_limit - int(loop_limit)
+                # Never go below the minimum level. Only a target rung carries a SoC to clamp - the
+                # modes are whole instructions and pack_export_limit ignores the target for them.
+                this_export_limit = pack_export_limit(loop_mode, calc_percent_limit(self.best_soc_min, self.soc_max), loop_power)
                 try_options.append([start, this_export_limit])
 
                 results.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_NOMINAL, all_n, end_record))

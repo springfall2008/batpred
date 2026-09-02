@@ -74,6 +74,13 @@ INVERTER_TEST = False  # Run inverter control self test
 EXPORT_LIMIT_FREEZE = 99.0  # Hold SoC, export only genuine PV surplus - no forced discharge
 EXPORT_LIMIT_IDLE = 100.0  # Export window disabled entirely
 
+# Export power levels the planner tries for a target export, as a fraction of full rate.
+# These are the powers themselves, not the packed fractions they used to be written as: the
+# encoding stores 1 - power, so the old ladder's 0.0/0.3/0.5/0.7 meant full/70%/50%/30% rate
+# and read backwards at the call site.
+FULL_EXPORT_POWER = 1.0
+LOW_EXPORT_POWER_LEVELS = [0.7, 0.5, 0.3]
+
 # Schema version for the debug yaml dump and the persisted plan. Bump when a field's *shape*
 # changes, not when one is added or removed - a reader can detect those itself, but it cannot
 # tell a new encoding from an old one when both are, say, a list of numbers. Absent means

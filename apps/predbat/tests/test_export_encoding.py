@@ -17,7 +17,7 @@ out by hand in Prediction.run_prediction and prediction_kernel.cpp, so the two c
 
 import random
 
-from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, FULL_EXPORT_POWER, LOW_EXPORT_POWER_LEVELS
 from utils import export_mode_of, export_target_of, export_power_of, pack_export_limit, export_limit_exports_no_battery, export_limits_to_stored, export_limits_from_stored
 
 
@@ -194,6 +194,31 @@ def test_export_limit_reads_the_old_float_form():
     return failed
 
 
+def test_export_ladder_rungs_are_unchanged():
+    """The (mode, power) ladder produces exactly the packed values the float ladder did.
+
+    optimise_export used to iterate a list mixing two kinds of thing - two modes and four power
+    levels - and encode each by clamping the integer part to the SoC floor and re-attaching the
+    rung's fraction. This pins the rewritten ladder to those values so the rewrite cannot have
+    quietly dropped or reordered a rung, which the plan goldens alone would not catch if the
+    dropped rung never won.
+    """
+    failed = 0
+    for floor in (0, 13, 50, 98):
+        # What the old float ladder produced: max(floor, int(rung)) + fraction
+        old_rungs = [EXPORT_LIMIT_IDLE, EXPORT_LIMIT_FREEZE, 0.0, 0.3, 0.5, 0.7]
+        expected = [max(floor, int(rung)) + rung - int(rung) for rung in old_rungs]
+
+        new_rungs = [(EXPORT_MODE_IDLE, FULL_EXPORT_POWER), (EXPORT_MODE_FREEZE, FULL_EXPORT_POWER), (EXPORT_MODE_TARGET, FULL_EXPORT_POWER)]
+        new_rungs += [(EXPORT_MODE_TARGET, power) for power in LOW_EXPORT_POWER_LEVELS]
+        actual = [float(pack_export_limit(mode, floor, power)) for mode, power in new_rungs]
+
+        if [round(value, 9) for value in actual] != [round(value, 9) for value in expected]:
+            print("ERROR: floor {} ladder {} expected {}".format(floor, actual, expected))
+            failed += 1
+    return failed
+
+
 def run_export_encoding_tests(my_predbat=None):
     """Run all export limit encoding tests"""
     failed = 0
@@ -205,6 +230,7 @@ def run_export_encoding_tests(my_predbat=None):
     failed += test_export_limit_exports_no_battery()
     failed += test_export_limit_serialisation_roundtrip()
     failed += test_export_limit_reads_the_old_float_form()
+    failed += test_export_ladder_rungs_are_unchanged()
     if not failed:
         print("Test: export limit encoding accessors match the hand-written decode they replace")
     return failed
