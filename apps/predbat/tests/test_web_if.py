@@ -47,8 +47,12 @@ def run_test_web_if(my_predbat):
         my_predbat.components.start("web")
         ha = my_predbat.ha_interface
 
-        # Inject a fake credential so we can verify live apps.yaml masking below
+        # Inject fake credentials so we can verify live apps.yaml masking below. Two kinds:
+        # one the key-name substrings catch, and one only the component registry's "secret"
+        # flag catches - an account number reads like ordinary config, so before the flag
+        # existed this download served it in the clear.
         my_predbat.args["octopus_api_key"] = "test_secret_value"
+        my_predbat.args["octopus_api_account"] = "test_account_number"
 
         # Define all registered endpoints from web.py
         # Format: (method, path)
@@ -330,16 +334,94 @@ def run_test_web_if(my_predbat):
         if res.status_code != 200 or "test_secret_value" in res.text or "xxx" not in res.text:
             print("ERROR: Default /debug_apps_live request was not masked")
             failed = 1
+        if "test_account_number" in res.text:
+            print("ERROR: Default /debug_apps_live request served a registry-flagged account number in the clear")
+            failed = 1
 
         res = requests.get("http://127.0.0.1:5052/debug_apps_live", params={"masked": "0"})
         if res.status_code != 200 or "test_secret_value" not in res.text:
             print("ERROR: Unmasked /debug_apps_live (masked=0) did not contain the expected credential value")
+            failed = 1
+        if "test_account_number" not in res.text:
+            print("ERROR: Unmasked /debug_apps_live (masked=0) dropped the account number - the opt-out must still return everything")
             failed = 1
 
         res = requests.get("http://127.0.0.1:5052/debug_apps_live", params={"masked": "1"})
         if res.status_code != 200 or "test_secret_value" in res.text or "xxx" not in res.text:
             print("ERROR: Masked /debug_apps_live did not redact the expected credential value")
             failed = 1
+        # The registry flag has to reach this route too, not just the debug yaml and MCP.
+        if "test_account_number" in res.text:
+            print("ERROR: Masked /debug_apps_live did not redact the registry-flagged account number")
+            failed = 1
+
+        # The file download sits next to the live one and is what people attach to bug reports,
+        # so a bare request must be redacted too - it used to serve apps.yaml verbatim.
+        # The credentials go into the file on disk, not just my_predbat.args: this route serves
+        # the file, and the shipped test apps.yaml has no credential in it, so comparing raw
+        # against redacted text would pass whether or not anything was actually redacted.
+        print("\n**** Verifying apps.yaml file download masking ****")
+        with open("apps.yaml", "a") as handle:
+            handle.write("\n  solcast_api_key: FILE-CREDENTIAL-VALUE\n  octopus_api_account: FILE-ACCOUNT-NUMBER\n")
+
+        res = requests.get("http://127.0.0.1:5052/debug_apps")
+        if res.status_code != 200:
+            print("ERROR: Default /debug_apps request failed: {}".format(res.status_code))
+            failed = 1
+        else:
+            if "FILE-CREDENTIAL-VALUE" in res.text:
+                print("ERROR: Default /debug_apps served a credential from the file in the clear")
+                failed = 1
+            # The registry flag has to reach the file download too, not just the live one.
+            if "FILE-ACCOUNT-NUMBER" in res.text:
+                print("ERROR: Default /debug_apps served a registry-flagged account number in the clear")
+                failed = 1
+            if "xxx" not in res.text:
+                print("ERROR: Default /debug_apps returned no redaction marker at all")
+                failed = 1
+            # Redacting the text rather than the parsed args is the point - the download should
+            # still read like the user's own file.
+            if "module: predbat" not in res.text:
+                print("ERROR: /debug_apps no longer returns the user's apps.yaml content")
+                failed = 1
+
+        res = requests.get("http://127.0.0.1:5052/debug_apps", params={"masked": "0"})
+        if res.status_code != 200:
+            print("ERROR: Unmasked /debug_apps (masked=0) failed: {}".format(res.status_code))
+            failed = 1
+        elif "FILE-CREDENTIAL-VALUE" not in res.text or "FILE-ACCOUNT-NUMBER" not in res.text:
+            print("ERROR: Unmasked /debug_apps (masked=0) did not return the file as written")
+            failed = 1
+
+        # The editor is deliberately NOT masked, on both halves. It shows the real file so a
+        # credential can be edited at all, and it writes back exactly what was submitted - if
+        # redaction ever leaked into this path it would save 'xxx' over the user's real
+        # credentials the first time they touched an unrelated setting. Downloads redact;
+        # the editor must not.
+        print("\n**** Verifying the apps.yaml editor is not masked ****")
+        res = requests.get("http://127.0.0.1:5052/apps_editor")
+        if res.status_code != 200:
+            print("ERROR: /apps_editor request failed: {}".format(res.status_code))
+            failed = 1
+        else:
+            if "FILE-CREDENTIAL-VALUE" not in res.text or "FILE-ACCOUNT-NUMBER" not in res.text:
+                print("ERROR: /apps_editor masked a credential - the user cannot edit what it will not show them")
+                failed = 1
+
+        editor_content = "pred_bat:\n  module: predbat\n  class: PredBat\n  solcast_api_key: EDITOR-WRITTEN-KEY\n  octopus_api_account: EDITOR-WRITTEN-ACCOUNT\n"
+        res = requests.post("http://127.0.0.1:5052/apps_editor", data={"apps_content": editor_content})
+        if res.status_code != 200:
+            print("ERROR: /apps_editor save failed: {}".format(res.status_code))
+            failed = 1
+        else:
+            with open("apps.yaml", "r") as handle:
+                written = handle.read()
+            if "EDITOR-WRITTEN-KEY" not in written or "EDITOR-WRITTEN-ACCOUNT" not in written:
+                print("ERROR: /apps_editor did not write the submitted credentials verbatim:\n{}".format(written))
+                failed = 1
+            if "xxx" in written:
+                print("ERROR: /apps_editor wrote a redaction marker into apps.yaml, destroying real credentials")
+                failed = 1
 
         # Check endpoint coverage
         print("\n**** Checking endpoint coverage ****")
