@@ -391,6 +391,7 @@ mypy
 nanmean
 nanstd
 nattribute
+nbytes
 ncalls
 nearr
 nemotron
