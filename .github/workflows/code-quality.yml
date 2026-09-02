@@ -48,6 +48,7 @@ jobs:
     - uses: pre-commit-ci/lite-action@v1.1.0
       if: always()
     - name: Upload kernel binaries
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: kernel-binaries
