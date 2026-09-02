@@ -268,8 +268,9 @@ def test_ge_cloud(my_predbat=None):
         ("write_failure", _test_async_write_inverter_setting_failure, "Write inverter setting failure"),
         ("api_locked", _test_async_get_inverter_data_inverter_locked, "Inverter locked body is a failure, not a success"),
         ("api_body_retryable", _test_async_get_inverter_data_retryable_body_failure, "Retryable body failure returns None"),
-        ("write_locked", _test_async_write_inverter_setting_locked, "Write aborts on a locked inverter"),
-        ("write_terminal", _test_async_write_inverter_setting_terminal_code, "Write does not retry terminal codes"),
+        ("write_locked", _test_async_write_inverter_setting_locked, "Write aborts on a terminal failure"),
+        ("api_bare_code", _test_async_get_inverter_data_terminal_code_without_success_flag, "Terminal code without a success flag is a failure"),
+        ("api_negative_value", _test_async_get_inverter_data_negative_value_other_endpoint, "Negative value outside the setting endpoints is data"),
         ("switch_event", _test_switch_event, "Switch event handler"),
         ("number_event", _test_number_event, "Number event handler"),
         ("select_event", _test_select_event, "Select event handler"),
@@ -3302,7 +3303,7 @@ def _test_async_read_inverter_setting_error_codes(my_predbat):
 
             async def mock_get_data_fatal(*args, **kwargs):
                 call_count[0] += 1
-                return {"value": code, "success": False, "message": "Inverter Locked"}
+                raise GECloudTerminalError(code, "Inverter Locked", "inverter_locked")
 
             with patch("gecloud.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
                 ge_cloud.async_get_inverter_data = mock_get_data_fatal
@@ -3514,8 +3515,8 @@ def _test_async_get_inverter_data_retryable_body_failure(my_predbat):
 
                     result = await ge_cloud.async_get_inverter_data(GE_API_INVERTER_WRITE_SETTING, "test123", 72, post=True, datain={"value": "10"})
 
-        if result is not None:
-            print("ERROR: Expected None for a retryable body failure, got {}".format(result))
+        if result != {"value": -5, "success": False, "message": "There was a server error"}:
+            print("ERROR: Expected the body returned so the caller can retry on the code, got {}".format(result))
             return 1
         if ge_cloud.last_success_timestamp is not None:
             print("ERROR: Expected last_success_timestamp to stay unset for a failed call")
@@ -3529,46 +3530,7 @@ def _test_async_get_inverter_data_retryable_body_failure(my_predbat):
 
 
 def _test_async_write_inverter_setting_locked(my_predbat):
-    """A locked inverter aborts the write on the first response instead of retrying 10 times"""
-
-    async def test():
-        ge_cloud = MockGECloudDirect()
-        ge_cloud.pending_writes["test123"] = []
-
-        call_count = [0]
-
-        async def mock_get_data(*args, **kwargs):
-            call_count[0] += 1
-            raise GECloudTerminalError(-7, "Inverter Locked", "inverter_locked")
-
-        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            ge_cloud.async_get_inverter_data = mock_get_data
-
-            result = await ge_cloud.async_write_inverter_setting("test123", 72, "10")
-
-            if result is not None:
-                print("ERROR: Expected None for a rejected write, got {}".format(result))
-                return 1
-            if call_count[0] != 1:
-                print("ERROR: Expected the write to abort after 1 attempt, got {}".format(call_count[0]))
-                return 1
-            if mock_sleep.call_count != 0:
-                print("ERROR: Expected no retry backoff for a terminal error, slept {} times".format(mock_sleep.call_count))
-                return 1
-
-        if ge_cloud.pending_writes["test123"]:
-            print("ERROR: Expected no pending write to be recorded for a rejected write")
-            return 1
-        if not any("Inverter Locked" in message and "-7" in message for message in ge_cloud.log_messages):
-            print("ERROR: Expected the GivEnergy message and code to be logged, got {}".format(ge_cloud.log_messages))
-            return 1
-        return 0
-
-    return run_async(test())
-
-
-def _test_async_write_inverter_setting_terminal_code(my_predbat):
-    """A terminal code in the write response body is not retried and is logged with its message"""
+    """A terminal failure aborts the write on the first response instead of retrying 10 times"""
 
     async def test():
         for code in [-3, -4, -7]:
@@ -3578,25 +3540,96 @@ def _test_async_write_inverter_setting_terminal_code(my_predbat):
 
             async def mock_get_data(*args, **kwargs):
                 call_count[0] += 1
-                return {"value": code, "message": "Inverter Locked"}
+                raise GECloudTerminalError(code, "Inverter Locked", "inverter_locked")
 
-            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
                 ge_cloud.async_get_inverter_data = mock_get_data
 
                 result = await ge_cloud.async_write_inverter_setting("test123", 72, "10")
 
                 if result is not None:
-                    print("ERROR: Expected None for terminal code {}, got {}".format(code, result))
+                    print("ERROR: Expected None for a rejected write, got {}".format(result))
                     return 1
                 if call_count[0] != 1:
-                    print("ERROR: Expected code {} to abort after 1 attempt, got {}".format(code, call_count[0]))
+                    print("ERROR: Expected code {} to abort the write after 1 attempt, got {}".format(code, call_count[0]))
                     return 1
-                if ge_cloud.pending_writes["test123"]:
-                    print("ERROR: Expected no pending write recorded for terminal code {}".format(code))
+                if mock_sleep.call_count != 0:
+                    print("ERROR: Expected no retry backoff for code {}, slept {} times".format(code, mock_sleep.call_count))
                     return 1
-                if not any(str(code) in message and "Inverter Locked" in message for message in ge_cloud.log_messages):
-                    print("ERROR: Expected code {} and its message logged, got {}".format(code, ge_cloud.log_messages))
-                    return 1
+
+            if ge_cloud.pending_writes["test123"]:
+                print("ERROR: Expected no pending write to be recorded for a rejected write")
+                return 1
+            if not any("Inverter Locked" in message and str(code) in message for message in ge_cloud.log_messages):
+                print("ERROR: Expected the GivEnergy message and code {} to be logged, got {}".format(code, ge_cloud.log_messages))
+                return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_inverter_data_terminal_code_without_success_flag(my_predbat):
+    """A terminal result code is a failure even when the body omits the success flag
+
+    Some setting read/write responses carry the negative code without also setting
+    success=false. Keying the classification on that flag alone let those bodies refresh the
+    component health timestamp and count as a successful API call (PR #4902 review).
+    """
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"data": {"value": -7, "message": "Inverter Locked"}})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        recorded = []
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                with patch("gecloud.record_api_call", side_effect=lambda *args, **kwargs: recorded.append(args)):
+                    mock_session_class.return_value = mock_session
+
+                    try:
+                        result = await ge_cloud.async_get_inverter_data(GE_API_INVERTER_WRITE_SETTING, "test123", 72, post=True, datain={"value": "10"})
+                        print("ERROR: Expected GECloudTerminalError for a bare terminal code, got {}".format(result))
+                        return 1
+                    except GECloudTerminalError as exc:
+                        if exc.code != -7 or exc.reason != "inverter_locked":
+                            print("ERROR: Expected code -7 / inverter_locked, got {} / {}".format(exc.code, exc.reason))
+                            return 1
+
+        if ge_cloud.last_success_timestamp is not None:
+            print("ERROR: Expected last_success_timestamp to stay unset for a rejected write")
+            return 1
+        if recorded != [("givenergy", False, "inverter_locked")]:
+            print("ERROR: Expected the failure recorded as inverter_locked, got {}".format(recorded))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_inverter_data_negative_value_other_endpoint(my_predbat):
+    """Outside the setting endpoints a negative "value" is data, not a result code"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"data": {"value": -7}})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session
+
+                result = await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
+
+        if result != {"value": -7}:
+            print("ERROR: Expected the body returned unchanged, got {}".format(result))
+            return 1
+        if ge_cloud.last_success_timestamp is None:
+            print("ERROR: Expected a successful call to update last_success_timestamp")
+            return 1
         return 0
 
     return run_async(test())
