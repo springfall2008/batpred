@@ -20,9 +20,9 @@ call to the C++ prediction kernel, which is where the threading now lives.
 
 from datetime import datetime, timedelta
 from multiprocessing import cpu_count
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
-from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot, export_mode_of, export_power_of, pack_export_limit
+from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot, export_mode_of, export_power_of, pack_export_limit, export_limit_exports_no_battery
 from prediction import Prediction
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
@@ -4041,9 +4041,9 @@ class Plan:
                             # shed any levels over-export before the high-priced peak is touched. A reduction is
                             # a shallower discharge (higher SoC limit) and/or a smaller window (later start) -
                             # never a deeper discharge nor an earlier start (a bigger window exports more, even
-                            # when the SoC limit rises). Off/freeze (limit >= 99) export no battery and force the
-                            # start back to the full window, so they are exempt from the earlier-start check.
-                            trim_export_ok = pass_type != "trim_export" or (n_best_soc >= self.export_limits_best[window_n] and (n_best_soc >= EXPORT_LIMIT_FREEZE or n_best_start >= keep_start))
+                            # when the SoC limit rises). Off/freeze export no battery and force the start back to
+                            # the full window, so they are exempt from the earlier-start check.
+                            trim_export_ok = pass_type != "trim_export" or (n_best_soc >= self.export_limits_best[window_n] and (export_limit_exports_no_battery(n_best_soc) or n_best_start >= keep_start))
                             if n_best_metric < best_metric and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]) and trim_export_ok:
                                 # Only a strict improvement drives another refinement iteration (see
                                 # the charge block above for why equal-metric flips must not).

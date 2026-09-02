@@ -18,7 +18,7 @@ out by hand in Prediction.run_prediction and prediction_kernel.cpp, so the two c
 import random
 
 from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
-from utils import export_mode_of, export_target_of, export_power_of, pack_export_limit
+from utils import export_mode_of, export_target_of, export_power_of, pack_export_limit, export_limit_exports_no_battery
 
 
 def test_export_encoding_roundtrip():
@@ -118,6 +118,36 @@ def test_export_encoding_reserved_interval():
     return failed
 
 
+def test_export_limit_exports_no_battery():
+    """The no-battery predicate matches the `>= EXPORT_LIMIT_FREEZE` expression it replaces.
+
+    plan.py's trim pass exempts off/freeze windows from its earlier-start check, because they
+    discharge no battery and force the start back to the full window. It asked that as an
+    ordering comparison, which holds only because both reserved values sort above every real
+    target. Pinning the predicate to that expression keeps the behaviour identical while the
+    encoding still packs a fraction; when mode becomes its own field this becomes a membership
+    test over modes and the ordering stops mattering.
+    """
+    failed = 0
+    random.seed(3)
+    values = [0.0, 47.3, 98.0, 98.999, 99.0, 99.5, 100.0] + [random.uniform(0, 101) for _ in range(5000)]
+    for value in values:
+        if export_limit_exports_no_battery(value) != (value >= EXPORT_LIMIT_FREEZE):
+            print("ERROR: value {} predicate {} expected {}".format(value, export_limit_exports_no_battery(value), value >= EXPORT_LIMIT_FREEZE))
+            failed += 1
+    # The two modes that export no battery, and a normal target that does
+    if not export_limit_exports_no_battery(pack_export_limit(EXPORT_MODE_FREEZE)):
+        print("ERROR: a freeze should export no battery")
+        failed += 1
+    if not export_limit_exports_no_battery(pack_export_limit(EXPORT_MODE_IDLE)):
+        print("ERROR: an idle window should export no battery")
+        failed += 1
+    if export_limit_exports_no_battery(pack_export_limit(EXPORT_MODE_TARGET, 50, 1.0)):
+        print("ERROR: a real target exports battery and must not be exempt")
+        failed += 1
+    return failed
+
+
 def run_export_encoding_tests(my_predbat=None):
     """Run all export limit encoding tests"""
     failed = 0
@@ -126,6 +156,7 @@ def run_export_encoding_tests(my_predbat=None):
     failed += test_export_encoding_modes()
     failed += test_export_encoding_matches_legacy_decode()
     failed += test_export_encoding_reserved_interval()
+    failed += test_export_limit_exports_no_battery()
     if not failed:
         print("Test: export limit encoding accessors match the hand-written decode they replace")
     return failed

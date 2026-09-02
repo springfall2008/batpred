@@ -1467,6 +1467,22 @@ def export_power_of(export_limit):
     return 1 - (export_limit - int(export_limit))
 
 
+def export_limit_exports_no_battery(export_limit):
+    """Whether this export limit discharges no battery - i.e. it is off, or a freeze.
+
+    Wraps what plan.py's trim pass expresses as `limit >= EXPORT_LIMIT_FREEZE`, which works
+    only because both reserved values happen to sort above every real target. That ordering
+    is a property of the packed encoding rather than of the question being asked, so it is
+    named here: once mode is a field of its own this becomes a membership test over modes
+    (idle or freeze) and the ordering can stop being load-bearing.
+
+    Deliberately not written in terms of export_mode_of yet - it must keep the >= behaviour
+    exactly while the encoding still packs a fraction, including for a value in the currently
+    unreachable [99.0, 100.0) interval, where the two disagree (see export_mode_of).
+    """
+    return export_limit >= EXPORT_LIMIT_FREEZE
+
+
 def pack_export_limit(mode, target=None, power=1.0):
     """Build a packed export limit from the three signals it encodes.
 
