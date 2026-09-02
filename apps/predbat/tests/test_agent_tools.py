@@ -14,6 +14,7 @@ before and after the extraction, or an MCP client's tool set changed without any
 """
 
 import asyncio
+import copy
 import json
 import os
 import re
@@ -679,6 +680,76 @@ def test_nested_credentials_are_redacted(my_predbat):
             failed = True
     finally:
         my_predbat.args = original_args
+    return failed
+
+
+def test_args_from_apps_yaml_snapshot_is_redacted(my_predbat):
+    """The second copy of apps.yaml kept for override detection never serves a credential.
+
+    PredBat.initialize() snapshots self.args into self.args_from_apps_yaml so set_arg_auto() can
+    tell "the user configured this" apart from "Predbat defaulted it" (PR #4500). Both dump paths
+    that walk self.__dict__ - create_debug_yaml() and the get_state tool - special-cased only the
+    field literally named "args" for masking, so this second copy went out in the clear: the
+    predbat_debug.yaml users attach to bug reports, every debug_history snapshot, and any model
+    calling get_state all received real api keys, tokens and passwords.
+
+    Mutation check: dropping "args_from_apps_yaml" from either masking tuple, or reverting the
+    snapshot in initialize() to copy.deepcopy(self.args), fails an assertion below.
+    """
+    failed = False
+    print("**** Testing the args_from_apps_yaml snapshot is redacted ****")
+
+    original_args = my_predbat.args
+    original_snapshot = getattr(my_predbat, "args_from_apps_yaml", None)
+    try:
+        secrets = {
+            "ha_key": "REAL-HA-TOKEN",
+            "solcast_api_key": "REAL-SOLCAST-KEY",
+            "givenergy_password": "REAL-PASSWORD",
+            "mcp_secret": "REAL-MCP-SECRET",
+            "forecast_solar": [{"postcode": "SW1A 1AA", "api_key": "REAL-NESTED-KEY"}],
+            "battery_size": 9.5,
+        }
+        my_predbat.args = copy.deepcopy(secrets)
+        # Planted unmasked on purpose: the guard under test is that neither dump path emits it
+        # in the clear, independently of the masking initialize() now applies at the source.
+        my_predbat.args_from_apps_yaml = copy.deepcopy(secrets)
+
+        real_values = ["REAL-HA-TOKEN", "REAL-SOLCAST-KEY", "REAL-PASSWORD", "REAL-MCP-SECRET", "REAL-NESTED-KEY"]
+
+        # The debug yaml - what a user attaches to a bug report.
+        debug_yaml = my_predbat.create_debug_yaml(write_file=False)
+        for secret in real_values:
+            if secret in debug_yaml:
+                print("ERROR: create_debug_yaml leaked {} from args_from_apps_yaml".format(secret))
+                failed = True
+        if "battery_size" not in debug_yaml:
+            print("ERROR: redaction damaged the debug yaml - non-credential args are missing")
+            failed = True
+
+        # The get_state tool - what a model asking for Predbat's state receives.
+        tools = PredbatTools(my_predbat)
+        result = json.dumps(asyncio.run(tools.execute("get_state", {"keys": ["args_from_apps_yaml"]})))
+        for secret in real_values:
+            if secret in result:
+                print("ERROR: get_state leaked {} from args_from_apps_yaml".format(secret))
+                failed = True
+        if "xxx" not in result:
+            print("ERROR: get_state returned no redaction marker, so the field was not masked: {}".format(result[:400]))
+            failed = True
+
+        # Masking must not damage the lookup set_arg_auto actually depends on.
+        masked_snapshot = mask_secret_args(secrets)
+        if masked_snapshot.get("battery_size") != 9.5:
+            print("ERROR: masking the snapshot damaged a non-credential value set_arg_auto compares against")
+            failed = True
+    finally:
+        my_predbat.args = original_args
+        if original_snapshot is None:
+            if hasattr(my_predbat, "args_from_apps_yaml"):
+                del my_predbat.args_from_apps_yaml
+        else:
+            my_predbat.args_from_apps_yaml = original_snapshot
     return failed
 
 
@@ -1366,6 +1437,7 @@ def run_agent_tools_tests(my_predbat):
     failed |= test_get_entity_history_bucket_cap(my_predbat)
     failed |= test_get_entity_history_lookback_clamp(my_predbat)
     failed |= test_nested_credentials_are_redacted(my_predbat)
+    failed |= test_args_from_apps_yaml_snapshot_is_redacted(my_predbat)
     failed |= test_get_apps_config_paths(my_predbat)
     failed |= test_get_plan_is_slimmed(my_predbat)
     failed |= test_set_config_refuses_what_it_cannot_change(my_predbat)

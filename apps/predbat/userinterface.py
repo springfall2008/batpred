@@ -770,7 +770,7 @@ class UserInterface:
                 if is_debug_excluded_key(key):
                     pass
                 else:
-                    if key == "args":
+                    if key in ("args", "args_from_apps_yaml"):
                         debug[key] = mask_secret_args(self.__dict__[key])
                     else:
                         debug[key] = self.__dict__[key]
