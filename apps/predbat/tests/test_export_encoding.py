@@ -18,7 +18,7 @@ out by hand in Prediction.run_prediction and prediction_kernel.cpp, so the two c
 import random
 
 from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
-from utils import export_mode_of, export_target_of, export_power_of, pack_export_limit, export_limit_exports_no_battery
+from utils import export_mode_of, export_target_of, export_power_of, pack_export_limit, export_limit_exports_no_battery, export_limits_to_stored, export_limits_from_stored
 
 
 def test_export_encoding_roundtrip():
@@ -148,6 +148,52 @@ def test_export_limit_exports_no_battery():
     return failed
 
 
+def test_export_limit_serialisation_roundtrip():
+    """Every representable limit survives a store/load round trip exactly.
+
+    The stored form is a self-describing mapping rather than the packed float, so a saved plan
+    or debug dump says "freeze" instead of 99.0. The round trip must still rebuild the identical
+    packed value, since the planner compares limits by equality.
+    """
+    failed = 0
+    limits = [pack_export_limit(EXPORT_MODE_FREEZE), pack_export_limit(EXPORT_MODE_IDLE)]
+    for target in range(0, 99):
+        for power in (1.0, 0.7, 0.5, 0.3):
+            limits.append(pack_export_limit(EXPORT_MODE_TARGET, target, power))
+
+    restored = export_limits_from_stored(export_limits_to_stored(limits))
+    if [float(value) for value in restored] != [float(value) for value in limits]:
+        print("ERROR: round trip changed the limits")
+        failed += 1
+
+    # The stored form must be plain data - a float subclass would serialise as a Python object
+    # tag that only Predbat can read, and yaml.safe_dump refuses it outright
+    for entry in export_limits_to_stored(limits):
+        if type(entry) is not dict or type(entry["mode"]) is not str:
+            print("ERROR: stored entry is not a plain mapping: {!r}".format(entry))
+            failed += 1
+            break
+    return failed
+
+
+def test_export_limit_reads_the_old_float_form():
+    """Bare floats from before the mapping existed still load.
+
+    Debug dumps arrive from whatever version the reporter is running, so this is a permanent
+    compatibility path rather than a migration.
+    """
+    failed = 0
+    if [float(value) for value in export_limits_from_stored([47.3, 99.0, 100.0])] != [47.3, 99.0, 100.0]:
+        print("ERROR: the old float form did not load unchanged")
+        failed += 1
+    # A malformed entry becomes idle rather than raising - a bad limit must not stop a replay
+    for bad in (None, "nonsense", {"mode": "bogus"}, {}):
+        if export_mode_of(export_limits_from_stored([bad])[0]) != EXPORT_MODE_IDLE:
+            print("ERROR: malformed entry {!r} did not fall back to idle".format(bad))
+            failed += 1
+    return failed
+
+
 def run_export_encoding_tests(my_predbat=None):
     """Run all export limit encoding tests"""
     failed = 0
@@ -157,6 +203,8 @@ def run_export_encoding_tests(my_predbat=None):
     failed += test_export_encoding_matches_legacy_decode()
     failed += test_export_encoding_reserved_interval()
     failed += test_export_limit_exports_no_battery()
+    failed += test_export_limit_serialisation_roundtrip()
+    failed += test_export_limit_reads_the_old_float_form()
     if not failed:
         print("Test: export limit encoding accessors match the hand-written decode they replace")
     return failed

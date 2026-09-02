@@ -28,6 +28,7 @@ from const import (
     TIME_FORMAT,
     PREDBAT_MODE_OPTIONS,
     PREDBAT_MODE_MONITOR,
+    DEBUG_SCHEMA_VERSION,
 )
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
@@ -727,7 +728,13 @@ class UserInterface:
             self.log("Warn: Debug file {} not found".format(filename))
             return
 
+        schema_version = debug.get("debug_schema_version", 0)
+        if schema_version > DEBUG_SCHEMA_VERSION:
+            self.log("Warn: Debug file {} was written by a newer Predbat (schema {} > {}) - replaying it may misread fields that have changed shape".format(filename, schema_version, DEBUG_SCHEMA_VERSION))
+
         for key in debug:
+            if key in ["debug_schema_version"]:
+                continue
             if key not in ["CONFIG_ITEMS", "inverters"]:
                 self.__dict__[key] = copy.deepcopy(debug[key])
             if key == "inverters":
@@ -786,6 +793,9 @@ class UserInterface:
             inverters_debug.append(inverter_debug)
         debug["inverters"] = inverters_debug
         debug["CONFIG_ITEMS"] = copy.deepcopy(self.CONFIG_ITEMS)
+        # Marks how the fields below are shaped, so a replay can tell an old encoding from a new
+        # one rather than guessing from the data. Absent in dumps written before versioning.
+        debug["debug_schema_version"] = DEBUG_SCHEMA_VERSION
 
         if write_file:
             with open(filename, "w") as file:

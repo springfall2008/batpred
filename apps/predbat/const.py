@@ -74,6 +74,13 @@ INVERTER_TEST = False  # Run inverter control self test
 EXPORT_LIMIT_FREEZE = 99.0  # Hold SoC, export only genuine PV surplus - no forced discharge
 EXPORT_LIMIT_IDLE = 100.0  # Export window disabled entirely
 
+# Schema version for the debug yaml dump and the persisted plan. Bump when a field's *shape*
+# changes, not when one is added or removed - a reader can detect those itself, but it cannot
+# tell a new encoding from an old one when both are, say, a list of numbers. Absent means
+# "before versioning", which is any dump written before this was introduced; those are still
+# read, so a bug report from an older release keeps working (see export_limit_from_stored).
+DEBUG_SCHEMA_VERSION = 1
+
 # Export modes - the three states an export window can be in. These name what the packed value
 # above already encodes; they are the vocabulary the rest of the code should ask in, rather than
 # each caller re-deriving intent by comparing against the two sentinels (which several modules

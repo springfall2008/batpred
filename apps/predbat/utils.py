@@ -1483,6 +1483,64 @@ def export_limit_exports_no_battery(export_limit):
     return export_limit >= EXPORT_LIMIT_FREEZE
 
 
+EXPORT_MODE_NAMES = {EXPORT_MODE_TARGET: "target", EXPORT_MODE_FREEZE: "freeze", EXPORT_MODE_IDLE: "idle"}
+EXPORT_MODE_BY_NAME = {name: mode for mode, name in EXPORT_MODE_NAMES.items()}
+
+
+def export_limit_to_stored(export_limit):
+    """Serialise one export limit as a self-describing mapping.
+
+    The packed float is an internal encoding, not a format worth persisting: 99.0 does not say
+    "freeze" to anything that has not read const.py, and the fraction silently carries the export
+    power. A plain mapping says what it means, survives yaml.safe_dump (a float subclass does not -
+    it emits a !!python/object tag that only Predbat can load), and leaves room for fields the
+    packed double has nowhere to put.
+
+    Only the fields that apply to the mode are written, so a freeze does not claim a meaningless
+    target or power.
+    """
+    mode = export_mode_of(export_limit)
+    if mode != EXPORT_MODE_TARGET:
+        return {"mode": EXPORT_MODE_NAMES[mode]}
+    # The power is recovered from the packed fraction, so it carries binary noise (0.7 comes back
+    # as 0.7000000000000028). Round it on the way out so the stored file reads cleanly; the packed
+    # value rebuilt from it is identical to the original either way at this precision.
+    return {"mode": EXPORT_MODE_NAMES[mode], "target": export_target_of(export_limit), "power": round(export_power_of(export_limit), 6)}
+
+
+def export_limit_from_stored(stored):
+    """Read one export limit from either the mapping form or a bare packed float.
+
+    The float branch is the translation layer for plans and debug dumps written before the
+    mapping existed. Those arrive indefinitely - a bug report carries whatever version the user
+    was running - so this is a permanent compatibility path, not a migration to be removed.
+
+    Anything unrecognised becomes an idle window rather than raising: a debug dump is a
+    diagnostic artefact and a malformed limit should not stop a replay.
+    """
+    if isinstance(stored, dict):
+        mode = EXPORT_MODE_BY_NAME.get(stored.get("mode"))
+        if mode is None:
+            return pack_export_limit(EXPORT_MODE_IDLE)
+        if mode != EXPORT_MODE_TARGET:
+            return pack_export_limit(mode)
+        return pack_export_limit(mode, stored.get("target", 0), stored.get("power", 1.0))
+    try:
+        return float(stored)
+    except (TypeError, ValueError):
+        return pack_export_limit(EXPORT_MODE_IDLE)
+
+
+def export_limits_to_stored(export_limits):
+    """Serialise a list of export limits for the persisted plan or a debug dump."""
+    return [export_limit_to_stored(limit) for limit in export_limits or []]
+
+
+def export_limits_from_stored(stored):
+    """Read a list of export limits written in either form."""
+    return [export_limit_from_stored(limit) for limit in stored or []]
+
+
 def pack_export_limit(mode, target=None, power=1.0):
     """Build a packed export limit from the three signals it encodes.
 

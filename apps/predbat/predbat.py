@@ -76,7 +76,7 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
-from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths
+from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths, export_limits_to_stored, export_limits_from_stored
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
@@ -716,7 +716,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "charge_window_best": self.charge_window_best,
             "charge_limit_best": self.charge_limit_best,
             "export_window_best": self.export_window_best,
-            "export_limits_best": self.export_limits_best,
+            "export_limits_best": export_limits_to_stored(self.export_limits_best),
             "plan_preclip": self.plan_preclip,
             "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
             "plan_last_updated_minutes": self.plan_last_updated_minutes,
@@ -768,7 +768,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.charge_window_best = plan_data.get("charge_window_best", [])
         self.charge_limit_best = plan_data.get("charge_limit_best", [])
         self.export_window_best = plan_data.get("export_window_best", [])
-        self.export_limits_best = plan_data.get("export_limits_best", [])
+        # Accepts both the mapping form and the bare floats written by older versions
+        self.export_limits_best = export_limits_from_stored(plan_data.get("export_limits_best", []))
         # The pre-clip snapshot plan selection scores against. Older saves predate it, and it is only ever a
         # four part plan, so anything else is discarded and the comparison falls back to the clipped plans.
         preclip = plan_data.get("plan_preclip")
