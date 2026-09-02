@@ -101,8 +101,10 @@ class MockBase:
             return result
         return default
 
-    def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
+    def set_state_wrapper(self, entity_id, state, attributes=None, required_unit=None):
         """Mock set_state_wrapper"""
+        if attributes is None:
+            attributes = {}
         self.mock_ha_states[entity_id] = {"state": state, "attributes": attributes}
 
     def get_history_wrapper(self, entity_id, days=30, required=False, tracked=True):

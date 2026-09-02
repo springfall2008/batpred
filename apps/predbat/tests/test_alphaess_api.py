@@ -57,8 +57,10 @@ class MockAlphaESS(AlphaESSAPI):
         """Read back whatever the test (or dashboard_item) put in self.state."""
         return self.state.get(entity_id, default)
 
-    async def set_state_external(self, entity_id, state, attributes={}):
+    async def set_state_external(self, entity_id, state, attributes=None):
         """Record a Predbat CONFIG_ITEMS switch change instead of reaching Home Assistant."""
+        if attributes is None:
+            attributes = {}
         self.external_state[entity_id] = state
 
     def set_arg_auto(self, arg, value):

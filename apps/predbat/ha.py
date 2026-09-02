@@ -971,10 +971,12 @@ class HAInterface(ComponentBase):
 
         return [history] if history else None
 
-    async def set_state_external(self, entity_id, state, attributes={}):
+    async def set_state_external(self, entity_id, state, attributes=None):
         """
         Used for external changes to Predbat state data
         """
+        if attributes is None:
+            attributes = {}
         new_value = state
         new_state = {"entity_id": entity_id, "state": state, "attributes": attributes}
         old_value = self.get_state(entity_id)
@@ -1057,10 +1059,12 @@ class HAInterface(ComponentBase):
         if (old_value is None) or (new_value != old_value):
             await self.base.trigger_watch_list(entity_id, attributes, old_state, new_state)
 
-    def set_state(self, entity_id, state, attributes={}):
+    def set_state(self, entity_id, state, attributes=None):
         """
         Set the state of an entity in Home Assistant.
         """
+        if attributes is None:
+            attributes = {}
         self.db_mirror_list[entity_id] = True
 
         if self.db_enable and (self.db_mirror_ha or self.db_primary):

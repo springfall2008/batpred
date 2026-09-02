@@ -79,8 +79,10 @@ class MockTeslemetryAPI(TeslemetryAPI):
         # guard returned False.
         self.base = SimpleNamespace(ha_interface=SimpleNamespace(set_state_external=self._capture_external), get_arg=lambda a, d=None, **k: d)
 
-    async def _capture_external(self, entity_id, state, attributes={}):
+    async def _capture_external(self, entity_id, state, attributes=None):
         """Capture set_state_external calls made against Predbat's own config entities."""
+        if attributes is None:
+            attributes = {}
         self.external_states[entity_id] = state
 
     @property
@@ -98,8 +100,10 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.dashboard_items[entity] = {"state": state, "attributes": attributes}
         self.entity_states[entity] = state
 
-    def set_state_wrapper(self, entity_id, state, attributes={}):
+    def set_state_wrapper(self, entity_id, state, attributes=None):
         """Capture entity state updates."""
+        if attributes is None:
+            attributes = {}
         self.entity_states[entity_id] = state
 
     def get_state_wrapper(self, entity_id=None, default=None, **kwargs):

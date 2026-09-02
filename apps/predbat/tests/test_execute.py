@@ -158,11 +158,11 @@ class ActiveTestInverter:
 def run_execute_test(
     my_predbat,
     name,
-    charge_window_best=[],
-    charge_limit_best=[],
-    export_window_best=[],
-    export_limits_best=[],
-    car_slot=[],
+    charge_window_best=None,
+    charge_limit_best=None,
+    export_window_best=None,
+    export_limits_best=None,
+    car_slot=None,
     soc_kw=0,
     soc_max=10,
     car_charging_from_battery=False,
@@ -222,10 +222,22 @@ def run_execute_test(
     assert_reserve_array=None,
     car_soc=0,
     battery_temperature=20,
-    assert_immediate_charge_soc_freeze_array=[],
+    assert_immediate_charge_soc_freeze_array=None,
     pv_forecast=0.0,
     set_charge_freeze_only=False,
 ):
+    if assert_immediate_charge_soc_freeze_array is None:
+        assert_immediate_charge_soc_freeze_array = []
+    if car_slot is None:
+        car_slot = []
+    if export_limits_best is None:
+        export_limits_best = []
+    if export_window_best is None:
+        export_window_best = []
+    if charge_limit_best is None:
+        charge_limit_best = []
+    if charge_window_best is None:
+        charge_window_best = []
     print("> Run scenario {}".format(name))
     my_predbat.log("> Run scenario {}".format(name))
     failed = False

@@ -1418,10 +1418,12 @@ class UserInterface:
         self.expose_config(config_item, values, force=True)
         return time_overrides
 
-    def manual_rates(self, config_item, exclude=[], new_value=None, default_rate=0):
+    def manual_rates(self, config_item, exclude=None, new_value=None, default_rate=0):
         """
         Update manual rates sensor
         """
+        if exclude is None:
+            exclude = []
         rate_overrides_minutes = {}
         rate_overrides = []
         plan_interval = self.get_arg("plan_interval_minutes", 30)
@@ -1499,10 +1501,12 @@ class UserInterface:
 
         return rate_overrides_minutes
 
-    def manual_times(self, config_item, exclude=[], new_value=None):
+    def manual_times(self, config_item, exclude=None, new_value=None):
         """
         Update manual times sensor
         """
+        if exclude is None:
+            exclude = []
         time_overrides = []
         plan_interval = self.get_arg("plan_interval_minutes", 30)
         minutes_now = int(self.minutes_now / plan_interval) * plan_interval

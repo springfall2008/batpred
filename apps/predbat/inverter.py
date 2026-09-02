@@ -2935,10 +2935,12 @@ class Inverter:
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
         self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 
-    def call_service_template(self, service, data, domain="charge", extra_data={}):
+    def call_service_template(self, service, data, domain="charge", extra_data=None):
         """
         Call a service template with data
         """
+        if extra_data is None:
+            extra_data = {}
         service_list = self.base.args.get(service, "")
         if not service_list:
             return False

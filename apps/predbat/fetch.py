@@ -140,17 +140,23 @@ class Fetch:
         scale_today=1.0,
         scale_fixed=1.0,
         type_load=False,
-        load_forecast={},
+        load_forecast=None,
         cloud_factor=None,
         load_scaling_dynamic=None,
         base_offset=None,
         flip=False,
-        load_adjust={},
-        load_baseline={},
+        load_adjust=None,
+        load_baseline=None,
     ):
         """
         Create cached step data for historical array
         """
+        if load_baseline is None:
+            load_baseline = {}
+        if load_adjust is None:
+            load_adjust = {}
+        if load_forecast is None:
+            load_forecast = {}
         values = {}
         cloud_diff = 0
 
@@ -1522,10 +1528,12 @@ class Fetch:
         self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
 
-    def rate_replicate(self, rates, rate_io={}, is_import=True, is_gas=False):
+    def rate_replicate(self, rates, rate_io=None, is_import=True, is_gas=False):
         """
         We don't get enough hours of data for Octopus, so lets assume it repeats until told others
         """
+        if rate_io is None:
+            rate_io = {}
         minute = -24 * 60
         rate_last = 0
         rate_last_valid = False  # Track if we've seen any real rates yet
