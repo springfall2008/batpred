@@ -744,10 +744,10 @@ class _HardTimeout(Exception):
 
 
 def _run_with_hard_timeout(coro, seconds=5):
-    """Run coro to completion, or raise _HardTimeout after `seconds` of wall-clock time.
+    """Run an async coroutine with a hard synchronous timeout.
 
-    An asyncio-level timeout (``asyncio.wait_for``) cannot be trusted to catch a runaway
-    ``while``/``for`` loop that only ever awaits mocked coroutines resolving with no real
+    Used by the pagination loop termination tests to bound mock-driven loops against infinite
+    iteration. Standard ``asyncio.wait_for`` is unreliable here because mock coroutines never truly yield
     suspension: each ``await`` completes synchronously without handing control back to the
     event loop's own scheduler, so a ``call_later`` timeout callback never gets a chance to
     run - confirmed empirically against a tight loop shaped exactly like the bug this guards
@@ -755,6 +755,8 @@ def _run_with_hard_timeout(coro, seconds=5):
     by ``SIGALRM``. SIGALRM is a genuine OS-level interrupt that CPython checks between
     bytecode instructions, so it fires even inside a loop that never truly yields.
     """
+    if not hasattr(signal, "SIGALRM"):
+        return run_async_local(coro)
 
     if not hasattr(signal, "SIGALRM"):
         import asyncio

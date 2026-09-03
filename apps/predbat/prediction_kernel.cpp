@@ -43,7 +43,7 @@
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
 #define PK_ABI_VERSION 5
-#define PK_PARITY_REVISION 10
+#define PK_PARITY_REVISION 11
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_LIMIT_FREEZE 99.0 // const.py EXPORT_LIMIT_FREEZE
@@ -229,6 +229,8 @@ struct PkContext {
     int32_t iboost_on_export;
     int32_t has_rate_gas;
     int32_t has_iboost_plan;
+
+    const double *pv_forecast_peak;
 };
 
 // Per-scenario inputs; field order MUST match the ctypes Structure in prediction_kernel.py.
@@ -239,6 +241,7 @@ struct PkScenario {
     const double *export_limits;  // percent per export window (99=freeze, 100=off - see EXPORT_LIMIT_FREEZE/EXPORT_LIMIT_IDLE in const.py)
     const int32_t *export_start;
     const int32_t *export_end;
+    const int32_t *export_flags;  // 1 if clipping_target_soc_pct is active, 0 otherwise
     double *soc_out;              // caller-allocated, n_steps entries, filled with round(soc, 3)
 
     int32_t n_charge;
@@ -288,6 +291,7 @@ struct PkBatchJob {
     const double *export_limits;
     const int32_t *export_start;
     const int32_t *export_end;
+    const int32_t *export_flags;
     double *soc_out; // optional, null to skip
 
     int32_t n_charge;
@@ -361,7 +365,7 @@ static PkScratch &thread_scratch()
 // Deep-copied context storage so Python-side buffers can be freed after create
 struct ContextStore {
     std::vector<double> rate_import, rate_export, alert_keep;
-    std::vector<double> pv, load, pv10, load10, pv90, load90;
+    std::vector<double> pv, load, pv10, load10, pv90, load90, pv_forecast_peak;
     std::vector<double> temp_charge_cap, temp_discharge_cap;
     std::vector<int32_t> io_flag;
     std::vector<double> charge_curve, discharge_curve;
@@ -471,7 +475,7 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
         for (const auto &dw : export_active) {
             const int32_t dstart = dw.first;
             const int32_t dend = dw.second;
-            if ((dstart < end) && (dend >= start)) {
+            if ((dstart < end) && (dend > start)) {
                 if (dstart <= start) {
                     if (start != dend) {
                         start = dend;
@@ -556,6 +560,7 @@ int64_t pk_context_create(const PkContext *in)
     store->load10.assign(in->load10, in->load10 + n);
     store->pv90.assign(in->pv90, in->pv90 + n);
     store->load90.assign(in->load90, in->load90 + n);
+    store->pv_forecast_peak.assign(in->pv_forecast_peak, in->pv_forecast_peak + n);
     store->temp_charge_cap.assign(in->temp_charge_cap, in->temp_charge_cap + n);
     store->temp_discharge_cap.assign(in->temp_discharge_cap, in->temp_discharge_cap + n);
     store->io_flag.assign(in->io_flag, in->io_flag + n);
@@ -579,6 +584,7 @@ int64_t pk_context_create(const PkContext *in)
     store->ctx.load10 = store->load10.data();
     store->ctx.pv90 = store->pv90.data();
     store->ctx.load90 = store->load90.data();
+    store->ctx.pv_forecast_peak = store->pv_forecast_peak.data();
     store->ctx.temp_charge_cap = store->temp_charge_cap.data();
     store->ctx.temp_discharge_cap = store->temp_discharge_cap.data();
     store->ctx.io_flag = store->io_flag.data();
@@ -803,6 +809,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double pv_now = pv_step[k];
         double load_yesterday = load_step[k];
 
+        // Removed clipping penalty calculation from C++ kernel
+
         // Clip PV for AC-coupled inverters with a PV AC limit - prediction.py:664-668
         if (!inverter_hybrid && pv_ac_limit > 0 && pv_now > pv_ac_limit) {
             pv_now = pv_ac_limit;
@@ -930,19 +938,25 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double discharge_rate_now_curve_step = discharge_rate_now_curve * step;
 
         const double battery_to_min = std::max(soc - reserve_expected, 0.0) * battery_loss_discharge;
-        const double battery_to_max = std::max(soc_max - soc, 0.0) * battery_loss;
-
         // prediction.py:791-793
         double discharge_min = reserve;
+        bool is_anti_clipping = false;
         if (export_window_active) {
             discharge_min = std::max({soc_max * export_limit_now / 100.0, reserve, c->best_soc_min});
+            is_anti_clipping = s->export_flags[export_window_n] != 0;
         }
+
+        double limit_max = soc_max;
+        if (is_anti_clipping && export_limit_now < PK_EXPORT_LIMIT_IDLE) {
+            limit_max = soc_max * export_limit_now / 100.0;
+        }
+        const double battery_to_max = std::max(limit_max - soc, 0.0) * battery_loss;
 
         double battery_draw = 0;
         double pv_dc = 0;
         double pv_ac = 0;
 
-        if (!c->set_export_freeze_only && export_window_active && export_limit_now < PK_EXPORT_LIMIT_FREEZE && (soc > discharge_min)) {
+        if ((!c->set_export_freeze_only || is_anti_clipping) && export_window_active && export_limit_now < PK_EXPORT_LIMIT_FREEZE && (soc > discharge_min)) {
             // Force export - prediction.py:795-902
             double export_rate_adjust = 1.0;
             if (c->set_export_low_power) {
@@ -952,7 +966,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_export, c->temp_discharge_cap[k], c->discharge_curve, battery_rate_min) * battery_rate_max_scaling_discharge;
             discharge_rate_now_curve_step = discharge_rate_now_curve * step;
 
-            battery_draw = std::min(discharge_rate_now_curve_step, battery_to_min);
+            const double battery_to_discharge_min = std::max(soc - discharge_min, 0.0) * battery_loss_discharge;
+            battery_draw = std::min(discharge_rate_now_curve_step, battery_to_discharge_min);
             pv_ac = pv_now * inverter_loss_ac;
             pv_dc = 0;
 
@@ -1038,7 +1053,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             charge_rate_now_curve = rate_curve_pct(soc_percent_round1, battery_rate_max_charge_combined, battery_rate_max_charge_combined, c->temp_charge_cap[k], c->charge_curve, battery_rate_min) * battery_rate_max_scaling;
             charge_rate_now_curve_step = charge_rate_now_curve * step;
 
-            battery_draw = -std::max({std::min(charge_rate_now_curve_step, std::max(charge_limit_n - soc, pv_now)), 0.0, -battery_to_max});
+            battery_draw = std::max({-std::min(charge_rate_now_curve_step, std::max(charge_limit_n - soc, pv_now)), -battery_to_max});
 
             if (inverter_hybrid) {
                 pv_dc = std::min(std::fabs(battery_draw), pv_now);
@@ -1064,7 +1079,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             // charge rate to 0 (or pauses charging) and otherwise leaves the inverter in
             // Demand/ECO mode, never touching the discharge rate. So it shares this flow with the
             // charge rate zeroed rather than being modelled by a parallel branch - see #4676.
-            const bool freeze_export = c->set_export_freeze && export_window_active && export_limit_now < PK_EXPORT_LIMIT_IDLE && (export_limit_now == PK_EXPORT_LIMIT_FREEZE || c->set_export_freeze_only);
+            const bool freeze_export = c->set_export_freeze && export_window_active && !is_anti_clipping && export_limit_now < PK_EXPORT_LIMIT_IDLE && (export_limit_now == PK_EXPORT_LIMIT_FREEZE || c->set_export_freeze_only);
 
             pv_ac = pv_now * inverter_loss_ac;
             pv_dc = 0;
@@ -1188,6 +1203,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             if (total_inverted > inverter_limit) {
                 const double over_limit = total_inverted - inverter_limit;
                 pv_ac = std::max(pv_ac - over_limit * inverter_loss, 0.0);
+                // Removed clipping penalty calculation from C++ kernel
             }
         } else {
             const double total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid);
@@ -1206,6 +1222,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         if (diff < 0 && std::fabs(diff) > export_limit) {
             const double over_limit = std::fabs(diff) - export_limit;
             pv_ac = std::max(pv_ac - over_limit, 0.0);
+            // Removed clipping penalty calculation from C++ kernel
         }
 
         // Adjust battery soc - prediction.py:1060-1064
@@ -1391,6 +1408,7 @@ static void run_batch_job(const ContextStore *c, const PkBatchJob &job, PkBatchR
     scenario.export_limits = job.export_limits;
     scenario.export_start = job.export_start;
     scenario.export_end = job.export_end;
+    scenario.export_flags = job.export_flags;
     scenario.soc_out = job.soc_out;
     scenario.n_charge = job.n_charge;
     scenario.n_export = job.n_export;

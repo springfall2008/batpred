@@ -44,7 +44,7 @@ OWN_SENSOR_RE = re.compile(r'"sensor\."\s*\+\s*self\.prefix\s*\+\s*"_([a-z0-9_]+
 
 def _load_recorder_example():
     """Return the recorder filter example from the FAQ as a dict, or None if it isn't there."""
-    with open(FAQ_PATH, "r") as handle:
+    with open(FAQ_PATH, "r", encoding="utf-8") as handle:
         text = handle.read()
     for block in re.findall(r"```yaml\n(.*?)```", text, re.S):
         parsed = yaml.safe_load(block)
@@ -59,7 +59,7 @@ def _entities_read_from_history():
     for name in sorted(os.listdir(SOURCE_DIR)):
         if not name.endswith(".py"):
             continue
-        with open(os.path.join(SOURCE_DIR, name), "r") as handle:
+        with open(os.path.join(SOURCE_DIR, name), "r", encoding="utf-8") as handle:
             source = handle.read()
         for argument in HISTORY_CALL_RE.findall(source):
             for match in OWN_DOMAIN_RE.findall(argument):

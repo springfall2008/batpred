@@ -11,6 +11,11 @@
 import os
 import time
 import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 import glob
 import argparse
 
@@ -268,6 +273,7 @@ from tests.test_band_rate_text import test_band_rate_text
 from tests.test_rate_text_scan import test_rate_text_scan
 from tests.test_kraken import run_kraken_tests
 from tests.test_kraken_auth_mixin import run_kraken_auth_mixin_tests
+from tests.test_clipping import run_clipping_tests
 from tests.test_clip_export_slots import run_clip_export_slots_tests
 from tests.test_manual_overrides import run_manual_overrides_tests
 from tests.test_charge_freeze_only import run_charge_freeze_only_tests
@@ -663,6 +669,7 @@ def main():
         # Kraken Energy (EDF/E.ON) tests
         ("kraken", run_kraken_tests, "Kraken API tests (init, GraphQL, tariff discovery, rate fetching, run lifecycle)", False),
         ("kraken_auth", run_kraken_auth_mixin_tests, "Kraken auth mixin tests (API key, email, refresh, 401 handling)", False),
+        ("clipping", run_clipping_tests, "Clipping logic tests", False),
         ("clip_export_slots", run_clip_export_slots_tests, "Clip export slots tests", False),
         ("manual_overrides", run_manual_overrides_tests, "Manual window override tests", False),
         ("charge_freeze_only", run_charge_freeze_only_tests, "set_charge_freeze_only (no grid charging) tests", False),
@@ -686,7 +693,7 @@ def main():
         ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with the C++ kernel", False),
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),
         ("optimise_swap_export", run_optimise_swap_export_tests, "Optimise pairwise export-window swap tests", False),
-        ("debug_cases", run_debug_cases, "Debug case file tests", False),
+        ("debug_cases", run_debug_cases, "Debug case file tests", True),
         ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
         ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
         ("annual_sampling", test_annual_sampling, "Annual prediction sample selection tests", False),
@@ -724,7 +731,7 @@ def main():
         ("ml_memory", run_ml_memory_tests, "ML training memory tests", False),
         # Production-scale ML training harness against a captured history fixture
         ("ml_training_perf", run_ml_training_perf_tests, "ML training performance tests", True),
-        ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", False),
+        ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", True),
         ("debug_history", test_debug_history, "Rolling debug-history snapshot buffer tests", False),
         ("debug_history_capture", test_debug_history_capture, "Debug history capture throttle/force-capture tests", False),
         ("debug_history_capture_alignment", test_debug_history_capture_slot_alignment, "Debug history capture timestamp is floored to the plan slot grid", False),

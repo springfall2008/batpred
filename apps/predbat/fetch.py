@@ -661,7 +661,7 @@ class Fetch:
             if history and len(history) > 0 and len(history[0]) > 0:
                 item = history[0][0]
                 try:
-                    last_updated_time = str2time(item["last_updated"])
+                    last_updated_time = str2time(item.get("last_updated", item.get("state_class", "")))
                 except (ValueError, TypeError):
                     last_updated_time = now_utc
                 age_days = max_days_previous
@@ -732,7 +732,7 @@ class Fetch:
             if isinstance(history, list) and history and history[0]:
                 item = history[0][0]
                 try:
-                    last_updated_time = str2time(item["last_updated"])
+                    last_updated_time = str2time(item.get("last_updated", item.get("state_class", "")))
                 except (ValueError, TypeError):
                     last_updated_time = now_utc
                 age = now_utc - last_updated_time
@@ -1139,7 +1139,7 @@ class Fetch:
             self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy, self.load_minutes, save=save)
 
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
-        self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
+        self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90, self.pv_forecast_minuteCS, self.pv_forecast_minuteMAX = self.fetch_pv_forecast()
 
         if self.load_minutes and not self.load_forecast_only and not self.load_forecast_history:
             # Apply modal filter to historical data. Skipped for days_previous_auto: the weighted-bucket
@@ -1387,12 +1387,20 @@ class Fetch:
         pv_forecast_minute = {}
         pv_forecast_minute10 = {}
         pv_forecast_minute90 = {}
+        pv_forecast_minuteCS = {}
+        pv_forecast_minuteHIST = {}
 
         # Get data from forecast sensor
         entity_id = "sensor." + self.prefix + "_pv_forecast_raw"
         pv_forecast_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast")
         pv_forecast10_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast10")
         pv_forecast90_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast90")
+        pv_forecastCS_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast_clearsky")
+        pv_forecastHIST_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast_historical")
+        if pv_forecastCS_packed_ld is None:
+            pv_forecastCS_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecastCS")
+        if pv_forecastHIST_packed_ld is None:
+            pv_forecastHIST_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecastMAX")
         relative_time = self.get_state_wrapper(entity_id=entity_id, attribute="relative_time")
         try:
             relative_time = datetime.strptime(relative_time, TIME_FORMAT)
@@ -1404,6 +1412,8 @@ class Fetch:
         pv_forecast_packed = {}
         pv_forecast10_packed = {}
         pv_forecast90_packed = {}
+        pv_forecastCS_packed = {}
+        pv_forecastHIST_packed = {}
 
         if pv_forecast_packed_ld:
             for key, value in pv_forecast_packed_ld.items():
@@ -1429,11 +1439,29 @@ class Fetch:
                 except (ValueError, TypeError):
                     pass
 
+        if pv_forecastCS_packed_ld:
+            for key, value in pv_forecastCS_packed_ld.items():
+                try:
+                    minute = int(key)
+                    pv_forecastCS_packed[minute] = float(value)
+                except (ValueError, TypeError):
+                    pass
+
+        if pv_forecastHIST_packed_ld:
+            for key, value in pv_forecastHIST_packed_ld.items():
+                try:
+                    minute = int(key)
+                    pv_forecastHIST_packed[minute] = float(value)
+                except (ValueError, TypeError):
+                    pass
+
         # Unpack the forecast data
         max_minute = max(pv_forecast_packed.keys()) if pv_forecast_packed else 0
         last_value = 0
         last_value10 = 0
         last_value90 = 0
+        last_valueCS = 0
+        last_valueHIST = 0
         # The forecast could be for a different time to our relative time, so we need to offset the minutes to align with our midnight_utc.
         # relative_time is the midnight at which the forecast was saved, so stored minute keys are relative to that midnight.
         # We subtract the offset so that stored minute X (= relative_time + X) maps to (relative_time + X - midnight_utc) minutes from today's midnight.
@@ -1443,9 +1471,13 @@ class Fetch:
             last_value = pv_forecast_packed.get(minute, last_value)
             last_value10 = pv_forecast10_packed.get(minute, last_value10)
             last_value90 = pv_forecast90_packed.get(minute, last_value90)
+            last_valueCS = pv_forecastCS_packed.get(minute, last_valueCS)
+            last_valueHIST = pv_forecastHIST_packed.get(minute, last_valueHIST)
             pv_forecast_minute[target_minute] = last_value
             pv_forecast_minute10[target_minute] = last_value10
             pv_forecast_minute90[target_minute] = last_value90
+            pv_forecast_minuteCS[target_minute] = last_valueCS
+            pv_forecast_minuteHIST[target_minute] = last_valueHIST
 
         # No p90 published (older sensor data, or a source that does not produce one) - fall back to
         # the central forecast. No upside is synthesised; see the design spec for why mirroring the
@@ -1453,7 +1485,7 @@ class Fetch:
         if not pv_forecast90_packed:
             pv_forecast_minute90 = dict(pv_forecast_minute)
 
-        return pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90
+        return pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_minuteCS, pv_forecast_minuteHIST
 
     def predict_battery_temperature(self, battery_temperature_history, step):
         """
@@ -2956,6 +2988,15 @@ class Fetch:
         # Carbon
         self.carbon_enable = self.get_arg("carbon_enable")
         self.carbon_metric = self.get_arg("carbon_metric")
+
+        # Clipping peak cost penalty model
+        self.clipping_buffer_enable = self.get_arg("clipping_buffer_enable")
+        self.clipping_auto_tune = self.get_arg("clipping_auto_tune")
+        self.clipping_cost_weight = self.get_arg("clipping_cost_weight")
+        self.clipping_amplification = self.get_arg("clipping_amplification")
+        self.clipping_buffer_start_offset = self.get_arg("clipping_buffer_start_offset", default=0)
+        self.clipping_buffer_end_offset = self.get_arg("clipping_buffer_end_offset", default=0)
+        self.clipping_limit_override = self.get_arg("clipping_limit_override") / MINUTE_WATT if self.get_arg("clipping_limit_override") else 0
 
         # iBoost solar diverter model
         self.iboost_enable = self.get_arg("iboost_enable")

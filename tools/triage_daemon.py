@@ -116,8 +116,8 @@ OLLAMA_MODEL = None
 OLLAMA_REVIEW_MODEL = None
 OLLAMA_BASE_URL = "http://localhost:11434"
 
-EDIT_SCOPE = f"//{CLONE_DIR.relative_to('/')}/**"
-SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to('/')}/**"
+EDIT_SCOPE = f"//{CLONE_DIR.relative_to(CLONE_DIR.anchor).as_posix()}/**"
+SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to(SCRATCH_DIR.anchor).as_posix()}/**"
 _ALLOWED_TOOLS_NON_GH = [
     # Git history, and the re-sync/discard the skill does before investigating
     "Bash(git log*)",
