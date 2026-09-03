@@ -59,12 +59,12 @@ class KrakenAuthMixin:
         if self.token_mint_backoff_logged_at and (now - self.token_mint_backoff_logged_at).total_seconds() < TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS:
             return
         self.token_mint_backoff_logged_at = now
-        self.log(f"Warn: Kraken token mint still edge/WAF blocked (block {self.token_mint_block_count}) - suppressing mints until {self.token_mint_blocked_until}")
+        self.log(f"Warn: Kraken: Token mint still edge/WAF blocked (block {self.token_mint_block_count}) - suppressing mints until {self.token_mint_blocked_until}")
 
     def clear_token_mint_backoff(self):
         """Clear the mint backoff after a successful token mint"""
         if self.token_mint_block_count:
-            self.log(f"Kraken token mint recovered after {self.token_mint_block_count} edge/WAF block(s)")
+            self.log(f"Kraken: Token mint recovered after {self.token_mint_block_count} edge/WAF block(s)")
         self.token_mint_block_count = 0
         self.token_mint_blocked_until = None
         self.token_mint_backoff_logged_at = None
@@ -176,7 +176,7 @@ class KrakenAuthMixin:
                         if response.status == 403 and is_edge_block_body(body):
                             self.token_mint_edge_blocked = True
                         else:
-                            self.log(f"Warn: Kraken token request failed with HTTP {response.status}")
+                            self.log(f"Warn: Kraken: Token request failed with HTTP {response.status}")
                         return None
                     data = await response.json()
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):

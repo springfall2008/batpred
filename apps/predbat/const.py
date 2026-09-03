@@ -23,6 +23,10 @@ TIME_FORMAT_SOLCAST = "%Y-%m-%dT%H:%M:%S.%f0%z"  # 2024-05-31T18:00:00.0000000Z
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
+
+# Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
+# downside case diverges harder than the central one
+CLOUD_FACTOR_PV10 = 0.2
 RUN_EVERY = 5
 # Forecast scenarios simulated by the planner.
 # PV_SCENARIO_PV10 must remain 1 so it stays interchangeable with the legacy pv10 boolean.

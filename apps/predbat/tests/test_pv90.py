@@ -477,9 +477,16 @@ def test_pv90_load_scaling_clamp_is_a_noop_at_defaults(my_predbat):
     up as the pv90 and pv10 load totals collapsing onto nominal rather than sitting either side of it.
     """
     failed = False
-    saved = {name: getattr(my_predbat, name) for name in ("load_scaling", "load_scaling10", "load_scaling90", "load_minutes", "load_forecast_only")}
+    saved = {name: getattr(my_predbat, name, None) for name in ("load_scaling", "load_scaling10", "load_scaling90", "load_minutes", "load_forecast_only", "metric_load_divergence_enable")}
     try:
         my_predbat.load_forecast_only = False
+        # The nominal and PV10 load arrays take different divergence factors (the PV10 one is
+        # +0.5), and the divergence model does not redistribute exactly - what it adds to a step it
+        # can only take back off the next one if that step is large enough. So with divergence on,
+        # the two totals are no longer in the pure load_scaling ratio this check asserts. Turn it
+        # off at the enable, since calculate_plan() re-derives the factor itself every recompute.
+        # This test is about the clamp, not about divergence.
+        my_predbat.metric_load_divergence_enable = False
         my_predbat.load_minutes = {minute: (1440 - minute) * 0.02 for minute in range(0, 1441)}
         my_predbat.load_scaling = 1.05
         my_predbat.load_scaling10 = 1.1
@@ -495,6 +502,48 @@ def test_pv90_load_scaling_clamp_is_a_noop_at_defaults(my_predbat):
         for name, got, want in (("pv10", total10, total * 1.1 / 1.05), ("pv90", total90, total * 0.7 / 1.05)):
             if abs(got - want) > max(want * 0.001, 1e-6):
                 print("ERROR: {} load total is {} at the defaults, expected {} - the clamp altered a value that was already in range".format(name, got, want))
+                failed = True
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+        my_predbat.plan_valid = False
+        my_predbat.calculate_plan(recompute=True)
+    return failed
+
+
+def test_pv90_load_scaling_ordering_holds_with_divergence(my_predbat):
+    """The pv90 < nominal < pv10 load ordering must survive the divergence model being on.
+
+    The clamp test above turns divergence off so it can assert exact scaling ratios, which leaves the
+    default-on modulated path with no coverage at all - a modulation change that broke this ordering
+    only on modulated data would keep the suite green. This asserts the ordering rather than the
+    ratios, because the model redistributes between steps and does not repay every borrow exactly,
+    so the totals move by a fraction of a percent even when nothing is wrong.
+    """
+    failed = False
+    saved = {name: getattr(my_predbat, name, None) for name in ("load_scaling", "load_scaling10", "load_scaling90", "load_minutes", "load_forecast_only")}
+    try:
+        my_predbat.load_forecast_only = False
+        my_predbat.load_minutes = {minute: (1440 - minute) * 0.02 for minute in range(0, 1441)}
+        my_predbat.load_scaling = 1.05
+        my_predbat.load_scaling10 = 1.1
+        my_predbat.load_scaling90 = 0.7
+        my_predbat.plan_valid = False
+        my_predbat.calculate_plan(recompute=True)
+        total = sum(my_predbat.load_minutes_step.values())
+        total10 = sum(my_predbat.load_minutes_step10.values())
+        total90 = sum(my_predbat.load_minutes_step90.values())
+        if total <= 0:
+            print("ERROR: nominal load total is {} - the check would be vacuous".format(total))
+            return True
+        if not (total90 < total < total10):
+            print("ERROR: load totals are not ordered pv90 {} < nominal {} < pv10 {} with divergence active".format(total90, total, total10))
+            failed = True
+        # Each scenario should still sit near its scaling ratio - modulation redistributes, it does
+        # not rescale, so a drift of more than a few percent means something else moved
+        for name, got, want in (("pv10", total10, total * 1.1 / 1.05), ("pv90", total90, total * 0.7 / 1.05)):
+            if abs(got - want) > want * 0.05:
+                print("ERROR: {} load total is {} with divergence active, expected near {} - modulation should redistribute, not rescale".format(name, got, want))
                 failed = True
     finally:
         for name, value in saved.items():
@@ -1366,6 +1415,7 @@ def run_pv90_tests(my_predbat):
     failed |= test_pv90_load_scaling90_is_absolute(my_predbat)
     failed |= test_pv90_load_scaling_clamp_invariant(my_predbat)
     failed |= test_pv90_load_scaling_clamp_is_a_noop_at_defaults(my_predbat)
+    failed |= test_pv90_load_scaling_ordering_holds_with_divergence(my_predbat)
     failed |= test_pv90_missing_series_falls_back_to_p50(my_predbat)
     failed |= test_pv90_scenario_selects_arrays(my_predbat)
     failed |= test_pv90_no_io_penalty_on_identical_series(my_predbat)

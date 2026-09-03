@@ -1128,7 +1128,7 @@ class PredbatTools:
                     continue
                 if callable(value):
                     continue
-                if key == "args":
+                if key in ("args", "args_from_apps_yaml"):
                     value = mask_secret_args(value)
 
                 fits, safe, size = measure_state_value(value, max_bytes)

@@ -270,9 +270,14 @@ with `max_bytes`.
 | `max_bytes` | Per-variable size budget before a value is described instead of returned (default 2048, maximum 262144) |
 
 `get_state` and `get_apps` both redact credentials. `get_apps` replaces credential-like values
-(anything whose name contains `_key`, `password`, `secret` or `token`) with `xxx`, so your API
-keys are not sent to your AI provider; pass `masked: false` if you deliberately want the raw
-values. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
+with `xxx`, so your API keys are not sent to your AI provider; pass `masked: false` if you
+deliberately want the raw values. A value counts as a credential if its name contains `_key`,
+`password`, `secret` or `token`, **or** if the component registry flags it explicitly - which
+covers the credentials a name alone cannot reveal, such as your Octopus account number, a Kraken
+MPAN, a site or plant id, and login identifiers like `deye_username`, `kraken_email` and
+`myenergi_hub_serial` (the myenergi API's digest-auth username). Inverter serial numbers are
+deliberately *not* redacted: they identify hardware rather than authenticate it, and they are
+what makes an integration bug report diagnosable. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
 return anything a debug dump would not - credentials, the Home Assistant interface, loaded
 secrets and the URL caches are not reachable through it at all. `get_apps_config` uses the same
 credential check as `get_apps`, but with no `masked: false` escape hatch at all - there is no
