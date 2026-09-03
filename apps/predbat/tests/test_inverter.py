@@ -2588,6 +2588,13 @@ def test_force_export_off_does_not_press_every_cycle(test_name, ha, my_predbat):
     inverter still reports a real time - and None never compares equal, so every cycle looked like a
     change and pressed the button. That is most of the day, not just export windows.
 
+    FoxCloud stands in for the cloud types here. They reach the bug by the same route as GS_fb00 but
+    settle somewhere different: being HH:MM:SS format they never take the H M unconditional register
+    rewrite, so the commit-once safety net gated on that format is skipped too and an idle cloud
+    inverter should press zero times - not the one GS_fb00 spends on its first post-restart commit.
+    Pinning that separately keeps the cloud behaviour from resting on GS_fb00 happening to share
+    has_discharge_enable_time.
+
     Plain GS takes the midnight-override path and is not affected by this None-comparison route, so it
     is checked here too to pin the difference down. (GS was affected by a separate bug - #4711's
     unconditional H M register rewrite, which GS also uses - but that is a different code path to the
@@ -2601,13 +2608,24 @@ def test_force_export_off_does_not_press_every_cycle(test_name, ha, my_predbat):
     # later tests and making results order-dependent.
     unset = object()
     saved_args = {key: my_predbat.args.get(key, unset) for key in ("inverter_type", "discharge_start_time", "discharge_end_time", "scheduled_discharge_enable")}
-    saved_items = {key: ha.dummy_items.get(key, unset) for key in ("select.discharge_start_time", "select.discharge_end_time", "switch.scheduled_discharge_enable", "select.inverter_mode")}
+    saved_items = {
+        key: ha.dummy_items.get(key, unset)
+        for key in ("select.discharge_start_time", "select.discharge_end_time", "switch.scheduled_discharge_enable", "select.inverter_mode", "number.discharge_target_soc", "select.idle_start_time", "select.idle_end_time")
+    }
+
+    # Times for the positive control below - any window will do, it just has to differ from idle.
+    export_start = datetime.strptime("18:00:00", "%H:%M:%S")
+    export_end = datetime.strptime("19:00:00", "%H:%M:%S")
 
     try:
-        for inverter_type, expected_presses in (("GS_fb00", 1), ("GS", 1)):
+        for inverter_type, expected_presses in (("GS_fb00", 1), ("GS", 1), ("FoxCloud", 0)):
             my_predbat.args["inverter_type"] = [inverter_type]
             inv = Inverter(my_predbat, 0, quiet=True)
             inv.rest_data = None
+            # Only the press count matters here. TestHAInterface applies a service call synchronously,
+            # so the write-and-poll read-back already sees the new value and the sleep between them is
+            # pure wall clock - several seconds per register write, across three inverter types.
+            inv.sleep = lambda seconds: None
 
             ha.dummy_items["select.discharge_start_time"] = "00:00:00"
             ha.dummy_items["select.discharge_end_time"] = "00:00:00"
@@ -2627,6 +2645,15 @@ def test_force_export_off_does_not_press_every_cycle(test_name, ha, my_predbat):
 
             if len(presses) > expected_presses:
                 print(f"ERROR: {test_name}: {inverter_type} pressed the button {len(presses)} times over 4 idle cycles, expected at most {expected_presses}")
+                failed = True
+
+            # Positive control: the suppression has to be specific to idle cycles. An inverter that had
+            # stopped committing altogether would satisfy the check above just as well, so entering an
+            # export window straight afterwards must still commit, exactly once.
+            idle_presses = len(presses)
+            inv.adjust_force_export(True, export_start, export_end)
+            if len(presses) != idle_presses + 1:
+                print(f"ERROR: {test_name}: {inverter_type} should press once on entering an export window, pressed {len(presses) - idle_presses} times")
                 failed = True
     finally:
         for key, value in saved_args.items():
