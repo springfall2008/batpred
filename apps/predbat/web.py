@@ -69,7 +69,7 @@ from web_helper import (
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, read_predbat_log, classify_log_line, log_line_included
+from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, mask_secret_yaml_text, read_predbat_log, classify_log_line, log_line_included
 from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION_DISPLAY
@@ -982,7 +982,7 @@ class WebInterface(ComponentBase):
         text += '<div style="flex: 1;">\n'
         text += "<h2>Debug</h2>\n"
         text += "<table>\n"
-        text += "<tr><td>Download</td><td><a href='javascript:void(0)' onclick='downloadLiveApps()'>apps.yaml (live)</a> | <a href='./debug_apps'>apps.yaml (file)</a></td></tr>\n"
+        text += "<tr><td>Download</td><td><a href='javascript:void(0)' onclick='downloadLiveApps()'>apps.yaml (live)</a> | <a href='javascript:void(0)' onclick='downloadFileApps()'>apps.yaml (file)</a></td></tr>\n"
         text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
@@ -2486,15 +2486,17 @@ chart.render();
         baseline_timestamp = baseline_json.get("timestamp", None) if baseline_json else None
 
         # Get current manual overrides
-        manual_charge_times = self.base.manual_times("manual_charge")
-        manual_export_times = self.base.manual_times("manual_export")
-        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
-        manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
-        manual_demand_times = self.base.manual_times("manual_demand")
-        manual_import_rates = self.base.manual_rates("manual_import_rates")
-        manual_export_rates = self.base.manual_rates("manual_export_rates")
-        manual_load_adjust = self.base.manual_rates("manual_load_adjust")
-        manual_soc_keep = self.base.manual_rates("manual_soc")
+        # Read-only: these run on the web server's own thread, so writing the decoded
+        # selection back could persist times captured mid-recompute (#4900)
+        manual_charge_times = self.base.manual_times("manual_charge", update=False)
+        manual_export_times = self.base.manual_times("manual_export", update=False)
+        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge", update=False)
+        manual_freeze_export_times = self.base.manual_times("manual_freeze_export", update=False)
+        manual_demand_times = self.base.manual_times("manual_demand", update=False)
+        manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
+        manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
+        manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
+        manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
@@ -2580,15 +2582,17 @@ chart.render();
         baseline_json = self.get_state_wrapper(entity_id=self.prefix + ".savings_yesterday_predbat", attribute="json", default=None)
 
         # Fetch override data
-        manual_charge_times = self.base.manual_times("manual_charge")
-        manual_export_times = self.base.manual_times("manual_export")
-        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
-        manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
-        manual_demand_times = self.base.manual_times("manual_demand")
-        manual_import_rates = self.base.manual_rates("manual_import_rates")
-        manual_export_rates = self.base.manual_rates("manual_export_rates")
-        manual_load_adjust = self.base.manual_rates("manual_load_adjust")
-        manual_soc_keep = self.base.manual_rates("manual_soc")
+        # Read-only: these run on the web server's own thread, so writing the decoded
+        # selection back could persist times captured mid-recompute (#4900)
+        manual_charge_times = self.base.manual_times("manual_charge", update=False)
+        manual_export_times = self.base.manual_times("manual_export", update=False)
+        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge", update=False)
+        manual_freeze_export_times = self.base.manual_times("manual_freeze_export", update=False)
+        manual_demand_times = self.base.manual_times("manual_demand", update=False)
+        manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
+        manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
+        manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
+        manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
@@ -2996,7 +3000,32 @@ chart.render();
         return await self.html_file_load("predbat.1.log", also_file="predbat.log", as_file="predbat.log")
 
     async def html_debug_apps(self, request):
-        return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")
+        """
+        Return the apps.yaml file as written, with credential values redacted by default.
+
+        Masks unless ?masked=0 is passed, matching /debug_apps_live: this link sits next to that
+        one and is the file a user grabs to attach to a bug report, so a bare request - or any
+        of the plain './debug_apps' links elsewhere in the UI - must not hand over credentials.
+        Redaction is applied to the file text rather than the parsed args, so the download still
+        reads like the user's own apps.yaml, comments and '!secret' references included.
+        """
+        masked = request.query.get("masked", "1") != "0"
+        if not masked:
+            return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")
+
+        data = None
+        if os.path.exists("apps.yaml"):
+            with open("apps.yaml", "r") as f:
+                data = f.read()
+        if data:
+            try:
+                data = mask_secret_yaml_text(data)
+            except Exception as e:
+                # Fail closed - serving the raw file because the parse failed is the leak this
+                # route exists to avoid. The unmasked download is still one click away.
+                self.log("Warn: Unable to redact apps.yaml for download: {}".format(e))
+                data = "# Predbat could not parse apps.yaml to redact it, so it has not been served.\n" "# Fix the YAML error, or use the unmasked download if you intend to share credentials.\n" "# Error: {}\n".format(e)
+        return await self.html_file("apps_masked.yaml.txt", data)
 
     async def html_debug_apps_live(self, request):
         """
@@ -4635,7 +4664,7 @@ chart.render();
 
             # For clear operations, we need to use the actual stored rate value, not the passed rate
             if action == "Clear Import":
-                manual_import_rates = self.base.manual_rates("manual_import_rates")
+                manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
                 actual_rate = manual_import_rates.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_import_rates", clear_option)
@@ -4644,7 +4673,7 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_import_rates", selection_option)
             elif action == "Clear Export":
-                manual_export_rates = self.base.manual_rates("manual_export_rates")
+                manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
                 actual_rate = manual_export_rates.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_export_rates", clear_option)
@@ -4657,7 +4686,7 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_load_adjust", selection_option)
             elif action == "Clear Load":
-                manual_load_adjust = self.base.manual_rates("manual_load_adjust")
+                manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
                 actual_rate = manual_load_adjust.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_load_adjust", clear_option)
@@ -4666,7 +4695,7 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_soc", selection_option)
             elif action == "Clear SOC":
-                manual_soc = self.base.manual_rates("manual_soc")
+                manual_soc = self.base.manual_rates("manual_soc", update=False)
                 actual_rate = manual_soc.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_soc", clear_option)
