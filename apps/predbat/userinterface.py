@@ -1418,14 +1418,32 @@ class UserInterface:
         self.expose_config(config_item, values, force=True)
         return time_overrides
 
-    def manual_rates(self, config_item, exclude=[], new_value=None, default_rate=0):
+    def manual_time_origin(self):
+        """
+        Midnight and minutes-now for decoding manual override selections
+
+        Derived from now_utc rather than read from self.midnight_utc / self.minutes_now, which
+        calculate_yesterday() rewrites for the duration of the savings calculation. Those writes
+        land on the shared instance, so a caller on another thread - the web server rendering the
+        plan, or a user clicking a slot on the plan card - could otherwise decode the stored
+        selection against a clock a day behind, and persist the result (#4900).
+        """
+        midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        minutes_now = int((self.now_utc - midnight_utc).total_seconds() / 60)
+        return midnight_utc, minutes_now
+
+    def manual_rates(self, config_item, exclude=[], new_value=None, default_rate=0, update=True):
         """
         Update manual rates sensor
+
+        Set update=False to decode the stored selection without writing it back - read-only
+        callers should use this. See the note in manual_times() for the shared time origin.
         """
         rate_overrides_minutes = {}
         rate_overrides = []
         plan_interval = self.get_arg("plan_interval_minutes", 30)
-        minutes_now = int(self.minutes_now / plan_interval) * plan_interval
+        midnight_utc, minutes_now_real = self.manual_time_origin()
+        minutes_now = int(minutes_now_real / plan_interval) * plan_interval
         manual_rate_max = 48 * 60
 
         # Deconstruct the value into a list of minutes
@@ -1460,10 +1478,10 @@ class UserInterface:
 
             if override_time:
                 # Calculate minutes from midnight today
-                minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+                minutes = int((override_time - midnight_utc).total_seconds() / 60)
                 minutes_now_slot = int(minutes_now / plan_interval) * plan_interval
 
-                if (minutes - minutes_now_slot) >= 0 and (minutes - minutes_now) < manual_rate_max:
+                if (minutes - minutes_now_slot) >= 0 and (minutes - minutes_now_real) < manual_rate_max:
                     rate_overrides.append((minutes, rate_value))
                     for minute in range(minutes, minutes + plan_interval):
                         rate_overrides_minutes[minute] = rate_value
@@ -1471,7 +1489,7 @@ class UserInterface:
         # Reconstruct the list in order based on minutes
         values_list = []
         for minute, rate in rate_overrides:
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
+            minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
             minute_rate_str = minute_str + "=" + str(rate)
             if minute_rate_str not in exclude and minute_rate_str not in values_list:
                 values_list.append(minute_rate_str)
@@ -1480,32 +1498,43 @@ class UserInterface:
             values = "+" + values
 
         # Create the new dropdown
-        time_values = []
-        for minute in range(minutes_now, minutes_now + manual_rate_max, plan_interval):
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
-            if minute in rate_overrides_minutes:
-                rate_value = rate_overrides_minutes[minute]
-                minute_str = f"{minute_str}={rate_value}"
-                minute_str = "[" + minute_str + "]"
-            time_values.append(minute_str)
+        if update:
+            time_values = []
+            for minute in range(minutes_now, minutes_now + manual_rate_max, plan_interval):
+                minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
+                if minute in rate_overrides_minutes:
+                    rate_value = rate_overrides_minutes[minute]
+                    minute_str = f"{minute_str}={rate_value}"
+                    minute_str = "[" + minute_str + "]"
+                time_values.append(minute_str)
 
-        if values not in time_values:
-            time_values.append(values)
-        time_values.append("off")
-        item["options"] = time_values
-        if not values:
-            values = "off"
-        self.expose_config(config_item, values, force=True)
+            if values not in time_values:
+                time_values.append(values)
+            time_values.append("off")
+            item["options"] = time_values
+            if not values:
+                values = "off"
+            self.expose_config(config_item, values, force=True)
 
         return rate_overrides_minutes
 
-    def manual_times(self, config_item, exclude=[], new_value=None):
+    def manual_times(self, config_item, exclude=[], new_value=None, update=True):
         """
         Update manual times sensor
+
+        The stored selection is a list of "%a %H:%M" strings which this re-resolves to absolute
+        minutes and then writes back in its re-rendered form, so both halves of that round trip
+        share the single origin from manual_time_origin() - previously the parse used
+        self.midnight_utc and the render self.midnight, which moved every stored slot on by a day
+        whenever the two disagreed (#4900).
+
+        Set update=False to decode the stored selection without writing it back, which is what a
+        read-only caller wants.
         """
         time_overrides = []
         plan_interval = self.get_arg("plan_interval_minutes", 30)
-        minutes_now = int(self.minutes_now / plan_interval) * plan_interval
+        midnight_utc, minutes_now_real = self.manual_time_origin()
+        minutes_now = int(minutes_now_real / plan_interval) * plan_interval
         manual_time_max = 48 * 60
 
         # Deconstruct the value into a list of minutes
@@ -1530,7 +1559,7 @@ class UserInterface:
 
             if override_time:
                 # Calculate minutes from midnight today
-                minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+                minutes = int((override_time - midnight_utc).total_seconds() / 60)
                 minutes_now_slot = int(minutes_now / plan_interval) * plan_interval
 
                 if (minutes >= minutes_now_slot) and (minutes - minutes_now_slot) < manual_time_max:
@@ -1539,7 +1568,7 @@ class UserInterface:
         # Reconstruct the list in order based on minutes
         values_list = []
         for minute in time_overrides:
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
+            minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
             if minute_str not in exclude and minute_str not in values_list:
                 values_list.append(minute_str)
         values = ",".join(values_list)
@@ -1547,20 +1576,21 @@ class UserInterface:
             values = "+" + values
 
         # Create the new dropdown
-        time_values = []
-        for minute in range(minutes_now, minutes_now + manual_time_max, plan_interval):
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
-            if minute in time_overrides:
-                minute_str = "[" + minute_str + "]"
-            time_values.append(minute_str)
+        if update:
+            time_values = []
+            for minute in range(minutes_now, minutes_now + manual_time_max, plan_interval):
+                minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
+                if minute in time_overrides:
+                    minute_str = "[" + minute_str + "]"
+                time_values.append(minute_str)
 
-        if values not in time_values:
-            time_values.append(values)
-        time_values.append("off")
-        item["options"] = time_values
-        if not values:
-            values = "off"
-        self.expose_config(config_item, values, force=True)
+            if values not in time_values:
+                time_values.append(values)
+            time_values.append("off")
+            item["options"] = time_values
+            if not values:
+                values = "off"
+            self.expose_config(config_item, values, force=True)
 
         if time_overrides:
             time_txt = []
