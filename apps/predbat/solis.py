@@ -1455,6 +1455,16 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # Convert SNs to lowercase for entity naming
         devices = [sn.lower() for sn in batteries]
 
+        # PV totals are summed across every entry in the arg list, so an inverter with no battery still
+        # belongs in them - its generation is part of the same array (issue #4922). Only the control and
+        # battery args are battery-filtered; a PV-only inverter is still never written to. load/import/
+        # export stay battery-only deliberately: on a shared-CT site those registers can overlap between
+        # inverters, so summing them risks double-counting the house load.
+        pv_devices = [sn.lower() for sn in self.inverter_sn]
+        pv_only_devices = [device for device in pv_devices if device not in devices]
+        if pv_only_devices:
+            self.log("Solis API: Including {} inverter(s) with no battery in the PV totals: {}".format(len(pv_only_devices), ", ".join(pv_only_devices)))
+
         # Configure base Predbat settings
         self.set_arg_auto("inverter_type", ["SolisCloud" for _ in range(num_inverters)])
         self.set_arg_auto("num_inverters", num_inverters)
@@ -1471,9 +1481,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # if solis_cloud_pv_load_ignore is set to true, override Solis cloud sensors and use load/pv_today/power entries defined in apps.yaml
         if not self.get_arg("solis_cloud_pv_load_ignore", default=False):
             self.set_arg_auto("load_today", [f"sensor.{self.prefix}_solis_{device}_total_load_energy" for device in devices])
-            self.set_arg_auto("pv_today", [f"sensor.{self.prefix}_solis_{device}_pv_energy_total" for device in devices])
+            self.set_arg_auto("pv_today", [f"sensor.{self.prefix}_solis_{device}_pv_energy_total" for device in pv_devices])
             self.set_arg_auto("load_power", [f"sensor.{self.prefix}_solis_{device}_load_power" for device in devices])
-            self.set_arg_auto("pv_power", [f"sensor.{self.prefix}_solis_{device}_pv_power" for device in devices])
+            self.set_arg_auto("pv_power", [f"sensor.{self.prefix}_solis_{device}_pv_power" for device in pv_devices])
         self.set_arg_auto("import_today", [f"sensor.{self.prefix}_solis_{device}_today_import_energy" for device in devices])
         self.set_arg_auto("export_today", [f"sensor.{self.prefix}_solis_{device}_today_export_energy" for device in devices])
 
