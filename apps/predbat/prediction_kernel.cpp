@@ -230,7 +230,7 @@ struct PkContext {
     int32_t has_rate_gas;
     int32_t has_iboost_plan;
 
-    double reserve_expected;
+    const double *pv_forecast_peak;
 };
 
 // Per-scenario inputs; field order MUST match the ctypes Structure in prediction_kernel.py.
@@ -810,7 +810,6 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double load_yesterday = load_step[k];
 
         // Removed clipping penalty calculation from C++ kernel
-        }
 
         // Clip PV for AC-coupled inverters with a PV AC limit - prediction.py:664-668
         if (!inverter_hybrid && pv_ac_limit > 0 && pv_now > pv_ac_limit) {
@@ -1203,7 +1202,6 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid);
             if (total_inverted > inverter_limit) {
                 const double over_limit = total_inverted - inverter_limit;
-                double pv_ac_before = pv_ac;
                 pv_ac = std::max(pv_ac - over_limit * inverter_loss, 0.0);
                 // Removed clipping penalty calculation from C++ kernel
             }
@@ -1223,7 +1221,6 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp);
         if (diff < 0 && std::fabs(diff) > export_limit) {
             const double over_limit = std::fabs(diff) - export_limit;
-            double pv_ac_before = pv_ac;
             pv_ac = std::max(pv_ac - over_limit, 0.0);
             // Removed clipping penalty calculation from C++ kernel
         }
