@@ -22,6 +22,7 @@ def run_clipping_tests(my_predbat):
     failed |= test_clipping_buffer_offsets(my_predbat)
     failed |= test_clipping_auto_tune_sync(my_predbat)
     failed |= test_clipping_status_overrides_display(my_predbat)
+    failed |= test_predict_clipping_target_soc_best_dynamic(my_predbat)
     return failed
 
 
@@ -425,6 +426,175 @@ def test_clipping_status_overrides_display(my_predbat):
             if attrs.get("clipping_buffer_max_kwh_override") != 4.0:
                 print("ERROR: attribute clipping_buffer_max_kwh_override mismatch")
                 failed = True
+
+    finally:
+        if original_prediction is not None:
+            my_predbat.prediction = original_prediction
+        elif hasattr(my_predbat, "prediction"):
+            del my_predbat.prediction
+        my_predbat.dashboard_item = original_dashboard_item
+        my_predbat.scenario_summary_title = original_summary_title
+        my_predbat.scenario_summary = original_summary
+        my_predbat.scenario_summary_state = original_summary_state
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_predict_clipping_target_soc_best_dynamic(my_predbat):
+    """
+    Test that predict_clipping_target_soc_best is dynamically populated
+    using pv_forecast_peak_step when clipping_buffer_enable is True,
+    even if clipping_cost_weight is 0.
+    """
+    print("**** test_predict_clipping_target_soc_best_dynamic ****")
+    from unittest.mock import MagicMock
+    from prediction import Prediction
+
+    failed = False
+    setup(my_predbat)
+
+    my_predbat.clipping_buffer_enable = True
+    my_predbat.clipping_cost_weight = 0  # Verify independence from clipping_cost_weight
+    my_predbat.clipping_buffer_kwh = 0  # Dynamic mode, not manual override
+    my_predbat.clipping_limit_effective = 3.6  # 3.6 kW
+    my_predbat.soc_max = 10.0
+    my_predbat.best_soc_min = 1.0
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.minutes_now = 0
+
+    # Construct peak solar forecast over 5-minute steps
+    # Solar peak between 10:00 (minute 600) and 14:00 (minute 840)
+    step = 5
+    pv_forecast_peak_step = {}
+    for minute in range(0, 24 * 60 + step, step):
+        if 600 <= minute <= 840:
+            pv_forecast_peak_step[minute] = 0.5  # Exceeds limit (0.3), so 0.2 kWh excess per 5min
+        else:
+            pv_forecast_peak_step[minute] = 0.0
+
+    # 1. Assert Prediction constructor stores pv_forecast_peak_step
+    pred_instance = Prediction(my_predbat, {}, {}, {}, {}, pv_forecast_peak_step=pv_forecast_peak_step)
+    if pred_instance.pv_forecast_peak_step != pv_forecast_peak_step:
+        print("ERROR: Prediction constructor did not retain pv_forecast_peak_step")
+        failed = True
+
+    # 2. Test dynamic population via pred.pv_forecast_peak_step and fallback to self.pv_forecast_peak_step
+    mock_prediction = MagicMock()
+    mock_prediction.run_prediction.return_value = (0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0, 0.0, 0.0, 0.0, 0.0, {0: 1.0, 60: 1.0, 480: 1.0, 720: 1.0}, [0.0], 0.0, 0.0, 0.0, 0.0)
+    mock_prediction.predict_soc_time = {0: 1.0}
+    mock_prediction.first_charge = 0
+    mock_prediction.first_charge_soc = 0.0
+    mock_prediction.predict_car_soc_time = [{0: 0.0}]
+    mock_prediction.predict_battery_power = {0: 0.0}
+    mock_prediction.predict_state = {0: 0.0}
+    mock_prediction.predict_battery_cycle = {0: 0.0}
+    mock_prediction.predict_pv_power = {0: 0.0}
+    mock_prediction.predict_grid_power = {0: 0.0}
+    mock_prediction.predict_load_power = {0: 0.0}
+    mock_prediction.final_export_kwh = 0.0
+    mock_prediction.export_kwh_h0 = 0.0
+    mock_prediction.final_load_kwh = 0.0
+    mock_prediction.load_kwh_h0 = 0.0
+    mock_prediction.metric_time = {0: 0.0}
+    mock_prediction.record_time = {0: 0.0}
+    mock_prediction.predict_iboost = {0: 0.0}
+    mock_prediction.predict_carbon_g = {0: 0.0}
+    mock_prediction.load_kwh_time = {0: 0.0}
+    mock_prediction.pv_kwh_time = {0: 0.0}
+    mock_prediction.import_kwh_time = {0: 0.0}
+    mock_prediction.export_kwh_time = {0: 0.0}
+    mock_prediction.final_pv_kwh = 0.0
+    mock_prediction.export_to_first_charge = 0.0
+    mock_prediction.pv_kwh_h0 = 0.0
+    mock_prediction.final_import_kwh = 0.0
+    mock_prediction.final_import_kwh_house = 0.0
+    mock_prediction.final_import_kwh_battery = 0.0
+    mock_prediction.hours_left = 24.0
+    mock_prediction.final_car_soc = [0.0]
+    mock_prediction.import_kwh_h0 = 0.0
+    mock_prediction.predict_export = {0: 0.0}
+    mock_prediction.predict_soc_best = {0: 1.0}
+    mock_prediction.predict_iboost_best = {0: 0.0}
+    mock_prediction.predict_metric_best = {0: 0.0}
+    mock_prediction.predict_carbon_best = {0: 0.0}
+    mock_prediction.predict_clipped_best = {0: 0.0}
+    mock_prediction.debug_enable = False
+    mock_prediction.pv_forecast_peak_step = pv_forecast_peak_step
+
+    original_prediction = getattr(my_predbat, "prediction", None)
+    my_predbat.prediction = mock_prediction
+
+    # Mock scenario helpers and dashboard_item
+    original_summary_title = my_predbat.scenario_summary_title
+    original_summary = my_predbat.scenario_summary
+    original_summary_state = my_predbat.scenario_summary_state
+    original_dashboard_item = my_predbat.dashboard_item
+
+    my_predbat.scenario_summary_title = lambda x: "dummy_title"
+    my_predbat.scenario_summary = lambda x, y: "dummy_summary"
+    my_predbat.scenario_summary_state = lambda x: "dummy_state"
+    my_predbat.dashboard_item = lambda name, state=None, attributes=None: None
+
+    try:
+        my_predbat.run_prediction(
+            my_predbat.charge_limit_best,
+            my_predbat.charge_window_best,
+            my_predbat.export_window_best,
+            my_predbat.export_limits_best,
+            False,
+            24 * 60,
+            save="best",
+        )
+
+        target_soc = getattr(my_predbat, "predict_clipping_target_soc_best", {})
+        remaining = getattr(my_predbat, "predict_clipping_remaining_best", {})
+
+        if not target_soc:
+            print("ERROR: predict_clipping_target_soc_best was not populated")
+            failed = True
+        elif not remaining:
+            print("ERROR: predict_clipping_remaining_best was not populated")
+            failed = True
+        else:
+            # Morning / before-peak (e.g. minute 0) should have headroom (target SOC < soc_max)
+            if target_soc.get(0, my_predbat.soc_max) >= my_predbat.soc_max:
+                print("ERROR: Expected target SOC at minute 0 to be below soc_max ({}), got {}".format(my_predbat.soc_max, target_soc.get(0)))
+                failed = True
+
+            if remaining.get(0, 0.0) <= 0.0:
+                print("ERROR: Expected remaining clipping buffer at minute 0 to be > 0, got {}".format(remaining.get(0)))
+                failed = True
+
+            # Post-peak (e.g. minute 900 / 15:00) should have recovered back to soc_max
+            if target_soc.get(900, 0.0) != my_predbat.soc_max:
+                print("ERROR: Expected target SOC at minute 900 to equal soc_max ({}), got {}".format(my_predbat.soc_max, target_soc.get(900)))
+                failed = True
+
+            if remaining.get(900, 1.0) != 0.0:
+                print("ERROR: Expected remaining clipping buffer at minute 900 to be 0.0, got {}".format(remaining.get(900)))
+                failed = True
+
+        # Test fallback: pred.pv_forecast_peak_step is None, but self.pv_forecast_peak_step is set
+        mock_prediction.pv_forecast_peak_step = None
+        my_predbat.pv_forecast_peak_step = pv_forecast_peak_step
+        my_predbat.predict_clipping_target_soc_best = {}
+
+        my_predbat.run_prediction(
+            my_predbat.charge_limit_best,
+            my_predbat.charge_window_best,
+            my_predbat.export_window_best,
+            my_predbat.export_limits_best,
+            False,
+            24 * 60,
+            save="best",
+        )
+
+        fallback_target_soc = getattr(my_predbat, "predict_clipping_target_soc_best", {})
+        if not fallback_target_soc or fallback_target_soc.get(0, my_predbat.soc_max) >= my_predbat.soc_max:
+            print("ERROR: Fallback to self.pv_forecast_peak_step failed to populate target SOC curve")
+            failed = True
 
     finally:
         if original_prediction is not None:

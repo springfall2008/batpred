@@ -1957,6 +1957,7 @@ class Plan:
         self.pv_forecast_minute_step = pv_forecast_minute_step
         self.pv_forecast_minute10_step = pv_forecast_minute10_step
         self.pv_forecast_minute90_step = pv_forecast_minute90_step
+        self.pv_forecast_peak_step = pv_forecast_peak_step
 
         # Yesterday data
         if recompute and self.calculate_savings and publish:
@@ -1971,6 +1972,7 @@ class Plan:
             load_minutes_step10,
             pv_forecast_minute90_step,
             load_minutes_step90,
+            pv_forecast_peak_step=pv_forecast_peak_step,
         )
         # The kernel spreads one batched fan-out across threads with the GIL released for the whole
         # call, so these are real cores - unlike a Python ThreadPool, which peaked at 1.15x on two
@@ -5520,7 +5522,7 @@ class Plan:
                 clipping_limit_step = getattr(self, "clipping_limit_effective", 0) * (step / 60.0)
                 # Ensure the chart uses the exact same peak dataset as the planning engine
                 # which already includes clipping_amplification.
-                pv_forecast_peak_step = getattr(pred, "pv_forecast_peak_step", None)
+                pv_forecast_peak_step = getattr(pred, "pv_forecast_peak_step", None) or getattr(self, "pv_forecast_peak_step", None)
 
                 manual_buffer_active = False
                 if self.clipping_buffer_kwh > 0:
@@ -5551,7 +5553,7 @@ class Plan:
                             remaining = self.clipping_buffer_kwh * (1.0 - progress)
                         else:
                             remaining = self.clipping_buffer_kwh
-                    elif pv_forecast_peak_step and clipping_limit_step > 0 and self.clipping_cost_weight > 0:
+                    elif pv_forecast_peak_step and clipping_limit_step > 0 and self.clipping_buffer_enable:
                         peak_pv = pv_forecast_peak_step.get(minute, 0)
                         if peak_pv > clipping_limit_step:
                             daily_cumulative_clip[day_index] = daily_cumulative_clip.get(day_index, 0.0) + (peak_pv - clipping_limit_step)
