@@ -51,6 +51,23 @@
 
 namespace {
 
+// The export limit packs three signals into one double: target SoC in the integer part, export
+// power in the fraction, and mode as the two reserved whole values above. These name the three
+// questions the simulation asks of it, mirroring export_mode_of/export_power_of in utils.py so
+// the two implementations of the encoding stay legible side by side.
+//
+// The sentinel is matched exactly rather than by range, which is what prediction.py:1074 does.
+// Note that leaves (99.0, 100.0) reading as a normal target here while the force-export test
+// below reads it as not one - a real divergence, tracked as issue #4914, preserved rather than
+// fixed here so the kernel keeps bit-parity with the Python engine.
+inline bool pk_export_is_idle(double export_limit) { return export_limit >= PK_EXPORT_LIMIT_IDLE; }
+inline bool pk_export_is_freeze(double export_limit) { return export_limit == PK_EXPORT_LIMIT_FREEZE; }
+inline double pk_export_power(double export_limit)
+{
+    return 1 - (export_limit - static_cast<double>(static_cast<int64_t>(export_limit)));
+}
+
+
 // Mirror of CPython round(x, n): correctly-rounded decimal rounding (ties to even).
 // snprintf performs a correctly-rounded binary->decimal conversion and strtod a
 // correctly-rounded decimal->binary conversion, matching CPython's _Py_dg_dtoa path.
@@ -432,7 +449,7 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
     std::vector<std::pair<int32_t, int32_t>> export_active;
     export_active.reserve(n_export);
     for (int32_t n = 0; n < n_export; n++) {
-        if (export_limits[n] < PK_EXPORT_LIMIT_IDLE) {
+        if (!pk_export_is_idle(export_limits[n])) {
             export_active.emplace_back(export_start[n], export_end[n]);
         }
     }
@@ -507,7 +524,7 @@ void build_window_membership(std::vector<int32_t> &member, int32_t n_windows, co
 {
     member.assign(n_steps, -1);
     for (int32_t window_n = 0; window_n < n_windows; window_n++) {
-        if (is_export ? !(limits[window_n] < PK_EXPORT_LIMIT_IDLE) : !(limits[window_n] > 0.0)) {
+        if (is_export ? pk_export_is_idle(limits[window_n]) : !(limits[window_n] > 0.0)) {
             continue;
         }
         for (int32_t m = starts[window_n]; m < ends[window_n]; m += 5) {
@@ -942,11 +959,14 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double pv_dc = 0;
         double pv_ac = 0;
 
+        // Deliberately not pk_export_is_freeze's complement: this asks "< freeze" while the freeze
+        // test below asks "== freeze", so a value in (99.0, 100.0) satisfies neither and the window
+        // does nothing. That is issue #4914, mirrored from prediction.py:900 to keep bit-parity.
         if (!c->set_export_freeze_only && export_window_active && export_limit_now < PK_EXPORT_LIMIT_FREEZE && (soc > discharge_min)) {
             // Force export - prediction.py:795-902
             double export_rate_adjust = 1.0;
             if (c->set_export_low_power) {
-                export_rate_adjust = 1 - (export_limit_now - static_cast<double>(static_cast<int64_t>(export_limit_now)));
+                export_rate_adjust = pk_export_power(export_limit_now);
             }
             discharge_rate_now = battery_rate_max_export * export_rate_adjust;
             discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_export, c->temp_discharge_cap[k], c->discharge_curve, battery_rate_min) * battery_rate_max_scaling_discharge;
@@ -1064,7 +1084,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             // charge rate to 0 (or pauses charging) and otherwise leaves the inverter in
             // Demand/ECO mode, never touching the discharge rate. So it shares this flow with the
             // charge rate zeroed rather than being modelled by a parallel branch - see #4676.
-            const bool freeze_export = c->set_export_freeze && export_window_active && export_limit_now < PK_EXPORT_LIMIT_IDLE && (export_limit_now == PK_EXPORT_LIMIT_FREEZE || c->set_export_freeze_only);
+            const bool freeze_export = c->set_export_freeze && export_window_active && !pk_export_is_idle(export_limit_now) && (pk_export_is_freeze(export_limit_now) || c->set_export_freeze_only);
 
             pv_ac = pv_now * inverter_loss_ac;
             pv_dc = 0;
