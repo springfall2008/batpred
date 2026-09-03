@@ -18,11 +18,15 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
-from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
-from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple, export_mode_of, export_power_of
+from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple, export_mode_of, export_power_of, pack_export_limit
 from prediction_batch import PredictionBatch, prediction_cache_key
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
+
+# The limit an inactive export window reads as. Built once at import rather than per minute:
+# run_prediction consults it on every step of the horizon for every simulation.
+IDLE_EXPORT_LIMIT = pack_export_limit(EXPORT_MODE_IDLE)
 
 
 def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp):
@@ -720,7 +724,7 @@ class Prediction(PredictionBatch):
             export_window_n = export_window_optimised.get(minute_absolute, -1)
             charge_window_active = charge_window_n >= 0
             export_window_active = export_window_n >= 0
-            export_limit_now = export_limits[export_window_n] if export_window_active else EXPORT_LIMIT_IDLE
+            export_limit_now = export_limits[export_window_n] if export_window_active else IDLE_EXPORT_LIMIT
             export_mode_now = export_mode_of(export_limit_now)
 
             # Find charge limit
