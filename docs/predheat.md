@@ -155,6 +155,8 @@ If your heat source makes use of weather compensation then add the following to 
 
 Predheat will fill in the gaps between the points provided.
 
+IMPORTANT: The weather compensation curve must have a low value of -20 degrees C and a high value of 20 degrees C. You can have whatever other points you want between the upper and lower bounds and Predheat will fill in the gaps, but if you don't have -20 and 20 Predheat will error when it tries to calculate the weather-adjusted flow temperature.
+
 ### Link Predheat to Predbat
 
 Add a **load_forecast** entry in `apps.yaml` to configure Predbat to use the [Predheat load forecast](apps-yaml.md#load-forecast):
