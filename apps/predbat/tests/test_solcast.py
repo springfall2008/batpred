@@ -82,6 +82,13 @@ class MockBase:
         """Track dashboard_item calls"""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes}
 
+    def resolve_pv_array_kwp(self, detected_kwp):
+        """Mirror Fetch.resolve_pv_array_kwp - fetch_pv_forecast publishes the detected array size through it."""
+        from const import PV_ARRAY_KWP_UNKNOWN
+
+        self.pv_array_kwp = float(detected_kwp) if detected_kwp and 0 < detected_kwp < PV_ARRAY_KWP_UNKNOWN else 0.0
+        return self.pv_array_kwp
+
     def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
         """Return empty history - no historical PV data in tests"""
         return {}

@@ -27,6 +27,18 @@ PREDICT_STEP = 5
 # Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
 # downside case diverges harder than the central one
 CLOUD_FACTOR_PV10 = 0.2
+# Window the envelope cloud model conserves energy over. Matches the half-hour rate slot so the
+# modulation can never shift PV across a slot boundary, and gives six PREDICT_STEP buckets - enough
+# granularity for the duty cycle to follow the p10/p50/p90 band's own asymmetry.
+CLOUD_WINDOW_MINUTES = 30
+# Ceiling for the p90 series' own modulation, as a multiple of DC array kWp. p90 is the top
+# percentile the forecaster publishes, so its upside has no next percentile to reach for and is
+# extrapolated instead; this rail stops a wide band extrapolating into a physically impossible
+# array output. 1.2 allows for cloud-edge enhancement above nameplate.
+CLOUD_ARRAY_MARGIN = 1.2
+# Sentinel fetch_pv_forecast() returns when the forecast source declares no array size (Solcast and
+# the HA integrations). Treated as "unknown", not as a real 9999 kWp array.
+PV_ARRAY_KWP_UNKNOWN = 9999
 RUN_EVERY = 5
 # Forecast scenarios simulated by the planner.
 # PV_SCENARIO_PV10 must remain 1 so it stays interchangeable with the legacy pv10 boolean.
