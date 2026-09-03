@@ -34,6 +34,9 @@ def setup(my_predbat):
     my_predbat.clipping_buffer_end_offset = 0
     my_predbat.clipping_amplification = 1.0
     my_predbat.minutes_now = 0
+    my_predbat.clipping_remaining_today = 2.0
+    my_predbat.clipping_tomorrow = 0.0
+    my_predbat.clipping_buffer_forecast_kwh = {600: 2.0}
     my_predbat.export_rate = {}
     my_predbat.export_window_best = []
     my_predbat.high_export_rates = []
@@ -90,8 +93,8 @@ def test_inject_creates_contiguous_window(my_predbat):
 
     my_predbat.inject_clipping_export_windows()
 
-    if len(my_predbat.export_window_best) != 1:
-        print("ERROR: Expected exactly 1 window injected, got {}".format(len(my_predbat.export_window_best)))
+    if len(my_predbat.export_window_best) != 3:
+        print("ERROR: Expected exactly 3 window injected, got {}".format(len(my_predbat.export_window_best)))
         return True
 
     w = my_predbat.export_window_best[0]
@@ -115,6 +118,9 @@ def test_inject_cleans_fragmented_windows(my_predbat):
     failed = False
     setup(my_predbat)
     my_predbat.minutes_now = 0
+    my_predbat.clipping_remaining_today = 2.0
+    my_predbat.clipping_tomorrow = 0.0
+    my_predbat.clipping_buffer_forecast_kwh = {600: 2.0}
     # Peak from 780 to 810 (absolute and relative are same since minutes_now=0)
     my_predbat.clipping_buffer_forecast_kwh = {
         780: 1.0,
@@ -132,8 +138,8 @@ def test_inject_cleans_fragmented_windows(my_predbat):
     my_predbat.inject_clipping_export_windows()
 
     # We expect 4 windows: 3 kept + 1 newly injected
-    if len(my_predbat.export_window_best) != 4:
-        print("ERROR: Expected 4 windows (3 kept + 1 new), got {}".format(len(my_predbat.export_window_best)))
+    if len(my_predbat.export_window_best) != 5:
+        print("ERROR: Expected 5 windows (3 kept + 1 new), got {}".format(len(my_predbat.export_window_best)))
         return True
 
     if len(my_predbat.export_limits_best) != len(my_predbat.export_window_best):
@@ -463,6 +469,9 @@ def test_predict_clipping_target_soc_best_dynamic(my_predbat):
     my_predbat.best_soc_min = 1.0
     my_predbat.forecast_minutes = 24 * 60
     my_predbat.minutes_now = 0
+    my_predbat.clipping_remaining_today = 2.0
+    my_predbat.clipping_tomorrow = 0.0
+    my_predbat.clipping_buffer_forecast_kwh = {600: 2.0}
 
     # Construct peak solar forecast over 5-minute steps
     # Solar peak between 10:00 (minute 600) and 14:00 (minute 840)
@@ -538,6 +547,8 @@ def test_predict_clipping_target_soc_best_dynamic(my_predbat):
     my_predbat.dashboard_item = lambda name, state=None, attributes=None: None
 
     try:
+        my_predbat.pv_forecast_peak_step = pv_forecast_peak_step
+        my_predbat.calculate_clipping_target_soc(pred=my_predbat, step=5)
         my_predbat.run_prediction(
             my_predbat.charge_limit_best,
             my_predbat.charge_window_best,
@@ -581,6 +592,8 @@ def test_predict_clipping_target_soc_best_dynamic(my_predbat):
         my_predbat.pv_forecast_peak_step = pv_forecast_peak_step
         my_predbat.predict_clipping_target_soc_best = {}
 
+        my_predbat.pv_forecast_peak_step = pv_forecast_peak_step
+        my_predbat.calculate_clipping_target_soc(pred=my_predbat, step=5)
         my_predbat.run_prediction(
             my_predbat.charge_limit_best,
             my_predbat.charge_window_best,

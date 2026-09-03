@@ -1316,7 +1316,7 @@ class Plan:
             current_start = morning_start
             current_rate = self.rate_export.get(morning_start, 0.0)
 
-            for m in range(morning_start + 30, peak_start + 30, 30):
+            for m in range(morning_start + 30, peak_end + 30, 30):
                 rate = self.rate_export.get(m, 0.0)
                 if rate != current_rate or m >= peak_start:
                     # Is this chunk part of a natively highly profitable export window?
@@ -1335,7 +1335,10 @@ class Plan:
                         "average": current_rate,
                     }
                     if not is_native_export:
-                        new_window["clipping_target_soc_pct"] = target_soc_pct
+                        # Use dynamic ceiling from predict_clipping_target_soc_best
+                        # which is indexed by minute
+                        target = getattr(self, "predict_clipping_target_soc_best", {}).get(current_start - self.minutes_now, self.soc_max)
+                        new_window["clipping_target_soc_pct"] = float(int(target / self.soc_max * 100.0))
 
                     new_windows.append(new_window)
                     current_start = m
@@ -1958,6 +1961,8 @@ class Plan:
         self.pv_forecast_minute10_step = pv_forecast_minute10_step
         self.pv_forecast_minute90_step = pv_forecast_minute90_step
         self.pv_forecast_peak_step = pv_forecast_peak_step
+        if self.clipping_buffer_enable:
+            self.calculate_clipping_target_soc(pred=self, step=PREDICT_STEP)
 
         # Yesterday data
         if recompute and self.calculate_savings and publish:
@@ -5517,57 +5522,7 @@ class Plan:
 
                 # Generate Clipping Visual Series (Remaining and Target SOC) for web.py charts
                 predict_clipping_remaining_best = {}
-                predict_clipping_target_soc_best = {}
-
-                clipping_limit_step = getattr(self, "clipping_limit_effective", 0) * (step / 60.0)
-                # Ensure the chart uses the exact same peak dataset as the planning engine
-                # which already includes clipping_amplification.
-                pv_forecast_peak_step = getattr(pred, "pv_forecast_peak_step", None) or getattr(self, "pv_forecast_peak_step", None)
-
-                manual_buffer_active = False
-                if self.clipping_buffer_kwh > 0:
-                    if self.clipping_buffer_start is None or self.clipping_buffer_end is None:
-                        manual_buffer_active = True
-
-                daily_cumulative_clip = {}
-                max_minute = self.forecast_minutes
-
-                buffer_start = self.clipping_buffer_start if self.clipping_buffer_start else 0
-                buffer_end = self.clipping_buffer_end if self.clipping_buffer_end else 24 * 60
-
-                for minute in range(max_minute, -step, -step):
-                    remaining = 0.0
-                    minute_absolute = minute + self.minutes_now
-
-                    if minute <= midnight_today_minute:
-                        day_index = 0
-                    elif minute <= midnight_today_minute + 24 * 60:
-                        day_index = 1
-                    else:
-                        day_index = 2
-
-                    if manual_buffer_active or (self.clipping_buffer_kwh > 0 and buffer_start <= minute_absolute < buffer_end):
-                        # Calculate linear decay for manual mode visual graph
-                        if buffer_end > buffer_start:
-                            progress = max(0.0, min(1.0, (minute_absolute - buffer_start) / (buffer_end - buffer_start)))
-                            remaining = self.clipping_buffer_kwh * (1.0 - progress)
-                        else:
-                            remaining = self.clipping_buffer_kwh
-                    elif pv_forecast_peak_step and clipping_limit_step > 0 and self.clipping_buffer_enable:
-                        peak_pv = pv_forecast_peak_step.get(minute, 0)
-                        if peak_pv > clipping_limit_step:
-                            daily_cumulative_clip[day_index] = daily_cumulative_clip.get(day_index, 0.0) + (peak_pv - clipping_limit_step)
-                        remaining = daily_cumulative_clip.get(day_index, 0.0)
-
-                    best_soc_min = getattr(self, "best_soc_min", 0.0)
-                    max_headroom = self.soc_max - best_soc_min
-                    capped_remaining = min(remaining, max_headroom)
-                    predict_clipping_remaining_best[minute] = round(remaining, 4)
-                    predict_clipping_target_soc_best[minute] = round(self.soc_max - capped_remaining, 4)
-
-                # Sort dictionaries to ensure forwards time order for ApexCharts rendering
-                self.predict_clipping_remaining_best = dict(sorted(predict_clipping_remaining_best.items()))
-                self.predict_clipping_target_soc_best = dict(sorted(predict_clipping_target_soc_best.items()))
+                self.calculate_clipping_target_soc(pred=pred, step=step)
 
                 if not self.clipping_buffer_enable:
                     self.clipping_remaining_today = clipping_today
@@ -6270,3 +6225,59 @@ class Plan:
         if cache is not None:
             cache[key] = hit
         return hit
+
+    def calculate_clipping_target_soc(self, pred=None, step=5):
+        """ Calculate dynamic clipping targets """
+        predict_clipping_target_soc_best = {}
+        predict_clipping_remaining_best = {}
+        midnight_today_minute = int(self.minutes_now / 1440) * 1440
+
+        clipping_limit_step = getattr(self, "clipping_limit_effective", 0) * (step / 60.0)
+        # Ensure the chart uses the exact same peak dataset as the planning engine
+        # which already includes clipping_amplification.
+        pv_forecast_peak_step = getattr(pred, "pv_forecast_peak_step", None) or getattr(self, "pv_forecast_peak_step", None)
+
+        manual_buffer_active = False
+        if self.clipping_buffer_kwh > 0:
+            if self.clipping_buffer_start is None or self.clipping_buffer_end is None:
+                manual_buffer_active = True
+
+        daily_cumulative_clip = {}
+        max_minute = self.forecast_minutes
+
+        buffer_start = self.clipping_buffer_start if self.clipping_buffer_start else 0
+        buffer_end = self.clipping_buffer_end if self.clipping_buffer_end else 24 * 60
+
+        for minute in range(max_minute, -step, -step):
+            remaining = 0.0
+            minute_absolute = minute + self.minutes_now
+
+            if minute_absolute <= midnight_today_minute + 24 * 60:
+                day_index = 0
+            elif minute_absolute <= midnight_today_minute + 48 * 60:
+                day_index = 1
+            else:
+                day_index = 2
+
+            if manual_buffer_active or (self.clipping_buffer_kwh > 0 and buffer_start <= minute_absolute < buffer_end):
+                # Calculate linear decay for manual mode visual graph
+                if buffer_end > buffer_start:
+                    progress = max(0.0, min(1.0, (minute_absolute - buffer_start) / (buffer_end - buffer_start)))
+                    remaining = self.clipping_buffer_kwh * (1.0 - progress)
+                else:
+                    remaining = self.clipping_buffer_kwh
+            elif pv_forecast_peak_step and clipping_limit_step > 0 and self.clipping_buffer_enable:
+                peak_pv = pv_forecast_peak_step.get(minute, 0)
+                if peak_pv > clipping_limit_step:
+                    daily_cumulative_clip[day_index] = daily_cumulative_clip.get(day_index, 0.0) + (peak_pv - clipping_limit_step)
+                remaining = daily_cumulative_clip.get(day_index, 0.0)
+
+            best_soc_min = getattr(self, "best_soc_min", 0.0)
+            max_headroom = self.soc_max - best_soc_min
+            capped_remaining = min(remaining, max_headroom)
+            predict_clipping_remaining_best[minute] = round(remaining, 4)
+            predict_clipping_target_soc_best[minute] = round(self.soc_max - capped_remaining, 4)
+
+        # Sort dictionaries to ensure forwards time order for ApexCharts rendering
+        self.predict_clipping_remaining_best = dict(sorted(predict_clipping_remaining_best.items()))
+        self.predict_clipping_target_soc_best = dict(sorted(predict_clipping_target_soc_best.items()))
