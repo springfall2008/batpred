@@ -6227,7 +6227,7 @@ class Plan:
         return hit
 
     def calculate_clipping_target_soc(self, pred=None, step=5):
-        """ Calculate dynamic clipping targets """
+        """Calculate dynamic clipping targets"""
         predict_clipping_target_soc_best = {}
         predict_clipping_remaining_best = {}
         midnight_today_minute = int(self.minutes_now / 1440) * 1440
