@@ -18,10 +18,26 @@ and historical data extraction from incrementing energy counters.
 
 import re
 import array
+import functools
 import os
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
-from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import (
+    LOW_POWER_PV_THRESHOLD,
+    MINUTE_WATT,
+    PREDICT_STEP,
+    TIME_FORMAT,
+    TIME_FORMAT_SECONDS,
+    TIME_FORMAT_OCTOPUS,
+    MAX_INCREMENT,
+    TIME_FORMAT_DAILY,
+    EXPORT_LIMIT_FREEZE,
+    EXPORT_LIMIT_IDLE,
+    EXPORT_MODE_TARGET,
+    EXPORT_MODE_FREEZE,
+    EXPORT_MODE_IDLE,
+    FULL_EXPORT_POWER,
+)
 import copy
 import json
 
@@ -1418,6 +1434,90 @@ def calc_percent_limit(charge_limit, soc_max):
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
 
+@functools.total_ordering
+class ExportLimit:
+    """An export window's instruction: mode, target SoC percentage and export power.
+
+    Three orthogonal signals as three fields, rather than the single double they used to be
+    packed into. That encoding put the target in the integer part, the power in the fraction
+    and the mode in two reserved whole values, which meant one variable answered three
+    questions and no consumer could ask a clean one of it.
+
+    It was also lossy in a way that mattered: the power is recovered by subtracting the
+    integer part, so 0.7 came back as 0.69999999999999929 or 0.70000000000000284 depending on
+    which target it was packed against. Two windows both at 70% held different numbers and did
+    not compare equal - 196 of 396 target/power pairs failed an exact equality check. Here the
+    power is simply the number it was set to.
+
+    Ordering and equality follow the packed value the encoding used to produce, because the
+    planner's passes compare limits to decide whether one is a shallower discharge than
+    another (see the trim pass in optimise_plan_pass). Comparing against a bare number still
+    works, so `limit == 0` still asks "a full discharge at full power".
+    """
+
+    __slots__ = ("mode", "target", "power")
+
+    def __init__(self, mode, target=None, power=FULL_EXPORT_POWER):
+        """Build an instruction; target is ignored for the modes that do not carry one."""
+        self.mode = mode
+        self.target = None if mode != EXPORT_MODE_TARGET else int(target or 0)
+        self.power = FULL_EXPORT_POWER if mode != EXPORT_MODE_TARGET else power
+
+    def _sort_key(self):
+        """The packed value this instruction used to be, used only for ordering and equality.
+
+        The modes sort above every real target, which is what the reserved values did and what
+        the trim pass's "exports no battery" check relies on.
+        """
+        if self.mode == EXPORT_MODE_IDLE:
+            return EXPORT_LIMIT_IDLE
+        if self.mode == EXPORT_MODE_FREEZE:
+            return EXPORT_LIMIT_FREEZE
+        return self.target + (FULL_EXPORT_POWER - self.power)
+
+    def exports_no_battery(self):
+        """Whether this instruction discharges no battery - i.e. it is off, or a freeze."""
+        return self.mode in (EXPORT_MODE_IDLE, EXPORT_MODE_FREEZE)
+
+    def __eq__(self, other):
+        """Equal when the same instruction, or when matching a bare number's packed value."""
+        if isinstance(other, ExportLimit):
+            return (self.mode, self.target, self.power) == (other.mode, other.target, other.power)
+        if isinstance(other, (int, float)):
+            return self._sort_key() == other
+        return NotImplemented
+
+    def __lt__(self, other):
+        """Ordered by the packed value, so a deeper discharge sorts below a shallower one."""
+        if isinstance(other, ExportLimit):
+            return self._sort_key() < other._sort_key()
+        if isinstance(other, (int, float)):
+            return self._sort_key() < other
+        return NotImplemented
+
+    def __hash__(self):
+        """Hashable so a plan of limits can key the prediction cache."""
+        return hash((self.mode, self.target, self.power))
+
+    def __float__(self):
+        """The packed value, for the C ABI and anything else still expecting one number."""
+        return float(self._sort_key())
+
+    def __round__(self, ndigits=None):
+        """Round the packed value, for display paths that format a limit as a number."""
+        return round(self._sort_key(), ndigits) if ndigits is not None else round(self._sort_key())
+
+    def __int__(self):
+        """The integer part of the packed value - the target percentage for a target."""
+        return int(self._sort_key())
+
+    def __repr__(self):
+        """Show the fields, not the number they used to be squeezed into."""
+        if self.mode == EXPORT_MODE_TARGET:
+            return "ExportLimit(target={}%, power={:.0%})".format(self.target, self.power)
+        return "ExportLimit({})".format(EXPORT_MODE_NAMES[self.mode])
+
+
 def export_mode_of(export_limit):
     """Which of the three export modes a packed export limit represents.
 
@@ -1437,6 +1537,8 @@ def export_mode_of(export_limit):
 
     Returns EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE or EXPORT_MODE_IDLE.
     """
+    if isinstance(export_limit, ExportLimit):
+        return export_limit.mode
     if export_limit >= EXPORT_LIMIT_IDLE:
         return EXPORT_MODE_IDLE
     if export_limit == EXPORT_LIMIT_FREEZE:
@@ -1450,6 +1552,8 @@ def export_target_of(export_limit):
     Only meaningful for EXPORT_MODE_TARGET; the reserved mode values do not carry a target and
     return None so a caller cannot silently use 99 or 100 as if it were one.
     """
+    if isinstance(export_limit, ExportLimit):
+        return export_limit.target
     if export_mode_of(export_limit) != EXPORT_MODE_TARGET:
         return None
     return int(export_limit)
@@ -1462,6 +1566,8 @@ def export_power_of(export_limit):
     counts *down* from full power, so 47.3 means 70% rate. Modes have no power level and return
     full rate, matching what the callers already assume.
     """
+    if isinstance(export_limit, ExportLimit):
+        return export_limit.power
     if export_mode_of(export_limit) != EXPORT_MODE_TARGET:
         return 1.0
     return 1 - (export_limit - int(export_limit))
@@ -1480,6 +1586,8 @@ def export_limit_exports_no_battery(export_limit):
     exactly while the encoding still packs a fraction, including for a value in the currently
     unreachable [99.0, 100.0) interval, where the two disagree (see export_mode_of).
     """
+    if isinstance(export_limit, ExportLimit):
+        return export_limit.exports_no_battery()
     return export_limit >= EXPORT_LIMIT_FREEZE
 
 
@@ -1548,11 +1656,7 @@ def pack_export_limit(mode, target=None, power=1.0):
     encoding is written down in exactly one place instead of being re-derived at each call site
     (see plan.py's ladder, which builds the same values by hand).
     """
-    if mode == EXPORT_MODE_IDLE:
-        return EXPORT_LIMIT_IDLE
-    if mode == EXPORT_MODE_FREEZE:
-        return EXPORT_LIMIT_FREEZE
-    return int(target) + (1.0 - power)
+    return ExportLimit(mode, target, power)
 
 
 def clone_windows(windows):

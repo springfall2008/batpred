@@ -726,6 +726,9 @@ class Prediction(PredictionBatch):
             export_window_active = export_window_n >= 0
             export_limit_now = export_limits[export_window_n] if export_window_active else IDLE_EXPORT_LIMIT
             export_mode_now = export_mode_of(export_limit_now)
+            # The SoC floor this window exports down to. A mode carries no target of its own and
+            # packs as 99/100, which is what this arithmetic used before the fields were split.
+            export_limit_percent = float(export_limit_now)
 
             # Find charge limit
             charge_limit_n = 0
@@ -905,7 +908,7 @@ class Prediction(PredictionBatch):
 
             discharge_min = reserve
             if export_window_active:
-                discharge_min = max(soc_max * export_limit_now / 100.0, reserve, self.best_soc_min)
+                discharge_min = max(soc_max * export_limit_percent / 100.0, reserve, self.best_soc_min)
 
             if not set_export_freeze_only and export_window_active and export_mode_now == EXPORT_MODE_TARGET and (soc > discharge_min):
                 # Discharge enable, capped at export limit

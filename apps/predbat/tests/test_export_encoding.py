@@ -18,7 +18,9 @@ out by hand in Prediction.run_prediction and prediction_kernel.cpp, so the two c
 import random
 
 from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, FULL_EXPORT_POWER, LOW_EXPORT_POWER_LEVELS
-from utils import export_mode_of, export_target_of, export_power_of, pack_export_limit, export_limit_exports_no_battery, export_limits_to_stored, export_limits_from_stored
+import yaml
+
+from utils import ExportLimit, export_mode_of, export_target_of, export_power_of, pack_export_limit, export_limit_exports_no_battery, export_limits_to_stored, export_limits_from_stored, export_limit_to_stored
 
 
 def test_export_encoding_roundtrip():
@@ -219,6 +221,59 @@ def test_export_ladder_rungs_are_unchanged():
     return failed
 
 
+def test_export_limit_power_is_exact():
+    """The power is the number it was set to, not one recovered by subtraction.
+
+    The packed encoding stored 1 - power in the fractional part, so the value came back with
+    binary noise that varied with the SoC target it was packed against: 0.7 at target 47 read
+    as 0.70000000000000284 and at target 13 as 0.69999999999999929. Two windows at the same
+    power did not compare equal - 196 of 396 target/power pairs failed an exact check.
+    """
+    failed = 0
+    for target in range(0, 99):
+        for power in (1.0, 0.7, 0.5, 0.3):
+            limit = pack_export_limit(EXPORT_MODE_TARGET, target, power)
+            if limit.power != power:
+                print("ERROR: target {} power {} stored as {!r}".format(target, power, limit.power))
+                failed += 1
+    # The specific failure the packed form had: same power, different targets, must be equal
+    if pack_export_limit(EXPORT_MODE_TARGET, 47, 0.7).power != pack_export_limit(EXPORT_MODE_TARGET, 13, 0.7).power:
+        print("ERROR: two windows at 70% power hold different values")
+        failed += 1
+    return failed
+
+
+def test_export_limit_dumps_as_plain_yaml():
+    """An export limit must serialise without a Python object tag.
+
+    The debug dump sweeps __dict__ wholesale, so a bare object would be written as
+    !!python/object/new:utils.ExportLimit - loadable only by yaml.unsafe_load with Predbat
+    importable, which defeats the point of an artefact people attach to bug reports.
+    """
+    failed = 0
+
+    class PlainDumper(yaml.Dumper):
+        """Dumper carrying only the export limit representer, mirroring DebugDumper"""
+
+    PlainDumper.add_representer(ExportLimit, lambda dumper, value: dumper.represent_dict(export_limit_to_stored(value)))
+
+    limits = [pack_export_limit(EXPORT_MODE_TARGET, 47, 0.7), pack_export_limit(EXPORT_MODE_FREEZE), pack_export_limit(EXPORT_MODE_IDLE)]
+    document = yaml.dump({"export_limits_best": limits}, Dumper=PlainDumper)
+    if "!!python" in document:
+        print("ERROR: the dump carries a Python object tag:\n{}".format(document))
+        failed += 1
+    try:
+        loaded = yaml.safe_load(document)
+    except yaml.YAMLError as error:
+        print("ERROR: safe_load rejected the dump: {}".format(error))
+        return failed + 1
+    restored = export_limits_from_stored(loaded["export_limits_best"])
+    if [float(value) for value in restored] != [float(value) for value in limits]:
+        print("ERROR: the dump did not round trip")
+        failed += 1
+    return failed
+
+
 def run_export_encoding_tests(my_predbat=None):
     """Run all export limit encoding tests"""
     failed = 0
@@ -231,6 +286,8 @@ def run_export_encoding_tests(my_predbat=None):
     failed += test_export_limit_serialisation_roundtrip()
     failed += test_export_limit_reads_the_old_float_form()
     failed += test_export_ladder_rungs_are_unchanged()
+    failed += test_export_limit_power_is_exact()
+    failed += test_export_limit_dumps_as_plain_yaml()
     if not failed:
         print("Test: export limit encoding accessors match the hand-written decode they replace")
     return failed

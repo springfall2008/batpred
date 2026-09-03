@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, ExportLimit, export_limit_to_stored
 import json
 import yaml
 import re
@@ -32,6 +32,24 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
+
+
+class DebugDumper(yaml.Dumper):
+    """yaml.Dumper that writes Predbat's own types as plain data.
+
+    create_debug_yaml sweeps __dict__ wholesale, so any object that reaches it is emitted with a
+    !!python/object tag by default - readable only by a yaml.unsafe_load with Predbat importable,
+    which defeats the point of a diagnostic artefact people attach to bug reports. Registering a
+    representer keeps the dump plain YAML that any tool can parse.
+    """
+
+
+def _represent_export_limit(dumper, export_limit):
+    """Write an export limit as the same mapping the persisted plan uses."""
+    return dumper.represent_dict(export_limit_to_stored(export_limit))
+
+
+DebugDumper.add_representer(ExportLimit, _represent_export_limit)
 
 
 class UserInterface:
@@ -799,11 +817,11 @@ class UserInterface:
 
         if write_file:
             with open(filename, "w") as file:
-                yaml.dump(debug, file)
+                yaml.dump(debug, file, Dumper=DebugDumper)
             self.log("Wrote debug yaml to {}".format(filename_p))
         else:
             # Return the debug yaml as a string
-            return yaml.dump(debug)
+            return yaml.dump(debug, Dumper=DebugDumper)
 
     def create_entity_list(self):
         """

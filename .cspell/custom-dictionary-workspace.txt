@@ -393,6 +393,7 @@ nanmean
 nanstd
 nattribute
 ncalls
+ndigits
 nearr
 nemotron
 NESO

@@ -21,8 +21,8 @@ import copy
 from html import escape as escape_html
 from datetime import timedelta
 from predbat import THIS_VERSION_DISPLAY
-from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, pack_export_limit
+from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_power_of, pack_export_limit
 from prediction import Prediction
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
@@ -1422,13 +1422,13 @@ class Output:
                     else:
                         state += "Exp&searr;"
                         raw_state = "Exp"
-                        export_rate_adjust = 1 - (limit - int(limit))
+                        export_rate_adjust = export_power_of(limit)
                         rate_kw = dp2(self.battery_rate_max_export * export_rate_adjust * MINUTE_WATT / 1000.0)
                         reason_parts.append({"code": "export_high_rate", "params": {"target_percent": dp2(target), "rate": rate_text_export, "rate_kw": "{:.2f}".format(rate_kw)}})
                     show_limit = str(dp2(target))
                     raw_state_target = str(dp2(target))
 
-                    if limit > int(limit):
+                    if export_power_of(limit) < FULL_EXPORT_POWER:
                         # Snail symbol
                         state += "&#x1F40C;"
 
@@ -2238,11 +2238,12 @@ class Output:
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             if window_n >= 0 and (export_mode_of(export_limits[window_n]) != EXPORT_MODE_IDLE):
-                soc_perc = export_limits[window_n]
+                # Published as a chart series, so this wants the limit as a plain percentage
+                soc_perc = float(export_limits[window_n])
                 soc_kw = (soc_perc * self.soc_max) / 100.0
                 if not export_limit_first:
                     export_limit_soc = soc_kw
-                    export_limit_percent = export_limits[window_n]
+                    export_limit_percent = soc_perc
                     export_limit_first = True
             else:
                 soc_perc = EXPORT_LIMIT_IDLE

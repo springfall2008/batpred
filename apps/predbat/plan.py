@@ -3020,7 +3020,9 @@ class Plan:
         for window_n in range(min(record_export_windows, len(export_window_best))):
             window = export_window_best[window_n]
             limit = export_limits_best[window_n]
-            limit_soc = self.soc_max * limit / 100.0
+            # A mode has no target of its own; it packs as 99/100 and the arithmetic below used
+            # that directly, so keep the same numbers via float() rather than inventing a target.
+            limit_soc = self.soc_max * float(limit) / 100.0
             window_start = max(window["start"], minutes_now)
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start
@@ -3057,7 +3059,10 @@ class Plan:
                         target_soc = max(limit_soc, soc_min)
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge * self.battery_rate_max_scaling_discharge)
                         window["target"] = calc_percent_limit(target_soc, self.soc_max)
-                        export_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max) + (limit - int(limit))
+                        # Clip the target up to what the simulation can actually reach, keeping the
+                        # window's export power - previously this rebuilt the packed value by hand,
+                        # re-attaching the fraction with `+ (limit - int(limit))`.
+                        export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_TARGET, calc_percent_limit(limit_soc, self.soc_max), export_power_of(limit))
                         if limit != export_limits_best[window_n] and self.debug_enable:
                             self.log("Clip up export window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
             else:
