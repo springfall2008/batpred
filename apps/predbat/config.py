@@ -2620,6 +2620,10 @@ APPS_SCHEMA = {
     "solcast_poll_hours": {"type": "float", "zero": False},
     "solcast_sites": {"type": "string_list"},
     "pv_forecast_today": {"type": "sensor", "sensor_type": "float"},
+    # DC array size in kWp, capping how far the p90 cloud model may extrapolate above the forecast.
+    # Auto-detected from the forecast_solar / open_meteo_forecast arrays; set here only for sources
+    # that declare no array size, such as Solcast and the HA integrations.
+    "pv_array_kwp": {"type": "float"},
     "pv_forecast_tomorrow": {"type": "sensor", "sensor_type": "float"},
     "pv_forecast_d3": {"type": "sensor", "sensor_type": "float"},
     "pv_forecast_d4": {"type": "sensor", "sensor_type": "float"},

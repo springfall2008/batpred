@@ -541,8 +541,13 @@ When the Freeze Export override is active, [Predbat status](what-does-predbat-do
 
 ## Cloud coverage and load variance
 
-By default Predbat tries to model passing clouds by modulating the PV forecast data on a 5-minute interval up and down while retaining the same predicted total.
-The amount of modulation depends on the difference between the PV50% (default) and PV10% scenario produced by Solcast.
+By default Predbat tries to model passing clouds by modulating the PV forecast data on a 5-minute interval up and down while retaining the same predicted total over each half-hour.
+
+Each scenario is modulated toward the next forecast percentile above it: the PV10% scenario reaches up toward PV50%, PV50% reaches up toward PV90%, and PV90% - having no percentile above it - reaches toward a continuation of its own band, capped at your DC array size (see **pv_array_kwp** in [apps.yaml settings](apps-yaml.md)) plus 20% for cloud-edge enhancement.
+
+How many of each half-hour's six 5-minute steps are raised rather than lowered follows the shape of your own forecast band. Solcast's downside is typically about twice its upside, giving four steps raised and two lowered, which lets the peaks reach PV90% while the troughs still fall far enough to matter. The PV10% scenario takes the opposite pattern, so it dips exactly where PV50% peaks and both directions are covered within the same 5 minutes.
+
+If your forecast source publishes no PV90% data, Predbat falls back to the older model, which modulates by a single figure derived from the gap between the PV50% and PV10% forecasts.
 
 You can disable this feature (_expert mode only_) using **switch.predbat_metric_cloud_enable**.
 

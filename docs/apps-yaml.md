@@ -1695,9 +1695,22 @@ scenario costs planning time, so if your machine is struggling you can turn On *
 while it is Off no PV90 scenario is simulated at all.
 See [Solar PV adjustment options](customisation.md#solar-pv-adjustment-options).
 
-Predbat models cloud coverage by using the difference between the PV and PV10 forecasts to work out a cloud factor,
-this modulates the PV output predictions up and down over the plan slot duration as if there were passing clouds.
-This can have an impact on planning, especially for things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.
+Predbat models cloud coverage by modulating each PV scenario toward the next forecast percentile above it - PV10 toward PV50, PV50 toward PV90 - up and down
+on a 5-minute interval while holding the total over each half hour. This can have an impact on planning, especially for things like freeze charging which could
+assume the PV will cover the house load but it might not due to clouds, and for systems whose array is large enough to clip against the inverter or export limit.
+
+### **pv_array_kwp**
+
+The total DC array size in kWp, used to cap how far the PV90 scenario's modulation may extrapolate above the forecast:
+
+```yaml
+  pv_array_kwp: 18.54
+```
+
+This is detected automatically from the `kwp` figures in your **forecast_solar** or **open_meteo_forecast** configuration, so you only need to set it when using
+Solcast or the Solcast HA integration, neither of which publishes an array size. Leaving it unset with such a source simply leaves the cap inactive.
+
+Set the DC array size, not your inverter rating - on a DC-oversized system these differ, and it is precisely that oversizing which causes clipping.
 
 See also [PV configuration options in Home Assistant](customisation.md#solar-pv-adjustment-options).
 
