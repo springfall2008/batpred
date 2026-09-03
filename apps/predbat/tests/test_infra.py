@@ -175,6 +175,7 @@ class TestHAInterface:
         # HAInterface.set_state_external() does. None for the handful of narrower component
         # tests that build a TestHAInterface() directly without a base to wire it to.
         self.base = None
+        self.delete_state_calls = []
 
     def get_service_store(self):
         stored_service = self.service_store
@@ -335,6 +336,13 @@ class TestHAInterface:
                 await self.base.trigger_callback(service_data)
                 return
         self.set_state(entity_id, state, attributes)
+
+    def delete_state(self, entity_id):
+        """Delete a state from the test HA state store."""
+        entity_id = entity_id.lower()
+        self.delete_state_calls.append(entity_id)
+        self.dummy_items.pop(entity_id, None)
+        return True
 
     def get_history(self, entity_id, now=None, days=30):
         # print("Getting history for {}".format(entity_id))
