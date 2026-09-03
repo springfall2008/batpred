@@ -72,6 +72,28 @@ Child entries can have children of their own, so for example rates_import_overri
 
 The indentation of children being two spaces indented from their parents and there being two spaces before the dash are especially critical. It's easy to mis-edit and have one or three spaces which isn't valid YAML.
 
+CAUTION: If you are configuring a child entry with children of its own, then the sub-children all follow under a single hyphen and  must NOT be individually hyphenated.  i.e.:
+
+```yaml
+forecast_solar:
+  - postcode: SW1A 2AB
+  - kwp: 4.0
+  - azimuth: 148
+  - declination: 30
+  - efficiency: 0.90
+```
+
+Is invalid YAML for Predbat, it must be entered as:
+
+```yaml
+forecast_solar:
+  - postcode: SW1A 2AB
+    kwp: 4.0
+    azimuth: 148
+    declination: 30
+    efficiency: 0.90
+```
+
 NB: the sequence of entries in `apps.yaml` doesn't matter, as long as the YAML itself is structured correctly you can move things and edit things anywhere in the file.
 
 ## Configuration items, entities, lists and regular expressions
