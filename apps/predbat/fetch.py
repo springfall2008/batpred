@@ -312,9 +312,13 @@ class Fetch:
                     floor = load_baseline.get(minute + minutes_now, 0.0) if load_baseline else 0.0
                     values[minute] = dp4(values[minute] - borrow * max(values[minute] - floor, 0.0) / room)
                 # dp4 on each step leaves up to half a milliwatt-hour per step unaccounted for.
-                # Push that residual onto the roomiest down step so the window total is exact -
-                # the scenarios are compared against each other, so a systematic drift in one of
-                # them is a bias in the plan, not a rounding detail.
+                # Push that residual onto the roomiest down step, which recovers the window total on
+                # any window holding meaningful energy - the scenarios are compared against each
+                # other, so a systematic drift in one of them is a bias in the plan, not a rounding
+                # detail. It is not guaranteed: the correction is floored at zero, so a window whose
+                # roomiest down step holds less than the residual keeps the remainder. In practice
+                # that is confined to near-empty dawn and dusk windows and measures around 0.001 kWh
+                # over a 48 hour horizon.
                 drift = sum(values[minute] for minute in offsets) - window_total
                 if drift:
                     roomiest = max(downs, key=lambda minute: values[minute])

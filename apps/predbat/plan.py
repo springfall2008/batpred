@@ -1494,7 +1494,7 @@ class Plan:
             # No usable p90 band (a forecast source that publishes none falls back to a copy of the
             # p50), so keep the legacy proportional model rather than losing the cloud model.
             if self.metric_cloud_coverage:
-                self.log("PV cloud model: proportional fallback, no PV90 band to modulate toward - check your solar forecast source publishes pv_estimate90")
+                self.log("PV cloud model: proportional fallback, no PV90 data to modulate toward - check your solar forecast source publishes a PV90 estimate (pv_estimate90)")
             pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
             pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if self.metric_cloud_coverage else None, flip=True)
             pv_forecast_minute90_step = self.step_data_history(self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)

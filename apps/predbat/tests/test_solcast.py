@@ -83,10 +83,20 @@ class MockBase:
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes}
 
     def resolve_pv_array_kwp(self, detected_kwp):
-        """Mirror Fetch.resolve_pv_array_kwp - fetch_pv_forecast publishes the detected array size through it."""
+        """Mirror Fetch.resolve_pv_array_kwp - fetch_pv_forecast publishes the detected array size through it.
+
+        The apps.yaml override has to win here exactly as it does in production, or a test that sets
+        pv_array_kwp in mock_config would silently exercise the detected value instead.
+        """
         from const import PV_ARRAY_KWP_UNKNOWN
 
-        self.pv_array_kwp = float(detected_kwp) if detected_kwp and 0 < detected_kwp < PV_ARRAY_KWP_UNKNOWN else 0.0
+        configured = self.get_arg("pv_array_kwp", 0.0)
+        if configured and configured > 0:
+            self.pv_array_kwp = float(configured)
+        elif detected_kwp and 0 < detected_kwp < PV_ARRAY_KWP_UNKNOWN:
+            self.pv_array_kwp = float(detected_kwp)
+        else:
+            self.pv_array_kwp = 0.0
         return self.pv_array_kwp
 
     def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
