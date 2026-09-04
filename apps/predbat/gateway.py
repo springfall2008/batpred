@@ -460,6 +460,7 @@ class GatewayMQTT(ComponentBase):
         now = datetime.datetime.now(self.local_tz)
         current_year = now.year
         new_windows = {}
+        generation = self.base.charger_registry.snapshot_generation()
         for cp_id in sorted(self._configured_ev_chargers):
             slot = self.charger_slot("gateway", cp_id)
             if slot is None:
@@ -487,6 +488,7 @@ class GatewayMQTT(ComponentBase):
                     continue
             new_windows[slot] = windows
         self._ev_windows = new_windows
+        self._ev_windows_generation = generation
 
     def _should_ev_charge_now(self, slot):
         """Return True if the current local time falls inside the given car slot's planned charge window."""
@@ -534,6 +536,8 @@ class GatewayMQTT(ComponentBase):
             if slot is None:
                 continue
             any_slotted = True
+            if not self.charger_plan_ready(getattr(self, "_ev_windows_generation", None)):
+                continue
             if slot not in self._ev_windows:
                 continue
             should_charge = self._should_ev_charge_now(slot)

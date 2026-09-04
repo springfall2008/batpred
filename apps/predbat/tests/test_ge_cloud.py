@@ -4603,6 +4603,7 @@ def _register_gecloud_chargers(ge, serials):
     registry sorts by serial, same as automatic config does.
     """
     ge.register_chargers("gecloud", [ChargerEntry("gecloud", serial) for serial in serials])
+    ge.base.charger_registry.confirm_plan(ge.base.charger_registry.generation)
 
 
 def _test_evc_control(my_predbat):

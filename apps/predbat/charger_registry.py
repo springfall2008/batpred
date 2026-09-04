@@ -109,6 +109,8 @@ class ChargerRegistry:
         self._lock = threading.RLock()
         self._by_source = {}
         self._slots = {}
+        self.generation = 0
+        self.plan_generation = None
         self._legacy_aggregates = {"energy": [], "power": []}
         # Aggregate key -> the exact value the registry last wrote there, so a key some other
         # component has overwritten since can be recognised as no longer ours to restore.
@@ -269,6 +271,27 @@ class ChargerRegistry:
         with self._lock:
             return self._slots.get((source, str(device_id)))
 
+    def snapshot_generation(self):
+        """Read the allocation version after any in-flight materialisation finishes."""
+        with self._lock:
+            return self.generation
+
+    def confirm_plan(self, generation):
+        """Enable control only after publishing a plan built with the current slot map."""
+        with self._lock:
+            if generation == self.generation:
+                self.plan_generation = generation
+
+    def plan_is_current(self, generation=None):
+        """Whether published car windows belong to the current charger allocation."""
+        with self._lock:
+            return self.plan_generation == self.generation and (generation is None or generation == self.generation)
+
+    def owns_aggregate(self, field):
+        """Whether the live aggregate still equals the last value composed here."""
+        with self._lock:
+            return field in self._aggregates_written and self.base.get_arg("car_charging_" + field, None, indirect=False) == self._aggregates_written[field]
+
     def _write_num_cars(self, count):
         """Write num_cars: the registry's own count, floored by every declared claim on it.
 
@@ -336,7 +359,9 @@ class ChargerRegistry:
             arg = "car_charging_{}".format(field)
             discovered = [getattr(entry, field) for entry in entries if getattr(entry, field)]
             if discovered:
-                values = list(self._legacy_aggregates[field]) + discovered
+                serials = {entry.device_id for entry in entries if getattr(entry, field) and entry.source in SERIAL_IDENTITY_SOURCES and len(entry.device_id) >= MIN_IDENTITY_MATCH_LENGTH}
+                legacy = [value for value in self._legacy_aggregates[field] if not self._names_a_discovered_charger(ChargerEntry(LEGACY_SOURCE, "0", planned=value), set(discovered), serials)]
+                values = list(dict.fromkeys(legacy + discovered))
                 self.base.set_arg(arg, values)
                 self._aggregates_written[field] = list(values)
             elif field in self._aggregates_written:
@@ -366,6 +391,7 @@ class ChargerRegistry:
             entries = self.entries()
             slots = {entry.key(): slot for slot, entry in enumerate(entries)}
             if slots != self._slots:
+                self.generation += 1
                 # Only on a change: this runs on every rediscovery, and the map is what a support
                 # log needs to explain which charger a car number refers to.
                 self.base.log("Info: ChargerRegistry: slots {}".format({"{}/{}".format(source, device_id): slot for (source, device_id), slot in sorted(slots.items(), key=lambda item: item[1])}))

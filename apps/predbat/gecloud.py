@@ -1492,6 +1492,9 @@ class GECloudDirect(ComponentBase):
         planned window, stopped outside one. A charger with no car plugged in is left
         alone - commanding it would achieve nothing and every command costs a retry loop.
         """
+        generation = self.base.charger_registry.snapshot_generation()
+        if not self.charger_plan_ready(generation):
+            return
         if not self.refresh_evc_car_windows(now):
             return
         # The slot comes from the registry rather than this component's own ordering: with
@@ -1503,6 +1506,8 @@ class GECloudDirect(ComponentBase):
         for uuid in self.controlled_evc_devices():
             device = self.evc_device[uuid]
             car_n = self.charger_slot("gecloud", device.get("serial_number", None))
+            if not self.charger_plan_ready(generation):
+                return
             if car_n is None:
                 continue
             if car_n not in self.evc_control_windows:

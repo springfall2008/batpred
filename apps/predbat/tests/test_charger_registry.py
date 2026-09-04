@@ -1047,3 +1047,118 @@ def test_charger_registry(my_predbat=None):
 # calls, running the whole file twice per session and reporting a pass/fail count that does
 # not match the tests. unit_test.py calls it directly by name, which this does not affect.
 test_charger_registry.__test__ = False
+
+
+def test_ohme_energy_survives_both_discovery_orders_and_rediscovery():
+    """Registry-owned energy lists must not make Ohme drop its own contribution."""
+    import asyncio
+    from tests.test_ohme import MockOhmeAPI, ENERGY_TODAY_ENTITY, POWER_WATTS_ENTITY
+
+    for ohme_first in (True, False):
+        api = MockOhmeAPI()
+        registry = api.base.charger_registry
+        if ohme_first:
+            asyncio.run(api.automatic_config())
+        registry.replace_source("gecloud", [ChargerEntry("gecloud", "CE1234", planned="binary_sensor.ce1234", energy="sensor.ce1234_energy", power="sensor.ce1234_power")])
+        for _ in range(2):
+            asyncio.run(api.automatic_config())
+            assert api.args["car_charging_energy"] == ["sensor.ce1234_energy", ENERGY_TODAY_ENTITY]
+            assert api.args["car_charging_power"] == ["sensor.ce1234_power", POWER_WATTS_ENTITY]
+
+
+def test_legacy_and_discovered_energy_are_counted_once():
+    """Two integrations measuring the same serial must not double the site total."""
+    for legacy in ("sensor.myenergi_zappi_10000001_charge_added_session", "sensor.predbat_myenergi_zappi_10000001_session_energy"):
+        base = MockBase(car_charging_energy=[legacy, "sensor.myenergi_zappi_100000010_charge_added_session"])
+        registry = _registry(base)
+        preregister_legacy(registry, base)
+        registry.replace_source("myenergi", [ChargerEntry("myenergi", "10000001", planned="sensor.zappi_connected", energy="sensor.predbat_myenergi_zappi_10000001_session_energy")])
+        assert base.args["car_charging_energy"] == ["sensor.myenergi_zappi_100000010_charge_added_session", "sensor.predbat_myenergi_zappi_10000001_session_energy"]
+        registry.replace_source("myenergi", [])
+        assert base.args["car_charging_energy"] == [legacy, "sensor.myenergi_zappi_100000010_charge_added_session"]
+
+
+def test_plan_publication_is_per_car_and_confirms_only_its_allocation():
+    """Publishing isolates car windows and cannot approve a mapping changed mid-plan."""
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from output import Output
+
+    registry = _registry()
+    registry.replace_source("ohme", [ChargerEntry("ohme", "ohme0")])
+    generation = registry.snapshot_generation()
+    captured = {}
+    base = SimpleNamespace(
+        num_cars=3, prefix="predbat", minutes_now=0, forecast_minutes=1440,
+        midnight_utc=datetime(2026, 9, 4, tzinfo=timezone.utc),
+        car_charging_slots=[
+            [{"start": 60, "end": 120, "kwh": 1, "average": 10, "cost": 10}],
+            [{"start": 180, "end": 240, "kwh": 2, "average": 20, "cost": 40}],
+            [],
+        ],
+        charger_registry=registry, car_charger_generation=generation,
+        time_abs_str=str,
+        dashboard_item=lambda entity, state, attributes: captured.update({entity: attributes}),
+    )
+    # The plan is in flight when another source takes slot 0.
+    registry.replace_source("gecloud", [ChargerEntry("gecloud", "CE1234")])
+    Output.publish_car_plan(base)
+    assert [window["start"] for window in captured["binary_sensor.predbat_car_charging_slot"]["planned"]] == ["60"]
+    assert [window["start"] for window in captured["binary_sensor.predbat_car_charging_slot_1"]["planned"]] == ["180"]
+    assert captured["binary_sensor.predbat_car_charging_slot_2"]["planned"] == []
+    assert not registry.plan_is_current()
+    base.car_charger_generation = registry.snapshot_generation()
+    Output.publish_car_plan(base)
+    assert registry.plan_is_current()
+
+
+def test_all_charger_controls_wait_after_slot_reallocation():
+    """Existing slot sensors cannot authorise control after their car identities change."""
+    import asyncio
+    from unittest.mock import AsyncMock
+    from tests.test_ohme import _ohme_control_api
+    from tests.test_gateway import TestEvControl
+    from tests.test_myenergi import _controlling_component, IN_WINDOW, NIGHT_WINDOW
+    from tests.test_ge_cloud import _evc_control_component, _register_gecloud_chargers, EVC_PLAN_SENSOR
+
+    ohme = _ohme_control_api(windows=[])
+    ohme.base.charger_registry.replace_source("gecloud", [ChargerEntry("gecloud", "CE1234")])
+    ohme.states[("binary_sensor.predbat_car_charging_slot_1", "planned")] = []
+    asyncio.run(ohme.control_charge())
+    assert not ohme.client.request_log
+    ohme.base.charger_registry.confirm_plan(ohme.base.charger_registry.generation)
+    asyncio.run(ohme.control_charge())
+    assert ohme.client.request_log
+
+    gateway = TestEvControl()._make_gateway(configured_chargers=["CP-A", "CP-B"])
+    gateway._ev_charging_active = {"CP-B": True}
+    gateway._ev_windows = {0: [], 1: []}
+    gateway._send_ev_command = AsyncMock()
+    gateway.base.charger_registry.replace_source("gateway", [ChargerEntry("gateway", "CP-B")])
+    asyncio.run(gateway._apply_ev_charging_state())
+    gateway._send_ev_command.assert_not_awaited()
+    gateway.base.charger_registry.confirm_plan(gateway.base.charger_registry.generation)
+    asyncio.run(gateway._apply_ev_charging_state())
+    gateway._send_ev_command.assert_awaited_once()
+
+    myenergi = _controlling_component(plans={0: [NIGHT_WINDOW], 1: []})
+    myenergi.base.charger_registry.confirm_plan(myenergi.base.charger_registry.generation)
+    myenergi.base.charger_registry.replace_source("gecloud", [ChargerEntry("gecloud", "CE1234")])
+    asyncio.run(myenergi.control_charge(IN_WINDOW))
+    myenergi.transport.set_mode.assert_not_awaited()
+    myenergi.base.charger_registry.confirm_plan(myenergi.base.charger_registry.generation)
+    asyncio.run(myenergi.control_charge(IN_WINDOW))
+    myenergi.transport.set_mode.assert_awaited_once()
+
+    commands = []
+    gecloud = _evc_control_component(commands)
+    gecloud.evc_device_list = ["charger"]
+    gecloud.evc_device = {"charger": {"serial_number": "EVC200", "status": "charging"}}
+    gecloud.entity_attributes = {EVC_PLAN_SENSOR: {"planned": []}}
+    _register_gecloud_chargers(gecloud, ["EVC100", "EVC200"])
+    gecloud.base.charger_registry.replace_source("gecloud", [ChargerEntry("gecloud", "EVC200")])
+    asyncio.run(gecloud.evc_control_charge(IN_WINDOW))
+    assert commands == []
+    gecloud.base.charger_registry.confirm_plan(gecloud.base.charger_registry.generation)
+    asyncio.run(gecloud.evc_control_charge(IN_WINDOW))
+    assert commands == [("charger", "stop-charge")]

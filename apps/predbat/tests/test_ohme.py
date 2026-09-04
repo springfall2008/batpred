@@ -1681,6 +1681,7 @@ def _ohme_control_api(windows=None, now=None, read_only=False):
     api.register_chargers("ohme", [ChargerEntry("ohme", OHME_DEVICE_ID, planned="binary_sensor.predbat_ohme_connected")])
     if windows is not None:
         api.states[("binary_sensor.predbat_car_charging_slot", "planned")] = windows
+        api.base.charger_registry.confirm_plan(api.base.charger_registry.generation)
     # A plugged-in car so charger_mode() has something to read
     api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}}
     return api
@@ -1823,6 +1824,7 @@ def _test_ohme_control_waits_for_plan(my_predbat=None):
 
     # An empty plan is a real answer, not a missing one - the charger is held paused
     api.states[("binary_sensor.predbat_car_charging_slot", "planned")] = []
+    api.base.charger_registry.confirm_plan(api.base.charger_registry.generation)
     run_async(api.control_charge())
     assert len(api.client.request_log) == 1, f"Expected a pause once the plan is known, got {api.client.request_log}"
     assert "stop" in api.client.request_log[0]["url"], f"Expected a pause command, got {api.client.request_log[0]['url']}"

@@ -275,7 +275,11 @@ each component number its own chargers:
 - **num_cars** is derived from that composed list, floored by any value you set in `apps.yaml` and by cars another
   part of Predbat owns outright - Octopus Intelligent and Kraken claim the number of cars enrolled, since those
   cars have no charger of their own. Such a claim is released when the cars go, so the count can come back down
-- Each component asks for its own charger's slot every cycle, so a charger is always driven from its own car's plan
+- Each component asks for its own charger's slot every cycle. After the mapping changes, automatic control waits
+  for a plan calculated and published for that mapping, so old slot sensors cannot drive a different charger
+- Energy and power aggregates count identical entity references only once. Legacy measurements carrying a
+  discovered manufacturer's serial are replaced by that charger's corresponding measurement. Ohme keeps its
+  contribution when other components register chargers or discovery runs again
 
 The consequence to be aware of: discovering a charger that sorts ahead of an existing one moves the later ones down
 a slot. Per-car settings (**car_charging_limit**, **car_charging_battery_size**, **car_charging_exclusive**, manual

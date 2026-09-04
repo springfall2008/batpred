@@ -1019,9 +1019,14 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
 
         The caller passes now so every Zappi is judged against one instant.
         """
+        generation = self.base.charger_registry.snapshot_generation()
+        if not self.charger_plan_ready(generation):
+            return
         if not self.refresh_car_windows(now):
             return
         for car_n, device in self.controlled_zappis():
+            if not self.charger_plan_ready(generation):
+                return
             # The registry allocates slots immediately, while self.num_cars - which the window
             # refresh loops over - is a cached copy refreshed once a cycle. So a Zappi that has
             # just moved to a higher slot has no entry in control_windows yet, and an absent key

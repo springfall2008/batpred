@@ -76,9 +76,9 @@ class Output:
         """
         Publish the car charging plan
         """
-        plan = []
         postfix = ""
         for car_n in range(self.num_cars):
+            plan = []
             if car_n > 0:
                 postfix = "_" + str(car_n)
             if not self.car_charging_slots[car_n]:
@@ -155,6 +155,8 @@ class Output:
                         "icon": "mdi:home-lightning-bolt-outline",
                     },
                 )
+
+        self.charger_registry.confirm_plan(getattr(self, "car_charger_generation", None))
 
     def publish_rates_export(self):
         """

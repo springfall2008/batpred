@@ -128,6 +128,10 @@ class ComponentBase(ABC):
         """
         return self.base.charger_registry.slot_for(source, device_id)
 
+    def charger_plan_ready(self, generation=None):
+        """Wait for a published plan using the current charger allocation."""
+        return self.base.charger_registry.plan_is_current(generation)
+
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
         Retrieve a configuration argument from the base system.

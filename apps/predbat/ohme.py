@@ -420,9 +420,14 @@ class OhmeAPI(ComponentBase):
             self.log("Info: Ohme API: Read only mode cleared, resuming charge control")
         self.control_read_only = False
 
+        generation = self.base.charger_registry.snapshot_generation()
+        if not self.charger_plan_ready(generation):
+            return
         if not self.refresh_car_windows():
             return
 
+        if not self.charger_plan_ready(generation):
+            return
         should_charge = self.should_charge_now()
         drifted = self.control_drifted(should_charge)
         if should_charge == self.control_charging and not drifted:
@@ -485,7 +490,7 @@ class OhmeAPI(ComponentBase):
         existing = self.get_arg("car_charging_energy", default=None, indirect=False)
         if isinstance(existing, list) and len(existing) == 1:
             existing = existing[0]
-        owns_energy = (not existing) or (isinstance(existing, str) and existing.startswith("re:")) or existing == ENERGY_TODAY_ENTITY
+        owns_energy = self.base.charger_registry.owns_aggregate("energy") or (not existing) or (isinstance(existing, str) and existing.startswith("re:")) or existing == ENERGY_TODAY_ENTITY
         if not owns_energy:
             self.log("Info: Ohme API: Leaving car_charging_energy set to {} rather than using {}".format(existing, ENERGY_TODAY_ENTITY))
 

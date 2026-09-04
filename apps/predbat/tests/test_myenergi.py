@@ -1077,9 +1077,11 @@ def test_control_charge_sets_fast_inside_and_stopped_outside():
     component.automatic_config()  # registers the Zappi with the charger registry, giving it a slot
     component.transport.set_mode = AsyncMock(return_value=True)
 
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_charge(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Fast", component.transport.set_mode.await_args
 
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_charge(OUT_OF_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Stopped", component.transport.set_mode.await_args
     print("  ✓ Fast inside a planned window, Stopped outside it")
@@ -1096,6 +1098,7 @@ def test_control_charge_maps_each_zappi_to_its_own_car():
     component.automatic_config()  # registers both Zappis, giving each its own slot
     component.transport.set_mode = AsyncMock(return_value=True)
 
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_charge(IN_WINDOW))
     by_serial = {call.args[0].serial: call.args[1] for call in component.transport.set_mode.await_args_list}
     assert by_serial == {"12345678": "Fast", "22223333": "Stopped"}, by_serial
@@ -1113,15 +1116,18 @@ def test_control_charge_is_edge_triggered_but_corrects_drift():
     component.automatic_config()  # registers the Zappi with the charger registry, giving it a slot
     component.transport.set_mode = AsyncMock(return_value=True)
 
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_charge(IN_WINDOW))
     assert component.transport.set_mode.await_count == 1
     # The poll now reports Fast, matching what was set, so nothing more is sent
     component.devices["Z12345678"] = _zappi(12345678, mode_index=1)
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_charge(IN_WINDOW))
     assert component.transport.set_mode.await_count == 1, "A settled charger must not be re-commanded"
 
     # Someone switches it to Eco+ in the myenergi app - Predbat puts it back
     component.devices["Z12345678"] = _zappi(12345678, mode_index=3)
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_charge(IN_WINDOW))
     assert component.transport.set_mode.await_count == 2, "Drift away from the set mode must be corrected"
     assert component.transport.set_mode.await_args.args[1] == "Fast"
@@ -1134,6 +1140,7 @@ def test_control_charge_ignores_eddis():
     component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
     component.transport.set_mode = AsyncMock(return_value=True)
 
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_charge(IN_WINDOW))
     component.transport.set_mode.assert_not_awaited()
     print("  ✓ Eddis are never driven by car charge control")
@@ -1149,6 +1156,7 @@ def test_control_charge_does_nothing_before_a_plan_exists():
     component.devices = {"Z12345678": _zappi(12345678)}
     component.transport.set_mode = AsyncMock(return_value=True)
 
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_charge(IN_WINDOW))
     component.transport.set_mode.assert_not_awaited()
     print("  ✓ Nothing is commanded before Predbat has published a plan")
@@ -1170,6 +1178,7 @@ def test_control_charge_skips_a_slot_whose_plan_has_not_been_read():
     component.transport.set_mode = AsyncMock(return_value=True)
 
     assert component.charger_slot("myenergi", "12345678") == 1, "The Zappi should have been pushed to slot 1"
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_charge(IN_WINDOW))
     component.transport.set_mode.assert_not_awaited()
     print("  ✓ A slot with no plan published yet is not commanded")
@@ -1184,6 +1193,7 @@ def test_control_charge_stops_on_a_published_empty_plan():
     component.transport.set_mode = AsyncMock(return_value=True)
 
     assert component.charger_slot("myenergi", "12345678") == 1
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_charge(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Stopped", component.transport.set_mode.await_args
     print("  ✓ An empty published plan still stops the charger")
@@ -1223,11 +1233,13 @@ def test_control_gating_refuses_with_a_reason():
 def test_control_releases_to_the_saved_mode():
     """Releasing puts the Zappi back where it was before Predbat first moved it."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Fast"
 
     # The switch going off is a release, not just a pause in commanding
     component.control_enabled = False
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Eco+", "The Zappi was in Eco+ before Predbat took over"
     assert component.control_modes == {}, "A released Zappi is no longer held"
@@ -1241,6 +1253,7 @@ def test_control_releases_to_eco_plus_when_nothing_was_saved():
     component.control_saved_modes = {}
     component.control_enabled = False
 
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Eco+", component.transport.set_mode.await_args
     print("  ✓ Release falls back to Eco+ when there is nothing saved")
@@ -1249,18 +1262,22 @@ def test_control_releases_to_eco_plus_when_nothing_was_saved():
 def test_control_stops_and_resumes_on_read_only():
     """Read only mode releases the Zappis, and clearing it resumes control."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_count == 1
 
     component.base.args["set_read_only"] = True
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Eco+", "Read only must release, not just stop commanding"
 
     # Still read only - nothing more is sent, there is nothing left to release
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_count == 2
 
     component.base.args["set_read_only"] = False
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
     run_async(component.control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Fast", "Clearing read only must resume control"
     print("  ✓ Read only releases the Zappis and clearing it resumes control")
@@ -1344,7 +1361,10 @@ def test_run_enables_control_and_drives_the_zappi():
     assert run_async(component.run(0, True)) is True
     assert component.control_active is True
     component.load_control_enabled.assert_awaited_once()
-    # A real poll drove the Zappi from the plan without waiting for a second cycle
+    # Discovery invalidates old slot sensors until the planner publishes for this map.
+    component.transport.set_mode.assert_not_awaited()
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
+    assert run_async(component.run(60, False)) is True
     assert component.transport.set_mode.await_count == 1, component.transport.set_mode.await_args_list
     print("  ✓ The run loop enables control and drives the Zappi from the plan")
 
@@ -1418,7 +1438,10 @@ def test_control_failure_does_not_break_the_poll():
     component.transport.set_mode = AsyncMock(side_effect=MyEnergiApiError("myenergi refused the mode"))
     component.load_control_enabled = AsyncMock()
 
-    assert run_async(component.run(0, True)) is True, "A refused mode must not fail the cycle"
+    assert run_async(component.run(0, True)) is True
+    component.base.charger_registry.confirm_plan(component.base.charger_registry.generation)
+    assert run_async(component.run(60, False)) is True, "A refused mode must not fail the cycle"
+    component.transport.set_mode.assert_awaited_once()
     assert component.last_success_timestamp is not None, "Monitoring still succeeded, so the poll counts"
     # Nothing was recorded as set, so the next cycle tries again rather than assuming it stuck
     assert component.control_modes == {}, component.control_modes

@@ -4410,6 +4410,7 @@ class TestEvControl:
         # Give each configured charge point a registry slot, same as _register_ev_chargers
         # would in production — control reads charger_slot(), so it needs one to act at all.
         gw.register_chargers("gateway", [ChargerEntry("gateway", cp_id) for cp_id in cp_ids])
+        gw.base.charger_registry.confirm_plan(gw.base.charger_registry.generation)
         gw._ev_max_current = ev_max_current if ev_max_current is not None else {"CP10000001": 32}
         gw._ev_windows = {}
         gw._ev_charging_active = {}
