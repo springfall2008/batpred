@@ -1348,6 +1348,77 @@ async def test_automatic_config_keeps_real_battery_reporting_zero_soh():
     return failed
 
 
+async def test_automatic_config_keeps_no_battery_inverter_in_pv_totals():
+    """Issue #4922: a PV-only inverter must stay out of battery control but stay in the PV totals.
+
+    Predbat sums pv_today/pv_power across the whole arg list, so a second inverter's generation is
+    simply added to the array total - dropping it hid ~45% of the generation on the reporting site.
+    load/import/export stay battery-only: those registers can overlap on a shared-CT install.
+    """
+    failed = False
+    print("**** Testing automatic_config keeps a No Battery inverter in the PV totals ****")
+
+    with_batt = "1031260253072197"
+    no_batt = "6031042245160206"
+    recorded, api = await _run_automatic_config({with_batt: _DETAIL_WITH_BATTERY, no_batt: _DETAIL_NO_BATTERY})
+
+    if recorded.get("num_inverters") != 1:
+        print("ERROR: expected num_inverters 1 - the PV-only inverter must not become a battery inverter, got {}".format(recorded.get("num_inverters")))
+        failed = True
+
+    expect_pv_today = [f"sensor.predbat_solis_{with_batt.lower()}_pv_energy_total", f"sensor.predbat_solis_{no_batt.lower()}_pv_energy_total"]
+    if recorded.get("pv_today") != expect_pv_today:
+        print("ERROR: expected pv_today to cover both inverters {}, got {}".format(expect_pv_today, recorded.get("pv_today")))
+        failed = True
+
+    expect_pv_power = [f"sensor.predbat_solis_{with_batt.lower()}_pv_power", f"sensor.predbat_solis_{no_batt.lower()}_pv_power"]
+    if recorded.get("pv_power") != expect_pv_power:
+        print("ERROR: expected pv_power to cover both inverters {}, got {}".format(expect_pv_power, recorded.get("pv_power")))
+        failed = True
+
+    # Control and battery args must not have widened along with the PV ones
+    for arg in ("soc_percent", "charge_limit", "reserve", "grid_power", "load_today", "load_power", "import_today", "export_today"):
+        entities = recorded.get(arg) or []
+        if len(entities) != 1 or no_batt.lower() in " ".join(entities):
+            print("ERROR: {} must stay on the battery inverter alone, got {}".format(arg, entities))
+            failed = True
+
+    if not any("in the PV totals" in message for message in api.log_messages):
+        print("ERROR: expected a log line naming the battery-less inverter(s) added to the PV totals")
+        failed = True
+
+    if not failed:
+        print("PASSED: automatic_config keeps a No Battery inverter in the PV totals")
+    return failed
+
+
+async def test_automatic_config_pv_totals_unchanged_when_all_have_batteries():
+    """With no PV-only inverter present the PV args must still be exactly the battery inverters."""
+    failed = False
+    print("**** Testing automatic_config leaves the PV totals alone when every inverter has a battery ****")
+
+    first = "1031260253072197"
+    second = "6031052256280133"
+    recorded, api = await _run_automatic_config({first: _DETAIL_WITH_BATTERY, second: _DETAIL_WITH_BATTERY_ALT_FIRMWARE})
+
+    if recorded.get("num_inverters") != 2:
+        print("ERROR: expected num_inverters 2, got {}".format(recorded.get("num_inverters")))
+        failed = True
+
+    expect_pv_today = [f"sensor.predbat_solis_{first.lower()}_pv_energy_total", f"sensor.predbat_solis_{second.lower()}_pv_energy_total"]
+    if recorded.get("pv_today") != expect_pv_today:
+        print("ERROR: expected pv_today {}, got {}".format(expect_pv_today, recorded.get("pv_today")))
+        failed = True
+
+    if any("in the PV totals" in message for message in api.log_messages):
+        print("ERROR: the PV-only inclusion must not be logged when there is no PV-only inverter")
+        failed = True
+
+    if not failed:
+        print("PASSED: automatic_config leaves the PV totals alone when every inverter has a battery")
+    return failed
+
+
 def run_solis_tests(my_predbat):
     """
     Run all Solis API tests
@@ -1372,6 +1443,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())
         failed |= asyncio.run(test_automatic_config_keeps_battery_when_battery_list_contradicts_battery_type())
         failed |= asyncio.run(test_automatic_config_keeps_real_battery_reporting_zero_soh())
+        failed |= asyncio.run(test_automatic_config_keeps_no_battery_inverter_in_pv_totals())
+        failed |= asyncio.run(test_automatic_config_pv_totals_unchanged_when_all_have_batteries())
         failed |= asyncio.run(test_read_cid())
         failed |= asyncio.run(test_read_batch())
         failed |= asyncio.run(test_read_and_write_cid())
