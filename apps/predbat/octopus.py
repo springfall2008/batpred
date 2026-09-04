@@ -2853,10 +2853,13 @@ class Octopus:
                     self.log("Warn: Octopus: Unable to decode Octopus free session start/end time {}".format(octopus_free_slot))
 
             if start and end:
+                # forecast_minutes is a duration from minutes_now, while start/end are absolute
+                # minutes from midnight_utc - so the window end is minutes_now + forecast_minutes.
+                # load_saving_slot() and load_axle_slot() both bound themselves that way.
                 start_minutes = minutes_to_time(start, self.midnight_utc)
-                end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
+                end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes + self.minutes_now)
 
-            if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < self.forecast_minutes:
+            if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < (self.forecast_minutes + self.minutes_now):
                 self.log("Setting Octopus free session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
                 for minute in range(start_minutes, end_minutes):
                     if export:
