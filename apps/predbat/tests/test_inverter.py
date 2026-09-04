@@ -40,6 +40,86 @@ def test_foxess_support_discharge_freeze_matches_foxcloud():
     return failed
 
 
+def test_custom_type_respects_configured_time_entity(my_predbat):
+    """
+    Regression test for issue #4738: a custom inverter definition using a non-HH:MM:SS
+    charge_time_format together with a real time window (has_time_window/has_discharge_enable_time
+    True) must not have its genuinely user-configured discharge_start_time/discharge_end_time/
+    charge_start_time/charge_end_time silently replaced by a self-created dummy sensor.
+
+    Two existing legitimate cases must be unaffected by the fix:
+      - GS_fb00 style (H M format): discharge_start_time is never user-configured at all - the real
+        writes go via separate hour/minute entities - so the dummy must still be created.
+      - SF style (has_time_window False): ships a bare placeholder string, not a real entity - the
+        dummy must still replace it, since there is nothing real to preserve.
+    """
+    failed = False
+    print("Test: test_custom_type_respects_configured_time_entity")
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_def = copy.deepcopy(INVERTER_DEF.get("TEST_CUSTOM_TIME_ENTITY"))
+
+    try:
+        # Case 1: real entity configured - must be kept, not overwritten
+        my_predbat.args["inverter_type"] = ["TEST_CUSTOM_TIME_ENTITY"]
+        my_predbat.args["inverter"] = {
+            "charge_time_format": "S",
+            "has_time_window": True,
+            "has_charge_enable_time": True,
+            "has_discharge_enable_time": True,
+        }
+        my_predbat.args["discharge_start_time"] = ["time.real_discharge_start"]
+        my_predbat.args["discharge_end_time"] = ["time.real_discharge_end"]
+        my_predbat.args["charge_start_time"] = ["time.real_charge_start"]
+        my_predbat.args["charge_end_time"] = ["time.real_charge_end"]
+        my_predbat.args["givtcp_rest"] = None
+
+        Inverter(my_predbat, 0, quiet=True)
+
+        for arg, expected in [
+            ("discharge_start_time", "time.real_discharge_start"),
+            ("discharge_end_time", "time.real_discharge_end"),
+            ("charge_start_time", "time.real_charge_start"),
+            ("charge_end_time", "time.real_charge_end"),
+        ]:
+            got = my_predbat.args[arg][0]
+            if got != expected:
+                print(f"ERROR: test_custom_type_respects_configured_time_entity: {arg} should stay {expected}, got {got} (overwritten by a dummy entity)")
+                failed = True
+
+        # Case 2: nothing configured for this arg - dummy creation must still kick in
+        del my_predbat.args["discharge_start_time"]
+        Inverter(my_predbat, 0, quiet=True)
+        got = my_predbat.args["discharge_start_time"][0]
+        if not (isinstance(got, str) and got.startswith("sensor.")):
+            print(f"ERROR: test_custom_type_respects_configured_time_entity: unconfigured discharge_start_time should get a dummy sensor, got {got}")
+            failed = True
+
+        # Case 3: SF-style bare placeholder (no domain) - must still be replaced by a dummy, not kept
+        my_predbat.args["inverter_type"] = ["TEST_CUSTOM_TIME_ENTITY_SF"]
+        my_predbat.args["inverter"] = {
+            "charge_time_format": "S",
+            "has_time_window": False,
+            "has_charge_enable_time": False,
+            "has_discharge_enable_time": False,
+        }
+        my_predbat.args["discharge_start_time"] = ["00:00:00"]
+        Inverter(my_predbat, 0, quiet=True)
+        got = my_predbat.args["discharge_start_time"][0]
+        if not (isinstance(got, str) and got.startswith("sensor.")):
+            print(f"ERROR: test_custom_type_respects_configured_time_entity: SF-style bare placeholder should still be replaced by a dummy sensor, got {got}")
+            failed = True
+    finally:
+        my_predbat.args = saved_args
+        if saved_def is None:
+            INVERTER_DEF.pop("TEST_CUSTOM_TIME_ENTITY", None)
+        else:
+            INVERTER_DEF["TEST_CUSTOM_TIME_ENTITY"] = saved_def
+        INVERTER_DEF.pop("TEST_CUSTOM_TIME_ENTITY_SF", None)
+
+    return failed
+
+
 def test_support_feedin_first_is_opt_in():
     """
     support_feedin_first says the inverter's Freeze Export really is a "Feed-in First" mode (load,
@@ -2887,6 +2967,7 @@ def run_inverter_tests(my_predbat_dummy):
     print("**** Running Inverter tests ****")
     failed |= test_foxess_support_discharge_freeze_matches_foxcloud()
     failed |= test_support_feedin_first_is_opt_in()
+    failed |= test_custom_type_respects_configured_time_entity(my_predbat)
     ha = my_predbat.ha_interface
 
     time_now = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
