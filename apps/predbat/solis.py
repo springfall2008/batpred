@@ -3315,17 +3315,6 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 self.log("Error: Solis API: No inverters to manage after discovery")
                 return False  # Stop further processing if no inverters
 
-        # Process events queued by the entity callbacks, on this loop. Drained after the
-        # startup block: the handlers need the ClientSession and the discovered inverter
-        # list, which only exist once the first cycle has completed. On a failed startup
-        # (the return above) the queue is left intact and drained on the next attempt.
-        while self.queued_events:
-            handler, *args = self.queued_events.pop(0)
-            try:
-                await handler(*args)
-            except Exception as e:
-                self.log("Warn: Solis API: Event handler error: {}".format(e))
-
         # Frequent polling (every minute)
         if first or (seconds % 60 == 0):
             for sn in self.inverter_sn:
@@ -3395,6 +3384,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     success = await self.poll_inverter_data(sn, SOLIS_CID_SINGLE, batch=False)
                 if not success:
                     poll_success = False
+
+        # Apply queued edits after the initial register decode, which replaces the
+        # local window cache, and before writing those windows to the inverter.
+        while self.queued_events:
+            handler, *args = self.queued_events.pop(0)
+            try:
+                await handler(*args)
+            except Exception as e:
+                self.log("Warn: Solis API: Event handler error: {}".format(e))
 
         # Control mode
         control_success = True

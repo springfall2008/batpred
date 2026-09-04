@@ -5475,9 +5475,11 @@ async def test_event_queued_not_executed_on_calling_loop():
     api = MockSolisAPI()
 
     executed = []
+    executing_loops = []
 
     async def spy(*args):
         executed.append(args)
+        executing_loops.append(asyncio.get_running_loop())
 
     api.select_event_handler = spy
     api.number_event_handler = spy
@@ -5494,10 +5496,9 @@ async def test_event_queued_not_executed_on_calling_loop():
         print("ERROR: expected 3 queued events, got {}".format(len(api.queued_events)))
         return 1
 
-    # Draining — which run() does on the Solis loop — is what performs the work.
-    while api.queued_events:
-        handler, *args = api.queued_events.pop(0)
-        await handler(*args)
+    # Exercise the production drain on a non-polling cycle.
+    assert await asyncio.to_thread(lambda: asyncio.run(api.run(5, False)))
+    assert all(loop is not asyncio.get_running_loop() for loop in executing_loops)
 
     if len(executed) != 3:
         print("ERROR: expected 3 handlers run on drain, got {}".format(len(executed)))
@@ -5522,12 +5523,8 @@ async def test_queued_event_failure_does_not_stop_the_queue():
     api.queued_events.append((boom, "a"))
     api.queued_events.append((ok, "b"))
 
-    while api.queued_events:
-        handler, *args = api.queued_events.pop(0)
-        try:
-            await handler(*args)
-        except Exception:
-            pass
+    assert await api.run(5, False)
+    assert any("Event handler error" in message for message in api.log_messages)
 
     if len(ran) != 1:
         print("ERROR: a failing event stranded the rest of the queue: {}".format(ran))
@@ -5555,21 +5552,29 @@ async def test_queued_event_drained_after_startup():
     async def fake_noop(*args, **kwargs):
         pass
 
+    async def fake_decode(sn):
+        """Simulate the startup register read replacing the local window cache."""
+        order.append("decode")
+        api.charge_discharge_time_windows[sn] = {1: {"charge_start_time": "01:00"}}
+
     async def fake_write_if_changed(*args, **kwargs):
         return True
 
     api.get_inverter_list = fake_get_inverter_list
     api.fetch_inverter_details = fake_poll
     api.poll_inverter_data = fake_poll
-    api.decode_time_windows = fake_noop
-    api.decode_time_windows_v2 = fake_noop
+    api.decode_time_windows = fake_decode
+    api.decode_time_windows_v2 = fake_decode
     api.startup_reset_registers = fake_noop
     api.reset_charge_windows_if_needed = fake_noop
     api.write_time_windows_if_changed = fake_write_if_changed
     api.publish_entities = fake_noop
 
+    handler = api.select_event_handler
+
     async def spy(entity_id, value):
         order.append("event")
+        await handler(entity_id, value)
         if api.session is None:
             print("ERROR: queued event drained before the ClientSession was created")
             return 1
@@ -5581,7 +5586,7 @@ async def test_queued_event_drained_after_startup():
     api.select_event_handler = spy
 
     # Queue as a real callback would, before the first run() cycle
-    api.queued_events.append((api.select_event_handler, "select.predbat_solis_1234567890_storage_mode", "Self Use"))
+    api.queued_events.append((api.select_event_handler, "select.predbat_solis_1234567890_charge_slot1_start_time", "02:00:00"))
 
     try:
         result = await api.run(0, True)
@@ -5593,7 +5598,8 @@ async def test_queued_event_drained_after_startup():
             await api.session.close()
             api.session = None
 
-    if order != ["startup", "event"]:
+    assert api.charge_discharge_time_windows["1234567890"][1]["charge_start_time"] == "02:00", "Startup decode overwrote the queued edit"
+    if order != ["startup", "decode", "event"]:
         print("ERROR: expected startup before event drain, got {}".format(order))
         return 1
     if api.queued_events:
