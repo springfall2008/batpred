@@ -406,10 +406,14 @@ class Inverter:
             self.nominal_capacity = self.base.get_arg("soc_max", default=0.0, index=self.id)
             self.soc_max = self.nominal_capacity * self.battery_scaling
 
-            if self.inverter_type in ["GE", "GEC", "GEE"]:
-                self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
-            elif "battery_rate_max" in self.base.args:
+            if "battery_rate_max" in self.base.args:
+                # battery_rate_max, when configured, is a more authoritative source than the charge_rate
+                # entity's max attribute - e.g. GECloud (GEC/GEE) always populates it from the device's
+                # reported model/capability data, whereas the charge_rate entity's max attribute there
+                # reflects a live register limit that can read back as a stale/wrong low value (#4908).
                 self.battery_rate_max_raw = self.base.get_arg("battery_rate_max", index=self.id, default=2600.0, required_unit="W")
+            elif self.inverter_type in ["GE", "GEC", "GEE"]:
+                self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
             else:
                 self.battery_rate_max_raw = 2600.0
 

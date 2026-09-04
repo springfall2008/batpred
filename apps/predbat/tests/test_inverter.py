@@ -2760,6 +2760,54 @@ def test_inverter_type_default_warning(test_name, my_predbat):
     return failed
 
 
+def test_gecloud_battery_rate_max_priority(test_name, my_predbat):
+    """
+    GECloud (GEC/GEE) always publishes an accurate battery_rate_max sensor derived from the
+    device's reported model/capability data. The charge_rate entity's max attribute for GEC
+    instead reflects a live register limit that can read back low/stale (e.g. 2600W on a 20kW
+    3-phase inverter, despite GECloud's own logs correctly showing 20000W) - issue #4908.
+    battery_rate_max must take priority over charge_rate's max attribute when both are configured,
+    while GE (local GivTCP), which never sets battery_rate_max, keeps using charge_rate's max
+    attribute as before.
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    ha = my_predbat.ha_interface
+    orig_args = {key: my_predbat.args.get(key) for key in ["inverter_type", "charge_rate", "battery_rate_max", "givtcp_rest"]}
+
+    try:
+        my_predbat.args["givtcp_rest"] = None
+        my_predbat.args["inverter_type"] = ["GEC"]
+        my_predbat.args["charge_rate"] = "number.gecloud_charge_rate_test"
+        my_predbat.args["battery_rate_max"] = "sensor.gecloud_battery_rate_max_test"
+        ha.dummy_items["number.gecloud_charge_rate_test"] = {"state": 2600, "max": 2600}
+        ha.dummy_items["sensor.gecloud_battery_rate_max_test"] = 20000
+
+        inv = Inverter(my_predbat, 0)
+        if inv.battery_rate_max_raw != 20000.0:
+            print("ERROR: GEC battery_rate_max_raw should use the battery_rate_max sensor (20000W), got {}".format(inv.battery_rate_max_raw))
+            failed = True
+
+        # GE (local GivTCP) never has battery_rate_max configured, so it must keep using charge_rate's max attribute
+        del my_predbat.args["battery_rate_max"]
+        my_predbat.args["inverter_type"] = ["GE"]
+        inv = Inverter(my_predbat, 0)
+        if inv.battery_rate_max_raw != 2600.0:
+            print("ERROR: GE battery_rate_max_raw should fall back to charge_rate's max attribute (2600W), got {}".format(inv.battery_rate_max_raw))
+            failed = True
+    finally:
+        del ha.dummy_items["number.gecloud_charge_rate_test"]
+        del ha.dummy_items["sensor.gecloud_battery_rate_max_test"]
+        for key, value in orig_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+
+    return failed
+
+
 def test_rest_battery_capacity_fallback(test_name, my_predbat):
     """
     Verify that when V3 REST data omits Battery_Capacity_kWh and battery_nominal_capacity,
@@ -3112,6 +3160,10 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_battery_scaling_invalid_value_clamped("battery_scaling_invalid_value_clamped", my_predbat)
 
     failed |= test_inverter_type_default_warning("inverter_type_default_warning", my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_gecloud_battery_rate_max_priority("gecloud_battery_rate_max_priority", my_predbat)
     if failed:
         return failed
 
