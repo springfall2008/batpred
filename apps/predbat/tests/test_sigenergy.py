@@ -1343,6 +1343,66 @@ def test_sigenergy_publish_mqtt_success(my_predbat):
     return failed
 
 
+def test_sigenergy_redact(my_predbat):
+    """Test redact masks credential keys at any depth and leaves the rest alone."""
+    failed = False
+
+    redacted = SigenergyAPI.redact({"accessToken": "live-token", "systemId": "SIG1"})
+    assert redacted["accessToken"] == "<redacted>", "accessToken masked"
+    assert redacted["systemId"] == "SIG1", "Non-credential key untouched"
+
+    # Nested inside a list, as the battery command payload nests its commands
+    nested = SigenergyAPI.redact({"commands": [{"systemId": "SIG1", "password": "hunter2"}]})
+    assert nested["commands"][0]["password"] == "<redacted>", "Credential masked inside a nested list"
+    assert nested["commands"][0]["systemId"] == "SIG1", "Nested non-credential key untouched"
+
+    # Every documented credential key is covered
+    for key in ("accessToken", "refreshToken", "appKey", "appSecret", "password", "token", "key"):
+        assert SigenergyAPI.redact({key: "secret"})[key] == "<redacted>", "Key {} masked".format(key)
+
+    # Scalars and lists of scalars pass straight through
+    assert SigenergyAPI.redact("plain") == "plain", "String passthrough"
+    assert SigenergyAPI.redact([1, 2]) == [1, 2], "List passthrough"
+    assert SigenergyAPI.redact(None) is None, "None passthrough"
+
+    return failed
+
+
+def test_sigenergy_publish_mqtt_redacts_token(my_predbat):
+    """Test _publish_mqtt keeps the live token on the wire but masks it in the log (#4920)."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "tok123"
+    api.mqtt_host = "openapi-eu.sigencloud.com" # cspell:disable-line
+    api.mqtt_port = 8883
+
+    mock_client = _make_mock_aiomqtt_client()
+    payload = {"accessToken": "live-secret-token", "commands": [{"systemId": "SIG1", "activeMode": "charge"}]}
+
+    with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+        with patch("sigenergy.aiomqtt.Client", return_value=mock_client):
+            ok = run_async(SigenergyAPI._publish_mqtt(api, "openapi/instruction/command", payload))
+
+    assert ok is True, "_publish_mqtt should return True on success"
+
+    # The broker still receives the real token — redaction is log-only
+    topic, wire_payload = mock_client.publishes[0]
+    import json
+
+    assert json.loads(wire_payload)["accessToken"] == "live-secret-token", "Real token still published to the broker"
+
+    published_logs = [m for m in api.log_messages if "MQTT published" in m]
+    assert len(published_logs) == 1, "Exactly one publish log line expected"
+    assert "live-secret-token" not in published_logs[0], "Token must not appear in the log"
+    assert "<redacted>" in published_logs[0], "Token replaced with the redaction marker"
+    assert "SIG1" in published_logs[0], "Non-credential payload content still logged"
+
+    # The caller's payload dict is not mutated by redaction
+    assert payload["accessToken"] == "live-secret-token", "Caller payload left unmodified"
+
+    return failed
+
+
 def test_sigenergy_publish_mqtt_failure(my_predbat):
     """Test _publish_mqtt returns False when the broker connection raises."""
     failed = False
@@ -3047,6 +3107,8 @@ def run_sigenergy_tests(my_predbat):
         ("apply_controls_deduplication", test_sigenergy_apply_controls_deduplication),
         ("apply_controls_export_mode", test_sigenergy_apply_controls_export_mode),
         ("publish_mqtt_success", test_sigenergy_publish_mqtt_success),
+        ("redact", test_sigenergy_redact),
+        ("publish_mqtt_redacts_token", test_sigenergy_publish_mqtt_redacts_token),
         ("publish_mqtt_failure", test_sigenergy_publish_mqtt_failure),
         ("send_battery_command_mqtt", test_sigenergy_send_battery_command_mqtt),
         ("send_battery_command_no_token", test_sigenergy_send_battery_command_no_token),

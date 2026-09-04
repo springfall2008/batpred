@@ -146,6 +146,11 @@ SIGENERGY_MQTT_TOPIC_ALARM = "openapi/alarm/{app_key}/{system_id}"      # alarm 
 SIGENERGY_MQTT_TOPIC_COMMAND = "openapi/instruction/command"            # battery command publish
 SIGENERGY_MQTT_TOPIC_MODE = "openapi/instruction/mode"                  # V1 operating mode switch (MQTT)
 
+# Payload keys masked before a payload is written to the log. The MQTT command payloads
+# carry the live accessToken (it doubles as the MQTT broker password), and Predbat logs are
+# routinely pasted into GitHub issues, so anything credential-bearing has to be masked first.
+SIGENERGY_LOG_REDACT_KEYS = ("accessToken", "refreshToken", "appKey", "appSecret", "password", "token", "key")
+
 # Operating mode enums (REST mode switch endpoint — MSC and FFG only; NBI is not used)
 SIGENERGY_MODE_MSC = 0   # Maximum Self-Consumption (eco)
 SIGENERGY_MODE_FFG = 5   # Fully Feed-in to Grid
@@ -1020,6 +1025,20 @@ class SigenergyAPI(ComponentBase):
         self._tls_context = tls_context
         return tls_context
 
+    @staticmethod
+    def redact(payload):
+        """Return payload with credential-bearing keys masked, for safe logging.
+
+        Recursive over dicts and lists, as deye.py's and sunsynk.py's redact are: the MQTT
+        command payload nests its per-system commands one level down inside a list, so a
+        top-level-only rewrite would still leak anything a future payload carries there.
+        """
+        if isinstance(payload, dict):
+            return {key: ("<redacted>" if key in SIGENERGY_LOG_REDACT_KEYS else SigenergyAPI.redact(value)) for key, value in payload.items()}
+        if isinstance(payload, list):
+            return [SigenergyAPI.redact(value) for value in payload]
+        return payload
+
     async def _publish_mqtt(self, topic, payload_dict):
         """Publish a JSON payload to the Sigenergy MQTT broker.
 
@@ -1047,7 +1066,7 @@ class SigenergyAPI(ComponentBase):
                 keepalive=30,
             ) as client:
                 await client.publish(topic, payload=json.dumps(payload_dict), qos=1)
-            self.log("SigenergyAPI: MQTT published to {} - {}".format(topic, payload_dict))
+            self.log("SigenergyAPI: MQTT published to {} - {}".format(topic, self.redact(payload_dict)))
             return True
         except Exception as e:
             self.log("Warn: SigenergyAPI: MQTT publish to {} failed: {}".format(topic, e))
