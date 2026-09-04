@@ -245,6 +245,47 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 - Each car will have its own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
 
+### How charger slots are allocated
+
+Several components can discover EV chargers for themselves - GivEnergy Cloud, myenergi, Ohme and the GivEnergy
+Gateway - and they all feed the same set of car slots. Predbat allocates those slots centrally rather than letting
+each component number its own chargers:
+
+- Anything you configured by hand in `apps.yaml` comes first, keeping the exact position you wrote it in, and is
+  written back exactly as you wrote it. If no component has discovered anything, the key is not rewritten at all -
+  it already holds your config. Trailing slots with nothing behind them are dropped - the shipped template
+  declares `num_cars: 1` with only an unmatched `re:` pattern, which is a count rather than a car. A gap in the
+  *middle* of your list is kept, holes and all, because per-car settings are addressed by slot number and closing
+  the gap would shift your second car onto your first car's settings
+- One exception: an entry that names a charger a component has also discovered is dropped, so a charger found
+  twice - once through a third-party integration's sensor, once by Predbat's own component - is one car rather
+  than two with its energy counted twice. The two are recognised as the same charger when the discovered
+  charger's manufacturer serial appears as a whole word in the entity you configured - no letter or digit
+  immediately either side of it - which is what happens in practice: `ha-myenergi` publishes
+  `sensor.myenergi_zappi_10000001_plug_status` while Predbat's own myenergi component publishes
+  `sensor.predbat_myenergi_zappi_10000001_plug_status` - different entities, same serial. The whole-word rule is
+  what keeps serial `10000001` from also claiming `sensor.myenergi_zappi_100000010_plug_status`, which is a
+  different charger. Only myenergi and GivEnergy Cloud chargers are matched this way, since their ids are
+  manufacturer serials; a Gateway charge point id is chosen by whoever installed it, so a Gateway charger is only
+  matched against an entry naming the exact same entity. An entity that names the same charger without carrying
+  its serial (one you have renamed, or a template helper) cannot be recognised and stays as its own car - remove
+  it from `car_charging_planned` yourself if the component has found that charger
+- Discovered chargers follow, sorted by (component, charger id) so the same set of chargers always produces the
+  same slot numbers across restarts, whatever order the various APIs happened to answer in
+- **num_cars** is derived from that composed list, floored by any value you set in `apps.yaml` and by cars another
+  part of Predbat owns outright - Octopus Intelligent and Kraken claim the number of cars enrolled, since those
+  cars have no charger of their own. Such a claim is released when the cars go, so the count can come back down
+- Each component asks for its own charger's slot every cycle, so a charger is always driven from its own car's plan
+
+The consequence to be aware of: discovering a charger that sorts ahead of an existing one moves the later ones down
+a slot. Per-car settings (**car_charging_limit**, **car_charging_battery_size**, **car_charging_exclusive**, manual
+SoC entry) are addressed by slot number, so check they still line up after adding a charger. Predbat logs the map
+whenever it changes:
+
+```text
+ChargerRegistry: slots {'gecloud/CE1234': 0, 'ohme/ohme0': 1}
+```
+
 ### Multiple cars with Octopus Intelligent Go (IOG)
 
 If you have **two or more EVs enrolled in Octopus Intelligent Go**, Predbat can track the scheduled dispatch slots for each car independently.
@@ -298,10 +339,12 @@ reports as live. Devices that Octopus reports as suspended are skipped, and the 
 car slots in a fixed order, so the same set of cars always produces the same car indexes.
 
 Slots are re-packed when a car goes away, so removing or suspending a car can move the cars after it up an index -
-for example if car 0 is removed, the car that was car 1 becomes car 0. `num_cars` is never reduced automatically, so
-the now-unused slot at the end simply falls back to Predbat-led charging. If you set per-car options in `apps.yaml`
-(**car_charging_battery_size**, **car_charging_limit**, **car_charging_exclusive**) or use manual SoC entry, check
-they still line up after adding or removing a car.
+for example if car 0 is removed, the car that was car 1 becomes car 0. `num_cars` is derived from the cars and
+chargers Predbat currently knows about (see [How charger slots are allocated](#how-charger-slots-are-allocated)),
+floored by anything you set in `apps.yaml` and by the count Octopus Intelligent needs, so removing an intelligent
+device can reduce it - what it will not do is drop below the number of cars another part of Predbat has asked for.
+If you set per-car options in `apps.yaml` (**car_charging_battery_size**, **car_charging_limit**,
+**car_charging_exclusive**) or use manual SoC entry, check they still line up after adding or removing a car.
 
 Predbat re-checks this on every device poll (roughly every 2 minutes) and re-wires the slots if the set of live,
 non-suspended devices changes - for example when you enrol a second EV, remove one, or suspend one car in favour of

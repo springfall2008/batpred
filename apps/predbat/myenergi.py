@@ -33,6 +33,7 @@ from typing import Optional
 import aiohttp
 
 from component_base import ComponentBase
+from charger_registry import ChargerEntry, slot_entity_suffix
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from predbat_metrics import record_api_call
@@ -816,14 +817,16 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
     def automatic_config(self):
         """Wire the device sensors into Predbat's load and car planning inputs.
 
-        Zappi charging energy is subtracted from house load as car charging, so it
-        goes to car_charging_energy - as a list, because minute_data_import_export
-        accepts one and sums the entities. The matching plug status sensors go to
-        car_charging_planned, which is indexed per car, so entry N is the Nth Zappi;
-        without it Predbat falls back to the car_charging_threshold heuristic, because
-        the regex the apps.yaml templates ship targets the third-party ha-myenergi
-        integration's entity names rather than the ones this component publishes. Eddi
-        diverted energy feeds iboost_energy_today.
+        Each Zappi is registered with the shared charger registry as one ChargerEntry, keyed
+        by its serial. The registry composes those entries with any other component's
+        chargers into the flat car_charging_* args - energy and power as concatenated
+        aggregates, planned as a slot-aligned list - and hands back the slot each Zappi was
+        given, which control_charge() and controlled_zappis() use rather than assuming a
+        Zappi's position among its own siblings is its car index. Without a planned entity
+        wired, Predbat falls back to the car_charging_threshold heuristic, because the regex
+        the apps.yaml templates ship targets the third-party ha-myenergi integration's entity
+        names rather than the ones this component publishes. Eddi diverted energy feeds
+        iboost_energy_today, unaffected by the registry - an Eddi is not a car charger.
 
         These sensors are session-scoped and reset to zero when a session ends. That is
         handled: get_from_incrementing() clamps negative deltas to zero for the
@@ -839,26 +842,26 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         The Zappi live power sensors go to car_charging_power, which is display-only: it feeds
         the web power flow diagram and the predbat.car_charging_power sensor, never the plan.
         """
-        zappi_energy_entities = []
-        zappi_power_entities = []
-        zappi_plug_entities = []
+        zappi_entries = []
         eddi_entity = None
         for device in sorted(self.devices.values(), key=lambda item: item.serial):
             prefix = self.entity_prefix(device)
             if device.kind == DEVICE_KIND_ZAPPI:
-                zappi_energy_entities.append("sensor.{}_session_energy".format(prefix))
-                zappi_power_entities.append("sensor.{}_power".format(prefix))
-                zappi_plug_entities.append("sensor.{}_plug_status".format(prefix))
+                zappi_entries.append(
+                    ChargerEntry(
+                        "myenergi",
+                        device.serial,
+                        planned="sensor.{}_plug_status".format(prefix),
+                        energy="sensor.{}_session_energy".format(prefix),
+                        power="sensor.{}_power".format(prefix),
+                    )
+                )
             elif device.kind == DEVICE_KIND_EDDI and eddi_entity is None:
                 eddi_entity = "sensor.{}_session_energy".format(prefix)
 
-        if zappi_energy_entities:
-            self.log("Info: myenergi: setting car_charging_energy to {}".format(zappi_energy_entities))
-            self.set_arg_auto("car_charging_energy", zappi_energy_entities)
-            self.log("Info: myenergi: setting car_charging_planned to {}".format(zappi_plug_entities))
-            self.set_arg_auto("car_charging_planned", zappi_plug_entities)
-            self.log("Info: myenergi: setting car_charging_power to {}".format(zappi_power_entities))
-            self.set_arg_auto("car_charging_power", zappi_power_entities)
+        if zappi_entries:
+            self.log("Info: myenergi: registering {} Zappi charger(s)".format(len(zappi_entries)))
+        self.register_chargers("myenergi", zappi_entries)
         if eddi_entity:
             self.log("Info: myenergi: setting iboost_energy_today to {}".format(eddi_entity))
             self.set_arg_auto("iboost_energy_today", eddi_entity)
@@ -876,8 +879,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         windows = {}
         found = False
         for car_n in range(self.num_cars):
-            postfix = "" if car_n == 0 else "_{}".format(car_n)
-            planned = self.get_state_wrapper("binary_sensor.{}_car_charging_slot{}".format(self.prefix, postfix), attribute="planned")
+            planned = self.get_state_wrapper("binary_sensor.{}_car_charging_slot{}".format(self.prefix, slot_entity_suffix(car_n)), attribute="planned")
             if planned is None:
                 continue
             found = True
@@ -980,7 +982,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         mode neither API accepts back - so a released Zappi always lands somewhere useful
         rather than being left Stopped.
         """
-        for device in self.controlled_zappis():
+        for _slot, device in self.controlled_zappis():
             if device.device_id not in self.control_modes:
                 continue
             mode = self.control_saved_modes.get(device.device_id)
@@ -992,12 +994,21 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         self.control_saved_modes = {}
 
     def controlled_zappis(self):
-        """The Zappis to drive, in serial order, so Zappi N is the same car as auto-config's Nth.
+        """The Zappis to drive, paired with the car slot each was allocated.
 
-        automatic_config() wires car_charging_energy and car_charging_planned as per-car
-        lists in this same order, so the two cannot disagree about which Zappi is which car.
+        This used to return Zappis in serial order and rely on "Zappi N is car N". That
+        stopped being true once chargers from several components share the slot space, so
+        the slot now comes from the registry - the same allocation automatic_config() made.
         """
-        return [device for device in sorted(self.devices.values(), key=lambda item: item.serial) if device.kind == DEVICE_KIND_ZAPPI]
+        pairs = []
+        for device in sorted(self.devices.values(), key=lambda item: item.serial):
+            if device.kind != DEVICE_KIND_ZAPPI:
+                continue
+            slot = self.charger_slot("myenergi", device.serial)
+            if slot is None:
+                continue
+            pairs.append((slot, device))
+        return pairs
 
     async def control_charge(self, now):
         """Drive every controlled Zappi from its car's charge plan.
@@ -1010,7 +1021,14 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         """
         if not self.refresh_car_windows(now):
             return
-        for car_n, device in enumerate(self.controlled_zappis()):
+        for car_n, device in self.controlled_zappis():
+            # The registry allocates slots immediately, while self.num_cars - which the window
+            # refresh loops over - is a cached copy refreshed once a cycle. So a Zappi that has
+            # just moved to a higher slot has no entry in control_windows yet, and an absent key
+            # would read as an empty plan and stop a charging car. Skip it until that car's plan
+            # has been published; a key present but empty is a real empty plan, and does stop.
+            if car_n not in self.control_windows:
+                continue
             wanted = ZAPPI_MODE_CHARGING if self.should_charge_now(car_n, now) else ZAPPI_MODE_STOPPED
             asked = self.control_modes.get(device.device_id)
             if asked == wanted and device.mode == wanted:

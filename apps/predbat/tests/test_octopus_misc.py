@@ -2161,6 +2161,21 @@ def test_octopus_automatic_config_respects_slot_claim(my_predbat):
         print("ERROR: Expected saving session wiring to still happen while the slots are claimed")
         failed = True
 
+    print("\n*** Test 2b: The num_cars claim is released when another component takes the slots ***")
+    # A spy registry rather than the real one: this fixture is shared with the rest of the
+    # suite, so the assertion is on the call and no registry state is left behind.
+    original_registry = getattr(my_predbat, "charger_registry", None)
+    spy_registry = MagicMock()
+    my_predbat.charger_registry = spy_registry
+    api_claimed = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api_claimed.intelligent_devices = {"device-aaa1": {"suspended": False}}
+    api_claimed.automatic_config(["import"])
+    my_predbat.charger_registry = original_registry
+
+    # Octopus is no longer wiring these cars, so the floor it claimed for them has to go -
+    # the owning component registers its own chargers and the registry counts those itself.
+    spy_registry.set_external_num_cars.assert_called_once_with("octopus", 0)
+
     print("\n*** Test 3: No claim wires the slots as normal ***")
     my_predbat.car_slot_owner = None
     api2 = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)

@@ -19,6 +19,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.test_infra import run_async
 from mock_base import MockBase
+from charger_registry import ChargerEntry
 
 from myenergi import (
     BOOST_ENERGY_MAX,
@@ -1073,6 +1074,7 @@ def test_control_charge_sets_fast_inside_and_stopped_outside():
     """
     component = _control_component(plans={0: [NIGHT_WINDOW]})
     component.devices = {"Z12345678": _zappi(12345678)}
+    component.automatic_config()  # registers the Zappi with the charger registry, giving it a slot
     component.transport.set_mode = AsyncMock(return_value=True)
 
     run_async(component.control_charge(IN_WINDOW))
@@ -1091,6 +1093,7 @@ def test_control_charge_maps_each_zappi_to_its_own_car():
     """
     component = _control_component(plans={0: [NIGHT_WINDOW], 1: []})
     component.devices = {"Z12345678": _zappi(12345678), "Z22223333": _zappi(22223333)}
+    component.automatic_config()  # registers both Zappis, giving each its own slot
     component.transport.set_mode = AsyncMock(return_value=True)
 
     run_async(component.control_charge(IN_WINDOW))
@@ -1107,6 +1110,7 @@ def test_control_charge_is_edge_triggered_but_corrects_drift():
     """
     component = _control_component(plans={0: [NIGHT_WINDOW]})
     component.devices = {"Z12345678": _zappi(12345678)}
+    component.automatic_config()  # registers the Zappi with the charger registry, giving it a slot
     component.transport.set_mode = AsyncMock(return_value=True)
 
     run_async(component.control_charge(IN_WINDOW))
@@ -1150,12 +1154,48 @@ def test_control_charge_does_nothing_before_a_plan_exists():
     print("  ✓ Nothing is commanded before Predbat has published a plan")
 
 
+def test_control_charge_skips_a_slot_whose_plan_has_not_been_read():
+    """A Zappi allocated a slot beyond this cycle's windows is left alone, not stopped.
+
+    The registry allocates slots immediately, while self.num_cars - which refresh_car_windows()
+    loops over - is a cached copy refreshed once a cycle. So the cycle a charger from another
+    component takes a lower slot, the Zappi's new slot has no windows entry yet, and reading
+    the absent key as an empty plan stops a car that is charging legitimately.
+    """
+    component = _control_component(plans={0: [NIGHT_WINDOW]})
+    component.devices = {"Z12345678": _zappi(12345678)}
+    component.automatic_config()
+    # A gecloud charger registers and sorts ahead of "myenergi", pushing the Zappi to slot 1
+    component.base.charger_registry.replace_source("gecloud", [ChargerEntry("gecloud", "CE1234", planned="binary_sensor.ce1234")])
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    assert component.charger_slot("myenergi", "12345678") == 1, "The Zappi should have been pushed to slot 1"
+    run_async(component.control_charge(IN_WINDOW))
+    component.transport.set_mode.assert_not_awaited()
+    print("  ✓ A slot with no plan published yet is not commanded")
+
+
+def test_control_charge_stops_on_a_published_empty_plan():
+    """A published but empty plan is a real answer - the Zappi is stopped, not skipped."""
+    component = _control_component(plans={0: [NIGHT_WINDOW], 1: []})
+    component.devices = {"Z12345678": _zappi(12345678)}
+    component.automatic_config()
+    component.base.charger_registry.replace_source("gecloud", [ChargerEntry("gecloud", "CE1234", planned="binary_sensor.ce1234")])
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    assert component.charger_slot("myenergi", "12345678") == 1
+    run_async(component.control_charge(IN_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Stopped", component.transport.set_mode.await_args
+    print("  ✓ An empty published plan still stops the charger")
+
+
 def _controlling_component(plans=None, **overrides):
     """Build a component with Zappi control fully enabled and one Zappi already held."""
     args = {"zappi_control": True}
     args.update(overrides)
     component = _control_component(plans=plans, **args)
     component.devices = {"Z12345678": _zappi(12345678)}
+    component.automatic_config()  # registers the Zappi with the charger registry, giving it a slot
     component.transport.set_mode = AsyncMock(return_value=True)
     # Capture the component's own log so the gating reasons can be asserted on
     component.log_messages = []
@@ -1636,21 +1676,33 @@ def test_automatic_config_eddi_only():
 
 
 def test_automatic_config_uses_set_arg_auto():
-    """An explicit apps.yaml value is reported via apps_yaml_override_warned, proving set_arg_auto (not set_arg) is used.
+    """Zappis are registered with the charger registry; Eddi's iboost wiring still uses set_arg_auto.
 
-    MockBase has neither args_from_apps_yaml nor apps_yaml_override_warned, so
-    set_arg_auto() silently degrades to plain set_arg() unless the test supplies
-    them - meaning swapping set_arg_auto() for set_arg() in automatic_config()
-    would leave every other auto-config test green. This test pins the call to
-    set_arg_auto specifically.
+    car_charging_* no longer goes through set_arg_auto() for Zappis - the registry writes
+    those args itself (via plain set_arg(), to avoid the autodiscovery override warning
+    misfiring on a merge rather than a clobber - see charger_registry.materialise()), so
+    the Zappi half of this contract is now "the Zappi ends up at its registry slot", not
+    "apps_yaml_override_warned fires". The Eddi branch is untouched: an explicit apps.yaml
+    iboost_energy_today is still reported via apps_yaml_override_warned, proving
+    set_arg_auto (not set_arg) is still used there. MockBase has neither
+    args_from_apps_yaml nor apps_yaml_override_warned, so set_arg_auto() silently degrades
+    to plain set_arg() unless the test supplies them - meaning swapping set_arg_auto() for
+    set_arg() in the Eddi branch would leave every other auto-config test green.
     """
     component = _make_component()
-    component.base.args_from_apps_yaml = {"car_charging_energy": ["sensor.explicit"]}
+    component.base.args_from_apps_yaml = {"iboost_energy_today": "sensor.explicit"}
     component.base.apps_yaml_override_warned = set()
-    component.devices = {"Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
+    component.devices = {
+        "Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
+        "E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI),
+    }
     component.automatic_config()
-    assert "car_charging_energy" in component.base.apps_yaml_override_warned, component.base.apps_yaml_override_warned
-    print("  ✓ Automatic configuration uses set_arg_auto, not set_arg")
+
+    assert component.charger_slot("myenergi", "12345678") == 0
+    assert component.base.args["car_charging_planned"] == ["sensor.predbat_myenergi_zappi_12345678_plug_status"]
+
+    assert "iboost_energy_today" in component.base.apps_yaml_override_warned, component.base.apps_yaml_override_warned
+    print("  ✓ Zappis are registered with the charger registry; Eddi wiring still uses set_arg_auto")
 
 
 def test_automatic_config_disabled():

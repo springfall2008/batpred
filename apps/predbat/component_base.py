@@ -109,6 +109,25 @@ class ComponentBase(ABC):
             self.log(f"Note: apps.yaml sets '{arg}: {raw_value}' but auto-discovery is using '{value}' instead - auto-discovery always wins currently; remove the apps.yaml entry to avoid this message")
         return self.set_arg(arg, value)
 
+    def register_chargers(self, source, entries):
+        """Register every EV charger this component has discovered.
+
+        Replaces everything `source` previously contributed, so it is safe - and expected -
+        to call on every rediscovery, including with an empty list when the chargers are gone.
+        Components must use this rather than assigning car_charging_* directly: direct
+        assignment is what made the last component to run erase every other one's chargers.
+        """
+        return self.base.charger_registry.replace_source(source, entries)
+
+    def charger_slot(self, source, device_id):
+        """The car index this component's charger was allocated, or None if unregistered.
+
+        Control loops MUST use this. Assuming your own charger is car 0, or that your Nth
+        charger is car N, drives a charger from another car's plan once a second source
+        registers.
+        """
+        return self.base.charger_registry.slot_for(source, device_id)
+
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
         Retrieve a configuration argument from the base system.

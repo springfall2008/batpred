@@ -253,6 +253,7 @@ from tests.test_github import test_github
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
 from tests.test_myenergi import test_myenergi
+from tests.test_charger_registry import test_charger_registry
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
 from tests.test_mock_base import test_mock_base_all
@@ -646,6 +647,8 @@ def main():
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         # myenergi Zappi and Eddi unit tests
         ("myenergi", test_myenergi, "myenergi Zappi and Eddi comprehensive tests (normalisation, transports, publishing, auto-config, controls)", False),
+        # Charger registry composition tests
+        ("charger_registry", test_charger_registry, "Charger registry composition tests (slots, legacy, floors, aggregates)", False),
         # ComponentBase lifecycle tests
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         ("components", test_components_all, "Components registry tests (all)", False),

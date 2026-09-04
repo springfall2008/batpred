@@ -4096,31 +4096,33 @@ class TestEvTelemetry:
 
 
 class TestEvAutoConfig:
-    """Tests for GatewayMQTT._register_ev_car() — conservative car registration."""
+    """Tests for GatewayMQTT._register_ev_chargers() — every charge point gets its own slot."""
 
-    def _make_gateway(self, ev_enable=True, num_cars=0, args=None, evc_control=False):
+    def _make_gateway(self, ev_enable=True, evc_control=False):
+        """A GatewayMQTT wired to a real registry, so slot allocation is the real thing."""
         from gateway import GatewayMQTT
         from unittest.mock import MagicMock
+        from charger_registry import ChargerRegistry
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.base = MagicMock()
+        # register_chargers()/charger_slot() go through base.charger_registry, and the
+        # registry writes back via base.set_arg — route that to the same gw._args dict
+        # the tests assert on, same pattern as Tasks 4 and 6.
+        gw.base.charger_registry = ChargerRegistry(gw.base)
         gw.log = MagicMock()
         gw.prefix = "predbat"
         gw.gateway_evc_automatic = ev_enable
         gw.gateway_evc_control = evc_control
-        gw.args = args if args is not None else {}
+        gw._ev_no_id_warned = False
+        gw.args = {}
         gw._args = {}
 
         def capture_set_arg(key, value):
             gw._args[key] = value
 
-        def fake_get_arg(key, default=None, **kwargs):
-            if key == "num_cars":
-                return num_cars
-            return default
-
         gw.set_arg = capture_set_arg
-        gw.get_arg = fake_get_arg
+        gw.base.set_arg = capture_set_arg
         return gw
 
     def _status_with_ev(self, charge_point_id="CP1", max_current_a=32, voltage_v=240):
@@ -4132,11 +4134,12 @@ class TestEvAutoConfig:
         ev.voltage_v = voltage_v
         return status
 
-    def test_registers_connected_charger_not_a_stale_slot(self):
-        """A disconnected charger in slot 0 must not be registered over a connected one.
+    def test_registers_every_charger_regardless_of_connection_state(self):
+        """A disconnected charger and a connected one both get their own slot.
 
-        Gateway firmware now reports known-but-offline chargers with connected=false
-        (it used to omit them), so the first entry is no longer guaranteed to be live.
+        Gateway firmware reports known-but-offline chargers with connected=false; the
+        registry (not connection state) now decides how many cars exist, so both register
+        — there is no more "prefer the connected one" selection to get wrong.
         """
         status = pb.GatewayStatus()
         stale = status.ev_chargers.add()
@@ -4146,28 +4149,19 @@ class TestEvAutoConfig:
         live.connected = True
         live.charge_point_id = "CP0001"
 
-        gw = self._make_gateway(ev_enable=True, num_cars=0)
-        gw._register_ev_car(status)
+        gw = self._make_gateway(ev_enable=True)
+        gw._register_ev_chargers(status)
 
-        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp0001_connected"]
-
-    def test_registers_offline_charger_when_none_connected(self):
-        """A charger that is merely offline right now still registers, so it reappears."""
-        status = pb.GatewayStatus()
-        offline = status.ev_chargers.add()
-        offline.connected = False
-        offline.charge_point_id = "CP0002"
-
-        gw = self._make_gateway(ev_enable=True, num_cars=0)
-        gw._register_ev_car(status)
-
-        assert gw._args["num_cars"] == 1
-        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp0002_connected"]
+        assert gw._args["num_cars"] == 2
+        assert gw._args["car_charging_planned"] == [
+            "binary_sensor.predbat_gateway_ev_cp0000_connected",
+            "binary_sensor.predbat_gateway_ev_cp0001_connected",
+        ]
 
     def test_registers_car_when_none_configured(self):
-        """With the flag on and no existing cars, the charger is registered as car 1."""
-        gw = self._make_gateway(ev_enable=True, num_cars=0)
-        gw._register_ev_car(self._status_with_ev())
+        """With the flag on and a single charger, it is registered as the only car."""
+        gw = self._make_gateway(ev_enable=True)
+        gw._register_ev_chargers(self._status_with_ev())
 
         assert gw._args["num_cars"] == 1
         assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp1_connected"]
@@ -4176,57 +4170,128 @@ class TestEvAutoConfig:
         # car_charging_rate is a UI config item — set via expose_config, not set_arg
         assert "car_charging_rate" not in gw._args
         gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.68)  # 32A * 240V / 1000
-        # Session energy sensor for subtracting EV load from history
-        assert gw._args["car_charging_energy"] == "sensor.predbat_gateway_ev_cp1_session_energy"
-        # Live charge power, display-only: drives the web power flow diagram
-        assert gw._args["car_charging_power"] == "sensor.predbat_gateway_ev_cp1_power"
+        # Session energy / power are site aggregates in the registry: one-element lists
+        # for a single charger rather than the old bare scalars.
+        assert gw._args["car_charging_energy"] == ["sensor.predbat_gateway_ev_cp1_session_energy"]
+        assert gw._args["car_charging_power"] == ["sensor.predbat_gateway_ev_cp1_power"]
         # Battery size and target limit are left to the existing car_charging_* settings
         assert "car_charging_battery_size" not in gw._args
         assert "car_charging_limit" not in gw._args
 
     def test_disabled_flag_does_nothing(self):
         """With the opt-in flag off, no car args are set."""
-        gw = self._make_gateway(ev_enable=False, num_cars=0)
-        gw._register_ev_car(self._status_with_ev())
+        gw = self._make_gateway(ev_enable=False)
+        gw._register_ev_chargers(self._status_with_ev())
         assert gw._args == {}
 
     def test_no_chargers_does_nothing(self):
         """No EV charger in telemetry means no registration."""
-        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw = self._make_gateway(ev_enable=True)
         status = pb.GatewayStatus()
-        gw._register_ev_car(status)
+        gw._register_ev_chargers(status)
+        assert gw._args == {}
+
+    def test_charge_point_without_an_id_is_skipped(self):
+        """A charger with no charge_point_id cannot be controlled, so it must not take a car slot.
+
+        _configured_ev_chargers filters out chargers with no id, so registering one under a
+        fallback name created a car Predbat plans for that control can never reach.
+        """
+        gw = self._make_gateway(ev_enable=True)
+        status = pb.GatewayStatus()
+        nameless = status.ev_chargers.add()
+        nameless.connected = True
+        nameless.charge_point_id = ""
+        real = status.ev_chargers.add()
+        real.connected = True
+        real.charge_point_id = "CP1"
+
+        gw._register_ev_chargers(status)
+
+        assert gw._args["num_cars"] == 1
+        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp1_connected"]
+        assert any("no charge_point_id" in str(call) for call in gw.log.call_args_list)
+
+    def test_only_charge_point_without_an_id_registers_nothing(self):
+        """The one reported charger having no id leaves the car args untouched, not zeroed."""
+        gw = self._make_gateway(ev_enable=True)
+        status = pb.GatewayStatus()
+        nameless = status.ev_chargers.add()
+        nameless.connected = True
+        nameless.charge_point_id = ""
+
+        gw._register_ev_chargers(status)
+
         assert gw._args == {}
 
     def test_car_charging_now_set_when_not_controlling(self):
         """car_charging_now is wired to session_active when gateway_evc_control is False."""
-        gw = self._make_gateway(ev_enable=True, num_cars=0, evc_control=False)
-        gw._register_ev_car(self._status_with_ev())
+        gw = self._make_gateway(ev_enable=True, evc_control=False)
+        gw._register_ev_chargers(self._status_with_ev())
         assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_session_active"]
 
     def test_car_charging_now_omitted_when_controlling(self):
-        """car_charging_now is not set when gateway_evc_control is True to prevent feedback loop."""
-        gw = self._make_gateway(ev_enable=True, num_cars=0, evc_control=True)
-        gw._register_ev_car(self._status_with_ev())
-        assert "car_charging_now" not in gw._args
+        """now=None per-charger when gateway_evc_control is True, to prevent a feedback loop.
+
+        The registry writes an explicit None for a slot-aligned field with no values at
+        all (not skip the key), unlike the old set_arg-only path which never touched it.
+        """
+        gw = self._make_gateway(ev_enable=True, evc_control=True)
+        gw._register_ev_chargers(self._status_with_ev())
+        assert gw._args["car_charging_now"] is None
 
     def test_charge_rate_falls_back_to_7_4_when_capability_unknown(self):
         """car_charging_rate expose_config uses 7.4kW fallback when max_current_a is 0."""
-        gw = self._make_gateway(ev_enable=True, num_cars=0)
-        gw._register_ev_car(self._status_with_ev(max_current_a=0, voltage_v=0))
+        gw = self._make_gateway(ev_enable=True)
+        gw._register_ev_chargers(self._status_with_ev(max_current_a=0, voltage_v=0))
         assert "car_charging_rate" not in gw._args
         gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.4)
 
     def test_charge_rate_computed_from_max_current_and_voltage(self):
         """car_charging_rate expose_config uses max_current_a * voltage_v when both are set."""
-        gw = self._make_gateway(ev_enable=True, num_cars=0)
-        gw._register_ev_car(self._status_with_ev(max_current_a=16, voltage_v=230))
+        gw = self._make_gateway(ev_enable=True)
+        gw._register_ev_chargers(self._status_with_ev(max_current_a=16, voltage_v=230))
         gw.base.expose_config.assert_called_once_with("car_charging_rate", 3.68)  # 16A * 230V / 1000
 
     def test_charge_rate_uses_230v_default_when_voltage_missing(self):
         """car_charging_rate expose_config uses 230V default when voltage_v is 0."""
-        gw = self._make_gateway(ev_enable=True, num_cars=0)
-        gw._register_ev_car(self._status_with_ev(max_current_a=32, voltage_v=0))
+        gw = self._make_gateway(ev_enable=True)
+        gw._register_ev_chargers(self._status_with_ev(max_current_a=32, voltage_v=0))
         gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.36)  # 32A * 230V / 1000
+
+    def test_two_charge_points_each_get_their_own_slot_and_rate(self):
+        """Two connected chargers each get a distinct slot, distinct entities and their own car_charging_rate_N.
+
+        This is the exact bug the registry exists to fix: the old code forced num_cars=1
+        and overwrote car_charging_* with whichever charger it picked, so a second
+        charge point was invisible to the optimizer entirely.
+        """
+        status = pb.GatewayStatus()
+        a = status.ev_chargers.add()
+        a.connected = True
+        a.charge_point_id = "AAAAAA"
+        a.max_current_a = 32
+        a.voltage_v = 230
+        b = status.ev_chargers.add()
+        b.connected = True
+        b.charge_point_id = "BBBBBB"
+        b.max_current_a = 16
+        b.voltage_v = 230
+
+        gw = self._make_gateway(ev_enable=True)
+        gw._register_ev_chargers(status)
+
+        assert gw._args["num_cars"] == 2
+        assert gw._args["car_charging_planned"] == [
+            "binary_sensor.predbat_gateway_ev_aaaaaa_connected",
+            "binary_sensor.predbat_gateway_ev_bbbbbb_connected",
+        ]
+        assert gw._args["car_charging_energy"] == [
+            "sensor.predbat_gateway_ev_aaaaaa_session_energy",
+            "sensor.predbat_gateway_ev_bbbbbb_session_energy",
+        ]
+        gw.base.expose_config.assert_any_call("car_charging_rate", 7.36)  # slot 0: 32A * 230V / 1000
+        gw.base.expose_config.assert_any_call("car_charging_rate_1", 3.68)  # slot 1: 16A * 230V / 1000
 
 
 class TestEvInitialize:
@@ -4321,21 +4386,34 @@ class TestEvNeedsReconfigure:
 
 
 class TestEvControl:
-    """Tests for GatewayMQTT EVC minute-level control — _refresh_ev_windows, _should_ev_charge_now, _apply_ev_charging_state."""
+    """Tests for GatewayMQTT EVC minute-level control — _refresh_ev_windows, _should_ev_charge_now, _apply_ev_charging_state.
+
+    Each configured charge point is judged against its own car slot's plan, so the fixture
+    registers every configured charge point with the charger registry (same as
+    automatic_config() would) rather than assuming car 0.
+    """
 
     def _make_gateway(self, evc_control=True, evc_automatic=True, configured_chargers=None, ev_max_current=None):
         from gateway import GatewayMQTT
         from unittest.mock import MagicMock
+        from charger_registry import ChargerEntry, ChargerRegistry
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.log = MagicMock()
         gw.prefix = "predbat"
         gw.gateway_evc_control = evc_control
         gw.gateway_evc_automatic = evc_automatic
-        gw._configured_ev_chargers = frozenset(configured_chargers or ["CP10000001"])
+        gw.base = MagicMock()
+        gw.base.charger_registry = ChargerRegistry(gw.base)
+        cp_ids = sorted(configured_chargers or ["CP10000001"])
+        gw._configured_ev_chargers = frozenset(cp_ids)
+        # Give each configured charge point a registry slot, same as _register_ev_chargers
+        # would in production — control reads charger_slot(), so it needs one to act at all.
+        gw.register_chargers("gateway", [ChargerEntry("gateway", cp_id) for cp_id in cp_ids])
         gw._ev_max_current = ev_max_current if ev_max_current is not None else {"CP10000001": 32}
-        gw._ev_windows = []
-        gw._ev_charging_active = False
+        gw._ev_windows = {}
+        gw._ev_charging_active = {}
+        gw._ev_no_slot_warned = False
         gw.local_tz = pytz.timezone("Europe/London")
         return gw
 
@@ -4347,7 +4425,7 @@ class TestEvControl:
         return result
 
     def test_refresh_ev_windows_parses_planned(self):
-        """_refresh_ev_windows parses the planned attribute into (start_dt, end_dt) pairs."""
+        """_refresh_ev_windows parses the planned attribute into (start_dt, end_dt) pairs, keyed by slot."""
 
         gw = self._make_gateway()
         planned = self._planned([("06-28 02:00:00", "06-28 05:30:00"), ("06-28 22:00:00", "06-28 23:00:00")])
@@ -4355,49 +4433,88 @@ class TestEvControl:
 
         gw._refresh_ev_windows()
 
-        assert len(gw._ev_windows) == 2
-        assert gw._ev_windows[0][0].hour == 2 and gw._ev_windows[0][0].minute == 0
-        assert gw._ev_windows[0][1].hour == 5 and gw._ev_windows[0][1].minute == 30
+        windows = gw._ev_windows[0]  # the single configured charge point's slot
+        assert len(windows) == 2
+        assert windows[0][0].hour == 2 and windows[0][0].minute == 0
+        assert windows[0][1].hour == 5 and windows[0][1].minute == 30
 
     def test_refresh_ev_windows_empty_plan(self):
-        """_refresh_ev_windows clears windows when planned is empty."""
+        """_refresh_ev_windows clears a slot's windows when planned is empty."""
         gw = self._make_gateway()
         gw.get_state_wrapper = lambda entity, attribute=None: [] if attribute == "planned" else "off"
-        gw._ev_windows = [("dummy", "dummy")]
+        gw._ev_windows = {0: [("dummy", "dummy")]}
 
         gw._refresh_ev_windows()
 
-        assert gw._ev_windows == []
+        assert gw._ev_windows == {0: []}
+
+    def test_refresh_ev_windows_reads_each_charge_points_own_slot(self):
+        """Two charge points read their own car slot's plan entity, not both car 0's.
+
+        Reading the unindexed entity for every charger would drive every charger from
+        car 0's plan regardless of which car it was actually registered as.
+        """
+        gw = self._make_gateway(configured_chargers=["CP-AAAAAA", "CP-BBBBBB"])
+        seen_entities = []
+
+        def fake_get_state(entity, attribute=None):
+            """Record which entity the code asked for, and answer for car 1 only."""
+            seen_entities.append(entity)
+            if entity.endswith("_1"):
+                return self._planned([("06-28 04:00:00", "06-28 05:00:00")])
+            return self._planned([("06-28 02:00:00", "06-28 03:00:00")])
+
+        gw.get_state_wrapper = fake_get_state
+        gw._refresh_ev_windows()
+
+        slot_a = gw.charger_slot("gateway", "CP-AAAAAA")
+        slot_b = gw.charger_slot("gateway", "CP-BBBBBB")
+        assert slot_a == 0 and slot_b == 1
+        assert "binary_sensor.predbat_car_charging_slot" in seen_entities
+        assert "binary_sensor.predbat_car_charging_slot_1" in seen_entities
+        assert gw._ev_windows[slot_a][0][0].hour == 2
+        assert gw._ev_windows[slot_b][0][0].hour == 4
 
     def test_should_charge_now_inside_window(self):
-        """_should_ev_charge_now returns True when now() is within a window."""
+        """_should_ev_charge_now returns True when now() is within the given slot's window."""
         import datetime as dt_mod
 
         gw = self._make_gateway()
         now = dt_mod.datetime.now(gw.local_tz)
         start = now - dt_mod.timedelta(minutes=30)
         end = now + dt_mod.timedelta(minutes=30)
-        gw._ev_windows = [(start, end)]
+        gw._ev_windows = {0: [(start, end)]}
 
-        assert gw._should_ev_charge_now() is True
+        assert gw._should_ev_charge_now(0) is True
 
     def test_should_charge_now_outside_window(self):
-        """_should_ev_charge_now returns False when now() is outside all windows."""
+        """_should_ev_charge_now returns False when now() is outside all of the slot's windows."""
         import datetime as dt_mod
 
         gw = self._make_gateway()
         now = dt_mod.datetime.now(gw.local_tz)
         start = now + dt_mod.timedelta(hours=2)
         end = now + dt_mod.timedelta(hours=4)
-        gw._ev_windows = [(start, end)]
+        gw._ev_windows = {0: [(start, end)]}
 
-        assert gw._should_ev_charge_now() is False
+        assert gw._should_ev_charge_now(0) is False
 
     def test_should_charge_now_no_windows(self):
-        """_should_ev_charge_now returns False when there are no windows."""
+        """_should_ev_charge_now returns False when there are no cached windows for the slot."""
         gw = self._make_gateway()
-        gw._ev_windows = []
-        assert gw._should_ev_charge_now() is False
+        gw._ev_windows = {}
+        assert gw._should_ev_charge_now(0) is False
+
+    def test_should_charge_now_reads_the_given_slot_not_another(self):
+        """A slot with no cached windows returns False even while another slot is mid-window."""
+        import datetime as dt_mod
+
+        gw = self._make_gateway()
+        now = dt_mod.datetime.now(gw.local_tz)
+        gw._ev_windows = {0: [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(minutes=5))]}
+
+        assert gw._should_ev_charge_now(0) is True
+        assert gw._should_ev_charge_now(1) is False
 
     def test_refresh_ev_windows_year_boundary(self):
         """Windows whose parsed start would be >23 h in the past get their year bumped."""
@@ -4415,13 +4532,14 @@ class TestEvControl:
 
         gw._refresh_ev_windows()
 
-        assert len(gw._ev_windows) == 1
-        start_dt, end_dt = gw._ev_windows[0]
+        windows = gw._ev_windows[0]
+        assert len(windows) == 1
+        start_dt, end_dt = windows[0]
         # After year bump, start should be in the future (next year)
         assert start_dt > now
 
     def test_apply_sends_start_on_transition(self):
-        """_apply_ev_charging_state sends SetChargingProfile then RemoteStartTransaction when entering a window."""
+        """_apply_ev_charging_state sends SetChargingProfile then RemoteStartTransaction, routed to the charge point, when entering a window."""
         import asyncio
         import datetime as dt_mod
         import json
@@ -4430,24 +4548,25 @@ class TestEvControl:
         published = []
 
         async def fake_publish_raw(topic, payload, **kwargs):
+            """Capture the decoded schedule payload the gateway publishes."""
             published.append(json.loads(payload.decode()))
 
         gw._publish_raw = fake_publish_raw
         gw.topic_ev_command = "predbat/devices/test/ev/command"
 
         now = dt_mod.datetime.now(gw.local_tz)
-        gw._ev_windows = [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))]
-        gw._ev_charging_active = False
+        gw._ev_windows = {0: [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))]}
+        gw._ev_charging_active = {}
 
         asyncio.run(gw._apply_ev_charging_state())
 
         assert len(published) == 2
-        assert published[0] == {"action": "SetChargingProfile", "current_a": 32}
-        assert published[1] == {"action": "RemoteStartTransaction", "id_tag": "predbat"}
-        assert gw._ev_charging_active is True
+        assert published[0] == {"action": "SetChargingProfile", "current_a": 32, "charge_point_id": "CP10000001"}
+        assert published[1] == {"action": "RemoteStartTransaction", "id_tag": "predbat", "charge_point_id": "CP10000001"}
+        assert gw._ev_charging_active == {"CP10000001": True}
 
     def test_apply_sends_stop_on_transition(self):
-        """_apply_ev_charging_state sends RemoteStopTransaction when leaving a window."""
+        """_apply_ev_charging_state sends RemoteStopTransaction, routed to the charge point, when leaving a window."""
         import asyncio
         import json
 
@@ -4455,18 +4574,84 @@ class TestEvControl:
         published = []
 
         async def fake_publish_raw(topic, payload, **kwargs):
+            """Capture the decoded schedule payload the gateway publishes."""
             published.append(json.loads(payload.decode()))
 
         gw._publish_raw = fake_publish_raw
         gw.topic_ev_command = "predbat/devices/test/ev/command"
-        gw._ev_windows = []  # no active window
-        gw._ev_charging_active = True  # was charging
+        gw._ev_windows = {0: []}  # no active window
+        gw._ev_charging_active = {"CP10000001": True}  # was charging
 
         asyncio.run(gw._apply_ev_charging_state())
 
         assert len(published) == 1
-        assert published[0] == {"action": "RemoteStopTransaction"}
-        assert gw._ev_charging_active is False
+        assert published[0] == {"action": "RemoteStopTransaction", "charge_point_id": "CP10000001"}
+        assert gw._ev_charging_active == {"CP10000001": False}
+
+    def test_refresh_leaves_a_never_published_slot_out_of_the_windows(self):
+        """A slot whose planned attribute has never been written is absent, not empty.
+
+        The two are different: an empty list is a real plan saying "not now", while a missing
+        attribute only means the plan for that car has not been published yet.
+        """
+        gw = self._make_gateway()
+        gw.get_state_wrapper = lambda entity, attribute=None: None
+
+        gw._refresh_ev_windows()
+
+        assert gw._ev_windows == {}
+
+    def test_apply_does_not_stop_a_charging_car_whose_plan_is_unpublished(self):
+        """The regression: a never-published slot must not read as an empty plan and stop the car.
+
+        Another source registering shifts a gateway charger to a higher slot; for the moments
+        before that slot's entity is published, `planned` is absent. Treating that as an empty
+        plan sent RemoteStopTransaction to a car that was mid-charge.
+        """
+        import asyncio
+
+        gw = self._make_gateway()
+        published = []
+
+        async def fake_publish_raw(topic, payload, **kwargs):
+            """Capture the raw payload so the test can assert nothing was published."""
+            published.append(payload)
+
+        gw._publish_raw = fake_publish_raw
+        gw.topic_ev_command = "predbat/devices/test/ev/command"
+        gw.get_state_wrapper = lambda entity, attribute=None: None
+        gw._ev_charging_active = {"CP10000001": True}  # actively charging
+
+        gw._refresh_ev_windows()
+        asyncio.run(gw._apply_ev_charging_state())
+
+        assert published == [], "A charging car must not be stopped for want of a published plan"
+        assert gw._ev_charging_active == {"CP10000001": True}
+        # It has a slot, so the "no charge point has a slot" warning must not fire either.
+        assert gw._ev_no_slot_warned is False
+
+    def test_apply_does_stop_a_charging_car_on_a_published_empty_plan(self):
+        """The other half: a published-but-empty plan is a real decision and does stop the car."""
+        import asyncio
+        import json
+
+        gw = self._make_gateway()
+        published = []
+
+        async def fake_publish_raw(topic, payload, **kwargs):
+            """Capture the decoded payload of whatever control message is sent."""
+            published.append(json.loads(payload.decode()))
+
+        gw._publish_raw = fake_publish_raw
+        gw.topic_ev_command = "predbat/devices/test/ev/command"
+        gw.get_state_wrapper = lambda entity, attribute=None: [] if attribute == "planned" else "off"
+        gw._ev_charging_active = {"CP10000001": True}
+
+        gw._refresh_ev_windows()
+        asyncio.run(gw._apply_ev_charging_state())
+
+        assert published == [{"action": "RemoteStopTransaction", "charge_point_id": "CP10000001"}]
+        assert gw._ev_charging_active == {"CP10000001": False}
 
     def test_apply_no_command_when_state_unchanged(self):
         """_apply_ev_charging_state sends nothing when desired state matches last state."""
@@ -4480,12 +4665,161 @@ class TestEvControl:
 
         gw._publish_raw = fake_publish_raw
         gw.topic_ev_command = "predbat/devices/test/ev/command"
-        gw._ev_windows = []
-        gw._ev_charging_active = False  # already stopped
+        gw._ev_windows = {0: []}
+        gw._ev_charging_active = {"CP10000001": False}  # already stopped
 
         asyncio.run(gw._apply_ev_charging_state())
 
         assert published == []
+
+    def test_apply_defaults_to_stopped_on_first_ever_check(self):
+        """A charge point never seen before is treated as already-stopped, not commanded.
+
+        _ev_charging_active starts empty, so a naive dict.get(cp_id) (defaulting to None)
+        would send a spurious RemoteStopTransaction on the very first cycle for a charger
+        that was never charging. The default must match should_charge=False so nothing is
+        sent until there is an actual transition.
+        """
+        import asyncio
+
+        gw = self._make_gateway()
+        published = []
+
+        async def fake_publish_raw(topic, payload, **kwargs):
+            """Capture each published (topic, payload) so the stop can be identified."""
+            published.append((topic, payload))
+
+        gw._publish_raw = fake_publish_raw
+        gw.topic_ev_command = "predbat/devices/test/ev/command"
+        gw._ev_windows = {0: []}  # no active window
+        gw._ev_charging_active = {}  # never commanded before
+
+        asyncio.run(gw._apply_ev_charging_state())
+
+        assert published == []
+
+    def test_apply_skips_a_charge_point_with_no_registry_slot(self):
+        """A configured charge point not yet registered (slot None) is skipped, not commanded.
+
+        This can happen mid-cycle: a charger appears in _configured_ev_chargers before
+        automatic_config() has re-run and given it a slot. _ev_charging_active is
+        deliberately pre-set to True for the unregistered charge point: without the
+        `if slot is None: continue` guard, its cached (stale, from before it lost its
+        slot) should_charge=False would differ from that True and a RemoteStopTransaction
+        would be sent for a charger the registry no longer even knows about — the skip
+        must suppress that, not merely coincide with "nothing to do" via an empty window.
+        """
+        import asyncio
+        from charger_registry import ChargerEntry
+
+        gw = self._make_gateway(configured_chargers=["CP10000001", "CP-UNREGISTERED"])
+        # De-register the second, simulating a charger discovered but not yet slotted.
+        gw.base.charger_registry.replace_source("gateway", [ChargerEntry("gateway", "CP10000001")])
+        assert gw.charger_slot("gateway", "CP-UNREGISTERED") is None
+        published = []
+
+        async def fake_publish_raw(topic, payload, **kwargs):
+            """Capture each published (topic, payload) so the skip can be proved silent."""
+            published.append((topic, payload))
+
+        gw._publish_raw = fake_publish_raw
+        gw.topic_ev_command = "predbat/devices/test/ev/command"
+        gw._ev_windows = {0: []}
+        gw._ev_charging_active = {"CP-UNREGISTERED": True}
+
+        asyncio.run(gw._apply_ev_charging_state())
+
+        assert published == []  # no crash, and CP10000001 has no active window either
+
+    def test_apply_warns_once_when_control_enabled_but_no_charger_has_a_slot(self):
+        """gateway_evc_control=True with gateway_evc_automatic=False was a silent no-op.
+
+        _configured_ev_chargers can be non-empty (populated from telemetry regardless of
+        the automatic flag) while every charger has no registry slot (only
+        _register_ev_chargers, gated on gateway_evc_automatic, ever gives one) - every
+        charge point was silently skipped forever, with nothing in the log to say why.
+        This must warn once, then stay quiet on repeat cycles while the condition holds.
+        """
+        import asyncio
+        from unittest.mock import call
+
+        gw = self._make_gateway(configured_chargers=["CP-NEVER-SLOTTED"])
+        # Undo what the fixture's automatic-config stand-in did, so no charge point has a
+        # slot - the exact state gateway_evc_automatic=False leaves control in.
+        gw.base.charger_registry.replace_source("gateway", [])
+        assert gw.charger_slot("gateway", "CP-NEVER-SLOTTED") is None
+
+        async def fake_publish_raw(topic, payload, **kwargs):
+            """Swallow the publish - this test asserts on the log, not on MQTT traffic."""
+            pass
+
+        gw._publish_raw = fake_publish_raw
+        gw.topic_ev_command = "predbat/devices/test/ev/command"
+        gw._ev_windows = {}
+        gw._ev_charging_active = {}
+
+        asyncio.run(gw._apply_ev_charging_state())
+        asyncio.run(gw._apply_ev_charging_state())
+        asyncio.run(gw._apply_ev_charging_state())
+
+        warn_calls = [c for c in gw.log.call_args_list if c == call("Warn: GatewayMQTT: EVC control is enabled but no charge point has a registered car slot - is gateway_evc_automatic off?")]
+        assert len(warn_calls) == 1
+
+    def test_apply_silent_when_every_configured_charger_has_a_slot(self):
+        """No "no slot" warning when charge points are (as normal) actually registered."""
+        import asyncio
+
+        gw = self._make_gateway()  # default fixture registers CP10000001 with a slot
+        published = []
+
+        async def fake_publish_raw(topic, payload, **kwargs):
+            """Capture each published (topic, payload) so the test can assert on the traffic."""
+            published.append((topic, payload))
+
+        gw._publish_raw = fake_publish_raw
+        gw.topic_ev_command = "predbat/devices/test/ev/command"
+        gw._ev_windows = {0: []}
+        gw._ev_charging_active = {}
+
+        asyncio.run(gw._apply_ev_charging_state())
+
+        assert not any("no charge point has a registered car slot" in str(c) for c in gw.log.call_args_list)
+
+    def test_apply_drives_two_charge_points_independently(self):
+        """Two charge points are started/stopped independently, each from its own slot's window.
+
+        This is the safety-critical case: commanding the wrong physical charger, or one
+        charger's window leaking into another's decision, is the bug class this task exists
+        to remove.
+        """
+        import asyncio
+        import datetime as dt_mod
+        import json
+
+        gw = self._make_gateway(configured_chargers=["CP-AAAAAA", "CP-BBBBBB"], ev_max_current={"CP-AAAAAA": 32, "CP-BBBBBB": 16})
+        published = []
+
+        async def fake_publish_raw(topic, payload, **kwargs):
+            """Capture the decoded payload of every command, one per charge point."""
+            published.append(json.loads(payload.decode()))
+
+        gw._publish_raw = fake_publish_raw
+        gw.topic_ev_command = "predbat/devices/test/ev/command"
+
+        now = dt_mod.datetime.now(gw.local_tz)
+        # slot 0 = CP-AAAAAA (inside its window), slot 1 = CP-BBBBBB (outside)
+        gw._ev_windows = {0: [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))], 1: []}
+        gw._ev_charging_active = {}
+
+        asyncio.run(gw._apply_ev_charging_state())
+
+        started = [p for p in published if p["action"] == "RemoteStartTransaction"]
+        stopped = [p for p in published if p["action"] == "RemoteStopTransaction"]
+        assert started == [{"action": "RemoteStartTransaction", "id_tag": "predbat", "charge_point_id": "CP-AAAAAA"}]
+        # CP-BBBBBB matches its default-stopped state, so it is skipped entirely — no
+        # command sent and no entry written for it — only CP-AAAAAA transitions.
+        assert stopped == []
+        assert gw._ev_charging_active == {"CP-AAAAAA": True}
 
     def test_max_current_fallback_32a(self):
         """Falls back to 32 A in SetChargingProfile when max_current_a not in cache for the charge point."""
@@ -4503,12 +4837,13 @@ class TestEvControl:
         gw.topic_ev_command = "predbat/devices/test/ev/command"
 
         now = dt_mod.datetime.now(gw.local_tz)
-        gw._ev_windows = [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))]
-        gw._ev_charging_active = False
+        gw._ev_windows = {0: [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))]}
+        gw._ev_charging_active = {}
 
         asyncio.run(gw._apply_ev_charging_state())
 
         assert published[0]["current_a"] == 32
+        assert published[0]["charge_point_id"] == "CP10000001"
 
 
 class TestRateAnchors(unittest.TestCase):
