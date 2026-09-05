@@ -461,6 +461,95 @@ def run_web_power_flow_tests(my_predbat):
     my_predbat.validate_config()
 
     # -------------------------------------------------------------------------
+    # car_charging_power is a list of chargers, not one entry per car, and its entries are summed.
+    # Two cars sharing one charger listed once per car therefore reports double the real draw
+    # (#4879). num_chargers lets a household state how many it has so that can be caught; unset it
+    # must change nothing, since no existing apps.yaml has the key.
+    print("Test: num_chargers catches a charger listed more times than there are chargers")
+    saved_chargers = my_predbat.args.get("num_chargers", None)
+    my_predbat.args.pop("num_chargers", None)
+    my_predbat.args["car_charging_power"] = ["sensor.car_charger_power", "sensor.car_charger_power"]
+    errors_unset = my_predbat.validate_config()
+    if errors_unset != baseline_errors:
+        print(f"  ERROR: with num_chargers unset a duplicated charger changed the error count by {errors_unset - baseline_errors}")
+        failed += 1
+
+    my_predbat.args["num_chargers"] = 1
+    errors_one_charger = my_predbat.validate_config()
+    if errors_one_charger <= baseline_errors:
+        print("  ERROR: two entries against num_chargers 1 should be a configuration error - this is the #4879 doubling")
+        failed += 1
+
+    print("Test: the same list is accepted once the charger count matches")
+    my_predbat.args["num_chargers"] = 2
+    errors_two_chargers = my_predbat.validate_config()
+    if errors_two_chargers != baseline_errors:
+        print(f"  ERROR: two chargers declared and two listed should validate, error count moved by {errors_two_chargers - baseline_errors}")
+        failed += 1
+
+    print("Test: fewer entries than chargers warns but is not an error")
+    # A charger with no live power sensor is a real, documented setup, so a short list must not
+    # force a false num_chargers - but an entry deleted by accident under-reports just as quietly
+    # as a repeated one over-reports, so it should not pass in silence either.
+    my_predbat.args["car_charging_power"] = ["sensor.car_charger_power"]
+    logged = []
+    original_log = my_predbat.log
+    my_predbat.log = lambda message, *args, **kwargs: (logged.append(message), original_log(message, *args, **kwargs))[1]
+    try:
+        errors_short = my_predbat.validate_config()
+    finally:
+        my_predbat.log = original_log
+    if errors_short != baseline_errors:
+        print(f"  ERROR: listing fewer chargers than declared should be tolerated, error count moved by {errors_short - baseline_errors}")
+        failed += 1
+    if my_predbat.arg_errors.get("car_charging_power"):
+        print(f"  ERROR: a short list recorded an arg_error, which would leave the install showing apps.yaml errors: {my_predbat.arg_errors.get('car_charging_power')}")
+        failed += 1
+    if not any("lists 1 of the 2" in message for message in logged):
+        print("  ERROR: a short car_charging_power list passed without any warning")
+        failed += 1
+
+    # Regression for a Copilot review finding on #4880: a scalar (single sensor, not a list) is a
+    # de-facto list of 1, just as short of num_chargers=2 as the ["sensor.car_charger_power"] case
+    # above - it must warn the same way rather than passing in silence.
+    print("Test: a single sensor (not a list) against num_chargers 2 warns but is not an error")
+    my_predbat.args["num_chargers"] = 2
+    my_predbat.args["car_charging_power"] = "sensor.car_charger_power"
+    logged = []
+    original_log = my_predbat.log
+    my_predbat.log = lambda message, *args, **kwargs: (logged.append(message), original_log(message, *args, **kwargs))[1]
+    try:
+        errors_scalar = my_predbat.validate_config()
+    finally:
+        my_predbat.log = original_log
+    if errors_scalar != baseline_errors:
+        print(f"  ERROR: a single sensor against num_chargers 2 should be tolerated, error count moved by {errors_scalar - baseline_errors}")
+        failed += 1
+    if my_predbat.arg_errors.get("car_charging_power"):
+        print(f"  ERROR: a scalar value recorded an arg_error, which would leave the install showing apps.yaml errors: {my_predbat.arg_errors.get('car_charging_power')}")
+        failed += 1
+    if not any("lists 1 of the 2" in message for message in logged):
+        print("  ERROR: a scalar car_charging_power value against num_chargers 2 passed without any warning")
+        failed += 1
+
+    print("Test: a bad sensor is still type-checked when num_chargers is unset")
+    # required_entries of 0 used to truncate the list away before the item type check ran, so a
+    # nonsense entity slipped through unvalidated the moment this key gained an entries rule.
+    my_predbat.args.pop("num_chargers", None)
+    my_predbat.args["car_charging_power"] = ["sensor.car_charger_nonsense"]
+    errors_unchecked = my_predbat.validate_config()
+    if errors_unchecked <= baseline_errors:
+        print("  ERROR: a non-numeric charger sensor was not validated with num_chargers unset")
+        failed += 1
+
+    my_predbat.args.pop("car_charging_power", None)
+    if saved_chargers is None:
+        my_predbat.args.pop("num_chargers", None)
+    else:
+        my_predbat.args["num_chargers"] = saved_chargers
+    my_predbat.validate_config()
+
+    # -------------------------------------------------------------------------
     print("Test: car charging power is published as a sensor for upstream consumers")
     my_predbat.args["car_charging_power"] = "sensor.car_charger_power"
     my_predbat.update_car_charging_power()

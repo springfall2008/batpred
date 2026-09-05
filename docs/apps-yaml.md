@@ -1935,10 +1935,11 @@ set **switch.predbat_car_energy_reported_load** to Off in Home Assistant. Predba
 Details of configuring `apps.yaml` for EV charging are described in [Configure apps.yaml for your car charging](car-charging.md#configure-appsyaml-for-your-car-charging), and a list of these configuration items is included below for completeness:
 
 - **num_cars** number of cars you want Predbat to plan for
+- **num_chargers** number of physical car chargers you have, which is not the same as the number of cars - only **car_charging_power** uses it, to check that list has not repeated a charger
 - **car_charging_exclusive** for multiple EV's to indicate if they can be charged independently or not
 - **car_energy_reported_load** - Set to False if your EV charger is wired outside the inverter's CT clamp (see [car charging documentation](car-charging.md#filtering-car-charging-energy-from-house-load))
 - **car_charging_energy** - Energy consumed by your EV charger
-- **car_charging_power** - Live power drawn by your EV charger, used for display only
+- **car_charging_power** - Live power drawn by your EV charger, used for display only. A list of chargers rather than one entry per car - see **num_chargers**
 - **octopus_intelligent_slot** - Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by
