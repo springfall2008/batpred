@@ -1562,6 +1562,13 @@ entities (`sensor.predbat_givtcp_0_*` and friends), then points its own settings
 **import_today**, **export_today** and **pv_today**. You do not need to configure any of those by hand,
 and anything you do set for them is overridden.
 
+Predbat also publishes the battery flows and the lifetime counters -
+`sensor.predbat_givtcp_<n>_battery_{charge,discharge}_today` and
+`sensor.predbat_givtcp_<n>_{load,import,export,pv,battery_charge,battery_discharge}_total`. Nothing in
+Predbat reads these - they are there for you, since on a REST-only setup (GivTCP's own Home Assistant
+integration not installed) they are the only GivEnergy energy entities in Home Assistant, and grid
+in/out, solar and battery in/out are the set its Energy Dashboard asks for.
+
 - **givtcp_automatic** - Optional, defaults to `true`. Set to `false` to stop Predbat pointing its settings
 at those entities, so you can configure `apps.yaml` yourself. The entities are still published either way,
 so you can name them by hand - or point an individual setting at a sensor of your own.

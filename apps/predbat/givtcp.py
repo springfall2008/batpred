@@ -139,6 +139,17 @@ GIVTCP_SENSORS = {
     "import_today": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:transmission-tower-import"},
     "export_today": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:transmission-tower-export"},
     "pv_today": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:solar-power"},
+    # The battery flows, which Predbat does not consume but which complete the daily set above.
+    "battery_charge_today": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:battery-plus-outline"},
+    "battery_discharge_today": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:battery-minus-outline"},
+    # Lifetime counters. total_increasing is right for these too - they only ever go up, and never
+    # reset the way the daily ones do at midnight.
+    "load_total": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:home-lightning-bolt"},
+    "import_total": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:transmission-tower-import"},
+    "export_total": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:transmission-tower-export"},
+    "pv_total": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:solar-power"},
+    "battery_charge_total": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:battery-plus-outline"},
+    "battery_discharge_total": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:battery-minus-outline"},
     "givtcp_version": {"icon": "mdi:tag-outline"},
     "firmware_version": {"icon": "mdi:chip"},
     "serial_number": {"icon": "mdi:identifier"},
@@ -190,6 +201,14 @@ GIVTCP_FRIENDLY_NAMES = {
     "import_today": "Import Energy Today",
     "export_today": "Export Energy Today",
     "pv_today": "PV Energy Today",
+    "battery_charge_today": "Battery Charge Energy Today",
+    "battery_discharge_today": "Battery Discharge Energy Today",
+    "load_total": "Load Energy Total",
+    "import_total": "Import Energy Total",
+    "export_total": "Export Energy Total",
+    "pv_total": "PV Energy Total",
+    "battery_charge_total": "Battery Charge Energy Total",
+    "battery_discharge_total": "Battery Discharge Energy Total",
     "givtcp_version": "GivTCP Version",
     "firmware_version": "Firmware Version",
     "serial_number": "Serial Number",
@@ -225,6 +244,29 @@ GIVTCP_ENERGY_TODAY_FIELDS = {
     "import_today": "Import_Energy_Today_kWh",
     "export_today": "Export_Energy_Today_kWh",
     "pv_today": "PV_Energy_Today_kWh",
+}
+
+# Everything else the Energy block carries, as key -> (section, field). From the same snapshot at no
+# extra cost, and published but NOT auto-configured: Predbat has no apps.yaml key that consumes a
+# battery flow or a lifetime counter, so there is nothing to point at them.
+#
+# They are here for the user - on a REST-only setup, with GivTCP's own HA integration not installed,
+# these are the only GivEnergy energy entities in Home Assistant, and grid in/out, solar and battery
+# in/out are the set its Energy Dashboard asks for. The battery flows are published for the day as
+# well as the lifetime, so the daily set lines up with the four above rather than the battery being
+# the one flow available only as a running total.
+#
+# GivTCP reports four more of each - AC_Charge, Battery_Throughput, Invertor and Self_Consumption -
+# left out rather than published as entities nothing asked for. Add them here if a use appears.
+GIVTCP_ENERGY_EXTRA_FIELDS = {
+    "battery_charge_today": ("Today", "Battery_Charge_Energy_Today_kWh"),
+    "battery_discharge_today": ("Today", "Battery_Discharge_Energy_Today_kWh"),
+    "load_total": ("Total", "Load_Energy_Total_kWh"),
+    "import_total": ("Total", "Import_Energy_Total_kWh"),
+    "export_total": ("Total", "Export_Energy_Total_kWh"),
+    "pv_total": ("Total", "PV_Energy_Total_kWh"),
+    "battery_charge_total": ("Total", "Battery_Charge_Energy_Total_kWh"),
+    "battery_discharge_total": ("Total", "Battery_Discharge_Energy_Total_kWh"),
 }
 
 # apps.yaml keys automatic_config() points at the published entities - keys not listed here
@@ -619,10 +661,17 @@ class GivTCPComponent(ComponentBase):
                     soh = 1.0
 
                 for key, field in GIVTCP_ENERGY_TODAY_FIELDS.items():
-                    value = rest.energy_today(field)
+                    value = rest.energy_reading("Today", field)
                     if value is not None:
                         self.dashboard_item(self._entity_id("sensor", n, key), state=value, attributes=self._attributes(n, key), app="givtcp")
                         published.add(key)
+
+                # Not added to `published`: nothing auto-configures these, so there is no key whose
+                # claim depends on whether they made it out.
+                for key, (period, field) in GIVTCP_ENERGY_EXTRA_FIELDS.items():
+                    value = rest.energy_reading(period, field)
+                    if value is not None:
+                        self.dashboard_item(self._entity_id("sensor", n, key), state=value, attributes=self._attributes(n, key), app="givtcp")
 
                 soc_max = design_capacity
                 if soc_max:

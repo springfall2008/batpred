@@ -2078,6 +2078,53 @@ def test_automatic_config_can_be_turned_off(my_predbat=None):
     return 1 if failed else 0
 
 
+def test_extra_energy_figures_are_published_but_not_claimed(my_predbat=None):
+    """
+    The battery flows and the lifetime counters are published, and deliberately not auto-configured.
+
+    They come out of the same snapshot as the daily totals at no extra cost, and on a REST-only
+    setup - GivTCP's own HA integration not installed - they are the only GivEnergy energy entities
+    in Home Assistant, which is what its Energy Dashboard wants. Predbat itself has no apps.yaml key
+    that consumes a lifetime total, so nothing points at them: claiming one would mean inventing a
+    setting to hold it.
+    """
+    failed = False
+    totals = ("battery_charge_today", "battery_discharge_today", "load_total", "import_total", "export_total", "pv_total", "battery_charge_total", "battery_discharge_total")
+
+    for fixture in ("cases/rest_v2.json", "cases/rest_v3.json"):
+        base, component = _rest_from_fixture(fixture)
+        _mark_discovered(component)
+        run_async(component.publish_data())
+        run_async(component.automatic_config())
+
+        for key in totals:
+            entity_id = "sensor.predbat_givtcp_0_" + key
+            if entity_id not in base.entities:
+                print("ERROR: {}: {} was not published".format(fixture, entity_id))
+                failed = True
+                continue
+            state = base.entities[entity_id]["state"]
+            if not isinstance(state, float) or state < 0:
+                print("ERROR: {}: {} published {}, expected a kWh figure".format(fixture, entity_id, state))
+                failed = True
+            attributes = base.entities[entity_id]["attributes"]
+            if attributes.get("device_class") != "energy" or attributes.get("state_class") != "total_increasing":
+                print("ERROR: {}: {} attributes {} are not a recordable energy total".format(fixture, entity_id, attributes))
+                failed = True
+            if key in base.args:
+                print("ERROR: {}: {} was auto-configured as {} - no apps.yaml key consumes a lifetime total".format(fixture, key, base.args.get(key)))
+                failed = True
+
+        # The daily and lifetime figures are different readings, not the same one published twice
+        if base.entities["sensor.predbat_givtcp_0_load_total"]["state"] == base.entities["sensor.predbat_givtcp_0_load_today"]["state"]:
+            print("ERROR: {}: load_total and load_today published the same value".format(fixture))
+            failed = True
+
+    if not failed:
+        print("PASS: lifetime energy totals are published and left unclaimed")
+    return 1 if failed else 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -2177,6 +2224,7 @@ def test_givtcp_component(my_predbat=None):
         ("friendly_names_complete", test_every_control_and_sensor_has_a_friendly_name_defined, "friendly name table covers every entity"),
         ("energy_today_publish", test_energy_today_sensors_are_published_and_claimed, "day energy totals published and claimed"),
         ("energy_today_absent", test_energy_today_keys_not_claimed_when_unreported, "energy totals unclaimed when unreported"),
+        ("energy_extra", test_extra_energy_figures_are_published_but_not_claimed, "battery flows and lifetime totals published, not claimed"),
         ("automatic_off", test_automatic_config_can_be_turned_off, "givtcp_automatic can be turned off"),
     ]
 

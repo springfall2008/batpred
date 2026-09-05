@@ -199,18 +199,18 @@ class GivTCPRest:
         timeslots = rest_data.get("Timeslots", {})
         return timeslots.get("Battery_pause_start_time_slot", None) is not None and timeslots.get("Battery_pause_end_time_slot", None) is not None
 
-    def energy_today(self, name):
+    def energy_reading(self, period, name):
         """
-        One of GivTCP's Energy.Today running totals in kWh, or None if it is not reported.
+        One of GivTCP's Energy counters in kWh, or None if it is not reported.
 
-        These are the day's accumulating totals - load, import, export and PV - which Predbat reads
-        the HISTORY of to build its load model, not just the current value. Both v2 and v3 report
-        them in the same place.
+        period is "Today" for the day's accumulating totals - which Predbat reads the HISTORY of to
+        build its load model, not just the current value - or "Total" for the lifetime counters.
+        Both live in the same snapshot on both v2 and v3, so neither costs an extra read.
         """
         rest_data = self.inverter.rest_data
         if not rest_data:
             return None
-        value = rest_data.get("Energy", {}).get("Today", {}).get(name, None)
+        value = rest_data.get("Energy", {}).get(period, {}).get(name, None)
         if value is None:
             return None
         try:
