@@ -133,6 +133,38 @@ class GivTCPRest:
         return value == "enable"
 
     @property
+    def pause_mode_supported(self):
+        """
+        Whether this inverter reports the battery-pause mode register, or None with no status yet.
+
+        rest_v3 only says GivTCP itself is new enough to offer /setBatteryPauseMode - it says
+        nothing about the inverter behind it, and a model with no pause support simply has no
+        Control.Battery_pause_mode in its snapshot. Gating on the version alone published a
+        "Disabled" fallback for a register that does not exist, which left
+        Inverter.inv_has_timed_pause switched on against a control that can never be written.
+        """
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return None
+        return rest_data.get("Control", {}).get("Battery_pause_mode", None) is not None
+
+    @property
+    def pause_slots_supported(self):
+        """
+        Whether this inverter reports the battery-pause time window, or None with no status yet.
+
+        Separate from pause_mode_supported: an inverter can support pausing without supporting a
+        scheduled window, and Inverter.adjust_pause_mode already copes with that by writing the
+        mode alone. Both ends are required - _window_for_write needs the other end of the window
+        to program either one, so a half-reported pair is no more usable than none at all.
+        """
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return None
+        timeslots = rest_data.get("Timeslots", {})
+        return timeslots.get("Battery_pause_start_time_slot", None) is not None and timeslots.get("Battery_pause_end_time_slot", None) is not None
+
+    @property
     def soc_kwh(self):
         """Current battery SoC in kWh, or None if GivTCP hasn't reported it this cycle."""
         rest_data = self.inverter.rest_data

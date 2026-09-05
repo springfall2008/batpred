@@ -182,8 +182,17 @@ GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS = [
 # only when every discovered inverter reports v3, so a mixed fleet leaves these to the user rather
 # than pointing half of them at entities that can never be written. Endpoints that never answered
 # are excluded - they default to rest_v3 False and would otherwise veto a wholly-v3 live fleet.
-GIVTCP_AUTO_CONFIG_PAUSE_KEYS = [
+#
+# The version is necessary but not sufficient: it describes GivTCP, not the inverter behind it, so
+# each half is additionally gated on the registers actually being reported (pause_mode_supported /
+# pause_slots_supported). They are separate keys because the capabilities are separate - an inverter
+# that can pause but cannot schedule a window keeps its pause_mode, and adjust_pause_mode writes the
+# mode alone, which is exactly what it already does when the window entities are absent.
+GIVTCP_AUTO_CONFIG_PAUSE_MODE_KEYS = [
     "pause_mode",
+]
+
+GIVTCP_AUTO_CONFIG_PAUSE_SLOT_KEYS = [
     "pause_start_time",
     "pause_end_time",
 ]
@@ -454,14 +463,16 @@ class GivTCPComponent(ComponentBase):
                 control = rest.inverter.rest_data.get("Control", {})
                 self.dashboard_item(self._entity_id("select", n, "inverter_mode"), state=control.get("Mode", "Eco"), attributes=GIVTCP_CONTROLS["inverter_mode"][2], app="givtcp")
 
-                # v3 only - see GIVTCP_AUTO_CONFIG_PAUSE_KEYS
-                if rest.inverter.rest_v3:
-                    self.dashboard_item(self._entity_id("select", n, "pause_mode"), state=control.get("Battery_pause_mode", "Disabled"), attributes=GIVTCP_CONTROLS["pause_mode"][2], app="givtcp")
+                # v3 only, and only when the inverter actually has the register - see
+                # GIVTCP_AUTO_CONFIG_PAUSE_MODE_KEYS. Publishing a fallback for a register GivTCP never
+                # reported made a control that does not exist look real to Predbat.
+                if rest.inverter.rest_v3 and rest.pause_mode_supported:
+                    self.dashboard_item(self._entity_id("select", n, "pause_mode"), state=control["Battery_pause_mode"], attributes=GIVTCP_CONTROLS["pause_mode"][2], app="givtcp")
 
                 timeslots = rest.inverter.rest_data.get("Timeslots", {})
-                if rest.inverter.rest_v3:
-                    self.dashboard_item(self._entity_id("select", n, "pause_start_time"), state=timeslots.get("Battery_pause_start_time_slot", "00:00:00"), attributes=GIVTCP_CONTROLS["pause_start_time"][2], app="givtcp")
-                    self.dashboard_item(self._entity_id("select", n, "pause_end_time"), state=timeslots.get("Battery_pause_end_time_slot", "00:00:00"), attributes=GIVTCP_CONTROLS["pause_end_time"][2], app="givtcp")
+                if rest.inverter.rest_v3 and rest.pause_slots_supported:
+                    self.dashboard_item(self._entity_id("select", n, "pause_start_time"), state=timeslots["Battery_pause_start_time_slot"], attributes=GIVTCP_CONTROLS["pause_start_time"][2], app="givtcp")
+                    self.dashboard_item(self._entity_id("select", n, "pause_end_time"), state=timeslots["Battery_pause_end_time_slot"], attributes=GIVTCP_CONTROLS["pause_end_time"][2], app="givtcp")
 
                 self.dashboard_item(self._entity_id("select", n, "charge_start_time"), state=timeslots.get("Charge_start_time_slot_1", "00:00:00"), attributes=GIVTCP_CONTROLS["charge_start_time"][2], app="givtcp")
                 self.dashboard_item(self._entity_id("select", n, "charge_end_time"), state=timeslots.get("Charge_end_time_slot_1", "00:00:00"), attributes=GIVTCP_CONTROLS["charge_end_time"][2], app="givtcp")
@@ -607,10 +618,18 @@ class GivTCPComponent(ComponentBase):
         else:
             self.log("Info: GivTCP: the export target register needs GivTCP v3 on every inverter - leaving discharge_target_soc to your apps.yaml config")
 
-        if all(self.rest[n].inverter.rest_v3 for n in discovered):
-            keys += GIVTCP_AUTO_CONFIG_PAUSE_KEYS
-        else:
+        if not all(self.rest[n].inverter.rest_v3 for n in discovered):
             self.log("Info: GivTCP: pause control needs GivTCP v3 on every inverter - leaving pause_mode/pause_start_time/pause_end_time to your apps.yaml config")
+        else:
+            if all(self.rest[n].pause_mode_supported for n in discovered):
+                keys += GIVTCP_AUTO_CONFIG_PAUSE_MODE_KEYS
+            else:
+                self.log("Info: GivTCP: Battery_pause_mode is not reported by every inverter - leaving pause_mode to your apps.yaml config")
+
+            if all(self.rest[n].pause_slots_supported for n in discovered):
+                keys += GIVTCP_AUTO_CONFIG_PAUSE_SLOT_KEYS
+            else:
+                self.log("Info: GivTCP: the battery pause time slots are not reported by every inverter - leaving pause_start_time/pause_end_time to your apps.yaml config")
 
         for key in keys:
             domain, _, _ = GIVTCP_CONTROLS.get(key, (None, None, None))

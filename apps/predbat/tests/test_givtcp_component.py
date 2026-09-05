@@ -1705,6 +1705,150 @@ def test_update_status_does_no_rest_read(my_predbat=None):
     return 0
 
 
+def _rest_data_without_pause(include_mode=False, include_slots=False):
+    """A GivTCP blob from an inverter with no battery-pause support.
+
+    GivTCP simply omits the fields the inverter has no register for, so an unsupported
+    model reports neither Control.Battery_pause_mode nor the Battery_pause_*_time_slot
+    pair. Both are droppable independently - a model can report the mode and not the
+    window - so each is switchable here.
+    """
+    data = _rest_data_blob()
+    if not include_mode:
+        del data["Control"]["Battery_pause_mode"]
+    if not include_slots:
+        del data["Timeslots"]["Battery_pause_start_time_slot"]
+        del data["Timeslots"]["Battery_pause_end_time_slot"]
+    return data
+
+
+def test_pause_entities_withheld_when_the_inverter_has_no_pause(my_predbat=None):
+    """
+    An inverter with no battery-pause registers gets no pause entities published.
+
+    rest_v3 says GivTCP is new enough to accept /setBatteryPauseMode - it says nothing about
+    the inverter behind it. Gating the publish on the version alone fabricated a pause window
+    from the "00:00:00" fallback, which made a control that does not exist look real: Predbat
+    read it back as a live entity and wrote to it, and every write was then refused by
+    _window_for_write for want of the other end of the window.
+    """
+    failed = False
+    base, component = _make_component()
+    component.rest[0].inverter.rest_v3 = True
+    component.rest[0].inverter.rest_data = _rest_data_without_pause()
+
+    run_async(component.publish_data())
+
+    for control in ("pause_mode", "pause_start_time", "pause_end_time"):
+        entity = "select.predbat_givtcp_0_" + control
+        if entity in base.entities:
+            print("ERROR: published {} for an inverter that reports no pause support".format(entity))
+            failed = True
+
+    # The rest of the publish is untouched - a missing pause block is not a broken snapshot
+    if base.entities.get("select.predbat_givtcp_0_charge_start_time", {}).get("state") != "00:30:00":
+        print("ERROR: dropping the pause entities damaged the rest of the publish")
+        failed = True
+
+    if not failed:
+        print("PASS: no pause entities published when the inverter reports no pause support")
+    return 1 if failed else 0
+
+
+def test_pause_keys_not_auto_configured_without_pause_support(my_predbat=None):
+    """
+    Predbat's pause_mode/pause_start_time/pause_end_time keys are left alone without the registers.
+
+    Claiming them pointed Inverter.adjust_pause_mode at entities that read back a made-up
+    00:00:00, so inv_has_timed_pause stayed on and every cycle wrote a pause window the
+    inverter has no register for.
+    """
+    failed = False
+    base, component = _make_component()
+    _mark_discovered(component)
+    component.rest[0].inverter.rest_v3 = True
+    component.rest[0].inverter.rest_data = _rest_data_without_pause()
+
+    run_async(component.automatic_config())
+
+    for key in ("pause_mode", "pause_start_time", "pause_end_time"):
+        if key in base.args:
+            print("ERROR: auto-configured {} = {} for an inverter with no pause support".format(key, base.args.get(key)))
+            failed = True
+
+    if not failed:
+        print("PASS: pause keys left to apps.yaml when the inverter reports no pause support")
+    return 1 if failed else 0
+
+
+def test_pause_mode_kept_when_only_the_time_window_is_missing(my_predbat=None):
+    """
+    Reporting Battery_pause_mode but no time slots keeps the mode and drops only the window.
+
+    adjust_pause_mode already copes with entity_start/entity_end being absent - it writes the
+    mode alone - so an inverter that can pause but cannot schedule it must keep its pause_mode
+    control rather than losing pause support altogether.
+    """
+    failed = False
+    base, component = _make_component()
+    _mark_discovered(component)
+    component.rest[0].inverter.rest_v3 = True
+    component.rest[0].inverter.rest_data = _rest_data_without_pause(include_mode=True)
+
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    if base.entities.get("select.predbat_givtcp_0_pause_mode", {}).get("state") != "Disabled":
+        print("ERROR: pause_mode was dropped even though the inverter reports it")
+        failed = True
+    if base.args.get("pause_mode") != ["select.predbat_givtcp_0_pause_mode"]:
+        print("ERROR: pause_mode was not auto-configured, got {}".format(base.args.get("pause_mode")))
+        failed = True
+
+    for control in ("pause_start_time", "pause_end_time"):
+        if "select.predbat_givtcp_0_" + control in base.entities:
+            print("ERROR: published {} with no time-slot registers reported".format(control))
+            failed = True
+        if control in base.args:
+            print("ERROR: auto-configured {} with no time-slot registers reported".format(control))
+            failed = True
+
+    if not failed:
+        print("PASS: pause_mode kept, pause window dropped, when only the slots are missing")
+    return 1 if failed else 0
+
+
+def test_pause_gate_needs_pause_support_on_every_inverter(my_predbat=None):
+    """One inverter without the pause registers leaves the whole fleet's pause keys unconfigured.
+
+    Same rule the version gate already applies: a per-inverter capability cannot be expressed
+    through one shared apps.yaml key, so a mixed fleet has to leave it to the user.
+    """
+    failed = False
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    _mark_discovered(component)
+    for rest in component.rest:
+        rest.inverter.rest_v3 = True
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    component.rest[1].inverter.rest_data = _rest_data_without_pause()
+
+    run_async(component.automatic_config())
+    if "pause_mode" in base.args:
+        print("ERROR: claimed pause_mode when inverter 1 reports no pause support")
+        failed = True
+
+    # Once both report it, the keys are claimed as before
+    component.rest[1].inverter.rest_data = _rest_data_blob()
+    run_async(component.automatic_config())
+    if base.args.get("pause_start_time") != ["select.predbat_givtcp_0_pause_start_time", "select.predbat_givtcp_1_pause_start_time"]:
+        print("ERROR: pause_start_time not configured for a fully-capable fleet, got {}".format(base.args.get("pause_start_time")))
+        failed = True
+
+    if not failed:
+        print("PASS: pause keys need pause support on every discovered inverter")
+    return 1 if failed else 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1795,6 +1939,10 @@ def test_givtcp_component(my_predbat=None):
         ("soh_clamp", test_battery_soh_is_clamped_at_full_health, "soh clamped at 1.0"),
         ("soh_not_design_ratio", test_soh_is_not_derived_from_the_two_design_figures, "soh not derived from design figures"),
         ("rate_tolerance", test_rate_write_tolerance_uses_the_real_max_rate, "rate write tolerance uses real max rate"),
+        ("pause_unsupported_publish", test_pause_entities_withheld_when_the_inverter_has_no_pause, "no pause entities without pause registers"),
+        ("pause_unsupported_config", test_pause_keys_not_auto_configured_without_pause_support, "pause keys unclaimed without pause registers"),
+        ("pause_mode_only", test_pause_mode_kept_when_only_the_time_window_is_missing, "pause_mode kept when only slots are missing"),
+        ("pause_mixed_support", test_pause_gate_needs_pause_support_on_every_inverter, "pause needs support on every inverter"),
     ]
 
     passed = 0
