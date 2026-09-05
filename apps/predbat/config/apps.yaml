@@ -92,8 +92,8 @@ pred_bat:
   # Example below is auto-restart for GivTCP app itself
   #auto_restart:
   #  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
-  #  - service: hassio/addon_restart
-  #    addon: 533ea71a_givtcp
+  #  - service: hassio/app_restart
+  #    app: 533ea71a_givtcp
   #
   #  Example on how to restart the inverter via GivTCP
   #  - service: button.press

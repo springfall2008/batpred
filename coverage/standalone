@@ -4,6 +4,11 @@ mkdir -p predbat_standalone
 cd predbat_standalone
 ln -s ../../apps/predbat/*.py .
 cd ..
+# HA changed terminology from 'addons' to 'apps' in HA 2026.2 with 'addon_configs' becoming 'app_configs' but retained
+# the old directory names for transition
+#
+# At present have not changed Predbat deployment in order to not break installations that are still using an older HA supervisor
+# Propose in Feb 2027 that Predbat be changed to use the new directory name
 #cp /Volumes/addon_configs/6adb4f0d_predbat/*.py predbat_standalone
 cp /Volumes/addon_configs/6adb4f0d_predbat/apps_direct.yaml predbat_standalone/apps.yaml
 cd predbat_standalone
