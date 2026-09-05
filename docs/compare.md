@@ -164,16 +164,32 @@ For example, to model a tariff combined with a higher minimum SoC target:
 You can model what your costs would look like with a **different battery size, charge rate, or inverter limit** using the hardware override keys.
 These are applied after live inverter data is fetched, so they fully replace the real hardware values for the duration of the comparison scenario.
 
-All four keys are optional and can be combined freely:
+All five keys are optional and can be combined freely:
 
 | Key | Description | Unit |
 |-----|-------------|------|
 | `override_soc_max_kwh` | Battery usable capacity | kWh |
 | `override_battery_rate_max_charge_kw` | Maximum battery charge rate | kW |
 | `override_battery_rate_max_discharge_kw` | Maximum battery discharge rate | kW |
+| `override_battery_rate_max_export_kw` | Maximum battery discharge rate during export (force export) windows | kW |
 | `override_inverter_limit_kw` | AC inverter output limit | kW |
 
+These values replace the totals Predbat sums across **all** of your inverters, so on a multi-inverter system enter the
+combined figure rather than a single inverter's rating.
+
 When `override_soc_max_kwh` is set the starting SoC is automatically clamped to the new capacity if needed.
+
+Predbat uses a separate rate during export windows, so if you only set `override_battery_rate_max_discharge_kw` then the
+export rate follows it automatically. Set `override_battery_rate_max_export_kw` as well whenever you want the export-window
+rate to differ from the discharge rate in either direction — for example an inverter that exports more slowly than it
+discharges, or an AC-coupled retrofit that exports faster.
+
+Your grid export limit (`export_limit` in `apps.yaml`) is **not** changed by these keys, since the property's grid
+connection does not change when you swap the inverter. If your export is capped by the grid connection rather than by the
+inverter, raising the override rates will not increase the modelled export.
+
+The modelled battery draw is also capped by the inverter limit, so a discharge or export override above the real inverter
+limit has no effect unless you raise `override_inverter_limit_kw` as well.
 
 **Example — evaluating a battery upgrade from 10 kWh to 20 kWh:**
 
