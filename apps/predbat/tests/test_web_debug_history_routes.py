@@ -123,6 +123,11 @@ def test_web_debug_history_routes(my_predbat):
         if first_id not in resp.headers.get("Content-Disposition", ""):
             print("  ERROR: expected first_id in the Content-Disposition filename, got {!r}".format(resp.headers.get("Content-Disposition")))
             failed = True
+        # GitHub refuses a bare .yaml attachment, so a snapshot that arrives named .yaml has to be
+        # renamed before it can go on a bug report - the whole point of #4932.
+        if not resp.headers.get("Content-Disposition", "").endswith(".yaml.txt"):
+            print("  ERROR: expected the single-snapshot download to be named .yaml.txt (#4932), got {!r}".format(resp.headers.get("Content-Disposition")))
+            failed = True
 
         print("Test: 'latest' (explicit and omitted) resolves to the newest snapshot, id and data match (#4438 review item 4)")
         resp = asyncio.run(w.html_debug_history_download(FakeRequest(query={"id": "latest"})))
