@@ -961,6 +961,18 @@ class Fetch:
                 self.iboost_today = dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
                 self.log("iBoost energy today from sensor reads {} kWh".format(self.iboost_today))
 
+        # iBoost hot water demand forecast and tank state of charge
+        self.iboost_forecast = {}
+        self.iboost_tank_soc_percent = None
+        if self.iboost_enable:
+            self.iboost_forecast = self.fetch_iboost_forecast()
+            if self.iboost_forecast and ("iboost_tank_soc" in self.args):
+                tank_soc = self.get_arg("iboost_tank_soc", None)
+                try:
+                    self.iboost_tank_soc_percent = float(tank_soc)
+                except (ValueError, TypeError):
+                    self.log("Warn: Unable to read iboost_tank_soc (value {}), assuming the tank is empty".format(tank_soc))
+
         # Fetch ML forecast if enabled
         load_ml_forecast = {}
         if self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False):
@@ -2762,6 +2774,119 @@ class Fetch:
                     load_forecast_final[minute] = value
         return load_forecast_final, load_forecast_array
 
+    def fetch_iboost_forecast(self):
+        """
+        Fetch the hot water demand forecast used by the iBoost forecast planner.
+
+        Reads the sensors configured with iboost_forecast in apps.yaml (the same data format as
+        load_forecast: a cumulative kWh series, either a dict of ISO timestamp -> kWh or a list of
+        {last_updated, energy} entries), scales the series by iboost_forecast_scaling and converts
+        it into demand per plan interval (kWh, negative deltas clamped to zero) covering the
+        forecast horizon. Returns a dict of absolute minute (interval start) -> kWh, or an empty
+        dict when no forecast is configured or no usable future data could be fetched, in which
+        case the caller falls back to the legacy smart plan.
+        """
+        if "iboost_forecast" not in self.args:
+            return {}
+
+        iboost_forecast_scaling = self.get_arg("iboost_forecast_scaling", 1.0)
+        demand_cumulative = {}
+        first_data_minute = None
+        last_data_minute = None
+        entity_ids = self.get_arg("iboost_forecast", indirect=False)
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+
+        for entity_id in entity_ids:
+            if not entity_id:
+                self.log("Warn: Unable to fetch iBoost demand forecast data, check your iboost_forecast setting in apps.yaml")
+                continue
+
+            attribute = None
+            if "$" in entity_id:
+                entity_id, attribute = entity_id.split("$")
+            try:
+                self.log("Loading iBoost demand forecast from {}, attribute {}".format(entity_id, attribute))
+                data = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
+            except (ValueError, TypeError) as e:
+                self.log("Warn: Unable to fetch iBoost demand forecast data from sensor {}, exception {}".format(entity_id, e))
+                data = None
+
+            # Convert format from dict to array
+            if isinstance(data, dict):
+                data_array = []
+                for key, value in data.items():
+                    data_array.append({"energy": value, "last_updated": key})
+                data = data_array
+            if (data is not None) and (not isinstance(data, list)):
+                self.log("Warn: iBoost demand forecast data from {} is not in a supported format. Skipping forecast source.".format(entity_id))
+                data = None
+
+            # Track the extent of the raw data; minute_data back-fills its output past the last
+            # data point, so staleness has to be judged from the raw timestamps.
+            for item in data or []:
+                try:
+                    item_minute = int((str2time(item["last_updated"]) - self.midnight_utc).total_seconds() / 60)
+                except (ValueError, TypeError, KeyError):
+                    continue
+                if (last_data_minute is None) or (item_minute > last_data_minute):
+                    last_data_minute = item_minute
+                if (first_data_minute is None) or (item_minute < first_data_minute):
+                    first_data_minute = item_minute
+
+            # Load data
+            forecast, _ = minute_data(
+                data,
+                self.forecast_days + 1,
+                self.midnight_utc,
+                "energy",
+                "last_updated",
+                backwards=False,
+                clean_increment=False,
+                smoothing=True,
+                divide_by=1.0,
+                scale=iboost_forecast_scaling,
+                required_unit="kWh",
+            )
+
+            if forecast:
+                for minute, value in forecast.items():
+                    demand_cumulative[minute] = demand_cumulative.get(minute, 0) + value
+            else:
+                self.log("Warn: Unable to load the iBoost demand forecast from {}. Skipping forecast source.".format(entity_id))
+
+        if not demand_cumulative:
+            self.log("Warn: iboost_forecast is configured but no forecast data could be loaded, using the legacy iBoost smart plan")
+            return {}
+
+        if (last_data_minute is None) or (last_data_minute <= self.minutes_now):
+            self.log("Warn: iBoost demand forecast ends at minute {} which is not in the future, using the legacy iBoost smart plan".format(last_data_minute))
+            return {}
+        if first_data_minute >= self.minutes_now + self.forecast_minutes:
+            self.log("Warn: iBoost demand forecast starts at minute {} which is beyond the planning horizon, using the legacy iBoost smart plan".format(first_data_minute))
+            return {}
+
+        # Convert the cumulative series into demand per plan interval, aligned to the same interval
+        # grid the planner books slots on. Per-minute deltas are clamped to zero individually (the
+        # same reading get_from_incrementing gives the load forecast) so dips in the series and the
+        # region minute_data back-fills beyond the data both read as zero demand. Minutes already
+        # elapsed in the current interval are skipped: any draw there is in the tank SoC reading.
+        demand = {}
+        total = 0.0
+        start_minute = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
+        for minute in range(start_minute, start_minute + self.forecast_minutes, self.plan_interval_minutes):
+            kwh = 0.0
+            for offset in range(self.plan_interval_minutes):
+                offset_minute = minute + offset
+                if offset_minute < self.minutes_now:
+                    continue
+                kwh += max(demand_cumulative.get(offset_minute + 1, 0) - demand_cumulative.get(offset_minute, 0), 0.0)
+            demand[minute] = dp4(kwh)
+            total += kwh
+
+        self.log("iBoost demand forecast loaded: {} kWh over {} intervals of {} minutes from minute {}".format(dp2(total), len(demand), self.plan_interval_minutes, start_minute))
+        return demand
+
     def fetch_carbon_intensity(self, entity_id):
         """
         Fetch the carbon intensity from the sensor
@@ -3100,6 +3225,9 @@ class Fetch:
         self.iboost_charging = self.get_arg("iboost_charging")
         self.iboost_gas_scale = self.get_arg("iboost_gas_scale")
         self.iboost_max_energy = self.get_arg("iboost_max_energy")
+        self.iboost_tank_capacity = self.get_arg("iboost_tank_capacity")
+        self.iboost_tank_reserve = self.get_arg("iboost_tank_reserve")
+        self.iboost_fill_rate_threshold = self.get_arg("iboost_fill_rate_threshold")
         self.iboost_max_power = self.get_arg("iboost_max_power") / MINUTE_WATT
         self.iboost_min_power = self.get_arg("iboost_min_power") / MINUTE_WATT
         self.iboost_min_soc = self.get_arg("iboost_min_soc")

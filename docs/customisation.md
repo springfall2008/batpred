@@ -640,6 +640,35 @@ Note: Gas rates have to be configured in `apps.yaml` using **metric_octopus_gas*
 
 It should be set to the reciprocal of the boiler efficiency, i.e. for an 80% efficient gas boiler, set to 1.25.
 
+### iBoost demand forecast
+
+If you have a forecast of your hot water demand (for example from a tank that reports its own state of charge, such as a Mixergy tank), the smart planner
+can schedule heating ahead of each draw instead of spreading a fixed daily energy budget over the cheapest slots.
+
+Configure **iboost_forecast** (and optionally **iboost_forecast_scaling** and **iboost_tank_soc**) in `apps.yaml` -
+see [iBoost energy](apps-yaml.md#iboost-energy) for the data format. When **iboost_forecast** is not configured the planner behaviour is unchanged.
+
+The forecast planner runs exactly when the smart planner would: iBoost must be enabled and either both **switch.predbat_iboost_solar** and
+**switch.predbat_iboost_charging** must be Off, or **switch.predbat_iboost_smart** must be On. A configured forecast has no effect in the solar or
+battery modes, and in the energy-rates-only modes it takes over slot selection, including the time-ordered plan normally used when
+**switch.predbat_iboost_smart** is Off.
+
+The hot water tank is modelled as a charge-only store: heating adds energy up to the tank capacity, forecast draws remove it, and the planner books the
+cheapest eligible slots before each draw so that the stored energy never falls below the reserve at any draw.
+Slots are still subject to the rate thresholds, the gas rate comparison and the daily **input_number.predbat_iboost_max_energy** cap described above.
+
+The forecast planner is controlled by these additional entities:
+
+- **input_number.predbat_iboost_tank_capacity** Sets the usable stored energy of the tank in kWh - default 10.
+- **input_number.predbat_iboost_tank_reserve** Sets the minimum stored energy in kWh to hold in the tank before each draw - default 0.
+- **input_number.predbat_iboost_fill_rate_threshold** When set, any slot with an import rate at or below this value (in pence) fills the remaining
+tank headroom regardless of the forecast, e.g. set it to 0 to heat fully on free or negative rates. The default of -99 disables filling.
+
+Note that **input_number.predbat_iboost_max_energy** remains a per-calendar-day cap on boost energy and should be set at or above the tank capacity
+when a demand forecast is used, otherwise the cap can prevent the forecast being covered.
+
+If the forecast sensor is missing, unavailable, stale or empty then Predbat logs a warning and falls back to the standard smart plan for that cycle.
+
 ### iBoost control
 
 ### iBoost output data

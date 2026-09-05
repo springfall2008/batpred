@@ -1162,6 +1162,22 @@ To disable, set it to 1440.
 - **iboost_energy_today** - Set to a sensor which tracks the amount of energy sent to your solar diverter, which can also be used to subtract from your historical load
 for more accurate predictions.
 
+- **iboost_forecast** - Optionally set to one or more sensors holding a hot water demand forecast, each pointing to a sensor and attribute in the same
+data format as [load_forecast](#load-forecast) (either a dictionary of timestamps and energy data, or a list of 'last_updated' timestamps and 'energy' values).
+The series must be cumulative kWh: Predbat takes the positive delta of the series in each plan interval as the demand for that interval, so dips in the series are ignored.
+When set, the [smart iBoost planner](customisation.md#iboost-demand-forecast) heats ahead of each forecast draw instead of spreading the daily energy budget over the cheapest slots.
+
+```yaml
+  iboost_forecast:
+    - sensor.hot_water_demand_forecast$results
+```
+
+- **iboost_forecast_scaling** - Multiplier applied to the demand forecast series, the default is 1.0. Use this to convert a series which isn't in kWh,
+e.g. set to 0.11 for a forecast in percent of an 11 kWh tank.
+
+- **iboost_tank_soc** - Optionally set to a sensor reporting the percentage of usable stored energy currently in the hot water tank.
+When set, the demand forecast planner only heats the shortfall between the forecast demand and the energy already stored; when not set the whole forecast is provisioned.
+
 ## Inverter control configurations
 
 NB: literal numeric values for the power-limit settings below (`inverter_limit`, `pv_ac_limit`, `export_limit`, `inverter_limit_charge`, `inverter_limit_discharge`, `inverter_limit_export`, `inverter_limit_charge_dc`, `battery_rate_max`, `inverter_battery_rate_min`) must always be in **watts** — e.g. `7300` for a 7.3 kW inverter, never `7.3`. Predbat's unit auto-conversion only fires when the value is a sensor reference (it reads `unit_of_measurement` from the HA entity); for literal values there is no entity to read, so the raw number is taken as watts. A literal `inverter_limit: 7.3` will be interpreted as 7.3 W and clamp `battery_draw` to ~0.0006 kWh per 5-min step, producing a plan that looks like Predbat refuses to discharge the battery.
