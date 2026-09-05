@@ -78,19 +78,6 @@ class Inverter:
         """
         time.sleep(seconds)
 
-    def _entity_is_predbat_published(self, entity_id):
-        """
-        Whether this entity is published by a Predbat component rather than a third-party integration.
-
-        base.dashboard_index_app records the owning component for every entity Predbat publishes
-        itself (see Output.dashboard_item). Such an entity only ever changes once that component
-        has applied the write and republished it - GivTCPComponent does its REST write inline off
-        the HA event, and verifies it against the inverter before republishing - so the moment the
-        new value appears it is real and there is nothing left to wait for.
-        """
-        published = getattr(self.base, "dashboard_index_app", None)
-        return bool(published) and entity_id in published
-
     def _poll_after_write(self, entity_id, matched, refresh=True, required_unit=None):
         """
         Spend one write_and_poll_sleep interval waiting for a written value, and return the last read.
@@ -102,17 +89,14 @@ class Inverter:
         to export (about five entity writes at 10s each) took roughly 50s of which almost all was
         spent waiting for work that was already finished.
 
-        Only entities Predbat publishes itself are polled. A third-party integration's entity keeps
-        the flat sleep: some report a written value optimistically and revert it when the device
-        rejects the write, and the full interval is what gives that revert time to show up.
+        A read that matches is trusted immediately, whatever owns the entity. This is only ever
+        reached once the caller has established that the entity did NOT already hold the target,
+        so a matching read is a transition observed after our own write rather than a stale value
+        that happened to agree.
 
         matched(state) decides whether a read is the value that was written - each caller compares
         differently (fuzzy numeric, exact string, on/off).
         """
-        if not self._entity_is_predbat_published(entity_id):
-            self.sleep(self.inv_write_and_poll_sleep)
-            return self.base.get_state_wrapper(entity_id, refresh=refresh, required_unit=required_unit)
-
         waited = 0.0
         delay = INVERTER_WRITE_POLL_INTERVAL
         while True:
@@ -2002,23 +1986,33 @@ class Inverter:
             return False
         domain, entity_name = entity_id.split(".")
 
-        current_state = self.base.get_state_wrapper(entity_id=entity_id)
-        # The ledger is shown the RAW read, taken before the boolean coercion below. That
-        # coercion maps "unavailable" to False, which is a perfectly valid switch position -
-        # a routine integration dropout would otherwise pass every suppression rung and be
-        # reported to the customer as somebody else turning their charging off.
-        raw_state = current_state
-        if isinstance(current_state, str):
-            current_state = current_state.lower() in ["on", "enable", "true"]
+        def switch_state(state):
+            """
+            The on/off value a switch read represents.
+
+            Maps "unavailable" to False, which is a perfectly valid switch position - which is
+            exactly why the control ledger below is handed the raw read instead of this: a routine
+            integration dropout would otherwise pass every suppression rung and be reported to the
+            customer as somebody else turning their charging off.
+            """
+            if isinstance(state, str):
+                return state.lower() in ["on", "enable", "true"]
+            return state
+
+        def switch_matched(state):
+            """Whether a switch read reports the on/off value being written."""
+            return switch_state(state) == new_value
+
+        raw_state = self.base.get_state_wrapper(entity_id=entity_id)
 
         ledger = self.base.control_ledger
         if ledger is not None:
             self._ledger_observe(ledger, name, entity_id, raw_state)
-            if current_state != new_value:
+            if not switch_matched(raw_state):
                 ledger.note_write_attempt(entity_id)
 
-        if current_state == new_value:
-            self.base.log("Inverter {} write_and_poll_switch: No write needed for {} as {} == {}".format(self.id, name, new_value, current_state))
+        if switch_matched(raw_state):
+            self.base.log("Inverter {} write_and_poll_switch: No write needed for {} as {} == {}".format(self.id, name, new_value, switch_state(raw_state)))
             # Re-arm. Once an EXTERNAL event (or a clear) has dropped ownership, a control already
             # sitting at Predbat's target reaches this early return on every cycle from now on, so
             # record_write() below is never called again and the control is silently unwatched for
@@ -2030,7 +2024,7 @@ class Inverter:
             return True
 
         retry = 0
-        while current_state != new_value and retry < INVERTER_MAX_RETRY:
+        while not switch_matched(raw_state) and retry < INVERTER_MAX_RETRY:
             retry += 1
             if domain == "sensor":
                 if new_value:
@@ -2042,18 +2036,9 @@ class Inverter:
                 service = base_entity + "/turn_" + ("on" if new_value else "off")
                 self.base.call_service_wrapper(service, entity_id=entity_id)
 
-            def switch_matched(state):
-                """Whether a read back reports the on/off value that was just written."""
-                if isinstance(state, str):
-                    state = state.lower() in ["on", "enable", "true"]
-                return state == new_value
+            raw_state = self._poll_after_write(entity_id, switch_matched, refresh=domain != "sensor")
 
-            current_state = self._poll_after_write(entity_id, switch_matched, refresh=domain != "sensor")
-            raw_state = current_state
-            if isinstance(current_state, str):
-                current_state = current_state.lower() in ["on", "enable", "true"]
-
-        if current_state == new_value:
+        if switch_matched(raw_state):
             self.base.log("Inverter {} Wrote {} to {} successfully and got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id=entity_id)))
             if domain != "sensor":
                 self.count_register_writes += 1
@@ -2081,23 +2066,37 @@ class Inverter:
             self.base.record_status("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
             return False
         domain, entity_name = entity_id.split(".")
-        current_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit)
 
-        # The ledger is shown the RAW read, taken before the float coercion below. That
-        # coercion turns a failed read - "unavailable", "unknown", a missing entity - into
-        # 0.0, which is a real-looking number that passes every suppression rung. Reported
-        # to a customer that reads as "a third party set your charge rate to 0 W", produced
-        # by nothing more than a routine integration dropout.
-        raw_state = current_state
-        if isinstance(new_value, str):
-            matched = current_state == new_value
-        else:
+        def value_state(state, warn=False):
+            """
+            A read coerced into the shape new_value is compared in - a float, or a plain string.
+
+            A failed read - "unavailable", "unknown", a missing entity - becomes 0.0, a
+            real-looking number that passes every suppression rung. Reported to a customer that
+            reads as "a third party set your charge rate to 0 W", produced by nothing more than a
+            routine integration dropout - which is why the control ledger below is handed the raw
+            read instead of this. Only the first read of the cycle warns, so a poll cannot repeat
+            the message on every look.
+            """
+            if isinstance(new_value, str):
+                return state
             try:
-                current_state = float(current_state)
+                return float(state)
             except (ValueError, TypeError):
-                self.log("Warn: Inverter {} write_and_poll_value: Current state for {} is {}".format(self.id, name, current_state))
-                current_state = 0.0
-            matched = abs(current_state - new_value) <= fuzzy
+                if warn:
+                    self.log("Warn: Inverter {} write_and_poll_value: Current state for {} is {}".format(self.id, name, state))
+                return 0.0
+
+        def value_matched(state):
+            """Whether a read is the value being written, within the fuzzy tolerance."""
+            state = value_state(state)
+            if isinstance(new_value, str):
+                return state == new_value
+            return abs(state - new_value) <= fuzzy
+
+        raw_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit)
+        current_state = value_state(raw_state, warn=True)
+        matched = value_matched(raw_state)
 
         ledger = self.base.control_ledger
         if ledger is not None:
@@ -2123,26 +2122,9 @@ class Inverter:
                     ledger.clear(entity_id)
                 return True
 
-            def value_matched(state):
-                """Whether a read back is the value that was just written, within the fuzzy tolerance."""
-                if isinstance(new_value, str):
-                    return state == new_value
-                try:
-                    state = float(state)
-                except (ValueError, TypeError):
-                    state = 0.0
-                return abs(state - new_value) <= fuzzy
-
-            current_state = self._poll_after_write(entity_id, value_matched, refresh=domain != "sensor", required_unit=required_unit)
-            raw_state = current_state
-            if isinstance(new_value, str):
-                matched = current_state == new_value
-            else:
-                try:
-                    current_state = float(current_state)
-                except (ValueError, TypeError):
-                    current_state = 0.0
-                matched = abs(current_state - new_value) <= fuzzy
+            raw_state = self._poll_after_write(entity_id, value_matched, refresh=domain != "sensor", required_unit=required_unit)
+            current_state = value_state(raw_state)
+            matched = value_matched(raw_state)
 
         if retry == 0:
             self.base.log(f"Inverter {self.id} write_and_poll_value: No write needed for {name}: {new_value} == {current_state} fuzzy {fuzzy}")
