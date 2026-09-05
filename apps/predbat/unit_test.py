@@ -235,6 +235,8 @@ from tests.test_integer_config import (
     test_get_ha_config_normalises_int_default_for_fractional_step,
     test_metric_battery_cycle_fractional_value_not_truncated,
     test_metric_battery_value_scaling_step_resolves_export_margin,
+    test_get_arg_float_schema_int_default_not_truncated,
+    test_component_arg_specs_resolve_float_declared_keys_as_float,
 )
 from tests.test_predbat_metrics_data_age import test_data_age_metrics_round_trip
 from tests.test_metrics_dashboard_control_conflicts import test_control_conflicts_metrics_round_trip, test_control_conflicts_dashboard_renders_section
@@ -608,6 +610,8 @@ def main():
         ("get_ha_config_fractional_default", test_get_ha_config_normalises_int_default_for_fractional_step, "get_ha_config normalises int default to float for fractional-step items (#4296)", False),
         ("metric_battery_cycle_fractional", test_metric_battery_cycle_fractional_value_not_truncated, "metric_battery_cycle fractional value not truncated by get_arg (#4296)", False),
         ("metric_battery_value_scaling_step", test_metric_battery_value_scaling_step_resolves_export_margin, "metric_battery_value_scaling step resolves the export margin (#4840)", False),
+        ("get_arg_float_schema", test_get_arg_float_schema_int_default_not_truncated, "get_arg trusts an APPS_SCHEMA float type over an int default (#4925)", False),
+        ("component_arg_float_specs", test_component_arg_specs_resolve_float_declared_keys_as_float, "COMPONENT_LIST arg specs resolve float-declared keys as float (#4925)", False),
         ("data_age_metrics", test_data_age_metrics_round_trip, "Metrics dashboard data_age_days/data_age_required_days tests", False),
         ("control_conflicts_metrics", test_control_conflicts_metrics_round_trip, "Metrics dashboard control_conflicts round-trip tests", False),
         ("control_conflicts_dashboard", test_control_conflicts_dashboard_renders_section, "Metrics dashboard control_conflicts section render tests", False),

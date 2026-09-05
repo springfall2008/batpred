@@ -161,6 +161,20 @@ class UserInterface:
         Argument getter that can use HA state as well as fixed values
         """
         value = None
+
+        if isinstance(default, int) and not isinstance(default, bool) and "float" in APPS_SCHEMA.get(arg, {}).get("type", "").split("|"):
+            # The default is not just a fallback for a missing value - the coercion at the end of this
+            # function is keyed on the *type* of this default and is applied to whatever value was
+            # resolved, real configured value or not. So a bare int default silently truncates a
+            # genuinely configured fractional value via int(float(value)), even though APPS_SCHEMA
+            # declares the key float and validate_config() accepted the fraction as valid (#4925:
+            # a configured solcast_poll_hours of 4.8 became 4, shortening the poll TTL to 4h and
+            # blowing the 10/day Solcast hobbyist quota; #4296 was the same mechanism on the
+            # CONFIG_ITEMS route, fixed in get_ha_config()). Trust the schema over the literal the
+            # caller happened to write, so no call site - a COMPONENT_LIST arg spec included - can
+            # change the type of a float-declared key by writing 8 instead of 8.0.
+            default = float(default)
+
         if can_override:
             can_override = CONFIG_API_OVERRIDE.get(arg, False)
 
