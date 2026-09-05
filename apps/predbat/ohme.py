@@ -421,12 +421,12 @@ class OhmeAPI(ComponentBase):
         self.control_read_only = False
 
         generation = self.base.charger_registry.snapshot_generation()
-        if not self.charger_plan_ready(generation):
+        if not self.charger_plan_ready(generation, "Ohme API"):
             return
         if not self.refresh_car_windows():
             return
 
-        if not self.charger_plan_ready(generation):
+        if not self.charger_plan_ready(generation, "Ohme API"):
             return
         should_charge = self.should_charge_now()
         drifted = self.control_drifted(should_charge)

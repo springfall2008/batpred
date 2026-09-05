@@ -75,8 +75,10 @@ def test_never_writes_none_into_a_list():
 
     for key in ("car_charging_planned", "car_charging_now", "car_charging_soc", "car_charging_energy", "car_charging_power"):
         assert None not in base.args.get(key, [])
-    # Only one of two slots can report SoC, so the slot-aligned list is omitted entirely
-    # rather than padded - car_charging_manual_soc covers the gap.
+    # Only one of two slots can report SoC, so the key is left exactly as it stands rather than
+    # padded - here that means untouched, since nothing had ever written it. See
+    # test_hand_written_soc_and_now_survive_a_discovered_charger for the case where it holds
+    # the user's own config; car_charging_manual_soc covers the slots with no sensor.
     assert "car_charging_soc" not in base.args
 
 
@@ -1162,3 +1164,201 @@ def test_all_charger_controls_wait_after_slot_reallocation():
     gecloud.base.charger_registry.confirm_plan(gecloud.base.charger_registry.generation)
     asyncio.run(gecloud.evc_control_charge(IN_WINDOW))
     assert commands == [("charger", "stop-charge")]
+
+
+def test_hand_written_soc_and_now_survive_a_discovered_charger():
+    """Discovery must never delete config it cannot compose - the blocker this fixes.
+
+    myenergi supplies neither soc nor now, so registering a Zappi alongside a hand-configured
+    car leaves both keys with a gap. Writing None into them, which is what an earlier version
+    did, deletes the key outright: fetch.py:1383 then read car_charging_soc as 0.0 and planned
+    a full charge into a possibly-full car, and fetch.py:2400 fell back to "no" for
+    car_charging_now. Before the registry existed the myenergi component never wrote either
+    key, so the user's own value simply survived - and that is the outcome restored here.
+    """
+    base = MockBase(
+        num_cars=1,
+        car_charging_planned=["binary_sensor.my_car_plugged"],
+        car_charging_soc=["sensor.my_car_soc"],
+        car_charging_now=["binary_sensor.my_car_charging"],
+    )
+    registry = _registry(base)
+    preregister_legacy(registry, base)
+    registry.replace_source("myenergi", [ChargerEntry("myenergi", "10000001", planned="sensor.predbat_myenergi_zappi_10000001_plug_status", energy="sensor.predbat_myenergi_zappi_10000001_charge_added_session")])
+
+    assert base.args["car_charging_soc"] == ["sensor.my_car_soc"]
+    assert base.args["car_charging_now"] == ["binary_sensor.my_car_charging"]
+    # The key that can be composed still is, and the Zappi still gets its own car.
+    assert base.args["car_charging_planned"] == ["binary_sensor.my_car_plugged", "sensor.predbat_myenergi_zappi_10000001_plug_status"]
+    assert base.args["num_cars"] == 2
+    assert registry.slot_for("myenergi", "10000001") == 1
+
+
+def test_a_second_source_does_not_delete_the_now_the_first_supplied():
+    """A charger arriving without `now` must not take away the `now` another one has.
+
+    The gateway is the only source that populates car_charging_now, so on a gateway install
+    that adds an Ohme - ohme supplies no now - nulling the key on a gap dropped the gateway
+    car's own charging-now sensor. That is essentially every mixed install.
+    """
+    base = MockBase()
+    registry = _registry(base)
+    registry.replace_source("gateway", [ChargerEntry("gateway", "CP-A", planned="binary_sensor.gw_plugged", now="binary_sensor.gw_session_active")])
+    assert base.args["car_charging_now"] == ["binary_sensor.gw_session_active"]
+
+    registry.replace_source("ohme", [ChargerEntry("ohme", "ohme0", planned="binary_sensor.predbat_ohme_connected")])
+
+    # Short for the new car count, which is exactly the pre-registry outcome: fetch.py warns
+    # the extra car is out of range rather than silently reading a deleted key as "no".
+    assert base.args["car_charging_now"] == ["binary_sensor.gw_session_active"]
+    assert base.args["car_charging_planned"] == ["binary_sensor.gw_plugged", "binary_sensor.predbat_ohme_connected"]
+    assert base.args["num_cars"] == 2
+
+
+def test_the_key_is_written_again_once_every_slot_has_a_value():
+    """Leaving a key alone on a gap must not stop the registry writing it when the gap closes."""
+    base = MockBase()
+    registry = _registry(base)
+    registry.replace_source("gateway", [ChargerEntry("gateway", "CP-A", planned="binary_sensor.a", soc="sensor.a_soc")])
+    assert base.args["car_charging_soc"] == ["sensor.a_soc"]
+
+    registry.replace_source("ohme", [ChargerEntry("ohme", "ohme0", planned="binary_sensor.b")])
+    assert base.args["car_charging_soc"] == ["sensor.a_soc"], "a gap leaves the key as it stands"
+
+    registry.replace_source("ohme", [ChargerEntry("ohme", "ohme0", planned="binary_sensor.b", soc="sensor.predbat_ohme_battery_percent")])
+    assert base.args["car_charging_soc"] == ["sensor.a_soc", "sensor.predbat_ohme_battery_percent"]
+
+
+def test_a_slot_gap_is_logged_once_and_again_when_it_changes():
+    """The gap is worth one line per gap, not one per rediscovery."""
+    base = MockBase()
+    logs = []
+    base.log = lambda message, quiet=True: logs.append(message)
+    registry = _registry(base)
+
+    def gap_logs():
+        """Every line the gap rule has written so far."""
+        return [message for message in logs if "leaving car_charging_soc" in message]
+
+    ohme = ChargerEntry("ohme", "ohme0", planned="binary_sensor.b")
+    registry.replace_source("gateway", [ChargerEntry("gateway", "CP-A", planned="binary_sensor.a", soc="sensor.a_soc")])
+    registry.replace_source("ohme", [ohme])
+    assert len(gap_logs()) == 1
+    assert "('ohme', 'ohme0')" in gap_logs()[0]
+
+    registry.replace_source("ohme", [ohme])
+    assert len(gap_logs()) == 1, "an unchanged gap must not be re-logged on every rediscovery"
+
+    # A second charger with no SoC changes what the gap is, which is worth saying.
+    registry.replace_source("gecloud", [ChargerEntry("gecloud", "EVC999999", planned="binary_sensor.c")])
+    assert len(gap_logs()) == 2
+
+
+def test_an_uppercase_gecloud_serial_dedupes_a_legacy_entity():
+    """GivEnergy Cloud serials are upper case, HA entity ids are not - the match must ignore case.
+
+    async_automatic_config_evc lower-cases the serial when it builds the entity name, so a
+    case-sensitive search for the raw device_id could never match a gecloud serial and that
+    half of the legacy dedup silently did nothing. myenergi serials are numeric, which is why
+    it went unnoticed.
+    """
+    base = MockBase(num_cars=1, car_charging_planned=["sensor.givenergy_evc123456_status"])
+    registry = _registry(base)
+    preregister_legacy(registry, base)
+    registry.replace_source("gecloud", [ChargerEntry("gecloud", "EVC123456", planned="binary_sensor.predbat_gecloud_evc123456_evc_car_connected")])
+
+    assert base.args["car_charging_planned"] == ["binary_sensor.predbat_gecloud_evc123456_evc_car_connected"]
+    assert base.args["num_cars"] == 1, "the same physical charger must not be counted twice"
+
+
+def test_an_uppercase_serial_still_respects_the_word_boundary():
+    """Ignoring case must not weaken the boundary rule that keeps a longer serial its own car."""
+    base = MockBase(num_cars=1, car_charging_planned=["sensor.givenergy_we1913g0055_status"])
+    registry = _registry(base)
+    preregister_legacy(registry, base)
+    registry.replace_source("gecloud", [ChargerEntry("gecloud", "WE1913G005", planned="binary_sensor.predbat_gecloud_we1913g005_evc_car_connected")])
+
+    assert base.args["num_cars"] == 2, "WE1913G0055 is a different charger, not a duplicate"
+    assert base.args["car_charging_planned"] == ["sensor.givenergy_we1913g0055_status", "binary_sensor.predbat_gecloud_we1913g005_evc_car_connected"]
+
+
+def test_a_control_loop_logs_once_while_it_waits_for_a_plan():
+    """A blocked control loop must say so - once - rather than returning silently.
+
+    charger_plan_ready() now gates all four control loops and every wait on it is a bare
+    return, so "my charger stopped responding" left nothing at all in the log to explain it.
+    """
+    from component_base import ComponentBase
+
+    class TestComponent(ComponentBase):
+        """Test implementation of ComponentBase."""
+
+        def initialize(self, **kwargs):
+            """No-op initialize for testing."""
+            pass
+
+    base = MockBase()
+    logs = []
+    base.log = lambda message, quiet=True: logs.append(message)
+    component = TestComponent(base)
+    registry = base.charger_registry
+
+    def waits():
+        """Every wait line logged so far."""
+        return [message for message in logs if "waiting for a car charge plan" in message]
+
+    registry.replace_source("ohme", [ChargerEntry("ohme", "ohme0", planned="binary_sensor.predbat_ohme_connected")])
+    generation = registry.snapshot_generation()
+
+    assert not component.charger_plan_ready(generation, "Ohme API")
+    assert not component.charger_plan_ready(generation, "Ohme API")
+    assert len(waits()) == 1, "the wait must be logged once, not once per cycle"
+    assert "Ohme API" in waits()[0]
+
+    registry.confirm_plan(generation)
+    assert component.charger_plan_ready(generation, "Ohme API")
+    assert len(waits()) == 1
+
+    # The latch cleared when the plan arrived, so a fresh wait is reported afresh.
+    registry.replace_source("gecloud", [ChargerEntry("gecloud", "CE1234", planned="binary_sensor.a")])
+    assert not component.charger_plan_ready(registry.snapshot_generation(), "Ohme API")
+    assert len(waits()) == 2
+
+
+def test_published_car_plans_do_not_leak_windows_between_cars():
+    """Each car's published `planned` attribute must hold only that car's own windows.
+
+    A regression test for output.py on its own - no registry involved. The window list was
+    built once outside the per-car loop, so car 1's attribute carried car 0's windows as well
+    as its own and car 2's carried both. Multi-car sites have had this since long before this
+    branch; it matters more now because the new control loops read exactly that attribute to
+    decide whether to charge, so a leaked window starts a charger outside its own plan.
+    """
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from output import Output
+
+    captured = {}
+    base = SimpleNamespace(
+        num_cars=3,
+        prefix="predbat",
+        minutes_now=0,
+        forecast_minutes=1440,
+        midnight_utc=datetime(2026, 9, 4, tzinfo=timezone.utc),
+        car_charging_slots=[
+            [{"start": 60, "end": 120, "kwh": 1, "average": 10, "cost": 10}],
+            [{"start": 180, "end": 240, "kwh": 2, "average": 20, "cost": 40}],
+            [{"start": 300, "end": 360, "kwh": 3, "average": 30, "cost": 90}],
+        ],
+        charger_registry=SimpleNamespace(confirm_plan=lambda generation: None),
+        car_charger_generation=None,
+        time_abs_str=str,
+        dashboard_item=lambda entity, state, attributes: captured.update({entity: attributes}),
+    )
+    Output.publish_car_plan(base)
+
+    published = [captured["binary_sensor.predbat_car_charging_slot" + suffix]["planned"] for suffix in ("", "_1", "_2")]
+    assert [[window["start"] for window in plan] for plan in published] == [["60"], ["180"], ["300"]]
+    # Distinct list objects too: one shared list appended to three times would fail the check
+    # above, but a list published by reference and cleared in place would not.
+    assert len({id(plan) for plan in published}) == 3

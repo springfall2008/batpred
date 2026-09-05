@@ -1493,7 +1493,7 @@ class GECloudDirect(ComponentBase):
         alone - commanding it would achieve nothing and every command costs a retry loop.
         """
         generation = self.base.charger_registry.snapshot_generation()
-        if not self.charger_plan_ready(generation):
+        if not self.charger_plan_ready(generation, "GECloud"):
             return
         if not self.refresh_evc_car_windows(now):
             return
@@ -1506,7 +1506,7 @@ class GECloudDirect(ComponentBase):
         for uuid in self.controlled_evc_devices():
             device = self.evc_device[uuid]
             car_n = self.charger_slot("gecloud", device.get("serial_number", None))
-            if not self.charger_plan_ready(generation):
+            if not self.charger_plan_ready(generation, "GECloud"):
                 return
             if car_n is None:
                 continue

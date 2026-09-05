@@ -536,7 +536,7 @@ class GatewayMQTT(ComponentBase):
             if slot is None:
                 continue
             any_slotted = True
-            if not self.charger_plan_ready(getattr(self, "_ev_windows_generation", None)):
+            if not self.charger_plan_ready(getattr(self, "_ev_windows_generation", None), "GatewayMQTT"):
                 continue
             if slot not in self._ev_windows:
                 continue

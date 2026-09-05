@@ -263,9 +263,11 @@ each component number its own chargers:
   charger's manufacturer serial appears as a whole word in the entity you configured - no letter or digit
   immediately either side of it - which is what happens in practice: `ha-myenergi` publishes
   `sensor.myenergi_zappi_10000001_plug_status` while Predbat's own myenergi component publishes
-  `sensor.predbat_myenergi_zappi_10000001_plug_status` - different entities, same serial. The whole-word rule is
-  what keeps serial `10000001` from also claiming `sensor.myenergi_zappi_100000010_plug_status`, which is a
-  different charger. Only myenergi and GivEnergy Cloud chargers are matched this way, since their ids are
+  `sensor.predbat_myenergi_zappi_10000001_plug_status` - different entities, same serial. Letter case is ignored,
+  because a GivEnergy Cloud serial is upper case (`EVC123456`) while a Home Assistant entity id never is. The
+  whole-word rule is what keeps serial `10000001` from also claiming
+  `sensor.myenergi_zappi_100000010_plug_status`, which is a different charger. Only myenergi and GivEnergy Cloud
+  chargers are matched this way, since their ids are
   manufacturer serials; a Gateway charge point id is chosen by whoever installed it, so a Gateway charger is only
   matched against an entry naming the exact same entity. An entity that names the same charger without carrying
   its serial (one you have renamed, or a template helper) cannot be recognised and stays as its own car - remove
@@ -280,6 +282,18 @@ each component number its own chargers:
 - Energy and power aggregates count identical entity references only once. Legacy measurements carrying a
   discovered manufacturer's serial are replaced by that charger's corresponding measurement. Ohme keeps its
   contribution when other components register chargers or discovery runs again
+- **car_charging_planned**, **car_charging_now** and **car_charging_soc** are one entry per car, so they cannot
+  hold a hole. Not every charger supplies all three - myenergi reports neither the car's SoC nor whether it is
+  charging, Ohme reports no charging-now sensor, and the Gateway omits charging-now under `gateway_evc_control` -
+  so when a discovered charger has nothing for one of these, Predbat leaves that key exactly as it already stands
+  rather than rewriting it. Your own `apps.yaml` value is never taken away, and a list written earlier is never
+  cleared; it is simply shorter than the new car count, and Predbat warns that the extra cars are out of range.
+  Set **car_charging_soc** by hand, or use the manual SoC switch, for a car whose charger cannot report it. A line
+  in the log names the chargers responsible:
+
+  ```text
+  ChargerRegistry: leaving car_charging_soc as it is - no value for [('myenergi', '10000001')]
+  ```
 
 The consequence to be aware of: discovering a charger that sorts ahead of an existing one moves the later ones down
 a slot. Per-car settings (**car_charging_limit**, **car_charging_battery_size**, **car_charging_exclusive**, manual

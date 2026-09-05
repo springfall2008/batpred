@@ -31,9 +31,10 @@ LEGACY_SOURCE = "legacy"
 
 # Slot-aligned args: one entry per car, so a gap cannot be represented. apps.yaml
 # validation rejects non-string list elements (predbat.py:1644), so a slot the registry
-# would have to invent a value for makes the whole key drop out (see materialise). A
-# legacy slot's raw value is not such a gap - it is written back exactly as the user's
-# own config produced it, None included.
+# would have to invent a value for means the key is left exactly as it stands rather than
+# written (see materialise) - never cleared, which would delete the user's own config for
+# the cars that do have a value. A legacy slot's raw value is not such a gap - it is
+# written back exactly as the user's own config produced it, None included.
 SLOT_ALIGNED = ("planned", "now", "soc")
 
 # Site aggregates: minute_data_import_export() sums the list, so gaps are simply
@@ -99,9 +100,13 @@ class ChargerRegistry:
     Components each run on their own thread (hass.py:223 starts them) and the gateway
     registers its chargers from an MQTT callback, so every public entry point that reads or
     mutates the shared state takes ``self._lock``. It is an RLock rather than a plain Lock
-    because replace_source() holds the lock across materialise(), which in turn calls
-    entries() - all three are public, so the lock has to be re-entrant or the outer call
-    would deadlock on the inner one.
+    because replace_source() holds the lock across the arg composition, which in turn calls
+    entries() - both are public, so the lock has to be re-entrant or the outer call would
+    deadlock on the inner one.
+
+    Nothing that blocks on Home Assistant runs under the lock: the composition is pure arg
+    writes, and the one HA round trip (car_charging_rate) is handed back to the caller to
+    make after it releases - see _expose_rates.
     """
 
     def __init__(self, base):
@@ -120,6 +125,10 @@ class ChargerRegistry:
         # user config" and "we put a discovered charger in there and it has since gone away",
         # which does have to be rewritten or the vanished charger's entity would stay behind.
         self._slot_args_written = set()
+        # Slot-aligned field -> the chargers that had no value for it the last time the key was
+        # left as it was, so the explanation is logged when the gap appears or changes rather
+        # than on every rediscovery.
+        self._slot_gap_logged = {}
         self._populated = False
         # The last value the registry wrote to num_cars, or None if it never has. Distinct from
         # _populated, which is only about having held a charger: an external-only claim writes
@@ -140,8 +149,9 @@ class ChargerRegistry:
         One call covers add, update and removal, and is idempotent - which is what makes it
         safe for a component to call on every rediscovery, including with an empty list when
         its chargers have gone away. Atomic in the real sense: the lock is held across the
-        materialise() too, so a component registering on another thread can neither observe
-        nor interleave with a half-composed set of args.
+        arg composition too, so a component registering on another thread can neither observe
+        nor interleave with a half-composed set of args. The one thing deliberately left
+        outside it is the car_charging_rate exposure - see _expose_rates.
         """
         with self._lock:
             deduped = {}
@@ -151,7 +161,8 @@ class ChargerRegistry:
                 self._by_source[source] = list(deduped.values())
             else:
                 self._by_source.pop(source, None)
-            self.materialise()
+            pending = self._materialise_locked()
+        self._expose_rates(pending)
 
     def set_external_num_cars(self, source, count):
         """Declare that `source` needs num_cars held at `count` for cars it owns itself.
@@ -175,7 +186,8 @@ class ChargerRegistry:
                 self._external_counts[source] = count
             else:
                 self._external_counts.pop(source, None)
-            self.materialise()
+            pending = self._materialise_locked()
+        self._expose_rates(pending)
 
     def entries(self):
         """Every registered charger, in deterministic slot order, clamped to the kernel ceiling."""
@@ -253,6 +265,14 @@ class ChargerRegistry:
         either side of it. Entity ids join their parts with "_", so that is exactly the boundary
         an embedded serial has, while a bare substring test would read serial 10000001 as naming
         sensor.myenergi_zappi_100000010_plug_status and drop a different charger's car.
+
+        The match is case insensitive because the two sides are not written the same way. HA
+        entity ids are always lower case, and async_automatic_config_evc lower-cases the serial
+        when it builds one - but a GivEnergy Cloud serial is upper case at source ("EVC123456",
+        "WE1913G005"), which is what device_id carries. A case-sensitive test could therefore
+        never match a gecloud serial at all, so that half of the dedup silently did nothing and
+        the duplicated charger stayed as its own car. myenergi serials are numeric, which is
+        why the tests did not see it.
         """
         if not entry.planned:
             return False
@@ -260,7 +280,7 @@ class ChargerRegistry:
             return True
         if not isinstance(entry.planned, str):
             return False
-        return any(re.search(r"(?<![0-9a-zA-Z])" + re.escape(device_id) + r"(?![0-9a-zA-Z])", entry.planned) for device_id in component_ids)
+        return any(re.search(r"(?<![0-9a-zA-Z])" + re.escape(device_id) + r"(?![0-9a-zA-Z])", entry.planned, re.IGNORECASE) for device_id in component_ids)
 
     def slot_for(self, source, device_id):
         """The car index this charger was given, or None if it is not registered.
@@ -385,85 +405,135 @@ class ChargerRegistry:
         apps.yaml values through verbatim.
 
         Takes the lock, so it is safe to call directly; replace_source() already holds it,
-        which is why the lock is re-entrant.
+        which is why the lock is re-entrant. The car_charging_rate exposure runs after the
+        lock is dropped - see _expose_rates.
         """
         with self._lock:
-            entries = self.entries()
-            slots = {entry.key(): slot for slot, entry in enumerate(entries)}
-            if slots != self._slots:
-                self.generation += 1
-                # Only on a change: this runs on every rediscovery, and the map is what a support
-                # log needs to explain which charger a car number refers to.
-                self.base.log("Info: ChargerRegistry: slots {}".format({"{}/{}".format(source, device_id): slot for (source, device_id), slot in sorted(slots.items(), key=lambda item: item[1])}))
-            self._slots = slots
-            if not entries:
-                if self._populated:
-                    # The registry held chargers before and is now empty - clear the stale args,
-                    # but only the ones the registry itself wrote. A key holding nothing but the
-                    # user's own legacy config was never ours, so clearing it would delete config
-                    # the registry only ever read.
-                    self._write_num_cars(0)
-                    for field in SLOT_ALIGNED:
-                        if field in self._slot_args_written:
-                            self.base.set_arg("car_charging_{}".format(field), None)
-                    self._write_aggregates([])
-                elif (self._num_cars_written is not None or self._external_counts) and self._owns_num_cars():
-                    # No charger has ever been registered here, so num_cars is carrying nothing but
-                    # declared claims - Octopus/Kraken cars that have no charger of their own. That
-                    # still has to be written from here, with no entries behind it, and lowered
-                    # again when the claim is released; gating it on _populated meant such a claim
-                    # could be raised but never taken back, holding a phantom car up for the rest
-                    # of the run. Slot-aligned and aggregate keys are untouched: a claim never
-                    # composed any, so there is nothing there that is the registry's to clear.
-                    #
-                    # A registry that has never written num_cars and holds no claim does nothing at
-                    # all - a site with neither chargers nor claims is left exactly as its
-                    # apps.yaml configured it.
-                    self._write_num_cars(0)
-                return
+            pending = self._materialise_locked()
+        self._expose_rates(pending)
 
-            self._populated = True
-            self._write_num_cars(len(entries))
+    def _expose_rates(self, pending):
+        """Write the per-slot car_charging_rate UI items, with the registry lock NOT held.
 
-            for field in SLOT_ALIGNED:
-                values = [getattr(entry, field) for entry in entries]
-                arg = "car_charging_{}".format(field)
-                if all(entry.source == LEGACY_SOURCE for entry in entries) and field not in self._slot_args_written:
-                    # Nothing here but the user's own apps.yaml slots, and the registry has never
-                    # written this key: it already holds exactly what their config produced, so
-                    # leave it completely alone rather than round-tripping it through here. That
-                    # matters because auto_config() runs first and turns an unmatched list regex
-                    # into a None (userinterface.py:1098), which the all-or-omit rule below would
-                    # otherwise read as a gap and drop the whole key - taking the *valid* sensors
-                    # in the other slots with it.
-                    continue
-                # Only a component slot with no value is a gap the registry would have to invent
-                # something for. A legacy slot's value - including that auto_config None - is the
-                # user's own config, and goes back verbatim, which is precisely what Predbat read
-                # from the key before the registry existed.
-                missing = [entry.key() for entry, value in zip(entries, values) if not value and entry.source != LEGACY_SOURCE]
-                if missing:
-                    # A component-caused gap cannot be expressed: None fails validation and a
-                    # placeholder would be read as a real entity. Omit the list and let
-                    # car_charging_manual_soc (or the plan, for "now") cover the slots that do
-                    # have one.
-                    self.base.log("Warn: ChargerRegistry: not setting {} - no value for {}".format(arg, missing))
-                    self.base.set_arg(arg, None)
-                elif any(values):
-                    self.base.set_arg(arg, values)
-                else:
-                    self.base.set_arg(arg, None)
-                self._slot_args_written.add(field)
+        car_charging_rate is a UI config item (input_number), not an arg - get_arg consults the
+        UI config before args, so set_arg would be ignored for it. But expose_config() reaches
+        ha.set_state and a synchronous HTTP POST (ha.py:1076), and replace_source() runs on
+        component threads - the gateway's straight from an MQTT callback - while the main loop
+        waits on the same lock in snapshot_generation() (fetch.py:2836). Holding the lock across
+        that POST made every registration block the main loop for as long as HA took to answer.
 
-            self._write_aggregates(entries)
+        So the (item, value) pairs are composed under the lock and written once it is released.
+        Only gateway chargers set max_rate_kw, so only gateway installs ever had the stall.
 
-            # car_charging_rate is a UI config item (input_number), not an arg - get_arg consults
-            # the UI config before args, so set_arg would be ignored here.
-            expose = getattr(self.base, "expose_config", None)
-            if expose is not None:
-                for slot, entry in enumerate(entries):
-                    if entry.max_rate_kw:
-                        expose("car_charging_rate" if slot == 0 else "car_charging_rate_{}".format(slot), entry.max_rate_kw)
+        The honest cost of moving it out: two components registering at once can have their
+        writes land in the opposite order to their compositions, leaving the older rate
+        standing. It is self-correcting - each rediscovery composes and writes the value again -
+        and it is a config default a user may override anyway, which is a far smaller thing
+        than blocking the main loop on an HA round trip.
+        """
+        expose = getattr(self.base, "expose_config", None)
+        if expose is None:
+            return
+        for item, value in pending:
+            expose(item, value)
+
+    def _materialise_locked(self):
+        """Compose and write the args; the caller must already hold the lock.
+
+        Returns the car_charging_rate (item, value) pairs for _expose_rates to write after the
+        lock is released, so no blocking HA I/O happens inside the critical section.
+        """
+        entries = self.entries()
+        slots = {entry.key(): slot for slot, entry in enumerate(entries)}
+        if slots != self._slots:
+            self.generation += 1
+            # Only on a change: this runs on every rediscovery, and the map is what a support
+            # log needs to explain which charger a car number refers to.
+            self.base.log("Info: ChargerRegistry: slots {}".format({"{}/{}".format(source, device_id): slot for (source, device_id), slot in sorted(slots.items(), key=lambda item: item[1])}))
+        self._slots = slots
+        if not entries:
+            self._slot_gap_logged.clear()
+            if self._populated:
+                # The registry held chargers before and is now empty - clear the stale args,
+                # but only the ones the registry itself wrote. A key holding nothing but the
+                # user's own legacy config was never ours, so clearing it would delete config
+                # the registry only ever read.
+                self._write_num_cars(0)
+                for field in SLOT_ALIGNED:
+                    if field in self._slot_args_written:
+                        self.base.set_arg("car_charging_{}".format(field), None)
+                self._write_aggregates([])
+            elif (self._num_cars_written is not None or self._external_counts) and self._owns_num_cars():
+                # No charger has ever been registered here, so num_cars is carrying nothing but
+                # declared claims - Octopus/Kraken cars that have no charger of their own. That
+                # still has to be written from here, with no entries behind it, and lowered
+                # again when the claim is released; gating it on _populated meant such a claim
+                # could be raised but never taken back, holding a phantom car up for the rest
+                # of the run. Slot-aligned and aggregate keys are untouched: a claim never
+                # composed any, so there is nothing there that is the registry's to clear.
+                #
+                # A registry that has never written num_cars and holds no claim does nothing at
+                # all - a site with neither chargers nor claims is left exactly as its
+                # apps.yaml configured it.
+                self._write_num_cars(0)
+            return []
+
+        self._populated = True
+        self._write_num_cars(len(entries))
+
+        for field in SLOT_ALIGNED:
+            values = [getattr(entry, field) for entry in entries]
+            arg = "car_charging_{}".format(field)
+            if all(entry.source == LEGACY_SOURCE for entry in entries) and field not in self._slot_args_written:
+                # Nothing here but the user's own apps.yaml slots, and the registry has never
+                # written this key: it already holds exactly what their config produced, so
+                # leave it completely alone rather than round-tripping it through here. That
+                # matters because auto_config() runs first and turns an unmatched list regex
+                # into a None (userinterface.py:1098), which the all-or-omit rule below would
+                # otherwise read as a gap and drop the whole key - taking the *valid* sensors
+                # in the other slots with it.
+                continue
+            # Only a component slot with no value is a gap the registry would have to invent
+            # something for. A legacy slot's value - including that auto_config None - is the
+            # user's own config, and goes back verbatim, which is precisely what Predbat read
+            # from the key before the registry existed.
+            missing = [entry.key() for entry, value in zip(entries, values) if not value and entry.source != LEGACY_SOURCE]
+            if missing:
+                # A component-caused gap cannot be expressed: None fails validation and a
+                # placeholder would be read as a real entity. So the key is left exactly as it
+                # stands - not written, and above all not cleared.
+                #
+                # Clearing it (which this used to do) was destructive rather than merely
+                # incomplete. myenergi supplies neither soc nor now, ohme supplies no now, and
+                # gateway supplies no now under gateway_evc_control, so on those installs the
+                # gap is permanent - and none of those components ever wrote these keys before
+                # the registry existed, which is exactly why a hand-written car_charging_soc
+                # used to survive discovery. Deleting it made fetch.py:1383 read the SoC as 0.0
+                # and plan a full charge into a possibly-full car, and dropped
+                # car_charging_now (fetch.py:2400 then falls back to "no") for the gateway car
+                # that did supply one as soon as an ohme registered alongside it.
+                #
+                # Leaving it produces the pre-registry outcome instead: a list that is short for
+                # the new car count, plus fetch.py's own out-of-range warning for the cars past
+                # its end. A stale value is recoverable; a deleted one is not. Where the value
+                # standing there is one the registry itself wrote for an earlier composition,
+                # that reasoning is the same - it is still the closest thing to the truth
+                # available, and car_charging_manual_soc (or the plan, for "now") covers the
+                # slots it does not reach.
+                if missing != self._slot_gap_logged.get(field):
+                    self._slot_gap_logged[field] = missing
+                    self.base.log("Warn: ChargerRegistry: leaving {} as it is - no value for {}".format(arg, missing))
+                continue
+            self._slot_gap_logged.pop(field, None)
+            if any(values):
+                self.base.set_arg(arg, values)
+            else:
+                self.base.set_arg(arg, None)
+            self._slot_args_written.add(field)
+
+        self._write_aggregates(entries)
+
+        return [("car_charging_rate" if slot == 0 else "car_charging_rate_{}".format(slot), entry.max_rate_kw) for slot, entry in enumerate(entries) if entry.max_rate_kw]
 
 
 def is_unconfigured(value):

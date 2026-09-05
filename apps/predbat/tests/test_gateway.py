@@ -4233,12 +4233,15 @@ class TestEvAutoConfig:
     def test_car_charging_now_omitted_when_controlling(self):
         """now=None per-charger when gateway_evc_control is True, to prevent a feedback loop.
 
-        The registry writes an explicit None for a slot-aligned field with no values at
-        all (not skip the key), unlike the old set_arg-only path which never touched it.
+        The key is left exactly as it stands rather than written, which is what the old
+        set_arg-only path did too - it never touched it. Writing an explicit None here (which
+        an earlier version of the registry did) deletes the key, so a car_charging_now the
+        user had set by hand, or another charger had supplied, disappeared the moment EVC
+        control was turned on.
         """
         gw = self._make_gateway(ev_enable=True, evc_control=True)
         gw._register_ev_chargers(self._status_with_ev())
-        assert gw._args["car_charging_now"] is None
+        assert "car_charging_now" not in gw._args
 
     def test_charge_rate_falls_back_to_7_4_when_capability_unknown(self):
         """car_charging_rate expose_config uses 7.4kW fallback when max_current_a is 0."""
