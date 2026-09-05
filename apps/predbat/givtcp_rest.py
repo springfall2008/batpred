@@ -420,9 +420,9 @@ class GivTCPRest:
             if json:
                 if "Control" in json:
                     if loop == 0:
-                        self.base.log("Inverter {} REST GET {} successful".format(inverter.id, url))
+                        self.base.log("GivTCP: Inverter {} REST GET {} successful".format(inverter.id, url))
                     else:
-                        self.base.log("Info: Inverter {} REST GET {} successful on retry {}".format(inverter.id, url, loop))
+                        self.base.log("Info: GivTCP: Inverter {} REST GET {} successful on retry {}".format(inverter.id, url, loop))
                     return json
 
             # if retry = False then don't retry further GET calls
@@ -435,11 +435,11 @@ class GivTCPRest:
             else:
                 delay = 40
 
-            self.base.log('Warn: inverter {} didn\'t receive JSON response from REST GET {}, received "{}". Waiting {}s then retrying'.format(inverter.id, url, json, delay))
+            self.base.log('Warn: GivTCP: inverter {} didn\'t receive JSON response from REST GET {}, received "{}". Waiting {}s then retrying'.format(inverter.id, url, json, delay))
             inverter.sleep(delay)
 
         # Exhausted retry attempts, fail REST GET and fallback to using HA entities (if they have been configured in apps.yaml)
-        self.base.log("Warn: Inverter {} unable to read REST data from {} - REST will be skipped for this run".format(inverter.id, url))
+        self.base.log("Warn: GivTCP: Inverter {} unable to read REST data from {} - REST will be skipped for this run".format(inverter.id, url))
         self.base.record_status("Warn: Inverter {} unable to read REST data from {} - REST will be skipped".format(inverter.id, url), had_errors=True)
         return None
 
@@ -460,7 +460,7 @@ class GivTCPRest:
         try:
             r = requests.post(url, json=json, timeout=INVERTER_REST_TIMEOUT)
         except Exception as e:
-            self.base.log("Warn: Inverter {} REST POST {} failed: {}".format(self.inverter.id, url, e))
+            self.base.log("Warn: GivTCP: Inverter {} REST POST {} failed: {}".format(self.inverter.id, url, e))
             return None
         return r
 
@@ -473,7 +473,7 @@ class GivTCPRest:
         try:
             r = requests.get(url, timeout=INVERTER_REST_TIMEOUT)
         except Exception as e:
-            self.base.log("Error: Exception raised {}".format(e))
+            self.base.log("Error: GivTCP: Exception raised {}".format(e))
 
         if r and (r.status_code == 200):
             return r.json()
@@ -504,11 +504,11 @@ class GivTCPRest:
                 new_value = new_value.lower() in ["enable", "on", "true"]
             if new_value == enable:
                 inverter.count_register_writes += 1
-                self.base.log("Set inverter {} charge target enable {} via REST successful on retry {}".format(inverter.id, enable, retry))
+                self.base.log("GivTCP: Set inverter {} charge target enable {} via REST successful on retry {}".format(inverter.id, enable, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Set inverter {} charge target enable {} via REST failed".format(inverter.id, enable))
+        self.base.log("Warn: GivTCP: Set inverter {} charge target enable {} via REST failed".format(inverter.id, enable))
         self.base.record_status("Warn: Inverter {} REST failed to enableChargeTarget".format(inverter.id), had_errors=True)
         return False
 
@@ -525,11 +525,11 @@ class GivTCPRest:
             inverter.rest_data = self.run_all(inverter.rest_data)
             if float(inverter.rest_data["Control"]["Target_SOC"]) == target:
                 inverter.count_register_writes += 1
-                self.base.log("Inverter {} charge target {} via REST successful on retry {}".format(inverter.id, target, retry))
+                self.base.log("GivTCP: Inverter {} charge target {} via REST successful on retry {}".format(inverter.id, target, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Inverter {} charge target {} via REST failed".format(inverter.id, target))
+        self.base.log("Warn: GivTCP: Inverter {} charge target {} via REST failed".format(inverter.id, target))
         self.base.record_status("Warn: Inverter {} REST failed to setChargeTarget".format(inverter.id), had_errors=True)
         return False
 
@@ -549,11 +549,11 @@ class GivTCPRest:
             # MINUTE_WATT and multiplied it straight back, and the stored copy is what left this at 5000W.
             if abs(new - rate) < (self.write_tolerance_watts() / 12):
                 inverter.count_register_writes += 1
-                self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(inverter.id, rate, retry))
+                self.base.log("GivTCP: Inverter {} set charge rate {} via REST successful on retry {}".format(inverter.id, rate, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Inverter {} set charge rate {} via REST failed got {}".format(inverter.id, rate, inverter.rest_data["Control"]["Battery_Charge_Rate"]))
+        self.base.log("Warn: GivTCP: Inverter {} set charge rate {} via REST failed got {}".format(inverter.id, rate, inverter.rest_data["Control"]["Battery_Charge_Rate"]))
         self.base.record_status("Warn: Inverter {} REST failed to setChargeRate".format(inverter.id), had_errors=True)
         return False
 
@@ -571,11 +571,11 @@ class GivTCPRest:
             new = int(inverter.rest_data["Control"]["Battery_Discharge_Rate"])
             if abs(new - rate) < (self.write_tolerance_watts() / 25):
                 inverter.count_register_writes += 1
-                self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(inverter.id, rate, retry))
+                self.base.log("GivTCP: Inverter {} set discharge rate {} via REST successful on retry {}".format(inverter.id, rate, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Inverter {} set discharge rate {} via REST failed got {}".format(inverter.id, rate, inverter.rest_data["Control"]["Battery_Discharge_Rate"]))
+        self.base.log("Warn: GivTCP: Inverter {} set discharge rate {} via REST failed got {}".format(inverter.id, rate, inverter.rest_data["Control"]["Battery_Discharge_Rate"]))
         self.base.record_status("Warn: Inverter {} REST failed to setDischargeRate to {} got {}".format(inverter.id, rate, inverter.rest_data["Control"]["Battery_Discharge_Rate"]), had_errors=True)
         return False
 
@@ -592,11 +592,11 @@ class GivTCPRest:
             inverter.rest_data = self.run_all(inverter.rest_data)
             if inverter_mode == inverter.rest_data["Control"]["Mode"]:
                 inverter.count_register_writes += 1
-                self.base.log("Set inverter {} mode {} via REST successful on retry {}".format(inverter.id, inverter_mode, retry))
+                self.base.log("GivTCP: Set inverter {} mode {} via REST successful on retry {}".format(inverter.id, inverter_mode, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Set inverter {} mode {} via REST failed".format(inverter.id, inverter_mode))
+        self.base.log("Warn: GivTCP: Set inverter {} mode {} via REST failed".format(inverter.id, inverter_mode))
         self.base.record_status("Warn: Inverter {} REST failed to setBatteryMode".format(inverter.id), had_errors=True)
         return False
 
@@ -613,11 +613,11 @@ class GivTCPRest:
             inverter.rest_data = self.run_all(inverter.rest_data)
             if pause_mode == inverter.rest_data["Control"]["Battery_pause_mode"]:
                 inverter.count_register_writes += 1
-                self.base.log("Set inverter {} pause mode {} via REST successful on retry {}".format(inverter.id, pause_mode, retry))
+                self.base.log("GivTCP: Set inverter {} pause mode {} via REST successful on retry {}".format(inverter.id, pause_mode, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Set inverter {} pause mode {} via REST failed".format(inverter.id, pause_mode))
+        self.base.log("Warn: GivTCP: Set inverter {} pause mode {} via REST failed".format(inverter.id, pause_mode))
         self.base.record_status("Warn: Inverter {} REST failed to setBatteryPauseMode got {}".format(inverter.id, inverter.rest_data["Control"]["Battery_pause_mode"]), had_errors=True)
         return False
 
@@ -636,11 +636,11 @@ class GivTCPRest:
             result = int(float(inverter.rest_data["Control"]["Battery_Power_Reserve"]))
             if result == target:
                 inverter.count_register_writes += 1
-                self.base.log("Set inverter {} reserve {} via REST successful on retry {}".format(inverter.id, target, retry))
+                self.base.log("GivTCP: Set inverter {} reserve {} via REST successful on retry {}".format(inverter.id, target, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Set inverter {} reserve {} via REST failed on retry {} got {}".format(inverter.id, target, retry, result))
+        self.base.log("Warn: GivTCP: Set inverter {} reserve {} via REST failed on retry {} got {}".format(inverter.id, target, retry, result))
         self.base.record_status("Warn: Inverter {} REST failed to setReserve to {} got {}".format(inverter.id, target, result), had_errors=True)
         return False
 
@@ -663,11 +663,11 @@ class GivTCPRest:
                     new_value = False
             if new_value == enable:
                 inverter.count_register_writes += 1
-                self.base.log("Set inverter {} charge schedule {} via REST successful on retry {}".format(inverter.id, enable, retry))
+                self.base.log("GivTCP: Set inverter {} charge schedule {} via REST successful on retry {}".format(inverter.id, enable, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Set inverter {} charge schedule {} via REST failed got {}".format(inverter.id, enable, inverter.rest_data["Control"]["Enable_Charge_Schedule"]))
+        self.base.log("Warn: GivTCP: Set inverter {} charge schedule {} via REST failed got {}".format(inverter.id, enable, inverter.rest_data["Control"]["Enable_Charge_Schedule"]))
         self.base.record_status("Warn: Inverter {} REST failed to enableChargeSchedule".format(inverter.id), had_errors=True)
         return False
 
@@ -690,11 +690,11 @@ class GivTCPRest:
                     new_value = False
             if new_value == enable:
                 inverter.count_register_writes += 1
-                self.base.log("Set inverter {} discharge schedule {} via REST successful on retry {}".format(inverter.id, enable, retry))
+                self.base.log("GivTCP: Set inverter {} discharge schedule {} via REST successful on retry {}".format(inverter.id, enable, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Set inverter {} discharge schedule {} via REST failed got {}".format(inverter.id, enable, inverter.rest_data["Control"]["Enable_Discharge_Schedule"]))
+        self.base.log("Warn: GivTCP: Set inverter {} discharge schedule {} via REST failed got {}".format(inverter.id, enable, inverter.rest_data["Control"]["Enable_Discharge_Schedule"]))
         self.base.record_status("Warn: Inverter {} REST failed to enableDischargeSchedule".format(inverter.id), had_errors=True)
         return False
 
@@ -711,11 +711,11 @@ class GivTCPRest:
             inverter.rest_data = self.run_all(inverter.rest_data)
             if inverter.rest_data["Timeslots"]["Battery_pause_start_time_slot"] == start and inverter.rest_data["Timeslots"]["Battery_pause_end_time_slot"] == finish:
                 inverter.count_register_writes += 1
-                self.base.log("Inverter {} set pause slot {} via REST successful after retry {}".format(inverter.id, data, retry))
+                self.base.log("GivTCP: Inverter {} set pause slot {} via REST successful after retry {}".format(inverter.id, data, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Inverter {} set pause slot {} via REST failed".format(inverter.id, data))
+        self.base.log("Warn: GivTCP: Inverter {} set pause slot {} via REST failed".format(inverter.id, data))
         self.base.record_status("Warn: Inverter {} REST failed to setPauseSlot".format(inverter.id), had_errors=True)
         return False
 
@@ -732,11 +732,11 @@ class GivTCPRest:
             inverter.rest_data = self.run_all(inverter.rest_data)
             if inverter.rest_data["Timeslots"]["Charge_start_time_slot_1"] == start and inverter.rest_data["Timeslots"]["Charge_end_time_slot_1"] == finish:
                 inverter.count_register_writes += 1
-                self.base.log("Inverter {} set charge slot 1 {} via REST successful after retry {}".format(inverter.id, data, retry))
+                self.base.log("GivTCP: Inverter {} set charge slot 1 {} via REST successful after retry {}".format(inverter.id, data, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Inverter {} set charge slot 1 {} via REST failed".format(inverter.id, data))
+        self.base.log("Warn: GivTCP: Inverter {} set charge slot 1 {} via REST failed".format(inverter.id, data))
         self.base.record_status("Warn: Inverter {} REST failed to setChargeSlot1".format(inverter.id), had_errors=True)
         return False
 
@@ -805,11 +805,11 @@ class GivTCPRest:
                 result = to_int(inverter.rest_data.get("raw", {}).get("invertor", {}).get("discharge_target_soc_1", None))
             if result == target:
                 inverter.count_register_writes += 1
-                self.base.log("Inverter {} Set export target slot 1 {} via REST successful after retry {}".format(inverter.id, data, retry))
+                self.base.log("GivTCP: Inverter {} Set export target slot 1 {} via REST successful after retry {}".format(inverter.id, data, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Inverter {} Set export target slot 1 {} via REST failed got {}".format(inverter.id, data, result))
+        self.base.log("Warn: GivTCP: Inverter {} Set export target slot 1 {} via REST failed got {}".format(inverter.id, data, result))
         self.base.record_status("Warn: Inverter {} REST failed to setExportTarget got {}".format(inverter.id, result), had_errors=True)
         return False
 
@@ -826,10 +826,10 @@ class GivTCPRest:
             inverter.rest_data = self.run_all(inverter.rest_data)
             if inverter.rest_data["Timeslots"]["Discharge_start_time_slot_1"] == start and inverter.rest_data["Timeslots"]["Discharge_end_time_slot_1"] == finish:
                 inverter.count_register_writes += 1
-                self.base.log("Inverter {} Set discharge slot 1 {} via REST successful after retry {}".format(inverter.id, data, retry))
+                self.base.log("GivTCP: Inverter {} Set discharge slot 1 {} via REST successful after retry {}".format(inverter.id, data, retry))
                 return True
             inverter.sleep(2)
 
-        self.base.log("Warn: Inverter {} Set discharge slot 1 {} via REST failed".format(inverter.id, data))
+        self.base.log("Warn: GivTCP: Inverter {} Set discharge slot 1 {} via REST failed".format(inverter.id, data))
         self.base.record_status("Warn: Inverter {} REST failed to setDischargeSlot1".format(inverter.id), had_errors=True)
         return False
