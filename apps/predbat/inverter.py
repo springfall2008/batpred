@@ -162,24 +162,24 @@ class Inverter:
                 if entity_id:
                     entity_id = self.base.resolve_arg(service, entity_id, indirect=False)
                 if shell:
-                    self.log("Warn: Calling restart shell command: {}".format(shell))
+                    self.log("Warn: Inverter {} Calling restart shell command: {}".format(self.id, shell))
                     os.system(shell)
                 if service:
                     if addon:
-                        self.log("Warn: Calling restart service {} with addon {}".format(service, addon))
+                        self.log("Warn: Inverter {} Calling restart service {} with addon {}".format(self.id, service, addon))
                         self.base.call_service_wrapper(service, addon=addon)
                     elif entity_id:
-                        self.log("Warn: Calling restart service {} with entity_id {}".format(service, entity_id))
+                        self.log("Warn: Inverter {} Calling restart service {} with entity_id {}".format(self.id, service, entity_id))
                         self.base.call_service_wrapper(service, entity_id=entity_id)
                     else:
-                        self.log("Warn: Calling restart service {}".format(service))
+                        self.log("Warn: Inverter {} Calling restart service {}".format(self.id, service))
                         self.base.call_service_wrapper(service)
                     if self.base.get_arg("set_system_notify"):
                         self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
                     self.sleep(15)
             raise Exception("Auto-restart triggered")
         else:
-            self.log("Info: auto_restart not defined in apps.yaml, Predbat can't auto-restart inverter control")
+            self.log("Info: Inverter {} auto_restart not defined in apps.yaml, Predbat can't auto-restart inverter control".format(self.id))
 
     def create_missing_arg(self, arg, default):
         """
@@ -385,7 +385,7 @@ class Inverter:
                         tz = pytz.timezone(self.base.get_arg("timezone", "Europe/London"))
                         self.inverter_time = tz.localize(datetime.strptime(ivtime, self.inv_clock_time_format))
                     except (ValueError, TypeError):
-                        self.base.log(f"Warn: Unable to read inverter time string {ivtime} using formats {[TIME_FORMAT, TIME_FORMAT_OCTOPUS, self.inv_clock_time_format]}")
+                        self.base.log(f"Warn: Inverter {self.id} unable to read inverter time string {ivtime} using formats {[TIME_FORMAT, TIME_FORMAT_OCTOPUS, self.inv_clock_time_format]}")
                         self.inverter_time = None
                         self.auto_restart("Unable to read inverter time")
 
@@ -431,11 +431,11 @@ class Inverter:
         self.reserve_current = dp2(self.soc_max * self.reserve_percent_current / 100.0)
 
         if self.reserve_min < battery_min_soc:
-            self.base.log("Increasing set_reserve_min{} from {}%  to battery_min_soc of {}%".format(reserve_min_postfix, self.reserve_min, battery_min_soc))
+            self.base.log("Inverter {} Increasing set_reserve_min{} from {}%  to battery_min_soc of {}%".format(self.id, reserve_min_postfix, self.reserve_min, battery_min_soc))
             self.base.expose_config("set_reserve_min" + reserve_min_postfix, battery_min_soc)
             self.reserve_min = battery_min_soc
 
-        self.base.log("Reserve min: {}%, battery_min: {}%".format(self.reserve_min, dp0(battery_min_soc)))
+        self.base.log("Inverter {} Reserve min: {}%, battery_min: {}%".format(self.id, self.reserve_min, dp0(battery_min_soc)))
         if (self.base.set_reserve_enable and self.inv_has_reserve_soc) or not self.inv_has_reserve_soc:
             self.reserve_percent = self.reserve_min
         else:
@@ -532,10 +532,10 @@ class Inverter:
         # capacity takes effect instead of falling through to the 8 kWh default below.
         if (not self.soc_max or self.soc_max <= 0) and self.nominal_capacity and self.nominal_capacity > 0:
             self.soc_max = dp3(self.nominal_capacity * self.battery_scaling)
-            self.log("Note: inverter {} soc_max source unavailable this cycle, retained last known battery size {:.3f} kWh".format(self.id, self.soc_max))
+            self.log("Note: Inverter {} soc_max source unavailable this cycle, retained last known battery size {:.3f} kWh".format(self.id, self.soc_max))
 
         if not self.nominal_capacity or self.nominal_capacity <= 0:
-            self.log("Note: Battery size was not set for inverter {}, enabling battery_scaling_auto".format(self.id))
+            self.log("Note: Inverter {} battery size was not set, enabling battery_scaling_auto".format(self.id))
             self.base.battery_scaling_auto = True
 
         # Run find_battery_size at most once per calendar day, always update the history sensor
@@ -575,7 +575,7 @@ class Inverter:
                 new_scaling = max(scaling_lower, min(scaling_upper, trimmed_mean / self.nominal_capacity))
                 self.battery_scaling = new_scaling
                 self.soc_max = dp3(self.nominal_capacity * new_scaling)
-                self.log("Info: inverter {} battery_scaling_auto set scaling {:.3f} (mean {:.2f} kWh, nominal {:.2f} kWh) resulting in soc_max {:.3f} kWh".format(self.id, new_scaling, trimmed_mean, self.nominal_capacity, self.soc_max))
+                self.log("Info: Inverter {} battery_scaling_auto set scaling {:.3f} (mean {:.2f} kWh, nominal {:.2f} kWh) resulting in soc_max {:.3f} kWh".format(self.id, new_scaling, trimmed_mean, self.nominal_capacity, self.soc_max))
             else:
                 # No nominal configured - use trimmed mean directly without clamping
                 self.soc_max = dp3(trimmed_mean)
@@ -587,7 +587,7 @@ class Inverter:
 
         # Final fallback if soc_max is still not determined
         if not self.soc_max or self.soc_max <= 0:
-            self.log("Warn: Unable to determine battery size for inverter {}, using 8 kWh default for this cycle, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
+            self.log("Warn: Inverter {} unable to determine battery size, using 8 kWh default for this cycle, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
             self.soc_max = 8.0
             self.nominal_capacity = self.soc_max
             # Intentionally do NOT persist the fallback into the soc_max / soc_max_nominal args:
@@ -730,7 +730,7 @@ class Inverter:
             battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=self.base.max_days_previous, required=False)
 
             if not soc_percent or not battery_power_data:
-                self.log("Warn: Unable to estimate battery size - no history data available")
+                self.log("Warn: Inverter {} unable to estimate battery size - no history data available".format(self.id))
                 return None
 
             battery_power, _ = minute_data(
@@ -752,7 +752,7 @@ class Inverter:
                 for minute in battery_power:
                     battery_power[minute] = -battery_power[minute]
             min_len = min(len(soc_percent), len(battery_power))
-            self.log("Find battery size has {} days of data, max days {}".format(dp0(min_len / 60 / 24.0), self.base.max_days_previous))
+            self.log("Inverter {} Find battery size has {} days of data, max days {}".format(self.id, dp0(min_len / 60 / 24.0), self.base.max_days_previous))
 
             estimate_battery_sizes = []
             rejected_battery_sizes = {}
@@ -889,7 +889,7 @@ class Inverter:
                             sample_count += 1
 
                         power_added_kwh = power_added / 1000.0
-                        self.log("  Power added over {} samples is {}kWh".format(sample_count, dp1(power_added_kwh)))
+                        self.log("Inverter {} power added over {} samples is {}kWh".format(self.id, sample_count, dp1(power_added_kwh)))
 
                         if power_added_kwh < min_power_added_kwh:
                             reject_battery_sample("energy_too_small")
@@ -954,10 +954,10 @@ class Inverter:
                 )
                 return average_battery_size
             else:
-                self.log("Warn: Unable to find any suitable charge periods to estimate battery size, rejected samples {}".format(rejected_battery_sizes))
+                self.log("Warn: Inverter {} Unable to find any suitable charge periods to estimate battery size, rejected samples {}".format(self.id, rejected_battery_sizes))
                 return None
         else:
-            self.log("Warn: Unable to estimate battery size from soc_percent and battery_power data")
+            self.log("Warn: Inverter {} unable to estimate battery size from soc_percent and battery_power data".format(self.id))
         return None
 
     def find_charge_curve(self, discharge):
@@ -1005,7 +1005,7 @@ class Inverter:
 
         if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
             battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
-            self.log("Looking for {} curve with sensors {}, {}, {} and {}".format(curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
+            self.log("Inverter {} Looking for {} curve with sensors {}, {}, {} and {}".format(self.id, curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
             if soc_kwh_percent:
                 soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous, required=False)
             else:
@@ -1087,7 +1087,7 @@ class Inverter:
                     for minute in battery_power:
                         battery_power[minute] = -battery_power[minute]
                 min_len = min(len(soc_kwh), len(charge_rate), len(predbat_status), len(battery_power))
-                self.log("Looking for {} curve, have found {} days of history data, max days {}".format(curve_type, dp1(min_len / 60 / 24.0), self.base.max_days_previous))
+                self.log("Inverter {} Looking for {} curve, have found {} days of history data, max days {}".format(self.id, curve_type, dp1(min_len / 60 / 24.0), self.base.max_days_previous))
 
                 soc_percent = {}
                 for minute in range(0, min_len):
@@ -1192,7 +1192,7 @@ class Inverter:
                         if final_curve_count[index] > 0:
                             final_curve[index] = dp2(final_curve[index] / final_curve_count[index])
 
-                    self.log("{} curve before adjustment is: {}".format(curve_type, final_curve))
+                    self.log("Inverter {} {} curve before adjustment is: {}".format(self.id, curve_type, final_curve))
 
                     # Find info for gap filling
                     found_required = False
@@ -1244,21 +1244,21 @@ class Inverter:
                                     text += "    {} : {}\n".format(key, final_curve[key])
                                     first = False
                             if self.base.battery_charge_power_curve_auto:
-                                self.log("Info: Curve automatically computed as:\n" + text)
+                                self.log("Info: Inverter {} curve automatically computed as:\n".format(self.id) + text)
                             else:
-                                self.log("Info: {} curve can be entered into apps.yaml or set to auto:\n".format(curve_type) + text)
+                                self.log("Info: Inverter {} {} curve can be entered into apps.yaml or set to auto:\n".format(self.id, curve_type) + text)
                             rate_scaling = round(rate_scaling, 2)
                             if discharge:
                                 if rate_scaling != self.base.battery_rate_max_scaling_discharge:
-                                    self.log("Info: Consider setting in HA: input_number.battery_rate_max_scaling_discharge: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling_discharge))
+                                    self.log("Info: Inverter {} Consider setting in HA: input_number.battery_rate_max_scaling_discharge: {} - currently {}".format(self.id, rate_scaling, self.base.battery_rate_max_scaling_discharge))
                             else:
                                 if rate_scaling != self.base.battery_rate_max_scaling:
-                                    self.log("Info: Consider setting in HA: input_number.battery_rate_max_scaling: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling))
+                                    self.log("Info: Inverter {} Consider setting in HA: input_number.battery_rate_max_scaling: {} - currently {}".format(self.id, rate_scaling, self.base.battery_rate_max_scaling))
                             return final_curve
                         else:
-                            self.log("Info: Found incorrect battery {} curve (was 0), maybe try again when you have more data.".format(curve_type))
+                            self.log("Info: Inverter {} Found incorrect battery {} curve (was 0), maybe try again when you have more data.".format(self.id, curve_type))
                     else:
-                        self.log("Warn: Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(curve_type))
+                        self.log("Warn: Inverter {} Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(self.id, curve_type))
                 else:
                     self.log(
                         "Info: Cannot find battery {} curve (no full rate {} cycle to {} found in history), battery may not have been fully charged/discharged at max rate recently - this is normal in cost-optimised operation".format(
@@ -1266,10 +1266,12 @@ class Inverter:
                         )
                     )
             else:
-                self.log("Warn: Cannot find battery {} curve (missing history), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(curve_type, soc_label, curve_type))
-                self.log("Warn: Sensor history data lengths: {} {}, {}_rate {}, battery_power {}, predbat_status {}".format(soc_label, len(soc_kwh), curve_type, len(charge_rate), len(battery_power), len(predbat_status)))
+                self.log(
+                    "Warn: Inverter {} Cannot find battery {} curve (missing history), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(self.id, curve_type, soc_label, curve_type)
+                )
+                self.log("Warn: Inverter {} Sensor history data lengths: {} {}, {}_rate {}, battery_power {}, predbat_status {}".format(self.id, soc_label, len(soc_kwh), curve_type, len(charge_rate), len(battery_power), len(predbat_status)))
         else:
-            self.log("Warn: Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(curve_type, soc_label, curve_type))
+            self.log("Warn: Inverter {} Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(self.id, curve_type, soc_label, curve_type))
         return {}
 
     def create_entity(self, entity_name, value, uom=None, device_class=None, icon=None):
@@ -1292,7 +1294,7 @@ class Inverter:
         self.created_attributes[entity_id] = attributes
 
         if self.base.get_state_wrapper(entity_id) is None:
-            self.log("**** Creating dummy entity {} with value {} and attributes {}".format(entity_id, value, attributes))
+            self.log("Inverter {} **** Creating dummy entity {} with value {} and attributes {}".format(self.id, entity_id, value, attributes))
             self.base.set_state_wrapper(entity_id, state=value, attributes=attributes)
         return entity_id
 
@@ -1657,7 +1659,7 @@ class Inverter:
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("discharge", discharge_power)
             elif self.soc_percent < float(current_charge_limit):
-                self.base.log(f"Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid Discharge disabled.")
+                self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid Discharge disabled.")
                 self.alt_charge_discharge_enable("discharge", False)
             elif self.soc_percent == float(current_charge_limit):  # If SoC target is reached
                 if self.inv_output_charge_control == "current":
@@ -1666,11 +1668,11 @@ class Inverter:
                 else:
                     self.alt_charge_discharge_enable("discharge", False)
             else:
-                self.base.log(f"Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Discharge enabled.")
+                self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Discharge enabled.")
                 self.alt_charge_discharge_enable("discharge", True)
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("discharge", discharge_power)
-                    self.base.log(f"Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Discharge enabled, amp rate written to inverter.")
+                    self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Discharge enabled, amp rate written to inverter.")
         else:
             if current_charge_limit == 0:
                 self.alt_charge_discharge_enable("eco", True)  # ECO Mode
@@ -1683,19 +1685,21 @@ class Inverter:
                 self.alt_charge_discharge_enable("charge", False)
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SoC)
-                self.base.log(f"Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Charge disabled.")
+                self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Charge disabled.")
             elif self.soc_percent == float(current_charge_limit):  # If SoC target is reached
                 self.alt_charge_discharge_enable("charge", True)  # Make sure charging is on
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SoC)
-                    self.base.log(f"Current SoC {self.soc_percent}% is same as Target SoC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
+                    self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is same as Target SoC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
             else:
                 # If we drop below the target, turn grid charging back on and make sure the charge current is correct
                 self.alt_charge_discharge_enable("charge", True)
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
-                    self.base.log(f"Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
-                self.base.log(f"Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}")
+                    self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
+                self.base.log(
+                    f"Inverter {self.id} Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
+                )
 
     def adjust_reserve(self, reserve):
         """
@@ -2347,7 +2351,7 @@ class Inverter:
         if discharge_end:
             self.track_discharge_end = discharge_end
 
-        self.log("Adjust idle time, charge {}-{} discharge {}-{}".format(self.track_charge_start, self.track_charge_end, self.track_discharge_start, self.track_discharge_end))
+        self.log("Inverter {} Adjust idle time, charge {}-{} discharge {}-{}".format(self.id, self.track_charge_start, self.track_charge_end, self.track_discharge_start, self.track_discharge_end))
 
         minutes_now = self.base.minutes_now
         charge_start_minutes, charge_end_minutes = window2minutes(self.track_charge_start, self.track_charge_end, minutes_now)
@@ -2394,7 +2398,7 @@ class Inverter:
         idle_start = idle_start_time.strftime(TIME_FORMAT_HMS)
         idle_end = idle_end_time.strftime(TIME_FORMAT_HMS)
 
-        self.base.log("Adjust demand (idle) time computed is {}-{}".format(idle_start, idle_end))
+        self.base.log("Inverter {} Adjust demand (idle) time computed is {}-{}".format(self.id, idle_start, idle_end))
 
         # Get previous start/end
         old_start = self.base.get_arg("idle_start_time", index=self.id)
@@ -2699,10 +2703,10 @@ class Inverter:
             new_mode = {solax_modes[x]: x for x in solax_modes}[new_switch]
 
             if new_switch != switch:
-                self.base.log(f"Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {direction} {enable}")
+                self.base.log(f"Inverter {self.id} Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {direction} {enable}")
                 self.write_and_poll_option(name=entity_id, entity_id=entity_id, new_value=new_mode)
             else:
-                self.base.log(f"Solis Energy Control Switch setting {switch} {new_mode} unchanged for {direction} {enable}")
+                self.base.log(f"Inverter {self.id} Solis Energy Control Switch setting {switch} {new_mode} unchanged for {direction} {enable}")
 
         # MQTT
         if direction == "charge" and enable:
@@ -3109,7 +3113,7 @@ class Inverter:
         This is just a switch we can toggle to on, it will turn off again automatically.
         """
         self.base.call_service_wrapper("switch/turn_on", entity_id=entity_id)
-        self.log(f"Pressed toggle button {entity_id} on Inverter {self.id}")
+        self.log(f"Inverter {self.id} pressed toggle button {entity_id}")
         return True
 
     def _press_single_button_and_poll(self, entity_id):
@@ -3126,12 +3130,12 @@ class Inverter:
             try:
                 time_pressed = datetime.strptime(state, TIME_FORMAT_SECONDS)
             except Exception as e:
-                self.base.log(f"Error parsing timestamp for {entity_id}: {e}")
+                self.base.log(f"Inverter {self.id} Error parsing timestamp for {entity_id}: {e}")
                 continue
 
             now_local = datetime.now(local_tz)
             if (now_local - time_pressed).seconds < 10:
-                self.base.log(f"Successfully pressed button {entity_id} on Inverter {self.id}")
+                self.base.log(f"Inverter {self.id} successfully pressed button {entity_id}")
                 return True
 
         self.base.log(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
