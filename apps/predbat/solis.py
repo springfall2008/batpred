@@ -381,6 +381,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.base_url = SOLIS_OAUTH_BASE_URL if self.auth_method == "oauth" else base_url
         self.automatic = automatic
         self.session = None
+        self.queued_events = []
         # Fallback used only when an inverter has never reported a live batteryVoltage - matches
         # the previous hard-coded assumption (issue #4493). get_nominal_voltage() below is the
         # real source of truth once live data is available.
@@ -1455,6 +1456,16 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # Convert SNs to lowercase for entity naming
         devices = [sn.lower() for sn in batteries]
 
+        # PV totals are summed across every entry in the arg list, so an inverter with no battery still
+        # belongs in them - its generation is part of the same array (issue #4922). Only the control and
+        # battery args are battery-filtered; a PV-only inverter is still never written to. load/import/
+        # export stay battery-only deliberately: on a shared-CT site those registers can overlap between
+        # inverters, so summing them risks double-counting the house load.
+        pv_devices = [sn.lower() for sn in self.inverter_sn]
+        pv_only_devices = [device for device in pv_devices if device not in devices]
+        if pv_only_devices:
+            self.log("Solis API: Including {} inverter(s) with no battery in the PV totals: {}".format(len(pv_only_devices), ", ".join(pv_only_devices)))
+
         # Configure base Predbat settings
         self.set_arg_auto("inverter_type", ["SolisCloud" for _ in range(num_inverters)])
         self.set_arg_auto("num_inverters", num_inverters)
@@ -1471,9 +1482,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # if solis_cloud_pv_load_ignore is set to true, override Solis cloud sensors and use load/pv_today/power entries defined in apps.yaml
         if not self.get_arg("solis_cloud_pv_load_ignore", default=False):
             self.set_arg_auto("load_today", [f"sensor.{self.prefix}_solis_{device}_total_load_energy" for device in devices])
-            self.set_arg_auto("pv_today", [f"sensor.{self.prefix}_solis_{device}_pv_energy_total" for device in devices])
+            self.set_arg_auto("pv_today", [f"sensor.{self.prefix}_solis_{device}_pv_energy_total" for device in pv_devices])
             self.set_arg_auto("load_power", [f"sensor.{self.prefix}_solis_{device}_load_power" for device in devices])
-            self.set_arg_auto("pv_power", [f"sensor.{self.prefix}_solis_{device}_pv_power" for device in devices])
+            self.set_arg_auto("pv_power", [f"sensor.{self.prefix}_solis_{device}_pv_power" for device in pv_devices])
         self.set_arg_auto("import_today", [f"sensor.{self.prefix}_solis_{device}_today_import_energy" for device in devices])
         self.set_arg_auto("export_today", [f"sensor.{self.prefix}_solis_{device}_today_export_energy" for device in devices])
 
@@ -2596,7 +2607,24 @@ class SolisAPI(ComponentBase, OAuthMixin):
         else:
             return None
 
+    # Event stubs: queue for the Solis component loop.
+    #
+    # These are invoked from the HA component's loop (ha.py -> trigger_callback),
+    # not this component's. Doing the API work here would issue requests from a
+    # foreign loop against a ClientSession bound to ours — aiohttp raises, the
+    # handler swallows it, and the user is told a write succeeded that never
+    # reached the inverter. Queue instead, and let run() do the work on the loop
+    # that owns the session. Same approach as Ohme and Octopus.
     async def select_event(self, entity_id, value):
+        self.queued_events.append((self.select_event_handler, entity_id, value))
+
+    async def number_event(self, entity_id, value):
+        self.queued_events.append((self.number_event_handler, entity_id, value))
+
+    async def switch_event(self, entity_id, service):
+        self.queued_events.append((self.switch_event_handler, entity_id, service))
+
+    async def select_event_handler(self, entity_id, value):
         """Handle select entity changes"""
         try:
             # Parse entity_id: select.{prefix}_solis_{sn}_{field}
@@ -2700,7 +2728,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         except Exception as e:
             self.log(f"Error: Solis API select_event failed for {entity_id}: {e}")
 
-    async def number_event(self, entity_id, value):
+    async def number_event_handler(self, entity_id, value):
         """Handle number entity changes"""
         try:
             # Parse entity_id: number.{prefix}_solis_{sn}_{field}
@@ -2909,7 +2937,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         except Exception as e:
             self.log(f"Error: Solis API number_event failed for {entity_id}: {e}")
 
-    async def switch_event(self, entity_id, service):
+    async def switch_event_handler(self, entity_id, service):
         """Handle switch entity changes"""
         try:
             # Parse entity_id: switch.{prefix}_solis_{sn}_{field}
@@ -3297,6 +3325,17 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 self.log("Error: Solis API: No inverters to manage after discovery")
                 return False  # Stop further processing if no inverters
 
+        # Process events queued by the entity callbacks, on this loop. Drained after the
+        # startup block: the handlers need the ClientSession and the discovered inverter
+        # list, which only exist once the first cycle has completed. On a failed startup
+        # (the return above) the queue is left intact and drained on the next attempt.
+        while self.queued_events:
+            handler, *args = self.queued_events.pop(0)
+            try:
+                await handler(*args)
+            except Exception as e:
+                self.log("Warn: Solis API: Event handler error: {}".format(e))
+
         # Frequent polling (every minute)
         if first or (seconds % 60 == 0):
             for sn in self.inverter_sn:
@@ -3430,7 +3469,7 @@ async def test_solis_api(key_id, secret):  # pragma: no cover
     # Call run() once
     print("Calling run() once...")
     await solis_api.run(seconds=0, first=True)
-    for device_sn, values in solis_api.cached_values.items():
+    for _device_sn, _values in solis_api.cached_values.items():
         #await solis_api.read_cid(device_sn, SOLIS_CID_STORAGE_MODE)  # Ensure we have the latest value for storage mode
         #await solis_api.read_cid(device_sn, SOLIS_CID_BATTERY_RESERVE_SOC)  # Ensure we have the latest value for battery reserve SOC
         #await solis_api.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, "5", field_description="Test write discharge soc to 5")  # Test writing a value

@@ -46,6 +46,13 @@ DEFAULT_EXPORT_LIMIT_KW = 10.0
 # A typical domestic panel in 2026. Only used to turn a panel count into kWp.
 DEFAULT_PANEL_WATTS = 400.0
 
+# A kWp figure above this in the solar config is far more likely Watts typed by
+# mistake - "6000" meaning 6,000 Wp - than a real array; even a large domestic
+# roof rarely reaches 30 kWp. Deliberately a warning, not a rejection: commercial
+# installations genuinely exceed it (see GH#4858), so the value is accepted and
+# modelled as typed, with config_warnings() flagging the likely mix-up.
+SOLAR_KWP_SOFT_LIMIT = 100.0
+
 # The Open-Meteo ERA5 archive, which the weather module draws on, starts in 1940.
 MINIMUM_YEAR = 1940
 
@@ -115,8 +122,17 @@ def _require_number(value, field, minimum=None, maximum=None, integer=False, exc
         raise AnnualConfigError("{} must be a whole number, got {}".format(field, value))
     try:
         number = int(value) if integer else float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: a value over the float ceiling (a digit-only paste of hundreds
+        # of digits) fails only at conversion, and must surface as this config error
+        # like any other, not as a bare traceback in the caller's except clause.
         raise AnnualConfigError("{} must be a number, got {!r}".format(field, value))
+    # NaN passes every comparison (NaN <= 0 is False), and inf clears a lower bound, so
+    # neither is caught by the range checks below: a YAML "kwp: .nan" would otherwise
+    # validate, flow into the model and render every derived figure as nan/inf - the
+    # most implausible value of all surviving a validation pass that rejects 0 and -3.
+    if not math.isfinite(number):
+        raise AnnualConfigError("{} must be a finite number, got {}".format(field, number))
     if minimum is not None:
         if exclusive_minimum and number <= minimum:
             raise AnnualConfigError("{} must be greater than {}, got {}".format(field, minimum, number))
@@ -142,11 +158,8 @@ def _coerce_bool(value):
 
 def _validate_solar(raw):
     """Normalise the solar array list, applying defaults and rejecting arrays without kwp."""
+    raw = _solar_entries(raw)
     if raw is None:
-        return []
-    if isinstance(raw, dict):
-        raw = [raw]
-    if not isinstance(raw, list):
         raise AnnualConfigError("annual.solar must be a list of arrays")
 
     arrays = []
@@ -474,6 +487,76 @@ def validate_config(config, today=None):
         "pv10_derate_fallback": _require_number(raw.get("pv10_derate_fallback", DEFAULT_PV10_DERATE_FALLBACK), "annual.pv10_derate_fallback", minimum=0, exclusive_minimum=True, maximum=1),
         "raw": scrub_secrets(raw),
     }
+
+
+def _solar_entries(raw):
+    """Return solar entries as a list, or None when the value is neither a mapping nor a list of them.
+
+    validate_config accepts a single array as a bare mapping (the wrapped YAML form
+    ``solar: {kwp: ...}``) as well as a list; every reader of this field wants the
+    same normalisation, so it lives here rather than being re-derived per caller.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        return [raw]
+    if isinstance(raw, list):
+        return raw
+    return None
+
+
+def _numeric_or_none(value):
+    """Return the value as a finite float, or None when it is not numeric.
+
+    Mirrors _require_number()'s coercion (numeric strings like the quoted figures a
+    hand-edited YAML or a stored form round-trip can carry are accepted) but instead
+    of raising, anything unusable returns None for the caller to skip: this is a
+    warning pass, and a value validation will reject has its own AnnualConfigError.
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: an absurd integer (a digit-only paste of hundreds of digits)
+        # is over the float ceiling before it converts, not a conversion failure.
+        return None
+    return number if math.isfinite(number) else None
+
+
+def config_warnings(config):
+    """Return a list of non-fatal sanity warnings about a config, for surfacing in the web form.
+
+    Unlike validate_config() these never block a run or a save. The case they exist
+    for is GH#4858: a peak power entered in Watts - "6000" meaning 6,000 Wp - in a
+    field that reads as kWp. Nothing downstream sees anything wrong, every derived
+    figure is merely very large rather than implausible, and only the total reads
+    as a 6 MWp roof. Accepts the same wrapped or bare mapping validate_config()
+    does, and is deliberately tolerant of input validate_config() will reject: a
+    malformed value gets its own AnnualConfigError, so warning about it here as
+    well would be noise. Warns only on the kWp field; the panels route (a count
+    times a per-panel wattage) cannot be mistaken for a single Wp figure.
+    """
+    if not isinstance(config, dict):
+        return []
+    raw = config.get("annual", config)
+    if not isinstance(raw, dict):
+        return []
+
+    warnings = []
+    solar = _solar_entries(raw.get("solar"))
+    if solar is None:
+        return []
+    for index, array in enumerate(solar):
+        if not isinstance(array, dict):
+            continue
+        kwp = _numeric_or_none(array.get("kwp"))
+        if kwp is None or kwp <= SOLAR_KWP_SOFT_LIMIT:
+            continue
+        # The form labels arrays from 1 while the config indexes them from 0: name
+        # both, so the note can be matched to the field it is talking about.
+        warnings.append("annual.solar[{}] (Array {} in the form): peak power {:g} kWp is far larger than a typical home array. If you entered Watts (Wp) rather than kWp, that is {:g} kWp.".format(index, index + 1, kwp, kwp / 1000.0))
+    return warnings
 
 
 # Minimal apps.yaml for a headless run. PredBat's Hass base class reads this at
@@ -1965,7 +2048,7 @@ class AnnualPredictor:
                     progress(completed, total_units, "Interpolating {} month(s)".format(len(interpolatable)))
                 wanted = [month for month, _, _ in interpolatable]
                 rows = build_interpolated_rows(anchor_rows, year, monthly_pv, months=wanted)
-                for month, days_in_month, standing_charge_p in interpolatable:
+                for month, _days_in_month, standing_charge_p in interpolatable:
                     row = rows.get(month)
                     if not row:
                         continue

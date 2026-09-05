@@ -36,4 +36,6 @@ This is important for any plan related issues.
 
 Once you have captured the issue go to the Web UI, in the Dash tab click on **predbat_debug.yaml** and wait 30 seconds for it to download. Select 'keep' if your Web Browser thinks the file is dangerous.
 
-Rename the download file to predbat_debug.yaml.txt and upload it to GitHub. This will allow your plan to be reproduced and also stores all your settings for review.
+The file arrives already named predbat_debug.yaml.txt, so upload it to GitHub as-is - no renaming needed. This will allow your plan to be reproduced and also stores all your settings for review.
+
+If the download link does nothing (the HA Companion app's built-in browser cannot save files, it just shows the content on screen), browse to the `debug/` folder under your Predbat config directory instead - with the File editor or Samba add-on - and attach a `predbat_debug_<timestamp>.yaml.txt` file from there. Predbat keeps a rolling history of these automatically, so there is usually one from around the time of the problem even if you had not turned debug mode on. Files captured before you upgraded to the version that added the `.txt` suffix keep the old plain-`.yaml` name until Predbat prunes them, and the per-cycle `predbat_debug_HH_MM_SS.yaml` files that debug mode itself writes are always plain-`.yaml` - rename those to `.yaml.txt` before attaching them.

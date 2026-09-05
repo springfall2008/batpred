@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.54.3"
+THIS_VERSION = "v8.55.0"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -76,7 +76,7 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
-from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths
+from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths, mask_secret_args
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
@@ -369,6 +369,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.metric_battery_value_export_scaling = 0.8
         self.calculate_pv90_plan = False
         self.pv_metric90_weight = 0.15
+        # DC array size in kWp, capping the p90 cloud model's extrapolation. Auto-detected from the
+        # forecast provider (see resolve_pv_array_kwp); 0 leaves the cap inert.
+        self.pv_array_kwp = 0.0
         self.load_scaling90 = 0.7
         self.metric_future_rate_offset_import = 0.0
         self.metric_future_rate_offset_export = 0.0
@@ -1856,7 +1859,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # (auto_config/load_user_config) or any component's automatic_config() touches self.args -
         # lets ComponentBase.set_arg_auto() tell "user explicitly configured this" apart from
         # "Predbat defaulted it" or "another component already overwrote it" (issue #4494 follow-up).
-        self.args_from_apps_yaml = copy.deepcopy(self.args)
+        # Masked at the source (set_arg_auto() is only ever called with auto-discovery targets
+        # like battery_scaling or sensor entity ids, never credential-shaped keys) so this second
+        # copy of apps.yaml can never carry a real secret regardless of how it's later dumped.
+        self.args_from_apps_yaml = mask_secret_args(self.args)
         self.apps_yaml_override_warned = set()  # {arg} already warned about via set_arg_auto()
         self.log("Predbat: Startup {}".format(__name__))
         self.update_time(print=False)

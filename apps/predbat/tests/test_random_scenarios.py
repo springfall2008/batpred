@@ -22,7 +22,7 @@ import traceback
 import yaml
 
 from tests.test_infra import reset_inverter
-from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
+from const import CLOUD_FACTOR_PV10, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -778,7 +778,7 @@ def apply_scenario_to_predbat(my_predbat, scenario):
         pv10,
         minutes_now,
         forward=True,
-        cloud_factor=min(my_predbat.metric_cloud_coverage + 0.2, 1.0) if my_predbat.metric_cloud_coverage else None,
+        cloud_factor=min(my_predbat.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if my_predbat.metric_cloud_coverage else None,
         flip=True,
     )
 

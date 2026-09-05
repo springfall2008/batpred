@@ -1242,6 +1242,71 @@ def test_call_service_template(test_name, my_predbat, inv, service_name="test", 
     return failed
 
 
+def test_call_service_template_retry(test_name, my_predbat, inv):
+    """A service call the HA layer rejects must be retried next cycle, not deduplicated away (#4876).
+
+    call_service_template() used to record the dedup hash before making the calls, and discard each
+    call's result. A service that silently failed was therefore treated as done, and every later
+    cycle with the same target logged "Skipped service ... as it was previously called" - so Predbat
+    believed it had set a control it had not. In #4876 that left a Deye sitting in its idle program
+    while predbat.status read Charging, until the identical call was re-sent by hand.
+
+    Note this is about the service call being *accepted*, not about the inverter's state: reading a
+    value back cannot settle it when the integration caches writes asynchronously.
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    ha = my_predbat.ha_interface
+    ha.service_store_enable = True
+    service_call = "retry_test_service"
+    my_predbat.args["retry_test"] = service_call
+    data = {"test": "data"}
+
+    try:
+        print("Test: a rejected call is retried on the next cycle")
+        my_predbat.last_service_hash = {}
+        ha.service_store_fail = {service_call}
+        inv.call_service_template("retry_test", data, domain="charge")
+        if not ha.get_service_store():
+            print("ERROR: the first call was never dispatched")
+            failed = True
+        if "charge" in my_predbat.last_service_hash:
+            print("ERROR: a rejected call was recorded as done - the next cycle will skip it")
+            failed = True
+        inv.call_service_template("retry_test", data, domain="charge")
+        if not ha.get_service_store():
+            print("ERROR: the call was not retried after being rejected - this is the #4876 hang")
+            failed = True
+
+        print("Test: once accepted, an identical call is deduplicated as before")
+        ha.service_store_fail = set()
+        my_predbat.last_service_hash = {}
+        inv.call_service_template("retry_test", data, domain="charge")
+        if not ha.get_service_store():
+            print("ERROR: the accepted call was never dispatched")
+            failed = True
+        inv.call_service_template("retry_test", data, domain="charge")
+        if ha.get_service_store():
+            print("ERROR: an accepted call was repeated - the dedup is meant to survive this fix")
+            failed = True
+
+        print("Test: a later rejection drops the earlier record rather than leaving it stale")
+        ha.service_store_fail = {service_call}
+        inv.call_service_template("retry_test", {"test": "other"}, domain="charge")
+        if "charge" in my_predbat.last_service_hash:
+            print("ERROR: the hash from the previous accepted call survived a rejection")
+            failed = True
+    finally:
+        ha.service_store_fail = set()
+        # Drain anything this test dispatched, or the next test in the module sees it as its own.
+        ha.get_service_store()
+        ha.service_store_enable = False
+        my_predbat.last_service_hash = {}
+
+    return failed
+
+
 def test_charge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     """
     Test charge window handling when time is illegal (e.g., 'unknown')
@@ -3047,6 +3112,7 @@ def run_inverter_tests(my_predbat_dummy):
     if failed:
         return failed
 
+    failed |= test_call_service_template_retry("test_service_retry", my_predbat, inv)
     failed |= test_call_service_template("test_service_simple1", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"})
     failed |= test_call_service_template("test_service_simple2", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False, repeat=True)
     failed |= test_call_service_template("test_service_simple3", my_predbat, inv, service_name="test_service", domain="discharge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False)
@@ -3135,7 +3201,7 @@ charge_start_service:
     """
     decoded_yaml = yaml.safe_load(dummy_yaml)
 
-    for repeat in range(2):
+    for _repeat in range(2):
         failed |= test_call_service_template(
             "test_service_complex5",
             my_predbat,
