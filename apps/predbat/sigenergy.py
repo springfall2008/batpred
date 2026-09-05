@@ -1029,12 +1029,12 @@ class SigenergyAPI(ComponentBase):
     def redact(payload):
         """Return payload with credential-bearing keys masked, for safe logging.
 
-        Recursive over dicts, lists, tuples and sets, as deye.py's and sunsynk.py's redact are
-        over dicts and lists: the MQTT command payload nests its per-system commands one level
-        down inside a list, so a top-level-only rewrite would still leak anything a future
-        payload carries there. Sequences beyond list are covered because json.dumps() serialises
-        tuples and sets as JSON arrays too — redacting only lists would let a tuple-shaped
-        payload be published as an array yet logged unmasked.
+        Recursive over dicts and common sequences. DeyeAPI/SunsynkAPI recurse over dicts + lists;
+        Sigenergy MQTT command payloads nest per-system commands one level down inside a list,
+        so a top-level-only rewrite would still leak anything a future payload carries there.
+        Tuples are included because json.dumps() serialises tuples as JSON arrays.
+        Sets/frozensets are handled for log safety, even though json.dumps() does not
+        serialise them by default.
         """
         if isinstance(payload, dict):
             return {key: ("<redacted>" if key in SIGENERGY_LOG_REDACT_KEYS else SigenergyAPI.redact(value)) for key, value in payload.items()}
