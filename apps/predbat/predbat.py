@@ -1474,7 +1474,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                         # extra entry silently inflates the total instead of being ignored (#4879).
                         elif len(value) > required_entries and required_entries > 0 and spec.get("entries_exact", False):
                             self.log("Warn: Validation of apps.yaml found configuration item '{}' has {} entries, expected exactly {} based on {}".format(name, len(value), required_entries, entries))
-                            self.arg_errors[name] = "Too many entries, expected {}".format(required_entries)
+                            self.arg_errors[name] = "Too many entries, expected exactly {}".format(required_entries)
                             errors += 1
                             continue
                     elif required_entries > 1:
