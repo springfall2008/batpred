@@ -81,6 +81,7 @@ from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
 from stromligning import Stromligning
+from charger_registry import ChargerRegistry, preregister_legacy
 from components import Components, COMPONENT_LIST
 from execute import Execute
 from marginal import Marginal
@@ -295,6 +296,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.validate_config_next_retry_time = None
         self.ha_interface = None
         self.num_cars = 0
+        self.charger_registry = ChargerRegistry(self)
         self.fatal_error = False
         self.components = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
@@ -1911,6 +1913,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             self.ha_interface.update_states()
             self.auto_config()
+
+            # Snapshot hand-written car_charging_* config as legacy slots. Runs after
+            # auto_config() so the snapshot sees entity ids the regex templates resolved to
+            # rather than the raw "re:" patterns, and still before any component's
+            # automatic_config() - phase 0 is storage/db/ha/web, none of which touch a
+            # car_charging_* key - so autodiscovery appends after the user's own config
+            # rather than displacing it.
+            preregister_legacy(self.charger_registry, self)
+
             self.load_user_config(quiet=False, register=False, load_config=True)
             self.comparison = Compare(self)
 

@@ -17,6 +17,7 @@ import uuid
 import traceback
 from utils import calc_percent_limit
 from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from charger_registry import ChargerEntry, slot_entity_suffix
 import pytz as _pytz
 
 from component_base import ComponentBase
@@ -54,6 +55,12 @@ _PLAN_REPUBLISH_INTERVAL = 5 * 60
 
 # Telemetry staleness threshold (seconds)
 _TELEMETRY_STALE_THRESHOLD = 120
+
+# Consecutive telemetry frames a configured EV charge point must be absent from before it is
+# released (_needs_reconfigure). Long enough that a charger reconnecting between frames keeps
+# its car slot and plan; short enough that one genuinely removed is gone within the staleness
+# threshold above rather than being planned for all run.
+_EV_MISSING_FRAMES_TO_RELEASE = 3
 
 # Total startup wait budget, in 0.5 s ticks, shared by the connection and auto-config waits
 _STARTUP_WAIT_TICKS = 120 * 2
@@ -273,10 +280,13 @@ class GatewayMQTT(ComponentBase):
         self._auto_configured = False
         self._configured_inverter_serials = frozenset()  # serials discovered at the last auto-config
         self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
+        self._ev_missing_frames = 0  # consecutive telemetry frames a configured charge point has been absent from
         self._last_published_plan = None
         self._pending_plan = None
-        self._ev_windows: list = []  # parsed (start_dt, end_dt) charge windows from HA plan attribute
-        self._ev_charging_active: bool = False  # last commanded state; avoids duplicate start/stop sends
+        self._ev_windows: dict = {}  # car slot -> parsed (start_dt, end_dt) charge windows from that slot's HA plan attribute
+        self._ev_charging_active: dict = {}  # charge_point_id -> last commanded state; avoids duplicate start/stop sends
+        self._ev_no_slot_warned = False  # True once the "control on, no charger has a slot" warning has fired; cleared when the condition clears
+        self._ev_no_id_warned = False  # True once the "charge point reported with no id" warning has fired
         self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
         self._command_id = 0  # incrementing counter included in every published command
@@ -427,12 +437,25 @@ class GatewayMQTT(ComponentBase):
             self._pending_plan = (plan_entries, timezone)
 
     def _refresh_ev_windows(self):
-        """Re-read the PredBat car-charging-slot planned windows from HA and cache them.
+        """Re-read Predbat's planned car-charging-slot windows for every registered charge point.
 
         Called once per run() cycle so the minute-level check always has up-to-date window
-        boundaries without polling HA every second.  The ``planned`` attribute of
-        ``binary_sensor.<prefix>_car_charging_slot`` is a list of ``{start, end, ...}`` dicts
-        with datetime strings in ``"%m-%d %H:%M:%S"`` format (produced by output.py).
+        boundaries without polling HA every second.  Each charge point reads its own car
+        slot's ``planned`` attribute — ``binary_sensor.<prefix>_car_charging_slot`` for slot
+        0, ``..._slot_N`` for car N (produced by output.py) — keyed by the slot the charger
+        registry allocated it via ``charger_slot()``.  Reading the unindexed slot-0 entity
+        for every charge point would drive every charger from car 0's plan regardless of
+        which car it was actually registered as.  A charge point with no registry slot yet
+        (discovered mid-cycle, before automatic_config has re-run) is skipped.
+
+        A slot whose ``planned`` attribute has never been published is left out of
+        ``_ev_windows`` entirely rather than recorded as an empty window list.  The two are
+        not the same thing: an empty list is a real plan that says "do not charge now", while
+        a missing attribute only says the plan for that car has not been written yet - which
+        is exactly what a charger sees in the moments after another source registers and
+        shifts it to a higher slot.  Treating the second as the first sent a
+        RemoteStopTransaction to a car that was mid-charge.  gecloud and myenergi draw the
+        same distinction (gecloud.py evc_control_charge, myenergi.py control_charge).
 
         Datetimes are localized using ``self.local_tz`` so comparisons respect the component
         timezone and DST transitions.  Year boundaries are handled: if a parsed start is more
@@ -441,69 +464,137 @@ class GatewayMQTT(ComponentBase):
         localization the end year is incremented to handle windows that straddle midnight
         on New Year's Eve.
         """
-        planned = self.get_state_wrapper(f"binary_sensor.{self.prefix}_car_charging_slot", attribute="planned") or []
         now = datetime.datetime.now(self.local_tz)
         current_year = now.year
-        windows = []
-        for w in planned:
-            try:
-                start_naive = datetime.datetime.strptime(w["start"], "%m-%d %H:%M:%S").replace(year=current_year)
-                end_naive = datetime.datetime.strptime(w["end"], "%m-%d %H:%M:%S").replace(year=current_year)
-                start_dt = self.local_tz.localize(start_naive)
-                end_dt = self.local_tz.localize(end_naive)
-                # If start is far in the past the plan crossed a year boundary (Dec 31 → Jan 1)
-                if start_dt < now - datetime.timedelta(hours=23):
-                    start_dt = start_dt.replace(year=start_dt.year + 1)
-                    end_dt = end_dt.replace(year=end_dt.year + 1)
-                elif end_dt < start_dt:
-                    # end crossed into the new year but start did not (e.g. 23:30 → 00:30)
-                    end_dt = end_dt.replace(year=end_dt.year + 1)
-                windows.append((start_dt, end_dt))
-            except (KeyError, ValueError):
+        new_windows = {}
+        generation = self.base.charger_registry.snapshot_generation()
+        for cp_id in sorted(self._configured_ev_chargers):
+            slot = self.charger_slot("gateway", cp_id)
+            if slot is None:
                 continue
-        self._ev_windows = windows
+            planned = self.get_state_wrapper(f"binary_sensor.{self.prefix}_car_charging_slot{slot_entity_suffix(slot)}", attribute="planned")
+            if planned is None:
+                # Never published for this slot - leave the key absent so control skips it.
+                continue
+            windows = []
+            for w in planned:
+                try:
+                    start_naive = datetime.datetime.strptime(w["start"], "%m-%d %H:%M:%S").replace(year=current_year)
+                    end_naive = datetime.datetime.strptime(w["end"], "%m-%d %H:%M:%S").replace(year=current_year)
+                    start_dt = self.local_tz.localize(start_naive)
+                    end_dt = self.local_tz.localize(end_naive)
+                    # If start is far in the past the plan crossed a year boundary (Dec 31 → Jan 1)
+                    if start_dt < now - datetime.timedelta(hours=23):
+                        start_dt = start_dt.replace(year=start_dt.year + 1)
+                        end_dt = end_dt.replace(year=end_dt.year + 1)
+                    elif end_dt < start_dt:
+                        # end crossed into the new year but start did not (e.g. 23:30 → 00:30)
+                        end_dt = end_dt.replace(year=end_dt.year + 1)
+                    windows.append((start_dt, end_dt))
+                except (KeyError, ValueError):
+                    continue
+            new_windows[slot] = windows
+        self._ev_windows = new_windows
+        self._ev_windows_generation = generation
 
-    def _should_ev_charge_now(self):
-        """Return True if the current local time falls inside any planned charge window."""
+    def _should_ev_charge_now(self, slot):
+        """Return True if the current local time falls inside the given car slot's planned charge window."""
         now = datetime.datetime.now(self.local_tz)
-        for start_dt, end_dt in self._ev_windows:
+        for start_dt, end_dt in self._ev_windows.get(slot, []):
             if start_dt <= now < end_dt:
                 return True
         return False
 
     async def _apply_ev_charging_state(self):
-        """Start or stop EVC charging when the window state transitions.
+        """Start or stop each registered charge point when its own slot's window state transitions.
 
-        Called every run() cycle (once per minute).  On a start transition, sets the
-        charging profile to the configured max current then issues RemoteStartTransaction
-        so the charger begins a session at that rate.  On a stop transition, issues
-        RemoteStopTransaction; the firmware falls back to its internal transaction ID when
-        none is supplied.  No command is sent when the desired state already matches
-        ``self._ev_charging_active``.
+        Called every run() cycle (once per minute), once per configured charge point.  Each
+        charge point is judged against the plan for its own car slot — the slot the charger
+        registry allocated it, via ``charger_slot()`` — never car 0's or another charger's,
+        so a charge point registered as (say) car 2 is only ever started and stopped from
+        car 2's plan.  On a start transition, sets the charging profile to the configured
+        max current then issues RemoteStartTransaction so the charger begins a session at
+        that rate.  On a stop transition, issues RemoteStopTransaction; the firmware falls
+        back to its internal transaction ID when none is supplied.  Every command carries the
+        charge point's own id — as both ``charge_point_id`` and ``target``, since firmware in
+        the field routes on one or the other (see ``_send_ev_command()``) — so it reaches the
+        right physical charger rather than whichever one connected first.  No
+        command is sent for a charge point whose desired state already matches its last
+        commanded state in ``self._ev_charging_active``, and a charge point with no
+        registry slot yet is skipped rather than commanded.  So is one whose slot has no
+        published plan at all: ``_refresh_ev_windows()`` leaves such a slot out of
+        ``_ev_windows`` rather than recording it as empty, and reading an absent key as an
+        empty plan would stop a car that is charging simply because its slot moved and the
+        new slot entity has not been published yet.  A key that is present but empty is a
+        real empty plan, and does stop the charger.
+
+        Control requires ``gateway_evc_automatic`` (documented in ``initialize()``) because
+        it is auto-config that gives each charge point its registry slot — that gating is
+        intentional and not changed here. But turning control on without automatic is a
+        silent, permanent no-op: every charge point is skipped for lack of a slot and
+        nothing is ever logged, which looks identical to "nothing to do" rather than
+        "misconfigured". If none of the currently-configured charge points has a slot, one
+        warning is logged (and cleared once any charge point does get a slot, so a later
+        recurrence — e.g. automatic gets disabled again — is reported afresh).
         """
-        if not self._configured_ev_chargers:
-            return
-        should_charge = self._should_ev_charge_now()
-        if should_charge == self._ev_charging_active:
-            return
-        # min() gives a deterministic choice when multiple chargers are present
-        cp_id = min(self._configured_ev_chargers)
-        if should_charge:
-            current_a = self._ev_max_current.get(cp_id, 32)
-            self.log(f"Info: GatewayMQTT: EVC start charging — current_a={current_a} for '{cp_id}'")
-            await self._send_ev_command({"action": "SetChargingProfile", "current_a": int(current_a)})
-            await self._send_ev_command({"action": "RemoteStartTransaction", "id_tag": "predbat"})
+        any_slotted = False
+        for cp_id in sorted(self._configured_ev_chargers):
+            slot = self.charger_slot("gateway", cp_id)
+            if slot is None:
+                continue
+            any_slotted = True
+            if not self.charger_plan_ready(getattr(self, "_ev_windows_generation", None), "GatewayMQTT"):
+                continue
+            if slot not in self._ev_windows:
+                continue
+            should_charge = self._should_ev_charge_now(slot)
+            if should_charge == self._ev_charging_active.get(cp_id, False):
+                continue
+            if should_charge:
+                current_a = self._ev_max_current.get(cp_id, 32)
+                self.log(f"Info: GatewayMQTT: EVC start charging — current_a={current_a} for '{cp_id}' (car {slot})")
+                await self._send_ev_command({"action": "SetChargingProfile", "current_a": int(current_a), "charge_point_id": cp_id})
+                await self._send_ev_command({"action": "RemoteStartTransaction", "id_tag": "predbat", "charge_point_id": cp_id})
+            else:
+                self.log(f"Info: GatewayMQTT: EVC stop charging for '{cp_id}' (car {slot})")
+                await self._send_ev_command({"action": "RemoteStopTransaction", "charge_point_id": cp_id})
+            self._ev_charging_active[cp_id] = should_charge
+
+        if self._configured_ev_chargers and not any_slotted:
+            if not self._ev_no_slot_warned:
+                self._ev_no_slot_warned = True
+                self.log("Warn: GatewayMQTT: EVC control is enabled but no charge point has a registered car slot - is gateway_evc_automatic off?")
         else:
-            self.log(f"Info: GatewayMQTT: EVC stop charging for '{cp_id}'")
-            await self._send_ev_command({"action": "RemoteStopTransaction"})
-        self._ev_charging_active = should_charge
+            self._ev_no_slot_warned = False
 
     async def _send_ev_command(self, command):
-        """Publish a single EV command dict as JSON to the EV command topic.
+        """Publish a single EV command dict as JSON to the shared EV command topic.
+
+        All EV commands share one topic (``topic_ev_command``) regardless of how many
+        charge points are configured, so ``command`` must carry a ``charge_point_id`` key
+        whenever more than one charge point may be present — the same convention
+        ``publish_command()`` uses for inverter_reset's ``serial`` field, which routes a
+        shared-topic command to one physical device by embedding its identity in the JSON
+        payload rather than the topic.  ``_apply_ev_charging_state()`` always includes it.
+
+        The same id is also sent as ``target``, because the two key names route on different
+        firmware.  ``ev_command.h`` reads ``target`` first and only falls back to
+        ``charge_point_id``, and there is deployed firmware that reads ``target`` alone —
+        its own comment records web-app commands arriving untargeted on ``charge_point_id``
+        and falling through to ``firstConnected()``.  Sending only ``charge_point_id`` was
+        invisible while the gateway commanded a single charger; with several, a stop meant
+        for CP-B would execute against whichever charger connected first and CP-B would
+        never be controlled at all.  Both keys carry the same value, so new firmware honours
+        ``target`` and old firmware finally routes correctly too.
 
         Args:
-            command: Dict with ``action`` key and any command-specific fields.
+            command: Dict with ``action`` key, any command-specific fields, and (for
+                multi-charger installs) ``charge_point_id``.  ``target`` is added here from
+                ``charge_point_id`` when the caller has not set it.
         """
+        charge_point_id = command.get("charge_point_id")
+        if charge_point_id is not None and "target" not in command:
+            command = dict(command, target=charge_point_id)
         await self._publish_raw(self.topic_ev_command, json.dumps(command).encode())
 
     async def _startup_wait(self, ticks, ready):
@@ -1067,11 +1158,23 @@ class GatewayMQTT(ComponentBase):
 
         Runs on first telemetry, and again when a *new* inverter serial appears — e.g.
         a second AIO is discovered later, which (per GivTCP) moves the control point
-        from the AIO to the Gateway. Removals are deliberately ignored so a transient
+        from the AIO to the Gateway. Inverter removals are deliberately ignored so a transient
         drop-out does not thrash the config; a permanent removal is handled by the
         onboarding/restart path. (NOTE: re-running re-selects the control target and
         rewrites the inverter args; whether PredBat core re-reads ``num_inverters`` at
         runtime vs. needing a component restart is tracked separately.)
+
+        EV chargers are reconciled on any *change* to the charge-point id set, not just on
+        additions. Matching additions alone meant a charger that went away was never released:
+        its car slot, its ``num_cars`` contribution and its now-dead entities stayed in the args
+        for the rest of the run, so Predbat kept planning for a charger that is not there.
+
+        A removal is debounced, an addition is not. One frame without a charge point is far more
+        likely to be a reconnect in progress than a charger that has gone — releasing on it
+        would drop the car and take its charge plan with it, only to re-register moments later —
+        so the charge point has to be absent from ``_EV_MISSING_FRAMES_TO_RELEASE`` consecutive
+        frames before its removal is treated as real. Nothing is lost by waiting: the charger
+        cannot be charging while it is not being reported.
         """
         if not self._auto_configured:
             return True
@@ -1081,11 +1184,22 @@ class GatewayMQTT(ComponentBase):
             return True
         # Re-run when an EV charger appears that we have not configured yet, so a charge
         # point connecting after first telemetry triggers car registration.
-        new_chargers = frozenset(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id) - self._configured_ev_chargers
+        reported_chargers = frozenset(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id)
+        new_chargers = reported_chargers - self._configured_ev_chargers
         if new_chargers:
+            self._ev_missing_frames = 0
             self.log(f"Info: GatewayMQTT: new EV charger(s) discovered {sorted(new_chargers)} — re-running auto-config")
             return True
-        return False
+        missing_chargers = self._configured_ev_chargers - reported_chargers
+        if not missing_chargers:
+            self._ev_missing_frames = 0
+            return False
+        self._ev_missing_frames = getattr(self, "_ev_missing_frames", 0) + 1
+        if self._ev_missing_frames < _EV_MISSING_FRAMES_TO_RELEASE:
+            return False
+        self._ev_missing_frames = 0
+        self.log(f"Info: GatewayMQTT: EV charger(s) {sorted(missing_chargers)} absent from {_EV_MISSING_FRAMES_TO_RELEASE} consecutive telemetry frames — re-running auto-config to release them")
+        return True
 
     def automatic_config(self):
         """Register gateway entities with PredBat's inverter model.
@@ -1319,9 +1433,9 @@ class GatewayMQTT(ComponentBase):
             self.set_state_wrapper(hybrid_entity, "off" if ac_coupled else "on")
             self.log(f"Info: GatewayMQTT: model '{model_name}' -> ac_coupled={ac_coupled}, set {hybrid_entity} {'off' if ac_coupled else 'on'}")
 
-        # Register the gateway's OCPP EV charger as a PredBat car (opt-in). Done after the
-        # inverter config so a failure here never blocks battery control.
-        self._register_ev_car(status)
+        # Register the gateway's OCPP EV charger(s) as PredBat car(s) (opt-in). Done after
+        # the inverter config so a failure here never blocks battery control.
+        self._register_ev_chargers(status)
 
         self._auto_configured = True
         self._configured_inverter_serials = frozenset(inv.serial for inv in all_inverters)
@@ -1329,14 +1443,27 @@ class GatewayMQTT(ComponentBase):
         self.log(f"Info: GatewayMQTT: auto-config complete: {num_inverters} inverter(s) registered")
         return num_inverters
 
-    def _register_ev_car(self, status):
-        """Register a connected OCPP EV charger as a PredBat car.
+    def _register_ev_chargers(self, status):
+        """Register every OCPP EV charger reported in telemetry as its own PredBat car.
 
-        Maps the gateway's EV telemetry entities onto the ``car_charging_*`` args so the
-        optimizer plans for the charger.  Gated behind ``gateway_evc_automatic``; does
-        nothing when no EV charger is present in telemetry.  Battery size, target SoC and
-        ready-time have no source from the charger and are left to the existing
-        ``car_charging_battery_size`` / ``car_charging_limit`` settings.
+        Maps each charger's gateway telemetry entities onto its own car_charging_* slot
+        via the charger registry, so the optimizer plans for every charge point present —
+        not just the first. Gated behind ``gateway_evc_automatic``; does nothing when no EV
+        charger is present in telemetry. Every charge point gets its own slot regardless of
+        connection state: whether a charger is a live session or merely offline right now,
+        it is registered so it still appears once it reconnects. Battery size, target SoC
+        and ready-time have no source from the charger and are left to the existing
+        ``car_charging_battery_size`` / ``car_charging_limit`` settings (shared across every
+        car, since the charger cannot report per-car values).
+
+        Telemetry reporting no chargers is a registration too, not a no-op: the registry is
+        handed the empty list so a charger that has gone gives its car slot back, ``num_cars``
+        drops and its stale entities are cleared. Returning early instead left the removed
+        charger registered for the rest of the run. Only a removal ``_needs_reconfigure()`` has
+        already debounced reaches here, so a charger blinking out of one frame does not release
+        anything. ``_ev_charging_active`` is pruned to the registered charge points at the same
+        time: a released charger's last commanded state must not decide whether the charger is
+        commanded when it comes back.
 
         Args:
             status: A decoded GatewayStatus protobuf message.
@@ -1344,38 +1471,42 @@ class GatewayMQTT(ComponentBase):
         if not self.gateway_evc_automatic:
             return
 
-        # Prefer a connected charger. Gateway firmware now reports known-but-offline
-        # chargers with connected=false (previously it omitted them entirely), so
-        # slot 0 can be a stale entry — registering that as the car would wire
-        # car_charging_* to a charger that is not there. Fall back to the first
-        # entry so a charger that is merely offline right now still registers.
         chargers = list(status.ev_chargers)
-        if not chargers:
-            return
 
-        # For now we overwrite the first charger only; multi-charger support needs work
-        ev = next((c for c in chargers if c.connected), chargers[0])
-        pfx = f"{self.prefix}_gateway_{self._ev_suffix(ev, multi=False)}"
-        self.set_arg("num_cars", 1)
-        # Entity-reference args (resolved by get_arg indirect lookup at fetch time).
-        # Battery size and target limit are deliberately left to the existing
-        # car_charging_battery_size / car_charging_limit settings — the charger cannot
-        # report them, so overwriting them here would only swap one default for another.
-        # "Planned"/"now" both derive from the connected binary sensor; many OCPP cars do
-        # not report SoC, so the manual-SoC path supplies a starting value.
-        self.set_arg("car_charging_planned", [f"binary_sensor.{pfx}_connected"])
-        if not self.gateway_evc_control:
-            self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_session_active"])
-        self.set_arg("car_charging_soc", [f"sensor.{pfx}_soc"])
-        self.set_arg("car_charging_energy", f"sensor.{pfx}_session_energy")
-        # Live charge power - display only, for the web power flow diagram
-        self.set_arg("car_charging_power", f"sensor.{pfx}_power")
-        # car_charging_rate is a UI config item (input_number), so update it via
-        # expose_config. get_arg() consults HA/UI config before args, so set_arg() would
-        # be ignored (and indirect entity resolution would never run).
-        self.base.expose_config("car_charging_rate", self._ev_charge_rate_kw(ev))
+        entries = []
+        for ev in sorted(chargers, key=lambda item: item.charge_point_id or ""):
+            if not ev.charge_point_id:
+                # Every other path keys off charge_point_id: _configured_ev_chargers excludes a
+                # charger without one, and _send_ev_command routes on it. Registering such a
+                # charger under a fallback name would consume a car slot for something control
+                # can never reach - a phantom car Predbat plans for and nothing ever charges.
+                if not self._ev_no_id_warned:
+                    self._ev_no_id_warned = True
+                    self.log("Warn: GatewayMQTT: telemetry reported an EV charger with no charge_point_id - skipping it, it cannot be addressed or controlled")
+                continue
+            pfx = "{}_gateway_{}".format(self.prefix, self._ev_suffix(ev, multi=False))
+            entries.append(
+                ChargerEntry(
+                    "gateway",
+                    ev.charge_point_id,
+                    planned="binary_sensor.{}_connected".format(pfx),
+                    # When Predbat drives the charger itself, "now" is Predbat's own decision
+                    # rather than an observation, so it is left to the plan.
+                    now=None if self.gateway_evc_control else "binary_sensor.{}_session_active".format(pfx),
+                    soc="sensor.{}_soc".format(pfx),
+                    energy="sensor.{}_session_energy".format(pfx),
+                    power="sensor.{}_power".format(pfx),
+                    max_rate_kw=self._ev_charge_rate_kw(ev),
+                )
+            )
 
-        self.log(f"Info: GatewayMQTT: registered EV charger '{ev.charge_point_id or 'unknown'}' as car 1")
+        self.register_chargers("gateway", entries)
+        registered = {entry.device_id for entry in entries}
+        self._ev_charging_active = {cp_id: state for cp_id, state in getattr(self, "_ev_charging_active", {}).items() if cp_id in registered}
+        if entries:
+            self.log("Info: GatewayMQTT: registered {} EV charger(s): {}".format(len(entries), ", ".join(sorted(registered))))
+        else:
+            self.log("Info: GatewayMQTT: telemetry reports no EV chargers - released the gateway's car slot(s)")
 
     async def _publish_predbat_data(self):
         """Publish price/timeline data to the gateway device for display.

@@ -410,6 +410,7 @@ nord
 nordpool
 noreferrer
 nosc
+nosuch
 nosuchrun
 notgithub
 notsn

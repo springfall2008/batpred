@@ -23,6 +23,7 @@ import json
 import random
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
+from charger_registry import ChargerEntry
 
 """
 GE Cloud data download
@@ -1435,11 +1436,12 @@ class GECloudDirect(ComponentBase):
         return in_car_plan_window(self.evc_control_windows.get(car_n, []), now)
 
     def controlled_evc_devices(self):
-        """The chargers to drive, in serial order, so charger N is auto-config's Nth car.
+        """The chargers to drive, in serial order.
 
-        async_automatic_config_evc() wires car_charging_energy and car_charging_planned as
-        per-car lists in this same order, so the two cannot disagree about which charger
-        is which car.
+        Serial order only makes the iteration reproducible - it no longer says which car a
+        charger is. Slots are allocated by the shared charger registry across every component
+        that discovers chargers, so evc_control_charge() asks charger_slot() for each device
+        rather than reading anything into this position.
         """
         known = [uuid for uuid in self.evc_device_list if self.evc_device.get(uuid, {}).get("serial_number", None)]
         return sorted(known, key=lambda uuid: str(self.evc_device[uuid]["serial_number"]))
@@ -1490,14 +1492,26 @@ class GECloudDirect(ComponentBase):
         planned window, stopped outside one. A charger with no car plugged in is left
         alone - commanding it would achieve nothing and every command costs a retry loop.
         """
+        generation = self.base.charger_registry.snapshot_generation()
+        if not self.charger_plan_ready(generation, "GECloud"):
+            return
         if not self.refresh_evc_car_windows(now):
             return
-        # Only as far as there are cars to follow. async_automatic_config_evc() raises
-        # num_cars to the charger count, but that reaches the base object a cycle later,
-        # so there is a window where a charger has no plan of its own - and a charger with
-        # no plan would read as "not planned" and be stopped while its car was charging.
-        for car_n, uuid in enumerate(self.controlled_evc_devices()[: self.num_cars]):
+        # The slot comes from the registry rather than this component's own ordering: with
+        # another source registered, our Nth charger is not car N. The registry is immediate
+        # while self.num_cars is a cached copy refreshed once a cycle, so a slot allocated
+        # since the last fetch has no entry in evc_control_windows yet - and an absent key
+        # would read as an empty plan and stop a charging car. Skip it until the plan for
+        # that car has actually been published; a key present but empty is a real empty plan.
+        for uuid in self.controlled_evc_devices():
             device = self.evc_device[uuid]
+            car_n = self.charger_slot("gecloud", device.get("serial_number", None))
+            if not self.charger_plan_ready(generation, "GECloud"):
+                return
+            if car_n is None:
+                continue
+            if car_n not in self.evc_control_windows:
+                continue
             if not self.evc_car_connected(device.get("status", None)):
                 continue
             wanted = EVC_COMMAND_START if self.evc_should_charge_now(car_n, now) else EVC_COMMAND_STOP
@@ -1514,45 +1528,41 @@ class GECloudDirect(ComponentBase):
         battery inverter is found: a GivEnergy charger paired with somebody else's battery
         is a normal setup, and folding this in there would leave it unconfigured.
 
-        Chargers are taken in serial order so charger N is always the same car as entry N
-        of both lists, and so the mapping does not shuffle when the API returns the
-        devices in a different order. car_charging_energy lets car_charging_hold subtract
-        the charging precisely instead of falling back to the car_charging_threshold
-        heuristic; car_charging_planned tells Predbat when there is actually a car to plan
-        for; car_charging_power is display-only and drives the web power flow diagram. Both go through set_arg_auto so an apps.yaml entry that auto-discovery is
-        about to override is logged rather than silently discarded.
+        Each charger is registered with the shared charger registry as one ChargerEntry keyed
+        by its serial, and the registry composes those with any other component's chargers into
+        the flat car_charging_* args and hands back the slot each one was given - which is what
+        evc_control_charge() drives from, rather than assuming a charger's position among its
+        own siblings is its car index. Serial order here only keeps the iteration reproducible
+        when the API returns the devices in a different order. car_charging_energy lets
+        car_charging_hold subtract the charging precisely instead of falling back to the
+        car_charging_threshold heuristic; car_charging_planned tells Predbat when there is
+        actually a car to plan for; car_charging_power is display-only and drives the web power
+        flow diagram.
         """
-        energy_entities = []
-        power_entities = []
-        connected_entities = []
+        entries = []
         for uuid in sorted(self.evc_device_list, key=lambda item: str(self.evc_device.get(item, {}).get("serial_number", "") or "")):
             serial = self.evc_device.get(uuid, {}).get("serial_number", None)
             if not serial:
                 # The serial is read from the device endpoint, so a charger that has not
-                # answered yet has no entity name to point at - skip it rather than wire
-                # up a name with a hole in it.
+                # answered yet has no entity name to point at - skip it rather than wire up
+                # a name with a hole in it.
                 self.log("GECloud: Warn: EV charger {} has no serial number yet, skipping it in automatic configuration".format(uuid))
                 continue
             entity_name = "{}_gecloud_{}".format(self.prefix, serial).lower()
-            energy_entities.append("sensor." + entity_name + "_evc_energy_active_import_register")
-            power_entities.append("sensor." + entity_name + "_evc_power_active_import")
-            connected_entities.append("binary_sensor." + entity_name + "_evc_car_connected")
+            entries.append(
+                ChargerEntry(
+                    "gecloud",
+                    serial,
+                    planned="binary_sensor." + entity_name + "_evc_car_connected",
+                    energy="sensor." + entity_name + "_evc_energy_active_import_register",
+                    power="sensor." + entity_name + "_evc_power_active_import",
+                )
+            )
 
-        if not energy_entities:
-            return
-
-        # Only ever raised, never lowered, as ohme and octopus do with the same setting -
-        # another component may already have registered cars of its own that are not this
-        # charger, and shrinking the count would drop them off the plan.
-        if self.get_arg("num_cars", 0) < len(energy_entities):
-            self.set_arg("num_cars", len(energy_entities))
-
-        self.log("GECloud: Setting car_charging_energy to {}".format(energy_entities))
-        self.set_arg_auto("car_charging_energy", energy_entities)
-        self.log("GECloud: Setting car_charging_planned to {}".format(connected_entities))
-        self.set_arg_auto("car_charging_planned", connected_entities)
-        self.log("GECloud: Setting car_charging_power to {}".format(power_entities))
-        self.set_arg_auto("car_charging_power", power_entities)
+        # num_cars is now derived by the registry, which composes across components. The old
+        # raise-only logic took a max of each component's local count, so one GivEnergy
+        # charger plus one Ohme charger yielded num_cars=1 with both claiming slot 0.
+        self.register_chargers("gecloud", entries)
 
     async def run(self, seconds, first):
         """

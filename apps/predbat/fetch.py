@@ -2831,6 +2831,9 @@ class Fetch:
         self.previous_status = self.get_state_wrapper(self.prefix + ".status")
         forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
 
+        # Capture before reading car configuration. Discovery may change slots while
+        # planning runs; such a plan must not drive the new allocation.
+        self.car_charger_generation = self.charger_registry.snapshot_generation()
         self.num_cars = self.get_arg("num_cars", 1)
         if self.num_cars > PREDBAT_MAX_CARS:
             self.log("Warn: num_cars {} exceeds the {} cars Predbat supports - clamping to {}".format(self.num_cars, PREDBAT_MAX_CARS, PREDBAT_MAX_CARS))

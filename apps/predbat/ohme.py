@@ -27,6 +27,7 @@ from typing import Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA
 from component_base import ComponentBase
+from charger_registry import ChargerEntry, is_unconfigured, slot_entity_suffix
 from predbat_metrics import record_api_call
 
 GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"  # cspell:disable-line
@@ -61,6 +62,9 @@ ohme_attribute_table = {
 # Ohme's own energy figure cannot be used for this
 ENERGY_TODAY_ENTITY = "sensor.predbat_ohme_energy_today"
 POWER_WATTS_ENTITY = "sensor.predbat_ohme_power_watts"
+
+# Ohme drives exactly one charger per account, so its registry device id is fixed.
+OHME_DEVICE_ID = "ohme0"
 
 # How often the Predbat-led control loop re-evaluates the plan. The plan is minute-granular so a
 # finer cadence buys nothing, and this matches the gateway EV charger control loop
@@ -327,7 +331,13 @@ class OhmeAPI(ComponentBase):
         Returns True once a plan has been read, False while the sensor has never been published -
         which is what stops the loop pausing a car on startup before it knows anything.
         """
-        planned = self.get_state_wrapper("binary_sensor." + self.prefix + "_car_charging_slot", attribute="planned")
+        # Follow this charger's own car, not car 0. Once a second component registers a
+        # charger, Ohme's slot moves - and reading car 0's plan would drive this charger
+        # from another car's schedule.
+        slot = self.charger_slot("ohme", OHME_DEVICE_ID)
+        if slot is None:
+            return False
+        planned = self.get_state_wrapper("binary_sensor." + self.prefix + "_car_charging_slot" + slot_entity_suffix(slot), attribute="planned")
         if planned is None:
             return False
 
@@ -410,9 +420,14 @@ class OhmeAPI(ComponentBase):
             self.log("Info: Ohme API: Read only mode cleared, resuming charge control")
         self.control_read_only = False
 
+        generation = self.base.charger_registry.snapshot_generation()
+        if not self.charger_plan_ready(generation, "Ohme API"):
+            return
         if not self.refresh_car_windows():
             return
 
+        if not self.charger_plan_ready(generation, "Ohme API"):
+            return
         should_charge = self.should_charge_now()
         drifted = self.control_drifted(should_charge)
         if should_charge == self.control_charging and not drifted:
@@ -465,32 +480,40 @@ class OhmeAPI(ComponentBase):
         wiring is deliberately separate - see automatic_config_octopus_intelligent().
         """
         self.log("Info: Ohme API: Registering the Ohme charger as a car")
-        if self.get_arg("num_cars", 0) < 1:
-            self.set_arg("num_cars", 1)
-        self.set_arg("car_charging_planned", ["binary_sensor.predbat_ohme_connected"])
-        self.set_arg("car_charging_soc", ["sensor.predbat_ohme_battery_percent"])
 
-        # Wire up the delivered-energy sensor so car_charging_hold can subtract car charging
-        # precisely instead of falling back to the car_charging_threshold heuristic. This runs
-        # before auto_config(final=True), so an unmatched regex from the apps.yaml default is
-        # still present as its literal "re:" string rather than having been removed yet - treat
-        # that as unconfigured, but leave a real charger (Zappi, Wallbox, hand-set sensor) alone.
-        # A list of one is how several components hand over a single entity, so unwrap it before
-        # comparing - otherwise an explicit ["sensor.predbat_ohme_energy_today"] looks third-party
+        # Whether to contribute Ohme's own energy and power sensors to the site aggregates.
+        # These are not slot aligned: the registry concatenates them and Predbat sums the list,
+        # so contributing alongside a third-party sensor (a Zappi the user configured by hand)
+        # composes rather than replaces - which is why the registry answers this rather than a
+        # bare "is anything already there". The one case that must still back off is a value
+        # another direct writer owns at runtime, alphaess being the one in the tree; see
+        # can_compose_aggregate().
+        #
+        # Ohme's own entity is always ours to write, however it round-trips through apps.yaml -
+        # explicitly set by the user, or left behind by an earlier run as the one-element list
+        # the registry writes (#4715 review). An unresolved apps.yaml default regex is not a
+        # sensor: this runs before auto_config(final=True), so it is still sitting there as its
+        # literal "re:" string rather than having been removed yet.
         existing = self.get_arg("car_charging_energy", default=None, indirect=False)
-        if isinstance(existing, list) and len(existing) == 1:
-            existing = existing[0]
-        # Ohme already owns the energy figure when the entity configured is its own, whether that
-        # was set here on a previous run or written into apps.yaml by hand (#4715 review)
-        if (not existing) or (isinstance(existing, str) and existing.startswith("re:")) or existing == ENERGY_TODAY_ENTITY:
-            self.set_arg_auto("car_charging_energy", ENERGY_TODAY_ENTITY)
-            # Live charge power, for the web power flow diagram and the predbat.car_charging_power
-            # sensor. Deliberately tied to the same decision as the energy sensor above: the two
-            # have to describe the same charger, so when another charger owns the energy figure
-            # Ohme's own power reading is left out rather than reported beside it.
-            self.set_arg_auto("car_charging_power", POWER_WATTS_ENTITY)
-        else:
+        existing_values = existing if isinstance(existing, list) else [existing]
+        others = [value for value in existing_values if not is_unconfigured(value) and value != ENERGY_TODAY_ENTITY]
+        owns_energy = self.base.charger_registry.can_compose_aggregate("energy") or not others
+        if not owns_energy:
             self.log("Info: Ohme API: Leaving car_charging_energy set to {} rather than using {}".format(existing, ENERGY_TODAY_ENTITY))
+
+        self.register_chargers(
+            "ohme",
+            [
+                ChargerEntry(
+                    "ohme",
+                    OHME_DEVICE_ID,
+                    planned="binary_sensor.predbat_ohme_connected",
+                    soc="sensor.predbat_ohme_battery_percent",
+                    energy=ENERGY_TODAY_ENTITY if owns_energy else None,
+                    power=POWER_WATTS_ENTITY if owns_energy else None,
+                )
+            ],
+        )
 
     async def automatic_config_octopus_intelligent(self):
         """

@@ -535,15 +535,17 @@ Those two entities are published whatever your settings say — they are new ent
 change nothing that already exists.
 
 Setting `ge_cloud_automatic_evc` to `true` additionally wires the chargers into Predbat's
-car planning, in serial order so charger N is car N:
+car planning, each charger taking one car slot:
 
 - **car_charging_energy** — each charger's `_evc_energy_active_import_register`, so
   `car_charging_hold` subtracts the car charging from house load precisely instead of
   falling back to the `car_charging_threshold` heuristic
 - **car_charging_planned** — each charger's `_evc_car_connected`, so Predbat only plans
   car charging when there is actually a car on the cable
-- **num_cars** — raised to the number of chargers if it is currently lower, never reduced,
-  since another component may have registered cars of its own
+- **num_cars** — derived from every charger Predbat knows about, not just GivEnergy's, and
+  floored by anything you set in `apps.yaml` or that another component has raised it to.
+  Which slot each charger gets is decided centrally — see
+  [How charger slots are allocated](car-charging.md#how-charger-slots-are-allocated)
 
 This is deliberately a separate setting from `ge_cloud_automatic` rather than part of it:
 it registers a car and moves `num_cars`, which would change the plan for existing users
@@ -562,9 +564,12 @@ connected and logged once, so please report the value from the log so it can be 
 #### Charger control (gecloud)
 
 With `ge_cloud_evc_control` set to `true`, Predbat drives each charger from its own car's
-plan: `start-charge` inside a planned charging window, `stop-charge` outside one. Charger N
-follows car N, in the same serial order the automatic configuration uses, so the two cannot
-disagree about which charger is which car.
+plan: `start-charge` inside a planned charging window, `stop-charge` outside one. Each charger
+follows the car slot it was allocated (see
+[How charger slots are allocated](car-charging.md#how-charger-slots-are-allocated)), which is
+the same allocation the automatic configuration wired the entities from, so the two cannot
+disagree about which charger is which car — including when a charger from another component
+holds an earlier slot.
 
 `ge_cloud_automatic_evc` must also be on, since it is that configuration which establishes
 the charger to car mapping. Predbat says so in the log and leaves control off rather than
@@ -898,7 +903,7 @@ Predbat supports both of myenergi's APIs:
     - `car_charging_planned` — every Zappi's plug status sensor, one entry per car, so Predbat knows when the car is plugged in and due to charge. The regex the `apps.yaml` templates ship for this key matches the third-party `ha-myenergi` integration's entity names, not the ones Predbat publishes, so without this Predbat would fall back to the `car_charging_threshold` heuristic
     - `iboost_energy_today` — the first Eddi's session energy (first by serial number). This feeds the iboost model, and it is also subtracted from your historical house load whenever `switch.predbat_iboost_energy_subtract` is on (the default), which happens whether or not iboost itself is enabled
 - Auto-configuration runs once, after the first poll that returns devices. A Zappi or Eddi added later is published as entities but is not wired into those keys until Predbat restarts
-- If you set `car_charging_planned` yourself in `apps.yaml`, Predbat logs a note and auto-discovery still wins — remove your entry to silence it
+- If you set `car_charging_planned` yourself in `apps.yaml`, your entry is kept: it kicks off the list in the position you wrote it, and every discovered Zappi is added after it rather than replacing it. The one exception is an entry naming a Zappi Predbat has also discovered — typically the third-party `ha-myenergi` integration's `sensor.myenergi_zappi_<serial>_plug_status` for a Zappi Predbat publishes as `sensor.predbat_myenergi_zappi_<serial>_plug_status` — which is dropped so that one charger is not counted as two cars. The match is on the Zappi's serial appearing in the entity id as a whole word: the serial must have no letter or digit immediately either side of it, so serial `10000001` matches `sensor.myenergi_zappi_10000001_plug_status` but not `sensor.myenergi_zappi_100000010_plug_status`, which is a different Zappi. Only sources whose device id is a manufacturer serial are matched this way — myenergi and GivEnergy Cloud; a Gateway charge point id is chosen by the installer, so it is only ever matched against an entry naming the exact same entity. An entry that names the same Zappi through an entity without its serial in it (a renamed entity, or a template helper) is not recognised and stays as its own car. See [How charger slots are allocated](car-charging.md#how-charger-slots-are-allocated)
 - Predbat's shipped `car_charging_planned_response` list covers the plug states a Zappi reports when the car is connected, including `ev ready to charge`. If you maintain your own list, add that value or Predbat will treat a car that is plugged in and waiting as not planned to charge
 - Boosting a Zappi is only accepted by myenergi while it is in Eco or Eco+ mode
 - Set `myenergi_enable_controls` to `false` for monitor-only operation — the boost switches are still published but stop responding
@@ -968,7 +973,7 @@ With `myenergi_zappi_control: true` Predbat drives your Zappi from the car charg
 
 Inside a planned charging window Predbat puts the Zappi in **Fast**, and outside one it puts it in **Stopped**. Fast is used because the window was chosen for its electricity rate rather than for sunshine — Eco or Eco+ would only charge from surplus, and the car would not get what the plan assumed.
 
-Each Zappi follows its own car. Zappis are matched to cars in serial number order, the same order `car_charging_energy` and `car_charging_planned` are wired in, so your first Zappi follows car 0's plan, your second follows car 1's, and so on.
+Each Zappi follows its own car — the car slot it was allocated, which is the same allocation `car_charging_energy` and `car_charging_planned` were wired from, so the two cannot disagree about which Zappi is which car. Serial number order settles the order among your own Zappis, but "Zappi N is car N" is not a rule you can rely on: a hand-configured car in `apps.yaml`, or a charger from another component, can hold an earlier slot and move every Zappi up. See [How charger slots are allocated](car-charging.md#how-charger-slots-are-allocated).
 
 Predbat re-checks the Zappi every minute. If the mode is changed in the myenergi app while Predbat is in control, it is put back — otherwise control would drift away silently.
 

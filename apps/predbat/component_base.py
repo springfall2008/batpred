@@ -109,6 +109,47 @@ class ComponentBase(ABC):
             self.log(f"Note: apps.yaml sets '{arg}: {raw_value}' but auto-discovery is using '{value}' instead - auto-discovery always wins currently; remove the apps.yaml entry to avoid this message")
         return self.set_arg(arg, value)
 
+    def register_chargers(self, source, entries):
+        """Register every EV charger this component has discovered.
+
+        Replaces everything `source` previously contributed, so it is safe - and expected -
+        to call on every rediscovery, including with an empty list when the chargers are gone.
+        Components must use this rather than assigning car_charging_* directly: direct
+        assignment is what made the last component to run erase every other one's chargers.
+        """
+        return self.base.charger_registry.replace_source(source, entries)
+
+    def charger_slot(self, source, device_id):
+        """The car index this component's charger was allocated, or None if unregistered.
+
+        Control loops MUST use this. Assuming your own charger is car 0, or that your Nth
+        charger is car N, drives a charger from another car's plan once a second source
+        registers.
+        """
+        return self.base.charger_registry.slot_for(source, device_id)
+
+    def charger_plan_ready(self, generation=None, name=None):
+        """Wait for a published plan using the current charger allocation.
+
+        Every control loop's wait on this is a bare `return`, and the same gate now covers all
+        four of them, so a charger that has stopped responding used to leave nothing in the log
+        to say why - the loop simply did nothing, cycle after cycle, indistinguishable from
+        having nothing to do. So the wait says so once.
+
+        Latched the same way as the gateway's _ev_no_slot_warned: logged when the wait starts
+        and cleared when a plan for the current allocation arrives, so a plan that never comes
+        costs one line rather than one per cycle, and a later recurrence - a reallocation, or
+        plan publication failing again - is reported afresh. `name` is the component's own log
+        prefix, since that is what a support log is read by.
+        """
+        ready = self.base.charger_registry.plan_is_current(generation)
+        if ready:
+            self._charger_plan_waiting = False
+        elif not getattr(self, "_charger_plan_waiting", False):
+            self._charger_plan_waiting = True
+            self.log("Info: {}: waiting for a car charge plan for the current charger allocation before controlling chargers".format(name or type(self).__name__))
+        return ready
+
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
         Retrieve a configuration argument from the base system.

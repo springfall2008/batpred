@@ -1316,6 +1316,14 @@ class OctopusAPI(ComponentBase):
         slot_owner = getattr(self.base, "car_slot_owner", None)
         if slot_owner and slot_owner != "octopus":
             self.log("OctopusAPI: Car slots are wired by the {} component, leaving them alone".format(slot_owner))
+            # Leaving the args alone must also mean letting go of the num_cars floor claimed for
+            # them on an earlier call, when octopus did own the slots. The owning component (Ohme
+            # takes the Intelligent slots when configured to) registers its own chargers, so the
+            # registry counts those cars itself - holding our stale claim on top would only keep
+            # num_cars raised for devices we are no longer wiring.
+            registry = getattr(self.base, "charger_registry", None)
+            if registry is not None:
+                registry.set_external_num_cars("octopus", 0)
         elif devices or self.intelligent_config_devices:
             # Suspended devices (e.g. an old/decommissioned charger still linked to the Octopus
             # account) aren't actively charging, so exclude them from the entity lists and from
@@ -1342,6 +1350,15 @@ class OctopusAPI(ComponentBase):
             num_cars = self.get_arg("num_cars", 0)
             if num_cars < len(active_devices):
                 self.set_arg("num_cars", len(active_devices))
+            # The raise above is only good until the charger registry next materialises: it writes
+            # num_cars from the chargers it holds, and an Intelligent car has no charger in there.
+            # So claim the count with the registry too, which keeps it as an explicit floor for as
+            # long as these devices are active and releases it when they go. The bare raise is kept
+            # for the case where no component ever registers a charger and the registry therefore
+            # never writes num_cars at all.
+            registry = getattr(self.base, "charger_registry", None)
+            if registry is not None:
+                registry.set_external_num_cars("octopus", len(active_devices))
             if active_devices:
                 self.log("OctopusAPI: Car slots wired to intelligent devices {}".format(sorted(active_devices)))
             else:
