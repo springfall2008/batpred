@@ -502,6 +502,47 @@ By default this threshold is calculated automatically based upon future import r
 If you set this to zero, this feature is disabled, and all low-rate slots will be used.
 This may mean you need to use expert mode and change your low-rate threshold (**input_number.predbat_rate_low_threshold**) to configure which slots should be considered if you have a tariff with more than 2 import rates (e.g. Flux)
 
+- Turn On **switch.predbat_car_charging_solar** if you want the car to soak up excess solar rather than that energy being exported.
+Predbat places car slots on forecast sunshine first, so the price-based planning above only has to cover whatever solar cannot deliver.
+
+    A slot counts as solar when two conditions hold. The forecast **surplus** - predicted PV generation minus predicted house load - is at least
+**input_number.predbat_car_charging_solar_excess** (1kW by default), and the export rate is no higher than
+**input_number.predbat_car_charging_rate_threshold_export** (99p by default, i.e. always divert).
+Lower that export threshold if you would rather sell your solar than put it in the car whenever export pays well.
+
+    Predbat only decides *when* to enable charging, never at what current - your charger or car modulates itself to whatever surplus is actually available,
+which is how Tesla's charge-on-solar and similar features are designed to work.
+
+    Because the charger modulates, Predbat forecasts the car drawing the surplus rather than its rated power. A 7kW charger under 5kW of sun with a 2kW
+house is predicted to take 3kW, not 7kW, and it is capped at the charger's rating when the surplus is larger than that. Surplus is worked out in five
+minute buckets and floored at zero in each, so a bright half hour is not cancelled out by a dark one either side of it.
+
+    This matters beyond the car plan itself: the car's predicted draw is part of the load Predbat plans the battery around. Assuming the full charger
+rate would put demand in the forecast that the sun cannot meet, making the battery look like it had to cover the difference and skewing every charge and
+export decision that follows.
+
+    One caveat if you also charge a home battery from solar: Predbat gives the car first call on the surplus, with the battery taking what is left.
+If your equipment prioritises the other way round, the car's share will be over-predicted while both are charging.
+
+- **input_number.predbat_car_charging_plan_min_soc** sets how much of the car's charge Predbat will pay for, as a percentage.
+It defaults to 100%, meaning anything solar does not deliver is bought, which is the behaviour if you leave it alone.
+
+    Lower it to split the plan in two. Bought slots stop at this level and must complete by the ready time, so it is the charge you are guaranteed
+whatever the weather. Solar slots carry on past it up to your full **car_charging_limit**, whenever the sun is free enough to be worth diverting.
+Set it to 30% with a charge limit of 80% and Predbat will buy your way to 30% at the cheapest hours overnight, then opportunistically take the car
+towards 80% on surplus sunshine.
+
+    Because solar is opportunistic rather than a promise, solar slots are not bounded by the ready time - only the bought slots are. That means you can
+set an early ready time for the guaranteed minimum without excluding the daylight hours that come after it.
+
+    If your car does this itself - Tesla's Charge on Solar has a "minimum charge" slider that behaves the same way - keep this setting in step with it,
+so that Predbat's forecast of what the car will draw matches what the car will actually do.
+
+- If your export rates are all below your import rates and the car needs energy, consider turning On **switch.predbat_car_charging_from_battery**.
+The trade-off between exporting the battery and saving it to charge the car is then made by the planner directly: the car's demand is part of the forecast,
+so an export that drains the battery is priced against the import the car will need later. Exporting wins when it pays more than that import, and keeping the
+charge wins when it does not. Left Off (the default), the battery is simply held back during car charging slots and the car is charged from the grid.
+
 - *WARNING:* Do not set **car_charging_now** in `apps.yaml` or you will create a circular dependency.
 
 - Predbat will set **binary_sensor.predbat_car_charging_slot** when it determines the car can be charged; you will need to write a Home Assistant automation based upon this sensor to control when your car charges.

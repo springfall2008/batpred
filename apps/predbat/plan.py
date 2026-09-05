@@ -5306,6 +5306,153 @@ class Plan:
         plan = self.sort_window_by_time(plan)
         return plan
 
+    def car_solar_load_forecast(self):
+        """
+        Build the central-case house load forecast used to size solar car slots
+
+        This is the same step_data_history call calculate_plan() makes for load_minutes_step, and it has
+        to be repeated here rather than borrowed: car slots are planned during the fetch, before the
+        first prediction of the cycle exists, so the plan's copy is either absent or a cycle stale.
+
+        The historical load it is built from already has car charging subtracted out of it (car_charging_hold
+        in get_filtered_load_window), so this is house load without the car - which is what the surplus
+        calculation needs, and why feeding the car's own draw back in as load cannot happen here.
+
+        metric_load_divergence is the one input not yet computed this cycle, so the previous cycle's value
+        is used and the first cycle after a restart runs without it. It only moves load between adjacent
+        five minute buckets and leaves the total alone, so a half-hour surplus barely notices.
+
+        Returns:
+        - dict: kWh of house load per PREDICT_STEP bucket, keyed by minutes from now
+        """
+        return self.step_data_history(
+            self.load_minutes,
+            self.minutes_now,
+            forward=False,
+            scale_today=self.load_inday_adjustment,
+            scale_fixed=self.load_scaling,
+            type_load=True,
+            load_forecast=self.load_forecast,
+            load_scaling_dynamic=self.load_scaling_dynamic,
+            cloud_factor=getattr(self, "metric_load_divergence", None),
+            load_adjust=self.manual_load_adjust,
+            load_baseline=self.dynamic_load_baseline,
+        )
+
+    def car_solar_surplus_kwh(self, start, end, load_step, rate_kw=None):
+        """
+        Forecast solar surplus over an absolute minute range, in kWh
+
+        Surplus is forecast PV less forecast house load, which is what a charge-on-solar charger actually
+        gets to draw. It is floored at zero in every PREDICT_STEP bucket rather than once over the whole
+        range, because a car cannot charge on an average: a sunny first half followed by a dark second
+        half yields the sunny half, not their sum.
+
+        rate_kw, when given, caps each bucket at what the charger can physically take. Without it a 10kW
+        midday surplus would be credited in full to a 7kW charger.
+
+        Load buckets are anchored on minutes_now while the slots sit on the plan interval grid, so the two
+        are generally out of phase; each bucket contributes only the fraction of itself the range covers.
+
+        Args:
+        - start, end: absolute minutes, half-open
+        - load_step: house load forecast from car_solar_load_forecast()
+        - rate_kw: charger limit in kW, or None for the raw surplus
+
+        Returns:
+        - float: kWh of surplus available in the range
+        """
+        step = PREDICT_STEP
+        total = 0.0
+        # Start at the bucket containing the range start, never before now - surplus already in the past
+        # cannot be charged, and load_step has no buckets there either
+        first = max(0, int((start - self.minutes_now) // step) * step)
+        for offset in range(first, self.forecast_minutes + self.plan_interval_minutes, step):
+            bucket_start = self.minutes_now + offset
+            if bucket_start >= end:
+                break
+            overlap = min(end, bucket_start + step) - max(start, bucket_start)
+            if overlap <= 0:
+                continue
+            pv_kwh = 0.0
+            for minute in range(bucket_start, bucket_start + step):
+                pv_kwh += self.pv_forecast_minute.get(minute, 0.0)
+            surplus = max(0.0, pv_kwh - load_step.get(offset, 0.0))
+            if rate_kw is not None:
+                surplus = min(surplus, rate_kw * step / 60.0)
+            total += surplus * overlap / step
+        return total
+
+    def plan_car_charging_solar_windows(self, load_step=None):
+        """
+        Find the slots where forecast solar is worth diverting to the car
+
+        A slot qualifies when the forecast surplus - PV less house load, not raw PV - is at least
+        car_charging_solar_excess, and the export rate is no higher than car_charging_rate_threshold_export.
+        That second test is what "it doesn't make sense to export it" means in practice. Testing the surplus
+        rather than raw generation is what the setting's name has always claimed: 4kW of sun against a 4kW
+        house leaves the car nothing, and used to qualify anyway.
+
+        Unlike the paid-import windows these run to the end of the forecast rather than stopping at the
+        ready time. Solar is opportunistic: it tops the car up above the guaranteed minimum whenever the
+        sun is free, and bounding it by a morning ready time would exclude every daylight hour.
+
+        Args:
+        - load_step: house load forecast, built here when the caller has not already done so
+
+        Returns:
+        - list: candidate windows, each marked with solar=True
+        """
+        if not self.car_charging_solar:
+            return []
+        if load_step is None:
+            load_step = self.car_solar_load_forecast()
+
+        windows = []
+        slot_count = 0
+        rejected_sun = 0
+        rejected_export = 0
+        start_minute = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
+        end_minute = self.minutes_now + self.forecast_minutes
+        for minute in range(start_minute, end_minute, self.plan_interval_minutes):
+            slot_count += 1
+            # The slot the clock is currently inside started in the past; only its remainder is available
+            slot_start = max(minute, self.minutes_now)
+            slot_end = minute + self.plan_interval_minutes
+            if slot_end <= slot_start:
+                continue
+            # The threshold is a power, so the slot's energy is converted rather than compared directly:
+            # on a 30 minute plan interval 1.25kWh is 2.5kW. Keeping it a power means the setting does
+            # not silently change meaning if plan_interval_minutes is not 30, and lets a part slot be
+            # judged on the same footing as a whole one.
+            surplus_kwh = self.car_solar_surplus_kwh(slot_start, slot_end, load_step)
+            power_kw = surplus_kwh * 60.0 / (slot_end - slot_start)
+            if power_kw < self.car_charging_solar_excess:
+                rejected_sun += 1
+                continue
+            export_rate = self.rate_export.get(minute, 0.0)
+            if export_rate > self.car_charging_rate_threshold_export:
+                rejected_export += 1
+                continue
+            # Price the slot at the export rate: solar sent to the car is not bought, it is export
+            # given up, so that is its real cost and what the plan should show
+            windows.append({"start": minute, "end": slot_end, "average": export_rate, "solar": True, "power_kw": dp2(power_kw)})
+
+        if slot_count:
+            accepted = ", ".join("{}={}kW".format(self.time_abs_str(window["start"]), window["power_kw"]) for window in windows)
+            self.log(
+                "Car solar windows: {} of {} slots qualify (need forecast surplus >= {}kW and export rate <= {}), rejected {} for low surplus and {} for export rate{}".format(
+                    len(windows),
+                    slot_count,
+                    self.car_charging_solar_excess,
+                    self.car_charging_rate_threshold_export,
+                    rejected_sun,
+                    rejected_export,
+                    " - accepted: " + accepted if accepted else "",
+                )
+            )
+        return windows
+
     def plan_car_charging(self, car_n, low_rates):
         """
         Plan when the car will charge, taking into account ready time and pricing
@@ -5351,38 +5498,65 @@ class Plan:
 
             price_sorted = [-1] + price_sorted
 
+        # Solar surplus windows are considered first, so free sunshine is used before any paid import and
+        # the price pass below only has to cover whatever solar cannot deliver. The house load forecast is
+        # built once and handed down rather than rebuilt per window - step_data_history walks every
+        # previous day for every bucket and is far too expensive to call inside the loop.
+        load_step = self.car_solar_load_forecast() if self.car_charging_solar else {}
+        candidate_windows = self.plan_car_charging_solar_windows(load_step)
         for window_n in price_sorted:
-            if window_n == -1:
-                window = extra_slot
-            else:
-                window = low_rates[window_n]
+            candidate_windows.append(extra_slot if window_n == -1 else low_rates[window_n])
+
+        # Energy that must be there by the ready time, whatever the weather. Bought slots stop here;
+        # solar carries on to the full limit, which is how "minimum from any source, the rest from sun"
+        # is expressed. Left at 100% (the default) both targets are the same and nothing changes.
+        min_soc_kwh = min(dp3(self.car_charging_plan_min_soc * self.car_charging_battery_size[car_n] / 100.0), self.car_charging_limit[car_n])
+
+        for window in candidate_windows:
+            is_solar = window.get("solar", False)
+            # Solar is opportunistic so it is not bound by the deadline; bought energy is the guarantee
+            window_target = self.car_charging_limit[car_n] if is_solar else min_soc_kwh
+            end_limit = (self.minutes_now + self.forecast_minutes) if is_solar else ready_minutes
 
             start = max(window["start"], self.minutes_now)
-            end = min(window["end"], ready_minutes)
+            end = min(window["end"], end_limit)
             price = window["average"]
 
             length = 0
             kwh = 0
 
-            # Stop once we have enough charge, allow small margin for rounding
-            if (car_soc + 0.1) >= self.car_charging_limit[car_n]:
-                break
+            # Enough charge for what this window is allowed to deliver. Skip rather than stop: solar
+            # windows come first and reach higher, so a later bought window may still owe the minimum
+            if (car_soc + 0.1) >= window_target:
+                continue
 
             # Skip past windows
             if end <= start:
                 continue
 
-            # Skip over prices when they are too high
-            if (max_price != 0) and price > max_price:
+            # A solar window and a cheap-import window can cover the same time; only plan one of them
+            if any((start < slot["end"]) and (end > slot["start"]) for slot in plan):
                 continue
 
-            # Compute amount of charge
+            # Skip over prices when they are too high. Solar windows are exempt: their energy is not
+            # being bought, so the import price of that time of day says nothing about them.
+            if (max_price != 0) and price > max_price and not window.get("solar", False):
+                continue
+
+            # Compute amount of charge. A bought slot draws the charger's full rate because that is what
+            # Predbat is asking for. A solar slot draws only what the sun leaves over the house, because
+            # the charger modulates - assuming the full rate there put a 7kW draw in the forecast against
+            # a 2kW surplus, inflating predicted load and making the battery look like it had to cover
+            # the difference.
             length = end - start
             hours = length / 60
-            kwh = self.car_charging_rate[car_n] * hours
+            if is_solar:
+                kwh = self.car_solar_surplus_kwh(start, end, load_step, rate_kw=self.car_charging_rate[car_n])
+            else:
+                kwh = self.car_charging_rate[car_n] * hours
 
             kwh_add = kwh * self.car_charging_loss
-            kwh_left = max(self.car_charging_limit[car_n] - car_soc, 0)
+            kwh_left = max(window_target - car_soc, 0)
 
             # Clamp length to required amount (shorten the window)
             if kwh_add > kwh_left:
@@ -5390,7 +5564,14 @@ class Plan:
                 length = int(min(round(((length * percent) / 5) + 0.5, 0) * 5, end - start))
                 end = start + length
                 hours = length / 60
-                kwh = self.car_charging_rate[car_n] * hours
+                # Recompute rather than scale: solar is not flat across the window, so the proportional
+                # length above is only a first guess at where to cut and the surplus in the part that
+                # survives has to be measured. It can come out under kwh_left, which is fine - a later
+                # window picks up the remainder.
+                if is_solar:
+                    kwh = self.car_solar_surplus_kwh(start, end, load_step, rate_kw=self.car_charging_rate[car_n])
+                else:
+                    kwh = self.car_charging_rate[car_n] * hours
                 kwh_add = min(kwh * self.car_charging_loss, kwh_left)
                 kwh = kwh_add / self.car_charging_loss
 
@@ -5404,6 +5585,7 @@ class Plan:
                 new_slot["average"] = window["average"]
                 new_slot["cost"] = dp2(new_slot["average"] * kwh)
                 new_slot["octopus"] = False
+                new_slot["solar"] = window.get("solar", False)
                 plan.append(new_slot)
 
         # Return sorted back in time order
