@@ -71,11 +71,16 @@ async def resolve_and_load_snapshot(storage, snapshot_id):
 
     Falls back, in order, to the pre-#4932 debug/ filename (content is there but under the
     old ".yaml" name) and then to the pre-#4720 legacy cache/ key (content is not in debug/
-    at all) if nothing is in debug/ under the current name for this id. A snapshot captured
-    before an install upgraded to this version stays downloadable for the rest of its normal
-    time in the ring rather than silently going dark the moment the install updates.
-    _discard_snapshot() reaps both older forms once the snapshot is naturally evicted, same
-    as any other.
+    at all) if nothing readable is in debug/ under the current name for this id. A snapshot
+    captured before an install upgraded to this version stays downloadable for the rest of
+    its normal time in the ring rather than silently going dark the moment the install
+    updates. _discard_snapshot() reaps both older forms once the snapshot is naturally
+    evicted, same as any other.
+
+    "Readable" means non-empty: load_debug_copy() returns "" for a file that exists but is
+    zero bytes (save_debug_copy() truncates on open before writing, so an interrupted
+    re-capture can leave one behind), and an empty file must fall through to the fallbacks
+    rather than short-circuit them with good content sitting under the legacy name.
 
     Returns (None, None) when nothing could be resolved or loaded.
     """
@@ -87,9 +92,9 @@ async def resolve_and_load_snapshot(storage, snapshot_id):
             return None, None
         snapshot_id = snapshots[0]["id"]
     data = await storage.load_debug_copy(snapshot_filename(snapshot_id))
-    if data is None:
+    if not data:
         data = await storage.load_debug_copy(_legacy_snapshot_filename(snapshot_id))
-    if data is None:
+    if not data:
         data = await storage.load(STORAGE_MODULE, _legacy_snapshot_key(snapshot_id))
     return snapshot_id, data
 
@@ -219,6 +224,12 @@ def snapshot_filename(snapshot_id):
     captures push it back) - two archives downloaded hours apart must name the same real
     capture identically, or they can't be merged/deduplicated by filename.
 
+    (One exception, bounded to a single ring lifetime: a capture still in the ring when an
+    install upgrades across #4932 is named ".yaml" in an archive downloaded before the
+    upgrade and ".yaml.txt" - via the legacy fallback - in one downloaded after, so
+    filename-keyed dedup keeps two copies of that one capture. Gone again once the
+    pre-rename file is naturally evicted; see _legacy_snapshot_filename().)
+
     The trailing ".txt" is load-bearing, not decoration (see #4932). GitHub refuses a bare
     ".yaml" as an issue attachment, so a snapshot picked straight out of debug/ - the only
     route a HA Companion-app user has, since that webview cannot save the download links
@@ -233,12 +244,15 @@ def snapshot_filename(snapshot_id):
 def _legacy_snapshot_filename(snapshot_id):
     """Return the pre-#4932 debug/ filename a snapshot's content may still be sitting under.
 
-    Only ever read/deleted now, never written to. An install upgrading across the rename has
-    a ring full of index entries whose files are on disk as ".yaml" - without this they would
-    both stop downloading and, worse, never be pruned, leaking one multi-megabyte file per
-    retained snapshot forever. See resolve_and_load_snapshot() and _discard_snapshot().
+    Derived from snapshot_filename() by stripping its trailing ".txt" - the legacy name is
+    exactly the current name as it stood before the rename, so the two can never drift apart
+    and re-hardcode the same stem a second time. Only ever read/deleted now, never written
+    to. An install upgrading across the rename has a ring full of index entries whose files
+    are on disk as ".yaml" - without this they would both stop downloading and, worse, never
+    be pruned, leaking one multi-megabyte file per retained snapshot forever. See
+    resolve_and_load_snapshot() and _discard_snapshot().
     """
-    return "predbat_debug_{}.yaml".format(snapshot_id)
+    return snapshot_filename(snapshot_id)[: -len(".txt")]
 
 
 async def load_all_snapshots(storage):

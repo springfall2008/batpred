@@ -13,12 +13,13 @@
 """
 
 import asyncio
+import os
 import tempfile
 import shutil
 from types import SimpleNamespace
 
 from web import WebInterface
-from debug_history import capture_snapshot
+from debug_history import _legacy_snapshot_filename, capture_snapshot, snapshot_filename
 from storage import StorageLocalFiles
 
 
@@ -140,6 +141,17 @@ def test_web_debug_history_routes(my_predbat):
         resp_omitted = asyncio.run(w.html_debug_history_download(FakeRequest()))
         if resp_omitted.body != b"marker: newest\n":
             print("  ERROR: expected omitting id entirely to behave the same as id=latest")
+            failed = True
+
+        print("Test: a snapshot that only exists on disk under the pre-rename .yaml name still downloads, named .yaml.txt (#4932 fallback)")
+        legacy_only_id = asyncio.run(capture_snapshot(storage, "marker: legacy only\n", now - datetime.timedelta(hours=6), max_count=15))
+        os.rename(os.path.join(tmpdir, "debug", snapshot_filename(legacy_only_id)), os.path.join(tmpdir, "debug", _legacy_snapshot_filename(legacy_only_id)))  # simulate the pre-upgrade on-disk name
+        resp = asyncio.run(w.html_debug_history_download(FakeRequest(query={"id": legacy_only_id})))
+        if resp.status != 200 or resp.body != b"marker: legacy only\n":
+            print("  ERROR: expected the legacy-only snapshot to serve its data via the filename fallback, got status={} body={!r}".format(resp.status, resp.body))
+            failed = True
+        if not resp.headers.get("Content-Disposition", "").endswith(".yaml.txt"):
+            print("  ERROR: expected the legacy-only snapshot's disposition to still be named .yaml.txt, got {!r}".format(resp.headers.get("Content-Disposition")))
             failed = True
 
         print("Test: download-all bundles every retained snapshot into one archive")

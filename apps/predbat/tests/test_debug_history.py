@@ -39,14 +39,19 @@ class FakeStorage:
         self.debug_copies_deleted = []
 
     async def save(self, module, filename, data, format="yaml", expiry=None):
-        """Record a saved value, the format it was saved with, and that a save happened."""
-        self.store[(module, filename)] = (data, format)
+        """Record a saved value, the format and expiry it was saved with, and that a save happened."""
+        self.store[(module, filename)] = (data, format, expiry)
         self.save_calls.append((module, filename))
 
     async def load(self, module, filename):
-        """Return a stored value, or None."""
+        """Return a stored value, or None if missing or past its expiry."""
         entry = self.store.get((module, filename))
-        return entry[0] if entry else None
+        if not entry:
+            return None
+        data, _format, expiry = entry
+        if expiry is not None and expiry <= datetime.datetime.now(datetime.timezone.utc):
+            return None
+        return data
 
     async def save_debug_copy(self, filename, text):
         """Record a debug/ write, matching StorageLocalFiles.save_debug_copy()."""
@@ -304,7 +309,7 @@ def test_debug_history(my_predbat):
     legacy_storage = FakeStorage()
     legacy_id = asyncio.run(capture_snapshot(legacy_storage, sample_yaml_text("pre-upgrade"), now, max_count=15))
     legacy_storage.debug_copies.pop(snapshot_filename(legacy_id), None)  # simulate: never written under the old scheme
-    legacy_storage.store[(STORAGE_MODULE, _legacy_snapshot_key(legacy_id))] = (sample_yaml_text("pre-upgrade"), "text")  # simulate: still sitting there from before the upgrade
+    legacy_storage.store[(STORAGE_MODULE, _legacy_snapshot_key(legacy_id))] = (sample_yaml_text("pre-upgrade"), "text", None)  # simulate: still sitting there from before the upgrade, no expiry
     if asyncio.run(load_snapshot(legacy_storage, legacy_id)) != sample_yaml_text("pre-upgrade"):
         print("  ERROR: a pre-upgrade snapshot with only a legacy cache/ entry should still load via the fallback")
         failed = True
@@ -317,6 +322,10 @@ def test_debug_history(my_predbat):
     legacy_entry = legacy_storage.store.get((STORAGE_MODULE, _legacy_snapshot_key(legacy_id)))
     if legacy_entry is None:
         print("  ERROR: _discard_snapshot should overwrite the legacy entry (with an expiry), not remove it outright - it has no delete() to call")
+        failed = True
+    stored_expiry = legacy_entry[2] if legacy_entry else None
+    if stored_expiry is None or stored_expiry > datetime.datetime.now(datetime.timezone.utc):
+        print("  ERROR: _discard_snapshot should expire the legacy entry in the past (so load() refuses it, as the real backend would), got expiry {!r}".format(stored_expiry))
         failed = True
     if asyncio.run(load_snapshot(legacy_storage, legacy_id)) is not None:
         print("  ERROR: the legacy entry should no longer be readable as snapshot content once evicted")
@@ -375,6 +384,36 @@ def test_debug_history(my_predbat):
         print("  ERROR: test would be vacuous - the legacy and current filenames are the same")
         failed = True
 
+    print("Test: when both names exist on disk for one id, the current .yaml.txt name wins (pins the documented fallback order)")
+    both_storage = FakeStorage()
+    both_id = asyncio.run(capture_snapshot(both_storage, sample_yaml_text("current"), now, max_count=15))
+    both_storage.debug_copies[_legacy_snapshot_filename(both_id)] = sample_yaml_text("legacy")  # same-second re-capture after the upgrade, old file not yet pruned
+    if asyncio.run(load_snapshot(both_storage, both_id)) != sample_yaml_text("current"):
+        print("  ERROR: the current-name file should win over the legacy .yaml one when both exist, got {!r}".format(asyncio.run(load_snapshot(both_storage, both_id))))
+        failed = True
+    asyncio.run(_discard_snapshot(both_storage, both_id))
+    if snapshot_filename(both_id) not in both_storage.debug_copies_deleted or _legacy_snapshot_filename(both_id) not in both_storage.debug_copies_deleted:
+        print("  ERROR: evicting an id with both names on disk should delete both, deletions were {}".format(both_storage.debug_copies_deleted))
+        failed = True
+
+    print("Test: a truncated (0-byte) current-name file falls through to the legacy fallback instead of serving empty content")
+    truncated_storage = FakeStorage()
+    truncated_id = asyncio.run(capture_snapshot(truncated_storage, sample_yaml_text("truncated"), now, max_count=15))
+    truncated_storage.debug_copies[snapshot_filename(truncated_id)] = ""  # save_debug_copy() truncates on open, so an interrupted re-capture can leave this behind
+    truncated_storage.debug_copies[_legacy_snapshot_filename(truncated_id)] = sample_yaml_text("truncated")
+    if asyncio.run(load_snapshot(truncated_storage, truncated_id)) != sample_yaml_text("truncated"):
+        print("  ERROR: a 0-byte current-name file should be treated as missing so the intact legacy copy loads, got {!r}".format(asyncio.run(load_snapshot(truncated_storage, truncated_id))))
+        failed = True
+
+    print("Test: load_all_snapshots names a legacy-named snapshot under the current .yaml.txt name in the archive")
+    legacy_bulk_storage = FakeStorage()
+    legacy_bulk_id = asyncio.run(capture_snapshot(legacy_bulk_storage, sample_yaml_text("legacy-bulk"), now, max_count=15))
+    legacy_bulk_storage.debug_copies[_legacy_snapshot_filename(legacy_bulk_id)] = legacy_bulk_storage.debug_copies.pop(snapshot_filename(legacy_bulk_id))
+    named_legacy = asyncio.run(load_all_snapshots(legacy_bulk_storage))
+    if len(named_legacy) != 1 or named_legacy[0][0] != snapshot_filename(legacy_bulk_id) or named_legacy[0][1] != sample_yaml_text("legacy-bulk"):
+        print("  ERROR: expected the pre-rename snapshot in the archive under the current name, got {}".format([(fname, text) for fname, text in named_legacy]))
+        failed = True
+
     print("Test: a pre-rename snapshot survives a real Storage backend round trip (the file genuinely on disk under the old name)")
     tmpdir = tempfile.mkdtemp()
     try:
@@ -389,6 +428,12 @@ def test_debug_history(my_predbat):
             failed = True
         if asyncio.run(load_snapshot(real_storage, pre_rename_real_id)) != pre_rename_text:
             print("  ERROR: a pre-rename snapshot should load from the real backend via the filename fallback")
+            failed = True
+        # 'latest' resolves through the index above (an explicit id skips it), so this is what
+        # makes that index entry live setup rather than dead weight - and pins the ?id=latest
+        # download path working against a real backend with only a legacy-named file.
+        if asyncio.run(load_snapshot(real_storage, "latest")) != pre_rename_text:
+            print("  ERROR: 'latest' should resolve through the index to the pre-rename snapshot on the real backend")
             failed = True
         asyncio.run(_discard_snapshot(real_storage, pre_rename_real_id))
         if os.path.exists(old_path):
