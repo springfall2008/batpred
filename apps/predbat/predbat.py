@@ -352,6 +352,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.soc_kw = 0
         self.soc_percent = 0
         self.soc_max = 10.0
+        self.battery_soc_full_hysteresis = 0
+        self.battery_full_hysteresis_active = None
         self.battery_temperature = 20
         self.end_record = 24 * 60 * 2
         self.predict_soc = {}
