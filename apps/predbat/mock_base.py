@@ -25,6 +25,8 @@ standalone run.
 from datetime import datetime
 import json
 
+from charger_registry import ChargerRegistry
+
 
 class MockHAInterface:
     """Minimal stand-in for the HA interface, used by the standalone CLI harnesses.
@@ -62,6 +64,7 @@ class MockBase:
         self.had_errors = False
         self.components = None
         self.num_cars = 0
+        self.charger_registry = ChargerRegistry(self)
         self.currency_symbols = "£p"
         self.arg_errors = {}
         self.args = {key: value for key, value in kwargs.items() if value is not None}

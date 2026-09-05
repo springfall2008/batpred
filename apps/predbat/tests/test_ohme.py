@@ -22,6 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ohme import (
     ENERGY_TODAY_ENTITY,
     MAX_ENERGY_GAP_SECONDS,
+    OHME_DEVICE_ID,
     POWER_WATTS_ENTITY,
     OhmeAPI,
     OhmeApiClient,
@@ -33,6 +34,7 @@ from ohme import (
     slot_list,
     vehicle_to_name,
 )
+from charger_registry import ChargerEntry, ChargerRegistry, preregister_legacy
 
 
 # ============================================================================
@@ -282,6 +284,7 @@ def test_ohme(my_predbat=None):
         ("connected_sensor", _test_ohme_connected_sensor, "connected binary sensor tracks plug state"),
         ("control_enable", _test_ohme_control_enable_rules, "ohme_control enable rules"),
         ("control_windows", _test_ohme_control_window_parsing, "control window parsing"),
+        ("control_no_slot", _test_ohme_control_without_a_registry_slot, "control waits for a registry slot"),
         ("control_midnight", _test_ohme_control_window_year_rollover, "control windows across new year"),
         ("control_startup", _test_ohme_control_waits_for_plan, "control waits for a published plan"),
         ("control_edges", _test_ohme_control_edge_triggered, "control only acts on transitions"),
@@ -1573,10 +1576,26 @@ class MockOhmeBase:
         self.api = api
         self.car_slot_owner = None
         self.components = MockComponents()
+        # register_chargers()/charger_slot() go through base.charger_registry, and the
+        # registry writes back via base.set_arg/base.log - route both to the owning mock
+        # API so registry-materialised args land in the same api.args the tests assert on.
+        self.charger_registry = ChargerRegistry(self)
 
     def load_previous_value_from_ha(self, entity, attribute=None):
         """Return whatever the test staged for this entity/attribute"""
         return self.api.previous_values.get((entity, attribute))
+
+    def set_arg(self, arg, value):
+        """Delegate to the owning mock API's stub args"""
+        self.api.set_arg(arg, value)
+
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+        """Delegate to the owning mock API's stub args - needed by preregister_legacy()"""
+        return self.api.get_arg(arg, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index, domain=domain, can_override=can_override, required_unit=required_unit)
+
+    def log(self, message):
+        """Delegate to the owning mock API's captured log messages"""
+        self.api.log(message)
 
 
 class MockOhmeAPI(OhmeAPI):
@@ -1657,8 +1676,12 @@ def _ohme_control_api(windows=None, now=None, read_only=False):
     api.control_active = True
     api.base.set_read_only = read_only
     api._now_override = now or datetime.datetime(2026, 8, 22, 23, 0, 0, tzinfo=datetime.timezone.utc).astimezone(api.local_tz)
+    # refresh_car_windows() now reads its own allocated slot rather than assuming car 0 -
+    # register it as the only charger so it lands at slot 0, matching the staged entity below.
+    api.register_chargers("ohme", [ChargerEntry("ohme", OHME_DEVICE_ID, planned="binary_sensor.predbat_ohme_connected")])
     if windows is not None:
         api.states[("binary_sensor.predbat_car_charging_slot", "planned")] = windows
+        api.base.charger_registry.confirm_plan(api.base.charger_registry.generation)
     # A plugged-in car so charger_mode() has something to read
     api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}}
     return api
@@ -1733,6 +1756,41 @@ def _test_ohme_control_window_parsing(my_predbat=None):
     return 0
 
 
+def _test_ohme_control_without_a_registry_slot(my_predbat=None):
+    """Test no plan is read at all until the charger has been allocated a car slot"""
+    print("**** Running test_ohme_control_without_a_registry_slot ****")
+
+    tz = pytz.timezone("Europe/London")
+    now = tz.localize(datetime.datetime(2026, 8, 22, 23, 30, 0))
+    inside = _ohme_plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
+
+    # Everything staged except the registration - automatic_config() has not run yet. Falling
+    # back to car 0's plan here would drive this charger from whatever car another component
+    # later puts in slot 0, so the plan is not read at all until the slot is known.
+    api = MockOhmeAPI()
+    api.ohme_automatic = True
+    api.ohme_control = True
+    api.control_active = True
+    api._now_override = now
+    api.states[("binary_sensor.predbat_car_charging_slot", "planned")] = [inside]
+    api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}}
+
+    assert api.charger_slot("ohme", OHME_DEVICE_ID) is None, "Expected no slot before registration"
+    assert api.refresh_car_windows() is False, "Expected no plan to be read without a slot"
+    assert not api.control_windows, f"Expected no windows without a slot, got {api.control_windows}"
+
+    run_async(api.control_charge())
+    assert len(api.client.request_log) == 0, f"Expected no commands without a slot, got {api.client.request_log}"
+
+    # Once registered the very same staged plan is read, so the guard is the slot and nothing else
+    api.register_chargers("ohme", [ChargerEntry("ohme", OHME_DEVICE_ID, planned="binary_sensor.predbat_ohme_connected")])
+    assert api.refresh_car_windows() is True, "Expected the plan to be read once a slot exists"
+    assert len(api.control_windows) == 1, f"Expected one window, got {api.control_windows}"
+
+    print("PASS: control waited for a registry slot")
+    return 0
+
+
 def _test_ohme_control_window_year_rollover(my_predbat=None):
     """Test windows that straddle new year are rebuilt around now"""
     print("**** Running test_ohme_control_window_year_rollover ****")
@@ -1766,6 +1824,7 @@ def _test_ohme_control_waits_for_plan(my_predbat=None):
 
     # An empty plan is a real answer, not a missing one - the charger is held paused
     api.states[("binary_sensor.predbat_car_charging_slot", "planned")] = []
+    api.base.charger_registry.confirm_plan(api.base.charger_registry.generation)
     run_async(api.control_charge())
     assert len(api.client.request_log) == 1, f"Expected a pause once the plan is known, got {api.client.request_log}"
     assert "stop" in api.client.request_log[0]["url"], f"Expected a pause command, got {api.client.request_log[0]['url']}"
@@ -2273,17 +2332,18 @@ def _test_ohme_auto_config_wires_car_charging_energy(my_predbat=None):
     """Test car registration points car_charging_energy at the delivered-energy sensor"""
     print("**** Running test_ohme_auto_config_wires_car_charging_energy ****")
 
-    # Nothing configured at all
+    # Nothing configured at all. car_charging_energy is a registry aggregate now, so even a
+    # single charger's sensor comes back as a one-element list rather than a bare scalar.
     api = MockOhmeAPI()
     run_async(api.automatic_config())
-    assert api.args.get("car_charging_energy") == ENERGY_TODAY_ENTITY, f"Expected {ENERGY_TODAY_ENTITY}, got {api.args.get('car_charging_energy')}"
+    assert api.args.get("car_charging_energy") == [ENERGY_TODAY_ENTITY], f"Expected [{ENERGY_TODAY_ENTITY}], got {api.args.get('car_charging_energy')}"
 
     # The apps.yaml default regex, still unresolved because no Zappi or Wallbox matched it.
     # auto_config(final=True) has not run yet at this point in startup, so it is still present
     api = MockOhmeAPI()
     api.args["car_charging_energy"] = "re:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)"
     run_async(api.automatic_config())
-    assert api.args.get("car_charging_energy") == ENERGY_TODAY_ENTITY, f"Expected unmatched regex to be replaced, got {api.args.get('car_charging_energy')}"
+    assert api.args.get("car_charging_energy") == [ENERGY_TODAY_ENTITY], f"Expected unmatched regex to be replaced, got {api.args.get('car_charging_energy')}"
 
     # The rest of the car registration happens too
     assert api.args.get("num_cars") == 1, f"Expected num_cars 1, got {api.args.get('num_cars')}"
@@ -2302,11 +2362,18 @@ def _test_ohme_auto_config_keeps_existing_car_charging_energy(my_predbat=None):
     print("**** Running test_ohme_auto_config_keeps_existing_car_charging_energy ****")
 
     # A resolved Zappi sensor means the user has another charger measuring car energy - taking
-    # that over with an Ohme-only figure would lose the car charging it is already reporting
+    # that over with an Ohme-only figure would lose the car charging it is already reporting.
+    # preregister_legacy() must run first, exactly as it does at real startup (predbat.py),
+    # so the pre-existing sensor is captured as a legacy aggregate before Ohme registers -
+    # otherwise Ohme's registration (which omits energy here) would recompute the aggregate
+    # from nothing and wipe the Zappi sensor out.
     api = MockOhmeAPI()
     api.args["car_charging_energy"] = "sensor.myenergi_zappi_1234_charge_added_session"
+    preregister_legacy(api.base.charger_registry, api.base)
     run_async(api.automatic_config())
 
+    # Left exactly as the user wrote it, scalar and all: with no registered charger supplying
+    # an energy sensor the registry does not own the key, so it does not rewrite it.
     assert api.args.get("car_charging_energy") == "sensor.myenergi_zappi_1234_charge_added_session", f"Expected the Zappi sensor to be kept, got {api.args.get('car_charging_energy')}"
     assert any("Leaving car_charging_energy" in msg for msg in api.log_messages), f"Expected a note about keeping it, got {api.log_messages}"
 
@@ -2318,9 +2385,11 @@ def _test_ohme_auto_config_wires_car_charging_power(my_predbat=None):
     """Test car registration points car_charging_power at the live charge power sensor"""
     print("**** Running test_ohme_auto_config_wires_car_charging_power ****")
 
+    # car_charging_power is a registry aggregate too, so a single charger's sensor comes back
+    # as a one-element list rather than a bare scalar.
     api = MockOhmeAPI()
     run_async(api.automatic_config())
-    assert api.args.get("car_charging_power") == POWER_WATTS_ENTITY, f"Expected {POWER_WATTS_ENTITY}, got {api.args.get('car_charging_power')}"
+    assert api.args.get("car_charging_power") == [POWER_WATTS_ENTITY], f"Expected [{POWER_WATTS_ENTITY}], got {api.args.get('car_charging_power')}"
 
     # The energy and power sensors have to describe the same charger, so when a real third-party
     # energy sensor is kept, Ohme's own power figure must not be wired in beside it
@@ -2334,13 +2403,13 @@ def _test_ohme_auto_config_wires_car_charging_power(my_predbat=None):
     api = MockOhmeAPI()
     api.args["car_charging_energy"] = ENERGY_TODAY_ENTITY
     run_async(api.automatic_config())
-    assert api.args.get("car_charging_power") == POWER_WATTS_ENTITY, f"Expected power wiring alongside Ohme's own energy entity, got {api.args.get('car_charging_power')}"
+    assert api.args.get("car_charging_power") == [POWER_WATTS_ENTITY], f"Expected power wiring alongside Ohme's own energy entity, got {api.args.get('car_charging_power')}"
 
     # The same entity handed over as a single-item list, which is how it round-trips through apps.yaml
     api = MockOhmeAPI()
     api.args["car_charging_energy"] = [ENERGY_TODAY_ENTITY]
     run_async(api.automatic_config())
-    assert api.args.get("car_charging_power") == POWER_WATTS_ENTITY, f"Expected power wiring for the list form, got {api.args.get('car_charging_power')}"
+    assert api.args.get("car_charging_power") == [POWER_WATTS_ENTITY], f"Expected power wiring for the list form, got {api.args.get('car_charging_power')}"
 
     print("PASS: auto config wired car_charging_power")
     return 0

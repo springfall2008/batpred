@@ -21,6 +21,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
 from storage import StorageLocalFiles
+from charger_registry import ChargerEntry, ChargerRegistry
 
 
 class MockGECloudDirect(GECloudDirect):
@@ -88,11 +89,29 @@ class MockGECloudDirect(GECloudDirect):
                 self.external_states[entity_id] = state
 
         class MockBase:
-            def __init__(self):
+            def __init__(self, api):
                 self.ha_interface = MockHAInterface()
                 self.num_cars = 0
+                self.api = api
+                # register_chargers()/charger_slot() go through base.charger_registry, and
+                # the registry writes back via base.set_arg/base.log - route both to the
+                # owning mock API so registry-materialised args land in the same
+                # api.config_args the tests assert on.
+                self.charger_registry = ChargerRegistry(self)
 
-        self.base = MockBase()
+            def set_arg(self, arg, value):
+                """Delegate to the owning mock API's stub args"""
+                self.api.set_arg(arg, value)
+
+            def get_arg(self, arg, default=None, **kwargs):
+                """Delegate to the owning mock API's stub args"""
+                return self.api.get_arg(arg, default=default, **kwargs)
+
+            def log(self, message):
+                """Delegate to the owning mock API's captured log messages"""
+                self.api.log(message)
+
+        self.base = MockBase(self)
 
     @property
     def now_utc_exact(self):
@@ -4513,20 +4532,34 @@ def _test_async_automatic_config_evc(my_predbat):
         ], "car_charging_power should list both chargers in serial order, got {}".format(ge.config_args.get("car_charging_power"))
         assert ge.config_args.get("num_cars") == 2, "num_cars should be raised to the number of chargers"
 
-        # Test 2: an existing larger num_cars is left alone - another component may own those cars
-        ge.config_args = {"num_cars": 3}
+        # Test 2: cars another component owns are a floor, not a stale value.
+        # octopus.py and kraken.py claim their intelligent device count so fetch.py reads the
+        # dispatch sensors they just wired - those cars have no charger in the registry, so
+        # overwriting with the registered count dropped them every time a GivEnergy charger
+        # was rediscovered. The claim is explicit (set_external_num_cars) rather than inferred
+        # from num_cars having moved, which was blind to a raise equal to our own last write.
+        ge.config_args = {}
+        ge.base.charger_registry.set_external_num_cars("octopus", 3)
         await ge.async_automatic_config_evc()
-        assert ge.config_args.get("num_cars") == 3, "num_cars should not be reduced to the charger count"
+        assert ge.config_args.get("num_cars") == 3, "num_cars claimed by another source should be kept as a floor, got {}".format(ge.config_args.get("num_cars"))
 
-        # Test 3: no chargers configures nothing at all
+        # And releasing the claim lets the count fall back to the registered chargers.
+        ge.base.charger_registry.set_external_num_cars("octopus", 0)
+        await ge.async_automatic_config_evc()
+        assert ge.config_args.get("num_cars") == 2, "num_cars should follow the chargers once the claim is released, got {}".format(ge.config_args.get("num_cars"))
+
+        # Test 3: no chargers clears everything - the registry had previously been
+        # populated by Tests 1/2, so going back to empty clears the stale values rather
+        # than leaving them in place (registering an empty list is how a source's
+        # chargers going away is expressed).
         ge.config_args = {}
         ge.evc_device_list = []
         ge.evc_device = {}
         await ge.async_automatic_config_evc()
-        assert ge.config_args.get("car_charging_energy") is None, "car_charging_energy should be left alone with no chargers"
-        assert ge.config_args.get("car_charging_planned") is None, "car_charging_planned should be left alone with no chargers"
-        assert ge.config_args.get("car_charging_power") is None, "car_charging_power should be left alone with no chargers"
-        assert ge.config_args.get("num_cars") is None, "num_cars should be left alone with no chargers"
+        assert ge.config_args.get("car_charging_energy") is None, "car_charging_energy should be cleared with no chargers"
+        assert ge.config_args.get("car_charging_planned") is None, "car_charging_planned should be cleared with no chargers"
+        assert ge.config_args.get("car_charging_power") is None, "car_charging_power should be cleared with no chargers"
+        assert ge.config_args.get("num_cars") == 0, "num_cars should be cleared to 0 with no chargers, got {}".format(ge.config_args.get("num_cars"))
 
         # Test 4: a charger whose serial has not been read yet is skipped rather than
         # publishing an entity name with a hole in it
@@ -4562,6 +4595,17 @@ def _evc_control_component(commands, num_cars=1):
     return ge
 
 
+def _register_gecloud_chargers(ge, serials):
+    """Give a mock component the registry slots evc_control_charge now reads from.
+
+    In production these come from async_automatic_config_evc(); these tests exercise
+    control in isolation, so they register directly. Pass order does not matter - the
+    registry sorts by serial, same as automatic config does.
+    """
+    ge.register_chargers("gecloud", [ChargerEntry("gecloud", serial) for serial in serials])
+    ge.base.charger_registry.confirm_plan(ge.base.charger_registry.generation)
+
+
 def _test_evc_control(my_predbat):
     """Test Predbat-led start/stop control of GivEnergy EV chargers from the car plan"""
 
@@ -4590,6 +4634,7 @@ def _test_evc_control(my_predbat):
         ge.evc_device_list = ["evc-001"]
         ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
         ge.entity_attributes = plan
+        _register_gecloud_chargers(ge, ["EVC100"])
 
         await ge.evc_control_charge(inside)
         assert commands == [("evc-001", "start-charge")], "A planned window should start the charge, got {}".format(commands)
@@ -4620,6 +4665,7 @@ def _test_evc_control(my_predbat):
         ge.evc_device_list = ["evc-001"]
         ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
         ge.entity_attributes = plan
+        _register_gecloud_chargers(ge, ["EVC100"])
         await ge.evc_control_charge(outside)
         commands.clear()
         await ge.switch_event("switch.predbat_gecloud_evc_control", "turn_off")
@@ -4633,6 +4679,7 @@ def _test_evc_control(my_predbat):
         ge.evc_device_list = ["evc-001"]
         ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "idle"}}
         ge.entity_attributes = plan
+        _register_gecloud_chargers(ge, ["EVC100"])
         await ge.evc_control_charge(inside)
         assert commands == [], "An empty charger should not be commanded, got {}".format(commands)
 
@@ -4642,6 +4689,7 @@ def _test_evc_control(my_predbat):
         ge = _evc_control_component(commands)
         ge.evc_device_list = ["evc-001"]
         ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
+        _register_gecloud_chargers(ge, ["EVC100"])
         await ge.evc_control_charge(inside)
         assert commands == [], "With no plan published nothing should be commanded, got {}".format(commands)
 
@@ -4654,13 +4702,15 @@ def _test_evc_control(my_predbat):
             "evc-second": {"serial_number": "EVC100", "status": "charging"},
         }
         ge.entity_attributes = {EVC_PLAN_SENSOR: plan[EVC_PLAN_SENSOR], EVC_PLAN_SENSOR_CAR_1: {"planned": []}}
+        _register_gecloud_chargers(ge, ["EVC100", "EVC200"])
 
         await ge.evc_control_charge(inside)
         assert sorted(commands) == sorted([("evc-second", "start-charge"), ("evc-first", "stop-charge")]), "The lower serial should be car 0, got {}".format(commands)
 
-        # Test 10: a charger with no car index yet is left alone rather than stopped.
-        # num_cars is raised by async_automatic_config_evc, but that lands on the base
-        # object a cycle later, so briefly there can be more chargers than cars.
+        # Test 10: a charger with no registry slot yet is left alone rather than stopped.
+        # Slots come from async_automatic_config_evc() registering the charger; a charger
+        # discovered since the last registration - e.g. on the very first control tick of
+        # a session, which runs before the one-shot auto-config call - simply has none yet.
         commands = []
         ge = _evc_control_component(commands, num_cars=1)
         ge.evc_device_list = ["evc-first", "evc-second"]
@@ -4669,9 +4719,38 @@ def _test_evc_control(my_predbat):
             "evc-second": {"serial_number": "EVC200", "status": "charging"},
         }
         ge.entity_attributes = {EVC_PLAN_SENSOR: plan[EVC_PLAN_SENSOR]}
+        _register_gecloud_chargers(ge, ["EVC100"])  # evc-second (EVC200) deliberately not registered
 
         await ge.evc_control_charge(inside)
-        assert commands == [("evc-first", "start-charge")], "Only the charger with a car should be commanded, got {}".format(commands)
+        assert commands == [("evc-first", "start-charge")], "Only the charger with a slot should be commanded, got {}".format(commands)
+
+        # Test 11: a charger whose slot is beyond the windows read this cycle is left alone.
+        # The registry allocates immediately while self.num_cars is a cached copy refreshed
+        # once a cycle, so refresh_evc_car_windows() can loop over fewer cars than there are
+        # slots. Without the key check the missing entry reads as an empty plan, and Predbat
+        # stops a car that is charging perfectly legitimately.
+        commands = []
+        ge = _evc_control_component(commands, num_cars=1)
+        ge.evc_device_list = ["evc-first", "evc-second"]
+        ge.evc_device = {
+            "evc-first": {"serial_number": "EVC100", "status": "charging"},
+            "evc-second": {"serial_number": "EVC200", "status": "charging"},
+        }
+        ge.entity_attributes = {EVC_PLAN_SENSOR: plan[EVC_PLAN_SENSOR]}
+        _register_gecloud_chargers(ge, ["EVC100", "EVC200"])
+
+        await ge.evc_control_charge(inside)
+        assert ge.charger_slot("gecloud", "EVC200") == 1, "EVC200 should hold slot 1"
+        assert commands == [("evc-first", "start-charge")], "A slot with no plan published yet must not be commanded, got {}".format(commands)
+
+        # Test 12: but a published empty plan is a real answer, not a missing one - car 1 is
+        # not charging, so its charger is stopped.
+        commands.clear()
+        ge.base.num_cars = 2
+        ge.entity_attributes = {EVC_PLAN_SENSOR: plan[EVC_PLAN_SENSOR], EVC_PLAN_SENSOR_CAR_1: {"planned": []}}
+
+        await ge.evc_control_charge(inside)
+        assert commands == [("evc-second", "stop-charge")], "An empty published plan should still stop the charger, got {}".format(commands)
 
         return 0
 
