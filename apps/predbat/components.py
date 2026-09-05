@@ -22,6 +22,13 @@ supplies it ("config"), plus how it is resolved ("required", "required_true", "d
 value is a credential, so it is redacted from debug dumps, downloads and anything served
 to an AI assistant - see secret_config_names() below for what that covers and, importantly,
 what it deliberately does not.
+
+Mark an entry "inverter": True when the component is somewhere Predbat's Inverter class can
+get its inverter state and controls from. Inverter uses that (via inverter_source_active())
+to tell "a source is configured but has not answered yet" - transient, retry next cycle -
+apart from "no source is configured at all", which is a setup gap that will never resolve.
+Before the tag existed that question was asked as "givtcp_rest or ge_cloud_direct", which
+was simply the two sources that happened to have been wired up when the check was written.
 """
 
 from storage import StorageComponent
@@ -151,6 +158,7 @@ COMPONENT_LIST = {
     "gecloud": {
         "class": GECloudDirect,
         "name": "GivEnergy Cloud Direct",
+        "inverter": True,
         "event_filter": "predbat_gecloud_",
         "args": {
             "ge_cloud_direct": {
@@ -298,6 +306,7 @@ COMPONENT_LIST = {
     "fox": {
         "class": FoxAPI,
         "name": "Fox API",
+        "inverter": True,
         "event_filter": "predbat_fox_",
         "args": {
             "key": {
@@ -339,6 +348,7 @@ COMPONENT_LIST = {
     "givtcp": {
         "class": GivTCPComponent,
         "name": "GivTCP REST",
+        "inverter": True,
         "event_filter": "predbat_givtcp_",
         "args": {
             "rest_urls": {
@@ -351,6 +361,7 @@ COMPONENT_LIST = {
     "deye": {
         "class": DeyeAPI,
         "name": "DEYE Cloud",
+        "inverter": True,
         "event_filter": "predbat_deye_",
         "args": {
             "app_id": {"required": False, "secret": True, "config": "deye_app_id"},
@@ -387,6 +398,7 @@ COMPONENT_LIST = {
     "sunsynk": {
         "class": SunsynkAPI,
         "name": "Sunsynk Cloud",
+        "inverter": True,
         "event_filter": "predbat_sunsynk_",
         "args": {
             "username": {"required": False, "secret": True, "config": "sunsynk_username"},
@@ -421,6 +433,7 @@ COMPONENT_LIST = {
     "alphaess": {
         "class": AlphaESSAPI,
         "name": "AlphaESS Cloud API",
+        "inverter": True,
         "event_filter": "predbat_alphaess_",
         "args": {
             "app_id": {"required": False, "secret": True, "config": "alphaess_app_id"},
@@ -448,6 +461,7 @@ COMPONENT_LIST = {
     "enphase": {
         "class": EnphaseAPI,
         "name": "Enphase API",
+        "inverter": True,
         "event_filter": "predbat_enphase_",
         "args": {
             "username": {
@@ -596,6 +610,7 @@ COMPONENT_LIST = {
     "sigenergy": {
         "class": SigenergyAPI,
         "name": "Sigenergy Cloud API",
+        "inverter": True,
         "event_filter": "predbat_sigenergy_",
         "args": {
             "system_id": {"required": True, "secret": True, "config": "sigenergy_system_id"},
@@ -615,6 +630,7 @@ COMPONENT_LIST = {
     "teslemetry": {
         "class": TeslemetryAPI,
         "name": "Tesla Powerwall (Teslemetry)",
+        "inverter": True,
         "event_filter": "predbat_teslemetry_",
         "args": {
             "key": {"required": True, "secret": True, "config": "teslemetry_key"},
@@ -631,6 +647,7 @@ COMPONENT_LIST = {
     "solax": {
         "class": SolaxAPI,
         "name": "SolaX Cloud API",
+        "inverter": True,
         "event_filter": "predbat_solax_",
         "args": {
             "client_id": {"required": True, "secret": True, "config": "solax_client_id"},
@@ -650,6 +667,7 @@ COMPONENT_LIST = {
     "solis": {
         "class": SolisAPI,
         "name": "Solis Cloud API",
+        "inverter": True,
         "event_filter": "predbat_solis_",
         "args": {
             # api_key/api_secret (HMAC) OR auth_method=oauth+access_token must be supplied.
@@ -691,6 +709,7 @@ if HAS_GATEWAY:
     COMPONENT_LIST["gateway"] = {
         "class": GatewayMQTT,
         "name": "PredBat Gateway",
+        "inverter": True,
         "event_filter": "predbat_gateway_",
         "args": {
             "gateway_device_id": {"required": True, "secret": True, "config": "gateway_device_id"},
@@ -919,6 +938,22 @@ class Components:
 
     def get_component(self, name):
         return self.components.get(name, None)
+
+    def inverter_source_active(self):
+        """
+        Whether any component marked "inverter": True in COMPONENT_LIST is initialised.
+
+        Answers "is Predbat getting its inverter state from a component at all", which is what
+        separates a source that has not answered this cycle - transient, worth retrying - from
+        no source being configured, which no amount of retrying will fix. Deliberately a fleet-wide
+        question rather than a per-inverter one: a component serves whichever inverters it
+        discovered, and Inverter only needs to know whether to keep waiting.
+        """
+        return any(COMPONENT_LIST.get(name, {}).get("inverter", False) and component for name, component in self.components.items())
+
+    def inverter_source_names(self):
+        """The display names of every active inverter component, for user-facing messages."""
+        return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False)]
 
     def get_all(self):
         all_components = [name for name in self.components.keys()]
