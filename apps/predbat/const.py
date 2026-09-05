@@ -108,3 +108,10 @@ PREDBAT_MODE_MONITOR = 0
 PREDBAT_MODE_CONTROL_SOC = 1
 PREDBAT_MODE_CONTROL_CHARGE = 2
 PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
+
+# Predbat's core charge/export status strings, ordered most-active-first. Used two ways: execute.py
+# resolves one headline status across a multi-inverter fleet (#4446), and output.py breaks a tie when
+# a history slot's dominant state is ambiguous - e.g. an even split between two states (#4843). Both
+# need the same answer to "which of these two states is the more significant one to show".
+CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
+EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
