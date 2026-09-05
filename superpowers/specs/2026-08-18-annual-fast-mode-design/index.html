@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>WhatIf fast mode: four seasonal months, interpolate the rest - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "WhatIf fast mode: four seasonal months, interpolate the rest";
+        var mkdocs_page_input_path = "superpowers/specs/2026-08-18-annual-fast-mode-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">WhatIf fast mode: four seasonal months, interpolate the rest</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="whatif-fast-mode-four-seasonal-months-interpolate-the-rest">WhatIf fast mode: four seasonal months, interpolate the rest</h1>
+<h2 id="problem">Problem</h2>
+<p>A WhatIf annual run plans every one of the twelve months. At the default
+<code>samples_per_month: 2</code> that is 24 planned days, or 48 with a car configured (each
+sampled day is planned twice, with and without a charging session). It takes one to
+three minutes without a car and two to six with one.</p>
+<p>That cost is paid every time someone changes a single number. The tool's audience is
+someone trying battery sizes against each other — "what about 10 kWh instead of 5?" —
+and a three minute wait per answer discourages exactly the exploration the tool exists
+for.</p>
+<p>Most of that work is redundant. Household electricity cost over a year is dominated by
+one smooth seasonal driver, solar yield, which the run already downloads in full for
+every day of the year before it plans anything. Planning all twelve months re-derives a
+curve whose shape is already known.</p>
+<p><code>fast_mode</code> plans four months and reconstructs the other eight from that known curve.</p>
+<h2 id="measured-basis">Measured basis</h2>
+<p>The design is not a guess. Three complete twelve month runs were recovered from the
+addon cache and used as ground truth: hold eight months out, rebuild them from four
+seasonal anchors, and score the reconstruction against what actually ran. Three anchor
+sets were tried against each of five candidate curves, over all four scenarios.</p>
+<table>
+<thead>
+<tr>
+<th>Scheme</th>
+<th>Annual cost error</th>
+<th>Savings error</th>
+<th>Per-month error</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cyclic linear on raw monthly totals</td>
+<td>0.91%</td>
+<td>1.78%</td>
+<td>18.3%</td>
+</tr>
+<tr>
+<td>Cyclic linear on per-day values</td>
+<td>1.71%</td>
+<td>1.36%</td>
+<td>18.7%</td>
+</tr>
+<tr>
+<td>Fourier (mean + 1st harmonic + cos 2θ)</td>
+<td>1.80%</td>
+<td>1.37%</td>
+<td>19.0%</td>
+</tr>
+<tr>
+<td>Proportional to solar (value ∝ PV)</td>
+<td>20.48%</td>
+<td>5.16%</td>
+<td>54.2%</td>
+</tr>
+<tr>
+<td><strong>Affine in solar (per-day = a + b·PV)</strong></td>
+<td>1.82%</td>
+<td>1.45%</td>
+<td><strong>12.6%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Errors are means; the savings column drives payback and is the figure that matters most.</p>
+<p>Three findings shape the design:</p>
+<p><strong>Solar-shaped, but affine rather than proportional.</strong> Making a month's cost
+proportional to its solar yield is the worst scheme tested, at 20% annual error,
+because cost has a large load-driven floor that does not scale with sun. Fitting
+<code>a + b·PV</code> recovers that floor in <code>a</code> and the solar response in <code>b</code>, and becomes the
+best scheme.</p>
+<p><strong>Annual totals barely care which curve is used.</strong> Every sane scheme lands within about
+2% on the annual total and 1.8% on savings. The curve choice is not what makes fast mode
+trustworthy for payback; four well-sampled anchors are. Where the curve earns its keep is
+the month-by-month table and chart.</p>
+<p><strong>Affine-in-solar is insensitive to anchor choice.</strong> Its per-month error holds at
+12.4-12.9% across every anchor set tried, while cyclic linear swings between 15.9% and
+26.4% depending on whether the chosen months happened to be seasonally representative.
+It is robust because it reads the real solar curve for the missing months instead of
+assuming the anchors implied it.</p>
+<h3 id="confirmed-against-agile-and-cosy">Confirmed against Agile and Cosy</h3>
+<p>The three runs above are all Octopus Intelligent Go, which is nearly rate-flat across the
+year, so they exercised no rate seasonality. Two further twelve month references were run
+to close that gap — Octopus Agile (monthly mean import 17.7p to 29.3p, a 66% spread) and
+Octopus Cosy — on an identical system, varying only the import tariff. A third Agile
+reference at <code>samples_per_month: 6</code> provides a lower-noise ground truth. See
+<a href="#curve-selection-results">Curve selection results</a>.</p>
+<h2 id="design">Design</h2>
+<h3 id="surface">Surface</h3>
+<p>Off by default, exposed three ways:</p>
+<ul>
+<li><code>annual.fast_mode: true</code> in the config file</li>
+<li><code>--fast</code> on <code>annual_cli</code>, which sets the same key before validation</li>
+<li>a checkbox in the web form's <strong>Advanced</strong> section, beside <code>samples_per_month</code></li>
+</ul>
+<p><code>validate_config</code> gains one entry beside <code>"debug"</code>, using the same coercion so that an
+explicit <code>fast_mode: "false"</code> in YAML cannot be read as truthy:</p>
+<pre><code class="language-python">&quot;fast_mode&quot;: _coerce_bool(raw.get(&quot;fast_mode&quot;, False)),
+</code></pre>
+<p>Because <code>validate_config</code> already stores <code>"raw": scrub_secrets(raw)</code> into the results
+document, the flag reaches the web layer's "what this run used" panel with no extra
+plumbing.</p>
+<h3 id="anchor-months">Anchor months</h3>
+<p><code>ANCHOR_MONTHS = (3, 6, 9, 12)</code> — March, June, September, December. One per season, and a
+spread that spans the solar range from midwinter to midsummer, which is what the fit needs
+to resolve <code>b</code>.</p>
+<p><strong>Corrected after implementation.</strong> This originally said <code>(1, 4, 7, 10)</code>, on the grounds
+that the measured data did not separate the candidates. That was wrong, and wrong in a way
+worth recording: the per-month cost error genuinely does not separate them, but the
+<em>savings</em> figures — the numbers a reader acts on — separate them sharply, because a saving
+is a difference between two reconstructed scenarios and small relative errors in each are
+amplified in the difference. Measured on the Cosy reference, reconstructing the year from
+each candidate:</p>
+<table>
+<thead>
+<tr>
+<th>Anchors</th>
+<th>System saving</th>
+<th>Predbat saving</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>(1, 4, 7, 10)</td>
+<td>+1.2%</td>
+<td>−10.6%</td>
+</tr>
+<tr>
+<td>(2, 5, 8, 11)</td>
+<td>−0.8%</td>
+<td>+11.7%</td>
+</tr>
+<tr>
+<td><strong>(3, 6, 9, 12)</strong></td>
+<td><strong>−0.5%</strong></td>
+<td><strong>+0.2%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Anchor count does not rescue a bad set: six, seven and eight anchors were also tried and
+land no better (Cosy with seven anchors is +11.8% on the Predbat saving, worse than four
+well-chosen ones).</p>
+<h3 id="the-interpolation-module">The interpolation module</h3>
+<p>A new <code>apps/predbat/annual_interpolate.py</code>. Pure functions, no I/O, no Predbat import, so
+the curve can be unit tested against known inputs and re-scored against reference runs
+without standing up an engine.</p>
+<pre><code class="language-python">ANCHOR_MONTHS = (3, 6, 9, 12)
+BASIS_SOLAR_AFFINE = &quot;solar_affine&quot;
+BASIS_LINEAR = &quot;linear&quot;
+DEFAULT_BASIS = BASIS_SOLAR_AFFINE  # provisional; fixed by the reference study below
+
+def monthly_pv_kwh(weather, year):
+    &quot;&quot;&quot;Return {month: total actual PV kWh}, or None when the run has no solar.&quot;&quot;&quot;
+
+def fit_solar_affine(pv_per_day, values_per_day):
+    &quot;&quot;&quot;Least-squares (a, b) for value_per_day = a + b * pv_per_day, or None if degenerate.&quot;&quot;&quot;
+
+def build_interpolated_rows(anchor_rows, year, monthly_pv, basis=DEFAULT_BASIS):
+    &quot;&quot;&quot;Return month rows for every month of the year absent from anchor_rows.&quot;&quot;&quot;
+</code></pre>
+<p><code>monthly_pv_kwh</code> reads <code>WeatherYear._daily_actual</code>, which already holds a total for every
+day of the year — the complete twelve month solar curve costs <strong>nothing extra to obtain</strong>,
+no additional fetch. (A small accessor is added to <code>WeatherYear</code> rather than reaching into
+the private attribute from another module.)</p>
+<p>Each scenario key is fitted independently for each field, on per-day values:</p>
+<pre><code>per_day(m)  = a + b · pv_per_day(m)        # a, b fitted over the surviving anchors
+value(m)    = per_day(m) · days_in_month(m)
+</code></pre>
+<p>Fitting per field matters. <code>no_pvbat</code> cost is load-driven and lands near <code>b ≈ 0</code>, while
+<code>export_kwh</code> is steeply solar-driven; one shared shape would serve neither. Working in
+per-day space keeps February's 28 days from reading as a seasonal dip.</p>
+<p>Three guards, each reachable with real configs:</p>
+<ul>
+<li><strong>No solar</strong> (<code>self.weather is None</code>, a battery-only run) leaves no basis to fit. Falls
+  back to <code>BASIS_LINEAR</code>, cyclic linear interpolation on per-day values, wrapping December
+  to January.</li>
+<li><strong>Degenerate fit</strong> — anchor PV variance at or near zero — takes the same fallback rather
+  than dividing by it.</li>
+<li><strong>Clamping.</strong> <code>cost_p</code> is legitimately negative when export credit exceeds import spend,
+  so it is left alone. Every other field in <code>SCENARIO_FIELDS</code> (<code>import_kwh</code>, <code>export_kwh</code>,
+  <code>pv_generated_kwh</code>, <code>battery_throughput_kwh</code>, <code>battery_cycles</code>) is clamped at zero: an
+  affine fit extrapolated below the anchors' solar range will otherwise produce negative
+  December export.</li>
+</ul>
+<p>The basis is a named strategy, not a hardcoded formula, so the reference study selects the
+default rather than this document asserting it.</p>
+<h3 id="rate-data-is-still-fetched-for-all-twelve-months">Rate data is still fetched for all twelve months</h3>
+<p>Fast mode skips <em>planning</em>, not <em>downloading</em>. Rate fetches are network-bound and cheap
+next to the search that planning runs; keeping all twelve buys three things:</p>
+<ol>
+<li>A month with genuinely no rate data stays <code>"unavailable"</code>, as it does today, instead of
+   being fabricated by interpolation over a gap the user should be told about.</li>
+<li><code>export_credit_p_estimate</code> is recomputed from the month's real average export rate
+   rather than interpolated. This keeps the field's meaning identical in fast and full
+   runs. Because it needs tariff data, it is attached in <code>run()</code> rather than inside the
+   pure module, using the 15th of the month as the representative day — the planned path
+   uses its first sampled day for the same purpose.</li>
+<li>It leaves a mean-rate regressor available without redesigning the mode. That term was
+   tested and rejected — see <a href="#curve-selection-results">Curve selection results</a> — so this
+   is now the weakest of the three reasons, but the first two stand on their own.</li>
+</ol>
+<h3 id="what-run-does">What <code>run()</code> does</h3>
+<p>The month loop is restructured around a <code>months_to_plan</code> list — all twelve today,
+<code>ANCHOR_MONTHS</code> under <code>fast_mode</code> — leaving the per-month planning body unchanged. Rate
+fetching, availability checks and the next-month spill fetch still run for every month, so
+an unavailable month is still detected and reported as one.</p>
+<p>After the loop, when <code>fast_mode</code> is on:</p>
+<ul>
+<li>Anchor rows that reached <code>"ok"</code> or <code>"degraded"</code> are the fit's input.</li>
+<li><strong>Fewer than two survive</strong> — one point cannot define a line — so fast mode is abandoned:
+  the remaining months are planned normally, a caveat records why, and the run completes
+  as a full one rather than failing or guessing.</li>
+<li>Otherwise <code>build_interpolated_rows</code> fills every month that is not an anchor and was not
+  already marked unavailable.</li>
+</ul>
+<p>Progress reports <code>len(months_to_plan)</code> units plus a final interpolation step, so the web
+progress bar stays truthful rather than stalling at 4/12.</p>
+<h3 id="results-document">Results document</h3>
+<p>Interpolated rows carry <code>"status": "interpolated"</code> and a provenance block:</p>
+<pre><code class="language-python">{
+    &quot;month&quot;: 5,
+    &quot;status&quot;: &quot;interpolated&quot;,
+    &quot;days&quot;: 31,
+    &quot;standing_charge_p&quot;: ...,
+    &quot;scenarios&quot;: {...},
+    &quot;interpolated_from&quot;: {&quot;anchors&quot;: [1, 4, 7, 10], &quot;basis&quot;: &quot;solar_affine&quot;},
+}
+</code></pre>
+<p>They carry no <code>sampled_days</code> — nothing was sampled — which is itself the honest signal
+that no day of that month was ever planned.</p>
+<p><code>_build_results</code> treats <code>"interpolated"</code> as included alongside <code>"ok"</code> and <code>"degraded"</code>, so
+these months count toward annual totals, savings and payback. That is the entire point of
+the mode; excluding them would report a four month year. The <code>annual</code> block gains
+<code>"fast_mode": True</code> and <code>"months_interpolated"</code>, so a stored run can never be mistaken for
+a full one after the fact.</p>
+<p>A caveat states the measured accuracy rather than implying none. On a tariff that passes
+the volatility guard below, the annual savings land within about 3% and payback within
+about 1% (measured: 0.5% and 0.2% on the Cosy reference); individual months are rougher,
+typically within about 10%. Tariffs where that would not hold never reach interpolation.</p>
+<h3 id="web-ui">Web UI</h3>
+<ul>
+<li><strong>Configure</strong>: a <code>fast_mode</code> checkbox in the Advanced block, following the existing
+  <code>debug</code> checkbox pattern for rendering and for <code>config_from_post</code> parsing, with a note
+  giving the trade — about 2.5× faster, monthly figures approximate, annual totals close.</li>
+<li><strong>Results</strong>: interpolated months are marked in the month table and chart, following the
+  precedent already set by <code>rates_synthesised</code>; "what this run used" gains a Fast mode row.</li>
+<li><strong>Run history</strong>: <code>annual_store.build_summary</code> records the flag so the run selector and
+  the Compare table distinguish a fast run from a full one. Comparing a fast run against a
+  full one is legitimate — that is the accuracy claim being made — but it must be visible.</li>
+</ul>
+<h3 id="speed">Speed</h3>
+<p>24 planned days become 8; 48 become 16 with a car. Weather fetch, twelve months of rate
+downloads and headless Predbat construction are fixed overhead that does not shrink, so
+the realistic figure is <strong>about 2.5× faster</strong>, not a clean 3×. The docs should say 2.5×.</p>
+<h2 id="curve-selection-results">Curve selection results</h2>
+<p>Five twelve month references were scored: three Intelligent Go, one Cosy, one Agile, plus
+an Agile run at six samples per month as a lower-noise ground truth. <strong><code>solar_affine</code> is
+confirmed as the default and the mean-rate term is rejected.</strong></p>
+<h3 id="the-rate-term-overfits-and-is-rejected">The rate term overfits and is rejected</h3>
+<p>Scored against the noisy references, <code>solar_affine + mean_rate</code> looked like the winner: it
+halved Agile's annual error, from 16.4% to 8.9%. Leave-one-anchor-out cross-validation —
+fit on three anchors, predict the withheld fourth — shows why that was an illusion:</p>
+<table>
+<thead>
+<tr>
+<th>Reference</th>
+<th><code>linear</code></th>
+<th><code>solar_affine</code></th>
+<th><code>solar_affine + rate</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agile (6 sample)</td>
+<td>54.7%</td>
+<td><strong>37.6%</strong></td>
+<td>361.9%</td>
+</tr>
+<tr>
+<td>Cosy</td>
+<td>39.5%</td>
+<td><strong>18.3%</strong></td>
+<td>50.9%</td>
+</tr>
+</tbody>
+</table>
+<p>Four anchors against three parameters leaves one degree of freedom, and the model spends it
+fitting noise. Against the <em>clean</em> Agile reference it is also worse than plain
+<code>solar_affine</code> on the figure that matters: +3.62% savings error versus +0.09%. Its gain on
+noisy references was absorbing that noise, not modelling signal. The same cross-validation
+confirms <code>solar_affine</code> beats <code>linear</code> decisively on generalisation, matching its per-month
+advantage on all five references.</p>
+<p>Rates are still fetched for all twelve months, for the unavailable-month and export-credit
+reasons above — those stand on their own and do not depend on a rate regressor.</p>
+<h3 id="the-volatility-guard">The volatility guard</h3>
+<p>Fast mode's accuracy holds only while a month's economics follow the solar curve. On Agile
+they do not, and <strong>no anchor set rescues it</strong> — every choice is 8-32% out on one savings
+figure or the other, and adding anchors does not help. That is a property of the tariff,
+not a fixable modelling defect: adding a rate term to the basis overfits (above), and
+because least squares is linear, fitting the savings difference directly is <em>identically</em>
+equal to differencing two fits, so that reformulation is a no-op.</p>
+<p>So rather than report a fast wrong number, the run declines fast mode and plans all twelve
+months. The signal is the coefficient of variation of daily average import price, which
+separates the two cases by roughly fortyfold:</p>
+<table>
+<thead>
+<tr>
+<th>Tariff</th>
+<th>Rate variability</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cosy</td>
+<td>0.002</td>
+<td>fast mode runs</td>
+</tr>
+<tr>
+<td>Intelligent Go and other banded tariffs</td>
+<td>~0 by construction</td>
+<td>fast mode runs</td>
+</tr>
+<tr>
+<td>Agile</td>
+<td>0.222</td>
+<td>full run</td>
+</tr>
+</tbody>
+</table>
+<p><code>FAST_MODE_MAX_RATE_CV = 0.10</code> sits between them with a wide margin either side. It is
+measured over the four anchor months rather than one: a single month is too tight (Agile's
+quietest month is 0.104 against the 0.10 limit) while the four-month mean sits at twice it.</p>
+<p>The check runs <strong>before any month is planned</strong>, so the progress total is honest from the
+first month rather than growing mid-run, and no work is wasted — the anchors a fast run
+would have planned are months a full run needs anyway. Verified end to end: <code>--fast</code> on
+Agile produces a bit-identical full run (+0.0% on both savings), and on Cosy reconstructs
+payback to 5.84 years against 5.81.</p>
+<h3 id="fast-modes-own-error-is-very-small">Fast mode's own error is very small</h3>
+<p>Decomposing Agile's error against the six-sample reference separates what fast mode causes
+from what it inherits:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>System saving error</th>
+<th>Predbat saving error</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A. Full 12 months at 2 samples (<strong>today's tool, no fast mode</strong>)</td>
+<td>−8.47%</td>
+<td>+17.83%</td>
+</tr>
+<tr>
+<td>B. Fast mode from those same 2-sample anchors</td>
+<td>−8.08%</td>
+<td>+16.83%</td>
+</tr>
+<tr>
+<td>C. Fast mode from clean anchors (<strong>curve error alone</strong>)</td>
+<td><strong>+0.09%</strong></td>
+<td><strong>−0.73%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Row C is the curve's actual contribution: <strong>well under 1%</strong>. Row B is indistinguishable
+from row A — fast mode inherits the sampling noise already present in the anchors rather
+than adding error of its own. The earlier reading, that "Agile breaks fast mode", was an
+artefact of scoring against a reference that was itself noisy.</p>
+<h3 id="pre-existing-finding-sampling-noise-on-volatile-tariffs">Pre-existing finding: sampling noise on volatile tariffs</h3>
+<p>Row A is not about fast mode at all and deserves separate attention: <strong>today's twelve month
+WhatIf run is already 8–18% off on Agile</strong> at the default two samples per month. Raising to
+six samples does not converge it — individual months still move by up to 218 p/day between
+the two runs, and June remains a large negative outlier in both. Agile's day-to-day price
+variance is simply too high for a handful of sampled days to characterise a month.</p>
+<p>This is a limitation of the existing sampling design, not of interpolation, and fixing it is
+out of scope here. It is recorded because it bounds what fast mode can be held to: on a
+volatile tariff, neither mode is accurate to better than roughly 10%, and the caveat text
+should not imply otherwise.</p>
+<p>The scoring harness is committed under <code>apps/predbat/tests/</code> so the curve can be
+re-validated when new reference runs appear, rather than living as a throwaway script. The
+reference runs themselves are large and site-specific, so they are not committed wholesale:
+one reduced fixture — months, scenarios and monthly PV only, no plans, no location — is
+committed per tariff family and asserts the chosen basis still beats the alternatives on it.
+The harness additionally accepts a directory of full reference runs via an environment
+variable and scores those when present, which is how the selection above was performed.
+Absent both, the test skips rather than failing, so a checkout without fixtures stays green.</p>
+<h2 id="testing">Testing</h2>
+<p>Per <code>CLAUDE.md</code>, all new code gets unit tests. New <code>tests/test_annual_interpolate.py</code>:</p>
+<ul>
+<li>exact recovery — anchors drawn from a known <code>a + b·PV</code> line reconstruct it exactly</li>
+<li>per-day handling — a constant per-day value reconstructs as varying monthly totals that
+  track month length</li>
+<li>clamping — an anchor set extrapolating a field negative yields zero, and <code>cost_p</code> stays
+  negative when it should</li>
+<li>degenerate fit — flat anchor PV falls back to linear rather than dividing by zero</li>
+<li>no-solar runs take the linear basis</li>
+<li>cyclic linear wraps December to January rather than extrapolating off the end</li>
+</ul>
+<p>Extended elsewhere:</p>
+<ul>
+<li><code>test_annual_config.py</code> — <code>fast_mode</code> defaults false, coerces <code>"false"</code> correctly</li>
+<li><code>test_annual_cli.py</code> — <code>--fast</code> sets the flag; absent leaves it false</li>
+<li><code>test_web_annual.py</code> — checkbox renders from config, round-trips through
+  <code>config_from_post</code>, and interpolated rows render marked in the table</li>
+<li>a fast-mode engine test asserting four months planned, eight marked <code>"interpolated"</code>,
+  annual totals covering all twelve, and the fallback when fewer than two anchors survive</li>
+</ul>
+<h2 id="documentation">Documentation</h2>
+<p><code>docs/annual-prediction.md</code> gains a Fast mode section under Advanced covering what it
+does, the measured accuracy, when not to use it (reading a specific month's figure), and
+the <code>--fast</code> flag; the run-duration text notes the fast figure alongside the full one.</p>
+<h2 id="out-of-scope">Out of scope</h2>
+<ul>
+<li>Changing <code>samples_per_month</code> under fast mode. Fast mode reduces months, not sampling
+  within a month; cutting both would let a single unlucky day shift the fitted slope for
+  the whole year, which is what the existing percentile sampler exists to prevent.</li>
+<li>A user-configurable month count. A boolean keeps the tested surface to two paths.</li>
+<li>Interpolating a stored full run after the fact.</li>
+<li>Re-pricing interpolated months by re-running the costing engine against their real rates
+  — that is a different and much larger feature than interpolation.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

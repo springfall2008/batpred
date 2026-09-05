@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Annual Tab: Three Pages, Run Comparison, and Split Plan Storage — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Annual Tab: Three Pages, Run Comparison, and Split Plan Storage \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-07-28-annual-pages-and-compare-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Annual Tab: Three Pages, Run Comparison, and Split Plan Storage — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="annual-tab-three-pages-run-comparison-and-split-plan-storage-design">Annual Tab: Three Pages, Run Comparison, and Split Plan Storage — Design</h1>
+<p><strong>Status:</strong> approved
+<strong>Date:</strong> 2026-07-28</p>
+<h2 id="purpose">Purpose</h2>
+<p>The Annual tab has grown into one long page: a configuration form, then a results view,
+with nothing between them. Three problems follow from that.</p>
+<ol>
+<li><strong>The form and the results read as one thing.</strong> The settings on screen often do not
+   describe the run below them — the selector can show a run from a different system
+   entirely.</li>
+<li><strong>There is no way to compare runs.</strong> Switching the selector replaces one set of
+   figures with another, so comparing two batteries means remembering numbers.</li>
+<li><strong>Debug plans make every page expensive.</strong> They are embedded in the results document,
+   which is loaded to render totals that do not use them.</li>
+</ol>
+<p>This splits the tab into three pages, adds a comparison table, and moves the captured
+plans out of the results document.</p>
+<h2 id="1-three-pages">1. Three pages</h2>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/annual</code></td>
+<td>Configuration form, Run button</td>
+</tr>
+<tr>
+<td><code>/annual_view</code></td>
+<td>Selector, "what this run used", totals, chart, month table, cost/payback, plan viewer, caveats</td>
+</tr>
+<tr>
+<td><code>/annual_compare</code></td>
+<td>One row per stored run</td>
+</tr>
+</tbody>
+</table>
+<p>Separate URLs rather than a <code>?page=</code> parameter: each page is bookmarkable, the browser
+back button behaves, and the run-completion navigation can land directly on the viewer.</p>
+<h3 id="navigation">Navigation</h3>
+<p>A tab strip at the top of all three pages, with the current page marked:</p>
+<pre><code>◀   [ Configure ]  [ Results ]  [ Compare ]   ▶
+</code></pre>
+<p>The arrows step through that order and are <strong>disabled at the ends rather than wrapping</strong> —
+wrapping makes "next" from Compare land on Configure, which reads as a misclick rather
+than a choice.</p>
+<p>The progress area renders on <strong>all three</strong> pages, hidden unless a run is in flight, so
+navigating away mid-run does not lose sight of it. The existing poll already runs on every
+page. On completion the tab that started the run now navigates to <code>/annual_view</code> rather
+than back to the form; other tabs still only get a link, for the reason already documented
+(a forced reload would discard whatever someone had typed elsewhere).</p>
+<h2 id="2-the-compare-page">2. The compare page</h2>
+<p>One row per stored run, newest first:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Run</td>
+<td>index <code>label</code> + timestamp</td>
+</tr>
+<tr>
+<td>Solar</td>
+<td>summary <code>total_kwp</code></td>
+</tr>
+<tr>
+<td>Battery</td>
+<td>summary <code>battery_kwh</code></td>
+</tr>
+<tr>
+<td>Import tariff</td>
+<td>summary <code>tariff</code></td>
+</tr>
+<tr>
+<td>Cost with Predbat</td>
+<td>summary <code>cost_with_predbat_p</code></td>
+</tr>
+<tr>
+<td>Saving vs no system</td>
+<td>summary <code>saving_vs_none_p</code></td>
+</tr>
+<tr>
+<td>Payback: PV only</td>
+<td>summary <code>payback_years.pv_only</code></td>
+</tr>
+<tr>
+<td>Payback: PV + battery</td>
+<td>summary <code>payback_years.pv_battery</code></td>
+</tr>
+<tr>
+<td>Payback: + Predbat</td>
+<td>summary <code>payback_years.pv_battery_predbat</code></td>
+</tr>
+</tbody>
+</table>
+<p>Nine columns is wide, so the table scrolls inside its own <code>overflow-x: auto</code> container
+rather than pushing the page sideways.</p>
+<p>Cells are honest about what they cannot show, consistent with the viewer:</p>
+<ul>
+<li>A run whose payback was unavailable shows <strong>—</strong>, with the stored reason on hover.</li>
+<li>A row that does not pay back says <strong>does not pay back</strong>, never a number.</li>
+<li>A run with no usable month shows <strong>—</strong> across the figures rather than zeros.</li>
+</ul>
+<p>The selected run (the one <code>/annual_view</code> is showing) is marked, and each row's label links
+to <code>/annual_view?run=&lt;id&gt;</code>.</p>
+<h2 id="3-the-run-summary-and-backfilling">3. The run summary, and backfilling</h2>
+<p>The compare table must not read every run's document. The index entry gains a <code>summary</code>:</p>
+<pre><code class="language-json">{
+  &quot;id&quot;: &quot;20260728-090412&quot;,
+  &quot;label&quot;: &quot;9.5 kWh battery, 5.6 kWp, Agile&quot;,
+  &quot;months_included&quot;: 12,
+  &quot;status&quot;: &quot;ok&quot;,
+  &quot;summary&quot;: {
+    &quot;total_kwp&quot;: 5.6,
+    &quot;battery_kwh&quot;: 9.5,
+    &quot;tariff&quot;: &quot;Agile&quot;,
+    &quot;cost_with_predbat_p&quot;: 66000.0,
+    &quot;saving_vs_none_p&quot;: 114000.0,
+    &quot;payback_years&quot;: {&quot;pv_only&quot;: 17.8, &quot;pv_battery&quot;: 13.61, &quot;pv_battery_predbat&quot;: 11.78},
+    &quot;payback_reason&quot;: null
+  }
+}
+</code></pre>
+<p><code>build_summary(results, config)</code> is a pure function, so it is tested directly.</p>
+<p><strong>Backfill.</strong> A run saved before this change has no <code>summary</code>. On first visit to the
+compare page, each such run's document is loaded once, its summary extracted, and the
+index <strong>written back</strong>. Every later visit is index-only. Without this, twenty debug runs
+would be re-read on every page load.</p>
+<p>The backfill writes the index once per visit, not once per run, and only when something
+actually changed — a compare page that changes nothing must not write storage at all.</p>
+<h2 id="4-splitting-the-plans-out-of-the-results-document">4. Splitting the plans out of the results document</h2>
+<h3 id="why">Why</h3>
+<p>Measured, with the fourth scenario in place:</p>
+<pre><code>one captured plan:  44,312 bytes
+   no car:   96 plans -&gt;  4.3 MB per run
+ with car:  192 plans -&gt;  8.5 MB per run   (x20 runs = 170 MB)
+</code></pre>
+<p>Today that whole document is read to render totals that ignore it, and <code>/annual_plan</code>
+reads all 4–8 MB to return one 44 KB plan — on every day/scenario click.</p>
+<h3 id="where-the-split-happens">Where the split happens</h3>
+<p><strong>Not in the engine.</strong> The engine runs as a subprocess and returns its results on stdout;
+its <code>storage</code> is the CLI's own work directory, not the web layer's Storage. The plans stay
+embedded in the document the engine emits — that is the transport — and <code>save_run</code> splits
+them out as it stores them.</p>
+<p>This keeps the engine, the CLI and the results-document schema unchanged, and confines the
+change to the storage boundary.</p>
+<h3 id="keys">Keys</h3>
+<p>Plans are addressed today as <code>month</code> + <code>index</code> + <code>scenario</code>, where <code>index</code> selects a <em>leg</em>
+entry (a car-configured day has two: with-car and without-car). Keying per <code>(month, index)</code>
+preserves that addressing exactly:</p>
+<pre><code>run_&lt;id&gt;                    ~30 KB   results, with &quot;plans&quot; stripped from every month row
+run_&lt;id&gt;_plans_&lt;MM&gt;_&lt;idx&gt;  ~177 KB   that leg's four scenarios
+</code></pre>
+<p>24 plan keys for a car-less debug run, 48 with a car. A non-debug run writes none.</p>
+<p><code>save_run</code> records the list of plan keys it wrote on the index entry, so <code>_discard_run</code>
+can expire them on eviction without having to re-derive which existed. <code>_discard_run</code>
+already handles the absent-<code>delete</code> case by overwriting with <code>None</code> and a past expiry;
+plan keys get the same treatment in a bounded loop.</p>
+<h3 id="reading">Reading</h3>
+<p><code>load_plan(storage, run_id, month, index, scenario)</code> reads the one leg blob and returns
+that scenario's plan. <code>/annual_plan</code> uses it instead of walking the results document.</p>
+<p><strong>Backward compatibility:</strong> a run stored before this change has its plans embedded and no
+plan keys. <code>load_plan</code> falls back to reading them out of the results document, so existing
+debug runs stay viewable rather than silently losing their plans.</p>
+<h3 id="what-annual_download-returns">What <code>/annual_download</code> returns</h3>
+<p>The stored results document, with plans stripped — matching what is stored. The plans are
+diagnostics for the viewer, not part of the results, and re-assembling 8 MB into a download
+would reintroduce the cost this section exists to remove. The download link says so.</p>
+<h2 id="5-testing">5. Testing</h2>
+<ul>
+<li><code>build_summary</code> against a full results document, a no-usable-month one, and one whose
+  payback is unavailable.</li>
+<li>Backfill: an index entry lacking a summary is filled from its document and written back;
+  a second visit reads no documents and writes nothing.</li>
+<li><code>save_run</code> strips <code>plans</code> from the stored document and writes one key per leg; a
+  non-debug run writes no plan keys; the index records the keys written.</li>
+<li><code>_discard_run</code> expires an evicted run's plan keys, not just its document.</li>
+<li><code>load_plan</code> returns the right scenario, falls back to an embedded-plans document, and
+  returns <code>None</code> (never raises) for a month, index or scenario that does not exist.</li>
+<li>Each page renders only its own section: the config page has no results table, the viewer
+  no form, the compare page neither.</li>
+<li>The nav marks the current page and disables the arrow at each end.</li>
+<li>The compare table reads each run's OWN summary — the same misattribution risk the run
+  details table had — and renders "—"/"does not pay back" rather than a fabricated number.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

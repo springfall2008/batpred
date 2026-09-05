@@ -1,0 +1,1318 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>WhatIf Fast Mode Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "WhatIf Fast Mode Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-08-18-annual-fast-mode.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">WhatIf Fast Mode Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="whatif-fast-mode-implementation-plan">WhatIf Fast Mode Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Add a <code>fast_mode</code> option to the WhatIf annual prediction that plans four seasonal months and reconstructs the other eight from the solar curve the run already downloads, making a run about 2.5× faster.</p>
+<p><strong>Architecture:</strong> A new pure module <code>annual_interpolate.py</code> fits each scenario field's per-day value against that month's actual PV yield (<code>per_day = a + b · pv_per_day</code>, least squares over the anchors) and evaluates it for the unplanned months. <code>AnnualPredictor.run()</code> plans only <code>ANCHOR_MONTHS</code> when the flag is set, then calls the module; rate downloads and availability checks still cover all twelve months. Interpolated months carry <code>status: "interpolated"</code> and count toward annual totals.</p>
+<p><strong>Tech Stack:</strong> Python 3, no new dependencies. Tests are hand-rolled functions registered in <code>TEST_REGISTRY</code> (this repo does <strong>not</strong> use pytest).</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-08-18-annual-fast-mode-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li><strong>Line length:</strong> 256 chars (Black), 250 chars (Flake8).</li>
+<li><strong>Docstrings:</strong> 100% coverage required (<code>interrogate</code>) — every function and class, including tests and nested helpers.</li>
+<li><strong>Spelling:</strong> British English (<code>en-gb</code>) via CSpell. New words go in <code>.cspell/custom-dictionary-workspace.txt</code>, which is auto-sorted on commit — re-stage after running pre-commit.</li>
+<li><strong>Naming:</strong> <code>lower_case_with_underscores</code>.</li>
+<li><strong>Tests:</strong> Every test function takes <code>my_predbat</code> (unused for pure tests) and returns a truthy <code>failed</code> value. Register in <code>TEST_REGISTRY</code> in <code>apps/predbat/unit_test.py</code> as <code>("name", func, "description", slow_bool)</code> and add the import.</li>
+<li><strong>Anchor months:</strong> <code>ANCHOR_MONTHS = (3, 6, 9, 12)</code> — exactly these, in this order.
+  (Corrected during implementation: this plan originally specified <code>(1, 4, 7, 10)</code>. The
+  per-month cost error does not separate the candidates, but the savings figures do —
+  see the design doc's Anchor months section for the measurements.)</li>
+<li><strong>Chosen basis:</strong> <code>solar_affine</code>. The mean-rate regressor was tested and <strong>rejected</strong> (overfits: 362% held-out error). Do not add it.</li>
+<li><strong>Verification:</strong> <code>cd coverage &amp;&amp; ./run_pre_commit</code> must exit 0 before any task is considered done. Save output to a file and grep it; never pipe straight to grep.</li>
+</ul>
+<hr />
+<h3 id="task-1-fast_mode-config-flag-and-fast-cli-flag">Task 1: <code>fast_mode</code> config flag and <code>--fast</code> CLI flag</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/annual.py</code> (the returned dict in <code>validate_config</code>, beside <code>"debug"</code> at line 321)
+- Modify: <code>apps/predbat/annual_cli.py</code> (argparse block at lines 155-160; config load at lines 163-168)
+- Test: <code>apps/predbat/tests/test_annual_config.py</code>, <code>apps/predbat/tests/test_annual_cli.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing.
+- Produces: <code>validate_config(config)["fast_mode"] -&gt; bool</code>; <code>annual_cli.apply_fast_override(config: dict, fast: bool) -&gt; dict</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing config test</strong></li>
+</ul>
+<p>Append to the end of <code>test_annual_config()</code> in <code>apps/predbat/tests/test_annual_config.py</code>, immediately before its final <code>return failed</code>:</p>
+<pre><code class="language-python">    print(&quot;Test: fast_mode defaults to False&quot;)
+    if validate_config(base_config())[&quot;fast_mode&quot;] is not False:
+        print(&quot;  ERROR: fast_mode should default to False, got {!r}&quot;.format(validate_config(base_config())[&quot;fast_mode&quot;]))
+        failed = True
+
+    print(&quot;Test: fast_mode accepts a real True&quot;)
+    config = base_config()
+    config[&quot;annual&quot;][&quot;fast_mode&quot;] = True
+    if validate_config(config)[&quot;fast_mode&quot;] is not True:
+        print(&quot;  ERROR: fast_mode True should survive validation&quot;)
+        failed = True
+
+    print(&quot;Test: an explicit 'false' string does not become truthy&quot;)
+    # Same trap as &quot;debug&quot;/&quot;hybrid&quot;: bool(&quot;false&quot;) is True, so a YAML value quoted by
+    # hand would silently enable fast mode for someone who explicitly turned it off.
+    config = base_config()
+    config[&quot;annual&quot;][&quot;fast_mode&quot;] = &quot;false&quot;
+    if validate_config(config)[&quot;fast_mode&quot;] is not False:
+        print(&quot;  ERROR: fast_mode 'false' must coerce to False, not a truthy string&quot;)
+        failed = True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run it to make sure it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_config &gt; /tmp/t1.txt 2&gt;&amp;1; grep -E "ERROR|KeyError|FAILED|PASSED" /tmp/t1.txt</code>
+Expected: FAIL — <code>KeyError: 'fast_mode'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add the config field</strong></li>
+</ul>
+<p>In <code>apps/predbat/annual.py</code>, in the dict returned by <code>validate_config</code>, immediately after the <code>"debug"</code> line:</p>
+<pre><code class="language-python">        # Plans four seasonal months and interpolates the rest - see annual_interpolate.py.
+        # _coerce_bool for the same reason as &quot;debug&quot;: an explicit fast_mode: &quot;false&quot; in a
+        # hand-written YAML must not read as truthy.
+        &quot;fast_mode&quot;: _coerce_bool(raw.get(&quot;fast_mode&quot;, False)),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the config test and make sure it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_config &gt; /tmp/t1.txt 2&gt;&amp;1; grep -E "ERROR|FAILED|PASSED" /tmp/t1.txt</code>
+Expected: PASS.</p>
+<ul>
+<li>[ ] <strong>Step 5: Write the failing CLI test</strong></li>
+</ul>
+<p>In <code>apps/predbat/tests/test_annual_cli.py</code>, add this function after <code>test_annual_cli</code>:</p>
+<pre><code class="language-python">def test_annual_cli_fast_flag(my_predbat):
+    &quot;&quot;&quot;--fast sets annual.fast_mode on either config form, and is absent by default.&quot;&quot;&quot;
+    failed = False
+
+    print(&quot;Test: --fast sets fast_mode on the wrapped config form&quot;)
+    config = {&quot;annual&quot;: {&quot;location&quot;: {&quot;postcode&quot;: &quot;SW1A 1AA&quot;}}}
+    result = annual_cli.apply_fast_override(config, True)
+    if result[&quot;annual&quot;].get(&quot;fast_mode&quot;) is not True:
+        print(&quot;  ERROR: --fast should set annual.fast_mode True, got {!r}&quot;.format(result[&quot;annual&quot;].get(&quot;fast_mode&quot;)))
+        failed = True
+
+    print(&quot;Test: --fast sets fast_mode on the bare inner form&quot;)
+    # validate_config accepts either shape (raw = config.get(&quot;annual&quot;, config)), so the
+    # override has to reach the same mapping validate_config will read.
+    config = {&quot;location&quot;: {&quot;postcode&quot;: &quot;SW1A 1AA&quot;}}
+    result = annual_cli.apply_fast_override(config, True)
+    if result.get(&quot;fast_mode&quot;) is not True:
+        print(&quot;  ERROR: --fast should set fast_mode on an unwrapped config, got {!r}&quot;.format(result.get(&quot;fast_mode&quot;)))
+        failed = True
+
+    print(&quot;Test: without --fast nothing is added&quot;)
+    config = {&quot;annual&quot;: {&quot;location&quot;: {&quot;postcode&quot;: &quot;SW1A 1AA&quot;}}}
+    result = annual_cli.apply_fast_override(config, False)
+    if &quot;fast_mode&quot; in result[&quot;annual&quot;]:
+        print(&quot;  ERROR: fast_mode must not be injected when --fast was not given&quot;)
+        failed = True
+
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Run it to make sure it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_cli &gt; /tmp/t1.txt 2&gt;&amp;1; grep -E "ERROR|AttributeError|FAILED|PASSED" /tmp/t1.txt</code>
+Expected: FAIL — the test is not registered yet, and <code>apply_fast_override</code> does not exist.</p>
+<ul>
+<li>[ ] <strong>Step 7: Implement the CLI flag</strong></li>
+</ul>
+<p>In <code>apps/predbat/annual_cli.py</code>, add this function immediately above <code>def main(argv=None):</code></p>
+<pre><code class="language-python">def apply_fast_override(config, fast):
+    &quot;&quot;&quot;Set ``annual.fast_mode`` when --fast was given, on whichever config shape was loaded.
+
+    ``validate_config`` accepts both the wrapped ({&quot;annual&quot;: {...}}) and the bare inner
+    mapping, so the override has to land on the same mapping it will read - writing to the
+    outer dict of a wrapped config would be silently ignored.
+    &quot;&quot;&quot;
+    if not fast:
+        return config
+    inner = config.get(&quot;annual&quot;) if isinstance(config, dict) and isinstance(config.get(&quot;annual&quot;), dict) else config
+    inner[&quot;fast_mode&quot;] = True
+    return config
+</code></pre>
+<p>In the argparse block, after the <code>--machine</code> argument:</p>
+<pre><code class="language-python">    parser.add_argument(&quot;--fast&quot;, action=&quot;store_true&quot;, help=&quot;Plan only four seasonal months and interpolate the rest (about 2.5x faster, monthly figures approximate)&quot;)
+</code></pre>
+<p>Immediately after the <code>yaml.safe_load</code> try/except block that sets <code>config</code> (after the <code>return 2</code> for a bad config), add:</p>
+<pre><code class="language-python">    config = apply_fast_override(config, args.fast)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 8: Register the new test</strong></li>
+</ul>
+<p>In <code>apps/predbat/unit_test.py</code>, extend the existing import at line 228:</p>
+<pre><code class="language-python">from tests.test_annual_cli import test_annual_cli, test_annual_cli_fast_flag, test_annual_cli_machine, test_annual_cli_machine_end_to_end
+</code></pre>
+<p>And add to <code>TEST_REGISTRY</code> beside the other annual CLI entries:</p>
+<pre><code class="language-python">        (&quot;annual_cli_fast_flag&quot;, test_annual_cli_fast_flag, &quot;Annual CLI --fast flag tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 9: Run both tests and make sure they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_config --test annual_cli --test annual_cli_fast_flag &gt; /tmp/t1.txt 2&gt;&amp;1; grep -E "ERROR|FAILED|PASSED" /tmp/t1.txt</code>
+Expected: three PASSED lines, no ERROR lines.</p>
+<ul>
+<li>[ ] <strong>Step 10: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/annual.py apps/predbat/annual_cli.py apps/predbat/tests/test_annual_config.py apps/predbat/tests/test_annual_cli.py apps/predbat/unit_test.py
+git commit -m &quot;feat(whatif): add fast_mode config flag and --fast CLI flag&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-the-interpolation-module">Task 2: The interpolation module</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/annual_interpolate.py</code>
+- Modify: <code>apps/predbat/annual_weather.py</code> (add a public accessor to <code>WeatherYear</code>, after <code>daily_actual_kwh</code> at line 75)
+- Create: <code>apps/predbat/tests/test_annual_interpolate.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing from earlier tasks.
+- Produces:
+  - <code>ANCHOR_MONTHS = (3, 6, 9, 12)</code>
+  - <code>BASIS_SOLAR_AFFINE = "solar_affine"</code>, <code>BASIS_LINEAR = "linear"</code>, <code>DEFAULT_BASIS = BASIS_SOLAR_AFFINE</code>
+  - <code>choose_basis(anchor_months: list, monthly_pv: dict | None, year: int) -&gt; str</code>
+  - <code>build_interpolated_rows(anchor_rows: dict, year: int, monthly_pv: dict | None, months=None, basis=None) -&gt; dict</code> returning <code>{month: row}</code>. Each row has <code>month</code>, <code>status="interpolated"</code>, <code>days</code>, <code>scenarios</code>, <code>interpolated_from</code>. It does <strong>not</strong> set <code>standing_charge_p</code> or <code>export_credit_p_estimate</code> — <code>run()</code> adds both (Task 4).
+  - <code>WeatherYear.monthly_actual_kwh(year) -&gt; dict</code> mapping month number to total actual PV kWh.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_annual_interpolate.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+&quot;&quot;&quot;Tests for fast-mode month interpolation.&quot;&quot;&quot;
+
+import calendar
+
+from annual_interpolate import ANCHOR_MONTHS, BASIS_LINEAR, BASIS_SOLAR_AFFINE, build_interpolated_rows, choose_basis
+
+YEAR = 2025
+FIELDS = [&quot;cost_p&quot;, &quot;import_kwh&quot;, &quot;export_kwh&quot;, &quot;pv_generated_kwh&quot;, &quot;battery_throughput_kwh&quot;, &quot;battery_cycles&quot;]
+
+
+def days_in(month):
+    &quot;&quot;&quot;Return the number of days in the given month of the test year.&quot;&quot;&quot;
+    return calendar.monthrange(YEAR, month)[1]
+
+
+def linear_pv():
+    &quot;&quot;&quot;Return a monthly PV curve that rises to midsummer and falls back, in kWh.&quot;&quot;&quot;
+    return {month: 100.0 + 500.0 * (1 - abs(month - 7) / 6.0) for month in range(1, 13)}
+
+
+def anchor_rows_from(value_for):
+    &quot;&quot;&quot;Build anchor month rows whose every scenario field is value_for(month).&quot;&quot;&quot;
+    rows = {}
+    for month in ANCHOR_MONTHS:
+        scenarios = {key: {field: value_for(month) for field in FIELDS} for key in [&quot;no_pvbat&quot;, &quot;pv_only&quot;, &quot;without_predbat&quot;, &quot;with_predbat&quot;]}
+        rows[month] = {&quot;month&quot;: month, &quot;status&quot;: &quot;ok&quot;, &quot;days&quot;: days_in(month), &quot;scenarios&quot;: scenarios}
+    return rows
+
+
+def test_annual_interpolate(my_predbat):
+    &quot;&quot;&quot;Interpolation reproduces a known affine curve, clamps, and falls back safely.&quot;&quot;&quot;
+    failed = False
+    pv = linear_pv()
+
+    print(&quot;Test: an exact affine relationship is reproduced exactly&quot;)
+    # per-day value = 2 + 0.5 * pv_per_day, so a correct least-squares fit through the four
+    # anchors must recover every other month to floating point precision.
+    def affine(month):
+        &quot;&quot;&quot;Monthly total whose per-day value is exactly 2 + 0.5 * pv per day.&quot;&quot;&quot;
+        return (2.0 + 0.5 * (pv[month] / days_in(month))) * days_in(month)
+
+    rows = build_interpolated_rows(anchor_rows_from(affine), YEAR, pv)
+    if sorted(rows) != [m for m in range(1, 13) if m not in ANCHOR_MONTHS]:
+        print(&quot;  ERROR: expected the eight non-anchor months, got {}&quot;.format(sorted(rows)))
+        failed = True
+    for month, row in rows.items():
+        got = row[&quot;scenarios&quot;][&quot;with_predbat&quot;][&quot;cost_p&quot;]
+        if abs(got - affine(month)) &gt; 1e-6:
+            print(&quot;  ERROR: month {} should reconstruct to {:.4f}, got {:.4f}&quot;.format(month, affine(month), got))
+            failed = True
+
+    print(&quot;Test: interpolated rows are marked and carry their provenance&quot;)
+    row = rows[5]
+    if row[&quot;status&quot;] != &quot;interpolated&quot;:
+        print(&quot;  ERROR: status should be 'interpolated', got {!r}&quot;.format(row[&quot;status&quot;]))
+        failed = True
+    if row[&quot;interpolated_from&quot;] != {&quot;anchors&quot;: list(ANCHOR_MONTHS), &quot;basis&quot;: BASIS_SOLAR_AFFINE}:
+        print(&quot;  ERROR: unexpected provenance {!r}&quot;.format(row[&quot;interpolated_from&quot;]))
+        failed = True
+    if &quot;sampled_days&quot; in row:
+        print(&quot;  ERROR: an interpolated month must not claim sampled days&quot;)
+        failed = True
+    if row[&quot;days&quot;] != days_in(5):
+        print(&quot;  ERROR: days should be the real month length, got {}&quot;.format(row[&quot;days&quot;]))
+        failed = True
+
+    print(&quot;Test: a constant per-day value scales with month length, not flat totals&quot;)
+    # Guards the per-day working space: February must come out smaller than March purely
+    # because it is shorter, which a fit on raw monthly totals would smear away.
+    rows = build_interpolated_rows(anchor_rows_from(lambda month: 10.0 * days_in(month)), YEAR, pv)
+    for month, row in rows.items():
+        expected = 10.0 * days_in(month)
+        if abs(row[&quot;scenarios&quot;][&quot;no_pvbat&quot;][&quot;cost_p&quot;] - expected) &gt; 1e-6:
+            print(&quot;  ERROR: month {} constant per-day should total {:.2f}, got {:.2f}&quot;.format(month, expected, row[&quot;scenarios&quot;][&quot;no_pvbat&quot;][&quot;cost_p&quot;]))
+            failed = True
+
+    print(&quot;Test: physical fields clamp at zero but cost may stay negative&quot;)
+    # A steep slope through the anchors extrapolates below zero in the dark months; export
+    # kWh cannot be negative, but an export-credit-dominated cost legitimately can be.
+    def steep(month):
+        &quot;&quot;&quot;Monthly total that extrapolates well below zero in midwinter.&quot;&quot;&quot;
+        return (-40.0 + 0.9 * (pv[month] / days_in(month))) * days_in(month)
+
+    rows = build_interpolated_rows(anchor_rows_from(steep), YEAR, pv)
+    if any(row[&quot;scenarios&quot;][&quot;with_predbat&quot;][&quot;export_kwh&quot;] &lt; 0 for row in rows.values()):
+        print(&quot;  ERROR: export_kwh must be clamped at zero&quot;)
+        failed = True
+    if not any(row[&quot;scenarios&quot;][&quot;with_predbat&quot;][&quot;cost_p&quot;] &lt; 0 for row in rows.values()):
+        print(&quot;  ERROR: cost_p must be allowed to go negative&quot;)
+        failed = True
+
+    print(&quot;Test: no solar falls back to the linear basis&quot;)
+    rows = build_interpolated_rows(anchor_rows_from(lambda month: 100.0), YEAR, None)
+    if rows[5][&quot;interpolated_from&quot;][&quot;basis&quot;] != BASIS_LINEAR:
+        print(&quot;  ERROR: a run with no solar should use the linear basis, got {!r}&quot;.format(rows[5][&quot;interpolated_from&quot;][&quot;basis&quot;]))
+        failed = True
+
+    print(&quot;Test: a degenerate (flat) PV curve falls back rather than dividing by zero&quot;)
+    flat = {month: 300.0 for month in range(1, 13)}
+    if choose_basis(list(ANCHOR_MONTHS), flat, YEAR) != BASIS_LINEAR:
+        print(&quot;  ERROR: flat PV across the anchors should select the linear basis&quot;)
+        failed = True
+    rows = build_interpolated_rows(anchor_rows_from(lambda month: 100.0 * days_in(month)), YEAR, flat)
+    if len(rows) != 8:
+        print(&quot;  ERROR: the fallback must still produce all eight months, got {}&quot;.format(len(rows)))
+        failed = True
+
+    print(&quot;Test: the linear basis wraps December round to January&quot;)
+    # December sits between the October and January anchors going forward round the circle;
+    # treating the anchor list as a straight line would extrapolate off the end instead.
+    values = {1: 10.0 * days_in(1), 4: 20.0 * days_in(4), 7: 30.0 * days_in(7), 10: 40.0 * days_in(10)}
+    rows = build_interpolated_rows(anchor_rows_from(lambda month: values[month]), YEAR, None)
+    december = rows[12][&quot;scenarios&quot;][&quot;no_pvbat&quot;][&quot;cost_p&quot;] / days_in(12)
+    if not 10.0 &lt; december &lt; 40.0:
+        print(&quot;  ERROR: December should interpolate between the Oct (40/day) and Jan (10/day) anchors, got {:.2f}/day&quot;.format(december))
+        failed = True
+
+    print(&quot;Test: only the requested months are produced&quot;)
+    rows = build_interpolated_rows(anchor_rows_from(lambda month: 100.0), YEAR, pv, months=[2, 3])
+    if sorted(rows) != [2, 3]:
+        print(&quot;  ERROR: expected only months 2 and 3, got {}&quot;.format(sorted(rows)))
+        failed = True
+
+    print(&quot;Test: derived fields are not interpolated&quot;)
+    # export_credit_p_estimate is recomputed by run() from the month's real export rate;
+    # interpolating it here would be overwritten at best and inconsistent at worst.
+    base = anchor_rows_from(lambda month: 100.0)
+    for month in ANCHOR_MONTHS:
+        for key in base[month][&quot;scenarios&quot;]:
+            base[month][&quot;scenarios&quot;][key][&quot;export_credit_p_estimate&quot;] = 55.0
+    rows = build_interpolated_rows(base, YEAR, pv)
+    if &quot;export_credit_p_estimate&quot; in rows[5][&quot;scenarios&quot;][&quot;with_predbat&quot;]:
+        print(&quot;  ERROR: export_credit_p_estimate must be left for run() to attach&quot;)
+        failed = True
+
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run it to make sure it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_interpolate &gt; /tmp/t2.txt 2&gt;&amp;1; grep -E "ERROR|not found|PASSED" /tmp/t2.txt</code>
+Expected: FAIL — <code>Test 'annual_interpolate' not found</code> (not registered) and the module does not exist.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write the module</strong></li>
+</ul>
+<p>Create <code>apps/predbat/annual_interpolate.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+&quot;&quot;&quot;Reconstruct the months a fast-mode run never planned, from the ones it did.
+
+Pure functions only - no I/O, no Predbat import - so the curve can be unit tested against
+known inputs and re-scored against stored reference runs without standing up an engine.
+
+The curve is affine in solar: a month's per-day figure is modelled as ``a + b * pv_per_day``
+and fitted by least squares over the anchor months, independently for every scenario and
+every field. Fitting per field is the point - ``no_pvbat`` cost is load-driven and lands
+near ``b = 0`` while ``export_kwh`` is steeply solar-driven, and one shared shape would
+serve neither. Working in per-day space stops February's 28 days reading as a seasonal dip.
+
+Measured against five twelve-month reference runs, this contributes under 1% error to the
+annual savings figure; see docs/superpowers/specs/2026-08-18-annual-fast-mode-design.md.
+&quot;&quot;&quot;
+
+import calendar
+
+# One per season, spanning midwinter to midsummer so the fit can resolve the solar slope.
+ANCHOR_MONTHS = (3, 6, 9, 12)
+
+BASIS_SOLAR_AFFINE = &quot;solar_affine&quot;
+BASIS_LINEAR = &quot;linear&quot;
+DEFAULT_BASIS = BASIS_SOLAR_AFFINE
+
+# Cost is the one field that may legitimately be negative (export credit exceeding import
+# spend). Everything else is a physical quantity that an extrapolated fit could otherwise
+# drive below zero - negative December export being the obvious way to get it wrong.
+SIGNED_FIELDS = (&quot;cost_p&quot;,)
+
+# Recomputed by run() from the month's real average export rate, so interpolating it here
+# would be overwritten at best and silently inconsistent at worst.
+DERIVED_FIELDS = (&quot;export_credit_p_estimate&quot;,)
+
+# Below this variance in per-day anchor PV there is no solar signal to fit against, and the
+# least-squares denominator is not safely invertible.
+_MIN_PV_VARIANCE = 1e-9
+
+
+def _fit_affine(xs, ys):
+    &quot;&quot;&quot;Return least-squares ``(intercept, slope)`` for ``y = a + b * x``, or None if degenerate.&quot;&quot;&quot;
+    count = len(xs)
+    mean_x = sum(xs) / count
+    mean_y = sum(ys) / count
+    denominator = sum((x - mean_x) ** 2 for x in xs)
+    if denominator &lt; _MIN_PV_VARIANCE:
+        return None
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / denominator
+    return mean_y - slope * mean_x, slope
+
+
+def _cyclic_linear(anchors, values, month):
+    &quot;&quot;&quot;Interpolate linearly around the month circle, wrapping December to January.
+
+    The year is a cycle, so December sits between the October and January anchors going
+    forward rather than off the end of a straight list.
+    &quot;&quot;&quot;
+    count = len(anchors)
+    for index in range(count):
+        start = anchors[index]
+        end = anchors[(index + 1) % count]
+        span = (end - start) % 12 or 12
+        offset = (month - start) % 12
+        if offset &lt;= span:
+            fraction = offset / float(span)
+            return values[index] * (1 - fraction) + values[(index + 1) % count] * fraction
+    return values[0]
+
+
+def choose_basis(anchor_months, monthly_pv, year):
+    &quot;&quot;&quot;Return the basis to use for this run: solar-affine when there is a solar signal to fit.
+
+    Chosen once for the whole run rather than per field, so every interpolated row reports
+    one honest basis in its provenance block.
+    &quot;&quot;&quot;
+    if not monthly_pv:
+        return BASIS_LINEAR
+    per_day = [monthly_pv.get(month, 0.0) / calendar.monthrange(year, month)[1] for month in anchor_months]
+    mean_pv = sum(per_day) / len(per_day)
+    if sum((value - mean_pv) ** 2 for value in per_day) &lt; _MIN_PV_VARIANCE:
+        return BASIS_LINEAR
+    return BASIS_SOLAR_AFFINE
+
+
+def build_interpolated_rows(anchor_rows, year, monthly_pv, months=None, basis=None):
+    &quot;&quot;&quot;Return ``{month: row}`` for every wanted month absent from ``anchor_rows``.
+
+    ``anchor_rows`` maps month number to a planned month row (as ``run()`` builds it, with a
+    ``scenarios`` dict). ``monthly_pv`` maps month number to that month's total actual PV
+    kWh, or is None for a battery-only run. ``months`` defaults to every month of the year
+    that is not an anchor; pass a list to skip months already known to be unavailable.
+
+    The returned rows carry no ``standing_charge_p`` and no ``export_credit_p_estimate``:
+    both need tariff data, so ``run()`` attaches them.
+    &quot;&quot;&quot;
+    anchors = sorted(anchor_rows)
+    if len(anchors) &lt; 2:
+        # One point cannot define a line. The caller is expected to have abandoned fast mode
+        # before reaching here; returning nothing keeps that contract enforceable rather
+        # than inventing a flat year from a single month.
+        return {}
+
+    if basis is None:
+        basis = choose_basis(anchors, monthly_pv, year)
+    if months is None:
+        months = [month for month in range(1, 13) if month not in anchors]
+
+    days = {month: calendar.monthrange(year, month)[1] for month in range(1, 13)}
+    pv_per_day = {month: (monthly_pv.get(month, 0.0) / days[month] if monthly_pv else 0.0) for month in range(1, 13)}
+    anchor_pv = [pv_per_day[month] for month in anchors]
+
+    scenario_keys = list(anchor_rows[anchors[0]][&quot;scenarios&quot;].keys())
+    provenance = {&quot;anchors&quot;: anchors, &quot;basis&quot;: basis}
+
+    rows = {}
+    for month in months:
+        rows[month] = {
+            &quot;month&quot;: month,
+            &quot;status&quot;: &quot;interpolated&quot;,
+            &quot;days&quot;: days[month],
+            &quot;scenarios&quot;: {key: {} for key in scenario_keys},
+            &quot;interpolated_from&quot;: dict(provenance),
+        }
+
+    for key in scenario_keys:
+        fields = [field for field in anchor_rows[anchors[0]][&quot;scenarios&quot;][key] if field not in DERIVED_FIELDS]
+        for field in fields:
+            per_day = [anchor_rows[month][&quot;scenarios&quot;][key][field] / days[month] for month in anchors]
+            fit = _fit_affine(anchor_pv, per_day) if basis == BASIS_SOLAR_AFFINE else None
+            for month in months:
+                if fit is not None:
+                    value = (fit[0] + fit[1] * pv_per_day[month]) * days[month]
+                else:
+                    value = _cyclic_linear(anchors, per_day, month) * days[month]
+                if field not in SIGNED_FIELDS:
+                    value = max(0.0, value)
+                rows[month][&quot;scenarios&quot;][key][field] = round(value, 3)
+
+    return rows
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Add the weather accessor</strong></li>
+</ul>
+<p>In <code>apps/predbat/annual_weather.py</code>, add to <code>WeatherYear</code> immediately after <code>daily_actual_kwh</code> (line 75):</p>
+<pre><code class="language-python">    def monthly_actual_kwh(self, year):
+        &quot;&quot;&quot;Return {month: total actual PV kWh} for the given year.
+
+        The whole twelve month solar curve, already in hand from the archive fetch - this is
+        what lets fast mode reconstruct months it never planned without another download.
+        &quot;&quot;&quot;
+        totals = {month: 0.0 for month in range(1, 13)}
+        for day, kwh in self._daily_actual.items():
+            if day.year == year:
+                totals[day.month] += kwh
+        return totals
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Register the test</strong></li>
+</ul>
+<p>In <code>apps/predbat/unit_test.py</code>, add the import beside the other annual test imports:</p>
+<pre><code class="language-python">from tests.test_annual_interpolate import test_annual_interpolate
+</code></pre>
+<p>And add to <code>TEST_REGISTRY</code>:</p>
+<pre><code class="language-python">        (&quot;annual_interpolate&quot;, test_annual_interpolate, &quot;Annual fast-mode interpolation curve tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Run the tests and make sure they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_interpolate --test annual_weather &gt; /tmp/t2.txt 2&gt;&amp;1; grep -E "ERROR|FAILED|PASSED" /tmp/t2.txt</code>
+Expected: two PASSED lines, no ERROR lines.</p>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/annual_interpolate.py apps/predbat/annual_weather.py apps/predbat/tests/test_annual_interpolate.py apps/predbat/unit_test.py
+git commit -m &quot;feat(whatif): add solar-affine month interpolation module&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-shared-included-status-constant">Task 3: Shared included-status constant</h3>
+<p>An interpolated month is currently invisible to four separate <code>("ok", "degraded")</code> checks, each of which would render it as <strong>unavailable</strong>. This task makes them agree via one constant, before Task 4 starts producing such rows.</p>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/annual.py</code> (add constant near <code>SCENARIO_FIELDS</code> at line 1259; use it at lines 1621-1622)
+- Modify: <code>apps/predbat/annual_cli.py</code> (import at line 26; check at line 68)
+- Modify: <code>apps/predbat/web_annual.py</code> (import at line 28; checks at lines 1428 and 1477)
+- Test: <code>apps/predbat/tests/test_annual_results.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing.
+- Produces: <code>annual.INCLUDED_STATUSES = ("ok", "degraded", "interpolated")</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Append to <code>test_annual_results()</code> in <code>apps/predbat/tests/test_annual_results.py</code>, before its final <code>return failed</code>. It reuses that file's existing <code>make_month_row(month, costs, status="ok")</code> and <code>make_predictor()</code> helpers. Extend the file's existing <code>from annual import ...</code> line to also import <code>INCLUDED_STATUSES</code>.</p>
+<pre><code class="language-python">    print(&quot;Test: INCLUDED_STATUSES covers planned, degraded and interpolated months&quot;)
+    if sorted(INCLUDED_STATUSES) != [&quot;degraded&quot;, &quot;interpolated&quot;, &quot;ok&quot;]:
+        print(&quot;  ERROR: INCLUDED_STATUSES should be ok/degraded/interpolated, got {!r}&quot;.format(INCLUDED_STATUSES))
+        failed = True
+
+    print(&quot;Test: an interpolated month counts toward the annual totals&quot;)
+    # The whole point of fast mode: these months were never planned, but excluding them
+    # would report a four month year rather than a twelve month one.
+    predictor = make_predictor()
+    months = [
+        make_month_row(1, {&quot;no_pvbat&quot;: 100.0, &quot;pv_only&quot;: 75.0, &quot;without_predbat&quot;: 50.0, &quot;with_predbat&quot;: 20.0}),
+        make_month_row(2, {&quot;no_pvbat&quot;: 200.0, &quot;pv_only&quot;: 140.0, &quot;without_predbat&quot;: 80.0, &quot;with_predbat&quot;: 30.0}, status=&quot;interpolated&quot;),
+    ]
+    result = predictor._build_results(months)
+    if result[&quot;annual&quot;][&quot;months_included&quot;] != 2:
+        print(&quot;  ERROR: an interpolated month should be included, got months_included {}&quot;.format(result[&quot;annual&quot;][&quot;months_included&quot;]))
+        failed = True
+    if result[&quot;annual&quot;][&quot;months_excluded&quot;] != []:
+        print(&quot;  ERROR: an interpolated month must not be excluded, got {}&quot;.format(result[&quot;annual&quot;][&quot;months_excluded&quot;]))
+        failed = True
+    if result[&quot;annual&quot;][&quot;scenarios&quot;][&quot;no_pvbat&quot;][&quot;cost_p&quot;] != 300.0:
+        print(&quot;  ERROR: the interpolated month's cost should be in the total, expected 300.0, got {}&quot;.format(result[&quot;annual&quot;][&quot;scenarios&quot;][&quot;no_pvbat&quot;][&quot;cost_p&quot;]))
+        failed = True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run it to make sure it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_results &gt; /tmp/t3.txt 2&gt;&amp;1; grep -E "ERROR|ImportError|cannot import|PASSED" /tmp/t3.txt</code>
+Expected: FAIL — <code>cannot import name 'INCLUDED_STATUSES'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add the constant and use it everywhere</strong></li>
+</ul>
+<p>In <code>apps/predbat/annual.py</code>, immediately after the <code>SCENARIO_FIELDS</code> definition (line 1259):</p>
+<pre><code class="language-python"># Month statuses that carry real figures and count toward the annual totals. &quot;interpolated&quot;
+# is one of them: a fast-mode month was never planned, but it is a modelled estimate of a
+# real month, and dropping it would report a four month year. Shared with annual_cli and
+# web_annual so the CLI table, the chart and the month table cannot drift from the totals.
+INCLUDED_STATUSES = (&quot;ok&quot;, &quot;degraded&quot;, &quot;interpolated&quot;)
+</code></pre>
+<p>In <code>apps/predbat/annual.py</code> <code>_build_results</code> (lines 1621-1622):</p>
+<pre><code class="language-python">        included = [entry for entry in months if entry[&quot;status&quot;] in INCLUDED_STATUSES]
+        excluded = [entry[&quot;month&quot;] for entry in months if entry[&quot;status&quot;] not in INCLUDED_STATUSES]
+</code></pre>
+<p>In <code>apps/predbat/annual_cli.py</code>, extend the import at line 26 and change line 68:</p>
+<pre><code class="language-python">from annual import INCLUDED_STATUSES, SCENARIO_KEYS, AnnualConfigError, AnnualPredictor  # noqa: E402
+</code></pre>
+<pre><code class="language-python">        if entry[&quot;status&quot;] not in INCLUDED_STATUSES:
+</code></pre>
+<p>In <code>apps/predbat/web_annual.py</code>, extend the import at line 28 and change both lines 1428 and 1477:</p>
+<pre><code class="language-python">from annual import INCLUDED_STATUSES, AnnualConfigError, validate_config
+</code></pre>
+<pre><code class="language-python">            if entry.get(&quot;status&quot;) not in INCLUDED_STATUSES:
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the affected suites and make sure they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k annual &gt; /tmp/t3.txt 2&gt;&amp;1; grep -E "ERROR|FAILED" /tmp/t3.txt; grep -c PASSED /tmp/t3.txt</code>
+Expected: no ERROR or FAILED lines.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/annual.py apps/predbat/annual_cli.py apps/predbat/web_annual.py apps/predbat/tests/test_annual_results.py
+git commit -m &quot;refactor(whatif): share one included-status constant across annual consumers&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-wire-fast-mode-into-the-engine">Task 4: Wire fast mode into the engine</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/annual.py</code> — <code>AnnualPredictor.run()</code> (lines 1450-1609) and <code>_build_results</code> (lines 1611-1664)
+- Test: <code>apps/predbat/tests/test_annual_interpolate.py</code> (add an engine-level test)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>annual_interpolate.ANCHOR_MONTHS</code>, <code>build_interpolated_rows</code>; <code>WeatherYear.monthly_actual_kwh</code>; <code>INCLUDED_STATUSES</code>.
+- Produces: results document gains <code>annual["fast_mode"]: bool</code> and <code>annual["months_interpolated"]: int</code>; interpolated rows gain <code>standing_charge_p</code> and <code>scenarios[*]["export_credit_p_estimate"]</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_annual_interpolate.py</code>:</p>
+<pre><code class="language-python">def test_annual_fast_mode_assembly(my_predbat):
+    &quot;&quot;&quot;The pieces run() assembles: month selection, provenance, totals and the anchor fallback.&quot;&quot;&quot;
+    failed = False
+    pv = linear_pv()
+
+    print(&quot;Test: fast mode plans only the anchor months&quot;)
+    from annual_interpolate import ANCHOR_MONTHS as anchors
+
+    if sorted(anchors) != [1, 4, 7, 10]:
+        print(&quot;  ERROR: anchors should be Jan/Apr/Jul/Oct, got {}&quot;.format(sorted(anchors)))
+        failed = True
+
+    print(&quot;Test: an unavailable month is not interpolated over&quot;)
+    # A month with no rate data must stay unavailable, not be quietly fabricated - which is
+    # why run() passes an explicit month list rather than letting the module fill everything.
+    wanted = [month for month in range(1, 13) if month not in anchors and month != 3]
+    rows = build_interpolated_rows(anchor_rows_from(lambda month: 100.0 * days_in(month)), YEAR, pv, months=wanted)
+    if 3 in rows:
+        print(&quot;  ERROR: month 3 was excluded but got interpolated anyway&quot;)
+        failed = True
+    if len(rows) != 7:
+        print(&quot;  ERROR: expected 7 interpolated months, got {}&quot;.format(len(rows)))
+        failed = True
+
+    print(&quot;Test: fewer than two surviving anchors produces nothing&quot;)
+    single = {1: anchor_rows_from(lambda month: 100.0)[1]}
+    if build_interpolated_rows(single, YEAR, pv) != {}:
+        print(&quot;  ERROR: a single anchor must not be fitted - run() falls back to a full run instead&quot;)
+        failed = True
+
+    print(&quot;Test: two surviving anchors still work&quot;)
+    two = {month: anchor_rows_from(lambda m: 100.0 * days_in(m))[month] for month in (1, 7)}
+    rows = build_interpolated_rows(two, YEAR, pv)
+    if len(rows) != 10:
+        print(&quot;  ERROR: two anchors should fill the other ten months, got {}&quot;.format(len(rows)))
+        failed = True
+    if rows[5][&quot;interpolated_from&quot;][&quot;anchors&quot;] != [1, 7]:
+        print(&quot;  ERROR: provenance should record the surviving anchors, got {!r}&quot;.format(rows[5][&quot;interpolated_from&quot;][&quot;anchors&quot;]))
+        failed = True
+
+    return failed
+</code></pre>
+<p>Register it: add <code>test_annual_fast_mode_assembly</code> to the <code>from tests.test_annual_interpolate import ...</code> line in <code>unit_test.py</code>, and add to <code>TEST_REGISTRY</code>:</p>
+<pre><code class="language-python">        (&quot;annual_fast_mode_assembly&quot;, test_annual_fast_mode_assembly, &quot;Annual fast-mode assembly tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run it to make sure it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_fast_mode_assembly &gt; /tmp/t4.txt 2&gt;&amp;1; grep -E "ERROR|not found|PASSED" /tmp/t4.txt</code>
+Expected: FAIL — test not registered yet.</p>
+<ul>
+<li>[ ] <strong>Step 3: Restructure the month loop</strong></li>
+</ul>
+<p>In <code>apps/predbat/annual.py</code>, add to the imports at the top of the file:</p>
+<pre><code class="language-python">from annual_interpolate import ANCHOR_MONTHS, build_interpolated_rows
+</code></pre>
+<p>In <code>run()</code>, replace the line <code>for month in range(1, 13):</code> (line 1504) and the <code>total_units</code>/<code>completed</code> setup above it (lines 1501-1502) with:</p>
+<pre><code class="language-python">        fast_mode = self.config[&quot;fast_mode&quot;]
+        # Rate downloads and availability checks still cover all twelve months even in fast
+        # mode - they are network-bound and cheap next to planning, and skipping them would
+        # let interpolation paper over a month that genuinely had no rates.
+        months_to_plan = list(ANCHOR_MONTHS) if fast_mode else list(range(1, 13))
+        total_units = len(months_to_plan) + (1 if fast_mode else 0)
+        completed = 0
+
+        for month in range(1, 13):
+</code></pre>
+<p>Inside the loop, immediately after <code>standing_charge_p</code> is computed (line 1509), insert the skip for months this run will not plan. Place it <strong>after</strong> both <code>fetch_month</code> calls and their unavailable checks, so an unavailable month is still detected — that is, immediately after the spill-fetch block that ends at line 1526:</p>
+<pre><code class="language-python">            if month not in months_to_plan:
+                # Planned nothing here; the row is built after the loop by interpolation.
+                # Recorded so the interpolation step knows this month had usable rates.
+                interpolatable.append((month, days_in_month, standing_charge_p))
+                continue
+</code></pre>
+<p>Initialise <code>interpolatable = []</code> beside <code>months = []</code> (line 1500).</p>
+<p>Change the progress call and the <code>completed</code> bookkeeping so <code>completed</code> only advances for planned months — otherwise the unavailable branches, which run for all twelve months, push <code>completed</code> past <code>total_units</code> and the progress bar overshoots. Replace the <code>if progress:</code> block at lines 1505-1506 with:</p>
+<pre><code class="language-python">            if progress and month in months_to_plan:
+                progress(completed, total_units, &quot;Month {:02d}/{}&quot;.format(month, year))
+</code></pre>
+<p>Then replace <strong>every</strong> bare <code>completed += 1</code> inside the loop (there are four: the two unavailable-rate branches, the no-usable-weather branch, the all-days-failed branch, and the success path) with:</p>
+<pre><code class="language-python">            if month in months_to_plan:
+                completed += 1
+</code></pre>
+<p>An unavailable month is still appended to <code>months</code> as it is today, and because the skip added above sits <em>after</em> the availability checks, it is never added to <code>interpolatable</code> — so a month with no rate data stays unavailable rather than being quietly interpolated over.</p>
+<ul>
+<li>[ ] <strong>Step 4: Add the interpolation step after the loop</strong></li>
+</ul>
+<p>In <code>run()</code>, immediately after the month loop and <strong>before</strong> <code>self.caveats.extend(self._tariff_fallback_caveats(...))</code> (line 1597), insert:</p>
+<pre><code class="language-python">        interpolated_count = 0
+        if fast_mode:
+            anchor_rows = {entry[&quot;month&quot;]: entry for entry in months if entry[&quot;status&quot;] in INCLUDED_STATUSES}
+            if len(anchor_rows) &lt; 2 and interpolatable:
+                # One anchor cannot define a line. Rather than fail or guess, plan the rest
+                # normally and finish as an ordinary full run - the user gets a slower but
+                # correct answer instead of a fast wrong one.
+                self.log(&quot;Warn: Annual: only {} anchor month(s) produced a result, so fast mode was abandoned and the remaining months planned in full&quot;.format(len(anchor_rows)))
+                self.caveats.append(&quot;Fast mode was abandoned because too few of the four sampled months produced a usable result, so all twelve months were planned instead. This run is a full run.&quot;)
+                for month, days_in_month, standing_charge_p in interpolatable:
+                    baseline_ready = await self.baseline_tariff.fetch_month(year, month)
+                    if not baseline_ready:
+                        baseline_fallback_months.append(month)
+                    months.append(await self._plan_one_month(month, year, zone, days_in_month, standing_charge_p, baseline_ready))
+                    completed += 1
+                months.sort(key=lambda entry: entry[&quot;month&quot;])
+                fast_mode = False
+            elif anchor_rows:
+                monthly_pv = self.weather.monthly_actual_kwh(year) if self.weather else None
+                if progress:
+                    progress(completed, total_units, &quot;Interpolating {} month(s)&quot;.format(len(interpolatable)))
+                wanted = [month for month, _, _ in interpolatable]
+                rows = build_interpolated_rows(anchor_rows, year, monthly_pv, months=wanted)
+                for month, days_in_month, standing_charge_p in interpolatable:
+                    row = rows.get(month)
+                    if not row:
+                        continue
+                    row[&quot;standing_charge_p&quot;] = round(standing_charge_p, 3)
+                    # Recomputed from this month's own export rate rather than interpolated,
+                    # so the field means exactly what it means in a planned month. The 15th
+                    # stands in for the month the way a planned month uses its first sample.
+                    midnight_utc = zone.localize(datetime(year, month, 15)).astimezone(pytz.utc)
+                    _, rate_export = self.tariff.rates_for(midnight_utc, DAY_MINUTES)
+                    export_rate = average_rate(rate_export, DAY_MINUTES)
+                    for key in row[&quot;scenarios&quot;]:
+                        row[&quot;scenarios&quot;][key][&quot;export_credit_p_estimate&quot;] = round(row[&quot;scenarios&quot;][key].get(&quot;export_kwh&quot;, 0.0) * export_rate, 3)
+                    months.append(row)
+                    interpolated_count += 1
+                months.sort(key=lambda entry: entry[&quot;month&quot;])
+                self.caveats.append(
+                    &quot;Fast mode: only {} were planned; the other {} month(s) were interpolated from them against this year's solar curve. Interpolation adds under 1% error to the annual savings figure, and individual months land within roughly 10-13% typically. On a tariff whose daily prices swing widely (Agile especially) the sampled months carry roughly 8-18% error of their own, which a full run has too - read individual months as indicative, not exact.&quot;.format(
+                        &quot;, &quot;.join(calendar.month_abbr[month] for month in sorted(anchor_rows)), len(interpolatable)
+                    )
+                )
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Extract the per-month planning body</strong></li>
+</ul>
+<p>The fallback in Step 4 calls <code>self._plan_one_month(...)</code>, which does not exist yet. Extract it from the loop body so the fallback can plan a skipped month without duplicating ~65 lines.</p>
+<p>Move the code from <code>samples = select_samples(...)</code> (line 1528) down to and including <code>months.append(row)</code> (line 1594) into this new method, placed immediately above <code>run()</code>:</p>
+<pre><code class="language-python">    async def _plan_one_month(self, month, year, zone, days_in_month, standing_charge_p, baseline_ready):
+        &quot;&quot;&quot;Plan and cost one month, returning its results row.
+
+        Extracted from run()'s loop so the fast-mode fallback can plan the months it
+        originally skipped without duplicating the body. Always returns a row - an
+        &quot;unavailable&quot; one when the month produced nothing usable - so the caller appends
+        unconditionally rather than reproducing the loop's branching.
+        &quot;&quot;&quot;
+</code></pre>
+<p>Three mechanical substitutions inside the moved body, and nothing else changes:</p>
+<ol>
+<li>Each <code>months.append({...}); completed += 1; continue</code> for a failure case becomes <code>return {...}</code> with the same dict.</li>
+<li>The final <code>months.append(row)</code> / <code>completed += 1</code> becomes <code>return row</code>.</li>
+<li><code>self.config</code> and <code>self.tariff</code> references are already on <code>self</code> and need no change.</li>
+</ol>
+<p>At the original site in the loop, the body becomes:</p>
+<pre><code class="language-python">            row = await self._plan_one_month(month, year, zone, days_in_month, standing_charge_p, baseline_ready)
+            months.append(row)
+            if month in months_to_plan:
+                completed += 1
+</code></pre>
+<p>Note <code>baseline_ready</code> is a parameter rather than recomputed inside: the loop already awaited <code>self.baseline_tariff.fetch_month(year, month)</code> for every month, and re-awaiting it would double the downloads.</p>
+<ul>
+<li>[ ] <strong>Step 6: Record fast mode in the results document</strong></li>
+</ul>
+<p>In <code>_build_results</code>, change the signature to accept the two new values and add them to the returned <code>annual</code> block:</p>
+<pre><code class="language-python">    def _build_results(self, months, fast_mode=False, months_interpolated=0):
+</code></pre>
+<pre><code class="language-python">            &quot;annual&quot;: {
+                &quot;scenarios&quot;: annual_scenarios,
+                &quot;standing_charge_p&quot;: standing_total,
+                &quot;savings&quot;: savings,
+                &quot;months_included&quot;: len(included),
+                &quot;months_excluded&quot;: excluded,
+                # Recorded so a stored run can never be mistaken for a full one after the
+                # fact - the compare table and the results page both key off this.
+                &quot;fast_mode&quot;: fast_mode,
+                &quot;months_interpolated&quot;: months_interpolated,
+                &quot;costs&quot;: costs,
+                &quot;payback&quot;: payback,
+            },
+</code></pre>
+<p>And change the final call in <code>run()</code>:</p>
+<pre><code class="language-python">        return self._build_results(months, fast_mode=fast_mode, months_interpolated=interpolated_count)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 7: Run the tests and make sure they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k annual &gt; /tmp/t4.txt 2&gt;&amp;1; grep -E "ERROR|FAILED" /tmp/t4.txt; grep -c PASSED /tmp/t4.txt</code>
+Expected: no ERROR or FAILED lines.</p>
+<ul>
+<li>[ ] <strong>Step 8: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/annual.py apps/predbat/tests/test_annual_interpolate.py apps/predbat/unit_test.py
+git commit -m &quot;feat(whatif): plan four anchor months and interpolate the rest in fast mode&quot;
+</code></pre>
+<hr />
+<h3 id="task-5-web-ui">Task 5: Web UI</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/web_annual.py</code> — Advanced fieldset (line 599), <code>config_from_post</code> (line 772), "what this run used" (line 1243), month table (line 1482), chart note (line 1454)
+- Modify: <code>apps/predbat/annual_store.py</code> — <code>build_summary</code> (line 71)
+- Test: <code>apps/predbat/tests/test_web_annual.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>annual["fast_mode"]</code>, <code>annual["months_interpolated"]</code>, row <code>status == "interpolated"</code>, row <code>interpolated_from</code>.
+- Produces: summary key <code>"fast_mode"</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_web_annual.py</code>. It reuses that file's existing <code>make_page(my_predbat)</code> helper, its <code>sample_run_results()</code> fixture, its <code>valid_postdata()</code> helper and the <code>DEFAULT_CONFIG</code> already imported at line 25. Before writing, read <code>make_page</code> (line 65) and <code>sample_run_results</code> (line 1421) and confirm the form-rendering method's exact name — use whatever <code>test_web_annual_form</code> calls, not the name guessed below.</p>
+<pre><code class="language-python">def test_web_annual_fast_mode(my_predbat):
+    &quot;&quot;&quot;The fast mode checkbox renders, round-trips, and interpolated months are marked.&quot;&quot;&quot;
+    failed = False
+    page = make_page(my_predbat)
+
+    print(&quot;Test: the Advanced block offers a fast mode checkbox&quot;)
+    form = page.html_annual_form(dict(DEFAULT_CONFIG))
+    if 'name=&quot;fast_mode&quot;' not in form:
+        print(&quot;  ERROR: the form should contain a fast_mode checkbox&quot;)
+        failed = True
+
+    print(&quot;Test: a ticked box round-trips into the config&quot;)
+    postdata = valid_postdata()
+    postdata[&quot;fast_mode&quot;] = &quot;on&quot;
+    config = page.config_from_post(postdata)
+    if config.get(&quot;fast_mode&quot;) is not True:
+        print(&quot;  ERROR: a ticked fast_mode box should set fast_mode True, got {!r}&quot;.format(config.get(&quot;fast_mode&quot;)))
+        failed = True
+
+    print(&quot;Test: an absent box means off&quot;)
+    # A checkbox absent from postdata means unchecked - there is no &quot;off&quot; value to read.
+    config = page.config_from_post(valid_postdata())
+    if config.get(&quot;fast_mode&quot;) is not False:
+        print(&quot;  ERROR: an absent fast_mode box should set fast_mode False, got {!r}&quot;.format(config.get(&quot;fast_mode&quot;)))
+        failed = True
+
+    print(&quot;Test: an interpolated month renders as interpolated, not unavailable&quot;)
+    results = sample_run_results()
+    results[&quot;months&quot;][4] = {
+        &quot;month&quot;: 5,
+        &quot;status&quot;: &quot;interpolated&quot;,
+        &quot;days&quot;: 31,
+        &quot;standing_charge_p&quot;: 1860.0,
+        &quot;scenarios&quot;: results[&quot;months&quot;][4][&quot;scenarios&quot;],
+        &quot;interpolated_from&quot;: {&quot;anchors&quot;: [1, 4, 7, 10], &quot;basis&quot;: &quot;solar_affine&quot;},
+    }
+    table = page._render_month_table(results)
+    if &quot;unavailable&quot; in table.split(&quot;May&quot;)[1][:200]:
+        print(&quot;  ERROR: an interpolated month must not render as unavailable&quot;)
+        failed = True
+    if &quot;interpolated&quot; not in table.lower():
+        print(&quot;  ERROR: an interpolated month should be labelled as such&quot;)
+        failed = True
+
+    return failed
+</code></pre>
+<p>Register it in <code>unit_test.py</code>: add <code>test_web_annual_fast_mode</code> to the <code>from tests.test_web_annual import (...)</code> block and add:</p>
+<pre><code class="language-python">        (&quot;web_annual_fast_mode&quot;, test_web_annual_fast_mode, &quot;Annual web tab fast mode tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run it to make sure it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test web_annual_fast_mode &gt; /tmp/t5.txt 2&gt;&amp;1; grep -E "ERROR|not found|PASSED" /tmp/t5.txt</code>
+Expected: FAIL.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add the form control</strong></li>
+</ul>
+<p>In <code>apps/predbat/web_annual.py</code>, in the Advanced <code>&lt;details&gt;</code> block immediately after the <code>samples_per_month</code> field (line 599):</p>
+<pre><code class="language-python">        text += '&lt;div class=&quot;annual-field&quot;&gt;&lt;label for=&quot;fast_mode&quot;&gt;Fast mode&lt;/label&gt;&lt;input type=&quot;checkbox&quot; id=&quot;fast_mode&quot; name=&quot;fast_mode&quot; {}&gt;&lt;/div&gt;\n'.format(&quot;checked&quot; if config.get(&quot;fast_mode&quot;) else &quot;&quot;)
+        text += '&lt;p class=&quot;annual-note&quot;&gt;Plans January, April, July and October and estimates the other eight months from this year\'s solar curve. About 2.5&amp;times; faster. Annual totals and payback stay close; individual months are approximate, so turn this off if you want to read a specific month\'s figure.&lt;/p&gt;\n'
+</code></pre>
+<p>Add <code>"fast_mode": False</code> to <code>DEFAULT_CONFIG</code> (line 60) beside <code>"samples_per_month": 2</code>.</p>
+<ul>
+<li>[ ] <strong>Step 4: Parse the checkbox</strong></li>
+</ul>
+<p>In <code>config_from_post</code>, beside the existing <code>debug</code> line (line 777):</p>
+<pre><code class="language-python">        config[&quot;fast_mode&quot;] = postdata.get(&quot;fast_mode&quot;) is not None
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Show it in "what this run used"</strong></li>
+</ul>
+<p>After the <code>samples_per_month</code> row (line 1244):</p>
+<pre><code class="language-python">        if config.get(&quot;fast_mode&quot;):
+            rows.append((&quot;Fast mode&quot;, &quot;on — 4 months planned, 8 interpolated&quot;))
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Mark interpolated months in the table and chart</strong></li>
+</ul>
+<p>In <code>_render_month_table</code>, beside the <code>synthesised</code> handling (after line 1482):</p>
+<pre><code class="language-python">            if entry.get(&quot;status&quot;) == &quot;interpolated&quot;:
+                # Included in the totals and rendered with real figures, so without this it
+                # is indistinguishable from a month that was actually planned.
+                basis = (entry.get(&quot;interpolated_from&quot;) or {}).get(&quot;anchors&quot;) or []
+                suffix += &quot; &lt;span class='annual-synthesised-tag' title='This month was not planned; its figures were estimated from the planned months against this year&amp;#39;s solar curve'&gt;interpolated from {}&lt;/span&gt;&quot;.format(html.escape(&quot;, &quot;.join(calendar.month_abbr[month] for month in basis), quote=True))
+</code></pre>
+<p>In the chart method, beside the <code>synthesised_months</code> note (after line 1458):</p>
+<pre><code class="language-python">        interpolated_months = [calendar.month_abbr[entry[&quot;month&quot;]] for entry in results.get(&quot;months&quot;, []) if entry.get(&quot;status&quot;) == &quot;interpolated&quot;]
+        if interpolated_months:
+            text += &quot;&lt;p class='annual-note'&gt;{} were not planned — their bars are estimated from the planned months against this year's solar curve. The annual total stays close; individual months are approximate.&lt;/p&gt;\n&quot;.format(&quot;, &quot;.join(interpolated_months))
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 7: Record it in the run summary</strong></li>
+</ul>
+<p>In <code>apps/predbat/annual_store.py</code> <code>build_summary</code>, add to the returned dict:</p>
+<pre><code class="language-python">        # So the run selector and compare table can distinguish a fast run from a full one.
+        # Comparing the two is legitimate - that is the accuracy claim - but it must be visible.
+        &quot;fast_mode&quot;: bool(((results or {}).get(&quot;annual&quot;) or {}).get(&quot;fast_mode&quot;)),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 8: Run the tests and make sure they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k annual &gt; /tmp/t5.txt 2&gt;&amp;1; grep -E "ERROR|FAILED" /tmp/t5.txt; grep -c PASSED /tmp/t5.txt</code>
+Expected: no ERROR or FAILED lines.</p>
+<ul>
+<li>[ ] <strong>Step 9: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/web_annual.py apps/predbat/annual_store.py apps/predbat/tests/test_web_annual.py apps/predbat/unit_test.py
+git commit -m &quot;feat(whatif): expose fast mode in the web UI and mark interpolated months&quot;
+</code></pre>
+<hr />
+<h3 id="task-6-committed-curve-scoring-harness">Task 6: Committed curve-scoring harness</h3>
+<p>Locks in the curve choice so a future change cannot silently regress it.</p>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/tests/test_annual_curve_reference.py</code>
+- Create: <code>coverage/cases/annual_reference_agile.json</code>, <code>coverage/cases/annual_reference_cosy.json</code>
+- Modify: <code>apps/predbat/unit_test.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>annual_interpolate.build_interpolated_rows</code>, <code>BASIS_SOLAR_AFFINE</code>, <code>BASIS_LINEAR</code>, <code>ANCHOR_MONTHS</code>.
+- Produces: nothing other tasks use.</p>
+<ul>
+<li>[ ] <strong>Step 1: Confirm the fixtures are present</strong></li>
+</ul>
+<p><strong>The two fixtures are already committed</strong> — <code>coverage/cases/annual_reference_agile.json</code> (from the six-samples-per-month Agile reference) and <code>coverage/cases/annual_reference_cosy.json</code>. Each holds twelve months of scenarios plus that month's PV yield, and nothing else: no plans, no location, no tariff URLs, no keys. Nothing to build.</p>
+<p>Run: <code>ls -la coverage/cases/annual_reference_*.json</code>
+Expected: two files, roughly 13 KB each.</p>
+<p>Only if you later produce a <strong>new</strong> reference run is regeneration needed, in which case reduce it the same way — keep <code>year</code>, <code>months</code> (each with <code>month</code>, <code>days</code>, <code>scenarios</code>) and <code>monthly_pv</code> keyed by month-number-as-string, and drop everything else.</p>
+<ul>
+<li>[ ] <strong>Step 2: Write the test</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_annual_curve_reference.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+&quot;&quot;&quot;Guards the fast-mode curve choice against stored reference runs.
+
+Reconstructs eight months from four anchors and checks the shipped basis still beats the
+alternatives. Skips when no fixture is present, so a checkout without them stays green.
+&quot;&quot;&quot;
+
+import json
+import os
+
+from annual_interpolate import ANCHOR_MONTHS, BASIS_LINEAR, BASIS_SOLAR_AFFINE, build_interpolated_rows
+
+FIXTURES = [&quot;annual_reference_agile.json&quot;, &quot;annual_reference_cosy.json&quot;]
+
+
+def fixture_paths():
+    &quot;&quot;&quot;Return the reference fixtures that exist, newest search path first.&quot;&quot;&quot;
+    found = []
+    for name in FIXTURES:
+        for base in (&quot;cases&quot;, os.path.join(&quot;coverage&quot;, &quot;cases&quot;)):
+            path = os.path.join(base, name)
+            if os.path.exists(path):
+                found.append(path)
+                break
+    return found
+
+
+def per_month_error(doc, basis):
+    &quot;&quot;&quot;Mean per-month cost error, as a percentage of that scenario's mean monthly cost.&quot;&quot;&quot;
+    year = doc[&quot;year&quot;]
+    months = {entry[&quot;month&quot;]: entry for entry in doc[&quot;months&quot;]}
+    monthly_pv = {int(month): value for month, value in doc[&quot;monthly_pv&quot;].items()}
+    anchors = {month: months[month] for month in ANCHOR_MONTHS if month in months}
+    rebuilt = build_interpolated_rows(anchors, year, monthly_pv, basis=basis)
+
+    errors = []
+    for key in months[ANCHOR_MONTHS[0]][&quot;scenarios&quot;]:
+        truth = {month: entry[&quot;scenarios&quot;][key][&quot;cost_p&quot;] for month, entry in months.items()}
+        scale = sum(abs(value) for value in truth.values()) / len(truth)
+        if scale &lt; 1e-6:
+            continue
+        for month, row in rebuilt.items():
+            if month in truth:
+                errors.append(abs(row[&quot;scenarios&quot;][key][&quot;cost_p&quot;] - truth[month]) / scale * 100)
+    return sum(errors) / len(errors) if errors else None
+
+
+def test_annual_curve_reference(my_predbat):
+    &quot;&quot;&quot;The shipped solar-affine basis still beats plain linear across the reference runs.
+
+    Measured when the basis was chosen: Agile 18.39% vs linear 18.84%, Cosy 9.56% vs 14.47%.
+    Agile's margin is genuinely narrow, so a per-fixture strict comparison would flake on
+    any harmless rounding change. The guard that matters is therefore the combined mean,
+    with a loose per-fixture ceiling to catch a basis that has broken outright.
+    &quot;&quot;&quot;
+    failed = False
+    paths = fixture_paths()
+    if not paths:
+        print(&quot;  SKIP: no annual reference fixtures found&quot;)
+        return failed
+
+    affine_all = []
+    linear_all = []
+    for path in paths:
+        doc = json.load(open(path))
+        affine = per_month_error(doc, BASIS_SOLAR_AFFINE)
+        linear = per_month_error(doc, BASIS_LINEAR)
+        if affine is None or linear is None:
+            print(&quot;  ERROR: {} produced no comparable months&quot;.format(path))
+            failed = True
+            continue
+        print(&quot;  {}: solar_affine {:.2f}%, linear {:.2f}%&quot;.format(os.path.basename(path), affine, linear))
+        affine_all.append(affine)
+        linear_all.append(linear)
+        # 1.10 is slack for rounding and anchor reshuffles, not for a real regression: at
+        # selection time the worst fixture had solar_affine at 0.98x linear.
+        if affine &gt; linear * 1.10:
+            print(&quot;  ERROR: {} - solar_affine ({:.2f}%) is far worse than linear ({:.2f}%); the basis has regressed&quot;.format(path, affine, linear))
+            failed = True
+
+    if affine_all:
+        affine_mean = sum(affine_all) / len(affine_all)
+        linear_mean = sum(linear_all) / len(linear_all)
+        print(&quot;  combined: solar_affine {:.2f}%, linear {:.2f}%&quot;.format(affine_mean, linear_mean))
+        if affine_mean &gt;= linear_mean:
+            print(&quot;  ERROR: solar_affine ({:.2f}%) must beat linear ({:.2f}%) overall, or it is not the right default&quot;.format(affine_mean, linear_mean))
+            failed = True
+
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Register and run it</strong></li>
+</ul>
+<p>Add the import and registry entry in <code>unit_test.py</code>:</p>
+<pre><code class="language-python">from tests.test_annual_curve_reference import test_annual_curve_reference
+</code></pre>
+<pre><code class="language-python">        (&quot;annual_curve_reference&quot;, test_annual_curve_reference, &quot;Annual fast-mode curve reference scoring&quot;, False),
+</code></pre>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_curve_reference &gt; /tmp/t6.txt 2&gt;&amp;1; grep -E "ERROR|SKIP|solar_affine|PASSED" /tmp/t6.txt</code>
+Expected: PASS, printing roughly <code>agile: solar_affine 18.39%, linear 18.84%</code> and <code>cosy: solar_affine 9.56%, linear 14.47%</code>, then a combined line where solar_affine is lower. Figures within a few tenths of these are fine; a large divergence means <code>build_interpolated_rows</code> is not doing what the selection study measured.</p>
+<ul>
+<li>[ ] <strong>Step 4: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/tests/test_annual_curve_reference.py apps/predbat/unit_test.py
+git commit -m &quot;test(whatif): guard the fast-mode curve choice against reference runs&quot;
+</code></pre>
+<p>(The fixtures themselves were committed with this plan; they are not part of this commit.)</p>
+<hr />
+<h3 id="task-7-documentation">Task 7: Documentation</h3>
+<p><strong>Files:</strong>
+- Modify: <code>docs/annual-prediction.md</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: everything above. Produces: nothing.</p>
+<ul>
+<li>[ ] <strong>Step 1: Add the Fast mode section</strong></li>
+</ul>
+<p>In <code>docs/annual-prediction.md</code>, add after the paragraph describing what the Advanced fieldset holds (search for <code>samples_per_month</code> and the "Advanced" mention around line 118):</p>
+<pre><code class="language-markdown">### Fast mode
+
+**Fast mode** under **Advanced** plans January, April, July and October only, and estimates
+the other eight months from those four against the year's actual solar curve. A run takes
+about 2.5 times less time — the saving is smaller than four-months-in-twelve suggests
+because the weather download, the rate downloads and starting the engine all still happen.
+
+It is built for comparing systems: try 5 kWh against 10 kWh, or Agile against Cosy, without
+waiting three minutes for each answer. The annual totals, savings and payback it reports are
+close to a full run — interpolation itself contributes under 1% to the annual saving.
+
+Individual months are approximate, typically within 10-13% and worse in the tails, and the
+month table and chart mark every estimated month so you can see which figures were modelled
+rather than planned. If you want to read one specific month's number, turn fast mode off.
+
+One caveat worth knowing, which is not about fast mode: on a tariff whose daily prices swing
+widely — Agile especially — sampling two days to stand for a month carries roughly 8-18%
+error of its own. Fast mode inherits that, and so does a full twelve month run. Raising
+**Days sampled per month** reduces it in both modes.
+
+Rates are still downloaded for all twelve months in fast mode, so a month with no rate data
+is still reported as unavailable rather than quietly estimated over.
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Update the run-duration text</strong></li>
+</ul>
+<p>Find the "### Running" paragraph beginning "A run takes roughly one to three minutes" and append to it:</p>
+<pre><code class="language-markdown">With **Fast mode** on (see below) those figures fall to roughly 30 to 90 seconds, or one to
+two and a half minutes with a car.
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Add the CLI flag to the command line section</strong></li>
+</ul>
+<p>In the "Running it from the command line" section, alongside the other flags:</p>
+<pre><code class="language-markdown">`--fast` enables fast mode for that run, overriding the config file: four months are planned
+and the rest interpolated. Equivalent to `fast_mode: true` under `annual:`.
+</code></pre>
+<p>Also add <code>fast_mode: false</code> to the annotated example config block (near <code>samples_per_month: 2</code>, around line 462) with a one-line comment.</p>
+<ul>
+<li>[ ] <strong>Step 4: Verify docs build and spelling</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_pre_commit &gt; /tmp/t7.txt 2&gt;&amp;1; echo "exit=$?"; grep -iE "cspell|Unknown word|Failed" /tmp/t7.txt | head</code>
+Expected: exit 0, cspell Passed. If cspell flags a word, add it to <code>.cspell/custom-dictionary-workspace.txt</code> and re-stage (the file is auto-sorted on commit).</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add docs/annual-prediction.md .cspell/custom-dictionary-workspace.txt
+git commit -m &quot;docs(whatif): document fast mode&quot;
+</code></pre>
+<hr />
+<h2 id="final-verification">Final verification</h2>
+<ul>
+<li>[ ] <strong>Full suite green</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_pre_commit &gt; /tmp/final.txt 2&gt;&amp;1; echo "exit=$?"; tail -3 /tmp/final.txt</code>
+Expected: exit 0 and <code>**** All tests passed</code>.</p>
+<ul>
+<li>[ ] <strong>End-to-end sanity check against a real run</strong></li>
+</ul>
+<p>Fast mode is worth confirming against the network once, not only against fixtures:</p>
+<pre><code class="language-bash">cd apps/predbat &amp;&amp; python3 annual_cli.py --config &lt;your-annual.yaml&gt; --fast --out /tmp/fast.json
+python3 -c &quot;
+import json; d=json.load(open('/tmp/fast.json'))
+print('fast_mode', d['annual']['fast_mode'], 'interpolated', d['annual']['months_interpolated'])
+print('included', d['annual']['months_included'], 'statuses', [m['status'] for m in d['months']])
+print('savings', d['annual']['savings'])
+&quot;
+</code></pre>
+<p>Expected: <code>fast_mode True</code>, <code>interpolated 8</code>, <code>included 12</code>, statuses showing <code>ok</code> for months 1/4/7/10 and <code>interpolated</code> for the other eight, and a savings figure within a few percent of a full run of the same config.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

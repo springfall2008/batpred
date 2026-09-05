@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>DEYE storage persistence and tiered refresh — design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "DEYE storage persistence and tiered refresh \u2014 design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-07-28-deye-storage-persistence-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">DEYE storage persistence and tiered refresh — design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="deye-storage-persistence-and-tiered-refresh-design">DEYE storage persistence and tiered refresh — design</h1>
+<p>Date: 2026-07-28
+Status: approved, ready for implementation planning</p>
+<h2 id="problem">Problem</h2>
+<p>The DEYE component holds all of its state in memory and re-polls everything on
+every 60-second tick. Two consequences:</p>
+<ol>
+<li><strong>Every restart is a cold start.</strong> <code>run()</code> gates discovery on
+   <code>if first or not self.device_list</code>, so a process restart re-runs
+   <code>station/list</code> and <code>station/device</code>, and rebuilds every derived value from
+   scratch. Predbat restarts routinely, so this is the common case, not an edge
+   case.</li>
+<li><strong>Steady-state polling is wasteful.</strong> <code>config/battery</code> is called once per
+   device per minute — 1440 calls/device/day — to read installer settings that
+   change perhaps once a year.</li>
+</ol>
+<p>Worse, some state cannot be re-derived at all. <code>applied_payload</code> is a pure
+in-memory change-detection cache with no API read-back (<code>config/tou</code> is defined
+in <code>DEYE_ENDPOINTS</code> but never called), and <code>pending_orders</code> tracks in-flight
+control orders. Both are lost on restart.</p>
+<h2 id="goals">Goals</h2>
+<ul>
+<li>Survive a restart without a full poll.</li>
+<li>Refresh each class of state on a cadence matched to how fast it actually
+  changes.</li>
+<li>Never let persistence cause the inverter to be controlled incorrectly.</li>
+</ul>
+<h2 id="non-goals">Non-goals</h2>
+<ul>
+<li>Multi-instance coordination. <code>StorageBase</code> exposes <code>_acquire_refresh_lock()</code>
+  for this; a single DEYE component per Predbat instance does not need it.</li>
+<li>Persisting <code>local_schedule</code>. It is rebuilt for free from HA entity states on
+  every tick, and the existing <code>"unknown"</code>/<code>"unavailable"</code> defaulting in
+  <code>get_schedule_settings_ha()</code> already covers the startup window before HA has
+  republished.</li>
+</ul>
+<h2 id="refresh-tiers">Refresh tiers</h2>
+<p><code>ComponentBase</code> ticks <code>run()</code> every 60 seconds after startup
+(<code>seconds % 60 == 0</code>), so a one-minute live tier is the natural rate and needs
+no special handling.</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>TTL</th>
+<th>API calls</th>
+<th>State refreshed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>static</code></td>
+<td>8h</td>
+<td><code>station/list</code>, <code>station/device</code>, <code>station/latest</code>, <code>device/measurePoints</code></td>
+<td><code>station_ids</code>, <code>device_list</code></td>
+</tr>
+<tr>
+<td><code>config</code></td>
+<td>15 min</td>
+<td><code>config/battery</code> per device</td>
+<td><code>device_battery_config</code></td>
+</tr>
+<tr>
+<td><code>ratings</code></td>
+<td>— (written by the <code>live</code> refresh, saved only on change)</td>
+<td>none of its own</td>
+<td><code>device_capacity</code>, <code>device_pack_voltage</code>, <code>device_rated_power</code></td>
+</tr>
+<tr>
+<td><code>live</code></td>
+<td>1 min</td>
+<td><code>device/latest</code> per device</td>
+<td><code>device_values</code>, <code>device_energy</code> — <strong>not cached</strong></td>
+</tr>
+<tr>
+<td><code>control</code></td>
+<td>on change</td>
+<td>none</td>
+<td><code>applied_payload</code>, <code>pending_orders</code>, <code>order_poll_count</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>device/latest</code> returns telemetry, the energy counters and the ratings
+(<code>RatedPower</code>, <code>BatteryRatedCapacity</code>, <code>BMSChargeVoltage</code>) in a single response,
+so the <code>ratings</code> tier has no API cost of its own — it is a separate <em>file</em>
+purely because it has a different restore rule (see below), not a separate poll.</p>
+<p>Steady-state API cost falls from 2 calls/device/minute to ~1.07, and
+<code>config/battery</code> from 1440 to 96 calls/device/day.</p>
+<h2 id="storage-layout">Storage layout</h2>
+<p>Four files under module <code>deye</code>: <code>static</code>, <code>config</code>, <code>ratings</code>, <code>control</code>.</p>
+<p>Telemetry and the energy counters are deliberately <strong>not</strong> cached. The live tier
+polls every minute, so persisting it would mean 1440 writes a day to save at most
+one tick's gap at startup — a poor trade against that much file or network IO.
+Home Assistant already retains the last published value of every entity, and
+<code>publish_data()</code> only writes a sensor when it has a value, so a failed poll
+leaves the previous reading in place rather than overwriting it. The <code>live</code> tier
+therefore has a TTL (governing poll cadence) but no file: its clock starts unset
+after a restart and the first tick polls immediately.</p>
+<p>Ratings come from the same <code>device/latest</code> response but <em>are</em> cached, because
+they are static and are what lets <code>automatic_config()</code> map <code>soc_max</code>,
+<code>battery_rate_max</code> and <code>inverter_limit</code> before the first poll returns. They are
+written only when the value actually changes, compared by serialised signature,
+so the once-a-minute poll does not rewrite an identical file.</p>
+<p>Per-tier files rather than a single blob because <code>storage.age()</code> is per-file, so
+each tier gets an independent clock for free. A single blob would need
+hand-rolled per-section timestamps, and rewriting it every minute for live data
+would reset the static section's age to zero, defeating the 8h TTL.</p>
+<p><code>save()</code> stamps <code>created</code> on every write, so <code>age()</code> is time-since-last-write.
+This only holds as a TTL if a tier is saved <strong>only when it actually refreshes</strong>.</p>
+<h2 id="the-refresh-clock">The refresh clock</h2>
+<p>Each tier keeps an in-memory last-refresh timestamp. At startup it is seeded
+from <code>storage.age()</code>; a tier with no stored file leaves its timestamp unset.</p>
+<p>A tier refreshes when:</p>
+<ul>
+<li>its timestamp is unset, <strong>or</strong></li>
+<li>its timestamp is older than the tier's TTL, <strong>or</strong></li>
+<li>its product is empty — specifically <code>not self.device_list</code> forces a <code>static</code>
+  refresh regardless of TTL.</li>
+</ul>
+<p>That last condition matters: without it, a discovery attempt that ran during an
+API outage and cached an empty <code>device_list</code> would pin the component dead for a
+full 8 hours.</p>
+<p>This deliberately does <strong>not</strong> use the <code>seconds % N == 0</code> idiom seen in
+<code>gecloud.py</code> and <code>ha.py</code>. That counter starts from process start, so every
+restart re-polls every tier — exactly the behaviour being removed. Seeding from
+<code>storage.age()</code> is what makes the cadence survive a restart.</p>
+<p>The design works unchanged when storage is absent: <code>self.storage</code> returns <code>None</code>,
+no timestamps are seeded, every tier refreshes on the first tick, and the
+in-memory clock governs from then on.</p>
+<p><code>first</code> reduces to "process start": restore the five files, seed the clocks, then
+let the TTLs decide. The existing <code>if first or not self.device_list</code> gate is
+removed.</p>
+<h2 id="restore-rules">Restore rules</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Restore rule</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>static</code></td>
+<td>unconditional</td>
+<td>Station and device IDs do not go stale.</td>
+</tr>
+<tr>
+<td><code>config</code></td>
+<td>unconditional</td>
+<td>Installer settings. Also covers a transient <code>config/battery</code> failure — this endpoint has already returned <code>2106001 config point not supported</code> on one cycle and succeeded on the next.</td>
+</tr>
+<tr>
+<td><code>ratings</code></td>
+<td>unconditional</td>
+<td>Static per install. Restoring these is the main win: <code>automatic_config()</code> can map <code>soc_max</code>, <code>battery_rate_max</code> and <code>inverter_limit</code> at startup without waiting for a poll.</td>
+</tr>
+<tr>
+<td><code>control</code> — <code>pending_orders</code>, <code>order_poll_count</code></td>
+<td>unconditional</td>
+<td>An unpolled order is orphaned. <code>DEYE_ORDER_MAX_POLLS</code> still bounds it.</td>
+</tr>
+<tr>
+<td><code>control</code> — <code>applied_payload</code></td>
+<td>only if age &lt; 15 min</td>
+<td>See below.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="why-applied_payload-is-bounded">Why <code>applied_payload</code> is bounded</h3>
+<p>This is the one place persistence can cause <em>incorrect control</em>, not merely
+staleness.</p>
+<p><code>apply_dynamic_control()</code> skips the write when the desired payload equals the
+applied one. Restoring <code>applied_payload</code> asserts <em>"the inverter still holds what
+we last wrote"</em>. If the inverter was changed externally while Predbat was down —
+installer, the Deye app, a manual TOU edit — that assertion is false, the write
+is skipped, and the battery silently diverges from the plan.</p>
+<p>Today a restart clears the cache and forces one corrective write. That is
+accidentally safe, and the safety must not be lost.</p>
+<p>A redundant write is cheap. A skipped write means the battery does the wrong
+thing. The 15-minute bound keeps the benefit for the quick restarts Predbat
+actually performs, and forces a corrective rewrite after any longer outage.</p>
+<h2 id="error-handling">Error handling</h2>
+<ul>
+<li><code>self.storage</code> is <code>None</code> → every save and load no-ops (the <code>teslemetry.py</code>
+  idiom).</li>
+<li>A corrupt or missing file → that tier's clock stays unset → it refreshes on the
+  next tick. No other tier is affected.</li>
+<li>Restored data is shape-validated (<code>isinstance</code> dict/list) before use, as
+  <code>gecloud.py</code> does, so a truncated file cannot poison in-memory state.</li>
+<li>A first cycle whose live poll returns nothing makes <code>run()</code> return <strong>False</strong>.
+  <code>automatic_config()</code> runs on the first cycle alone, so completing startup
+  without telemetry would permanently skip the energy args until the next process
+  restart. Returning False leaves <code>first</code> set and <code>ComponentBase</code> retries the
+  whole startup path on its backoff (60s doubling to 128 minutes). Deliberately
+  gated on the live poll only, not on <code>config/battery</code>: that endpoint can be
+  permanently unsupported on a model (<code>2106001</code>), and gating on it would back off
+  to 128 minutes and never complete startup, whereas <code>automatic_config()</code> already
+  degrades gracefully when battery config is missing.</li>
+<li>A failed refresh must <strong>not</strong> save — saving would reset the TTL and skip the
+  retry — and must not clobber good in-memory state. This is the same principle
+  as the <code>RatedPower</code> clobber fix: absence of data is not zero.</li>
+</ul>
+<h2 id="testing">Testing</h2>
+<p><code>MockDeye</code> gains an injected <code>storage</code> property returning <code>self._mock_storage</code>,
+following the pattern already in <code>tests/test_ge_cloud.py</code>. <code>StorageLocalFiles</code>
+is used for a round-trip test against a temporary directory.</p>
+<p>Cases:</p>
+<ul>
+<li>Cold start, no stored state: every tier refreshes.</li>
+<li>Warm restart inside every TTL: <strong>zero</strong> API calls beyond the <code>live</code> tier.</li>
+<li>Telemetry is never restored and the live clock always starts expired.</li>
+<li>Unchanged ratings are not rewritten by repeated polls; a changed rating is.</li>
+<li>Restored ratings prime the signature so the first poll writes nothing.</li>
+<li>Each tier expiring independently: an expired <code>config</code> does not trigger a
+  <code>static</code> refresh, and vice versa.</li>
+<li>Empty <code>device_list</code> forces a <code>static</code> refresh despite a fresh clock.</li>
+<li>Corrupt file for one tier: that tier refreshes, the others restore.</li>
+<li><code>storage is None</code> throughout: component behaves exactly as it does today.</li>
+<li>A failed refresh does not save and does not clobber cached state.</li>
+<li><code>applied_payload</code> restored inside 15 minutes suppresses a redundant write;
+  outside 15 minutes it is discarded and the next apply writes.</li>
+<li>A discovery that returns nothing does not clobber an already-known device list.</li>
+<li>A first cycle without telemetry returns False and does not run
+  <code>automatic_config()</code>; the retry with telemetry returns True and does.</li>
+<li>A pending order restored from storage resumes polling to completion.</li>
+</ul>
+<h2 id="files-touched">Files touched</h2>
+<ul>
+<li><code>apps/predbat/deye.py</code> — tier clocks, restore/save, <code>run()</code> restructuring.</li>
+<li><code>apps/predbat/deye_const.py</code> — TTL constants.</li>
+<li><code>apps/predbat/tests/test_deye_storage.py</code> — new.</li>
+<li><code>apps/predbat/tests/test_deye_api.py</code> — <code>MockDeye</code> storage property.</li>
+<li><code>apps/predbat/unit_test.py</code> — register the new test module.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

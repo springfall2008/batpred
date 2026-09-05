@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>myenergi Integration — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "myenergi Integration \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-08-23-myenergi-integration-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">myenergi Integration — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="myenergi-integration-design">myenergi Integration — Design</h1>
+<p>Date: 2026-08-23
+Status: Approved for implementation planning</p>
+<h2 id="1-purpose">1. Purpose</h2>
+<p>Add myenergi Zappi (EV charger) and Eddi (hot water diverter) support to Predbat as a
+pluggable component. Scope for this first implementation:</p>
+<ul>
+<li>Monitoring of Zappi and Eddi devices, published as Predbat entities.</li>
+<li>Automatic configuration wiring the device energy sensors into <code>car_charging_energy</code>
+  (Zappi) and <code>iboost_energy_today</code> (Eddi).</li>
+<li>Send-boost and cancel-boost controls, exposed as switches with a companion number
+  entity for the boost amount.</li>
+<li>Documented stubs for every other control (mode, priority, minimum green level,
+  schedules, Libbi) so the shape of the interface is fixed before the work lands.</li>
+<li>A command line test interface, matching <code>fox.py</code>, <code>axle.py</code> and the other components.</li>
+</ul>
+<p>Libbi is explicitly out of scope. Webhooks are out of scope; this release polls.</p>
+<h2 id="2-the-two-myenergi-apis">2. The two myenergi APIs</h2>
+<p>myenergi exposes two unrelated APIs, and Predbat needs both.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>3rd-party API</th>
+<th>Direct ("director") API</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Host</td>
+<td><code>api.s18.myenergi.net</code>, auth at <code>auth.s18.myenergi.net</code></td>
+<td><code>director.myenergi.net</code>, redirecting to the user's active server</td>
+</tr>
+<tr>
+<td>Auth</td>
+<td>OAuth2 authorization_code, bearer JWT</td>
+<td>HTTP Digest: username = hub serial, password = API key</td>
+</tr>
+<tr>
+<td>Credentials</td>
+<td><code>client_id</code>/<code>client_secret</code> issued by manual myenergi partner registration</td>
+<td>Self-served by the user at myaccount.myenergi.com</td>
+</tr>
+<tr>
+<td>Protocol</td>
+<td>REST/JSON</td>
+<td>CGI-style GET endpoints returning JSON</td>
+</tr>
+<tr>
+<td>Eddi</td>
+<td>Documented as "support currently in development"</td>
+<td>Fully supported</td>
+</tr>
+<tr>
+<td>Token life</td>
+<td>Access token 1 day, refresh token 1 year</td>
+<td>n/a</td>
+</tr>
+<tr>
+<td>Reference</td>
+<td><a href="https://api-docs.s18.myenergi.net/">https://api-docs.s18.myenergi.net/</a></td>
+<td><code>pymyenergi</code>, as used by <code>cjne/ha-myenergi</code></td>
+</tr>
+</tbody>
+</table>
+<p>The direct API is the only one a self-hosted Home Assistant user can set up today. The
+3rd-party API is the only one usable at scale by Predbat.com, and it is the officially
+supported route. Supporting only one of them would strand one of the two audiences.</p>
+<h3 id="21-direct-api-endpoints-used">2.1 Direct API endpoints used</h3>
+<p>The hub redirects clients to a per-account server. <code>director.myenergi.net</code> returns an
+<code>X_MYENERGI-asn</code> response header naming the real host (e.g. <code>s18.myenergi.net</code>); all
+subsequent requests go there, and the value is re-read on every response so a server
+migration is followed automatically.</p>
+<table>
+<thead>
+<tr>
+<th>Purpose</th>
+<th>Endpoint</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>All device status</td>
+<td><code>GET /cgi-jstatus-*</code></td>
+</tr>
+<tr>
+<td>Single device status</td>
+<td><code>GET /cgi-jstatus-{P}{serial}</code> where <code>{P}</code> is <code>Z</code> or <code>E</code></td>
+</tr>
+<tr>
+<td>Day history (hourly)</td>
+<td><code>GET /cgi-jdayhour-{P}{serial}-{yyyy}-{m}-{d}-{hour}-{hours}</code></td>
+</tr>
+<tr>
+<td>Zappi manual boost</td>
+<td><code>GET /cgi-zappi-mode-Z{serial}-0-10-{kwh}-0000</code></td>
+</tr>
+<tr>
+<td>Zappi smart boost</td>
+<td><code>GET /cgi-zappi-mode-Z{serial}-0-11-{kwh}-{hhmm}</code></td>
+</tr>
+<tr>
+<td>Zappi cancel boost</td>
+<td><code>GET /cgi-zappi-mode-Z{serial}-0-2-0-0000</code></td>
+</tr>
+<tr>
+<td>Zappi set mode</td>
+<td><code>GET /cgi-zappi-mode-Z{serial}-{mode}-0-0-0000</code> (stub)</td>
+</tr>
+<tr>
+<td>Eddi boost</td>
+<td><code>GET /cgi-eddi-boost-E{serial}-10-{target}-{minutes}</code></td>
+</tr>
+<tr>
+<td>Eddi cancel boost</td>
+<td><code>GET /cgi-eddi-boost-E{serial}-1-{target}-0</code></td>
+</tr>
+<tr>
+<td>Eddi set mode</td>
+<td><code>GET /cgi-eddi-mode-E{serial}-{0\|1}</code> (stub)</td>
+</tr>
+</tbody>
+</table>
+<p>Boost targets are <code>heater1: 1</code>, <code>heater2: 2</code>, <code>relay1: 11</code>, <code>relay2: 12</code>. Only <code>heater1</code>
+is used in this release.</p>
+<p>Zappi charge modes are indexed <code>["None", "Fast", "Eco", "Eco+", "Stopped"]</code>; Zappi states
+are <code>["Unkn0", "Paused", "Unkn2", "Charging", "Boosting", "Completed"]</code>; Eddi states are
+<code>["Unkn0", "Paused", "Unkn2", "Diverting", "Boosting", "Max temp reached", "Stopped"]</code>.</p>
+<p>Relevant raw JSON fields: <code>sno</code> serial, <code>sta</code> state index, <code>zmo</code> Zappi charge mode index,
+<code>pst</code> plug state, <code>che</code> session energy in kWh, <code>div</code> diverted power in W, <code>grd</code> grid power,
+<code>gen</code> generated power, <code>vol</code> voltage in decivolts, <code>frq</code> frequency, <code>rbt</code> Eddi remaining
+boost seconds, <code>bsm</code> Eddi boosting flag, <code>tp1</code>/<code>tp2</code> Eddi temperatures, <code>hno</code> Eddi active
+heater.</p>
+<h3 id="22-3rd-party-api-endpoints-used">2.2 3rd-party API endpoints used</h3>
+<table>
+<thead>
+<tr>
+<th>Purpose</th>
+<th>Endpoint</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Token exchange / refresh</td>
+<td><code>POST https://auth.s18.myenergi.net/oauth2/token</code></td>
+</tr>
+<tr>
+<td>Device list</td>
+<td><code>GET /devices</code></td>
+</tr>
+<tr>
+<td>Device status</td>
+<td><code>GET /devices/{id}/status</code></td>
+</tr>
+<tr>
+<td>Send boost</td>
+<td><code>POST /devices/{id}/boost</code></td>
+</tr>
+<tr>
+<td>Cancel boost</td>
+<td><code>DELETE /devices/{id}/boost</code></td>
+</tr>
+<tr>
+<td>Set mode</td>
+<td><code>POST /devices/{id}/mode</code> (stub)</td>
+</tr>
+<tr>
+<td>History</td>
+<td><code>GET /devices/{id}/history</code> (stub)</td>
+</tr>
+</tbody>
+</table>
+<p>Device IDs are the device class prefix plus serial, e.g. <code>ZA12345678</code>, <code>ED12345678</code>.</p>
+<p>Zappi boost body is <code>{"mode": "normal", "parameters": {"energy": &lt;1-99 kWh&gt;}}</code>, or
+<code>{"mode": "smart", "parameters": {"energy": N, "targetTime": "&lt;ISO-8601&gt;"}}</code>. Eddi boost
+body is <code>{"durationMinutes": &lt;0-240&gt;}</code>. Sending Zappi fields to an Eddi (or the reverse)
+is rejected with a 400, so the transport selects the body by device class.</p>
+<p>Status fields used: <code>deviceClass</code>, <code>status</code>, <code>state</code>, <code>deviceStatus</code>, <code>supplyMode</code>,
+<code>pilotState</code>, <code>boostCharge</code> (Zappi) / <code>boostActive</code> (Eddi), <code>actualPower</code>, <code>gridPower</code>,
+<code>genPower</code>, <code>sessionEnergy</code>, <code>energyDelivered</code>, <code>timestamp</code>. Power is in kW and energy in
+kWh, both of which are scaled to Predbat's expected units on normalisation.</p>
+<h2 id="3-architecture">3. Architecture</h2>
+<p>A single new module <code>apps/predbat/myenergi.py</code>, registered as component <code>myenergi</code>, built
+around a transport abstraction so that everything above the wire format is written once.</p>
+<pre><code>MyEnergiAPI(ComponentBase, OAuthMixin)     # lifecycle, polling, publishing, auto-config, controls
+  └── transport: MyEnergiTransport         # abstract
+        ├── MyEnergiDirectTransport        # digest auth, ASN redirect, /cgi-* endpoints
+        └── MyEnergiCloudTransport         # bearer JWT via OAuthMixin, REST endpoints
+</code></pre>
+<p><code>MyEnergiTransport</code> is the only place that knows about wire formats. It exposes:</p>
+<pre><code class="language-python">async def connect(self) -&gt; bool
+async def fetch_devices(self) -&gt; list[MyEnergiDevice]
+async def send_boost(self, device, amount, target_time=None) -&gt; bool
+async def cancel_boost(self, device) -&gt; bool
+async def set_mode(self, device, mode) -&gt; bool          # stub
+async def set_priority(self, device, priority) -&gt; bool  # stub
+async def set_min_green_level(self, device, level)      # stub
+async def get_schedule(self, device)                    # stub
+async def set_schedule(self, device, schedule)          # stub
+</code></pre>
+<p>Stub methods log a single "not implemented in this release" warning and return <code>False</code>.
+They exist so the interface is settled and the follow-up work is additive.</p>
+<h3 id="31-normalised-device-model">3.1 Normalised device model</h3>
+<p>Both transports return the same dataclass, so the publishing and control layers never
+branch on transport:</p>
+<pre><code class="language-python">@dataclass
+class MyEnergiDevice:
+    device_id: str              # &quot;Z12345678&quot; direct, &quot;ZA12345678&quot; cloud
+    kind: str                   # &quot;zappi&quot; | &quot;eddi&quot;
+    serial: str
+    name: str
+    online: bool
+    status: str                 # normalised: charging / boosting / diverting / paused / ...
+    mode: str                   # zappi charge mode; eddi operating mode
+    plug_status: str            # zappi only, &quot;&quot; for eddi
+    power_w: float              # charging (zappi) or diverted (eddi) power
+    grid_power_w: float
+    generation_w: float
+    voltage: float
+    session_energy_kwh: float
+    boost_active: bool
+    boost_remaining_mins: int
+    temp_1: float | None        # eddi only
+    temp_2: float | None        # eddi only
+</code></pre>
+<p>Normalisation is two pure functions, <code>normalise_direct_device(raw, kind)</code> and
+<code>normalise_cloud_device(raw, meta)</code>, testable without any network or component fixture.</p>
+<h3 id="32-transport-selection">3.2 Transport selection</h3>
+<p><code>myenergi_auth_method</code> selects the transport: <code>direct</code> (default) or <code>oauth</code>. The
+component validates at initialise time that the credentials for the chosen method are
+present, and logs an actionable error naming the missing keys otherwise.</p>
+<p>The cloud transport reuses <code>oauth_mixin.py</code> exactly as <code>fox.py</code>, <code>deye.py</code> and <code>solis.py</code>
+do: the access token arrives via <code>myenergi_key</code>, refresh is delegated to the
+oauth-refresh edge function keyed by <code>myenergi_token_hash</code>, and Predbat never holds a
+<code>client_secret</code>. <code>provider_name</code> is <code>"myenergi"</code>. Both refresh paths are wired -
+<code>check_and_refresh_oauth_token()</code> proactively before each poll for a token that has
+reached its stated expiry, and <code>handle_oauth_401()</code> reactively when a poll comes back
+401, with the poll retried once behind it, for a token revoked before then.</p>
+<h2 id="4-configuration">4. Configuration</h2>
+<h3 id="41-component_list-entry-componentspy">4.1 <code>COMPONENT_LIST</code> entry (<code>components.py</code>)</h3>
+<pre><code class="language-python">&quot;myenergi&quot;: {
+    &quot;class&quot;: MyEnergiAPI,
+    &quot;name&quot;: &quot;myenergi&quot;,
+    &quot;event_filter&quot;: &quot;predbat_myenergi_&quot;,
+    &quot;args&quot;: {
+        &quot;auth_method&quot;:      {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_auth_method&quot;, &quot;default&quot;: &quot;direct&quot;},
+        &quot;hub_serial&quot;:       {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_hub_serial&quot;},
+        &quot;api_key&quot;:          {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_api_key&quot;},
+        &quot;key&quot;:              {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_key&quot;},
+        &quot;token_expires_at&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_token_expires_at&quot;},
+        &quot;token_hash&quot;:       {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_token_hash&quot;},
+        &quot;automatic&quot;:        {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_automatic&quot;, &quot;default&quot;: True},
+        &quot;enable_controls&quot;:  {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_enable_controls&quot;, &quot;default&quot;: True},
+        &quot;poll_seconds&quot;:     {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_poll_seconds&quot;, &quot;default&quot;: 60},
+    },
+    &quot;required_or&quot;: [&quot;api_key&quot;, &quot;key&quot;],
+    &quot;phase&quot;: 1,
+    &quot;can_restart&quot;: True,
+},
+</code></pre>
+<p><code>required_or</code> means the component only starts when the user has supplied credentials for
+one transport or the other, matching how <code>axle</code> gates itself.</p>
+<h3 id="42-apps_schema-additions-configpy">4.2 <code>APPS_SCHEMA</code> additions (<code>config.py</code>)</h3>
+<pre><code class="language-python">&quot;myenergi_auth_method&quot;:      {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+&quot;myenergi_hub_serial&quot;:       {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+&quot;myenergi_api_key&quot;:          {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+&quot;myenergi_key&quot;:              {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+&quot;myenergi_token_expires_at&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+&quot;myenergi_token_hash&quot;:       {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+&quot;myenergi_automatic&quot;:        {&quot;type&quot;: &quot;boolean&quot;},
+&quot;myenergi_enable_controls&quot;:  {&quot;type&quot;: &quot;boolean&quot;},
+&quot;myenergi_poll_seconds&quot;:     {&quot;type&quot;: &quot;integer&quot;, &quot;zero&quot;: False},
+</code></pre>
+<h3 id="43-appsyaml-examples">4.3 apps.yaml examples</h3>
+<p>Direct, the default for self-hosted users:</p>
+<pre><code class="language-yaml">myenergi_hub_serial: '12345678'
+myenergi_api_key: 'your-api-key-from-myaccount-myenergi-com'
+</code></pre>
+<p>Cloud OAuth:</p>
+<pre><code class="language-yaml">myenergi_auth_method: 'oauth'
+myenergi_key: '&lt;access token&gt;'
+myenergi_token_hash: '&lt;token hash&gt;'
+myenergi_token_expires_at: '2026-09-01T00:00:00Z'
+</code></pre>
+<h2 id="5-published-entities">5. Published entities</h2>
+<p>Entity names carry the serial so multi-device sites work without collisions, following
+the <code>gecloud</code> per-device naming convention.</p>
+<p>Zappi, per device:</p>
+<table>
+<thead>
+<tr>
+<th>Entity</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sensor.predbat_myenergi_zappi_{sn}_status</code></td>
+<td>normalised status string</td>
+</tr>
+<tr>
+<td><code>sensor.predbat_myenergi_zappi_{sn}_mode</code></td>
+<td>Fast / Eco / Eco+ / Stopped</td>
+</tr>
+<tr>
+<td><code>sensor.predbat_myenergi_zappi_{sn}_plug_status</code></td>
+<td>EV connection state</td>
+</tr>
+<tr>
+<td><code>sensor.predbat_myenergi_zappi_{sn}_power</code></td>
+<td>W, <code>device_class: power</code></td>
+</tr>
+<tr>
+<td><code>sensor.predbat_myenergi_zappi_{sn}_session_energy</code></td>
+<td>kWh, <code>device_class: energy</code></td>
+</tr>
+<tr>
+<td><code>binary_sensor.predbat_myenergi_zappi_{sn}_charging</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>switch.predbat_myenergi_zappi_{sn}_boost</code></td>
+<td>on = send boost, off = cancel boost</td>
+</tr>
+<tr>
+<td><code>number.predbat_myenergi_zappi_{sn}_boost_energy</code></td>
+<td>kWh, 1–99, default 10</td>
+</tr>
+</tbody>
+</table>
+<p>Eddi, per device:</p>
+<table>
+<thead>
+<tr>
+<th>Entity</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sensor.predbat_myenergi_eddi_{sn}_status</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>sensor.predbat_myenergi_eddi_{sn}_power</code></td>
+<td>W</td>
+</tr>
+<tr>
+<td><code>sensor.predbat_myenergi_eddi_{sn}_session_energy</code></td>
+<td>kWh</td>
+</tr>
+<tr>
+<td><code>sensor.predbat_myenergi_eddi_{sn}_temp_1</code> / <code>_temp_2</code></td>
+<td>°C, omitted when unavailable</td>
+</tr>
+<tr>
+<td><code>switch.predbat_myenergi_eddi_{sn}_boost</code></td>
+<td>on = send boost, off = cancel boost</td>
+</tr>
+<tr>
+<td><code>number.predbat_myenergi_eddi_{sn}_boost_minutes</code></td>
+<td>minutes, 0–240, default 60</td>
+</tr>
+</tbody>
+</table>
+<p>There is deliberately no separate <code>_boosting</code> binary sensor: the boost switch's own
+state is derived from the device's <code>boost_active</code>, so a second entity would only
+duplicate it.</p>
+<p>All are published through <code>dashboard_item(..., app="myenergi")</code> with an attribute table
+in the style of <code>ohme_attribute_table</code>.</p>
+<h2 id="6-automatic-configuration">6. Automatic configuration</h2>
+<p>Gated on <code>myenergi_automatic</code> (default true), run once after the first successful poll.</p>
+<ul>
+<li>Zappi session energy sensors → <code>car_charging_energy</code>, as a list when more than one
+  Zappi is present. <code>minute_data_import_export</code> accepts a list and sums the entities.</li>
+<li>Zappi plug status sensors → <code>car_charging_planned</code>, as a list, which is indexed per
+  car so entry N is the Nth Zappi by serial. The regex the apps.yaml templates ship for
+  this key targets the third-party <code>ha-myenergi</code> integration's entity names, which do
+  not match the ones this component publishes, so without this the key fails to resolve
+  and Predbat silently falls back to the <code>car_charging_threshold</code> heuristic. The Zappi
+  pilot states <code>C1</code>/<code>D1</code> normalise to <code>EV ready to charge</code>, which the templates'
+  <code>car_charging_planned_response</code> lists did not carry and now do.</li>
+<li>Eddi session energy sensor → <code>iboost_energy_today</code>, first Eddi only.</li>
+</ul>
+<p>All use <code>set_arg_auto()</code> so that an explicit apps.yaml value is reported rather than
+silently overwritten.</p>
+<p>Predbat reads these back from Home Assistant history as incrementing counters. Session
+energy resets to zero at the end of each session, which <code>get_from_incrementing</code> handles
+by clamping negative deltas to zero (<code>fetch.py:574</code>).</p>
+<h3 id="61-known-limitation">6.1 Known limitation</h3>
+<p>Session resets themselves are handled correctly. <code>iboost_energy_today</code> is read at
+<code>fetch.py:782</code> as <code>abs(value[0] - value[minutes_now])</code>, but the series it reads has
+already been through <code>minute_data_load(..., clean_increment=True)</code> →
+<code>clean_incrementing_reverse()</code> (<code>utils.py:716-744</code>), which rebases the counter whenever
+it detects a reset. A day of several Eddi sessions therefore totals correctly, and the
+same holds for <code>car_charging_energy</code>.</p>
+<p>The residual limitation is narrower, and applies to both keys equally because the loss is
+in the shared cumulative series. <code>minute_data()</code> only propagates a fall as a reset when it
+is near midnight or at least 1.0 kWh (<code>utils.py:565</code>); anything smaller is interpolated
+over as a dip in the data before <code>clean_incrementing_reverse()</code> (<code>utils.py:740</code>) ever sees
+it. A session ending below roughly 1 kWh is therefore under-counted, and an intervening
+zero reading does not rescue it — the dip is smoothed away first. Measured against
+Predbat's own <code>minute_data</code>, two 0.6 kWh sessions
+in a day total 0.600 kWh rather than 1.20 kWh, while two sessions of 2.0 and 1.5 kWh total
+correctly. This is accepted for this release: it is a fraction of a kWh, and the planner
+is driven by the larger sessions. The fix, if it is wanted later, is to derive the sensor
+from the day-history endpoint (<code>/cgi-jdayhour-E{sn}-...</code> or <code>GET /devices/{id}/history</code>),
+which both transports already reach. This is recorded in the documentation so the
+behaviour is not mistaken for a bug.</p>
+<h2 id="7-controls">7. Controls</h2>
+<p>The boost switch is a momentary-style control, following <code>ohme.py</code>'s <code>_approve_charge</code>
+pattern: <code>turn_on</code> sends a boost, <code>turn_off</code> cancels it, and the published state is
+re-derived from the device's own <code>boost_active</code> on the next poll rather than being held
+locally. That way a boost started or stopped from the myenergi app is reflected correctly.</p>
+<p>Events arrive via <code>switch_event</code> / <code>number_event</code> and are queued onto <code>self.queued_events</code>
+for the run loop rather than being actioned inside the event callback, exactly as
+<code>ohme.py</code> does, so that API calls never run on the event thread.</p>
+<p>Boost amount comes from the companion number entity, so the switch itself carries no
+parameters. Sending a Zappi boost while the charger is in Fast or Stopped mode is
+rejected by the API; the component checks the mode first and logs a clear warning instead
+of issuing a call it knows will fail.</p>
+<p>All controls are gated on <code>myenergi_enable_controls</code> (default true), so a user can run the
+component in monitor-only mode.</p>
+<h3 id="71-stubbed-controls">7.1 Stubbed controls</h3>
+<p>Zappi mode select, priority, minimum green level, phase setting, lock settings, schedules
+and super-schedules; Eddi mode, priority and heater priority; all Libbi support. Each is a
+transport method that logs once and returns <code>False</code>, plus a line in the documentation
+saying it is not yet implemented.</p>
+<h2 id="8-polling-and-error-handling">8. Polling and error handling</h2>
+<p><code>ComponentBase.start()</code> calls <code>run(seconds, first)</code> on a fixed 60 second cadence once
+started, so <code>myenergi_poll_seconds</code> (default 60) is rounded up to the nearest multiple of
+60 and enforced inside <code>run()</code> by a <code>seconds % interval == 0</code> guard. It exists to let a
+user back off polling on a multi-device site, not to poll faster than the base loop.</p>
+<p>The direct transport fetches all devices in a single <code>/cgi-jstatus-*</code> call. The cloud
+transport caches <code>GET /devices</code> and refreshes it every 30 minutes, polling
+<code>/devices/{id}/status</code> per device in between.</p>
+<ul>
+<li>Digest auth failures and HTTP 401 are reported as configuration errors, not retried
+  tightly; <code>ComponentBase</code> already applies exponential startup backoff.</li>
+<li>A missing <code>X_MYENERGI-asn</code> header on the direct transport means bad credentials, and is
+  reported as such rather than as a transport failure.</li>
+<li><code>update_success_timestamp()</code> is called on each successful poll so component health
+  monitoring works.</li>
+<li>API calls are wrapped with <code>record_api_call</code> from <code>predbat_metrics</code>, as the other
+  components do.</li>
+<li>The last good reading is retained when a poll returns nothing, so a transient failure
+  does not publish zeros into the energy sensors that feed <code>car_charging_energy</code>.</li>
+</ul>
+<h2 id="9-command-line-test-interface">9. Command line test interface</h2>
+<p><code>python3 myenergi.py</code> with <code>argparse</code>, following <code>fox.py</code>:</p>
+<pre><code>--hub-serial SERIAL --api-key KEY     direct transport
+--token KEY [--token-hash H]          cloud transport
+--boost {zappi,eddi} --amount N       send a boost to the first matching device
+--cancel-boost {zappi,eddi}           cancel a boost
+--raw                                 dump the raw API response
+</code></pre>
+<p>Default behaviour with credentials only is to connect, run one poll, and print the
+normalised device table. Uses <code>MockBase</code> from <code>mock_base.py</code>, is marked
+<code># pragma: no cover</code>, and never requires a running Predbat.</p>
+<h2 id="10-testing">10. Testing</h2>
+<p>New file <code>apps/predbat/tests/test_myenergi.py</code>, exporting <code>test_myenergi()</code> and registered
+in <code>TEST_REGISTRY</code> in <code>unit_test.py</code>.</p>
+<p>Coverage:</p>
+<ol>
+<li><strong>Normalisation</strong> — direct and cloud raw payloads for Zappi and Eddi map to identical
+   <code>MyEnergiDevice</code> values, including unit conversion (kW→W, decivolts→volts) and the
+   <code>sta</code>/<code>zmo</code> index lookups. Out-of-range indices fall back safely rather than raising.</li>
+<li><strong>Direct transport</strong> — ASN redirect is followed and re-read; a missing <code>X_MYENERGI-asn</code>
+   header is treated as an auth failure; boost and cancel produce the exact expected URLs
+   for both device kinds.</li>
+<li><strong>Cloud transport</strong> — correct boost body per device class; Eddi never receives <code>mode</code>
+   or <code>parameters</code>, Zappi never receives <code>durationMinutes</code>; bearer header is set.</li>
+<li><strong>Transport selection</strong> — <code>auth_method</code> picks the right class; missing credentials
+   produce a clear error and no start.</li>
+<li><strong>Publishing</strong> — entity names, units and device classes for a two-Zappi one-Eddi site;
+   temperatures omitted when unavailable.</li>
+<li><strong>Auto-config</strong> — <code>car_charging_energy</code> becomes a list for multiple Zappis;
+   <code>iboost_energy_today</code> is set for the Eddi; nothing is set when <code>myenergi_automatic</code> is
+   false; <code>set_arg_auto</code> is used.</li>
+<li><strong>Controls</strong> — switch and number events queue rather than calling inline; boost uses
+   the number entity's value; a Zappi boost in Fast mode is refused with a warning and no
+   API call; controls do nothing when <code>myenergi_enable_controls</code> is false.</li>
+<li><strong>Stubs</strong> — every stubbed method returns <code>False</code> and logs, without raising.</li>
+<li><strong>Error handling</strong> — a failed poll retains the previous reading and does not publish
+   zeros; HTTP errors increment the error count without killing the component.</li>
+</ol>
+<p>Tests use <code>unittest.mock.AsyncMock</code> against the transport's HTTP layer, following
+<code>test_ohme.py</code> and <code>test_fox_api.py</code>. No network access.</p>
+<p>Per the repository's shared-fixture constraint, the tests must not leak state into the
+shared <code>my_predbat</code> fixture; the component is constructed against <code>MockBase</code> wherever a
+full Predbat instance is not required.</p>
+<h2 id="11-documentation">11. Documentation</h2>
+<ul>
+<li><code>docs/components.md</code> — a <code>### myenergi (myenergi)</code> section matching the existing
+  layout: what it does, when to enable, configuration options, how to get an API key
+  from myaccount.myenergi.com, the published entities, the reserved controls, and the
+  small-session limitation from section 6.1.</li>
+<li><code>docs/apps-yaml.md</code> — the new <code>myenergi_*</code> keys.</li>
+<li><code>.cspell/custom-dictionary-workspace.txt</code> — <code>libbi</code>, <code>jstatus</code>, <code>jdayhour</code>, <code>harvi</code>
+  and <code>asn</code>. <code>Eddi</code>, <code>myenergi</code> and <code>zappi</code> are already present.</li>
+</ul>
+<h2 id="12-out-of-scope">12. Out of scope</h2>
+<p>Libbi battery support; webhooks; charge schedules and super-schedules; managed mode;
+cloud configuration endpoints; charge-session history import; Zappi mode control; Eddi
+heater 2 and relay targets; myenergi as a Predbat inverter or battery source.</p>
+<h2 id="13-risks">13. Risks</h2>
+<ul>
+<li><strong>Partner registration.</strong> The cloud transport cannot be tested end to end until
+  myenergi issues a <code>client_id</code>/<code>client_secret</code>. Mitigation: the transport is written
+  against the published OpenAPI schema and unit-tested against recorded payloads; the
+  direct transport is the default so the release is useful regardless.</li>
+<li><strong>Eddi on the 3rd-party API.</strong> myenergi document Eddi support there as "in development",
+  so cloud-transport Eddi behaviour may change. Mitigation: normalisation is centralised,
+  and the direct transport covers Eddi fully today.</li>
+<li><strong>Undocumented direct API.</strong> The <code>/cgi-*</code> endpoints are not officially supported and
+  could change. Mitigation: they are stable in practice and widely used by
+  <code>pymyenergi</code>/<code>ha-myenergi</code>; failures degrade to a logged error, never a crash.</li>
+<li><strong>Session-energy semantics.</strong> Covered in section 6.1.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
