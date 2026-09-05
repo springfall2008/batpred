@@ -2374,7 +2374,7 @@ This may be useful with GivTCP if you have time sync errors or lose the REST ser
 The auto_restart itself is a list of commands to run to trigger a restart.
 
 - The **shell** command will call a 'sh' shell and can be used to delete files and suchlike.
-- The **service** command is used to call a service and can contain arguments of **app** and/or **entity_id**. The configuration below is for GivTCP v3.
+- The **service** command is used to call a service and can contain arguments of **app** (or legacy **addon**) and/or **entity_id**. The configuration below is for GivTCP v3.
 
 ```yaml
   auto_restart:
