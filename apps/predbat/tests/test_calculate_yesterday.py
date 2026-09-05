@@ -1185,6 +1185,12 @@ def _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed):
         if len(captured["export_window_best"]) != len(captured["export_limits_best"]):
             print("ERROR: rebuilt {} export windows but {} export limits - they must stay in step".format(len(captured["export_window_best"]), len(captured["export_limits_best"])))
             failed = True
+        # A window is only rebuilt if it covers real time. Asserting the list is merely non-empty
+        # let a list of zero-width windows count as a fix for years - see the dedicated test below.
+        empty = [window for window in captured["export_window_best"] if window["start"] >= window["end"]]
+        if empty:
+            print("ERROR: {} rebuilt export windows cover no time at all, e.g. {!r}".format(len(empty), empty[0]))
+            failed = True
 
     _restore_methods(my_predbat, original_run_pred)
     my_predbat.savings_last_updated = None
@@ -1591,6 +1597,169 @@ def _test_brief_edge_blip_is_not_counted(my_predbat, failed):
     return failed
 
 
+def _test_edge_only_state_still_gets_real_window_bounds(my_predbat, failed):
+    """A state that holds a slot edge and nothing else must still get real window bounds (#4872).
+
+    The dominant-state tally trusts a slot's first/last 5 minutes when they hold one state
+    throughout, but the scan that works out where the window starts and ends only ever walked the
+    slot's interior minutes. A state living *only* in a trusted edge was therefore counted by the
+    tally - producing a charge or export window - while the scan never saw it, so the window was
+    appended with start/end still None. in_charge_window() then compared an int against None:
+
+        TypeError: '>=' not supported between instances of 'int' and 'NoneType'
+
+    which took down the whole update_pred() cycle, not just the History view. Both edges are
+    covered here: one slot charges for exactly its first 5 minutes, a later one exports for exactly
+    its last 5 minutes, and each must be rebuilt with bounds that lie inside its own slot.
+    """
+    print("calculate_yesterday: Test - a state holding only a slot edge still gets real window bounds (#4872)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    charge_slot_start = 1200
+    export_slot_start = 1260
+    start = now_utc - timedelta(minutes=1800)
+    status_points = []
+    for step in range(0, 1800, 1):
+        state = "Demand"
+        if charge_slot_start <= step < charge_slot_start + 5:
+            state = "Charging"
+        elif export_slot_start + 25 <= step < export_slot_start + 30:
+            state = "Exporting"
+        stamp = start + timedelta(minutes=step)
+        status_points.append({"state": state, "last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S+00:00"), "attributes": {"p/kWh": "0.0"}})
+    status_hist = [status_points]
+
+    def _history_with_edge_only_states(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        return ("", "{}")
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_edge_only_states
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    for label, windows, slot_start in (
+        ("charge", captured.get("charge_window_best") or [], charge_slot_start),
+        ("export", captured.get("export_window_best") or [], export_slot_start),
+    ):
+        if len(windows) != 1:
+            print("ERROR: a state holding a full slot edge should rebuild exactly one {} window, got {}".format(label, windows))
+            failed = True
+            continue
+        window = windows[0]
+        if window["start"] is None or window["end"] is None:
+            print("ERROR: the {} window was rebuilt with unset bounds {!r}, which crashes in_charge_window()".format(label, window))
+            failed = True
+        elif not (window["start"] < window["end"]):
+            print("ERROR: the {} window bounds are not ordered: {!r}".format(label, window))
+            failed = True
+
+    # The bounds must also survive the real in_charge_window()/in_window scan rather than merely
+    # being non-None, since that is where the reported crash landed.
+    charge_windows = captured.get("charge_window_best") or []
+    if charge_windows and charge_windows[0]["start"] is not None:
+        if my_predbat.in_charge_window(charge_windows[0:1], charge_windows[0]["start"]) != 0:
+            print("ERROR: the rebuilt charge window does not contain its own start minute: {!r}".format(charge_windows[0]))
+            failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_cross_charging_export_window_covers_the_slot(my_predbat, failed):
+    """A cross-charging slot's export window must cover the slot, not collapse to zero width (#4466).
+
+    Cross-charging charges and exports at the same time, so calculate_yesterday() detects both sides
+    at the same minute of the slot. The charge/export handoff - "whichever side starts second ends
+    the one that started first" - then closed the export window at its own start minute, giving
+    {"start": N, "end": N}. Such a window is in the list but covers no time: in_charge_window()'s
+    "start <= minute < end" can never be true for it, so it renders as nothing and contributes
+    nothing to the simulated cost. The export half of cross-charging was therefore still missing from
+    the History view even after #4466 restored it to the list, because
+    _test_cross_charging_reconstructed_as_both_windows only asserted the list was non-empty.
+
+    Starting at the same minute is an overlap, not a handoff: both sides must run the whole slot.
+    """
+    print("calculate_yesterday: Test - a Cross-charging slot's export window covers the whole slot (#4466)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    status_hist = _make_constant_history("Cross-charging", now_utc)
+
+    def _history_with_cross_charging(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        return ("", "{}")
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_cross_charging
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    export_windows = captured.get("export_window_best") or []
+    charge_windows = captured.get("charge_window_best") or []
+    interval = my_predbat.plan_interval_minutes
+
+    if not export_windows:
+        print("ERROR: a Cross-charging history should rebuild export windows, got none")
+        failed = True
+    else:
+        # Cross-charging holds every minute, so each side should cover a full slot, and the two
+        # sides should line up with each other rather than one being a sliver of the other.
+        wrong = [window for window in export_windows if (window["end"] - window["start"]) != interval]
+        if wrong:
+            print("ERROR: {} of {} Cross-charging export windows do not cover their whole {}-minute slot, e.g. {!r}".format(len(wrong), len(export_windows), interval, wrong[0]))
+            failed = True
+        if charge_windows and export_windows[0] != charge_windows[0]:
+            print("ERROR: Cross-charging runs both sides over the same minutes, but the first export window {!r} does not match the first charge window {!r}".format(export_windows[0], charge_windows[0]))
+            failed = True
+
+    # A zero-width window is invisible to the scan that renders the plan, which is what made the
+    # missing export half so hard to spot - check through the real lookup, not just the bounds.
+    if export_windows:
+        window = export_windows[0]
+        if my_predbat.in_charge_window(export_windows[0:1], window["start"]) != 0:
+            print("ERROR: the rebuilt Cross-charging export window {!r} is invisible to in_charge_window()".format(window))
+            failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
 def _test_missing_cost_today_history(my_predbat, failed):
     """Test: no recorded history for predbat.cost_today (issue #4583).
 
@@ -1763,5 +1932,7 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_short_export_inside_a_freeze_slot(my_predbat, failed)
     failed = _test_full_edge_state_counts_toward_the_dominant_tally(my_predbat, failed)
     failed = _test_brief_edge_blip_is_not_counted(my_predbat, failed)
+    failed = _test_edge_only_state_still_gets_real_window_bounds(my_predbat, failed)
+    failed = _test_cross_charging_export_window_covers_the_slot(my_predbat, failed)
 
     return failed
