@@ -19,6 +19,16 @@ battery may serve local load; it does not force grid export. The legacy endpoint
 power field at all, so forced-export behaviour there remains unverified and cannot be
 requested at a particular wattage. The private VPP control used by providers is unavailable.
 
+EXPORT CANNOT BE CONTROLLED (GH#4701). The Open API has no forced-export, working-mode
+or dispatch endpoint, and AlphaESS document ctrDis as a discharge PERMISSION window:
+inside it the system runs in self-consumption, outside it the battery may only charge.
+So a programmed export window exports nothing beyond genuine solar surplus. Freeze
+Export is equally undeliverable - it needs the battery stopped from charging off solar,
+and gridCharge only gates timed GRID charging, so the payload built for Freeze Export is
+identical to the Demand mode one. Users should run predbat_mode 'Control charge'. The
+builders below are left intact deliberately: they are correct for what the API accepts,
+and forced export is available on the same hardware over local Modbus.
+
 Auth is stateless: every request carries appId, timeStamp and
 sign = sha512(appId + appSecret + timeStamp). There is no token and no refresh, so the
 self-hosted add-on and the Predbat.com SaaS path share one code path.
