@@ -25,7 +25,7 @@ def test_inverter_dump_does_not_reach_the_base_object(my_predbat=None):
     """
     No inverter attribute may drag the PredBat object into the debug yaml.
 
-    Inverter.givtcp (the GivTCP REST client) keeps a back-reference to the base object, and
+    Inverter.givtcp (the GivTCP REST client) kept a back-reference to the base object, and
     create_debug_yaml()'s inverter walk only skipped keys literally named "base*". yaml.dump()
     then followed inverter.givtcp.base into the whole PredBat graph, which either killed the
     dump on the first unpicklable thing it met - an in-flight coroutine on a live system,
@@ -33,8 +33,11 @@ def test_inverter_dump_does_not_reach_the_base_object(my_predbat=None):
     token and every other member is_debug_excluded_key() deliberately drops into the file
     users attach to public bug reports.
 
-    Asserted as an invariant over every attribute rather than against "givtcp" by name, so the
-    next component client attached to an Inverter is caught here too.
+    Inverter has since stopped holding a REST client at all (GivTCPComponent owns it), so the
+    original offender is gone. The guard and this test stay: the hazard is any helper object
+    with a back-reference, not that one attribute, which is why both are expressed over every
+    attribute rather than against "givtcp" by name. One is planted below so the test is
+    exercising the guard rather than passing because there is nothing left to catch.
 
     Mutation check: removing the back-reference guard from create_debug_yaml() fails this.
     """
@@ -45,11 +48,14 @@ def test_inverter_dump_does_not_reach_the_base_object(my_predbat=None):
     try:
         inverter = _plant_inverter(my_predbat)
 
-        # The client that started this: present, and genuinely holding the base object, so the
-        # test cannot quietly pass because the attribute went away.
-        if getattr(inverter, "givtcp", None) is None or inverter.givtcp.base is not my_predbat:
-            print("ERROR: Inverter.givtcp no longer holds a back-reference - update this test's premise")
-            failed = True
+        # Stand-in for the next component client someone attaches to an Inverter
+        class _ClientWithBackReference:
+            """A helper object holding the base, exactly as GivTCPRest used to."""
+
+            def __init__(self, base):
+                self.base = base
+
+        inverter.some_component_client = _ClientWithBackReference(my_predbat)
 
         text = my_predbat.create_debug_yaml(write_file=False)
         debug = yaml.unsafe_load(text)
@@ -61,7 +67,7 @@ def test_inverter_dump_does_not_reach_the_base_object(my_predbat=None):
                 failed = True
 
         # The dump is still worth having - the plain data fields survive
-        for key in ("id", "soc_max", "rest_v3"):
+        for key in ("id", "soc_max", "inverter_type"):
             if key not in dumped:
                 print("ERROR: the guard dropped '{}', which is ordinary debug data".format(key))
                 failed = True
@@ -77,12 +83,12 @@ def test_debug_yaml_survives_an_unpicklable_member(my_predbat=None):
     """
     An unpicklable object behind an excluded member must not take the debug dump down with it.
 
-    This is the live failure: "Warning: Failed to capture debug history snapshot: cannot pickle
+    This was the live failure: "Warning: Failed to capture debug history snapshot: cannot pickle
     'coroutine' object" every capture interval, with switch.predbat_debug_enable and the web UI's
     debug download broken the same way. The coroutine is ordinary - an async component holding an
     in-flight call - and it sits on ha_interface, which is_debug_excluded_key() already drops. It
-    was only fatal because inverter.givtcp.base routed the dump back around that exclusion, which
-    is also how the access token planted alongside it here would have escaped.
+    was only fatal because a back-reference routed the dump around that exclusion, which is also
+    how the access token planted alongside it here would have escaped.
     """
     failed = False
     print("**** Testing the debug yaml survives an unpicklable member behind an excluded one ****")

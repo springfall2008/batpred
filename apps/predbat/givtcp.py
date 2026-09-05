@@ -129,6 +129,12 @@ GIVTCP_SENSORS = {
     "battery_soh": {"icon": "mdi:battery-heart-variant"},
     "battery_dod": {"icon": "mdi:battery-arrow-down-outline"},
     "battery_dod_soh": {"icon": "mdi:battery-heart-outline"},
+    # Identity, published so the version/firmware/serial are readable state rather than something
+    # only a log line ever knew. Inverter.__init__ used to do a REST read of its own purely for
+    # these three.
+    "givtcp_version": {"icon": "mdi:tag-outline"},
+    "firmware_version": {"icon": "mdi:chip"},
+    "serial_number": {"icon": "mdi:identifier"},
 }
 
 # Human-readable names for every entity above, prefixed with the inverter index at publish time
@@ -173,6 +179,9 @@ GIVTCP_FRIENDLY_NAMES = {
     "battery_soh": "Battery State of Health",
     "battery_dod": "Battery Depth of Discharge",
     "battery_dod_soh": "Battery Scaling",
+    "givtcp_version": "GivTCP Version",
+    "firmware_version": "Firmware Version",
+    "serial_number": "Serial Number",
 }
 
 # Discovery values Inverter.__init__ used to read straight off the REST blob. Published as sensors
@@ -298,6 +307,10 @@ class GivTCPComponent(ComponentBase):
         # holds the indices that actually answered, and is what drives automatic_config().
         self.discovered = []
         self.discovery_done = False
+        # Which inverters have had their identity logged. Version, firmware and serial are worth
+        # saying once when an inverter is first seen, not every 60s poll for the life of the
+        # process - Inverter.__init__ used to report this off a REST read of its own.
+        self.identified = set()
         # The discovered set automatic_config() was last run against, so a fleet that grows on a
         # later re-probe reconfigures rather than staying at its startup size.
         self.configured_for = []
@@ -335,11 +348,10 @@ class GivTCPComponent(ComponentBase):
                 data = await self._run_blocking(rest.read_data)
                 if data:
                     rest.inverter.rest_data = data
-                    # Mirrors Inverter.__init__'s own version detection - power_readings() only
-                    # trusts GivTCP's own Battery_Voltage field once this is set.
-                    version = data.get("Stats", {}).get("GivTCP_Version", "Unknown")
-                    rest.inverter.rest_v3 = version.startswith("3")
                     answered.append(n)
+                    if n not in self.identified:
+                        self.identified.add(n)
+                        self.log("GivTCP: inverter {} at {} - GivTCP version {}, firmware {}, serial {}".format(n, rest.inverter.rest_api, rest.givtcp_version, rest.firmware_version, rest.serial_number))
 
             # Settle discovery on the first pass that finds anything. A pass where nothing answers
             # leaves it open so the next cycle re-probes every URL, rather than locking in an empty
@@ -403,13 +415,16 @@ class GivTCPComponent(ComponentBase):
             if not data:
                 continue
             rest.inverter.rest_data = data
-            version = data.get("Stats", {}).get("GivTCP_Version", "Unknown")
-            rest.inverter.rest_v3 = version.startswith("3")
             # Appended, never inserted. The order of self.discovered is Predbat's inverter
             # numbering, so moving an existing entry would repoint a running inverter at different
             # physical hardware mid-flight.
             self.discovered.append(n)
-            self.log("GivTCP: inverter at {} answered on re-probe - now managing {} inverter(s)".format(rest.inverter.rest_api, len(self.discovered)))
+            self.identified.add(n)
+            self.log(
+                "GivTCP: inverter {} at {} answered on re-probe - GivTCP version {}, firmware {}, serial {} - now managing {} inverter(s)".format(
+                    n, rest.inverter.rest_api, rest.givtcp_version, rest.firmware_version, rest.serial_number, len(self.discovered)
+                )
+            )
 
     def _entity_id(self, domain, n, control):
         return "{}.{}_givtcp_{}_{}".format(domain, self.prefix, n, control)
@@ -490,7 +505,7 @@ class GivTCPComponent(ComponentBase):
                 inverter_model = rest.inverter.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
                 inverter_type_tokens = frozenset(re.findall(r"[a-z]+|\d+", rest.inverter_type().lower()))
                 model_unsupported = inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS or inverter_type_tokens in DISCHARGE_TARGET_UNSUPPORTED_TYPES
-                if not rest.inverter.rest_v3:
+                if not rest.rest_v3:
                     # v2 has no /setDischargeTarget - see GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
                     pass
                 elif model_unsupported:
@@ -523,11 +538,11 @@ class GivTCPComponent(ComponentBase):
                 # v3 only, and only when the inverter actually has the register - see
                 # GIVTCP_AUTO_CONFIG_PAUSE_MODE_KEYS. Publishing a fallback for a register GivTCP never
                 # reported made a control that does not exist look real to Predbat.
-                if rest.inverter.rest_v3 and rest.pause_mode_supported:
+                if rest.rest_v3 and rest.pause_mode_supported:
                     self.dashboard_item(self._entity_id("select", n, "pause_mode"), state=control["Battery_pause_mode"], attributes=self._attributes(n, "pause_mode"), app="givtcp")
 
                 timeslots = rest.inverter.rest_data.get("Timeslots", {})
-                if rest.inverter.rest_v3 and rest.pause_slots_supported:
+                if rest.rest_v3 and rest.pause_slots_supported:
                     self.dashboard_item(self._entity_id("select", n, "pause_start_time"), state=timeslots["Battery_pause_start_time_slot"], attributes=self._attributes(n, "pause_start_time"), app="givtcp")
                     self.dashboard_item(self._entity_id("select", n, "pause_end_time"), state=timeslots["Battery_pause_end_time_slot"], attributes=self._attributes(n, "pause_end_time"), app="givtcp")
 
@@ -535,6 +550,12 @@ class GivTCPComponent(ComponentBase):
                 self.dashboard_item(self._entity_id("select", n, "charge_end_time"), state=timeslots.get("Charge_end_time_slot_1", "00:00:00"), attributes=self._attributes(n, "charge_end_time"), app="givtcp")
                 self.dashboard_item(self._entity_id("select", n, "discharge_start_time"), state=timeslots.get("Discharge_start_time_slot_1", "00:00:00"), attributes=self._attributes(n, "discharge_start_time"), app="givtcp")
                 self.dashboard_item(self._entity_id("select", n, "discharge_end_time"), state=timeslots.get("Discharge_end_time_slot_1", "00:00:00"), attributes=self._attributes(n, "discharge_end_time"), app="givtcp")
+
+                # Identity. Always published (never withheld on "Unknown") - a missing entity and
+                # an unknown version are different states, and the latter is the useful one to see.
+                self.dashboard_item(self._entity_id("sensor", n, "givtcp_version"), state=rest.givtcp_version, attributes=self._attributes(n, "givtcp_version"), app="givtcp")
+                self.dashboard_item(self._entity_id("sensor", n, "firmware_version"), state=rest.firmware_version, attributes=self._attributes(n, "firmware_version"), app="givtcp")
+                self.dashboard_item(self._entity_id("sensor", n, "serial_number"), state=rest.serial_number, attributes=self._attributes(n, "serial_number"), app="givtcp")
 
                 soc_kwh = rest.soc_kwh
                 if soc_kwh is not None:
@@ -670,12 +691,12 @@ class GivTCPComponent(ComponentBase):
         else:
             self.log("Info: GivTCP: Enable_Charge_Target is not reported by every inverter - leaving charge_limit_enable to your apps.yaml config")
 
-        if all(self.rest[n].inverter.rest_v3 for n in discovered):
+        if all(self.rest[n].rest_v3 for n in discovered):
             keys += GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
         else:
             self.log("Info: GivTCP: the export target register needs GivTCP v3 on every inverter - leaving discharge_target_soc to your apps.yaml config")
 
-        if not all(self.rest[n].inverter.rest_v3 for n in discovered):
+        if not all(self.rest[n].rest_v3 for n in discovered):
             self.log("Info: GivTCP: pause control needs GivTCP v3 on every inverter - leaving pause_mode/pause_start_time/pause_end_time to your apps.yaml config")
         else:
             if all(self.rest[n].pause_mode_supported for n in discovered):

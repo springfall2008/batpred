@@ -38,8 +38,9 @@ from utils import dp2, dp3, dp4, time_string_to_stamp
 class InverterRestState:
     """
     Minimal stand-in for the subset of Inverter that GivTCPRest depends on: id, rest_api (the
-    configured URL), rest_data (mutable last-read snapshot), rest_v3, a register-write counter,
-    and a blocking sleep().
+    configured URL), rest_data (mutable last-read snapshot), a register-write counter, and a
+    blocking sleep(). The GivTCP version is not among them - GivTCPRest decodes that from
+    rest_data itself (see its rest_v3).
 
     Lets a caller that isn't a real Inverter (e.g. GivTCPComponent, which has no Inverter object
     to hand GivTCPRest) construct one of these instead, so GivTCPRest itself stays unchanged.
@@ -53,7 +54,6 @@ class InverterRestState:
         self.id = id
         self.rest_api = rest_api
         self.rest_data = None
-        self.rest_v3 = False
         self.battery_scaling = battery_scaling
         self.count_register_writes = 0
 
@@ -81,6 +81,41 @@ class GivTCPRest:
             self.post_command = rest_postCommand
         if rest_getData:
             self.get_data = rest_getData
+
+    @property
+    def givtcp_version(self):
+        """The GivTCP version string from the last status read, or "Unknown"."""
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return "Unknown"
+        return rest_data.get("Stats", {}).get("GivTCP_Version", "Unknown")
+
+    @property
+    def rest_v3(self):
+        """
+        Whether GivTCP is version 3, decoded from the status snapshot rather than set from outside.
+
+        This is a fact about the data already in hand, so deriving it here keeps the client
+        self-contained: nothing has to remember to stamp the flag on before a snapshot is parsed,
+        and a freshly re-probed endpoint cannot be decoded against the version of a previous one.
+        """
+        return self.givtcp_version.startswith("3")
+
+    @property
+    def firmware_version(self):
+        """The inverter's firmware version from the last status read, or "Unknown"."""
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return "Unknown"
+        return rest_data.get("raw", {}).get("invertor", {}).get("firmware_version", "Unknown")
+
+    @property
+    def serial_number(self):
+        """The inverter's serial number from the last status read, or "Unknown"."""
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return "Unknown"
+        return rest_data.get("raw", {}).get("invertor", {}).get("serial_number", "Unknown")
 
     @property
     def charge_enable_time(self):
@@ -252,7 +287,7 @@ class GivTCPRest:
         raw_value = self.inverter.rest_data.get("raw", {}).get("invertor", {}).get("battery_nominal_capacity", None) if self.inverter.rest_data else None
         if not raw_value:
             return None
-        if self.inverter.rest_v3:
+        if self.rest_v3:
             return float(raw_value)
         return float(raw_value) / 19.53125
 
@@ -371,7 +406,7 @@ class GivTCPRest:
         rest_data = self.inverter.rest_data
         if not rest_data:
             return False
-        if self.inverter.rest_v3:
+        if self.rest_v3:
             return rest_data.get("Control", {}).get("Battery_Calibration", "Off") != "Off"
         soc_force_adjust = rest_data.get("raw", {}).get("invertor", {}).get("soc_force_adjust", None)
         if not soc_force_adjust:

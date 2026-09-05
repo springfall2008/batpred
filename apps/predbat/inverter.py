@@ -22,7 +22,6 @@ import time
 import pytz
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
-from givtcp_rest import GivTCPRest
 from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, EXPORT_LIMIT_IDLE, INVERTER_WRITE_POLL_INTERVAL, INVERTER_WRITE_POLL_MAX_INTERVAL
 from control_ledger import generation_from_state, OWNED, UNOWNED
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
@@ -40,7 +39,7 @@ class Inverter:
     """
 
     def self_test(self, minutes_now):
-        self.base.log(f"======= INVERTER CONTROL SELF TEST START - REST={self.rest_api} ========")
+        self.base.log("======= INVERTER CONTROL SELF TEST START ========")
         self.adjust_battery_target(99, False)
         self.adjust_battery_target(100, False)
         self.adjust_charge_rate(215)
@@ -65,11 +64,6 @@ class Inverter:
         self.adjust_force_export(True, timea, timeb)
         self.adjust_force_export(False)
         self.base.log("======= INVERTER CONTROL SELF TEST END ========")
-
-        if self.rest_api:
-            self.rest_api = None
-            self.rest_data = None
-            self.self_test(minutes_now)
         exit
 
     def sleep(self, seconds):
@@ -194,7 +188,7 @@ class Inverter:
         if (arg not in self.base.args) or (not isinstance(self.base.args[arg], list)):
             self.base.args[arg] = [default, default, default, default]
 
-    def __init__(self, base, id=0, quiet=False, rest_postCommand=None, rest_getData=None):
+    def __init__(self, base, id=0, quiet=False):
         """
         Inverter class
         """
@@ -212,7 +206,6 @@ class Inverter:
         self.soc_percent = 0
         self.soc_max = None
         self.nominal_capacity = None
-        self.rest_data = None
         self.inverter_limit = 7500.0 / MINUTE_WATT
         self.export_limit = 99999.0 / MINUTE_WATT
         self.inverter_time = None
@@ -244,12 +237,7 @@ class Inverter:
         self.battery_voltage = 52.0
         self.pv_power = 0
         self.load_power = 0
-        self.rest_api = None
         self.in_calibration = False
-        self.firmware_version = "Unknown"
-        self.givtcp_version = "n/a"
-        self.rest_v3 = False
-        self.serial_number = "Unknown"
         self.count_register_writes = 0
         self.created_attributes = {}
         self.track_charge_start = "00:00:00"
@@ -258,8 +246,6 @@ class Inverter:
         self.track_discharge_end = "00:00:00"
         self.idle_start_minutes = 0
         self.idle_end_minutes = 0
-
-        self.givtcp = GivTCPRest(self.base, self, rest_postCommand=rest_postCommand, rest_getData=rest_getData)
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
         if "inverter_type" not in self.base.args:
@@ -290,7 +276,6 @@ class Inverter:
 
         # Load inverter brand definitions
         self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
-        self.inv_has_rest_api = INVERTER_DEF[self.inverter_type]["has_rest_api"]
         self.inv_has_mqtt_api = INVERTER_DEF[self.inverter_type]["has_mqtt_api"]
         self.inv_mqtt_topic = self.base.get_arg("mqtt_topic", "Sofar2mqtt")
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]
@@ -325,29 +310,6 @@ class Inverter:
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
             quiet = False
-
-        # Rest API for GivEnergy. Charge/discharge/reserve/window control, battery and capacity
-        # discovery, calibration, pause and inverter mode, and the #4517 discharge-target model
-        # check all go through entities published by GivTCPComponent now. This one read remains for
-        # the two things that have no entity behind them: the GivTCP version, firmware and serial
-        # reported below, and the raw Battery_Power_Reserve read further down - which deliberately
-        # differs from the entity path, reporting what the inverter is actually set to without
-        # applying battery_min_soc. update_status() does NOT re-read; nothing would consume it.
-        if self.inverter_type == "GE":
-            self.rest_api = self.base.get_arg("givtcp_rest", None, indirect=False, index=self.id)
-            if self.rest_api:
-                if not quiet:
-                    self.base.log("Inverter {} using REST API {}".format(self.id, self.rest_api))
-                self.rest_data = self.givtcp.read_data()
-                if not self.rest_data:
-                    self.auto_restart("REST read failure")
-                else:
-                    self.givtcp_version = self.rest_data.get("Stats", {}).get("GivTCP_Version", "Unknown")
-                    self.firmware_version = self.rest_data.get("raw", {}).get("invertor", {}).get("firmware_version", "Unknown")
-                    self.serial_number = self.rest_data.get("raw", {}).get("invertor", {}).get("serial_number", "Unknown")
-                    if self.givtcp_version.startswith("3"):
-                        self.rest_v3 = True
-                    self.log("Inverter {} GivTCP Version: {}, Firmware: {}, serial {}".format(self.id, self.givtcp_version, self.firmware_version, self.serial_number))
 
         # Timed pause support?
         if self.inv_has_timed_pause:
@@ -461,11 +423,11 @@ class Inverter:
         # Min soc setting
         battery_min_soc = self.base.get_arg("battery_min_soc", default=max(self.reserve_min, 4), index=self.id)
 
-        # Get current reserve value
-        if self.rest_data and ("Control" in self.rest_data) and ("Battery_Power_Reserve" in self.rest_data["Control"]):
-            self.reserve_percent_current = float(self.rest_data["Control"]["Battery_Power_Reserve"])
-        else:
-            self.reserve_percent_current = max(self.base.get_arg("reserve", default=battery_min_soc, index=self.id, required_unit="%"), battery_min_soc)
+        # Get current reserve value. GivTCPComponent publishes the reserve entity's state straight
+        # from Battery_Power_Reserve, so this reads the same number the REST snapshot used to carry
+        # without a second source of truth for it. (Only the entity's "min" attribute is adjusted
+        # for battery_min_soc; its state is what the inverter is actually set to.)
+        self.reserve_percent_current = max(self.base.get_arg("reserve", default=battery_min_soc, index=self.id, required_unit="%"), battery_min_soc)
         self.reserve_current = dp2(self.soc_max * self.reserve_percent_current / 100.0)
 
         if self.reserve_min < battery_min_soc:
@@ -1343,7 +1305,6 @@ class Inverter:
 
             Parameter                          Type    Units
             ---------                          ----    -----
-            self.rest_data                     dict
             self.charge_enable_time            bool
             self.discharge_enable_time         bool
             self.charge_rate_now               float
@@ -1374,12 +1335,11 @@ class Inverter:
         self.load_power = 0
         self.grid_power = 0
 
-        # Deliberately no REST read here. Everything this used to feed is now published as entities
-        # by GivTCPComponent and read through the ordinary get_arg path below, so refreshing
-        # rest_data served nothing: it is only consumed in __init__, which does its own read. The
-        # refresh cost a blocking GET per inverter per cycle on top of the component's own poll, and
-        # read_data()'s retry ladder put 20s + 40s + 40s of sleep inside the main planning loop
-        # whenever GivTCP was slow.
+        # Deliberately no REST read here, and none anywhere else in this class: GivTCPComponent
+        # owns the REST client and publishes everything it reads as entities, which the ordinary
+        # get_arg path below picks up. A read here cost a blocking GET per inverter per cycle on
+        # top of the component's own poll, and read_data()'s retry ladder put 20s + 40s + 40s of
+        # sleep inside the main planning loop whenever GivTCP was slow.
         self.charge_rate_now = self.get_current_charge_rate() / MINUTE_WATT
         self.discharge_rate_now = self.get_current_discharge_rate() / MINUTE_WATT
 
@@ -1564,10 +1524,8 @@ class Inverter:
         # Construct discharge window from GivTCP settings
         self.export_window = []
 
-        # Record which source we read from, rather than re-deriving it below. Both branches
-        # reach the empty-value handling and only one of them is REST, so a ternary over
-        # rest_api/ge_cloud_direct mislabels the configured-entity case and sends the user to
-        # check credentials for a source they are not using.
+        # Record which source we read from, rather than re-deriving it below - both branches
+        # reach the empty-value handling and only one of them came from a component.
         if "discharge_start_time" in self.base.args:
             export_source = "discharge_start_time"
             discharge_start = time_string_to_stamp(self.base.get_arg("discharge_start_time", index=self.id))

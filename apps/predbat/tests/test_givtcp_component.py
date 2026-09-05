@@ -31,9 +31,16 @@ def _rest_data_blob(
     pause_start="00:00:00",
     pause_end="00:00:00",
     charge_target_enable="enable",
+    version="2.4.0",
 ):
-    """A realistic-shaped GivTCP /readData response, sized to what publish_data() reads."""
+    """A realistic-shaped GivTCP /readData response, sized to what publish_data() reads.
+
+    Stats.GivTCP_Version is part of the blob because GivTCPRest decodes rest_v3 from it - a test
+    wanting v3 behaviour passes version="3.0.4" rather than stamping a flag the real code no
+    longer has.
+    """
     return {
+        "Stats": {"GivTCP_Version": version},
         "Control": {
             "Battery_Charge_Rate": charge_rate,
             "Battery_Discharge_Rate": discharge_rate,
@@ -62,6 +69,17 @@ def _make_component(rest_urls="http://givtcp:6345"):
     base = MockBase()
     component = GivTCPComponent(base, rest_urls=rest_urls)
     return base, component
+
+
+def _set_v3(rest, is_v3=True):
+    """Put a GivTCP version into the snapshot, which is where GivTCPRest now decodes rest_v3 from.
+
+    Call this after rest_data is assigned - the version is part of the status blob rather than a
+    flag stamped on beside it, so a later assignment of rest_data replaces it.
+    """
+    if rest.inverter.rest_data is None:
+        rest.inverter.rest_data = {}
+    rest.inverter.rest_data["Stats"] = {"GivTCP_Version": "3.0.4" if is_v3 else "2.4.0"}
 
 
 def _mark_discovered(component, indices=None):
@@ -111,7 +129,7 @@ def test_publish_data_controls(my_predbat=None):
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob()
     # v3: the discharge target control below is version gated, v2 has no /setDischargeTarget
-    component.rest[0].inverter.rest_v3 = True
+    _set_v3(component.rest[0], True)
     run_async(component.publish_data())
 
     checks = {
@@ -139,7 +157,7 @@ def test_publish_data_sensors(my_predbat=None):
     """publish_data() publishes the read-only status sensors with the normalised values."""
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob(soc_kwh=5.0, soc_percent=50)
-    component.rest[0].inverter.rest_v3 = True  # battery_voltage only trusts GivTCP's own field on v3+ (normally set by run()'s version detection)
+    _set_v3(component.rest[0], True)  # battery_voltage only trusts GivTCP's own field on v3+ (normally set by run()'s version detection)
     run_async(component.publish_data())
 
     checks = {
@@ -298,12 +316,12 @@ def test_publish_data_mode_entities(my_predbat=None):
 
     # v2: no /setBatteryPauseMode endpoint, so publishing a pause entity would offer a control that
     # can never be written - Inverter.adjust_pause_mode's REST path was gated on v3 for the same reason
-    component.rest[0].inverter.rest_v3 = False
+    _set_v3(component.rest[0], False)
     run_async(component.publish_data())
     assert base.entities["select.predbat_givtcp_0_inverter_mode"]["state"] == "Timed Export", f"Expected inverter_mode published, got {base.entities['select.predbat_givtcp_0_inverter_mode']['state']}"
     assert "select.predbat_givtcp_0_pause_mode" not in base.entities, "pause_mode must not be published for GivTCP v2"
 
-    component.rest[0].inverter.rest_v3 = True
+    _set_v3(component.rest[0], True)
     run_async(component.publish_data())
     assert base.entities["select.predbat_givtcp_0_pause_mode"]["state"] == "PauseCharge", f"Expected pause_mode published, got {base.entities['select.predbat_givtcp_0_pause_mode']['state']}"
     assert base.entities["select.predbat_givtcp_0_pause_start_time"]["state"] == "01:00:00"
@@ -358,14 +376,14 @@ def test_automatic_config_pause_keys_need_v3_everywhere(my_predbat=None):
 
     # A mixed fleet must leave the pause keys alone rather than pointing the v2 inverter at an
     # entity its GivTCP can never accept a write for
-    component.rest[0].inverter.rest_v3 = True
-    component.rest[1].inverter.rest_v3 = False
+    _set_v3(component.rest[0], True)
+    _set_v3(component.rest[1], False)
     run_async(component.automatic_config())
     assert "pause_mode" not in base.args, f"Expected pause_mode left unconfigured on a mixed fleet, got {base.args.get('pause_mode')}"
     # inverter_mode is not version gated, so it is still claimed
     assert "inverter_mode" in base.args, "Expected inverter_mode to be auto-configured regardless of version"
 
-    component.rest[1].inverter.rest_v3 = True
+    _set_v3(component.rest[1], True)
     run_async(component.automatic_config())
     assert base.args.get("pause_mode") == ["select.predbat_givtcp_0_pause_mode", "select.predbat_givtcp_1_pause_mode"], f"Expected pause_mode configured for both, got {base.args.get('pause_mode')}"
 
@@ -393,7 +411,7 @@ def test_discharge_target_not_published_for_unsupported_models(my_predbat=None):
         component.rest[0].inverter.rest_data = _rest_data_blob()
         component.rest[0].inverter.rest_data["raw"] = {"invertor": {"model": model, "discharge_target_soc_1": "4"}}
         # the model check is a v3-only concern now: v2 publishes no discharge target at all
-        component.rest[0].inverter.rest_v3 = True
+        _set_v3(component.rest[0], True)
         run_async(component.publish_data())
         assert entity_id not in base.entities, f"model={model!r} must not publish a discharge target entity"
 
@@ -404,7 +422,7 @@ def test_discharge_target_not_published_for_unsupported_models(my_predbat=None):
         component.rest[0].inverter.rest_data = _rest_data_blob()
         component.rest[0].inverter.rest_data["raw"] = {"invertor": {"model": model, "discharge_target_soc_1": "4"}}
         # the model check is a v3-only concern now: v2 publishes no discharge target at all
-        component.rest[0].inverter.rest_v3 = True
+        _set_v3(component.rest[0], True)
         run_async(component.publish_data())
         assert entity_id in base.entities, f"model={model!r} should still publish a discharge target entity"
 
@@ -417,8 +435,6 @@ def _rest_from_fixture(filename):
     base, component = _make_component()
     with open(filename, "r") as handle:
         component.rest[0].inverter.rest_data = json.load(handle)
-    version = component.rest[0].inverter.rest_data.get("Stats", {}).get("GivTCP_Version", "Unknown")
-    component.rest[0].inverter.rest_v3 = version.startswith("3")
     return base, component
 
 
@@ -492,16 +508,16 @@ def test_calibration_detected_per_version(my_predbat=None):
     base, component = _make_component()
     rest = component.rest[0]
 
-    rest.inverter.rest_v3 = True
     for value, expected in [("Off", False), ("On", True), ("Calibrating", True)]:
         rest.inverter.rest_data = {"Control": {"Battery_Calibration": value}}
+        _set_v3(rest, True)
         if rest.in_calibration() != expected:
             print(f"ERROR: v3 Battery_Calibration={value!r}: expected {expected}, got {rest.in_calibration()}")
             failed = 1
 
-    rest.inverter.rest_v3 = False
     for value, expected in [(0, False), (1, True), (6, True), (7, False), (None, False), ("bad", False)]:
         rest.inverter.rest_data = {"raw": {"invertor": {"soc_force_adjust": value}}}
+        _set_v3(rest, False)
         if rest.in_calibration() != expected:
             print(f"ERROR: v2 soc_force_adjust={value!r}: expected {expected}, got {rest.in_calibration()}")
             failed = 1
@@ -593,13 +609,13 @@ def test_run_detects_givtcp_version(my_predbat=None):
     component.rest[0].read_data = MagicMock(return_value=data)
 
     run_async(component.run(seconds=0, first=True))
-    assert component.rest[0].inverter.rest_v3 is True, "Expected rest_v3 True for a 3.x GivTCP_Version"
+    assert component.rest[0].rest_v3 is True, "Expected rest_v3 True for a 3.x GivTCP_Version"
 
     data2 = _rest_data_blob()
     data2["Stats"] = {"GivTCP_Version": "2.9.0"}
     component.rest[0].read_data = MagicMock(return_value=data2)
     run_async(component.run(seconds=GIVTCP_POLL_SECONDS, first=False))
-    assert component.rest[0].inverter.rest_v3 is False, "Expected rest_v3 False for a 2.x GivTCP_Version"
+    assert component.rest[0].rest_v3 is False, "Expected rest_v3 False for a 2.x GivTCP_Version"
     print("PASS: run() detects GivTCP's version from Stats.GivTCP_Version")
     return 0
 
@@ -1080,7 +1096,7 @@ def _capacity_blob(design_kwh=9.5232, full_ah=184.82, design_ah=186.0, v3=False)
     the per-module Battery_Capacity vs Battery_Design_Capacity under Battery_Details, which is flat
     on v2 and nested under Battery_Stack_N on v3.
     """
-    blob = _rest_data_blob()
+    blob = _rest_data_blob(version="3.0.4" if v3 else "2.4.0")
     blob["Invertor_Details"] = {"Battery_Capacity_kWh": design_kwh}
     module = {"Battery_Capacity": full_ah, "Battery_Design_Capacity": design_ah}
     if v3:
@@ -1375,7 +1391,7 @@ def test_discharge_target_not_published_on_v2(my_predbat=None):
     recording an error each time. That is the every-cycle rewrite loop #4517 was meant to end.
     """
     base, component = _rest_from_fixture("cases/rest_v2.json")
-    component.rest[0].inverter.rest_v3 = False
+    _set_v3(component.rest[0], False)
     run_async(component.publish_data())
 
     assert "number.predbat_givtcp_0_discharge_target_soc" not in base.entities, "v2 must not publish a discharge target control"
@@ -1390,7 +1406,7 @@ def test_discharge_target_not_published_on_v2(my_predbat=None):
 def test_discharge_target_still_published_on_v3(my_predbat=None):
     """v3 does have the endpoint, so the control is published and claimed as before."""
     base, component = _rest_from_fixture("cases/rest_v3.json")
-    component.rest[0].inverter.rest_v3 = True
+    _set_v3(component.rest[0], True)
     run_async(component.publish_data())
 
     assert "number.predbat_givtcp_0_discharge_target_soc" in base.entities, "v3 should publish the discharge target control"
@@ -1408,8 +1424,8 @@ def test_discharge_target_needs_v3_on_every_inverter(my_predbat=None):
     _mark_discovered(component)
     for rest in component.rest:
         rest.inverter.rest_data = _rest_data_blob()
-    component.rest[0].inverter.rest_v3 = True
-    component.rest[1].inverter.rest_v3 = False
+    _set_v3(component.rest[0], True)
+    _set_v3(component.rest[1], False)
 
     run_async(component.automatic_config())
     assert "discharge_target_soc" not in base.args, f"a mixed fleet must not claim discharge_target_soc, got {base.args.get('discharge_target_soc')}"
@@ -1432,8 +1448,8 @@ def _typed_blob(invertor_type=None, raw_model=None):
 def _publishes_discharge_target(invertor_type=None, raw_model=None):
     """Whether publish_data emits the export target control for this model identification."""
     base, component = _make_component()
-    component.rest[0].inverter.rest_v3 = True
     component.rest[0].inverter.rest_data = _typed_blob(invertor_type, raw_model)
+    _set_v3(component.rest[0], True)
     run_async(component.publish_data())
     return "number.predbat_givtcp_0_discharge_target_soc" in base.entities
 
@@ -1549,8 +1565,8 @@ def test_battery_voltage_not_published_or_claimed_on_v2(my_predbat=None):
     and freezes, at 52.0 if the user had configured nothing.
     """
     base, component = _make_component()
-    component.rest[0].inverter.rest_v3 = False
     component.rest[0].inverter.rest_data = _rest_data_blob()
+    _set_v3(component.rest[0], False)
     del component.rest[0].inverter.rest_data["Power"]["Power"]["Battery_Voltage"]
     _mark_discovered(component)
 
@@ -1569,8 +1585,8 @@ def test_battery_voltage_not_published_or_claimed_on_v2(my_predbat=None):
 def test_battery_voltage_published_and_claimed_on_v3(my_predbat=None):
     """v3 reports Battery_Voltage directly, so it is published and claimed as before."""
     base, component = _make_component()
-    component.rest[0].inverter.rest_v3 = True
     component.rest[0].inverter.rest_data = _rest_data_blob()
+    _set_v3(component.rest[0], True)
     _mark_discovered(component)
 
     run_async(component.publish_data())
@@ -1590,8 +1606,8 @@ def test_battery_voltage_never_reads_back_its_own_entity(my_predbat=None):
     published value - which is what made the reading freeze rather than track the battery.
     """
     base, component = _make_component()
-    component.rest[0].inverter.rest_v3 = False
     component.rest[0].inverter.rest_data = _rest_data_blob()
+    _set_v3(component.rest[0], False)
     del component.rest[0].inverter.rest_data["Power"]["Power"]["Battery_Voltage"]
     base.args["battery_voltage"] = "sensor.predbat_givtcp_0_battery_voltage"
 
@@ -1677,31 +1693,29 @@ def test_one_bad_snapshot_does_not_starve_the_rest_of_the_fleet(my_predbat=None)
     return 0
 
 
-def test_update_status_does_no_rest_read(my_predbat=None):
+def test_inverter_does_no_rest_read(my_predbat=None):
     """
-    Inverter.update_status() must not re-read GivTCP over REST.
+    Inverter must not talk REST at all - GivTCPComponent owns the client and publishes what it reads.
 
-    Nothing consumes the result: rest_data is only read in __init__ (the version/firmware/serial
-    metadata and the raw reserve), which runs before update_status and does its own read. The
-    refresh cost a blocking HTTP GET per inverter on every 5-minute cycle, on top of the component's
-    own 60s poll - and when GivTCP is slow, read_data()'s retry ladder burns 20s + 40s + 40s of
-    Inverter.sleep() inside the main planning loop and records an error, all for data that is then
-    discarded.
+    Nothing in Inverter consumes a snapshot any more: the controls, windows, battery and capacity
+    discovery, calibration, pause, inverter mode, the reserve and the inverter's own identity all
+    arrive as entities. A read here cost a blocking HTTP GET per inverter on every 5-minute cycle
+    on top of the component's own 60s poll, and when GivTCP is slow read_data()'s retry ladder
+    burns 20s + 40s + 40s of Inverter.sleep() inside the main planning loop.
+
+    Asserted over the whole module rather than one method, so the read cannot come back somewhere
+    else: this is a guard against reintroduction, not a behavioural test.
     """
     import inspect
     import inverter as inverter_module
 
-    # Matched on the call pattern rather than the bare word, so the explanatory comment left in
-    # update_status does not trip this. A guard against reintroduction, not a behavioural test:
-    # driving a real update_status needs the full Inverter harness in test_inverter.py.
-    source = inspect.getsource(inverter_module.Inverter.update_status)
-    assert "self.givtcp.read_data()" not in source, "update_status must not perform a REST read - nothing consumes it"
-    assert "self.rest_data =" not in source, "update_status must not refresh rest_data"
-
-    # __init__ still does, for the metadata and the raw reserve read that have no entity equivalent
-    init_source = inspect.getsource(inverter_module.Inverter.__init__)
-    assert "self.givtcp.read_data()" in init_source, "__init__ still needs its own REST read"
-    print("PASS: update_status performs no REST read")
+    source = inspect.getsource(inverter_module)
+    # Matched on the call pattern rather than the bare word, so an explanatory comment naming
+    # read_data or rest_data does not trip it.
+    assert ".read_data()" not in source, "Inverter must not perform a REST read - the component owns the client"
+    assert "self.rest_data" not in source, "Inverter must not hold a REST snapshot"
+    assert "GivTCPRest(" not in source, "Inverter must not construct a REST client"
+    print("PASS: Inverter performs no REST read and holds no snapshot")
     return 0
 
 
@@ -1734,8 +1748,8 @@ def test_pause_entities_withheld_when_the_inverter_has_no_pause(my_predbat=None)
     """
     failed = False
     base, component = _make_component()
-    component.rest[0].inverter.rest_v3 = True
     component.rest[0].inverter.rest_data = _rest_data_without_pause()
+    _set_v3(component.rest[0], True)
 
     run_async(component.publish_data())
 
@@ -1766,8 +1780,8 @@ def test_pause_keys_not_auto_configured_without_pause_support(my_predbat=None):
     failed = False
     base, component = _make_component()
     _mark_discovered(component)
-    component.rest[0].inverter.rest_v3 = True
     component.rest[0].inverter.rest_data = _rest_data_without_pause()
+    _set_v3(component.rest[0], True)
 
     run_async(component.automatic_config())
 
@@ -1792,8 +1806,8 @@ def test_pause_mode_kept_when_only_the_time_window_is_missing(my_predbat=None):
     failed = False
     base, component = _make_component()
     _mark_discovered(component)
-    component.rest[0].inverter.rest_v3 = True
     component.rest[0].inverter.rest_data = _rest_data_without_pause(include_mode=True)
+    _set_v3(component.rest[0], True)
 
     run_async(component.publish_data())
     run_async(component.automatic_config())
@@ -1827,10 +1841,10 @@ def test_pause_gate_needs_pause_support_on_every_inverter(my_predbat=None):
     failed = False
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
     _mark_discovered(component)
-    for rest in component.rest:
-        rest.inverter.rest_v3 = True
     component.rest[0].inverter.rest_data = _rest_data_blob()
     component.rest[1].inverter.rest_data = _rest_data_without_pause()
+    for rest in component.rest:
+        _set_v3(rest, True)
 
     run_async(component.automatic_config())
     if "pause_mode" in base.args:
@@ -1839,6 +1853,7 @@ def test_pause_gate_needs_pause_support_on_every_inverter(my_predbat=None):
 
     # Once both report it, the keys are claimed as before
     component.rest[1].inverter.rest_data = _rest_data_blob()
+    _set_v3(component.rest[1], True)
     run_async(component.automatic_config())
     if base.args.get("pause_start_time") != ["select.predbat_givtcp_0_pause_start_time", "select.predbat_givtcp_1_pause_start_time"]:
         print("ERROR: pause_start_time not configured for a fully-capable fleet, got {}".format(base.args.get("pause_start_time")))
@@ -1866,8 +1881,8 @@ def test_every_published_entity_has_a_friendly_name(my_predbat=None):
     """
     failed = False
     base, component = _make_component()
-    component.rest[0].inverter.rest_v3 = True
     component.rest[0].inverter.rest_data = _rest_data_blob()
+    _set_v3(component.rest[0], True)
     run_async(component.publish_data())
 
     published = [entity_id for entity_id in base.entities if "givtcp" in entity_id]
@@ -1903,8 +1918,8 @@ def test_friendly_names_are_not_written_back_into_the_shared_tables(my_predbat=N
     failed = False
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
     for rest in component.rest:
-        rest.inverter.rest_v3 = True
         rest.inverter.rest_data = _rest_data_blob()
+        _set_v3(rest, True)
     run_async(component.publish_data())
 
     for n in (0, 1):
@@ -2002,7 +2017,7 @@ def test_givtcp_component(my_predbat=None):
         ("missing_control", test_missing_control_field_does_not_abort_the_publish, "missing Control field skipped"),
         ("missing_schedule", test_missing_schedule_flag_is_not_published_as_off, "unknown schedule flag not published"),
         ("fleet_isolation", test_one_bad_snapshot_does_not_starve_the_rest_of_the_fleet, "one bad inverter does not starve others"),
-        ("no_dead_rest_read", test_update_status_does_no_rest_read, "update_status does no REST read"),
+        ("no_rest_in_inverter", test_inverter_does_no_rest_read, "Inverter does no REST read at all"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),

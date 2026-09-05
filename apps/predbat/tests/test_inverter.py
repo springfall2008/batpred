@@ -17,6 +17,7 @@ from utils import calc_percent_limit
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
 from inverter import Inverter
+from givtcp_rest import GivTCPRest
 from config import INVERTER_DEF
 
 
@@ -71,6 +72,19 @@ def test_support_feedin_first_is_opt_in():
         print("ERROR: every inverter type declares support_feedin_first - the .get() default in inverter.py is no longer covered")
         failed = True
     return failed
+
+
+def _rest_client(inv, dummy_rest=None):
+    """A REST client bound to this inverter, as GivTCPComponent builds one for itself.
+
+    Inverter no longer owns a GivTCPRest - the component does, and publishes what it reads as
+    entities - so the tests that exercise the client's own methods construct one instead of
+    reaching through the inverter for it. inv.rest_data, which these tests set directly, is still
+    the snapshot the client reads. dummy_rest is optional: the read-only helpers need no transport.
+    """
+    if dummy_rest is None:
+        return GivTCPRest(inv.base, inv)
+    return GivTCPRest(inv.base, inv, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
 
 
 def dummy_sleep(seconds):
@@ -721,7 +735,7 @@ def test_rest_enable_charge_target(test_name, ha, inv, dummy_rest, enable, expec
     else:
         dummy_rest.rest_data = {"Control": {"Enable_Charge_Target": "enable" if enable else "disable"}}
 
-    inv.givtcp.enable_charge_target(enable)
+    _rest_client(inv, dummy_rest).enable_charge_target(enable)
 
     rest_commands = dummy_rest.get_commands()
     if json.dumps(expect_commands) != json.dumps(rest_commands):
@@ -764,7 +778,7 @@ def test_inverter_self_test(test_name, my_predbat):
     dummy_rest.rest_data["Power"]["Power"]["PV_Power"] = 200
     dummy_rest.rest_data["Power"]["Power"]["Load_Power"] = 300
 
-    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
+    inv = Inverter(my_predbat, 0)
     inv.sleep = dummy_sleep
     inv.self_test(my_predbat.minutes_now)
     rest = dummy_rest.get_commands()
@@ -963,7 +977,7 @@ def test_inverter_update(
     # (only battery/capacity discovery in __init__ still comes from REST), so it must match here too.
     dummy_items["sensor.battery_capacity"] = -1
 
-    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
+    inv = Inverter(my_predbat, 0)
     inv.sleep = dummy_sleep
 
     print("Test: Update Inverter - REST")
@@ -2014,7 +2028,7 @@ def test_discharge_target_read_back(test_name, ha, inv, dummy_rest):
         dummy_rest.get_commands()
         del errors[:]
 
-        if not inv.givtcp.set_discharge_target(20):
+        if not _rest_client(inv, dummy_rest).set_discharge_target(20):
             print("ERROR: {}: string read back of the export target should count as success".format(test_name))
             failed = True
         if target_errors():
@@ -2125,7 +2139,7 @@ def test_discharge_target_settle_delay(test_name, ha, inv, dummy_rest):
         dummy_rest.queue_rest_data(settled)
         dummy_rest.get_commands()
 
-        if not inv.givtcp.set_discharge_target(20):
+        if not _rest_client(inv, dummy_rest).set_discharge_target(20):
             print("ERROR: {}: write should be recognised as successful once the stale cache catches up".format(test_name))
             failed = True
 
@@ -2184,7 +2198,7 @@ def test_discharge_target_control_signal(test_name, ha, inv, dummy_rest):
         dummy_rest.queue_rest_data(settled_control)
         dummy_rest.get_commands()
 
-        if not inv.givtcp.set_discharge_target(20):
+        if not _rest_client(inv, dummy_rest).set_discharge_target(20):
             print("ERROR: {}: write should be recognised as successful from Control.Discharge_Target_SOC_1 alone".format(test_name))
             failed = True
 
@@ -2221,21 +2235,21 @@ def test_discharge_target_read_prefers_control(test_name, ha, inv):
         # Control has the real, current value - stale raw must not override it (the core of #4517:
         # the old caller ignored Control entirely and would have seen "0", not "20", here).
         inv.rest_data = {"Control": {"Discharge_Target_SOC_1": "20"}, "raw": {"invertor": {"discharge_target_soc_1": "0"}}}
-        result = inv.givtcp.read_discharge_target()
+        result = _rest_client(inv).read_discharge_target()
         if result != 20:
             print("ERROR: {}: expected Control's value 20, got {}".format(test_name, result))
             failed = True
 
         # Control missing the key entirely - falls back to raw.
         inv.rest_data = {"Control": {}, "raw": {"invertor": {"discharge_target_soc_1": "15"}}}
-        result = inv.givtcp.read_discharge_target()
+        result = _rest_client(inv).read_discharge_target()
         if result != 15:
             print("ERROR: {}: expected raw fallback value 15, got {}".format(test_name, result))
             failed = True
 
         # Neither present - no crash, just None (matches "No current discharge target to read" path).
         inv.rest_data = {"Control": {}, "raw": {"invertor": {}}}
-        result = inv.givtcp.read_discharge_target()
+        result = _rest_client(inv).read_discharge_target()
         if result is not None:
             print("ERROR: {}: expected None when neither field is present, got {}".format(test_name, result))
             failed = True
@@ -2595,7 +2609,7 @@ def test_rest_battery_capacity_fallback(test_name, my_predbat):
     dummy_rest.rest_data = rest_v3_data
 
     my_predbat.restart_active = True
-    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData, quiet=False)
+    inv = Inverter(my_predbat, 0, quiet=False)
     inv.sleep = dummy_sleep
     inv.update_status(my_predbat.minutes_now)
     my_predbat.restart_active = False
@@ -2884,7 +2898,7 @@ def run_inverter_tests(my_predbat_dummy):
 
     my_predbat.args["givtcp_rest"] = None
     dummy_rest = DummyRestAPI()
-    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
+    inv = Inverter(my_predbat, 0)
     inv.sleep = dummy_sleep
     inv.update_status(my_predbat.minutes_now)
     my_predbat.inv = inv
