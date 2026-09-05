@@ -400,6 +400,44 @@ def run_test_manual_times(my_predbat):
     else:
         print("PASS: T13 Selecting during the clock shift kept every slot: {}".format(manual_export_times))
 
+    # Test 14: A rate override several days out survives
+    # Rate overrides carry a 7 day horizon, not the 48 hours a manual charge/export slot gets:
+    # they are future tariff data that only has to be remembered until the plan reaches them,
+    # which is how a supplier's free-electricity hour announced days ahead can be entered.
+    print("Test 14: Rate override beyond 48 hours is retained")
+    my_predbat.midnight_utc = datetime(2025, 12, 19, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.midnight = my_predbat.midnight_utc.astimezone(my_predbat.local_tz)
+    my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=0)  # Start at midnight
+    my_predbat.minutes_now = 0
+    my_predbat.manual_select("manual_import_rates", "off")
+
+    far_day = (my_predbat.now_utc + timedelta(days=4)).strftime("%a")
+    far_minute = 4 * 24 * 60 + 12 * 60
+    my_predbat.manual_select("manual_import_rates", "{} 12:00=0.0".format(far_day))
+    manual_import_far = my_predbat.manual_rates("manual_import_rates", default_rate=10.0)
+
+    if far_minute not in manual_import_far:
+        print("ERROR: T14 Expected minute {} ({} 12:00) to survive but got {}".format(far_minute, far_day, sorted(manual_import_far)))
+        failed = True
+    elif manual_import_far[far_minute] != 0.0:
+        print("ERROR: T14 Expected rate 0.0 at minute {} but got {}".format(far_minute, manual_import_far[far_minute]))
+        failed = True
+    else:
+        print("PASS: T14 Rate override 4 days ahead retained at minute {} rate {}".format(far_minute, manual_import_far[far_minute]))
+
+    # Test 15: the same distance out is still rejected for a manual TIME slot, which stays bounded
+    # by the plan horizon - Predbat can only act on a slot the plan actually reaches.
+    print("Test 15: Manual time beyond 48 hours is still dropped")
+    my_predbat.manual_select("manual_demand", "off")
+    my_predbat.manual_select("manual_demand", "{} 12:00".format(far_day))
+    manual_demand_far = my_predbat.manual_times("manual_demand")
+
+    if far_minute in manual_demand_far:
+        print("ERROR: T15 Expected minute {} to be dropped from manual_demand but got {}".format(far_minute, manual_demand_far))
+        failed = True
+    else:
+        print("PASS: T15 Manual demand 4 days ahead correctly dropped: {}".format(manual_demand_far))
+
     # Restore time context to current time
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc =  my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)

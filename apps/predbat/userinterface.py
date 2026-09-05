@@ -28,6 +28,8 @@ from const import (
     TIME_FORMAT,
     PREDBAT_MODE_OPTIONS,
     PREDBAT_MODE_MONITOR,
+    MANUAL_RATE_MAX_MINUTES,
+    MANUAL_TIME_MAX_MINUTES,
 )
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
@@ -1444,7 +1446,7 @@ class UserInterface:
         plan_interval = self.get_arg("plan_interval_minutes", 30)
         midnight_utc, minutes_now_real = self.manual_time_origin()
         minutes_now = int(minutes_now_real / plan_interval) * plan_interval
-        manual_rate_max = 48 * 60
+        manual_rate_max = MANUAL_RATE_MAX_MINUTES
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
@@ -1535,7 +1537,7 @@ class UserInterface:
         plan_interval = self.get_arg("plan_interval_minutes", 30)
         midnight_utc, minutes_now_real = self.manual_time_origin()
         minutes_now = int(minutes_now_real / plan_interval) * plan_interval
-        manual_time_max = 48 * 60
+        manual_time_max = MANUAL_TIME_MAX_MINUTES
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)

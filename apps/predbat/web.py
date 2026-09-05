@@ -71,7 +71,7 @@ from web_helper import (
 
 from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, mask_secret_yaml_text, read_predbat_log, classify_log_line, log_line_included
 from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
-from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
+from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
@@ -4654,8 +4654,9 @@ chart.render();
             override_time = get_override_time_from_string(now_utc, time_str, self.plan_interval_minutes)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 48 * 60:
-                return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
+            if minutes_from_now >= MANUAL_RATE_MAX_MINUTES:
+                max_hours = MANUAL_RATE_MAX_MINUTES // 60
+                return web.json_response({"success": False, "message": f"Override time must be within {max_hours} hours from now."}, status=400)
 
             # Calculate minutes from midnight for looking up existing rates
             minutes_from_midnight = int((override_time - self.midnight_utc).total_seconds() / 60)
@@ -4738,8 +4739,9 @@ chart.render();
                 return web.json_response({"success": False, "message": "Invalid time format"}, status=400)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 48 * 60:
-                return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
+            if minutes_from_now >= MANUAL_TIME_MAX_MINUTES:
+                max_hours = MANUAL_TIME_MAX_MINUTES // 60
+                return web.json_response({"success": False, "message": f"Override time must be within {max_hours} hours from now."}, status=400)
 
             selection_option = "{}".format(override_time.strftime("%a %H:%M"))
             clear_option = "[{}]".format(override_time.strftime("%a %H:%M"))

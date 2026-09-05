@@ -58,6 +58,13 @@ INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving 
 INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
 PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
+# How far ahead a manual override may be placed. The two horizons differ on purpose: a manual
+# charge/export/freeze/demand slot is bounded by the plan, since Predbat can only act on a slot the
+# plan reaches, whereas a rate override is future tariff data that only has to be REMEMBERED until
+# the plan reaches it - e.g. an energy supplier announcing a free-electricity hour several days out.
+# 7 days is the ceiling the 'Day HH:MM' selection format can express anyway.
+MANUAL_TIME_MAX_MINUTES = 48 * 60
+MANUAL_RATE_MAX_MINUTES = 7 * 24 * 60
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
