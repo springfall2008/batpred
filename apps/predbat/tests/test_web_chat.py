@@ -2620,23 +2620,41 @@ def test_busy_banner_only_points_at_another_conversation(my_predbat):
     offer a way there. On the conversation already open it was describing the transcript directly
     below it and offering to switch to where the user already was.
 
+    The decision now lives in refreshBanner() rather than in setBusy(), because restating it at
+    each call site is what let handleTitle restate it inverted (#4840). setBusy() is still checked
+    for delegating to it, so the rule cannot quietly move back into one caller and drift again.
+
     Mutation check: calling showBanner() unconditionally fails this.
     """
     failed = False
     print("**** Testing the busy banner only points elsewhere ****")
     script = web_chat.get_chat_script()
 
-    body = _extract_function_body(script, "setBusy")
+    body = _extract_function_body(script, "refreshBanner")
     if body is None:
-        print("ERROR: there is no setBusy() to inspect")
+        print("ERROR: there is no refreshBanner() to inspect")
         return True
     if "state.conversation" not in body:
-        print("ERROR: setBusy() does not compare the busy conversation with the open one: {!r}".format(body))
+        print("ERROR: refreshBanner() does not compare the busy conversation with the open one: {!r}".format(body))
         failed = True
     # Both outcomes must be reachable: shown for another conversation, hidden for this one.
     if "showBanner" not in body or "hideBanner" not in body:
-        print("ERROR: setBusy() cannot both show and hide the banner: {!r}".format(body))
+        print("ERROR: refreshBanner() cannot both show and hide the banner: {!r}".format(body))
         failed = True
+
+    for name in ("setBusy", "setIdle"):
+        caller = _extract_function_body(script, name)
+        if caller is None or "refreshBanner" not in caller:
+            print("ERROR: {}() no longer routes the banner decision through refreshBanner(): {!r}".format(name, caller))
+            failed = True
+        # A direct hideBanner()/showBanner() call is the shape the inverted rule grew in: whoever
+        # calls one decides for themselves, and that decision drifted. refreshBanner() is the only
+        # place allowed to choose. Comments are stripped first - naming the old call while
+        # explaining why it is no longer made must not read as making it.
+        code = re.sub(r"//[^\n]*", "", caller or "")
+        if "hideBanner" in code or "showBanner" in code:
+            print("ERROR: {}() still reaches for the banner directly instead of leaving the decision to refreshBanner(): {!r}".format(name, caller))
+            failed = True
 
     return failed
 
@@ -3761,6 +3779,62 @@ def test_provider_selector_sits_in_the_footer_beside_the_model_picker(my_predbat
     return failed
 
 
+def test_title_event_does_not_offer_to_switch_to_the_open_conversation(my_predbat):
+    """A title arriving mid-turn must not raise the 'replying elsewhere' banner (#4840).
+
+    The banner exists to say a reply is happening in a conversation the user is NOT looking at, and
+    offers a link to switch to it. 'title' events are scoped server-side to the conversation being
+    viewed, so `state.busy.conversation_id === state.conversation` inside handleTitle is true
+    exactly when the busy conversation is the one already on screen - the case setBusy deliberately
+    hides the banner for. Showing it there offered to switch the user to the transcript in front of
+    them, captioned with a title the header had not caught up with yet.
+    """
+    failed = False
+    print("**** Testing title event does not raise the switch-to banner ****")
+
+    script = web_chat.get_chat_script()
+
+    body = _extract_function_body(script, "handleTitle")
+    if body is None:
+        print("ERROR: no handleTitle function found")
+        return True
+
+    if "showBanner" in body:
+        print("ERROR: handleTitle still calls showBanner, which offers to switch to the conversation already open: {!r}".format(body))
+        failed = True
+
+    # The header reads its title from state.titles (see updateChatTitle), which handleTitle never
+    # updated - so the header went on saying 'New chat' until the user switched away and back.
+    if "state.titles" not in body:
+        print("ERROR: handleTitle does not update state.titles, so the header keeps the old title: {!r}".format(body))
+        failed = True
+    if "updateChatTitle" not in body:
+        print("ERROR: handleTitle does not refresh the header title: {!r}".format(body))
+        failed = True
+
+    # One place decides whether the banner belongs on screen, so setBusy and handleTitle cannot
+    # drift apart again.
+    decide = _extract_function_body(script, "refreshBanner")
+    if decide is None:
+        print("ERROR: no refreshBanner function - the show/hide rule still lives in more than one place")
+        return True
+    if "!==" not in decide:
+        print("ERROR: refreshBanner does not test that the busy conversation is a DIFFERENT one: {!r}".format(decide))
+        failed = True
+    if "showBanner" not in decide or "hideBanner" not in decide:
+        print("ERROR: refreshBanner should own both sides of the decision: {!r}".format(decide))
+        failed = True
+
+    busy = _extract_function_body(script, "setBusy")
+    if busy is None or "refreshBanner" not in busy:
+        print("ERROR: setBusy no longer delegates the banner decision to refreshBanner: {!r}".format(busy))
+        failed = True
+
+    if not failed:
+        print("✓ Test passed: a title event leaves the banner alone and refreshes the header")
+    return failed
+
+
 def test_own_message_is_shown_without_waiting_for_the_server_echo(my_predbat):
     """Hitting send must render your own message immediately, not only when the SSE echo lands.
 
@@ -3836,6 +3910,7 @@ def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
     failed |= test_routes_always_registered_handlers_404_unconfigured(my_predbat)
+    failed |= test_title_event_does_not_offer_to_switch_to_the_open_conversation(my_predbat)
     failed |= test_own_message_is_shown_without_waiting_for_the_server_echo(my_predbat)
     failed |= test_chat_routes_survive_the_real_phase_order(my_predbat)
     failed |= test_send_is_busy_and_unknown_is_404(my_predbat)
