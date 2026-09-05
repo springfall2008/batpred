@@ -31,7 +31,6 @@ from const import (
     PREDBAT_MODE_MONITOR,
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
-    LOW_POWER_PV_LIGHT_FRACTION,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -898,6 +897,31 @@ class Fetch:
             load_minutes = MinuteArray(load_minutes, size)
         return load_minutes, age_days
 
+    def fetch_pv_forecast_and_dawn(self):
+        """
+        Fetch the PV forecast, compute the dawn light/dark split from it, and publish the dawn
+        binary_sensor - as one call so the ordering that #4699 regressed on (the split must be
+        computed from a freshly-fetched forecast, not the empty dict fetch_sensor_data() resets it
+        to at the top of each cycle) can't drift apart again. Published unconditionally regardless
+        of whether import rates currently exist, so the sensor never goes stale.
+
+        Returns:
+            pv_light_dark: dict as returned by calc_pv_light_dark(), also stored on self.pv_light_dark.
+        """
+        self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
+
+        # Stored on self, not just local, so it can be used elsewhere rather than only by the
+        # window split below.
+        pv_light_dark = self.pv_light_dark = self.calc_pv_light_dark()
+        # "on" past dawn, "off" before it or when unclassified (combine_charge_slots off, or no
+        # PV forecast) - not the same as PV actually producing right now, see calc_dawn's docstring
+        self.dashboard_item(
+            "binary_sensor." + self.prefix + "_dawn",
+            state="on" if pv_light_dark.get(self.minutes_now) == 1 else "off",
+            attributes={"friendly_name": "Predbat is past dawn (light, not dark, in the low-power charge window split)", "icon": "mdi:weather-sunset-up"},
+        )
+        return pv_light_dark
+
     def fetch_sensor_data(self, save=True):
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
@@ -931,6 +955,7 @@ class Fetch:
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
         self.pv_forecast_minute90 = {}
+        self.pv_light_dark = {}
         # See Plan.refresh_pv_forecast_minute90(): both series are re-fetched together below, so no
         # earlier pair of signatures may be held against them
         self.pv_forecast_minute90_signatures = None
@@ -1218,6 +1243,12 @@ class Fetch:
         if self.rate_import or self.rate_export:
             self.set_rate_thresholds()
 
+        # Needed here, ahead of "Find charging windows" below, because calc_pv_light_dark() reads
+        # self.pv_forecast_minute to locate dawn - it was previously fetched further down in this
+        # function, after the dawn calculation had already run against the freshly-reset empty dict
+        # from the top of fetch_sensor_data(), so the dawn split could never actually trigger (#4699).
+        pv_light_dark = self.fetch_pv_forecast_and_dawn()
+
         # Find discharging windows
         if self.rate_export:
             self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True, alt_rates=self.rate_import)
@@ -1228,8 +1259,6 @@ class Fetch:
 
         # Find charging windows
         if self.rate_import:
-            pv_light_dark = self.calc_pv_light_dark()
-
             # Find charging window
             self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=self.rate_export, pv_light_dark=pv_light_dark)
             self.log("Low Import rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
@@ -1265,9 +1294,6 @@ class Fetch:
         # Work out cost today
         if self.import_today:
             self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy, self.load_minutes, save=save)
-
-        # Fetch PV forecast if enabled, today must be enabled, other days are optional
-        self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
 
         if self.load_minutes and not self.load_forecast_only and not self.load_forecast_history:
             # Apply modal filter to historical data. Skipped for days_previous_auto: the weighted-bucket
@@ -1784,13 +1810,21 @@ class Fetch:
         day correctly stay all-dark (dawn never crosses) and a polar-day day correctly stay all-light
         (crossed from the very first bucket).
 
-        The threshold itself is LOW_POWER_PV_LIGHT_FRACTION of the peak PV forecast anywhere in
-        self.pv_forecast_minute, not a fixed Watts figure, so it scales with the site rather than being
-        picked for a "typical" system size.
+        The threshold is the user-configurable low_power_pv_threshold_w, an absolute Watts figure,
+        rather than a fraction of this forecast's own peak. A fraction-of-peak threshold sounds like it
+        "scales with the site", but it actually scales with today's weather: a heavily overcast day has
+        a low peak of its own, so a fixed fraction of it can call a trickle of PV "light" at a much
+        lower absolute wattage than the same fraction would on a clear day - and there is nothing in
+        Predbat today recording the site's real panel capacity to normalise against instead (only
+        inverter_limit, which caps the inverter's own output, not the array's rating). An absolute
+        figure the user sets once for their own system does not have that problem (#4699 follow-up).
+        The same value and the same comparison is reused by find_charge_rate's low-power abandon check
+        (utils.py) - one threshold answering "is this bright enough to matter" everywhere it is asked,
+        rather than two independently-tuned ones that could disagree on genuine twilight PV.
 
-        Built from whatever PV forecast is already in self.pv_forecast_minute, which at the point this
-        is called from fetch_sensor_data is up to one cycle stale (refreshed later this same loop by
-        fetch_pv_forecast()) - fine for a forecast that doesn't meaningfully change minute to minute.
+        Built from self.pv_forecast_minute as populated earlier this same fetch_sensor_data() call by
+        fetch_pv_forecast() - see #4699, where calc_pv_light_dark() ran before that populating call and
+        so always saw the freshly-reset empty dict, silently disabling the dawn split for everyone.
 
         Logs the calculated dawn time (today's, or the earliest day the forecast reaches if today's PV
         data isn't there) each time it runs, so it's visible whether the detected dawn looks sane.
@@ -1799,11 +1833,7 @@ class Fetch:
         if not self.pv_forecast_minute:
             return pv_light_dark
 
-        peak_pv = max(self.pv_forecast_minute.values())
-        if peak_pv <= 0:
-            return {pv_minute: 0 for pv_minute in self.pv_forecast_minute}
-
-        light_threshold = peak_pv * LOW_POWER_PV_LIGHT_FRACTION
+        light_threshold = self.low_power_pv_threshold_w / MINUTE_WATT
         interval = self.plan_interval_minutes
         bucket_sums = {}
         bucket_counts = {}
@@ -3016,6 +3046,7 @@ class Fetch:
         self.set_charge_low_power = self.get_arg("set_charge_low_power")
         self.set_export_low_power = self.get_arg("set_export_low_power")
         self.charge_low_power_margin = self.get_arg("charge_low_power_margin")
+        self.low_power_pv_threshold_w = self.get_arg("low_power_pv_threshold_w")
         self.calculate_export_first = True
 
         self.set_status_notify = self.get_arg("set_status_notify")

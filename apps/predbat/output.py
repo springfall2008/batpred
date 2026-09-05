@@ -1082,6 +1082,7 @@ class Output:
             self.battery_temperature,
             self.battery_temperature_charge_curve,
             pv_window_kwh=pv_window_kwh,
+            low_power_pv_threshold_w=self.low_power_pv_threshold_w,
         )
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
