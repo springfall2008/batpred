@@ -46,15 +46,16 @@ def test_alert_feed(my_predbat):
     """
     failed = 0
     ha = my_predbat.ha_interface
-    today = datetime.now().strftime("%Y-%m-%d")
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    # Dates come from the clock the code under test uses, not the machine's. The harness runs on the
+    # timezone set in apps.yaml, so on a machine in another zone datetime.now() can be a whole day
+    # out and the alert window lands outside the forecast entirely.
+    today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
+    yesterday = (my_predbat.midnight_utc - timedelta(days=1)).strftime("%Y-%m-%d")
+    tomorrow = (my_predbat.midnight_utc + timedelta(days=1)).strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
     birmingham = [52.4823, -1.8900]
-    bristol = [51.4545, -2.5879]
-    manchester = [53.4808, -2.2426]
     fife = [56.2082, -3.1495]
 
     alert_data = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -498,7 +499,6 @@ def test_alert_feed(my_predbat):
         "event": "Yellow|Amber",
         "keep": 0.5,
     }
-    original_download_alert_data = alert_feed.download_alert_data
     alert_feed.alert_config = alert_config
     alert_feed.alert_xml = alert_data
     alerts, alert_active_keep = alert_feed.process_alerts(my_predbat.minutes_now, my_predbat.midnight_utc, testing=True)

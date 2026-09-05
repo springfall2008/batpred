@@ -82,6 +82,23 @@ class MockBase:
         """Track dashboard_item calls"""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes}
 
+    def resolve_pv_array_kwp(self, detected_kwp):
+        """Mirror Fetch.resolve_pv_array_kwp - fetch_pv_forecast publishes the detected array size through it.
+
+        The apps.yaml override has to win here exactly as it does in production, or a test that sets
+        pv_array_kwp in mock_config would silently exercise the detected value instead.
+        """
+        from const import PV_ARRAY_KWP_UNKNOWN
+
+        configured = self.get_arg("pv_array_kwp", 0.0)
+        if configured and configured > 0:
+            self.pv_array_kwp = float(configured)
+        elif detected_kwp and 0 < detected_kwp < PV_ARRAY_KWP_UNKNOWN:
+            self.pv_array_kwp = float(detected_kwp)
+        else:
+            self.pv_array_kwp = 0.0
+        return self.pv_array_kwp
+
     def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
         """Return empty history - no historical PV data in tests"""
         return {}
@@ -528,7 +545,7 @@ def test_cache_get_url_metrics_forecast_solar(my_predbat):
             return test_api.mock_aiohttp_session()
 
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
-            result = run_async(test_api.solar.cache_get_url(url, params, max_age=60))
+            run_async(test_api.solar.cache_get_url(url, params, max_age=60))
 
         # Should increment forecast_solar metrics, not solcast
         if test_api.solar.forecast_solar_requests_total != 1:
@@ -3142,9 +3159,6 @@ def test_pv_calibration_power_conversion(my_predbat):
     try:
         solar = test_api.solar
         base = test_api.mock_base
-
-        plan_interval = base.plan_interval_minutes  # 5
-        minutes_now = base.minutes_now  # 720 (12:00)
 
         # Build synthetic cumulative pv_today history.
         # We represent 5 previous days.  Each day, the panel produces 2 kWh between

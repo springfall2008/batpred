@@ -201,6 +201,8 @@ pred_bat:
   kraken_password: !secret kraken_password  # Kraken password (if using Kraken component)
 ```
 
+If a credential-like value (matching a key name containing `_key`, `password`, `secret` or `token`) is found written directly in `apps.yaml` instead of via `!secret`, Predbat logs a warning and lists the affected item(s) on the [web interface](web-interface.md) apps.yaml page. This is a warning rather than a validation error - the configuration still works, but moving the value into `secrets.yaml` keeps it out of `apps.yaml`, which is more likely to end up shared, backed up or attached to a bug report.
+
 When Predbat loads, it will automatically replace `!secret octopus_api_key` with the actual value from `secrets.yaml`.
 
 If a secret is referenced in `apps.yaml` but not found in `secrets.yaml`, Predbat will log a warning and the configuration item will be set to `None`.
@@ -888,7 +890,20 @@ See [Components - Sunsynk Cloud API](components.md#sunsynk-cloud-api-sunsynk) fo
 
 **EXPERIMENTAL:** Nobody on the Predbat project has AlphaESS hardware, so this integration's wire behaviour is inferred from AlphaESS's published Open API documentation and from the Home Assistant AlphaESS integration, rather than confirmed against real inverters. Every request and response is traced to the log by default, so a tester's log is usable evidence for an issue report - please open one if anything here doesn't match what you see.
 
-Predbat includes support for AlphaESS hybrid inverters via the AlphaESS Open API, providing direct cloud-based monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 access is required.
+Predbat includes support for AlphaESS hybrid inverters via the AlphaESS Open API, providing direct cloud-based monitoring and timed charge control - no local Modbus/RS485 access is required. It **cannot** control export, see below.
+
+#### AlphaESS cannot be used to control export
+
+**The AlphaESS Open API has no way to export your battery to the grid, so Predbat cannot make it do so.** This is a limitation of the API rather than of Predbat - see [issue #4701](https://github.com/springfall2008/batpred/issues/4701) for the field report and the evidence behind this section.
+
+The only battery controls the API offers are a grid-charge window with a target SoC (`updateChargeConfigInfo`) and a discharge window with an SoC floor (`updateDisChargeConfigInfo`), or both together on entitled systems (`setTimeChargeBySn`). There is no forced-export, working-mode or dispatch endpoint of any kind. In practice that means:
+
+- **Force Export does nothing.** AlphaESS's own documentation describes the discharge window as a *permission* window rather than a forced export: during the window the system runs in self-consumption mode, and outside it the battery is only allowed to charge. A programmed export window therefore has the battery cover house load and export nothing beyond genuine solar surplus, which is exactly what testers see.
+- **Freeze Export does nothing either.** Predbat implements Freeze Export by disabling charging while leaving the inverter in Demand mode, so that solar surplus reaches the grid instead of the battery. The API has no way to stop the battery charging from solar - `gridCharge` gates only *timed grid charging*, and with it off the system reverts to self-consumption, where surplus solar charges the battery as usual. The settings Predbat writes for Freeze Export come out identical to the ones it writes for Demand mode.
+
+**So set `select.predbat_mode` to `Control charge` on an AlphaESS system.** Predbat then plans and writes no export windows at all, and the plan contains only what the inverter can actually deliver: charging from the grid at cheap rates, and covering house load the rest of the time. Left in `Control charge & discharge`, Predbat builds a plan around exports that never happen, and it also programs the discharge window up to `plan_interval_minutes` ahead of each planned export slot - which, on the permission-window semantics above, bars the battery from covering house load until that window opens, so a load spike is met from the grid instead. That side effect has been reported separately, on leaving an Axle VPP event, in [issue #4723](https://github.com/springfall2008/batpred/issues/4723).
+
+Forced export *is* achievable on AlphaESS hardware over **local Modbus**, whose dispatch registers offer forced discharge, forced export and a solar-export-priority mode. None of that is reachable from the cloud API. If controlled export matters to you, a local Modbus integration feeding Predbat's standard inverter entities is the route to it, and the AlphaESS Cloud component is still useful for monitoring alongside.
 
 #### AlphaESS Cloud Configuration
 
@@ -925,7 +940,7 @@ AlphaESS's charge and discharge endpoints are whole-object replacements, and the
 
 Charge and discharge windows are snapped to the API's 15-minute grid (`:00`, `:15`, `:30`, `:45`) before being written. This is because off-grid values are accepted by the API without an error but then silently ignored by the device, which would otherwise look like a working configuration that quietly does nothing.
 
-Charge/discharge rate handling differs by system entitlement. Systems entitled to AlphaESS's periodic schedule API get a genuine power setpoint alongside up to six windows; systems that are not fall back to the older two-window endpoints, which have no rate field at all, so a **non-zero** rate you configure is simply not honoured there - only the window times and the enable flag reach the inverter. A **zero** rate is meaningful on both paths, however, because there is no separate pause endpoint - Predbat signals freeze charge or freeze export by writing a window with a zero rate, and both the legacy and periodic paths turn that into a disabled/held window rather than an open one.
+Charge/discharge rate handling differs by system entitlement. Systems entitled to AlphaESS's periodic schedule API get a genuine power setpoint alongside up to six windows; systems that are not fall back to the older two-window endpoints, which have no rate field at all, so a **non-zero** rate you configure is simply not honoured there - only the window times and the enable flag reach the inverter. A **zero** rate is meaningful on both paths, however, because there is no separate pause endpoint - Predbat signals a hold by writing a window with a zero rate, and both the legacy and periodic paths turn that into a held window (discharge time control on, with no permitted period) rather than an open one. That holds the battery out of *discharging*; nothing in the API can stop it charging from solar, which is why Freeze Export is not deliverable - see [AlphaESS cannot be used to control export](#alphaess-cannot-be-used-to-control-export).
 
 `battery_rate_max` is not reported by the API at all, so Predbat estimates it from the inverter's nominal AC power (`poinv`) rather than leave it unset - an unset value would silently fall back to a generic 2600W internal default instead. On a well-matched AlphaESS package `poinv` is close to the real battery rate, but where it isn't, correct it either with `battery_rate_max_scaling` (Predbat will suggest a value in the log once it has measured your actual achieved rate) or by setting `alphaess_battery_rate_max` directly to your pack's real limit in Watts.
 
@@ -1296,6 +1311,8 @@ Controls the way Predbat models your inverter, this does not change the way it i
 Freeze Export disables charging but leaves the inverter in Demand mode, so by default Predbat models the battery as still discharging to cover house load whenever load exceeds solar - only charging is prevented.
 
 Some inverters (observed on AlphaESS) do not behave that way: instead of covering house load they only leak a small fixed battery discharge during Freeze Export. If your inverter behaves this way, set this to the observed battery-side discharge rate in Watts so Predbat's prediction model matches reality.
+
+This does not apply to the built-in [AlphaESS Cloud](#alphaess-cloud-api) component, which cannot deliver Freeze Export at all - the observation above is necessarily from an AlphaESS controlled by some other means, since the Open API cannot disable charging.
 
 ```yaml
   inverter_freeze_export_discharge_rate: 269
@@ -1693,9 +1710,22 @@ scenario costs planning time, so if your machine is struggling you can turn On *
 while it is Off no PV90 scenario is simulated at all.
 See [Solar PV adjustment options](customisation.md#solar-pv-adjustment-options).
 
-Predbat models cloud coverage by using the difference between the PV and PV10 forecasts to work out a cloud factor,
-this modulates the PV output predictions up and down over the plan slot duration as if there were passing clouds.
-This can have an impact on planning, especially for things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.
+Predbat models cloud coverage by modulating each PV scenario toward the next forecast percentile above it - PV10 toward PV50, PV50 toward PV90 - up and down
+on a 5-minute interval while holding the total over each half hour. This can have an impact on planning, especially for things like freeze charging which could
+assume the PV will cover the house load but it might not due to clouds, and for systems whose array is large enough to clip against the inverter or export limit.
+
+### **pv_array_kwp**
+
+The total DC array size in kWp, used to cap how far the PV90 scenario's modulation may extrapolate above the forecast:
+
+```yaml
+  pv_array_kwp: 18.54
+```
+
+This is detected automatically from the `kwp` figures in your **forecast_solar** or **open_meteo_forecast** configuration, so you only need to set it when using
+Solcast or the Solcast HA integration, neither of which publishes an array size. Leaving it unset with such a source simply leaves the cap inactive.
+
+Set the DC array size, not your inverter rating - on a DC-oversized system these differ, and it is precisely that oversizing which causes clipping.
 
 See also [PV configuration options in Home Assistant](customisation.md#solar-pv-adjustment-options).
 
@@ -1961,6 +1991,143 @@ no hub, use the serial of the device acting as one, which is the Zappi or Eddi t
 The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash` is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging to the transport you did not select still starts the component — it then logs which setting is missing rather than failing silently.
 
 See [Components - myenergi](components.md#myenergi-myenergi) for the full list of published entities, the boost controls, and a known limitation around very short charging or diversion sessions.
+
+## AI Chat Agent
+
+Predbat can add a Chat tab to the web interface, backed by a large language model. That can be a hosted service such as [OpenRouter](https://openrouter.ai), or a model running on your own machine through [Ollama](https://ollama.com) - with a local model nothing you ask, and nothing the tools return, leaves your network.
+
+Everything the chat agent uses lives in one **chat** block. Endpoints go under **providers**, each named by you, so you can configure more than one and switch between them in the Chat tab:
+
+```yaml
+  chat:
+    providers:
+      openrouter:
+        type: openrouter
+        url: 'https://openrouter.ai/api/v1'
+        model: nvidia/nemotron-3-ultra-550b-a55b:free
+        api_key: !secret openrouter_api_key
+      ollama:
+        type: ollama
+        url: 'http://localhost:11434/v1'
+        model: gpt-oss:20b
+      ollama_cloud:
+        type: ollama
+        url: 'https://ollama.com/v1'
+        model: gpt-oss:120b
+        api_key: !secret ollama_cloud_api_key
+```
+
+That is a complete, working example with all three kinds of endpoint - a hosted aggregator, a
+server of your own, and Ollama's paid cloud - and you can delete whichever you do not want. The
+local one shows `localhost`, which is only right if Ollama runs on the same machine as Predbat;
+see [Reaching Ollama from Predbat](#reaching-ollama-from-predbat), because inside Home Assistant
+it usually does not.
+
+Every field above except **api_key** is optional. Left out, **type** is taken from the entry's
+name and **url** and **model** from the defaults below - so `openrouter:` with just a key is a
+working provider on its own.
+
+You do not have to write this block by hand. The Chat tab's **Settings** dialog adds, edits and removes providers and saves them here for you, keeping the rest of the file - including your comments - as it was; see [Chat View](web-interface.md#chat-view). It never shows you a saved API key, and leaving the key box empty when editing a provider keeps whatever is already in the file.
+
+**model** belongs to the provider rather than the block, because a model id only means anything to the endpoint serving it - `openai/gpt-4o-mini` does not exist on Ollama and `qwen3:latest` does not exist on OpenRouter.
+
+Leave it out and the provider starts on a sensible default for its kind, so a newly configured endpoint answers straight away:
+
+| Provider type | Default model |
+| ------------- | ------------- |
+| `openrouter` | `nvidia/nemotron-3-ultra-550b-a55b:free` - free, so a first question never bills you unexpectedly |
+| `ollama` | `gpt-oss:20b` |
+| `openai`, `local` | None - there is no sensible guess for an arbitrary endpoint, so pick one from the Chat tab |
+
+You can change model at any time from the Chat tab's search box, and Predbat remembers your choice per provider, so switching between them does not lose it.
+
+### Reaching Ollama from Predbat
+
+`http://localhost:11434/v1` only works when Ollama is running on the same machine as Predbat, and
+it usually is not - Predbat runs inside its Home Assistant container, so "localhost" there means
+the container, not your desktop. Two things need doing:
+
+1. **Let Ollama listen on the network.** Out of the box it only accepts connections from its own
+   machine. In the Ollama desktop app, turn on **Expose Ollama to the network** in Settings. For a
+   server or Docker install, set `OLLAMA_HOST=0.0.0.0` in its environment and restart it.
+2. **Point Predbat at the host, not at localhost.** Use the machine's name or IP address -
+   `http://192.168.1.50:11434/v1`, `http://my-desktop.local:11434/v1` - as the **url**.
+
+If the URL is wrong or Ollama is not listening, the Chat tab says so rather than failing silently:
+the model picker reports what went wrong instead of offering models, and **Fetch models** in the
+Settings dialog gives the same message while you are still typing the address. A machine that
+sleeps takes its models with it, so a desktop running Ollama needs to be awake when you ask
+Predbat something.
+
+### Ollama Cloud
+
+Ollama also runs models on its own hardware, which you reach as an ordinary provider rather than
+through your local server:
+
+```yaml
+  chat:
+    providers:
+      ollama_cloud:
+        type: ollama
+        url: 'https://ollama.com/v1'
+        model: gpt-oss:120b
+        api_key: !secret ollama_cloud_api_key
+```
+
+Two things to get right. The URL is `https://ollama.com/v1` - not `/api/v1`, which is a 404 - and
+the model ids there are plain (`gpt-oss:120b`), without the `-cloud` suffix a *local* server uses
+when it refers to a cloud model it has pulled.
+
+Unlike your own machine, this is a paid service, so Predbat treats its models as billable: the
+Chat tab's **Show only free models** box will hide all of them, and tells you how many are behind
+it. The same provider type pointed at a local address is free, because it is your own hardware -
+where Ollama runs decides which it is, not what the entry is called.
+
+A hosted endpoint needs an **api_key**; a local one needs only a **url** and no key at all. The name is yours to choose - it is what appears in the Chat tab - so you can have two of the same kind:
+
+```yaml
+  chat:
+    providers:
+      desktop:
+        type: ollama
+        url: 'http://localhost:11434/v1'
+      nas:
+        type: ollama
+        url: 'http://192.168.1.50:11434/v1'
+      work:
+        type: openai
+        url: 'https://llm.example.com/v1'
+        api_key: !secret work_llm_key
+    turn_timeout: 1800
+```
+
+Everything else the agent takes sits alongside **providers** in the same block, without the `chat_` prefix those settings used to carry.
+
+**type** is only needed when the name does not already say which kind of endpoint it is. Left out, Predbat uses the entry's name if that is a provider it knows (`openrouter`, `ollama`, `openai`), and otherwise works it out from the URL - a `localhost` or private-network address needs no key, anything else does. Set it explicitly if the guess is wrong for your setup; `local` is the generic keyless option for an OpenAI-compatible server that is not Ollama.
+
+An entry missing what it needs - a hosted endpoint with no key - still appears in the Chat tab's Settings dialog, marked as needing a key before it can answer, rather than silently vanishing.
+
+There is no separate enable switch: configuring an endpoint is what enables the feature, and the model is chosen in the Chat tab rather than here.
+
+Before enabling this, read the [chat component's security note](components.md#security-note-chat): the web interface has no login of its own, tool results (including log lines and configuration) are sent to whichever provider you have configured and on to whoever serves the model you choose, and a deleted conversation's stored copy is not removed immediately - it stays on disk until it expires.
+
+**Configuration options:**
+
+All of these live inside the **chat** block:
+
+- **providers** - The named endpoints described above. Each takes **url**, **api_key**, **type** and **model**, all optional individually but needing enough between them to reach something
+- **max_tokens** - Maximum tokens per completion; `0` leaves it to the model/provider's own default (default: `0`)
+- **max_tool_rounds** - Maximum model round trips (completions) allowed within one turn before Predbat stops and asks you to continue. Every tool call the model makes inside one round trip still runs - this bounds round trips, not tool calls (default: `32`)
+- **max_history** - Maximum recent messages sent to the model each turn, trimmed at a user-message boundary so a tool call and its reply are never split apart - bounds cost, not how much of the conversation is stored. `0` (the default) means unlimited - the whole conversation is sent every turn (default: `0`)
+- **max_conversations** - Maximum conversations kept; the least recently updated are pruned once you go over this (default: `20`)
+- **expiry_days** - Days of inactivity before a conversation's stored copy expires (default: `30`)
+- **turn_timeout** - Seconds a whole turn is allowed to run, across every round trip, before Predbat stops it (default: `1800`)
+- **request_timeout** - Seconds a single completion request is allowed to run before it is treated as hung - bounds one request, not the whole turn (default: `300`)
+- **fetch_allowlist** - Hosts the agent's `fetch_url` tool is allowed to reach, replacing rather than extending the default list (default: `springfall2008.github.io`, `github.com`, `raw.githubusercontent.com`)
+
+Three switches also control the chat agent's behaviour once it is running. **switch.predbat_chat_confirm_writes** (on) holds every configuration change or plan override the agent proposes for your approval before it runs. **switch.predbat_ai_ha_state_enable** (on) lets it read any Home Assistant entity and its history, not just Predbat's own - turn this off if you would rather the model saw only Predbat's own data. **switch.predbat_chat_web_search** (off) lets the model search the wider web through OpenRouter's plugin, which costs roughly $0.001-0.015 per request on top of the model's own cost; it is the only one of the three that costs money, which is why it is the only one off by default. Searching Predbat's own documentation does not use it and works regardless.
+
+See [Components - AI Chat Agent](components.md#ai-chat-agent-chat) for the full tool list and [the Chat tab](web-interface.md#chat-view) for how to use it.
 
 ## Watch List - automatically start Predbat execution
 

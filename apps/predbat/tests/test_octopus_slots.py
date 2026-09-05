@@ -14,6 +14,82 @@ from utils import dp2, in_car_slot
 import json
 
 
+class _MockOctopusComponent:
+    """Stand-in for the OctopusAPI component, reporting an import tariff code."""
+
+    def __init__(self, tariff_code=None):
+        """Initialize with the import tariff code to report."""
+        self.tariffs = {"import": {"tariffCode": tariff_code}} if tariff_code else {}
+
+
+class _MockComponents:
+    """Stand-in for the component registry."""
+
+    def __init__(self, octopus=None):
+        """Initialize with the given octopus component stand-in registered, if any."""
+        self._components = {"octopus": octopus} if octopus else {}
+
+    def get_component(self, name):
+        """Return the registered stand-in component, if any."""
+        return self._components.get(name)
+
+
+def run_octopus_slot_max_default_tests(my_predbat):
+    """
+    Test for get_octopus_slot_max — an explicit apps.yaml octopus_slot_max always wins;
+    otherwise IOG-SMB tariffs (which Octopus enforces a 6-hour daily cap on) default to
+    12 slots, and every other tariff (including the older INTELLI-VAR) stays uncapped at 48.
+    """
+    failed = False
+    print("**** Running Test: octopus_slot_max_default ****")
+
+    saved_args = my_predbat.args.pop("octopus_slot_max", "__unset__")
+    saved_components = getattr(my_predbat, "components", None)
+
+    try:
+        # Explicit apps.yaml value wins even for an IOG-SMB tariff
+        my_predbat.args["octopus_slot_max"] = 20
+        my_predbat.components = _MockComponents(_MockOctopusComponent("E-1R-IOG-SMB-TOU-25-12-12-H"))
+        result = my_predbat.get_octopus_slot_max()
+        if result != 20:
+            print("ERROR: Explicit octopus_slot_max should win over auto-detection, expected 20 got {}".format(result))
+            failed = True
+
+        # Unset + IOG-SMB tariff -> defaults to 12 (6 hours)
+        my_predbat.args.pop("octopus_slot_max", None)
+        my_predbat.components = _MockComponents(_MockOctopusComponent("E-1R-IOG-SMB-TOU-25-12-12-H"))
+        result = my_predbat.get_octopus_slot_max()
+        if result != 12:
+            print("ERROR: Unset octopus_slot_max on an IOG-SMB tariff should default to 12, got {}".format(result))
+            failed = True
+
+        # Unset + older INTELLI-VAR tariff -> stays uncapped at 48
+        my_predbat.components = _MockComponents(_MockOctopusComponent("E-1R-INTELLI-VAR-25-01-01-H"))
+        result = my_predbat.get_octopus_slot_max()
+        if result != 48:
+            print("ERROR: Unset octopus_slot_max on an INTELLI-VAR tariff should default to 48, got {}".format(result))
+            failed = True
+
+        # Unset + no octopus component registered -> stays uncapped at 48
+        my_predbat.components = None
+        result = my_predbat.get_octopus_slot_max()
+        if result != 48:
+            print("ERROR: Unset octopus_slot_max with no octopus component should default to 48, got {}".format(result))
+            failed = True
+    finally:
+        if saved_args == "__unset__":
+            my_predbat.args.pop("octopus_slot_max", None)
+        else:
+            my_predbat.args["octopus_slot_max"] = saved_args
+        my_predbat.components = saved_components
+
+    if failed:
+        print("**** ❌ octopus_slot_max_default tests FAILED ****")
+    else:
+        print("**** ✅ octopus_slot_max_default tests PASSED ****")
+    return failed
+
+
 def run_load_octopus_slot_test(testname, my_predbat, slots, expected_slots, consider_full, car_soc, car_limit, car_loss):
     """
     Run a test for load_octopus_slot
@@ -93,7 +169,6 @@ def run_load_octopus_slots_tests(my_predbat):
         start_plus_15 = start + timedelta(minutes=15)
         start_minus_30 = start - timedelta(minutes=30)
         end = start + timedelta(minutes=60)
-        prev_soc = soc
         prev_soc2 = soc2
         soc += 5
         soc2 += 2.5

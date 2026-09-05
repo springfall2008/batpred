@@ -21,7 +21,7 @@ import copy
 from html import escape as escape_html
 from datetime import timedelta
 from predbat import THIS_VERSION_DISPLAY
-from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, MINUTE_WATT
+from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, MINUTE_WATT, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate
 from prediction import Prediction
 
@@ -50,6 +50,7 @@ REASON_TEMPLATES = {
     "manual_override_export": "You manually set this slot to export.",
     "manual_override_freeze_export": "You manually set this slot to freeze exporting.",
     "manual_override_demand": "You manually set this slot to demand mode.",
+    "mixed_slot_states": "This slot did not hold one state throughout - Predbat was in: {states}. The cell shows the most significant of them.",
 }
 
 
@@ -62,6 +63,58 @@ def yesterday_slot_is_exporting(slot_status):
     "exporting" alone would silently drop the export half of a real cross-charging slot.
     """
     return "exporting" in slot_status or "cross-charging" in slot_status
+
+
+def more_active_slot_status(current, candidate, precedence):
+    """Pick the more significant of two ``predbat.status`` strings, used to break a tie in
+    ``dominant_slot_status()`` below.
+
+    ``precedence`` is one of the most-active-first lists in const.py, matched case-insensitively and
+    exactly - "freeze exporting" contains "exporting", so a substring test would rank every export
+    sub-state as a full export. "Cross-charging" appears in neither list yet counts on both sides
+    (see ``yesterday_slot_is_exporting``); it ranks above everything, because a fleet charging and
+    discharging at once is the state a reader most needs to see. Anything else - Demand, Read-Only,
+    a Hold-for-car annotation - ranks last, and an incumbent is kept on a tie so the *first* of two
+    equal states wins rather than the last.
+    """
+    if not current:
+        return candidate
+
+    def rank(status):
+        if status == "cross-charging":
+            return -1
+        for index, entry in enumerate(precedence):
+            if status == entry.lower():
+                return index
+        return len(precedence)
+
+    return candidate if rank(candidate) < rank(current) else current
+
+
+def dominant_slot_status(minute_counts, precedence):
+    """Pick the ``predbat.status`` that held the most minutes of a history slot, from a
+    ``{status: minutes}`` tally.
+
+    ``calculate_yesterday()`` renders each 30-minute slot as a single charge or export state, but a
+    slot can legitimately contain more than one - a force export that hits its target part way
+    through drops to freeze export, and a manual override can change the state at any minute. The
+    reconstruction used to assign unconditionally as it scanned, so whichever state ran *last* won
+    and an earlier one that actually held the slot vanished: #4840's force export from 17:05-17:17
+    was erased by the freeze export that followed it at 17:18, and the History view showed no export
+    at all. The cell should instead show whichever state genuinely dominated the slot's minutes.
+
+    A tie - most often an exact even split - is broken with ``more_active_slot_status``, which also
+    carries the cross-charging special case.
+    """
+    if not minute_counts:
+        return ""
+
+    most_minutes = max(minute_counts.values())
+    dominant = ""
+    for status, minutes in minute_counts.items():
+        if minutes == most_minutes:
+            dominant = more_active_slot_status(dominant, status, precedence)
+    return dominant
 
 
 class Output:
@@ -1275,6 +1328,7 @@ class Output:
             soc_color = "#3AEE85"
             pv_symbol = ""
             split = False
+            raw_state_mixed = None
 
             if soc_percent < 20.0:
                 soc_color = "#F18261"
@@ -1444,6 +1498,22 @@ class Output:
                     state += " &#8526;"
                     raw_state_override = "Manual export freeze"
                     reason_parts.append({"code": "manual_override_freeze_export", "params": {}})
+
+            # A history slot can hold more than one state - Predbat re-runs every few minutes and a
+            # manual override can land on any minute - but a row shows exactly one. Mark a collapsed
+            # slot with an asterisk and list what actually happened in the row's reasons, which is a
+            # list and so copes with all six states a 30 minute slot can hold, unlike the two-way
+            # state/state2 split cell (#4843). Only calculate_yesterday()'s reconstruction sets
+            # "mixed" - forward plan windows never carry it, so the live plan is untouched.
+            mixed_states = []
+            if charge_window_n >= 0:
+                mixed_states += self.charge_window_best[charge_window_n].get("mixed", [])
+            if export_window_n >= 0:
+                mixed_states += self.export_window_best[export_window_n].get("mixed", [])
+            if mixed_states:
+                state += "*"
+                raw_state_mixed = [entry.capitalize() for entry in mixed_states]
+                reason_parts.append({"code": "mixed_slot_states", "params": {"states": ", ".join(raw_state_mixed)}})
 
             # Alert
             if in_alert:
@@ -1655,6 +1725,7 @@ class Output:
             json_row["state"] = raw_state
             json_row["state_target"] = raw_state_target
             json_row["state_override"] = raw_state_override
+            json_row["state_mixed"] = raw_state_mixed
             json_row["state_html"] = state
 
             json_row["reasons"] = reason_parts if reason_parts else demand_reason
@@ -1686,10 +1757,13 @@ class Output:
             json_row["show_limit"] = show_limit
             json_row["pv_forecast"] = raw_pv_forecast
             json_row["pv_forecast10"] = pv_forecast10
-            json_row["pv_forecast_total"] = raw_pv_total
+            # Rounded here rather than in the accumulator: these are running sums, so adding
+            # ~96 two-decimal values gives 0.41000000000000003 and the like. The accumulator
+            # keeps full precision so the rounding cannot drift over the length of the plan.
+            json_row["pv_forecast_total"] = dp2(raw_pv_total)
             json_row["load_forecast"] = raw_load_forecast
             json_row["load_forecast10"] = load_forecast10
-            json_row["load_forecast_total"] = raw_load_total
+            json_row["load_forecast_total"] = dp2(raw_load_total)
             json_row["clipped"] = clipped_change
 
             # Add color information for client-side rendering
@@ -1703,7 +1777,7 @@ class Output:
 
             if self.load_forecast:
                 json_row["extra_load"] = raw_extra_forecast
-                json_row["extra_load_total"] = raw_extra_forecast_total
+                json_row["extra_load_total"] = dp2(raw_extra_forecast_total)
                 json_row["extra_color"] = extra_color
             if self.num_cars > 0:
                 json_row["car_charging"] = car_charging_kwh
@@ -3014,6 +3088,14 @@ class Output:
             self.savings_last_updated = self.now_utc
             return
 
+        # Unlike cost above, missing carbon_today history isn't fatal to this function - carbon is an
+        # optional add-on metric, so a user who has just turned it on (and so has no history for it yet)
+        # should still get their savings/plan history, just with carbon_yesterday reading 0 until a full
+        # day of predbat.carbon_today history has accumulated for it to read back.
+        carbon_today_data = self.get_history_wrapper(entity_id=self.prefix + ".carbon_today", days=2, required=False) if self.carbon_enable else None
+        if self.carbon_enable and not carbon_today_data:
+            self.log("Warn: Calculate yesterday: No history for {}.carbon_today yet, carbon_yesterday will read 0 and carbon_total can't increment until a day of history has built up".format(self.prefix))
+
         self.log("Calculating data from yesterday for savings calculation")
 
         # step_data_history() only fills in offsets up to self.forecast_minutes + plan_interval_minutes.
@@ -3089,6 +3171,17 @@ class Output:
         cost_data_per_kwh, _ = minute_data(cost_today_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(minutes_back, 0.0)
         cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
+
+        # Get Carbon yesterday, read back the same way as cost above - predbat.carbon_today's own
+        # recorded history at 23:59 yesterday is its final value for the day, before it resets to 0.
+        # carbon_enable_real is captured now because self.carbon_enable is temporarily forced False
+        # further down (to keep the no-PV/battery baseline simulation from computing carbon too) for
+        # longer than this function's remaining "yesterday" publishing runs after it.
+        carbon_enable_real = self.carbon_enable
+        carbon_yesterday = 0.0
+        if carbon_today_data:
+            carbon_data, _ = minute_data(carbon_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+            carbon_yesterday = carbon_data.get(minutes_back, 0.0)
         cost_yesterday_array = {}
         for minute in range(0, end_record + self.minutes_now):
             cost_value = cost_data.get(minutes_back + 24 * 60 - minute - 5, 0.0)  # -5 gives 4 minutes into new data to allow for reset
@@ -3239,40 +3332,56 @@ class Output:
                 if "," in status:
                     # If there are multiple statuses take the first one
                     predbat_status[minute] = status.split(",")[0].strip()
+            # Ignore the first and last edge_minutes of each slot when they don't hold one state
+            # throughout - Predbat's reported status can lag a slot boundary by a minute or two while
+            # it catches up to a replan, and that leftover from the previous (or next) slot must not
+            # be mistaken for a real part of this one. A status occupying the *whole* edge window,
+            # though, is indistinguishable from a genuine replan landing right at the boundary, so it
+            # is trusted like any interior minute rather than discarded on principle.
+            edge_minutes = 5
             for minute in range(0, end_record + minutes_now, self.plan_interval_minutes):
                 minute_offset = minutes_now + end_record - minute
-                charge_during_slot = ""
-                export_during_slot = ""
+
+                # predbat_status is keyed by minutes AGO, so the status for plan-minute
+                # (minute + slot_offset) lives at (minute_offset - slot_offset).
+                slot_statuses = [predbat_status.get(minute_offset - slot_offset, "").lower() for slot_offset in range(self.plan_interval_minutes)]
+                tally_start = 0 if len(set(slot_statuses[:edge_minutes])) == 1 else edge_minutes
+                tally_end = self.plan_interval_minutes if len(set(slot_statuses[-edge_minutes:])) == 1 else self.plan_interval_minutes - edge_minutes
+
                 charge_start_minute = None
                 charge_end_minute = None
                 export_start_minute = None
                 export_end_minute = None
 
-                # Searching for charge or export in this slot, ignore the first and last 5 minutes to avoid edge effects
-                for slot_offset in range(5, self.plan_interval_minutes - 5):
-                    slot_minute = minute_offset - self.plan_interval_minutes + slot_offset
-                    slot_status = predbat_status.get(slot_minute, "").lower()
-                    real_minute = minute + slot_offset
+                # Walk exactly the minutes the tally below trusts. The two must agree: the tally
+                # decides *whether* a slot rebuilds a charge or export window and this walk decides
+                # *where* that window starts, so a state the tally counts but this walk never sees
+                # produces a window with start/end still None, and in_charge_window() then compares
+                # an int against None and takes down the whole update_pred() cycle (regression from #4872).
+                # A state found anywhere in the slot's leading edge window still snaps back to the
+                # slot boundary, as it always has - a state already running that early reads as
+                # having opened the slot, and the History view renders whole slots regardless.
+                for slot_offset in range(tally_start, tally_end):
+                    slot_status = slot_statuses[slot_offset]
+                    real_minute = minute if slot_offset <= edge_minutes else minute + slot_offset
 
                     # Cross-charging genuinely straddles both sides - track it as both an exporting
                     # and a charging slot (its name contains "charging" but not "exporting"), so
                     # these are independent "if"s rather than "if/elif".
-                    if yesterday_slot_is_exporting(slot_status):
-                        export_during_slot = slot_status
-                        if export_start_minute is None:
-                            export_start_minute = real_minute
-                            if slot_offset == 5:
-                                export_start_minute -= 5
-                            if charge_start_minute is not None:
-                                charge_end_minute = export_start_minute
-                    if "charging" in slot_status:
-                        charge_during_slot = slot_status
-                        if charge_start_minute is None:
-                            charge_start_minute = real_minute
-                            if slot_offset == 5:
-                                charge_start_minute -= 5
-                            if export_start_minute is not None:
-                                export_end_minute = charge_start_minute
+                    # One side starting *later* than the other ends the earlier one - the slot hands
+                    # off mid-way. Starting at the same minute is not a handoff but an overlap: both
+                    # run the whole slot, which is exactly what cross-charging is. Ending the earlier
+                    # side at the later one's start would then close it at its own start minute, and
+                    # a zero-width window renders as nothing at all - which is how the export half of
+                    # a cross-charging slot went missing again after #4466 restored it.
+                    if yesterday_slot_is_exporting(slot_status) and export_start_minute is None:
+                        export_start_minute = real_minute
+                        if charge_start_minute is not None and charge_start_minute < export_start_minute:
+                            charge_end_minute = export_start_minute
+                    if "charging" in slot_status and charge_start_minute is None:
+                        charge_start_minute = real_minute
+                        if export_start_minute is not None and export_start_minute < charge_start_minute:
+                            export_end_minute = charge_start_minute
 
                 # Assume slots end at end of period if not found
                 if export_end_minute is None and export_start_minute is not None:
@@ -3280,9 +3389,27 @@ class Output:
                 if charge_end_minute is None and charge_start_minute is not None:
                     charge_end_minute = minute + self.plan_interval_minutes
 
+                # Tally how many trusted minutes each status held, so the cell can show whichever one
+                # actually dominated the slot rather than whichever the scan above happened to detect
+                # first (#4843).
+                export_minute_counts = {}
+                charge_minute_counts = {}
+                for slot_offset in range(tally_start, tally_end):
+                    slot_status = slot_statuses[slot_offset]
+                    if yesterday_slot_is_exporting(slot_status):
+                        export_minute_counts[slot_status] = export_minute_counts.get(slot_status, 0) + 1
+                    if "charging" in slot_status:
+                        charge_minute_counts[slot_status] = charge_minute_counts.get(slot_status, 0) + 1
+
+                export_during_slot = dominant_slot_status(export_minute_counts, EXPORT_STATE_PRECEDENCE)
+                charge_during_slot = dominant_slot_status(charge_minute_counts, CHARGE_STATE_PRECEDENCE)
+
                 if yesterday_slot_is_exporting(export_during_slot):
                     # Assume exporting at this time
-                    self.export_window_best.append({"start": export_start_minute, "end": export_end_minute})
+                    export_window = {"start": export_start_minute, "end": export_end_minute}
+                    if len(export_minute_counts) > 1:
+                        export_window["mixed"] = list(export_minute_counts.keys())
+                    self.export_window_best.append(export_window)
                     if "freeze" in export_during_slot:
                         # Assume freeze export
                         self.export_limits_best.append(EXPORT_LIMIT_FREEZE)
@@ -3293,7 +3420,10 @@ class Output:
 
                 if "charging" in charge_during_slot:
                     # Assume charging at this time
-                    self.charge_window_best.append({"start": charge_start_minute, "end": charge_end_minute})
+                    charge_window = {"start": charge_start_minute, "end": charge_end_minute}
+                    if len(charge_minute_counts) > 1:
+                        charge_window["mixed"] = list(charge_minute_counts.keys())
+                    self.charge_window_best.append(charge_window)
                     if "freeze" in charge_during_slot:
                         # Assume freeze charge
                         self.charge_limit_best.append(self.reserve)
@@ -3344,6 +3474,7 @@ class Output:
         self.savings_today_predbat_soc = final_soc
         self.savings_today_actual = cost_yesterday
         self.cost_yesterday_car = cost_yesterday_car
+        self.carbon_yesterday = carbon_yesterday
 
         # Save state
         self.dashboard_item(
@@ -3363,6 +3494,17 @@ class Output:
                 "json": plan_json_yesterday,
             },
         )
+        if carbon_enable_real:
+            self.dashboard_item(
+                self.prefix + ".carbon_yesterday",
+                state=dp2(carbon_yesterday),
+                attributes={
+                    "friendly_name": "Carbon yesterday",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "g",
+                    "icon": "mdi:carbon-molecule",
+                },
+            )
         if num_cars > 0:
             self.dashboard_item(
                 self.prefix + ".cost_yesterday_car",

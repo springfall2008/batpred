@@ -23,6 +23,22 @@ TIME_FORMAT_SOLCAST = "%Y-%m-%dT%H:%M:%S.%f0%z"  # 2024-05-31T18:00:00.0000000Z
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
+
+# Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
+# downside case diverges harder than the central one
+CLOUD_FACTOR_PV10 = 0.2
+# Window the envelope cloud model conserves energy over. Matches the half-hour rate slot so the
+# modulation can never shift PV across a slot boundary, and gives six PREDICT_STEP buckets - enough
+# granularity for the duty cycle to follow the p10/p50/p90 band's own asymmetry.
+CLOUD_WINDOW_MINUTES = 30
+# Ceiling for the p90 series' own modulation, as a multiple of DC array kWp. p90 is the top
+# percentile the forecaster publishes, so its upside has no next percentile to reach for and is
+# extrapolated instead; this rail stops a wide band extrapolating into a physically impossible
+# array output. 1.2 allows for cloud-edge enhancement above nameplate.
+CLOUD_ARRAY_MARGIN = 1.2
+# Sentinel fetch_pv_forecast() returns when the forecast source declares no array size (Solcast and
+# the HA integrations). Treated as "unknown", not as a real 9999 kWp array.
+PV_ARRAY_KWP_UNKNOWN = 9999
 RUN_EVERY = 5
 # Forecast scenarios simulated by the planner.
 # PV_SCENARIO_PV10 must remain 1 so it stays interchangeable with the legacy pv10 boolean.
@@ -42,6 +58,13 @@ INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving 
 INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
 PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
+# How far ahead a manual override may be placed. The two horizons differ on purpose: a manual
+# charge/export/freeze/demand slot is bounded by the plan, since Predbat can only act on a slot the
+# plan reaches, whereas a rate override is future tariff data that only has to be REMEMBERED until
+# the plan reaches it - e.g. an energy supplier announcing a free-electricity hour several days out.
+# 7 days is the ceiling the 'Day HH:MM' selection format can express anyway.
+MANUAL_TIME_MAX_MINUTES = 48 * 60
+MANUAL_RATE_MAX_MINUTES = 7 * 24 * 60
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
@@ -69,3 +92,10 @@ PREDBAT_MODE_MONITOR = 0
 PREDBAT_MODE_CONTROL_SOC = 1
 PREDBAT_MODE_CONTROL_CHARGE = 2
 PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
+
+# Predbat's core charge/export status strings, ordered most-active-first. Used two ways: execute.py
+# resolves one headline status across a multi-inverter fleet (#4446), and output.py breaks a tie when
+# a history slot's dominant state is ambiguous - e.g. an even split between two states (#4843). Both
+# need the same answer to "which of these two states is the more significant one to show".
+CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
+EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]

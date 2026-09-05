@@ -159,7 +159,7 @@ def _test_carbon_initialization(my_predbat=None):
         print("  ✗ ERROR: Postcode not set correctly")
         failed = 1
 
-    if api.automatic != True:
+    if api.automatic is not True:
         print("  ✗ ERROR: Automatic flag not set correctly")
         failed = 1
 
@@ -188,7 +188,7 @@ def _test_fetch_carbon_data_success(my_predbat=None):
 
     with patch("carbon.aiohttp.ClientSession") as mock_session_class:
         mock_session_class.return_value = mock_session
-        result = run_async(api.fetch_carbon_data())
+        run_async(api.fetch_carbon_data())
 
         # Check data was collected (3 points per call * 2 calls)
         if len(api.carbon_data_points) != 6:
@@ -793,7 +793,7 @@ def _test_run_first_call(my_predbat=None):
         # Call run with first=True
         result = run_async(api.run(seconds=0, first=True))
 
-        if result != True:
+        if result is not True:
             print(f"ERROR: run() should return True")
             return 1
 

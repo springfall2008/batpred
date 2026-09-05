@@ -208,6 +208,8 @@ class Inverter:
             self.rest_getData = rest_getData
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
+        if "inverter_type" not in self.base.args:
+            self.log("Warn: Inverter {}: inverter_type is not set in apps.yaml, assuming GivEnergy (GE) - if this is not correct, set inverter_type to match your inverter, see the documentation".format(self.id))
 
         # Read user defined inverter type
         if "inverter" in self.base.args:
@@ -1831,12 +1833,33 @@ class Inverter:
         # Clamp reserve at max setting
         reserve = min(reserve, self.reserve_max)
 
+        reserve_entity = None
+        if not self.rest_data:
+            reserve_entity = self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="%")
+            if reserve_entity:
+                # Some components (e.g. GE Cloud) publish the inverter's own register bounds onto the entity's
+                # min/max attributes; respect them so we never ask for a value the device will silently clamp
+                # and confirm - otherwise write_and_poll_value's poll-back never matches the un-clamped target
+                # and the same failing write retries forever (GH#4826).
+                device_min = self.base.get_state_wrapper(reserve_entity, attribute="min", default=None)
+                device_max = self.base.get_state_wrapper(reserve_entity, attribute="max", default=None)
+                if device_min not in (None, ""):
+                    try:
+                        reserve = max(reserve, int(float(device_min) + 0.5))
+                    except (ValueError, TypeError):
+                        pass
+                if device_max not in (None, ""):
+                    try:
+                        reserve = min(reserve, int(float(device_max)))
+                    except (ValueError, TypeError):
+                        pass
+
         if current_reserve != reserve:
             self.base.log("Inverter {} Current Reserve is {}% and new target is {}%".format(self.id, dp0(current_reserve), dp0(reserve)))
             if self.rest_data:
                 self.rest_setReserve(reserve)
             else:
-                self.write_and_poll_value("reserve", self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="%"), reserve)
+                self.write_and_poll_value("reserve", reserve_entity, reserve)
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Target Reserve has been changed to {}% at {}".format(self.id, dp0(reserve), self.base.time_now_str()))
             self.mqtt_message(topic="set/reserve", payload=reserve)
@@ -2259,7 +2282,7 @@ class Inverter:
             if old_value != new_value:
                 ledger.note_write_attempt(entity_id)
 
-        for retry in range(INVERTER_MAX_RETRY):
+        for _retry in range(INVERTER_MAX_RETRY):
             if entity_base == "time":
                 service = entity_base + "/set_value"
                 self.base.call_service_wrapper(service, time=new_value, entity_id=entity_id)
@@ -2926,13 +2949,11 @@ class Inverter:
         hash_index = domain
         last_service_hash = self.base.last_service_hash.get(hash_index, "")
         this_service_hash = hash(str(service) + "_" + str(data) + "_" + str(extra_data))
+        service_repeat = last_service_hash == this_service_hash
 
-        if last_service_hash == this_service_hash:
-            service_repeat = True
-        else:
-            # Record the last service called
-            self.base.last_service_hash[hash_index] = this_service_hash
-            service_repeat = False
+        # Whether every call this template actually made was accepted. The hash that suppresses a
+        # repeat is only recorded at the end, and only if this holds - see the note below.
+        service_calls_ok = True
 
         for service_template in service_list:
             service_data = {}
@@ -2966,10 +2987,27 @@ class Inverter:
             elif service_name:
                 service_name = service_name.replace(".", "/")
                 self.log("Inverter {} Calling service {} domain {} service_name {} with data {}".format(self.id, service, domain, service_name, service_data))
-                self.base.call_service_wrapper(service_name, **service_data)
+                if not self.base.call_service_wrapper(service_name, **service_data):
+                    self.log("Warn: Inverter {} service {} domain {} service_name {} was not accepted, it will be retried next cycle".format(self.id, service, domain, service_name))
+                    service_calls_ok = False
             else:
                 self.log("Warn: Inverter {} unable to find service name for {}".format(self.id, service))
 
+        # Only remember the call once it has actually been accepted. Recording it up front - as this
+        # used to, before the calls were even made - meant a service that silently failed was
+        # deduplicated away on every subsequent cycle ("Skipped service ... as it was previously
+        # called"), so Predbat believed it had set a control it had not. #4876 saw predbat.status
+        # read Charging while the inverter's own display still showed its idle program, until the
+        # identical call was re-sent by hand. Dropping the record instead lets the next cycle reissue
+        # it naturally, without needing "repeat: True" on the template in apps.yaml.
+        if service_calls_ok:
+            self.base.last_service_hash[hash_index] = this_service_hash
+        else:
+            self.base.last_service_hash.pop(hash_index, None)
+
+        # Deliberately not reporting the call result here: callers use this return value to choose a
+        # fallback service (e.g. "if not charge_freeze_service: charge_stop_service"), so reporting a
+        # transient failure would silently downgrade a freeze into a stop rather than retrying it.
         return True
 
     def adjust_charge_immediate(self, target_soc, freeze=False):
@@ -3271,7 +3309,7 @@ class Inverter:
         """
         local_tz = pytz.timezone(self.base.get_arg("timezone", "Europe/London"))
 
-        for retry in range(INVERTER_MAX_RETRY):
+        for _retry in range(INVERTER_MAX_RETRY):
             self.base.call_service_wrapper("button/press", entity_id=entity_id)
             self.sleep(self.inv_write_and_poll_sleep)
             state = self.base.get_state_wrapper(entity_id, refresh=True)

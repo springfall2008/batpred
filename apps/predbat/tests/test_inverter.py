@@ -265,7 +265,7 @@ def test_adjust_charge_window(
         expect_data = [["dummy/setChargeSlot1", {"start": charge_start_time[0:5], "finish": charge_end_time[0:5]}]]
     else:
         expect_data = []
-    if prev_enable_charge != True:
+    if prev_enable_charge is not True:
         expect_data.append(["dummy/enableChargeSchedule", {"state": "enable"}])
 
     if json.dumps(expect_data) != json.dumps(rest_command):
@@ -317,6 +317,31 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
         expect_data = []
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
+        failed = True
+
+    return failed
+
+
+def test_adjust_reserve_device_bounds(test_name, ha, inv, prev_reserve, reserve, device_min, device_max, expect_reserve, reserve_min=4, reserve_max=100):
+    """
+    Test
+       inv.adjust_reserve(self, reserve) clamps its target against a component-published register
+       floor/ceiling (e.g. GE Cloud's "between:" validation rule surfaced onto the entity's min/max
+       attributes), rather than asking for a value the device will silently clamp-and-confirm to
+       something else forever (GH#4826)
+    """
+    failed = False
+    inv.reserve_percent = reserve_min
+    inv.reserve_min = reserve_min
+    inv.reserve_max = reserve_max
+
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    ha.dummy_items["number.reserve"] = {"state": prev_reserve, "min": device_min, "max": device_max}
+    inv.adjust_reserve(reserve)
+    if ha.get_state("number.reserve") != expect_reserve:
+        print("ERROR: Reserve should be {} got {}".format(expect_reserve, ha.get_state("number.reserve")))
         failed = True
 
     return failed
@@ -1444,6 +1469,71 @@ def test_call_service_template(test_name, my_predbat, inv, service_name="test", 
     return failed
 
 
+def test_call_service_template_retry(test_name, my_predbat, inv):
+    """A service call the HA layer rejects must be retried next cycle, not deduplicated away (#4876).
+
+    call_service_template() used to record the dedup hash before making the calls, and discard each
+    call's result. A service that silently failed was therefore treated as done, and every later
+    cycle with the same target logged "Skipped service ... as it was previously called" - so Predbat
+    believed it had set a control it had not. In #4876 that left a Deye sitting in its idle program
+    while predbat.status read Charging, until the identical call was re-sent by hand.
+
+    Note this is about the service call being *accepted*, not about the inverter's state: reading a
+    value back cannot settle it when the integration caches writes asynchronously.
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    ha = my_predbat.ha_interface
+    ha.service_store_enable = True
+    service_call = "retry_test_service"
+    my_predbat.args["retry_test"] = service_call
+    data = {"test": "data"}
+
+    try:
+        print("Test: a rejected call is retried on the next cycle")
+        my_predbat.last_service_hash = {}
+        ha.service_store_fail = {service_call}
+        inv.call_service_template("retry_test", data, domain="charge")
+        if not ha.get_service_store():
+            print("ERROR: the first call was never dispatched")
+            failed = True
+        if "charge" in my_predbat.last_service_hash:
+            print("ERROR: a rejected call was recorded as done - the next cycle will skip it")
+            failed = True
+        inv.call_service_template("retry_test", data, domain="charge")
+        if not ha.get_service_store():
+            print("ERROR: the call was not retried after being rejected - this is the #4876 hang")
+            failed = True
+
+        print("Test: once accepted, an identical call is deduplicated as before")
+        ha.service_store_fail = set()
+        my_predbat.last_service_hash = {}
+        inv.call_service_template("retry_test", data, domain="charge")
+        if not ha.get_service_store():
+            print("ERROR: the accepted call was never dispatched")
+            failed = True
+        inv.call_service_template("retry_test", data, domain="charge")
+        if ha.get_service_store():
+            print("ERROR: an accepted call was repeated - the dedup is meant to survive this fix")
+            failed = True
+
+        print("Test: a later rejection drops the earlier record rather than leaving it stale")
+        ha.service_store_fail = {service_call}
+        inv.call_service_template("retry_test", {"test": "other"}, domain="charge")
+        if "charge" in my_predbat.last_service_hash:
+            print("ERROR: the hash from the previous accepted call survived a rejection")
+            failed = True
+    finally:
+        ha.service_store_fail = set()
+        # Drain anything this test dispatched, or the next test in the module sees it as its own.
+        ha.get_service_store()
+        ha.service_store_enable = False
+        my_predbat.last_service_hash = {}
+
+    return failed
+
+
 def test_charge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     """
     Test charge window handling when time is illegal (e.g., 'unknown')
@@ -1464,7 +1554,7 @@ def test_charge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1504,7 +1594,7 @@ def test_charge_window_none_value(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1601,7 +1691,7 @@ def test_charge_window_rest_configured_but_no_data_yet(test_name, my_predbat, du
         return failed
 
     # Should set the same safe defaults as the "value is None" case
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1671,7 +1761,7 @@ def test_charge_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
         return True
 
     # Should set the same safe defaults as the REST case
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1748,7 +1838,7 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
         return True
 
     # Same safe defaults the discharge_start-is-None path already sets
-    if inv.discharge_enable_time != False:
+    if inv.discharge_enable_time is not False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
     # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
@@ -1843,7 +1933,7 @@ def test_discharge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.discharge_enable_time != False:
+    if inv.discharge_enable_time is not False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
     # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
@@ -1883,7 +1973,7 @@ def test_charge_window_invalid_format_time(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.charge_enable_time != False:
+    if inv.charge_enable_time is not False:
         print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
         failed = True
     if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
@@ -1923,7 +2013,7 @@ def test_discharge_window_invalid_format_time(test_name, my_predbat, dummy_items
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.discharge_enable_time != False:
+    if inv.discharge_enable_time is not False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
     # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
@@ -1965,7 +2055,7 @@ def test_discharge_window_none_value(test_name, my_predbat, dummy_items):
     inv.update_status(my_predbat.minutes_now)
 
     # Should set safe defaults
-    if inv.discharge_enable_time != False:
+    if inv.discharge_enable_time is not False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
     # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
@@ -2692,6 +2782,49 @@ def test_battery_scaling_invalid_value_clamped(test_name, my_predbat):
     return failed
 
 
+def test_inverter_type_default_warning(test_name, my_predbat):
+    """
+    Verify Inverter.__init__ warns when inverter_type is not set in apps.yaml and Predbat is
+    silently assuming GivEnergy (GE) - issue #4822, where a fully custom entity-based setup with
+    no inverter_type configured had its scheduled_discharge_enable entity silently overridden by
+    the GE fallback, with nothing in the log distinguishing an assumed GE from a configured one.
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    orig_inverter_type = my_predbat.args.get("inverter_type")
+    orig_log = my_predbat.log
+    my_predbat.args["givtcp_rest"] = None
+
+    def warned(log_messages):
+        return any("inverter_type is not set" in msg for msg in log_messages)
+
+    try:
+        # inverter_type entirely absent - must warn
+        my_predbat.args.pop("inverter_type", None)
+        log_messages = []
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        Inverter(my_predbat, 0)
+        if not warned(log_messages):
+            print("ERROR: expected a warning when inverter_type is not configured, got none")
+            failed = True
+
+        # inverter_type explicitly configured as GE - must not warn
+        my_predbat.args["inverter_type"] = ["GE"]
+        log_messages = []
+        Inverter(my_predbat, 0)
+        if warned(log_messages):
+            print("ERROR: unexpected warning when inverter_type is explicitly set to GE")
+            failed = True
+    finally:
+        my_predbat.log = orig_log
+        if orig_inverter_type is None:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = orig_inverter_type
+    return failed
+
+
 def test_rest_battery_capacity_fallback(test_name, my_predbat):
     """
     Verify that when V3 REST data omits Battery_Capacity_kWh and battery_nominal_capacity,
@@ -3043,6 +3176,10 @@ def run_inverter_tests(my_predbat_dummy):
 
     failed |= test_battery_scaling_invalid_value_clamped("battery_scaling_invalid_value_clamped", my_predbat)
 
+    failed |= test_inverter_type_default_warning("inverter_type_default_warning", my_predbat)
+    if failed:
+        return failed
+
     failed |= test_rest_battery_capacity_fallback("rest_capacity_fallback", my_predbat)
     if failed:
         return failed
@@ -3194,6 +3331,15 @@ def run_inverter_tests(my_predbat_dummy):
     if failed:
         return failed
 
+    # GH#4826: a device-published register floor above Predbat's requested target must be honoured
+    # so the write converges instead of retrying the unreachable target forever
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_min1", ha, inv, 5, 4, device_min=5, device_max=100, expect_reserve=5)
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_min2", ha, inv, 3, 4, device_min=5, device_max=100, expect_reserve=5)
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_max1", ha, inv, 10, 80, device_min=4, device_max=50, expect_reserve=50)
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_no_bounds", ha, inv, 4, 10, device_min=None, device_max=None, expect_reserve=10)
+    if failed:
+        return failed
+
     failed |= test_adjust_charge_window("adjust_charge_window1", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "00:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
     failed |= test_adjust_charge_window("adjust_charge_window2", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "23:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     failed |= test_adjust_charge_window("adjust_charge_window3", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "23:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
@@ -3295,6 +3441,7 @@ def run_inverter_tests(my_predbat_dummy):
     if failed:
         return failed
 
+    failed |= test_call_service_template_retry("test_service_retry", my_predbat, inv)
     failed |= test_call_service_template("test_service_simple1", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"})
     failed |= test_call_service_template("test_service_simple2", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False, repeat=True)
     failed |= test_call_service_template("test_service_simple3", my_predbat, inv, service_name="test_service", domain="discharge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False)
@@ -3383,7 +3530,7 @@ charge_start_service:
     """
     decoded_yaml = yaml.safe_load(dummy_yaml)
 
-    for repeat in range(2):
+    for _repeat in range(2):
         failed |= test_call_service_template(
             "test_service_complex5",
             my_predbat,

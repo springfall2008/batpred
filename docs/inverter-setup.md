@@ -200,7 +200,9 @@ Launch Predbat with hass.py (from the Predbat-addon repository) either via a Doc
 
 **Experimental**
 
-Predbat has a built-in AlphaESS Cloud integration for AlphaESS hybrid inverters via the AlphaESS Open API, providing monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 Home Assistant integration is required.
+Predbat has a built-in AlphaESS Cloud integration for AlphaESS hybrid inverters via the AlphaESS Open API, providing monitoring and timed charge control - no local Modbus/RS485 Home Assistant integration is required.
+
+**It cannot control export.** The AlphaESS Open API has no forced-export, working-mode or dispatch endpoint, and its discharge window turns out to be a *permission* window rather than a forced export, so neither Force Export nor Freeze Export reaches the grid - see [AlphaESS cannot be used to control export](apps-yaml.md#alphaess-cannot-be-used-to-control-export) for the detail and for why you should set `select.predbat_mode` to `Control charge` on these systems. Forced export is available on the hardware over local Modbus, just not over the cloud API.
 
 Nobody on the Predbat project has AlphaESS hardware, so this integration's wire behaviour is inferred from AlphaESS's published Open API documentation and the Home Assistant AlphaESS integration rather than confirmed against real inverters - every request and response is traced to the log by default so you can capture evidence for an issue report. A standalone diagnostics CLI (`apps/predbat/alphaess.py`) is included specifically so you can verify it against your own system, using the [diagnostics CLI](#verifying-with-the-alphaess-diagnostics-cli) below, before trusting Predbat with control.
 
@@ -250,7 +252,7 @@ python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET --unbind -
 
 **`--unbind` is one-way from Home Assistant/the CLI.** Once unbound, Predbat can no longer read or control that system, and there is no `--bind`-from-nothing shortcut back - re-binding needs a fresh verification code emailed to the owner, via `--verify` then `--bind` as above, or via the AlphaESS portal.
 
-See [AlphaESS Cloud API](apps-yaml.md#alphaess-cloud-api) in `apps.yaml` for the full list of `alphaess_*` settings, defaults and important behaviour to be aware of - including the write-timing, freeze-signalling, `export_limit` and `battery_rate_max` notes that apply to every AlphaESS install.
+See [AlphaESS Cloud API](apps-yaml.md#alphaess-cloud-api) in `apps.yaml` for the full list of `alphaess_*` settings, defaults and important behaviour to be aware of - including the export-control limitation above, and the write-timing, freeze-signalling, `export_limit` and `battery_rate_max` notes that apply to every AlphaESS install.
 
 ## Canadian Solar EP Cube
 
@@ -627,7 +629,7 @@ Copy the template [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfa
 
 Install the [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) integration via HACS and configure it with your Hanchu cloud account credentials. Confirm that inverter and battery sensors are appearing in Home Assistant before proceeding.
 
-### Step 1 — Create helpers
+### Hanchu Step 1 — Create helpers
 
 Create the following helpers in Home Assistant (Settings → Devices & Services → Helpers):
 
@@ -646,7 +648,7 @@ Create the following helpers in Home Assistant (Settings → Devices & Services 
 
 `input_text.hanchu_last_mode_action` tracks the last mode successfully applied so the bridge script can skip a redundant API call when Predbat reasserts a state that is already active.
 
-### Step 2 — Create the bridge script
+### Hanchu Step 2 — Create the bridge script
 
 All four of Predbat's service hooks call the same script, `script.hanchu_set_state_queued`, passing a `mode_action` field to indicate which state to apply. The script runs with `mode: queued` so if Predbat fires two calls close together — for example stopping a discharge and starting a charge in the same plan-evaluation cycle — Home Assistant queues the second call behind the first rather than letting both `device_control` calls race each other.
 
@@ -681,11 +683,24 @@ sequence:
     then:
       - stop: "No change — same action already applied, skipping API call"
   - variables:
-      start_seconds: "{{ (now() - now().replace(hour=0, minute=0, second=0, microsecond=0)).seconds }}"
-      tct_start: "{{ start_seconds if act == 'charge_start' else 0 }}"
-      tct_end: "{{ 39600 if act == 'charge_start' else 0 }}"      # 11:00:00
-      tdt_start: "{{ start_seconds if act == 'discharge_start' else 0 }}"
-      tdt_end: "{{ 86340 if act == 'discharge_start' else 0 }}"   # 23:59:00
+      # Convert HH:MM:SS time strings from Predbat sensors to seconds since midnight
+      charge_start_seconds: >-
+        {% set t = states('sensor.predbat_HC_0_charge_start_time').split(':') %}
+        {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+      charge_end_seconds: >-
+        {% set t = states('sensor.predbat_HC_0_charge_end_time').split(':') %}
+        {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+      discharge_start_seconds: >-
+        {% set t = states('sensor.predbat_HC_0_discharge_start_time').split(':') %}
+        {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+      discharge_end_seconds: >-
+        {% set t = states('sensor.predbat_HC_0_discharge_end_time').split(':') %}
+        {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+      # Set slot values based on action — zeroise inactive slots
+      tct_start: "{{ charge_start_seconds if act == 'charge_start' else 0 }}"
+      tct_end: "{{ charge_end_seconds if act == 'charge_start' else 0 }}"
+      tdt_start: "{{ discharge_start_seconds if act == 'discharge_start' else 0 }}"
+      tdt_end: "{{ discharge_end_seconds if act == 'discharge_start' else 0 }}"
   - action: hanchuess.device_control
     data:
       sn: YOURSERIAL
@@ -749,7 +764,81 @@ sequence:
 
 The script always writes all four time slot fields (`TCT_START_1`, `TCT_END_1`, `TDT_START_1`, `TDT_END_1`) on every call, zeroing whichever pair is not the active mode. This keeps charge and discharge mutually exclusive on the device without relying on separate stop/start calls landing in the right order.
 
-### Step 3 — Add the soc_kw template sensor
+### Hanchu Step 3 — Create the mid-window time update automation
+
+Predbat may revise its planned charge or discharge end time mid-window without issuing a new charge_start or discharge_start service call. Without this automation, the Hanchu would continue using the original end time written at the start of the window, potentially stopping charge or discharge earlier than Predbat intended.
+
+Create a new automation (Settings → Automations & Scenes → Automations → Add Automation → Edit in YAML) and paste the following, replacing YOURSERIAL with your device serial number:
+
+```yaml
+alias: Predbat - Update Hanchu Charge/Discharge Window Times
+description: >
+  Watches Predbat's charge and discharge end time sensors and updates the
+  Hanchu time slots when they change mid-window during an active charge or
+  discharge session.
+triggers:
+  - trigger: state
+    entity_id: sensor.predbat_HC_0_charge_end_time
+    id: charge_end_changed
+  - trigger: state
+    entity_id: sensor.predbat_HC_0_discharge_end_time
+    id: discharge_end_changed
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.to_state.state not in ['unknown', 'unavailable', '00:00:00'] }}
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: charge_end_changed
+          - condition: template
+            value_template: >-
+              {{ is_state('input_boolean.predbat_charge_start', 'on') }}
+        sequence:
+          - variables:
+              charge_start_seconds: >-
+                {% set t = states('sensor.predbat_HC_0_charge_start_time').split(':') %}
+                {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+              charge_end_seconds: >-
+                {% set t = trigger.to_state.state.split(':') %}
+                {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+          - action: hanchuess.device_control
+            data:
+              sn: YOURSERIAL
+              dev_type: "2"
+              value:
+                TCT_START_1: "{{ charge_start_seconds }}"
+                TCT_END_1: "{{ charge_end_seconds }}"
+                TDT_START_1: 0
+                TDT_END_1: 0
+      - conditions:
+          - condition: trigger
+            id: discharge_end_changed
+          - condition: template
+            value_template: >-
+              {{ is_state('input_boolean.predbat_discharge_start', 'on') }}
+        sequence:
+          - variables:
+              discharge_start_seconds: >-
+                {% set t = states('sensor.predbat_HC_0_discharge_start_time').split(':') %}
+                {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+              discharge_end_seconds: >-
+                {% set t = trigger.to_state.state.split(':') %}
+                {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
+          - action: hanchuess.device_control
+            data:
+              sn: YOURSERIAL
+              dev_type: "2"
+              value:
+                TCT_START_1: 0
+                TCT_END_1: 0
+                TDT_START_1: "{{ discharge_start_seconds }}"
+                TDT_END_1: "{{ discharge_end_seconds }}"
+mode: queued
+```
+
+### Hanchu Step 4 — Add the soc_kw template sensor
 
 Predbat requires a `soc_kw` sensor reporting battery state of charge in kWh. Add the following to your `configuration.yaml`:
 
@@ -767,7 +856,7 @@ template:
 
 Replace `YOURSERIAL` with your device serial number and `NN.NN` with your total battery capacity in kWh (for example `18.80` for a dual 9.4 kWh system). Restart Home Assistant after adding this.
 
-### Step 4 — Configure apps.yaml
+### Hanchu Step 5 — Configure apps.yaml
 
 - Replace `YOURSERIAL` throughout the template with your device serial number as it appears in your HA entity IDs
 - Adjust `inverter_limit`, `inverter_limit_charge`, `inverter_limit_discharge`, `inverter_limit_export` and `battery_rate_max` to match your inverter and battery rated capacity in watts
@@ -783,6 +872,7 @@ Replace `YOURSERIAL` with your device serial number and `NN.NN` with your total 
 - **Automation latency:** Start/stop commands are occasionally delayed by up to ~2 minutes due to HA scheduling. This has not caused any practical issues in production use.
 - **No charge/discharge enable toggle:** Hanchu has no explicit enable/disable for charge or discharge. The slot zeroing mechanism (setting both start and end to `00:00:00`) is the disable method.
 - **Min SOC:** Managed via `battery_min_soc` pointing directly to the Hanchu entity — no separate Predbat reserve setting needed.
+- **Mid-window time updates:** Predbat may revise its planned charge or discharge end time mid-window without issuing a new start service call. The mid-window automation above catches these changes and updates the Hanchu time slots accordingly, ensuring the inverter honours Predbat's revised plan rather than the original end time.
 
 ## Huawei
 

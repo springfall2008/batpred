@@ -1594,7 +1594,7 @@ class GatewayMQTT(ComponentBase):
             return
         if not self.is_alive() or not self._auto_configured:
             return
-        for suffix, serial in self._suffix_to_serial.items():
+        for _suffix, serial in self._suffix_to_serial.items():
             if serial not in self._inverter_reset_done:
                 await self.publish_command("inverter_reset", serial=serial)
                 self._inverter_reset_done.add(serial)

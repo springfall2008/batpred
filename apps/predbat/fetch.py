@@ -31,6 +31,9 @@ from const import (
     PREDBAT_MODE_MONITOR,
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
+    CLOUD_WINDOW_MINUTES,
+    CLOUD_ARRAY_MARGIN,
+    PV_ARRAY_KWP_UNKNOWN,
 )
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -71,6 +74,79 @@ class Fetch:
             return pv_factor
         else:
             return None
+
+    def get_cloud_duty(self, minutes_now, pv_data, pv_data10, pv_data90):
+        """Work out how many steps of each conservation window the envelope model spends raised.
+
+        Peaks reach the p90 ceiling and troughs reach the p10 floor together only when the up:down
+        step ratio matches the band's own asymmetry, (p50-p10):(p90-p50). Solcast's downside is
+        typically about twice its upside, so a fixed 1:1 alternation - all the pairwise model could
+        express - always under-reaches on one side.
+
+        Returns (n_up, n_down), or None when there is no upside band to reach for: a forecast source
+        that publishes no p90 falls back to a copy of the p50, and the caller must keep the legacy
+        proportional model rather than silently losing the cloud model altogether.
+        """
+        up_gap = 0.0
+        down_gap = 0.0
+        for minute in range(self.forecast_minutes):
+            nominal = pv_data.get(minute + minutes_now, 0.0)
+            up_gap += max(pv_data90.get(minute + minutes_now, 0.0) - nominal, 0.0)
+            down_gap += max(nominal - pv_data10.get(minute + minutes_now, 0.0), 0.0)
+
+        if up_gap <= 0:
+            return None
+
+        period = CLOUD_WINDOW_MINUTES // PREDICT_STEP
+        ratio = down_gap / up_gap
+        # Clamped to leave at least one step on each side - a window that is all up or all down has
+        # nothing to trade against and would leave the borrow outstanding.
+        n_up = int(min(max(round(period * ratio / (1.0 + ratio)), 1), period - 1))
+        return (n_up, period - n_up)
+
+    def resolve_pv_array_kwp(self, detected_kwp):
+        """Settle the DC array size the p90 cloud ceiling is capped against.
+
+        Forecast Solar and Open-Meteo declare kwp per array and fetch_pv_forecast already totals it,
+        so most setups need no configuration. Solcast and the HA integrations publish no array size
+        and arrive as the PV_ARRAY_KWP_UNKNOWN sentinel, leaving the cap inert - correct, since an
+        invented figure would be worse than none. apps.yaml wins over both: declared figures are
+        routinely understated, users entering the inverter rating or one string of two.
+        """
+        configured = self.get_arg("pv_array_kwp", 0.0)
+        if configured and configured > 0:
+            self.pv_array_kwp = float(configured)
+        elif detected_kwp and 0 < detected_kwp < PV_ARRAY_KWP_UNKNOWN:
+            self.pv_array_kwp = float(detected_kwp)
+        else:
+            self.pv_array_kwp = 0.0
+        return self.pv_array_kwp
+
+    def get_pv90_cloud_ceiling(self, minutes_now, pv_data, pv_data90):
+        """Build the per-minute ceiling the p90 series modulates toward.
+
+        p50 reaches for p90 and p10 reaches for p50, but p90 has no next percentile above it, so its
+        upside is extrapolated by continuing the band one width further. Leaving p90 unmodulated
+        instead is not neutral: it makes p90 the one smooth scenario, handing it an efficiency
+        bonus the other two do not get and biasing every comparison between them.
+
+        The extrapolation is capped at the DC array size times CLOUD_ARRAY_MARGIN, since a very wide
+        band can otherwise reach past anything the array could physically produce. The cap can never
+        pull the ceiling below p90 itself - that would invert the upside scenario into a downside
+        one, which is the same failure mode load_scaling90 is clamped against.
+        """
+        array_kwp = getattr(self, "pv_array_kwp", 0) or 0
+        cap = (array_kwp * CLOUD_ARRAY_MARGIN / 60.0) if array_kwp > 0 else None
+
+        ceiling = {}
+        for minute in range(self.forecast_minutes):
+            minute_absolute = minute + minutes_now
+            upside = pv_data90.get(minute_absolute, 0.0)
+            extended = upside + max(upside - pv_data.get(minute_absolute, 0.0), 0.0)
+            if cap is not None:
+                extended = max(min(extended, cap), upside)
+            ceiling[minute_absolute] = extended
+        return ceiling
 
     def filtered_today(self, time_data, resetmidnight=False, stamp=None):
         """
@@ -141,6 +217,8 @@ class Fetch:
         type_load=False,
         load_forecast={},
         cloud_factor=None,
+        cloud_ceiling=None,
+        cloud_duty=None,
         load_scaling_dynamic=None,
         base_offset=None,
         flip=False,
@@ -184,7 +262,7 @@ class Fetch:
             # Extra load adding in (e.g. heat pump)
             load_extra = 0
             if load_forecast:
-                for offset in range(step):
+                for _offset in range(step):
                     load_extra += self.get_from_incrementing(load_forecast, minute_absolute, backwards=False)
             if load_adjust:
                 load_extra += load_adjust.get(minute_absolute, 0) * step / float(self.plan_interval_minutes)  # The kWh figure is for the plan interval period, so divide by plan_interval_minutes and times by step
@@ -195,15 +273,89 @@ class Fetch:
             if minute_absolute in load_baseline:
                 values[minute] = max(values[minute], load_baseline[minute_absolute])
 
-        # Simple divergence model keeps the same total but brings PV/Load up and down every 5 minutes
+        # Envelope-driven divergence model. Where the legacy model below swings by a fraction of
+        # the local value, this one swings toward a real per-minute ceiling - the next forecast
+        # percentile up - so the amplitude follows what the forecaster actually said about
+        # uncertainty at that time of day rather than one horizon-wide scalar.
+        #
+        # Conservation is per CLOUD_WINDOW_MINUTES rather than per adjacent pair. That is the whole
+        # point of the window: a pair can only trade 1:1, so a trough can never fall further than
+        # the peak beside it rose, and with an asymmetric p10/p50/p90 band the peak is the narrow
+        # side. Six steps to a window allow an uneven duty cycle (n_up up, n_down down), which lets
+        # peaks reach the ceiling while troughs still fall far enough to change the plan.
+        if cloud_ceiling and cloud_duty:
+            n_up, n_down = cloud_duty
+            period = n_up + n_down
+            # flip offsets the pattern by n_up so a flipped series lowers exactly where the plain
+            # one raises - the antiphase the legacy model got from a 1:1 alternation, generalised
+            # to an uneven duty cycle.
+            phase = n_up if flip else 0
+            for window_start in range(0, self.forecast_minutes, CLOUD_WINDOW_MINUTES):
+                offsets = [minute for minute in range(window_start, min(window_start + CLOUD_WINDOW_MINUTES, self.forecast_minutes), step)]
+                ups = [minute for minute in offsets if (((minute + minutes_now) // step) + phase) % period < n_up]
+                downs = [minute for minute in offsets if minute not in ups]
+                if not ups or not downs:
+                    continue
+                window_total = sum(values[minute] for minute in offsets)
+                headroom = {minute: max(sum(cloud_ceiling.get(minute + minutes_now + offset, 0.0) for offset in range(step)) - values[minute], 0.0) for minute in ups}
+                want = sum(headroom.values())
+                # Each down step can give back at most what it holds, so the window can never be
+                # driven negative and never has to leave a borrow outstanding.
+                room = sum(max(values[minute] - (load_baseline.get(minute + minutes_now, 0.0) if load_baseline else 0.0), 0.0) for minute in downs)
+                borrow = min(want, room)
+                if borrow <= 0:
+                    continue
+                for minute in ups:
+                    values[minute] = dp4(values[minute] + headroom[minute] * borrow / want)
+                for minute in downs:
+                    floor = load_baseline.get(minute + minutes_now, 0.0) if load_baseline else 0.0
+                    values[minute] = dp4(values[minute] - borrow * max(values[minute] - floor, 0.0) / room)
+                # dp4 on each step leaves up to half a milliwatt-hour per step unaccounted for.
+                # Push that residual onto the roomiest down step, which recovers the window total on
+                # any window holding meaningful energy - the scenarios are compared against each
+                # other, so a systematic drift in one of them is a bias in the plan, not a rounding
+                # detail. It is not guaranteed: the correction is floored at zero, so a window whose
+                # roomiest down step holds less than the residual keeps the remainder. In practice
+                # that is confined to near-empty dawn and dusk windows and measures around 0.001 kWh
+                # over a 48 hour horizon.
+                drift = sum(values[minute] for minute in offsets) - window_total
+                if drift:
+                    roomiest = max(downs, key=lambda minute: values[minute])
+                    values[roomiest] = dp4(max(values[roomiest] - drift, 0.0))
+
+        # Simple divergence model that raises and lowers alternate steps so the planner stops
+        # assuming PV exactly blankets load. It is approximately - not exactly - total-preserving:
+        # a raised step borrows, and the following step repays only what its own value can cover
+        # (`min(cloud_diff, values[minute])`), so a borrow larger than the step that follows it is
+        # not fully given back. Repaying exactly needs the outstanding debt tracked separately from
+        # the next borrow, which is a rewrite of the model rather than a tweak here.
         if cloud_factor and cloud_factor > 0:
+            last_minute = self.forecast_minutes - step
             for minute in range(0, self.forecast_minutes, step):
-                cloud_on = (int((minute + self.minutes_now) / 5) + 1 if flip else 0) % 2
+                # The inner parentheses matter: a conditional expression binds looser than "+", so
+                # "int(...) + 1 if flip else 0" is "(int(...) + 1) if flip else 0" - which is a
+                # constant 0 whenever flip is False, leaving every non-flipped caller unmodulated.
+                # flip only means anything as an antiphase to a modulated base, so it is the offset
+                # that is conditional, not the whole expression.
+                #
+                # Keyed off the minutes_now parameter, not self.minutes_now: every other minute in
+                # this function comes from the parameter, and output.py already calls it with 0.
+                # That also keeps the result a pure function of the inputs, which the replay and
+                # test paths rely on for determinism.
+                cloud_on = (int((minute + minutes_now) / step) + (1 if flip else 0)) % 2
                 if cloud_on > 0:
-                    cloud_diff += min(values[minute] * cloud_factor, values.get(minute + 5, 0) * cloud_factor)
-                    values[minute] += cloud_diff
+                    # Don't borrow on the final step - the fill loop above runs a plan interval
+                    # past forecast_minutes, so values.get(minute + step) finds a real bucket that
+                    # this loop will never reach to repay, leaking that borrow into the total.
+                    if minute < last_minute:
+                        cloud_diff += min(values[minute] * cloud_factor, values.get(minute + step, 0) * cloud_factor)
+                        values[minute] += cloud_diff
                 else:
-                    subtract = min(cloud_diff, values[minute])
+                    # The dynamic load baseline is a floor, applied in the fill loop above. The
+                    # subtract has to respect it or the modulation walks straight back through it -
+                    # only ever an issue since the load arrays started being modulated at all.
+                    floor = load_baseline.get(minute + minutes_now, 0.0) if load_baseline else 0.0
+                    subtract = min(cloud_diff, max(values[minute] - floor, 0.0))
                     values[minute] -= subtract
                     cloud_diff = 0
                 values[minute] = dp4(values[minute])
@@ -353,11 +505,11 @@ class Fetch:
         if zero_periods:
             self.log("Warn: Found {} periods of zero load with power data, filling using power integration".format(len(zero_periods)))
             # Print the first 5 periods for debugging
-            for i, (period_start, period_end, base_value) in enumerate(zero_periods[:5]):
+            for _i, (period_start, period_end, base_value) in enumerate(zero_periods[:5]):
                 start_timestamp = self.now_utc - timedelta(minutes=period_start)
                 self.log("Zero load period starting at {} ({} minutes) for {} minutes with base value {}".format(start_timestamp.strftime(TIME_FORMAT), period_start, period_end - period_start + 1, base_value))
 
-            for period_start, period_end, base_value in zero_periods:
+            for period_start, period_end, _base_value in zero_periods:
                 # Integrate power data over this period
                 # First calculate total energy consumed in this period
                 total_energy = 0
@@ -511,7 +663,7 @@ class Fetch:
         if num_gaps > 0:
             self.log("Warn: Found {} gaps in load_today totalling {} minutes to fill using average data".format(len(gap_list), num_gaps))
             # Print the first 5 gaps for debugging
-            for i, (gap_start, gap_length) in enumerate(gap_list[:5]):
+            for _i, (gap_start, gap_length) in enumerate(gap_list[:5]):
                 gap_start_timestamp = self.now_utc - timedelta(minutes=gap_start)
                 self.log("Gap starting at {} ({} minutes) for {} minutes".format(gap_start_timestamp.strftime(TIME_FORMAT), gap_start, gap_length))
 

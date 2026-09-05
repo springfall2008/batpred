@@ -345,6 +345,45 @@ def run_rate_add_io_slots_tests(my_predbat):
         expected_rates_17[minute] = 4.0
     failed |= run_rate_add_io_slots_test("test17_dup_does_not_waste_cap", my_predbat, slots_17, True, 2, expected_rates_17)
 
+    # Test 18: Zero kWh slot in the past does not consume cap budget or get the cheap rate.
+    # A dispatch that delivered (or was withdrawn / never actually happened and simply hasn't been
+    # metered as) zero kWh shouldn't eat into the day's slot cap the way a genuine dispatch does.
+    # 13 slots yesterday (all fully in the past), index 4 is zero kWh: without the fix, all 13
+    # compete for the 12-slot cap and the 13th (chronologically last) loses out; with the fix the
+    # zero-kWh slot is skipped entirely, leaving 12 real slots - all of which fit under the cap.
+    print("\n**** Test 18: Zero kWh slot in the past does not consume cap budget ****")
+    slots = []
+    expected_rates = {}
+    for i in range(13):
+        slot_start = midnight_utc - timedelta(days=1) + timedelta(minutes=i * 30)
+        slot_end = slot_start + timedelta(minutes=30)
+        kwh = 0 if i == 4 else 2.5
+        slots.append({"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": kwh, "source": "smart-charge", "location": "AT_HOME"})
+        yesterday_minute = -1440 + i * 30
+        for minute in range(yesterday_minute, yesterday_minute + 30):
+            expected_rates[minute] = 10.0 if i == 4 else 4.0  # the zero-kWh slot itself is left at the default rate
+
+    failed |= run_rate_add_io_slots_test("test18_zero_kwh_past_excluded", my_predbat, slots, True, 12, expected_rates)
+
+    # Test 19: Zero kWh slot in the future still counts toward the cap and gets the cheap rate -
+    # the Test 18 exclusion is scoped to slots that have already happened, not ones still to come
+    # (a future planned dispatch's kWh is usually synthesised rather than genuinely zero, but the
+    # cap logic must not rely on that - it should treat a future zero-kWh slot the same as before).
+    print("\n**** Test 19: Zero kWh slot in the future is not excluded ****")
+    slots = []
+    expected_rates = {}
+    for i in range(13):  # 13 slots today, starting at 13:00 (after minutes_now=10:00, and after the
+        # midday cap boundary so all 13 land in the same midday-to-midday period), zero-kwh at index 4
+        slot_start = midnight_utc + timedelta(hours=13) + timedelta(minutes=i * 30)
+        slot_end = slot_start + timedelta(minutes=30)
+        kwh = 0 if i == 4 else 2.5
+        slots.append({"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": kwh, "source": "smart-charge", "location": "AT_HOME"})
+        start_minute = 780 + i * 30  # 13:00 = minute 780
+        for minute in range(start_minute, start_minute + 30):
+            expected_rates[minute] = 4.0 if i < 12 else 10.0  # the zero-kWh slot at i=4 still consumes a cap slot
+
+    failed |= run_rate_add_io_slots_test("test19_zero_kwh_future_not_excluded", my_predbat, slots, True, 12, expected_rates)
+
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes
 

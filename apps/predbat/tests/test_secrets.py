@@ -61,9 +61,6 @@ def test_secrets_loading():
     with open("secrets.yaml", "w") as f:
         yaml.dump(secrets_data, f)
 
-    # Create a test apps.yaml with !secret tags
-    test_config = {"pred_bat": {"module": "predbat", "class": "PredBat", "api_key": "!secret test_api_key", "username": "!secret test_username"}}
-
     # Write YAML with !secret tags (manually to preserve the tag)
     with open("test_apps.yaml", "w") as f:
         f.write("pred_bat:\n")
@@ -106,8 +103,73 @@ def test_secrets_loading():
     return False  # False = success in Predbat test framework
 
 
+def test_mask_secret_yaml_text():
+    """The apps.yaml file download is redacted without being rewritten.
+
+    /debug_apps serves the file as the user wrote it, and it sits next to the live download as
+    the file people attach to bug reports. Redacting the parsed args would hand back a
+    regenerated document with the comments stripped, so this redacts the text instead: comments,
+    ordering and quoting survive, credential values do not.
+
+    Mutation check: dropping the TaggedScalar guard redacts '!secret' references too, and
+    removing the is_secret_key() call leaves every credential in place - both fail below.
+    """
+    from utils import mask_secret_yaml_text
+
+    failed = False
+    print("**** Testing apps.yaml text redaction ****")
+
+    source = """# My Predbat config
+pred_bat:
+  # Octopus settings
+  octopus_api_key: 'REAL-OCTOPUS-KEY'
+  octopus_api_account: A-REAL-ACCOUNT
+  ha_key: !secret ha_token
+  battery_size: 9.5
+  solis_inverter_sn: SN-VISIBLE
+  forecast_solar:
+    - postcode: SW1A 1AA
+      api_key: REAL-NESTED-KEY
+"""
+    masked = mask_secret_yaml_text(source)
+
+    for secret in ("REAL-OCTOPUS-KEY", "A-REAL-ACCOUNT", "REAL-NESTED-KEY"):
+        if secret in masked:
+            print("ERROR: {} survived text redaction:\n{}".format(secret, masked))
+            failed = True
+
+    # A '!secret' reference names a credential, it does not contain one - and which secret a key
+    # resolves to is exactly what you need when an integration will not authenticate.
+    if "!secret ha_token" not in masked:
+        print("ERROR: a '!secret' reference was redacted or rewritten:\n{}".format(masked))
+        failed = True
+
+    # The point of redacting the text rather than the args: it still reads like their own file.
+    if "# My Predbat config" not in masked or "# Octopus settings" not in masked:
+        print("ERROR: comments were lost, so the download no longer matches the user's file:\n{}".format(masked))
+        failed = True
+
+    if "9.5" not in masked or "SN-VISIBLE" not in masked or "SW1A 1AA" not in masked:
+        print("ERROR: redaction damaged values that must stay readable:\n{}".format(masked))
+        failed = True
+
+    # Unparseable input must raise, so the route fails closed rather than serving raw text.
+    try:
+        mask_secret_yaml_text("pred_bat:\n  key: [unclosed\n")
+        print("ERROR: invalid YAML was accepted instead of raising, so the route could serve it unredacted")
+        failed = True
+    except Exception:
+        pass
+
+    if not failed:
+        print("**** test_mask_secret_yaml_text PASSED ****")
+    return failed
+
+
 def run_secrets_tests(my_predbat=None):
     """
     Run all secrets tests
     """
-    return test_secrets_loading()
+    failed = test_secrets_loading()
+    failed |= test_mask_secret_yaml_text()
+    return failed

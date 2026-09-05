@@ -756,7 +756,7 @@ class HAInterface(ComponentBase):
 
                 # Fail all pending requests on connection drop
                 with self.ws_pending_lock:
-                    for req_id, req_info in list(self.ws_pending_requests.items()):
+                    for _req_id, req_info in list(self.ws_pending_requests.items()):
                         req_info["result_holder"]["error"] = "connection_lost"
                         req_info["result_holder"]["success"] = False
                         req_info["event"].set()
