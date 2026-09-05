@@ -3194,10 +3194,16 @@ class Octopus:
                         else:
                             saved_slots.add(minute)
 
-                        # Calculate which day this minute belongs to (day boundary at midday)
+                        # Calculate which day this slot belongs to (day boundary at midday)
                         # Period 0 = noon today (720) to 11:59 tomorrow (2159), etc.
                         # Python's floor division handles negative numbers correctly
-                        day_offset = (minute - 720) // (24 * 60)
+                        #
+                        # Key this on the slot's START, not the current minute: a window that opens in
+                        # the evening and runs past noon the next day would otherwise cross into the
+                        # next period part-way through and be handed a second budget, re-stamping its
+                        # tail at rate_min_base in the middle of the day-rate block. load_octopus_slots
+                        # already charges a window to its start period the same way.
+                        day_offset = (start_minutes - 720) // (24 * 60)
 
                         # Initialise counter for this day if needed
                         if day_offset not in slots_per_day:
