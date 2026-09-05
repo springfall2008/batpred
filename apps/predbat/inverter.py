@@ -23,7 +23,7 @@ import pytz
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
 from givtcp_rest import GivTCPRest
-from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, EXPORT_LIMIT_IDLE
+from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, EXPORT_LIMIT_IDLE, INVERTER_WRITE_POLL_INTERVAL, INVERTER_WRITE_POLL_MAX_INTERVAL
 from control_ledger import generation_from_state, OWNED, UNOWNED
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
 
@@ -77,6 +77,53 @@ class Inverter:
         Sleep for x seconds
         """
         time.sleep(seconds)
+
+    def _entity_is_predbat_published(self, entity_id):
+        """
+        Whether this entity is published by a Predbat component rather than a third-party integration.
+
+        base.dashboard_index_app records the owning component for every entity Predbat publishes
+        itself (see Output.dashboard_item). Such an entity only ever changes once that component
+        has applied the write and republished it - GivTCPComponent does its REST write inline off
+        the HA event, and verifies it against the inverter before republishing - so the moment the
+        new value appears it is real and there is nothing left to wait for.
+        """
+        published = getattr(self.base, "dashboard_index_app", None)
+        return bool(published) and entity_id in published
+
+    def _poll_after_write(self, entity_id, matched, refresh=True, required_unit=None):
+        """
+        Spend one write_and_poll_sleep interval waiting for a written value, and return the last read.
+
+        inv_write_and_poll_sleep is a timeout, not a known duration: the HA service call returns as
+        soon as Home Assistant has accepted it, and the value appears only once whatever owns the
+        entity has actually applied it. Sleeping the whole interval before the first look charged
+        every write the worst case - a GivTCP REST write lands in well under a second, so switching
+        to export (about five entity writes at 10s each) took roughly 50s of which almost all was
+        spent waiting for work that was already finished.
+
+        Only entities Predbat publishes itself are polled. A third-party integration's entity keeps
+        the flat sleep: some report a written value optimistically and revert it when the device
+        rejects the write, and the full interval is what gives that revert time to show up.
+
+        matched(state) decides whether a read is the value that was written - each caller compares
+        differently (fuzzy numeric, exact string, on/off).
+        """
+        if not self._entity_is_predbat_published(entity_id):
+            self.sleep(self.inv_write_and_poll_sleep)
+            return self.base.get_state_wrapper(entity_id, refresh=refresh, required_unit=required_unit)
+
+        waited = 0.0
+        delay = INVERTER_WRITE_POLL_INTERVAL
+        while True:
+            state = self.base.get_state_wrapper(entity_id, refresh=refresh, required_unit=required_unit)
+            remaining = self.inv_write_and_poll_sleep - waited
+            if matched(state) or remaining <= 0:
+                return state
+            step = min(delay, remaining)
+            self.sleep(step)
+            waited += step
+            delay = min(delay * 2, INVERTER_WRITE_POLL_MAX_INTERVAL)
 
     def auto_restart(self, reason):
         """
@@ -1995,8 +2042,13 @@ class Inverter:
                 service = base_entity + "/turn_" + ("on" if new_value else "off")
                 self.base.call_service_wrapper(service, entity_id=entity_id)
 
-            self.sleep(self.inv_write_and_poll_sleep)
-            current_state = self.base.get_state_wrapper(entity_id=entity_id, refresh=domain != "sensor")
+            def switch_matched(state):
+                """Whether a read back reports the on/off value that was just written."""
+                if isinstance(state, str):
+                    state = state.lower() in ["on", "enable", "true"]
+                return state == new_value
+
+            current_state = self._poll_after_write(entity_id, switch_matched, refresh=domain != "sensor")
             raw_state = current_state
             if isinstance(current_state, str):
                 current_state = current_state.lower() in ["on", "enable", "true"]
@@ -2071,8 +2123,17 @@ class Inverter:
                     ledger.clear(entity_id)
                 return True
 
-            self.sleep(self.inv_write_and_poll_sleep)
-            current_state = self.base.get_state_wrapper(entity_id, refresh=domain != "sensor", required_unit=required_unit)
+            def value_matched(state):
+                """Whether a read back is the value that was just written, within the fuzzy tolerance."""
+                if isinstance(new_value, str):
+                    return state == new_value
+                try:
+                    state = float(state)
+                except (ValueError, TypeError):
+                    state = 0.0
+                return abs(state - new_value) <= fuzzy
+
+            current_state = self._poll_after_write(entity_id, value_matched, refresh=domain != "sensor", required_unit=required_unit)
             raw_state = current_state
             if isinstance(new_value, str):
                 matched = current_state == new_value
@@ -2151,8 +2212,7 @@ class Inverter:
                 if ledger is not None:
                     ledger.clear(entity_id)
                 return True
-            self.sleep(self.inv_write_and_poll_sleep)
-            old_value = self.base.get_state_wrapper(entity_id, refresh=True)
+            old_value = self._poll_after_write(entity_id, lambda state: state == new_value)
             if old_value == new_value:
                 self.base.log("Inverter {} Wrote {} to {} successfully".format(self.id, name, new_value))
                 self.count_register_writes += 1
