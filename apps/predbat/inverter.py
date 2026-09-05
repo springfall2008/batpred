@@ -267,6 +267,15 @@ class Inverter:
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
         self.inv_has_fox_inverter_mode = INVERTER_DEF[self.inverter_type].get("has_fox_inverter_mode", False)
+        # Whether this "power" mode inverter type needs a synthetic charge_rate/discharge_rate HA
+        # entity auto-created when it's REST-less (see the elif not self.rest_data branch below).
+        # Defaults True to match every "power" mode type's existing behaviour - the underlying need
+        # (a REST-less "power" inverter has nowhere else to persist the computed rate, #3311) isn't
+        # specific to one inverter, it applies to any of them run without REST (e.g. GE's own
+        # documented "if not using REST" case). An explicit, discoverable per-type flag rather than
+        # silently inferring "needs one" from whatever is/isn't already in args - and gives a lever
+        # to opt a specific type out later if one is found that genuinely never needs it.
+        self.inv_needs_charge_rate_entity = INVERTER_DEF[self.inverter_type].get("has_charge_rate_entity", True)
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -553,12 +562,36 @@ class Inverter:
             self.base.args["charge_limit"][id] = self.create_entity("charge_limit", 100, device_class=None, uom="%", icon="mdi:target")
 
         if self.inv_output_charge_control != "power":
+            # "current" (and "none") mode: charge_rate is always a synthetic mirror of the real
+            # current-based control, not something a user configures directly, so it's always
+            # (re)created here regardless of whatever - if anything - is already in args.
             max_charge = self.battery_rate_max_charge * MINUTE_WATT
             max_discharge = self.battery_rate_max_discharge * MINUTE_WATT
             self.create_missing_arg("charge_rate", max_charge)
             self.create_missing_arg("discharge_rate", max_discharge)
             self.base.args["charge_rate"][id] = self.create_entity("charge_rate", max_charge, uom="W", device_class="power")
             self.base.args["discharge_rate"][id] = self.create_entity("discharge_rate", max_discharge, uom="W", device_class="power")
+        elif not self.rest_data and self.inv_needs_charge_rate_entity:
+            # "power" mode inverters normally write the rate straight to the inverter (REST/cloud
+            # API) with no HA entity involved, so charge_rate is usually left for the user to
+            # configure only if they want one (e.g. GE's "if not using REST" apps.yaml comment) -
+            # unlike "current" mode above, an already-configured value here is real, not a
+            # placeholder, so it must not be overwritten. But a REST-less "power" inverter that's
+            # driven by a script rather than a native register (Solax, #3311) still needs
+            # get_current_charge_rate()/adjust_charge_rate() to have *something* to read/write -
+            # without an entity the computed rate has nowhere to be stored and reads back as
+            # battery_rate_max_raw instead, sending full power to the script regardless of what
+            # was actually planned. has_charge_rate_entity (INVERTER_DEF) declares which inverter
+            # types actually need this; still gated on "not already configured" too, so a real
+            # user-configured entity is never clobbered.
+            max_charge = self.battery_rate_max_charge * MINUTE_WATT
+            max_discharge = self.battery_rate_max_discharge * MINUTE_WATT
+            if "charge_rate" not in self.base.args:
+                self.create_missing_arg("charge_rate", max_charge)
+                self.base.args["charge_rate"][id] = self.create_entity("charge_rate", max_charge, uom="W", device_class="power")
+            if "discharge_rate" not in self.base.args:
+                self.create_missing_arg("discharge_rate", max_discharge)
+                self.base.args["discharge_rate"][id] = self.create_entity("discharge_rate", max_discharge, uom="W", device_class="power")
 
         if not self.inv_has_ge_inverter_mode and not self.inv_has_fox_inverter_mode and not self.inv_has_ge_eco_toggle:
             self.create_missing_arg("inverter_mode", "Eco")
