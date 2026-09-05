@@ -1033,7 +1033,7 @@ class SigenergyAPI(ComponentBase):
         Sigenergy MQTT command payloads nest per-system commands one level down inside a list,
         so a top-level-only rewrite would still leak anything a future payload carries there.
         Tuples are included because json.dumps() serialises tuples as JSON arrays.
-        Sets/frozensets are handled for log safety, even though json.dumps() does not
+        Sets/frozen sets are handled for log safety, even though json.dumps() does not
         serialise them by default.
         """
         if isinstance(payload, dict):
