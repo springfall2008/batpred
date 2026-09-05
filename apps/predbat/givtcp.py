@@ -131,6 +131,50 @@ GIVTCP_SENSORS = {
     "battery_dod_soh": {"icon": "mdi:battery-heart-outline"},
 }
 
+# Human-readable names for every entity above, prefixed with the inverter index at publish time
+# (see _attributes). Without a friendly_name Home Assistant falls back to showing the raw entity
+# id, which is how the whole fleet ended up displayed as "predbat_givtcp_0_charge_rate".
+#
+# Written out rather than derived from the key so the units and initialisms read properly - the
+# key "soc_kw" holds kWh and would title-case to "Soc Kw" - matching how gecloud's attribute_table
+# names its entities. Every key in GIVTCP_CONTROLS and GIVTCP_SENSORS must appear here.
+GIVTCP_FRIENDLY_NAMES = {
+    # Controls
+    "charge_rate": "Charge Rate",
+    "discharge_rate": "Discharge Rate",
+    "charge_limit": "Charge Limit",
+    "reserve": "Reserve",
+    "discharge_target_soc": "Discharge Target SoC",
+    "charge_limit_enable": "Charge Limit Enable",
+    "scheduled_charge_enable": "Scheduled Charge Enable",
+    "scheduled_discharge_enable": "Scheduled Discharge Enable",
+    "charge_start_time": "Charge Start Time",
+    "charge_end_time": "Charge End Time",
+    "discharge_start_time": "Discharge Start Time",
+    "discharge_end_time": "Discharge End Time",
+    "inverter_mode": "Inverter Mode",
+    "pause_mode": "Pause Mode",
+    "pause_start_time": "Pause Start Time",
+    "pause_end_time": "Pause End Time",
+    # Sensors
+    "soc_kw": "SoC kWh",
+    "soc_percent": "SoC %",
+    "battery_power": "Battery Power",
+    "pv_power": "PV Power",
+    "grid_power": "Grid Power",
+    "load_power": "Load Power",
+    "battery_voltage": "Battery Voltage",
+    "soc_max": "Battery Capacity",
+    "battery_temperature": "Battery Temperature",
+    "inverter_time": "Inverter Time",
+    "battery_rate_max": "Battery Max Rate",
+    "inverter_limit": "Inverter Limit",
+    "battery_calibration": "Battery Calibration",
+    "battery_soh": "Battery State of Health",
+    "battery_dod": "Battery Depth of Discharge",
+    "battery_dod_soh": "Battery Scaling",
+}
+
 # Discovery values Inverter.__init__ used to read straight off the REST blob. Published as sensors
 # and claimed below so that path becomes an ordinary entity read like every other inverter type.
 # Published only when GivTCP reports the underlying Control field, so claimed per key the same way
@@ -370,6 +414,19 @@ class GivTCPComponent(ComponentBase):
     def _entity_id(self, domain, n, control):
         return "{}.{}_givtcp_{}_{}".format(domain, self.prefix, n, control)
 
+    def _attributes(self, n, control):
+        """
+        The published attributes for one entity of inverter n: the shared table's, plus its name.
+
+        Always a fresh copy. GIVTCP_CONTROLS/GIVTCP_SENSORS are module constants shared by every
+        inverter in the fleet, so writing the per-inverter friendly name (or the per-inverter min
+        and max that the rate and reserve entities go on to set) into one would hand every other
+        inverter whichever value published last.
+        """
+        attributes = dict(GIVTCP_CONTROLS[control][2] if control in GIVTCP_CONTROLS else GIVTCP_SENSORS[control])
+        attributes["friendly_name"] = "GivTCP {} {}".format(n, GIVTCP_FRIENDLY_NAMES[control])
+        return attributes
+
     async def publish_data(self):
         """Publish current status as HA entities for every configured inverter."""
         for n, rest in enumerate(self.rest):
@@ -387,8 +444,8 @@ class GivTCPComponent(ComponentBase):
                 # for a GE inverter from exactly this attribute, so publishing the generic value would
                 # tell it the battery can take 20kW.
                 max_battery_rate = rest.max_battery_rate()
-                charge_rate_attributes = dict(GIVTCP_CONTROLS["charge_rate"][2])
-                discharge_rate_attributes = dict(GIVTCP_CONTROLS["discharge_rate"][2])
+                charge_rate_attributes = self._attributes(n, "charge_rate")
+                discharge_rate_attributes = self._attributes(n, "discharge_rate")
                 if max_battery_rate:
                     charge_rate_attributes["max"] = max_battery_rate
                     discharge_rate_attributes["max"] = max_battery_rate
@@ -405,7 +462,7 @@ class GivTCPComponent(ComponentBase):
                 self.dashboard_item(self._entity_id("number", n, "discharge_rate"), state=rest.inverter.rest_data.get("Control", {}).get("Battery_Discharge_Rate", 0), attributes=discharge_rate_attributes, app="givtcp")
                 target_soc = rest.target_soc
                 if target_soc is not None:
-                    self.dashboard_item(self._entity_id("number", n, "charge_limit"), state=target_soc, attributes=GIVTCP_CONTROLS["charge_limit"][2], app="givtcp")
+                    self.dashboard_item(self._entity_id("number", n, "charge_limit"), state=target_soc, attributes=self._attributes(n, "charge_limit"), app="givtcp")
                 # Inverter clamps its reserve target to this entity's min/max (GH#4826) so it never asks
                 # for a value the device silently clamps and confirms, which would leave
                 # write_and_poll_value retrying forever - set_reserve() verifies an exact match.
@@ -419,7 +476,7 @@ class GivTCPComponent(ComponentBase):
                 # 0), so it lowers the advertised minimum. It never raises it: keeping a target above a
                 # policy floor is Inverter's own reserve_percent job, and duplicating that here would put
                 # the same rule in two places that can disagree.
-                reserve_attributes = dict(GIVTCP_CONTROLS["reserve"][2])
+                reserve_attributes = self._attributes(n, "reserve")
                 battery_min_soc = self.get_arg("battery_min_soc", default=None, index=n)
                 if battery_min_soc is not None:
                     try:
@@ -443,48 +500,48 @@ class GivTCPComponent(ComponentBase):
                 else:
                     discharge_target = rest.read_discharge_target()
                     if discharge_target is not None:
-                        self.dashboard_item(self._entity_id("number", n, "discharge_target_soc"), state=discharge_target, attributes=GIVTCP_CONTROLS["discharge_target_soc"][2], app="givtcp")
+                        self.dashboard_item(self._entity_id("number", n, "discharge_target_soc"), state=discharge_target, attributes=self._attributes(n, "discharge_target_soc"), app="givtcp")
 
                 # Only when GivTCP reports it: see GivTCPRest.charge_target_enabled
                 charge_target_enabled = rest.charge_target_enabled
                 if charge_target_enabled is not None:
-                    self.dashboard_item(self._entity_id("switch", n, "charge_limit_enable"), state="on" if charge_target_enabled else "off", attributes=GIVTCP_CONTROLS["charge_limit_enable"][2], app="givtcp")
+                    self.dashboard_item(self._entity_id("switch", n, "charge_limit_enable"), state="on" if charge_target_enabled else "off", attributes=self._attributes(n, "charge_limit_enable"), app="givtcp")
                 # Only when GivTCP reports them: an unknown published as "off" would tell Predbat the
                 # schedule is disabled and have it write to turn it back on.
                 charge_enable_time = rest.charge_enable_time
                 if charge_enable_time is not None:
-                    self.dashboard_item(self._entity_id("switch", n, "scheduled_charge_enable"), state="on" if charge_enable_time else "off", attributes=GIVTCP_CONTROLS["scheduled_charge_enable"][2], app="givtcp")
+                    self.dashboard_item(self._entity_id("switch", n, "scheduled_charge_enable"), state="on" if charge_enable_time else "off", attributes=self._attributes(n, "scheduled_charge_enable"), app="givtcp")
                     published.add("scheduled_charge_enable")
                 discharge_enable_time = rest.discharge_enable_time
                 if discharge_enable_time is not None:
-                    self.dashboard_item(self._entity_id("switch", n, "scheduled_discharge_enable"), state="on" if discharge_enable_time else "off", attributes=GIVTCP_CONTROLS["scheduled_discharge_enable"][2], app="givtcp")
+                    self.dashboard_item(self._entity_id("switch", n, "scheduled_discharge_enable"), state="on" if discharge_enable_time else "off", attributes=self._attributes(n, "scheduled_discharge_enable"), app="givtcp")
                     published.add("scheduled_discharge_enable")
 
                 control = rest.inverter.rest_data.get("Control", {})
-                self.dashboard_item(self._entity_id("select", n, "inverter_mode"), state=control.get("Mode", "Eco"), attributes=GIVTCP_CONTROLS["inverter_mode"][2], app="givtcp")
+                self.dashboard_item(self._entity_id("select", n, "inverter_mode"), state=control.get("Mode", "Eco"), attributes=self._attributes(n, "inverter_mode"), app="givtcp")
 
                 # v3 only, and only when the inverter actually has the register - see
                 # GIVTCP_AUTO_CONFIG_PAUSE_MODE_KEYS. Publishing a fallback for a register GivTCP never
                 # reported made a control that does not exist look real to Predbat.
                 if rest.inverter.rest_v3 and rest.pause_mode_supported:
-                    self.dashboard_item(self._entity_id("select", n, "pause_mode"), state=control["Battery_pause_mode"], attributes=GIVTCP_CONTROLS["pause_mode"][2], app="givtcp")
+                    self.dashboard_item(self._entity_id("select", n, "pause_mode"), state=control["Battery_pause_mode"], attributes=self._attributes(n, "pause_mode"), app="givtcp")
 
                 timeslots = rest.inverter.rest_data.get("Timeslots", {})
                 if rest.inverter.rest_v3 and rest.pause_slots_supported:
-                    self.dashboard_item(self._entity_id("select", n, "pause_start_time"), state=timeslots["Battery_pause_start_time_slot"], attributes=GIVTCP_CONTROLS["pause_start_time"][2], app="givtcp")
-                    self.dashboard_item(self._entity_id("select", n, "pause_end_time"), state=timeslots["Battery_pause_end_time_slot"], attributes=GIVTCP_CONTROLS["pause_end_time"][2], app="givtcp")
+                    self.dashboard_item(self._entity_id("select", n, "pause_start_time"), state=timeslots["Battery_pause_start_time_slot"], attributes=self._attributes(n, "pause_start_time"), app="givtcp")
+                    self.dashboard_item(self._entity_id("select", n, "pause_end_time"), state=timeslots["Battery_pause_end_time_slot"], attributes=self._attributes(n, "pause_end_time"), app="givtcp")
 
-                self.dashboard_item(self._entity_id("select", n, "charge_start_time"), state=timeslots.get("Charge_start_time_slot_1", "00:00:00"), attributes=GIVTCP_CONTROLS["charge_start_time"][2], app="givtcp")
-                self.dashboard_item(self._entity_id("select", n, "charge_end_time"), state=timeslots.get("Charge_end_time_slot_1", "00:00:00"), attributes=GIVTCP_CONTROLS["charge_end_time"][2], app="givtcp")
-                self.dashboard_item(self._entity_id("select", n, "discharge_start_time"), state=timeslots.get("Discharge_start_time_slot_1", "00:00:00"), attributes=GIVTCP_CONTROLS["discharge_start_time"][2], app="givtcp")
-                self.dashboard_item(self._entity_id("select", n, "discharge_end_time"), state=timeslots.get("Discharge_end_time_slot_1", "00:00:00"), attributes=GIVTCP_CONTROLS["discharge_end_time"][2], app="givtcp")
+                self.dashboard_item(self._entity_id("select", n, "charge_start_time"), state=timeslots.get("Charge_start_time_slot_1", "00:00:00"), attributes=self._attributes(n, "charge_start_time"), app="givtcp")
+                self.dashboard_item(self._entity_id("select", n, "charge_end_time"), state=timeslots.get("Charge_end_time_slot_1", "00:00:00"), attributes=self._attributes(n, "charge_end_time"), app="givtcp")
+                self.dashboard_item(self._entity_id("select", n, "discharge_start_time"), state=timeslots.get("Discharge_start_time_slot_1", "00:00:00"), attributes=self._attributes(n, "discharge_start_time"), app="givtcp")
+                self.dashboard_item(self._entity_id("select", n, "discharge_end_time"), state=timeslots.get("Discharge_end_time_slot_1", "00:00:00"), attributes=self._attributes(n, "discharge_end_time"), app="givtcp")
 
                 soc_kwh = rest.soc_kwh
                 if soc_kwh is not None:
-                    self.dashboard_item(self._entity_id("sensor", n, "soc_kw"), state=soc_kwh, attributes=GIVTCP_SENSORS["soc_kw"], app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "soc_kw"), state=soc_kwh, attributes=self._attributes(n, "soc_kw"), app="givtcp")
                 soc_percent = rest.inverter.rest_data.get("Power", {}).get("Power", {}).get("SOC", None)
                 if soc_percent is not None:
-                    self.dashboard_item(self._entity_id("sensor", n, "soc_percent"), state=soc_percent, attributes=GIVTCP_SENSORS["soc_percent"], app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "soc_percent"), state=soc_percent, attributes=self._attributes(n, "soc_percent"), app="givtcp")
 
                 # Discovery values - see GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS. Each is only published when
                 # GivTCP actually reports it, so a missing one falls back to the user's own apps.yaml
@@ -512,7 +569,7 @@ class GivTCPComponent(ComponentBase):
 
                 soc_max = design_capacity
                 if soc_max:
-                    self.dashboard_item(self._entity_id("sensor", n, "soc_max"), state=soc_max, attributes=GIVTCP_SENSORS["soc_max"], app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "soc_max"), state=soc_max, attributes=self._attributes(n, "soc_max"), app="givtcp")
                     published.add("soc_max")
 
                 if soh is not None:
@@ -520,41 +577,41 @@ class GivTCPComponent(ComponentBase):
                     # defaults to 1.0 and can be supplied per inverter with givtcp_battery_dod. Inverter
                     # applies one scaling factor, so the combined product is what battery_scaling points at.
                     dod = float(self.get_arg("givtcp_battery_dod", default=1.0, index=n))
-                    self.dashboard_item(self._entity_id("sensor", n, "battery_soh"), state=soh, attributes=GIVTCP_SENSORS["battery_soh"], app="givtcp")
-                    self.dashboard_item(self._entity_id("sensor", n, "battery_dod"), state=dod, attributes=GIVTCP_SENSORS["battery_dod"], app="givtcp")
-                    self.dashboard_item(self._entity_id("sensor", n, "battery_dod_soh"), state=dp4(soh * dod), attributes=GIVTCP_SENSORS["battery_dod_soh"], app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "battery_soh"), state=soh, attributes=self._attributes(n, "battery_soh"), app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "battery_dod"), state=dod, attributes=self._attributes(n, "battery_dod"), app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "battery_dod_soh"), state=dp4(soh * dod), attributes=self._attributes(n, "battery_dod_soh"), app="givtcp")
 
                 battery_temperature = rest.battery_temperature()
                 if battery_temperature is not None:
-                    self.dashboard_item(self._entity_id("sensor", n, "battery_temperature"), state=battery_temperature, attributes=GIVTCP_SENSORS["battery_temperature"], app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "battery_temperature"), state=battery_temperature, attributes=self._attributes(n, "battery_temperature"), app="givtcp")
                     published.add("battery_temperature")
 
                 inverter_time = rest.inverter_time()
                 if inverter_time:
-                    self.dashboard_item(self._entity_id("sensor", n, "inverter_time"), state=inverter_time, attributes=GIVTCP_SENSORS["inverter_time"], app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "inverter_time"), state=inverter_time, attributes=self._attributes(n, "inverter_time"), app="givtcp")
                     published.add("inverter_time")
 
                 if max_battery_rate:
-                    self.dashboard_item(self._entity_id("sensor", n, "battery_rate_max"), state=max_battery_rate, attributes=GIVTCP_SENSORS["battery_rate_max"], app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "battery_rate_max"), state=max_battery_rate, attributes=self._attributes(n, "battery_rate_max"), app="givtcp")
 
                 max_inverter_rate = rest.max_inverter_rate()
                 if max_inverter_rate:
-                    self.dashboard_item(self._entity_id("sensor", n, "inverter_limit"), state=max_inverter_rate, attributes=GIVTCP_SENSORS["inverter_limit"], app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "inverter_limit"), state=max_inverter_rate, attributes=self._attributes(n, "inverter_limit"), app="givtcp")
                     published.add("inverter_limit")
 
                 # Always published, unlike the values above: "not calibrating" is a real answer that
                 # Predbat needs, and an absent entity would be indistinguishable from one
-                self.dashboard_item(self._entity_id("sensor", n, "battery_calibration"), state="on" if rest.in_calibration() else "off", attributes=GIVTCP_SENSORS["battery_calibration"], app="givtcp")
+                self.dashboard_item(self._entity_id("sensor", n, "battery_calibration"), state="on" if rest.in_calibration() else "off", attributes=self._attributes(n, "battery_calibration"), app="givtcp")
                 published.add("battery_calibration")
 
                 power = rest.power_readings()
                 if power:
-                    self.dashboard_item(self._entity_id("sensor", n, "battery_power"), state=power["battery_power"], attributes=GIVTCP_SENSORS["battery_power"], app="givtcp")
-                    self.dashboard_item(self._entity_id("sensor", n, "pv_power"), state=power["pv_power"], attributes=GIVTCP_SENSORS["pv_power"], app="givtcp")
-                    self.dashboard_item(self._entity_id("sensor", n, "grid_power"), state=power["grid_power"], attributes=GIVTCP_SENSORS["grid_power"], app="givtcp")
-                    self.dashboard_item(self._entity_id("sensor", n, "load_power"), state=power["load_power"], attributes=GIVTCP_SENSORS["load_power"], app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "battery_power"), state=power["battery_power"], attributes=self._attributes(n, "battery_power"), app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "pv_power"), state=power["pv_power"], attributes=self._attributes(n, "pv_power"), app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "grid_power"), state=power["grid_power"], attributes=self._attributes(n, "grid_power"), app="givtcp")
+                    self.dashboard_item(self._entity_id("sensor", n, "load_power"), state=power["load_power"], attributes=self._attributes(n, "load_power"), app="givtcp")
                     if power["battery_voltage"] is not None:
-                        self.dashboard_item(self._entity_id("sensor", n, "battery_voltage"), state=power["battery_voltage"], attributes=GIVTCP_SENSORS["battery_voltage"], app="givtcp")
+                        self.dashboard_item(self._entity_id("sensor", n, "battery_voltage"), state=power["battery_voltage"], attributes=self._attributes(n, "battery_voltage"), app="givtcp")
                         published.add("battery_voltage")
             except Exception as e:
                 self.log("Warn: GivTCP: failed to publish inverter {} at {}: {}".format(n, rest.inverter.rest_api, e))

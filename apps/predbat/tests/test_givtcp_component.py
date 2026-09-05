@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 from tests.test_infra import run_async
 from mock_base import MockBase
-from givtcp import GivTCPComponent, GIVTCP_POLL_SECONDS, GIVTCP_REDISCOVER_SECONDS, DISCHARGE_TARGET_UNSUPPORTED_MODELS
+from givtcp import GivTCPComponent, GIVTCP_POLL_SECONDS, GIVTCP_REDISCOVER_SECONDS, DISCHARGE_TARGET_UNSUPPORTED_MODELS, GIVTCP_CONTROLS, GIVTCP_SENSORS, GIVTCP_FRIENDLY_NAMES
 
 
 def _rest_data_blob(
@@ -1849,6 +1849,106 @@ def test_pause_gate_needs_pause_support_on_every_inverter(my_predbat=None):
     return 1 if failed else 0
 
 
+def test_every_published_entity_has_a_friendly_name(my_predbat=None):
+    """
+    Every entity this component publishes carries a per-inverter friendly_name.
+
+    Without one Home Assistant falls back to showing the raw entity id, so the whole GivTCP
+    fleet appeared in the UI as "predbat_givtcp_0_charge_rate" and friends. Every other
+    inverter component (gecloud, fox, solax, solis, alphaess) names its entities; this one
+    published none at all.
+
+    The index has to be in the name as well as the entity id - a two-inverter fleet otherwise
+    shows two identically-named copies of every control.
+
+    Asserted over whatever publish_data() actually emits rather than against a fixed list, so a
+    newly published entity cannot be added without a name.
+    """
+    failed = False
+    base, component = _make_component()
+    component.rest[0].inverter.rest_v3 = True
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    run_async(component.publish_data())
+
+    published = [entity_id for entity_id in base.entities if "givtcp" in entity_id]
+    if len(published) < 20:
+        print("ERROR: only {} entities published - the fixture is not exercising the publish".format(len(published)))
+        failed = True
+
+    for entity_id in published:
+        attributes = base.entities[entity_id].get("attributes") or {}
+        friendly_name = attributes.get("friendly_name")
+        if not friendly_name:
+            print("ERROR: {} published with no friendly_name".format(entity_id))
+            failed = True
+            continue
+        if not friendly_name.startswith("GivTCP 0 "):
+            print("ERROR: {} friendly_name '{}' is not prefixed with its inverter index".format(entity_id, friendly_name))
+            failed = True
+
+    if not failed:
+        print("PASS: all {} published entities carry an inverter-prefixed friendly_name".format(len(published)))
+    return 1 if failed else 0
+
+
+def test_friendly_names_are_not_written_back_into_the_shared_tables(my_predbat=None):
+    """
+    A second inverter gets its own name, not the first one's.
+
+    GIVTCP_CONTROLS/GIVTCP_SENSORS are module constants shared by the whole fleet, so the name
+    has to go onto a per-publish copy. Mutating the table in place would give every inverter
+    whichever index published last - and would quietly do the same to the per-inverter min/max
+    the rate and reserve entities already set.
+    """
+    failed = False
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    for rest in component.rest:
+        rest.inverter.rest_v3 = True
+        rest.inverter.rest_data = _rest_data_blob()
+    run_async(component.publish_data())
+
+    for n in (0, 1):
+        entity_id = "number.predbat_givtcp_{}_charge_rate".format(n)
+        expected = "GivTCP {} Charge Rate".format(n)
+        got = (base.entities.get(entity_id, {}).get("attributes") or {}).get("friendly_name")
+        if got != expected:
+            print("ERROR: {} named '{}', expected '{}'".format(entity_id, got, expected))
+            failed = True
+
+    # The shared table itself must be untouched
+    if "friendly_name" in GIVTCP_CONTROLS["charge_rate"][2]:
+        print("ERROR: the friendly name was written back into the shared GIVTCP_CONTROLS table")
+        failed = True
+
+    if not failed:
+        print("PASS: each inverter gets its own friendly name and the shared tables are untouched")
+    return 1 if failed else 0
+
+
+def test_every_control_and_sensor_has_a_friendly_name_defined(my_predbat=None):
+    """
+    GIVTCP_FRIENDLY_NAMES covers every key in GIVTCP_CONTROLS and GIVTCP_SENSORS.
+
+    _attributes() looks the name up unconditionally, so a control or sensor added to either table
+    without one raises KeyError mid-publish and takes that inverter's whole cycle down. Catching
+    the omission here rather than at runtime is the point of this test.
+    """
+    failed = False
+    missing = [key for key in list(GIVTCP_CONTROLS) + list(GIVTCP_SENSORS) if key not in GIVTCP_FRIENDLY_NAMES]
+    if missing:
+        print("ERROR: no friendly name defined for: {}".format(", ".join(sorted(missing))))
+        failed = True
+
+    stale = [key for key in GIVTCP_FRIENDLY_NAMES if key not in GIVTCP_CONTROLS and key not in GIVTCP_SENSORS]
+    if stale:
+        print("ERROR: friendly names defined for entities that are not published: {}".format(", ".join(sorted(stale))))
+        failed = True
+
+    if not failed:
+        print("PASS: all {} controls and sensors have a friendly name".format(len(GIVTCP_FRIENDLY_NAMES)))
+    return 1 if failed else 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -1943,6 +2043,9 @@ def test_givtcp_component(my_predbat=None):
         ("pause_unsupported_config", test_pause_keys_not_auto_configured_without_pause_support, "pause keys unclaimed without pause registers"),
         ("pause_mode_only", test_pause_mode_kept_when_only_the_time_window_is_missing, "pause_mode kept when only slots are missing"),
         ("pause_mixed_support", test_pause_gate_needs_pause_support_on_every_inverter, "pause needs support on every inverter"),
+        ("friendly_names", test_every_published_entity_has_a_friendly_name, "every published entity has a friendly name"),
+        ("friendly_names_per_inverter", test_friendly_names_are_not_written_back_into_the_shared_tables, "friendly names are per-inverter copies"),
+        ("friendly_names_complete", test_every_control_and_sensor_has_a_friendly_name_defined, "friendly name table covers every entity"),
     ]
 
     passed = 0
