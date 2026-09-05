@@ -1366,6 +1366,15 @@ This requires at least several days of historical data with charging periods of 
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set).
+- **givtcp_battery_dod** - Optional depth of discharge for a GivTCP (REST) battery, one per inverter, default 1.0.
+GivTCP does not report DoD, so set this if your battery cannot use its full nameplate capacity (e.g. 0.8 for an 80% DoD
+battery). Predbat publishes `battery_soh` (measured capacity / design capacity) and combines it with this value into
+`battery_dod_soh`, which `battery_scaling` is pointed at - so the planned battery size is design capacity x SoH x DoD.
+SoH comes from the per-module `Battery_Capacity` vs `Battery_Design_Capacity` the BMS reports under `Battery_Details`.
+- **battery_calibration** - Optional sensor name reporting whether the battery is currently being calibrated (`on`/`off`).
+A calibration cycle deliberately drives the battery outside its normal SoC range, so while one is running any plan would be
+wrong and Predbat disables itself for that inverter. Leave unset if your inverter does not report this - an absent sensor
+means "never calibrating". Set automatically for GivTCP (REST) users.
 
 #### Power Data
 
@@ -1547,7 +1556,22 @@ To check your REST is working open up the readData API point in a Web browser e.
 
 If you get a bunch of inverter information back then it's working!
 
-Note that Predbat will still retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
+With **givtcp_rest** set, Predbat reads the GivTCP REST API itself and publishes what it finds as its own
+entities (`sensor.predbat_givtcp_0_*` and friends), then points its own settings at them - including
+**inverter_type**, **num_inverters**, the control entities, and the daily energy totals **load_today**,
+**import_today**, **export_today** and **pv_today**. You do not need to configure any of those by hand,
+and anything you do set for them is overridden.
+
+Predbat also publishes the battery flows and the lifetime counters -
+`sensor.predbat_givtcp_<n>_battery_{charge,discharge}_today` and
+`sensor.predbat_givtcp_<n>_{load,import,export,pv,battery_charge,battery_discharge}_total`. Nothing in
+Predbat reads these - they are there for you, since on a REST-only setup (GivTCP's own Home Assistant
+integration not installed) they are the only GivEnergy energy entities in Home Assistant, and grid
+in/out, solar and battery in/out are the set its Energy Dashboard asks for.
+
+- **givtcp_automatic** - Optional, defaults to `true`. Set to `false` to stop Predbat pointing its settings
+at those entities, so you can configure `apps.yaml` yourself. The entities are still published either way,
+so you can name them by hand - or point an individual setting at a sensor of your own.
 
 - **givtcp_rest_power_ignore** - Optional, defaults to false. When set to `true` for a given inverter, Predbat will use the configured sensor entities
 (load_power, pv_power, grid_power, battery_power) instead of reading power values from the GivTCP REST API.

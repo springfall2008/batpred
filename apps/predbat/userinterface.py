@@ -783,6 +783,17 @@ class UserInterface:
                 if not key.startswith("__") and not callable(getattr(inverter, key)):
                     if key.startswith("base"):
                         pass
+                    elif getattr(inverter.__dict__[key], "base", None) is not None:
+                        # A helper object that keeps its own back-reference to Predbat (the GivTCP
+                        # REST client, Inverter.givtcp). yaml.dump() walks arbitrary objects through
+                        # __reduce_ex__(), so emitting one serialises the entire PredBat graph
+                        # through its .base: the dump either dies on the first unpicklable thing it
+                        # meets - an in-flight coroutine, the open log file - or, worse, succeeds and
+                        # writes ha_interface's access token and every other member
+                        # is_debug_excluded_key() deliberately drops into the file users attach to
+                        # public bug reports. Skipping "base" alone was enough only while every
+                        # such reference was named that.
+                        pass
                     else:
                         inverter_debug[key] = inverter.__dict__[key]
             inverters_debug.append(inverter_debug)
