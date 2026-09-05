@@ -1483,6 +1483,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                             self.arg_errors[name] = "Invalid type, expected list"
                             errors += 1
                             continue
+                        # A scalar here is a de-facto list of 1, still short of required_entries.
+                        # optional_entries permits that (see the short-list case above) but must not
+                        # let it go unremarked the way the list branch doesn't - a single sensor
+                        # standing in for num_chargers=2, say, should warn just as a too-short list does.
+                        self.log("Warn: Validation of apps.yaml found configuration item '{}' lists 1 of the {} declared by {} - only the entries listed are used".format(name, required_entries, entries))
 
                 for expected_type in expected_types:
                     if expected_type == "none":
@@ -1508,6 +1513,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 if not spec.get("zero", True) and int(item) == 0:
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' is zero".format(name))
                                     self.arg_errors[name] = "Invalid value, expected non-zero integer item {}".format(item)
+                                    errors += 1
+                                    break
+                                if allowed and item not in allowed:
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' value {} is not in allowed list {}".format(name, item, allowed))
+                                    self.arg_errors[name] = "Invalid value {}, expected one of {}".format(item, allowed)
                                     errors += 1
                                     break
                     elif expected_type == "float" or expected_type == "float_list":
@@ -1570,30 +1580,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                     self.arg_errors[name] = "Invalid type, expected boolean item {}".format(item)
                                     errors += 1
                                     break
-                    elif expected_type == "integer" or expected_type == "integer_list":
-                        if expected_type == "integer" and isinstance(value, int):
-                            value = [value]
-                        elif expected_type == "integer_list":
-                            value = self.get_arg(name, [], indirect=False)
-
-                        if isinstance(value, list):
-                            if required_entries and len(value) > required_entries:
-                                value = value[:required_entries]
-
-                            matches = True
-                            for item in value:
-                                if not self.validate_is_int(item):
-                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an integer".format(name, item))
-                                    self.arg_errors[name] = "Invalid type, expected integer item {}".format(item)
-                                    errors += 1
-                                    break
-
-                                if allowed and item not in allowed:
-                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' value {} is not in allowed list {}".format(name, item, allowed))
-                                    self.arg_errors[name] = "Invalid value {}, expected one of {}".format(item, allowed)
-                                    errors += 1
-                                    break
-
                     elif expected_type == "dict" or expected_type == "dict_list":
                         if expected_type == "dict" and isinstance(value, dict):
                             value = [value]

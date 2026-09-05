@@ -509,6 +509,29 @@ def run_web_power_flow_tests(my_predbat):
         print("  ERROR: a short car_charging_power list passed without any warning")
         failed += 1
 
+    # Regression for a Copilot review finding on #4880: a scalar (single sensor, not a list) is a
+    # de-facto list of 1, just as short of num_chargers=2 as the ["sensor.car_charger_power"] case
+    # above - it must warn the same way rather than passing in silence.
+    print("Test: a single sensor (not a list) against num_chargers 2 warns but is not an error")
+    my_predbat.args["num_chargers"] = 2
+    my_predbat.args["car_charging_power"] = "sensor.car_charger_power"
+    logged = []
+    original_log = my_predbat.log
+    my_predbat.log = lambda message, *args, **kwargs: (logged.append(message), original_log(message, *args, **kwargs))[1]
+    try:
+        errors_scalar = my_predbat.validate_config()
+    finally:
+        my_predbat.log = original_log
+    if errors_scalar != baseline_errors:
+        print(f"  ERROR: a single sensor against num_chargers 2 should be tolerated, error count moved by {errors_scalar - baseline_errors}")
+        failed += 1
+    if my_predbat.arg_errors.get("car_charging_power"):
+        print(f"  ERROR: a scalar value recorded an arg_error, which would leave the install showing apps.yaml errors: {my_predbat.arg_errors.get('car_charging_power')}")
+        failed += 1
+    if not any("lists 1 of the 2" in message for message in logged):
+        print("  ERROR: a scalar car_charging_power value against num_chargers 2 passed without any warning")
+        failed += 1
+
     print("Test: a bad sensor is still type-checked when num_chargers is unset")
     # required_entries of 0 used to truncate the list away before the item type check ran, so a
     # nonsense entity slipped through unvalidated the moment this key gained an entries rule.
