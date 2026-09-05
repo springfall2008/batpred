@@ -292,7 +292,7 @@ def test_ohme(my_predbat=None):
         ("control_read_only", _test_ohme_control_read_only_release, "read only releases the charger"),
         ("control_read_only_src", _test_ohme_control_read_only_effective, "read only uses the effective state"),
         ("control_target_restore", _test_ohme_control_restores_target, "release restores the charger target"),
-        ("auto_config_keeps", _test_ohme_auto_config_keeps_existing_car_charging_energy, "auto config keeps a real charger sensor"),
+        ("auto_config_keeps", _test_ohme_auto_config_keeps_existing_car_charging_energy, "auto config composes with a legacy sensor"),
         ("auto_config_power", _test_ohme_auto_config_wires_car_charging_power, "auto config wires car_charging_power"),
         ("publish_data", _test_ohme_publish_data, "OhmeAPI publish_data"),
         ("publish_disconnected", _test_ohme_publish_data_disconnected, "OhmeAPI publish_data disconnected"),
@@ -2358,26 +2358,39 @@ def _test_ohme_auto_config_wires_car_charging_energy(my_predbat=None):
 
 
 def _test_ohme_auto_config_keeps_existing_car_charging_energy(my_predbat=None):
-    """Test auto config leaves a real charger's energy sensor alone"""
+    """Test auto config composes with a hand-written sensor but backs off a runtime one"""
     print("**** Running test_ohme_auto_config_keeps_existing_car_charging_energy ****")
 
-    # A resolved Zappi sensor means the user has another charger measuring car energy - taking
-    # that over with an Ohme-only figure would lose the car charging it is already reporting.
-    # preregister_legacy() must run first, exactly as it does at real startup (predbat.py),
-    # so the pre-existing sensor is captured as a legacy aggregate before Ohme registers -
-    # otherwise Ohme's registration (which omits energy here) would recompute the aggregate
-    # from nothing and wipe the Zappi sensor out.
+    # A resolved Zappi sensor means the user has another charger measuring car energy. The
+    # registry captures it at startup (preregister_legacy, exactly as predbat.py does) and
+    # concatenates it ahead of every discovered charger's sensor, so Ohme contributing its own
+    # adds to the Zappi rather than replacing it - both are summed. Backing off here instead
+    # left Ohme's charging out of load subtraction and power display for no gain, which is the
+    # opposite of what this PR promises for a mixed install.
     api = MockOhmeAPI()
     api.args["car_charging_energy"] = "sensor.myenergi_zappi_1234_charge_added_session"
     preregister_legacy(api.base.charger_registry, api.base)
     run_async(api.automatic_config())
 
-    # Left exactly as the user wrote it, scalar and all: with no registered charger supplying
-    # an energy sensor the registry does not own the key, so it does not rewrite it.
-    assert api.args.get("car_charging_energy") == "sensor.myenergi_zappi_1234_charge_added_session", f"Expected the Zappi sensor to be kept, got {api.args.get('car_charging_energy')}"
-    assert any("Leaving car_charging_energy" in msg for msg in api.log_messages), f"Expected a note about keeping it, got {api.log_messages}"
+    assert api.args.get("car_charging_energy") == [
+        "sensor.myenergi_zappi_1234_charge_added_session",
+        ENERGY_TODAY_ENTITY,
+    ], f"Expected the Zappi sensor and Ohme's to be composed, got {api.args.get('car_charging_energy')}"
+    assert api.args.get("car_charging_power") == [POWER_WATTS_ENTITY], f"Expected Ohme's power sensor alongside it, got {api.args.get('car_charging_power')}"
 
-    print("PASS: auto config kept the existing car_charging_energy sensor")
+    # The case that must still back off: a value another direct writer (alphaess.py:805) set at
+    # runtime, after the legacy snapshot was taken. That writer owns the key and re-sets it from
+    # its own discovery, so contributing here would be both unwanted and short lived.
+    api = MockOhmeAPI()
+    preregister_legacy(api.base.charger_registry, api.base)
+    api.args["car_charging_energy"] = "sensor.alphaess_car_charging_energy"
+    run_async(api.automatic_config())
+
+    assert api.args.get("car_charging_energy") == "sensor.alphaess_car_charging_energy", f"Expected the runtime sensor to be left alone, got {api.args.get('car_charging_energy')}"
+    assert api.args.get("car_charging_power") is None, f"Expected no power wiring when another writer owns the energy sensor, got {api.args.get('car_charging_power')}"
+    assert any("Leaving car_charging_energy" in msg for msg in api.log_messages), f"Expected a note about leaving it, got {api.log_messages}"
+
+    print("PASS: auto config composed with the legacy sensor and left the runtime one alone")
     return 0
 
 

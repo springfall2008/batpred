@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytz
 import gateway_status_pb2 as pb
-from gateway import _STARTUP_WAIT_TICKS
+from gateway import _EV_MISSING_FRAMES_TO_RELEASE, _STARTUP_WAIT_TICKS
 
 import importlib.util
 
@@ -4121,8 +4121,18 @@ class TestEvAutoConfig:
         def capture_set_arg(key, value):
             gw._args[key] = value
 
+        def capture_get_arg(key, default=None, **kwargs):
+            """Read back what was set, so the registry's ownership checks see real values.
+
+            A MagicMock returns a fresh mock for every get_arg, which never equals what the
+            registry recorded writing - so every "is this key still ours?" test answered no and
+            the release path below silently left the aggregates behind.
+            """
+            return gw._args.get(key, default)
+
         gw.set_arg = capture_set_arg
         gw.base.set_arg = capture_set_arg
+        gw.base.get_arg = capture_get_arg
         return gw
 
     def _status_with_ev(self, charge_point_id="CP1", max_current_a=32, voltage_v=240):
@@ -4185,11 +4195,62 @@ class TestEvAutoConfig:
         assert gw._args == {}
 
     def test_no_chargers_does_nothing(self):
-        """No EV charger in telemetry means no registration."""
+        """No EV charger in telemetry, and none ever registered, leaves the args untouched."""
         gw = self._make_gateway(ev_enable=True)
         status = pb.GatewayStatus()
         gw._register_ev_chargers(status)
         assert gw._args == {}
+
+    def test_a_charger_that_goes_away_is_released(self):
+        """Telemetry reporting no chargers must give the car slot back, not be ignored.
+
+        _register_ev_chargers used to return early on an empty charger list, so the registry
+        was never told - the removed charge point kept its slot, its num_cars contribution and
+        its now-dead entities for the rest of the run, and Predbat went on planning for a
+        charger that is not there. The empty list is a registration like any other.
+        """
+        gw = self._make_gateway(ev_enable=True)
+        gw._ev_charging_active = {}
+        gw._register_ev_chargers(self._status_with_ev())
+        assert gw._args["num_cars"] == 1
+        gw._ev_charging_active = {"CP1": True}
+
+        gw._register_ev_chargers(pb.GatewayStatus())
+
+        assert gw._args["num_cars"] == 0
+        assert gw._args["car_charging_planned"] is None
+        assert gw._args["car_charging_soc"] is None
+        assert gw._args["car_charging_energy"] is None
+        # A released charger's last commanded state must not decide whether it is commanded
+        # when it comes back - it would be read as "already charging" and never started.
+        assert gw._ev_charging_active == {}
+
+    def test_a_removed_charger_is_released_only_after_the_debounce(self):
+        """The two halves together: the predicate holds the release back, then it happens.
+
+        One frame without the charge point is far more likely to be a reconnect in progress
+        than a charger that has gone, and releasing on it would drop the car's plan only to
+        re-register moments later.
+        """
+        gw = self._make_gateway(ev_enable=True)
+        gw._auto_configured = True
+        gw._configured_inverter_serials = frozenset()
+        gw._ev_missing_frames = 0
+        gw._ev_charging_active = {}
+
+        gw._register_ev_chargers(self._status_with_ev())
+        gw._configured_ev_chargers = frozenset({"CP1"})
+        assert gw._args["num_cars"] == 1
+
+        empty = pb.GatewayStatus()
+        for _ in range(_EV_MISSING_FRAMES_TO_RELEASE - 1):
+            assert gw._needs_reconfigure(empty) is False
+            assert gw._args["num_cars"] == 1, "a transient dropout must not release the car"
+
+        assert gw._needs_reconfigure(empty) is True
+        gw._register_ev_chargers(empty)
+
+        assert gw._args["num_cars"] == 0
 
     def test_charge_point_without_an_id_is_skipped(self):
         """A charger with no charge_point_id cannot be controlled, so it must not take a car slot.
@@ -4387,6 +4448,44 @@ class TestEvNeedsReconfigure:
         gw = self._make_gateway()
         assert gw._needs_reconfigure(self._status()) is False
 
+    def test_a_configured_charger_going_missing_eventually_reconfigures(self):
+        """A removal has to reconcile too - matching additions alone never released a charger."""
+        gw = self._make_gateway()
+        gw._configured_ev_chargers = frozenset({"CP20000002"})
+        gw._ev_missing_frames = 0
+
+        for _ in range(_EV_MISSING_FRAMES_TO_RELEASE - 1):
+            assert gw._needs_reconfigure(self._status()) is False
+        assert gw._needs_reconfigure(self._status()) is True
+
+    def test_a_reconnect_resets_the_debounce(self):
+        """A charger reported again mid-debounce starts the count over rather than continuing.
+
+        Otherwise a charger that flickers - present, absent, present, absent - accumulates
+        absences across reconnections and is eventually released while it is still there.
+        """
+        gw = self._make_gateway()
+        gw._configured_ev_chargers = frozenset({"CP20000002"})
+        gw._ev_missing_frames = 0
+
+        for _ in range(_EV_MISSING_FRAMES_TO_RELEASE - 1):
+            assert gw._needs_reconfigure(self._status()) is False
+        assert gw._needs_reconfigure(self._status(charge_point_id="CP20000002")) is False
+
+        for _ in range(_EV_MISSING_FRAMES_TO_RELEASE - 1):
+            assert gw._needs_reconfigure(self._status()) is False, "the count must have started over"
+        assert gw._needs_reconfigure(self._status()) is True
+
+    def test_one_charger_going_missing_does_not_release_the_others(self):
+        """The reconcile is on the whole set: a second charger's removal is detected too."""
+        gw = self._make_gateway()
+        gw._configured_ev_chargers = frozenset({"CP20000002", "CP30000003"})
+        gw._ev_missing_frames = 0
+
+        for _ in range(_EV_MISSING_FRAMES_TO_RELEASE - 1):
+            assert gw._needs_reconfigure(self._status(charge_point_id="CP20000002")) is False
+        assert gw._needs_reconfigure(self._status(charge_point_id="CP20000002")) is True
+
 
 class TestEvControl:
     """Tests for GatewayMQTT EVC minute-level control — _refresh_ev_windows, _should_ev_charge_now, _apply_ev_charging_state.
@@ -4565,8 +4664,9 @@ class TestEvControl:
         asyncio.run(gw._apply_ev_charging_state())
 
         assert len(published) == 2
-        assert published[0] == {"action": "SetChargingProfile", "current_a": 32, "charge_point_id": "CP10000001"}
-        assert published[1] == {"action": "RemoteStartTransaction", "id_tag": "predbat", "charge_point_id": "CP10000001"}
+        # Both routing keys, same value: firmware in the field reads one or the other.
+        assert published[0] == {"action": "SetChargingProfile", "current_a": 32, "charge_point_id": "CP10000001", "target": "CP10000001"}
+        assert published[1] == {"action": "RemoteStartTransaction", "id_tag": "predbat", "charge_point_id": "CP10000001", "target": "CP10000001"}
         assert gw._ev_charging_active == {"CP10000001": True}
 
     def test_apply_sends_stop_on_transition(self):
@@ -4589,7 +4689,7 @@ class TestEvControl:
         asyncio.run(gw._apply_ev_charging_state())
 
         assert len(published) == 1
-        assert published[0] == {"action": "RemoteStopTransaction", "charge_point_id": "CP10000001"}
+        assert published[0] == {"action": "RemoteStopTransaction", "charge_point_id": "CP10000001", "target": "CP10000001"}
         assert gw._ev_charging_active == {"CP10000001": False}
 
     def test_refresh_leaves_a_never_published_slot_out_of_the_windows(self):
@@ -4654,7 +4754,7 @@ class TestEvControl:
         gw._refresh_ev_windows()
         asyncio.run(gw._apply_ev_charging_state())
 
-        assert published == [{"action": "RemoteStopTransaction", "charge_point_id": "CP10000001"}]
+        assert published == [{"action": "RemoteStopTransaction", "charge_point_id": "CP10000001", "target": "CP10000001"}]
         assert gw._ev_charging_active == {"CP10000001": False}
 
     def test_apply_no_command_when_state_unchanged(self):
@@ -4819,11 +4919,51 @@ class TestEvControl:
 
         started = [p for p in published if p["action"] == "RemoteStartTransaction"]
         stopped = [p for p in published if p["action"] == "RemoteStopTransaction"]
-        assert started == [{"action": "RemoteStartTransaction", "id_tag": "predbat", "charge_point_id": "CP-AAAAAA"}]
+        assert started == [{"action": "RemoteStartTransaction", "id_tag": "predbat", "charge_point_id": "CP-AAAAAA", "target": "CP-AAAAAA"}]
         # CP-BBBBBB matches its default-stopped state, so it is skipped entirely — no
         # command sent and no entry written for it — only CP-AAAAAA transitions.
         assert stopped == []
         assert gw._ev_charging_active == {"CP-AAAAAA": True}
+
+    def test_every_command_carries_both_routing_keys(self):
+        """Each command must name its charge point as both `target` and `charge_point_id`.
+
+        ev_command.h reads `target` first and only falls back to `charge_point_id`, and there
+        is deployed firmware that reads `target` alone - its own comment records web-app
+        commands arriving on `charge_point_id` and falling through to firstConnected(). While
+        the gateway commanded a single charger that was invisible; with two, a stop meant for
+        CP-BBBBBB would have executed against CP-AAAAAA and CP-BBBBBB never been controlled.
+        """
+        import asyncio
+        import datetime as dt_mod
+        import json
+
+        gw = self._make_gateway(configured_chargers=["CP-AAAAAA", "CP-BBBBBB"], ev_max_current={"CP-AAAAAA": 32, "CP-BBBBBB": 16})
+        published = []
+
+        async def fake_publish_raw(topic, payload, **kwargs):
+            """Capture the decoded payload of every command sent this cycle."""
+            published.append(json.loads(payload.decode()))
+
+        gw._publish_raw = fake_publish_raw
+        gw.topic_ev_command = "predbat/devices/test/ev/command"
+
+        now = dt_mod.datetime.now(gw.local_tz)
+        # slot 0 = CP-AAAAAA starting, slot 1 = CP-BBBBBB stopping: all three command types.
+        gw._ev_windows = {0: [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))], 1: []}
+        gw._ev_charging_active = {"CP-BBBBBB": True}
+
+        asyncio.run(gw._apply_ev_charging_state())
+
+        assert sorted(command["action"] for command in published) == ["RemoteStartTransaction", "RemoteStopTransaction", "SetChargingProfile"]
+        for command in published:
+            assert command["target"] == command["charge_point_id"], command
+        # And each id is the loop's own charge point, not whichever one it started with.
+        assert {command["action"]: command["target"] for command in published} == {
+            "SetChargingProfile": "CP-AAAAAA",
+            "RemoteStartTransaction": "CP-AAAAAA",
+            "RemoteStopTransaction": "CP-BBBBBB",
+        }
 
     def test_max_current_fallback_32a(self):
         """Falls back to 32 A in SetChargingProfile when max_current_a not in cache for the charge point."""

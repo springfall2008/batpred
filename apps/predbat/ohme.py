@@ -27,7 +27,7 @@ from typing import Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA
 from component_base import ComponentBase
-from charger_registry import ChargerEntry, slot_entity_suffix
+from charger_registry import ChargerEntry, is_unconfigured, slot_entity_suffix
 from predbat_metrics import record_api_call
 
 GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"  # cspell:disable-line
@@ -481,16 +481,23 @@ class OhmeAPI(ComponentBase):
         """
         self.log("Info: Ohme API: Registering the Ohme charger as a car")
 
-        # The energy sensor is only ours to claim when no other charger already owns it.
-        # This runs before auto_config(final=True), so an unmatched regex from the apps.yaml
-        # default is still present as its literal "re:" string rather than having been
-        # removed yet - treat that as unconfigured, but leave a real charger (Zappi, Wallbox,
-        # hand-set sensor) alone. A list of one is how several components hand over a single
-        # entity, so unwrap it before comparing.
+        # Whether to contribute Ohme's own energy and power sensors to the site aggregates.
+        # These are not slot aligned: the registry concatenates them and Predbat sums the list,
+        # so contributing alongside a third-party sensor (a Zappi the user configured by hand)
+        # composes rather than replaces - which is why the registry answers this rather than a
+        # bare "is anything already there". The one case that must still back off is a value
+        # another direct writer owns at runtime, alphaess being the one in the tree; see
+        # can_compose_aggregate().
+        #
+        # Ohme's own entity is always ours to write, however it round-trips through apps.yaml -
+        # explicitly set by the user, or left behind by an earlier run as the one-element list
+        # the registry writes (#4715 review). An unresolved apps.yaml default regex is not a
+        # sensor: this runs before auto_config(final=True), so it is still sitting there as its
+        # literal "re:" string rather than having been removed yet.
         existing = self.get_arg("car_charging_energy", default=None, indirect=False)
-        if isinstance(existing, list) and len(existing) == 1:
-            existing = existing[0]
-        owns_energy = self.base.charger_registry.owns_aggregate("energy") or (not existing) or (isinstance(existing, str) and existing.startswith("re:")) or existing == ENERGY_TODAY_ENTITY
+        existing_values = existing if isinstance(existing, list) else [existing]
+        others = [value for value in existing_values if not is_unconfigured(value) and value != ENERGY_TODAY_ENTITY]
+        owns_energy = self.base.charger_registry.can_compose_aggregate("energy") or not others
         if not owns_energy:
             self.log("Info: Ohme API: Leaving car_charging_energy set to {} rather than using {}".format(existing, ENERGY_TODAY_ENTITY))
 

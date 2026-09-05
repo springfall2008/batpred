@@ -31,10 +31,12 @@ LEGACY_SOURCE = "legacy"
 
 # Slot-aligned args: one entry per car, so a gap cannot be represented. apps.yaml
 # validation rejects non-string list elements (predbat.py:1644), so a slot the registry
-# would have to invent a value for means the key is left exactly as it stands rather than
-# written (see materialise) - never cleared, which would delete the user's own config for
-# the cars that do have a value. A legacy slot's raw value is not such a gap - it is
-# written back exactly as the user's own config produced it, None included.
+# would have to invent a value for means the user's own key is left exactly as it stands
+# rather than written (see materialise) - never cleared, which would delete their config for
+# the cars that do have a value. A list the registry composed itself is cut back to the slots
+# that still line up instead, because its positions move when the charger set does. A legacy
+# slot's raw value is not such a gap - it is written back exactly as the user's own config
+# produced it, None included.
 SLOT_ALIGNED = ("planned", "now", "soc")
 
 # Site aggregates: minute_data_import_export() sums the list, so gaps are simply
@@ -120,11 +122,14 @@ class ChargerRegistry:
         # Aggregate key -> the exact value the registry last wrote there, so a key some other
         # component has overwritten since can be recognised as no longer ours to restore.
         self._aggregates_written = {}
-        # Slot-aligned fields the registry has actually written. A key holding only legacy slots
-        # is left alone (materialise), so this is what tells the difference between "untouched
-        # user config" and "we put a discovered charger in there and it has since gone away",
-        # which does have to be rewritten or the vanished charger's entity would stay behind.
-        self._slot_args_written = set()
+        # Slot-aligned fields the registry has actually written, each mapped to the exact value
+        # it last wrote there. A key holding only legacy slots is left alone (materialise), so
+        # the presence of a field tells the difference between "untouched user config" and "we
+        # put a discovered charger in there and it has since gone away", which does have to be
+        # rewritten or the vanished charger's entity would stay behind; and the value tells
+        # whether what is standing there is still ours - the same ownership idiom
+        # _write_aggregates applies to car_charging_energy/_power.
+        self._slot_args_written = {}
         # Slot-aligned field -> the chargers that had no value for it the last time the key was
         # left as it was, so the explanation is logged when the gap appears or changes rather
         # than on every rediscovery.
@@ -312,6 +317,34 @@ class ChargerRegistry:
         with self._lock:
             return field in self._aggregates_written and self.base.get_arg("car_charging_" + field, None, indirect=False) == self._aggregates_written[field]
 
+    def can_compose_aggregate(self, field):
+        """Whether a component may contribute its own sensor to this aggregate.
+
+        Two very different things can be standing in car_charging_energy/_power, and only one of
+        them is a reason for a component to hold back:
+
+        - A hand-written sensor the registry captured at startup (preregister_legacy), or an
+          aggregate the registry composed itself. Both are safe to add to, because _write_aggregates
+          concatenates: the captured legacy sensor is written back ahead of every discovered
+          charger's, so contributing does not replace it - the two are summed by
+          minute_data_import_export(). A component that backs off here instead simply omits its own
+          charging from load subtraction and power display for no gain.
+        - A value another direct writer put there at runtime, alphaess.py:805 being the one in the
+          tree. That writer owns the key and will set it again from its own discovery, so a
+          contribution here is both unwanted and short lived. Components must still back off.
+
+        The two are told apart by what the key holds now: the captured snapshot means nobody has
+        written since preregister_legacy read it, so it is still the user's own config, while
+        anything else appeared afterwards and belongs to whoever wrote it.
+        """
+        with self._lock:
+            if self.owns_aggregate(field):
+                return True
+            current = self.base.get_arg("car_charging_{}".format(field), None, indirect=False)
+            if not isinstance(current, list):
+                current = [current]
+            return [value for value in current if not is_unconfigured(value)] == self._legacy_aggregates[field]
+
     def _write_num_cars(self, count):
         """Write num_cars: the registry's own count, floored by every declared claim on it.
 
@@ -359,6 +392,57 @@ class ChargerRegistry:
         if current is None or current == self._num_cars_written:
             return True
         return bool(self._external_counts) and current == max(self._external_counts.values())
+
+    def _write_slot_arg(self, arg, field, values):
+        """Write a slot-aligned key and remember exactly what was written there.
+
+        Recording the value, not just the fact of having written, is what lets a later
+        composition tell "this is still the list we composed" from "somebody else has set this
+        since" - the same distinction _write_aggregates draws for the aggregates.
+        """
+        value = values if any(values) else None
+        self.base.set_arg(arg, value)
+        self._slot_args_written[field] = value
+
+    def _owns_slot_arg(self, arg, field):
+        """True when this slot-aligned key still holds exactly what the registry last wrote.
+
+        A key the registry has never written belongs to the user's apps.yaml, and one that has
+        moved since belongs to whoever moved it; neither is ours to rewrite on a gap.
+        """
+        return field in self._slot_args_written and self.base.get_arg(arg, None, indirect=False) == self._slot_args_written[field]
+
+    def _trim_owned_slot_arg(self, arg, field, entries, values, missing):
+        """Cut a registry-composed slot list back to the slots that are still positionally true.
+
+        A composed list is tied to the charger set it was composed from: slot N holds whatever
+        charger sorted Nth *then*, which need not be the charger in slot N now. A charger that
+        sorts ahead of one already registered shifts every later slot along - myenergi joining
+        an ohme takes slot 0, because "myenergi" sorts before "ohme" - so keeping the old list
+        hands the ohme's SoC to the myenergi car, and fetch.py plans that car's charge from
+        another car's battery level. Leaving a stale list alone is only harmless while it stays
+        aligned; once it does not, it is actively wrong.
+
+        So everything up to the first gap is kept - each of those values still belongs to the
+        entry standing at its own index - and the rest is dropped. Nothing of the user's is lost
+        by that: legacy slots sort first (ChargerEntry.sort_key), so they are always inside the
+        kept head, and what is dropped is only ever what the registry itself invented. Where the
+        head is empty the key goes back to unset, which is what the user had before the charger
+        that cannot fill it was discovered.
+
+        Only reached for a key the registry owns (_owns_slot_arg). A hand-written key is left
+        exactly as it stands instead - see the caller.
+        """
+        gap = next(index for index, (entry, value) in enumerate(zip(entries, values)) if not value and entry.source != LEGACY_SOURCE)
+        head = values[:gap]
+        dropped = self._slot_args_written[field] != (head if any(head) else None)
+        self._write_slot_arg(arg, field, head)
+        if missing != self._slot_gap_logged.get(field):
+            self._slot_gap_logged[field] = missing
+            if dropped:
+                self.base.log("Warn: ChargerRegistry: {} no longer lines up with the current car slots - keeping the first {} slot(s) and dropping the rest, as {} supply no value".format(arg, gap, missing))
+            else:
+                self.base.log("Warn: ChargerRegistry: leaving {} as it is - no value for {}".format(arg, missing))
 
     def _write_aggregates(self, entries):
         """Write the site-aggregate args, but only the keys the registry actually owns.
@@ -461,7 +545,7 @@ class ChargerRegistry:
                 self._write_num_cars(0)
                 for field in SLOT_ALIGNED:
                     if field in self._slot_args_written:
-                        self.base.set_arg("car_charging_{}".format(field), None)
+                        self._write_slot_arg("car_charging_{}".format(field), field, [])
                 self._write_aggregates([])
             elif (self._num_cars_written is not None or self._external_counts) and self._owns_num_cars():
                 # No charger has ever been registered here, so num_cars is carrying nothing but
@@ -499,9 +583,17 @@ class ChargerRegistry:
             # from the key before the registry existed.
             missing = [entry.key() for entry, value in zip(entries, values) if not value and entry.source != LEGACY_SOURCE]
             if missing:
+                if self._owns_slot_arg(arg, field):
+                    # The key holds a list the registry composed itself, which is positionally
+                    # tied to the charger set it was composed from - so it is not simply "the
+                    # closest thing to the truth available" once the slots move under it. It is
+                    # cut back to the slots that are still true rather than kept whole; see
+                    # _trim_owned_slot_arg for what that protects against.
+                    self._trim_owned_slot_arg(arg, field, entries, values, missing)
+                    continue
                 # A component-caused gap cannot be expressed: None fails validation and a
-                # placeholder would be read as a real entity. So the key is left exactly as it
-                # stands - not written, and above all not cleared.
+                # placeholder would be read as a real entity. So the user's own key is left
+                # exactly as it stands - not written, and above all not cleared.
                 #
                 # Clearing it (which this used to do) was destructive rather than merely
                 # incomplete. myenergi supplies neither soc nor now, ohme supplies no now, and
@@ -515,21 +607,16 @@ class ChargerRegistry:
                 #
                 # Leaving it produces the pre-registry outcome instead: a list that is short for
                 # the new car count, plus fetch.py's own out-of-range warning for the cars past
-                # its end. A stale value is recoverable; a deleted one is not. Where the value
-                # standing there is one the registry itself wrote for an earlier composition,
-                # that reasoning is the same - it is still the closest thing to the truth
-                # available, and car_charging_manual_soc (or the plan, for "now") covers the
-                # slots it does not reach.
+                # its end. A stale value is recoverable; a deleted one is not, and
+                # car_charging_manual_soc (or the plan, for "now") covers the slots it does not
+                # reach. That holds because the value is the *user's*: positions in it are
+                # theirs, so a car appended after them cannot shift what they wrote.
                 if missing != self._slot_gap_logged.get(field):
                     self._slot_gap_logged[field] = missing
                     self.base.log("Warn: ChargerRegistry: leaving {} as it is - no value for {}".format(arg, missing))
                 continue
             self._slot_gap_logged.pop(field, None)
-            if any(values):
-                self.base.set_arg(arg, values)
-            else:
-                self.base.set_arg(arg, None)
-            self._slot_args_written.add(field)
+            self._write_slot_arg(arg, field, values)
 
         self._write_aggregates(entries)
 

@@ -1229,6 +1229,48 @@ def test_the_key_is_written_again_once_every_slot_has_a_value():
     assert base.args["car_charging_soc"] == ["sensor.a_soc", "sensor.predbat_ohme_battery_percent"]
 
 
+def test_a_charger_that_takes_slot_zero_does_not_inherit_the_previous_cars_soc():
+    """A list the registry composed itself must not survive the slots moving under it.
+
+    Ohme registers alone, so the registry writes car_charging_soc = [ohme_soc] with the ohme in
+    slot 0. A myenergi Zappi then registers and sorts ahead of it ("myenergi" < "ohme"), taking
+    slot 0 and pushing the ohme to slot 1 - and myenergi supplies no SoC. Keeping the old list
+    on that gap left slot 0 holding the *ohme's* SoC while slot 0 is now the Zappi's car, so
+    fetch.py:1383 read one car's battery level for another and planned its charge from it.
+    """
+    base = MockBase()
+    registry = _registry(base)
+    registry.replace_source("ohme", [ChargerEntry("ohme", "ohme0", planned="binary_sensor.predbat_ohme_connected", soc="sensor.predbat_ohme_battery_percent")])
+    assert base.args["car_charging_soc"] == ["sensor.predbat_ohme_battery_percent"]
+
+    registry.replace_source("myenergi", [ChargerEntry("myenergi", "10000001", planned="sensor.predbat_myenergi_zappi_10000001_plug_status")])
+
+    assert registry.slot_for("myenergi", "10000001") == 0
+    assert registry.slot_for("ohme", "ohme0") == 1
+    assert base.args.get("car_charging_soc") != ["sensor.predbat_ohme_battery_percent"], "the ohme's SoC must not be read as the Zappi car's"
+    assert "car_charging_soc" not in base.args, "nothing of the user's was in there, so the key goes back to unset"
+
+
+def test_a_stale_composed_list_keeps_the_users_own_slots():
+    """Trimming a composed list drops only what the registry invented, never the user's config.
+
+    Legacy slots sort first, so they are always inside the kept head: here the hand-written SoC
+    keeps slot 0 while the discovered charger's, which no longer describes the car standing in
+    its slot, is dropped.
+    """
+    base = MockBase(num_cars=1, car_charging_planned=["binary_sensor.my_car_plugged"], car_charging_soc=["sensor.my_car_soc"])
+    registry = _registry(base)
+    preregister_legacy(registry, base)
+    registry.replace_source("ohme", [ChargerEntry("ohme", "ohme0", planned="binary_sensor.predbat_ohme_connected", soc="sensor.predbat_ohme_battery_percent")])
+    assert base.args["car_charging_soc"] == ["sensor.my_car_soc", "sensor.predbat_ohme_battery_percent"]
+
+    # The ohme goes away and a Zappi arrives, which supplies no SoC at all.
+    registry.replace_source("ohme", [])
+    registry.replace_source("myenergi", [ChargerEntry("myenergi", "10000001", planned="sensor.predbat_myenergi_zappi_10000001_plug_status")])
+
+    assert base.args["car_charging_soc"] == ["sensor.my_car_soc"]
+
+
 def test_a_slot_gap_is_logged_once_and_again_when_it_changes():
     """The gap is worth one line per gap, not one per rediscovery."""
     base = MockBase()
