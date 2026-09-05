@@ -39,6 +39,7 @@ class DaemonPathsTestCase(unittest.TestCase):
         self._patch("LOG_DIR", self.log_dir)
         self._patch("CLONE_DIR", base / "batpred")
         self._patch("SCRATCH_DIR", base / "scratch")
+        self._patch("QUEUE_DIR", base / "journal-queue")
 
     def _patch(self, name, value):
         """Patch a module-level constant on triage_daemon for the duration of the test."""
@@ -1478,7 +1479,7 @@ class ReviewPrTests(DaemonPathsTestCase):
         triage_daemon.review_pr(4742)
         cmd = mock_run.call_args[0][0]
         self.assertIn("--append-system-prompt", cmd)
-        self.assertEqual(cmd[cmd.index("--append-system-prompt") + 1], triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT)
+        self.assertIn(triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT, cmd[cmd.index("--append-system-prompt") + 1])
 
     @patch("triage_daemon.subprocess.run")
     def test_raises_on_a_non_zero_exit(self, mock_run):
@@ -1639,7 +1640,7 @@ class CleanupPrTests(DaemonPathsTestCase):
         triage_daemon.cleanup_pr(4742)
         cmd = mock_run.call_args[0][0]
         self.assertIn("--append-system-prompt", cmd)
-        self.assertEqual(cmd[cmd.index("--append-system-prompt") + 1], triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT)
+        self.assertIn(triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT, cmd[cmd.index("--append-system-prompt") + 1])
 
     @patch("triage_daemon.subprocess.run")
     def test_raises_on_a_non_zero_exit(self, mock_run):
@@ -1752,6 +1753,259 @@ class CommentDisclosureTests(unittest.TestCase):
     def test_mark_pr_cleanup_failed_discloses(self, mock_run):
         triage_daemon.mark_pr_cleanup_failed(4742)
         self.assertTrue(self._body_of_first_comment_call(mock_run).startswith("Automated"))
+
+
+class JournalQueueTests(DaemonPathsTestCase):
+    """The queue is where a flow parks a finding for the daily journal PR to pick up."""
+
+    def test_queue_lives_outside_the_clone(self):
+        """sync_repo() runs `git reset --hard` and `git clean -fd` on the clone before every
+        flow, so anything queued inside it would be destroyed before the flush ever saw it.
+        That is why every earlier attempt to have the bot maintain the journal came to
+        nothing, permissions aside."""
+        self.assertFalse(str(triage_daemon.QUEUE_DIR).startswith(str(triage_daemon.CLONE_DIR)))
+
+    def test_every_flow_may_write_to_the_queue(self):
+        """All five flows capture findings, so the queue's Edit grant has to be in the shared
+        base list rather than added per flow."""
+        rule = f"Edit({triage_daemon.QUEUE_SCOPE})"
+        for name in ("ALLOWED_TOOLS", "ALLOWED_TOOLS_PR", "ALLOWED_TOOLS_REVIEW", "ALLOWED_TOOLS_CLEANUP"):
+            with self.subTest(allowlist=name):
+                self.assertIn(rule, getattr(triage_daemon, name).split(","))
+
+    def test_entries_are_empty_when_the_queue_has_never_been_written(self):
+        """A fresh install has no queue directory at all; that is not an error."""
+        self.assertEqual(triage_daemon.journal_queue_entries(), [])
+
+    def test_entries_are_sorted_and_only_markdown(self):
+        """Sorted so the flush reads them in a stable order, and filtered so a stray download
+        or editor swap file in the directory cannot be mistaken for a finding."""
+        triage_daemon.QUEUE_DIR.mkdir(parents=True)
+        for name in ("4931-b.md", "4900-a.md", "notes.txt"):
+            (triage_daemon.QUEUE_DIR / name).write_text("x")
+        self.assertEqual([p.name for p in triage_daemon.journal_queue_entries()], ["4900-a.md", "4931-b.md"])
+
+
+class JournalCapturePromptTests(unittest.TestCase):
+    """JOURNAL_CAPTURE_PROMPT is how a flow learns to capture at all. No skill asked for this
+    before, which is why journal upkeep was self-motivated and patchy - and /code-review is a
+    built-in skill whose SKILL.md we do not own, so an appended system prompt is the only
+    lever that reaches every flow."""
+
+    def test_names_the_queue_directory(self):
+        """Concrete enough to act on: the agent has to be told where to write."""
+        self.assertIn(str(triage_daemon.QUEUE_DIR), triage_daemon.JOURNAL_CAPTURE_PROMPT)
+
+    def test_asks_only_for_what_was_verified(self):
+        """The journal's value is that its entries are checkable. A queue full of hypotheses
+        would poison it faster than leaving it stale."""
+        prompt = triage_daemon.JOURNAL_CAPTURE_PROMPT
+        self.assertIn("verified", prompt)
+        self.assertIn("how you verified", prompt)
+
+    def test_tells_the_agent_to_skip_when_there_is_nothing_worth_saying(self):
+        """Most runs learn nothing new. Without an explicit opt-out the model writes something
+        anyway, and the daily PR fills with restatements of what the journal already says."""
+        self.assertIn("nothing", triage_daemon.JOURNAL_CAPTURE_PROMPT.lower())
+
+
+class JournalCaptureReachesEveryFlowTests(DaemonPathsTestCase):
+    """Every claude-invoking flow must carry the capture instruction."""
+
+    def _appended_system_prompt(self, mock_run):
+        """Return the --append-system-prompt value from the mocked claude invocation."""
+        cmd = mock_run.call_args[0][0]
+        return cmd[cmd.index("--append-system-prompt") + 1]
+
+    def _run_flow(self, flow, *args):
+        """Invoke one flow with subprocess.run mocked, returning its appended system prompt."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            flow(*args)
+            return self._appended_system_prompt(mock_run)
+
+    def test_every_flow_appends_the_capture_prompt(self):
+        """Triage, follow-up, PR creation, PR review and PR cleanup all capture."""
+        flows = [
+            (triage_daemon.triage, 4931),
+            (triage_daemon.triage_followup, 4931),
+            (triage_daemon.create_pr, 4931),
+            (triage_daemon.review_pr, 4941),
+            (triage_daemon.cleanup_pr, 4941),
+        ]
+        for flow, arg in flows:
+            with self.subTest(flow=flow.__name__):
+                self.assertIn(triage_daemon.JOURNAL_CAPTURE_PROMPT, self._run_flow(flow, arg))
+
+    def test_review_and_cleanup_keep_the_gh_api_steer_as_well(self):
+        """These two already carried GH_API_ENDPOINT_FIRST_PROMPT. Appending the capture text
+        must add to it, not replace it - the #4758 fix depends on that steer surviving."""
+        for flow, arg in ((triage_daemon.review_pr, 4941), (triage_daemon.cleanup_pr, 4941)):
+            with self.subTest(flow=flow.__name__):
+                appended = self._run_flow(flow, arg)
+                self.assertIn(triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT, appended)
+                self.assertIn(triage_daemon.JOURNAL_CAPTURE_PROMPT, appended)
+
+    def test_only_one_append_system_prompt_flag_is_passed(self):
+        """Two --append-system-prompt flags is not a documented way to pass two prompts, so
+        the parts are joined into a single value instead."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            triage_daemon.review_pr(4941)
+            self.assertEqual(mock_run.call_args[0][0].count("--append-system-prompt"), 1)
+
+
+class JournalFlushGateTests(DaemonPathsTestCase):
+    """The flush runs at most once a day, and only when something is waiting."""
+
+    def _queue(self, count):
+        """Put `count` candidate files in the queue directory."""
+        triage_daemon.QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+        for i in range(count):
+            (triage_daemon.QUEUE_DIR / f"{i}.md").write_text("finding")
+
+    def test_no_flush_when_the_queue_is_empty(self):
+        """A quiet day opens no PR at all, rather than an empty one."""
+        self.assertFalse(triage_daemon.should_flush_journal({}, "2026-09-05"))
+
+    def test_flush_when_something_is_queued_and_today_has_not_run(self):
+        self._queue(1)
+        self.assertTrue(triage_daemon.should_flush_journal({}, "2026-09-05"))
+
+    def test_no_second_flush_on_the_same_day(self):
+        """The daemon polls every 5 minutes; without the date gate a non-empty queue would
+        open a PR on every poll."""
+        self._queue(1)
+        state = {"last_journal_flush": "2026-09-05"}
+        self.assertFalse(triage_daemon.should_flush_journal(state, "2026-09-05"))
+
+    def test_flushes_again_the_next_day(self):
+        self._queue(1)
+        state = {"last_journal_flush": "2026-09-04"}
+        self.assertTrue(triage_daemon.should_flush_journal(state, "2026-09-05"))
+
+    def test_a_single_finding_is_enough(self):
+        """One verified finding is worth a PR - the daily gate already bounds the review
+        burden, so there is no minimum batch size on top of it."""
+        self._queue(1)
+        self.assertTrue(triage_daemon.should_flush_journal({}, "2026-09-05"))
+
+
+class JournalPermissionTests(unittest.TestCase):
+    """The flush flow can push and open a PR, so its blast radius is deliberately the
+    narrowest of any flow: two files, and no other repo write."""
+
+    def _allowed(self):
+        return triage_daemon.ALLOWED_TOOLS_JOURNAL.split(",")
+
+    def test_does_not_grant_clone_wide_edit(self):
+        """Every other flow may edit anywhere in the clone. This one may not - it is the only
+        flow that can push, so a prompt-injected edit to apps/predbat would land on a branch."""
+        self.assertNotIn(f"Edit({triage_daemon.EDIT_SCOPE})", self._allowed())
+
+    def test_grants_exactly_the_journal_and_the_dictionary(self):
+        """cspell is a pre-commit hook and a journal entry naming a new vendor term fails it,
+        so the dictionary has to be writable too - and nothing else does."""
+        edits = sorted(rule for rule in self._allowed() if rule.startswith("Edit("))
+        self.assertEqual(edits, sorted([f"Edit({triage_daemon.JOURNAL_SCOPE})", f"Edit({triage_daemon.DICTIONARY_SCOPE})"]))
+
+    def test_cannot_write_the_queue_it_reads(self):
+        """The flush consumes candidates; it never needs to author one. Reading them comes
+        from --add-dir, not from an Edit grant."""
+        self.assertNotIn(f"Edit({triage_daemon.QUEUE_SCOPE})", self._allowed())
+
+    def test_can_commit_push_and_open_a_pr(self):
+        """The whole point of the flow: land the entries as a PR for a human to merge."""
+        for command in ("git add -A", "git commit -m x", "git push origin bot/debug-journal-2026-09-05", "gh pr create --draft"):
+            with self.subTest(command=command):
+                self.assertTrue(any(bash_rule_matches(rule, command) for rule in self._allowed() if rule.startswith("Bash(")))
+
+    def test_cannot_merge_its_own_pr(self):
+        """A human merge is the review gate. Losing it would make the bot the only reviewer of
+        its own edits to the file every other flow trusts."""
+        denied = triage_daemon.DISALLOWED_TOOLS_JOURNAL.split(",")
+        self.assertTrue(any(bash_rule_matches(rule, "gh pr merge 5000") for rule in denied if rule.startswith("Bash(")))
+
+    def test_still_blocks_force_push_variants(self):
+        """Same defence in depth as the PR flow: it can push, so it must not rewrite history."""
+        denied = triage_daemon.DISALLOWED_TOOLS_JOURNAL.split(",")
+        for command in ("git push --force origin main", "git push origin main -f", "git push --force-with-lease"):
+            with self.subTest(command=command):
+                self.assertTrue(any(bash_rule_matches(rule, command) for rule in denied if rule.startswith("Bash(")))
+
+    def test_does_not_inherit_the_broad_gh_grant(self):
+        """Same reasoning as the review and cleanup flows: a catch-all would silently re-widen
+        every scoped carve-out below it."""
+        self.assertNotIn("Bash(gh *)", self._allowed())
+
+    def test_does_not_grant_a_direct_push_to_main(self):
+        """main is protection-gated and the design is explicitly PR-and-human-merge, so the
+        allowlist names the bot branch prefix rather than any ref."""
+        self.assertFalse(any(bash_rule_matches(rule, "git push origin main") for rule in self._allowed() if rule.startswith("Bash(git push")))
+
+
+class JournalFlushInvocationTests(DaemonPathsTestCase):
+    """What the flush actually runs."""
+
+    def test_invokes_the_journal_update_skill_under_its_own_permission_set(self):
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            triage_daemon.flush_journal()
+            cmd = mock_run.call_args[0][0]
+        self.assertIn("/journal-update", cmd[cmd.index("-p") + 1])
+        self.assertEqual(cmd[cmd.index("--allowedTools") + 1], triage_daemon.ALLOWED_TOOLS_JOURNAL)
+        self.assertEqual(cmd[cmd.index("--disallowedTools") + 1], triage_daemon.DISALLOWED_TOOLS_JOURNAL)
+
+    def test_tells_the_skill_where_the_queue_is(self):
+        """The queue lives outside the clone, so the path has to be passed in and added to the
+        session's directory scope for Read/Grep."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            triage_daemon.flush_journal()
+            cmd = mock_run.call_args[0][0]
+        self.assertIn(str(triage_daemon.QUEUE_DIR), cmd[cmd.index("-p") + 1])
+        self.assertIn(str(triage_daemon.QUEUE_DIR), cmd[cmd.index("--add-dir") + 1 :])
+
+
+class JournalQueueArchiveTests(DaemonPathsTestCase):
+    """Consumed candidates are moved aside, not deleted."""
+
+    def _queue(self, *names):
+        triage_daemon.QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (triage_daemon.QUEUE_DIR / name).write_text("finding")
+        return triage_daemon.journal_queue_entries()
+
+    def test_a_successful_flush_empties_the_queue(self):
+        """Otherwise the next day folds the same findings in again."""
+        self._queue("4931-a.md")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            triage_daemon.flush_journal()
+        self.assertEqual(triage_daemon.journal_queue_entries(), [])
+
+    def test_a_failed_flush_leaves_the_queue_intact(self):
+        """A finding must survive a flush that never opened a PR - the daemon has already
+        stamped the date, so tomorrow's run is its next chance."""
+        self._queue("4931-a.md")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1)
+            triage_daemon.flush_journal()
+        self.assertEqual([p.name for p in triage_daemon.journal_queue_entries()], ["4931-a.md"])
+
+    def test_consumed_findings_are_kept_not_deleted(self):
+        """A candidate the flush decided to drop is still evidence of what was seen."""
+        self._queue("4931-a.md")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            triage_daemon.flush_journal()
+        self.assertTrue((triage_daemon.QUEUE_DIR / "processed" / "4931-a.md").exists())
+
+    def test_archived_findings_are_not_queued_again(self):
+        """journal_queue_entries() must not recurse into the archive."""
+        self._queue("4931-a.md")
+        triage_daemon.archive_journal_queue(triage_daemon.journal_queue_entries())
+        self.assertFalse(triage_daemon.should_flush_journal({}, "2026-09-06"))
 
 
 if __name__ == "__main__":

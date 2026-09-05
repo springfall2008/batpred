@@ -149,3 +149,7 @@ Grep for the named symbol rather than trusting a line number.
 ## Adding to this file
 
 When an investigation turns up something a future triage run would have wanted to know — a config item that explains a class of report, an API quirk, a symptom that maps to a module — add a row. Keep it short, name the symbol rather than the line number, and cite the issue number so the next reader can check the original.
+
+If you are running under the triage bot you cannot edit this file directly — the clone is `reset --hard` before every flow, so the edit would not survive. Write the finding as a single markdown file in the queue directory named in your system prompt instead; the `/journal-update` flow folds the queue in once a day, re-checking each candidate against current `main` first, and opens a PR for a maintainer to merge.
+
+Whichever route you take, the bar is the same and it is not "interesting": record what you **verified**, say how you verified it, and keep anything you merely suspect explicitly marked as suspected. A wrong entry here is worse than a missing one — every later run trusts this file, so a confident mistake ends up in a comment posted to a real reporter. Correcting or deleting a stale entry counts as much as adding one.

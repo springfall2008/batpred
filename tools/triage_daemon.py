@@ -82,6 +82,15 @@ console output just says which issue it is working on and where that log is;
 `tail -f` it to watch a triage in progress. Logs are never pruned, so clear the
 directory out yourself if it grows.
 
+Every flow also carries JOURNAL_CAPTURE_PROMPT, asking it to leave any finding a future
+run would want in ~/predbat-triage-bot/journal-queue/ - outside the clone, because
+sync_repo() resets and cleans the checkout before every flow and would otherwise destroy
+it. Once a day, if anything is queued, the daemon runs `/journal-update` under
+ALLOWED_TOOLS_JOURNAL: the only flow that can both edit a file and push, and correspondingly
+the narrowest edit scope of any (the debug journal and the cspell dictionary, named by exact
+path, nothing else). It opens a PR against main and cannot merge it - a human merge is the
+review gate, because every other flow reads that journal and trusts it.
+
 The allowlist deliberately includes general-purpose tools (python3,
 curl, ./run_all), which together amount to arbitrary code execution
 inside the clone - the triage skill needs to open a reporter's log,
@@ -118,6 +127,19 @@ OLLAMA_BASE_URL = "http://localhost:11434"
 
 EDIT_SCOPE = f"//{CLONE_DIR.relative_to('/')}/**"
 SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to('/')}/**"
+# Findings destined for the debug journal are parked here, deliberately OUTSIDE the clone:
+# sync_repo() runs `git reset --hard origin/main` and `git clean -fd` before every flow, so a
+# note written inside the checkout is destroyed before anything can pick it up. That, more
+# than any permission rule, is why the journal never got maintained by the bot.
+QUEUE_DIR = BASE_DIR / "journal-queue"
+QUEUE_SCOPE = f"//{QUEUE_DIR.relative_to('/')}/**"
+# The two files the daily flush may touch. Scoped to the exact paths rather than the clone,
+# because this is the only flow that can both edit and push.
+JOURNAL_RELPATH = ".claude/skills/issue-triage/references/debug-journal.md"
+DICTIONARY_RELPATH = ".cspell/custom-dictionary-workspace.txt"
+JOURNAL_SCOPE = f"//{(CLONE_DIR / JOURNAL_RELPATH).relative_to('/')}"
+DICTIONARY_SCOPE = f"//{(CLONE_DIR / DICTIONARY_RELPATH).relative_to('/')}"
+JOURNAL_BRANCH_PREFIX = "bot/debug-journal-"
 _ALLOWED_TOOLS_NON_GH = [
     # Git history, and the re-sync/discard the skill does before investigating
     "Bash(git log*)",
@@ -179,6 +201,9 @@ _ALLOWED_TOOLS_NON_GH = [
     # rule is not matched by the file permission check, so don't add one.
     f"Edit({EDIT_SCOPE})",
     f"Edit({SCRATCH_SCOPE})",
+    # Every flow may leave a journal finding behind. In the shared base list rather than
+    # added per flow, so a new flow inherits it instead of silently losing its findings.
+    f"Edit({QUEUE_SCOPE})",
     "WebFetch",
     "Read",
     "Grep",
@@ -313,6 +338,45 @@ DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if 
 # /code-review's own instructions live in a skill we don't own, so this prompt is the only
 # lever available for it; /pr-cleanup's SKILL.md already asks for disclosure directly, and
 # this is the belt-and-braces backup for it, same reasoning as the endpoint-first steer.
+# The daily journal flush. This is the only flow that can edit a file AND push, so its edit
+# scope is the narrowest of any: the journal itself, the cspell dictionary (a new vendor term
+# in an entry fails the pre-commit hook without it), and the queue it consumes. It gets no
+# broad "Bash(gh *)" - same reasoning as the review and cleanup flows - and its push grant
+# names the bot branch prefix, so it cannot push to main even though main is where the file
+# lives. A human merging the PR is the review gate on journal content, and the journal being
+# wrong is worse than it being stale: an entry asserting a fixed credential leak would have a
+# later triage run tell a reporter to rotate keys that never leaked.
+_ALLOWED_TOOLS_JOURNAL_EXTRA = [
+    "Bash(git add*)",
+    "Bash(git commit*)",
+    f"Bash(git push origin {JOURNAL_BRANCH_PREFIX}*)",
+    f"Bash(git push -u origin {JOURNAL_BRANCH_PREFIX}*)",
+    "Bash(gh pr create*)",
+    "Bash(./run_pre_commit*)",
+    "Bash(./run_pre_commit)",
+]
+_JOURNAL_DROPPED_EDITS = {f"Edit({EDIT_SCOPE})", f"Edit({SCRATCH_SCOPE})", f"Edit({QUEUE_SCOPE})"}
+ALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _ALLOWED_TOOLS_NON_GH if rule not in _JOURNAL_DROPPED_EDITS] + [f"Edit({JOURNAL_SCOPE})", f"Edit({DICTIONARY_SCOPE})"] + _ALLOWED_TOOLS_JOURNAL_EXTRA)
+# gh pr merge/close stay denied from the base list - the bot never merges its own journal PR.
+_JOURNAL_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr create*)"}
+DISALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _DISALLOWED_TOOLS_BASE if rule not in _JOURNAL_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
+
+# Appended to every flow's system prompt. Until this existed no skill asked for a journal
+# finding at all, so upkeep was self-motivated and happened in maybe one run in ten - and
+# /code-review is a built-in skill whose SKILL.md this repo does not own, so an appended
+# system prompt is the only lever that reaches all five flows.
+JOURNAL_CAPTURE_PROMPT = (
+    "Before you finish, consider whether this investigation turned up something a future triage run would have wanted to know "
+    "- a config item that explains a whole class of report, an API or firmware quirk, a symptom that maps to a module, a trap "
+    "that wasted your time, or an existing debug-journal entry you found to be out of date. "
+    f"If so, write it as a single markdown file in {QUEUE_DIR} named <issue-or-pr-number>-<short-slug>.md. "
+    "Record only what you actually verified, and say how you verified it (read the symbol, ran the test, replayed the debug "
+    "file, probed the live API) - separate that from anything you merely suspect, and name the issue or PR number so the next "
+    "reader can check the original. A daily job folds these into the journal after re-checking each one against main. "
+    "If this run learned nothing that generalises beyond the ticket in front of you, write nothing at all - that is the "
+    "normal outcome, and an empty queue is much better than one full of restatements of what the journal already says."
+)
+
 GH_API_ENDPOINT_FIRST_PROMPT = (
     "Permission rules in this session match a literal command prefix, so `gh api` calls are only permitted when the current allowlist covers the exact spelling you use. "
     "Prefer the endpoint-first, unquoted form (endpoint immediately after `gh api`) and put flags after the endpoint - for example "
@@ -590,12 +654,107 @@ def claude_budget_args(amount, review_only=False):
     return ["--max-budget-usd", amount]
 
 
+def append_system_prompt(*parts):
+    """Return the --append-system-prompt CLI pair carrying every non-empty part.
+
+    Joined into one value rather than passed as repeated flags: two
+    --append-system-prompt flags is not a documented way to supply two prompts, and the
+    review/cleanup flows need both the gh-api endpoint steer and the journal capture text.
+    """
+    return ["--append-system-prompt", "\n\n".join(part for part in parts if part)]
+
+
+def journal_queue_entries():
+    """Return the queued journal candidates, oldest filename first.
+
+    Filtered to *.md so a stray download or editor swap file left in the directory is not
+    mistaken for a finding, and sorted so the flush reads them in a stable order.
+    """
+    if not QUEUE_DIR.exists():
+        return []
+    return sorted(path for path in QUEUE_DIR.glob("*.md") if path.is_file())
+
+
+def should_flush_journal(state, today):
+    """True when there is something queued and today's flush has not run yet.
+
+    The daemon polls every POLL_SECONDS, so without the date gate a non-empty queue would
+    open a pull request on every poll. One finding is enough to justify a PR - the daily
+    gate already bounds how often a maintainer is asked to review one.
+    """
+    if not journal_queue_entries():
+        return False
+    return state.get("last_journal_flush") != today
+
+
+def archive_journal_queue(entries):
+    """Move consumed candidates into QUEUE_DIR/processed/.
+
+    Moved rather than deleted: no `rm` grant is needed anywhere, a dropped candidate stays
+    auditable next to the PR that dropped it, and journal_queue_entries()'s non-recursive
+    glob stops an archived finding being folded in twice.
+    """
+    if not entries:
+        return
+    archive_dir = QUEUE_DIR / "processed"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    for entry in entries:
+        entry.replace(archive_dir / entry.name)
+
+
+def flush_journal():
+    """Fold the queued findings into the debug journal and open a PR for a human to merge.
+
+    Deliberately not a straight append. The skill re-checks each candidate against current
+    main before folding it in, and re-checks the entries already in the journal against
+    what has merged since - a journal that only ever grows becomes wrong, and a wrong entry
+    is worse than a missing one because every later triage run trusts it.
+    """
+    cmd = (
+        [
+            "claude",
+            "-p",
+            f"/journal-update queue={QUEUE_DIR}",
+            "--permission-mode",
+            "dontAsk",
+            "--allowedTools",
+            ALLOWED_TOOLS_JOURNAL,
+            "--disallowedTools",
+            DISALLOWED_TOOLS_JOURNAL,
+            "--verbose",
+            # The queue lives outside the clone, so it needs to be in scope for Read/Grep
+            # as well as covered by the Edit rule.
+            "--add-dir",
+            str(QUEUE_DIR),
+            "--max-turns",
+            "80",
+        ]
+        + claude_model_args(review_only=True)
+        + claude_budget_args("10.00", review_only=True)
+    )
+    consumed = journal_queue_entries()
+    log_path = LOG_DIR / "journal-update.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[triage] journal: folding {len(consumed)} finding(s) in, logging to {log_path}", flush=True)
+    with log_path.open("a") as log_handle:
+        log_handle.write(f"\n==== journal update started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
+        log_handle.write(f"==== journal update exited {result.returncode} ====\n")
+    if result.returncode == 0:
+        archive_journal_queue(consumed)
+    print(f"[triage] journal: exited {result.returncode}", flush=True)
+
+
 def triage(issue_number):
     cmd = (
         [
             "claude",
             "-p",
             f"/issue-triage {issue_number} scratch={SCRATCH_DIR}",
+        ]
+        + append_system_prompt(JOURNAL_CAPTURE_PROMPT)
+        + [
             "--permission-mode",
             "dontAsk",
             "--allowedTools",
@@ -644,6 +803,9 @@ def triage_followup(issue_number):
             "claude",
             "-p",
             f"/issue-triage-followup {issue_number} scratch={SCRATCH_DIR}",
+        ]
+        + append_system_prompt(JOURNAL_CAPTURE_PROMPT)
+        + [
             "--permission-mode",
             "dontAsk",
             "--allowedTools",
@@ -685,6 +847,9 @@ def create_pr(issue_number):
             "claude",
             "-p",
             f"/issue-pr {issue_number} scratch={SCRATCH_DIR}",
+        ]
+        + append_system_prompt(JOURNAL_CAPTURE_PROMPT)
+        + [
             "--permission-mode",
             "dontAsk",
             "--allowedTools",
@@ -906,8 +1071,9 @@ def review_pr(pr_number):
             "claude",
             "-p",
             f"/code-review {pr_number} high --comment",
-            "--append-system-prompt",
-            GH_API_ENDPOINT_FIRST_PROMPT,
+        ]
+        + append_system_prompt(GH_API_ENDPOINT_FIRST_PROMPT, JOURNAL_CAPTURE_PROMPT)
+        + [
             "--permission-mode",
             "dontAsk",
             "--allowedTools",
@@ -1001,8 +1167,9 @@ def cleanup_pr(pr_number):
             "claude",
             "-p",
             f"/pr-cleanup {pr_number} scratch={SCRATCH_DIR}",
-            "--append-system-prompt",
-            GH_API_ENDPOINT_FIRST_PROMPT,
+        ]
+        + append_system_prompt(GH_API_ENDPOINT_FIRST_PROMPT, JOURNAL_CAPTURE_PROMPT)
+        + [
             "--permission-mode",
             "dontAsk",
             "--allowedTools",
@@ -1103,6 +1270,15 @@ def main():
                 process_bot_review_pr(pr)
             for pr in fetch_bot_cleanup_prs():
                 process_bot_cleanup_pr(pr)
+            today = time.strftime("%Y-%m-%d")
+            if should_flush_journal(state, today):
+                # Stamp the date before running, not after: a flush that fails would
+                # otherwise be retried on every poll for the rest of the day. The queue
+                # survives a failure, so the findings just wait for tomorrow.
+                state["last_journal_flush"] = today
+                save_state(state)
+                sync_repo()
+                flush_journal()
         except subprocess.CalledProcessError as exc:
             print(f"[triage] error: {exc}", flush=True)
         time.sleep(POLL_SECONDS)
