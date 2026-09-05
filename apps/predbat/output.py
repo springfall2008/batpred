@@ -3352,28 +3352,34 @@ class Output:
                 export_start_minute = None
                 export_end_minute = None
 
-                # A slot's rendered start/end always snaps to the slot grid unless charge and export
-                # genuinely hand off to each other mid-slot (both sides detected below), so this walk
-                # only needs the interior minutes it has always used - trusting a homogeneous edge
-                # cannot move a boundary that was already going to land on the slot edge.
-                for slot_offset in range(edge_minutes, self.plan_interval_minutes - edge_minutes):
+                # Walk exactly the minutes the tally below trusts. The two must agree: the tally
+                # decides *whether* a slot rebuilds a charge or export window and this walk decides
+                # *where* that window starts, so a state the tally counts but this walk never sees
+                # produces a window with start/end still None, and in_charge_window() then compares
+                # an int against None and takes down the whole update_pred() cycle (regression from #4872).
+                # A state found anywhere in the slot's leading edge window still snaps back to the
+                # slot boundary, as it always has - a state already running that early reads as
+                # having opened the slot, and the History view renders whole slots regardless.
+                for slot_offset in range(tally_start, tally_end):
                     slot_status = slot_statuses[slot_offset]
-                    real_minute = minute + slot_offset
+                    real_minute = minute if slot_offset <= edge_minutes else minute + slot_offset
 
                     # Cross-charging genuinely straddles both sides - track it as both an exporting
                     # and a charging slot (its name contains "charging" but not "exporting"), so
                     # these are independent "if"s rather than "if/elif".
+                    # One side starting *later* than the other ends the earlier one - the slot hands
+                    # off mid-way. Starting at the same minute is not a handoff but an overlap: both
+                    # run the whole slot, which is exactly what cross-charging is. Ending the earlier
+                    # side at the later one's start would then close it at its own start minute, and
+                    # a zero-width window renders as nothing at all - which is how the export half of
+                    # a cross-charging slot went missing again after #4466 restored it.
                     if yesterday_slot_is_exporting(slot_status) and export_start_minute is None:
                         export_start_minute = real_minute
-                        if slot_offset == edge_minutes:
-                            export_start_minute -= edge_minutes
-                        if charge_start_minute is not None:
+                        if charge_start_minute is not None and charge_start_minute < export_start_minute:
                             charge_end_minute = export_start_minute
                     if "charging" in slot_status and charge_start_minute is None:
                         charge_start_minute = real_minute
-                        if slot_offset == edge_minutes:
-                            charge_start_minute -= edge_minutes
-                        if export_start_minute is not None:
+                        if export_start_minute is not None and export_start_minute < charge_start_minute:
                             export_end_minute = charge_start_minute
 
                 # Assume slots end at end of period if not found
