@@ -72,6 +72,7 @@ cdn
 Cerbo
 cexxxx
 ceyyyy
+CGNAT
 Chae
 Chaf
 chargedischarge
@@ -192,6 +193,7 @@ ESSAPI
 etoday
 etok
 euids
+EVAC
 EVDC
 evergen
 evilspringfall
