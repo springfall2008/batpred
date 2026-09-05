@@ -37,6 +37,8 @@ def run_dispatch_timeline_tests(my_predbat):
     saved_now_utc = my_predbat.now_utc
     saved_midnight_utc = my_predbat.midnight_utc
     saved_minutes_now = my_predbat.minutes_now
+    saved_charge_window_best = my_predbat.charge_window_best
+    saved_charge_limit_best = my_predbat.charge_limit_best
 
     try:
         # Fixed, mutually-consistent midnight/now so this test doesn't depend on (or leak into)
@@ -49,6 +51,11 @@ def run_dispatch_timeline_tests(my_predbat):
         # Default window: -4h..+24h at 30-min step = 56 blocks. "now" (offset 0) sits at block 8 (4h * 2).
         NUM_BLOCKS = 56
         NOW_BLOCK = 8
+
+        # No plan by default: the existing cases below assert uppercase letters, which only hold
+        # when Predbat is not charging in those blocks
+        my_predbat.charge_window_best = []
+        my_predbat.charge_limit_best = []
 
         print("Test 1: nothing scheduled - all dots")
         timeline = my_predbat.build_dispatch_timeline(0, [], [], [])
@@ -130,10 +137,46 @@ def run_dispatch_timeline_tests(my_predbat):
         if timeline != expected:
             print("  ERROR: expected 3 consecutive P blocks, got {!r}".format(timeline))
             failed = True
+        print("Test 9: a planned slot Predbat charges in renders lowercase")
+        slot_start = midnight_utc + timedelta(hours=12)  # 2h from now -> block NOW_BLOCK+4
+        slot_end = slot_start + timedelta(minutes=30)
+        my_predbat.charge_window_best = [{"start": 12 * 60, "end": 12 * 60 + 30}]
+        my_predbat.charge_limit_best = [5.0]
+        timeline = my_predbat.build_dispatch_timeline(0, [], [], [_slot(slot_start, slot_end)])
+        expected = list("." * NUM_BLOCKS)
+        expected[NOW_BLOCK + 4] = "p"
+        expected = "".join(expected)
+        if timeline != expected:
+            print("  ERROR: a slot Predbat plans to charge in should be 'p', expected {!r}, got {!r}".format(expected, timeline))
+            failed = True
+
+        print("Test 10: a charge window with a zero limit does not lowercase the slot")
+        my_predbat.charge_limit_best = [0.0]
+        timeline = my_predbat.build_dispatch_timeline(0, [], [], [_slot(slot_start, slot_end)])
+        expected = list("." * NUM_BLOCKS)
+        expected[NOW_BLOCK + 4] = "P"
+        expected = "".join(expected)
+        if timeline != expected:
+            print("  ERROR: a zero-limit window is not a charge, expected {!r}, got {!r}".format(expected, timeline))
+            failed = True
+
+        print("Test 11: a charge window where there is no slot leaves dots untouched")
+        my_predbat.charge_window_best = [{"start": 14 * 60, "end": 14 * 60 + 30}]
+        my_predbat.charge_limit_best = [5.0]
+        timeline = my_predbat.build_dispatch_timeline(0, [], [], [])
+        if timeline != "." * NUM_BLOCKS:
+            print("  ERROR: charging where no dispatch exists must not mark the timeline, got {!r}".format(timeline))
+            failed = True
+
+        my_predbat.charge_window_best = []
+        my_predbat.charge_limit_best = []
+
     finally:
         my_predbat.now_utc = saved_now_utc
         my_predbat.midnight_utc = saved_midnight_utc
         my_predbat.minutes_now = saved_minutes_now
+        my_predbat.charge_window_best = saved_charge_window_best
+        my_predbat.charge_limit_best = saved_charge_limit_best
 
     if failed:
         print("\n**** dispatch_timeline tests: FAILED ****")
