@@ -1425,6 +1425,81 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     return failed
 
 
+def test_press_and_poll_button_side_scoping(my_predbat, inv):
+    """
+    Tests;
+        def press_and_poll_button(self, side="both")
+
+    Covers GitHub issue #2328: with separate charge_update_button/discharge_update_button
+    entities configured (rather than a single combined button), pressing one side must not also
+    press the other - the reporter's log showed both buttons pressed together even when only one
+    side had anything to update, and on hardware that counts button presses towards flash/EEPROM
+    wear this doubles the unnecessary writes. Bypasses the real button-press-and-poll mechanism
+    (its retry/timestamp-polling behaviour is a separate concern from the side-scoping this test
+    checks) by recording which entity_id(s) press_and_poll_button() actually tries to press.
+    """
+    failed = False
+    print("**** Running Test: press_and_poll_button_side_scoping ****")
+
+    pressed = []
+
+    def fake_press(entity_id):
+        pressed.append(entity_id)
+        return True
+
+    # my_predbat/inv are shared across the whole test run - save everything this test touches so
+    # it can be restored exactly, rather than leaking a changed/missing arg or method into later
+    # tests (e.g. test_force_export_unchanged_times_HM_format relies on schedule_write_button
+    # already being set from run_inverter_tests' own setup).
+    unset = object()
+    real_press_single_button_and_poll = inv._press_single_button_and_poll
+    saved_args = {key: my_predbat.args.get(key, unset) for key in ("charge_update_button", "discharge_update_button", "charge_discharge_update_button", "schedule_write_button")}
+
+    try:
+        inv._press_single_button_and_poll = fake_press
+
+        my_predbat.args["charge_update_button"] = "button.charge_update"
+        my_predbat.args["discharge_update_button"] = "button.discharge_update"
+        for key in ("charge_discharge_update_button", "schedule_write_button"):
+            if key in my_predbat.args:
+                del my_predbat.args[key]
+
+        cases = [
+            ("charge", ["button.charge_update"]),
+            ("discharge", ["button.discharge_update"]),
+            ("both", ["button.charge_update", "button.discharge_update"]),
+        ]
+        for side, expected in cases:
+            pressed.clear()
+            inv.press_and_poll_button(side=side)
+            if sorted(pressed) != sorted(expected):
+                print(f"ERROR: press_and_poll_button(side='{side}') pressed {pressed}, expected {expected}")
+                failed = True
+            else:
+                print(f"  PASS: side='{side}' pressed only {pressed}")
+
+        # Default (no side given) must still press both, for any caller that hasn't been updated
+        pressed.clear()
+        inv.press_and_poll_button()
+        if sorted(pressed) != sorted(["button.charge_update", "button.discharge_update"]):
+            print(f"ERROR: press_and_poll_button() with no side should press both, got {pressed}")
+            failed = True
+        else:
+            print("  PASS: default side='both' pressed both")
+    finally:
+        inv._press_single_button_and_poll = real_press_single_button_and_poll
+        for key, value in saved_args.items():
+            if value is unset:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+
+    if not failed:
+        print("PASS: All press_and_poll_button side scoping tests passed")
+
+    return failed
+
+
 def test_call_service_template(test_name, my_predbat, inv, service_name="test", domain="charge", data={}, extra_data={}, clear=True, repeat=False, service_template=None, expected_result=None, twice=True):
     """
     tests
@@ -2575,6 +2650,269 @@ def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
     return failed
 
 
+def test_force_export_stable_window_presses_button_once(test_name, ha, inv):
+    """
+    Regression test for issue #4709: a stable export window must commit to the inverter once, not on
+    every Predbat cycle.
+
+    H M format rewrites the time registers unconditionally as a write-reliability workaround (#1529),
+    so changed_start_end is True on every cycle of an unchanged window. Gating the button press on it
+    (as #4000 did) pressed the button every 5 minutes for the whole window. On Solis each press zeroes
+    the timed charge/discharge current registers, stopping export until something restores them, and it
+    also triggers the 30 second GivTCP settle sleep in adjust_inverter_mode.
+
+    The writes themselves must be preserved - this asserts only that the *commit* stops repeating.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_time_button_press = True
+
+    export_time = "07:58:00"
+    export_end = "09:02:00"
+
+    ha.dummy_items["select.discharge_start_time"] = export_time
+    ha.dummy_items["select.discharge_end_time"] = export_end
+    ha.dummy_items["time.discharge_start_hour"] = export_time
+    ha.dummy_items["time.discharge_end_hour"] = export_end
+    ha.dummy_items["switch.scheduled_discharge_enable"] = "on"
+    ha.dummy_items["number.discharge_target_soc"] = inv.reserve_percent
+    ha.dummy_items["select.inverter_mode"] = "Timed Export"
+
+    inv.base.args["discharge_start_time"] = "select.discharge_start_time"
+    inv.base.args["discharge_end_time"] = "select.discharge_end_time"
+    inv.base.args["discharge_start_hour"] = "time.discharge_start_hour"
+    inv.base.args["discharge_end_hour"] = "time.discharge_end_hour"
+    inv.base.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+
+    ts = datetime.strptime(export_time, "%H:%M:%S")
+    te = datetime.strptime(export_end, "%H:%M:%S")
+
+    # Nothing committed yet, as after a Predbat restart - this cycle must commit the schedule (#4000)
+    inv.last_export_schedule_committed = None
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_force_export(True, ts, te)
+
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: first cycle should commit the schedule (button pressed), got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    # Subsequent cycles of the same, unchanged window must not press the button again (#4709)
+    for cycle in range(2, 4):
+        ha.dummy_items["switch.inverter_button"] = "off"
+        before_writes = inv.count_register_writes
+        inv.adjust_force_export(True, ts, te)
+
+        if ha.dummy_items.get("switch.inverter_button") != "off":
+            print(f"ERROR: {test_name}: cycle {cycle} of an unchanged window should not press the button again")
+            failed = True
+
+        # The time registers are still rewritten - only the commit is suppressed
+        if inv.count_register_writes < before_writes + 2:
+            print(f"ERROR: {test_name}: cycle {cycle} should still rewrite the time registers, writes went {before_writes} -> {inv.count_register_writes}")
+            failed = True
+
+    # A genuine change to the window must commit again
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_force_export(True, ts, datetime.strptime("09:32:00", "%H:%M:%S"))
+
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: a changed window must be committed, got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    # A failed button press must not be recorded as committed - it has to be retried next cycle, rather
+    # than the schedule being treated as applied until it happens to change again on its own.
+    saved_press = inv.press_and_poll_button
+    try:
+        inv.last_export_schedule_committed = None
+        inv.press_and_poll_button = lambda side="both": False
+        inv.adjust_force_export(True, ts, te)
+
+        attempts = []
+        inv.press_and_poll_button = lambda side="both", _a=attempts: (_a.append(side), True)[1]
+        inv.adjust_force_export(True, ts, te)
+
+        if not attempts:
+            print(f"ERROR: {test_name}: a failed commit must be retried on the next cycle, not recorded as done")
+            failed = True
+    finally:
+        inv.press_and_poll_button = saved_press
+
+    inv.last_export_schedule_committed = None
+    return failed
+
+
+def test_force_export_enable_only_flip_skips_settle_sleep(test_name, ha, inv):
+    """
+    Regression test: turning scheduled export on/off with the window's start/end times unchanged
+    must not trigger the 30 second GivTCP settle sleep in adjust_inverter_mode.
+
+    That sleep exists specifically for "start/end of discharge window was just adjusted" (its own log
+    message) - a HH:MM:SS-format inverter (e.g. Fox, GE) whose scheduled_discharge_enable flips while
+    new_start/new_end already match what's on the inverter has not written any time register at all,
+    so there is nothing for GivTCP to settle. schedule_changed alone is too broad a gate for this - it
+    is also True on a bare enable flip - so adjust_force_export must gate the sleep on times_changed
+    (start/end actually differing) instead, while still pressing the update button and recording the
+    commit via the broader schedule_changed (the enable state genuinely did change and does need
+    committing).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "HH:MM:SS"
+    inv.inv_time_button_press = True
+    inv.last_export_schedule_committed = None
+
+    export_time = "18:00:00"
+    export_end = "19:00:00"
+
+    # Window already on the inverter matches what we're about to request - only the enable flag differs.
+    ha.dummy_items["select.discharge_start_time"] = export_time
+    ha.dummy_items["select.discharge_end_time"] = export_end
+    ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
+    ha.dummy_items["number.discharge_target_soc"] = inv.reserve_percent
+    ha.dummy_items["select.inverter_mode"] = "Timed Export"
+    ha.dummy_items["switch.inverter_button"] = "off"
+
+    inv.base.args["discharge_start_time"] = "select.discharge_start_time"
+    inv.base.args["discharge_end_time"] = "select.discharge_end_time"
+    inv.base.args.pop("discharge_start_hour", None)
+    inv.base.args.pop("discharge_end_hour", None)
+    inv.base.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+
+    ts = datetime.strptime(export_time, "%H:%M:%S")
+    te = datetime.strptime(export_end, "%H:%M:%S")
+
+    saved_sleep = inv.sleep
+    sleep_calls = []
+    inv.sleep = lambda seconds, _c=sleep_calls: _c.append(seconds)
+
+    try:
+        inv.adjust_force_export(True, ts, te)
+
+        if ha.dummy_items.get("switch.inverter_button") != "on":
+            print(f"ERROR: {test_name}: enable flip must still commit (button pressed), got {ha.dummy_items.get('switch.inverter_button')}")
+            failed = True
+
+        # Other writes (the enable switch itself, the target SoC) legitimately sleep briefly to poll for
+        # confirmation - inv_write_and_poll_sleep, not the 30s GivTCP settle sleep. Only that specific
+        # 30-second value is what this test cares about.
+        if 30 in sleep_calls:
+            print(f"ERROR: {test_name}: enable-only flip with unchanged times should not trigger the 30s GivTCP settle sleep, got sleep({sleep_calls})")
+            failed = True
+
+        # Sanity check the sleep gate still fires when the times genuinely do change alongside the flip
+        ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
+        ha.dummy_items["switch.inverter_button"] = "off"
+        sleep_calls.clear()
+        inv.adjust_force_export(True, ts, datetime.strptime("20:00:00", "%H:%M:%S"))
+
+        if 30 not in sleep_calls:
+            print(f"ERROR: {test_name}: a genuine window time change must still trigger the 30s settle sleep, got sleep({sleep_calls})")
+            failed = True
+    finally:
+        inv.sleep = saved_sleep
+        inv.last_export_schedule_committed = None
+
+    return failed
+
+
+def test_force_export_off_does_not_press_every_cycle(test_name, ha, my_predbat):
+    """
+    Regression test for issue #2328: with no export scheduled the update button must not be pressed on
+    every cycle.
+
+    execute.py calls adjust_force_export(False) with no times whenever nothing is being exported. On an
+    inverter with has_discharge_enable_time set (GS_fb00, and the FoxCloud/TESLA/Enphase/Deye/Sunsynk/
+    AlphaESS cloud types) the midnight override is skipped, so new_start/new_end stay None while the
+    inverter still reports a real time - and None never compares equal, so every cycle looked like a
+    change and pressed the button. That is most of the day, not just export windows.
+
+    FoxCloud stands in for the cloud types here. They reach the bug by the same route as GS_fb00 but
+    settle somewhere different: being HH:MM:SS format they never take the H M unconditional register
+    rewrite, so the commit-once safety net gated on that format is skipped too and an idle cloud
+    inverter should press zero times - not the one GS_fb00 spends on its first post-restart commit.
+    Pinning that separately keeps the cloud behaviour from resting on GS_fb00 happening to share
+    has_discharge_enable_time.
+
+    Plain GS takes the midnight-override path and is not affected by this None-comparison route, so it
+    is checked here too to pin the difference down. (GS was affected by a separate bug - #4711's
+    unconditional H M register rewrite, which GS also uses - but that is a different code path to the
+    one this test targets.)
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    # my_predbat/ha are shared across the whole test run - save everything this test touches so it
+    # can be restored exactly, rather than leaking a changed/missing arg or dummy entity value into
+    # later tests and making results order-dependent.
+    unset = object()
+    saved_args = {key: my_predbat.args.get(key, unset) for key in ("inverter_type", "discharge_start_time", "discharge_end_time", "scheduled_discharge_enable")}
+    saved_items = {
+        key: ha.dummy_items.get(key, unset)
+        for key in ("select.discharge_start_time", "select.discharge_end_time", "switch.scheduled_discharge_enable", "select.inverter_mode", "number.discharge_target_soc", "select.idle_start_time", "select.idle_end_time")
+    }
+
+    # Times for the positive control below - any window will do, it just has to differ from idle.
+    export_start = datetime.strptime("18:00:00", "%H:%M:%S")
+    export_end = datetime.strptime("19:00:00", "%H:%M:%S")
+
+    try:
+        for inverter_type, expected_presses in (("GS_fb00", 1), ("GS", 1), ("FoxCloud", 0)):
+            my_predbat.args["inverter_type"] = [inverter_type]
+            inv = Inverter(my_predbat, 0, quiet=True)
+            inv.rest_data = None
+            # Only the press count matters here. TestHAInterface applies a service call synchronously,
+            # so the write-and-poll read-back already sees the new value and the sleep between them is
+            # pure wall clock - several seconds per register write, across three inverter types.
+            inv.sleep = lambda seconds: None
+
+            ha.dummy_items["select.discharge_start_time"] = "00:00:00"
+            ha.dummy_items["select.discharge_end_time"] = "00:00:00"
+            ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
+            ha.dummy_items["select.inverter_mode"] = "Eco"
+            my_predbat.args["discharge_start_time"] = "select.discharge_start_time"
+            my_predbat.args["discharge_end_time"] = "select.discharge_end_time"
+            my_predbat.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+
+            presses = []
+            # Must report success, as a real press does - a falsy return means "not committed, retry"
+            inv.press_and_poll_button = lambda side="both", _p=presses: (_p.append(side), True)[1]
+
+            # Several cycles with nothing to export - the first may commit, the rest must be silent
+            for _ in range(4):
+                inv.adjust_force_export(False)
+
+            if len(presses) > expected_presses:
+                print(f"ERROR: {test_name}: {inverter_type} pressed the button {len(presses)} times over 4 idle cycles, expected at most {expected_presses}")
+                failed = True
+
+            # Positive control: the suppression has to be specific to idle cycles. An inverter that had
+            # stopped committing altogether would satisfy the check above just as well, so entering an
+            # export window straight afterwards must still commit, exactly once.
+            idle_presses = len(presses)
+            inv.adjust_force_export(True, export_start, export_end)
+            if len(presses) != idle_presses + 1:
+                print(f"ERROR: {test_name}: {inverter_type} should press once on entering an export window, pressed {len(presses) - idle_presses} times")
+                failed = True
+    finally:
+        for key, value in saved_args.items():
+            if value is unset:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+        for key, value in saved_items.items():
+            if value is unset:
+                ha.dummy_items.pop(key, None)
+            else:
+                ha.dummy_items[key] = value
+
+    return failed
+
+
 def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_start, new_end):
     """
     Test that when *_start_hour / *_end_hour args resolve to time.* entities the full
@@ -3588,6 +3926,10 @@ charge_start_service:
     if failed:
         return failed
 
+    failed |= test_press_and_poll_button_side_scoping(my_predbat, inv)
+    if failed:
+        return failed
+
     failed |= test_auto_restart(
         "auto_restart0",
         my_predbat,
@@ -3766,6 +4108,19 @@ charge_start_service:
 
     # Regression test: GS_fb00 H M format must write time entities and press button even when times are unchanged
     failed |= test_force_export_unchanged_times_HM_format("force_export_unchanged_HM_format", ha, inv)
+    if failed:
+        return failed
+
+    # Regression test for issue #4709: a stable export window must be committed once, not every cycle
+    failed |= test_force_export_stable_window_presses_button_once("force_export_stable_window_button_once", ha, inv)
+    if failed:
+        return failed
+
+    # Regression test: an enable-only flip (times unchanged) must not trigger the GivTCP settle sleep
+    failed |= test_force_export_enable_only_flip_skips_settle_sleep("force_export_enable_only_flip_skips_settle_sleep", ha, inv)
+
+    # Regression test for issue #2328: idle (non-export) cycles must not press the button every time
+    failed |= test_force_export_off_does_not_press_every_cycle("force_export_off_no_repeat_press", ha, my_predbat)
     if failed:
         return failed
 

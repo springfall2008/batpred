@@ -201,6 +201,9 @@ class Inverter:
         self.track_discharge_end = "00:00:00"
         self.idle_start_minutes = 0
         self.idle_end_minutes = 0
+        # Last export schedule (start, end, enabled) Predbat actually committed to this inverter.
+        # None means nothing has been committed yet in this run, so the next call commits once.
+        self.last_export_schedule_committed = None
 
         if rest_postCommand:
             self.rest_postCommand = rest_postCommand
@@ -2043,7 +2046,7 @@ class Inverter:
 
             # For inverters that need a button press to apply changes (e.g., Fox), press the button now
             if self.inv_time_button_press:
-                self.press_and_poll_button()
+                self.press_and_poll_button(side="charge")
 
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Target SoC has been changed to {}% at {}".format(self.id, soc, self.base.time_now_str()))
@@ -2602,6 +2605,11 @@ class Inverter:
             self.log("Warn: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
             return False
 
+        # Whether the caller asked us to manage the export times at all this cycle. execute.py calls
+        # adjust_force_export(False) with no times whenever nothing is being exported, which is a
+        # different thing from the GE branch below deliberately clearing them.
+        times_supplied = (new_start_time is not None) or (new_end_time is not None)
+
         # Start time to correct format
         if new_start_time:
             new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
@@ -2759,19 +2767,51 @@ class Inverter:
             if not old_discharge_enable:
                 self.log("Inverter {} Turning on scheduled export".format(self.id))
 
-        if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable) or changed_start_end:
+        # Whether the export schedule itself actually needs (re)committing to the inverter, as opposed
+        # to us merely having rewritten the time registers. For H M format those registers are rewritten
+        # every cycle as a write-reliability workaround (#1529), so changed_start_end is True on every
+        # cycle of a stable export window and must not be used to gate the commit - on Solis each button
+        # press zeroes the timed current registers (#4709), and it also triggers the 30s GivTCP sleep in
+        # adjust_inverter_mode. Tracking what we last committed keeps a stable window quiet while still
+        # committing once after a restart, when nothing has been committed yet (#4000).
+        # When the caller supplied no times at all we are not managing the export window this cycle, so
+        # neither time can have "changed". Comparing None against the time the inverter still reports is
+        # never equal, which pressed the update button on every idle cycle for the rest of the day (#2328).
+        # A genuine transition out of export is still caught by force_export != old_discharge_enable below.
+        start_changed = times_supplied and new_start != old_start
+        end_changed = times_supplied and new_end != old_end
+        export_schedule = (new_start, new_end, force_export)
+        # Separately, whether the start/end times themselves actually moved - used below to gate the
+        # GivTCP settle sleep, which exists for the window write specifically ("start/end of discharge
+        # window was just adjusted"). schedule_changed alone is too broad for that: it also goes True on
+        # a bare scheduled_discharge_enable flip with the window untouched, which doesn't need settling.
+        times_changed = start_changed or end_changed
+        schedule_changed = times_changed or (force_export != old_discharge_enable)
+        if is_hm_format and export_schedule != self.last_export_schedule_committed:
+            # Only the H M path rewrites unconditionally, so only it needs the extra commit-once-per-run
+            # safety net; every other format already commits on a real change alone. Treat it as a real
+            # window write too, so the settle sleep still runs on this first post-restart commit.
+            schedule_changed = True
+            times_changed = True
+
+        if schedule_changed:
+            committed = True
             if self.inv_time_button_press:
-                self.press_and_poll_button()
+                committed = self.press_and_poll_button(side="discharge")
+            if committed:
+                # Only remember a commit that actually succeeded, otherwise a failed button press would
+                # be recorded as done and never retried until the schedule next changes on its own.
+                self.last_export_schedule_committed = export_schedule
 
         # Force export, turn it on after we change the window
         if force_export:
-            self.adjust_inverter_mode(force_export, changed_start_end=changed_start_end)
+            self.adjust_inverter_mode(force_export, changed_start_end=times_changed)
             if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                 if self.inv_charge_control_immediate:
                     self.enable_charge_discharge_with_time_current("discharge", True)
 
         # Notify
-        if changed_start_end:
+        if schedule_changed and changed_start_end:
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Export time slot set to {} - {} at time {}".format(self.id, new_start, new_end, self.base.time_now_str()))
 
@@ -2831,7 +2871,7 @@ class Inverter:
             else:
                 # Press button if needed
                 if self.inv_time_button_press:
-                    self.press_and_poll_button()
+                    self.press_and_poll_button(side="charge")
 
         # Updated cached status to disabled
         # Don't do it if notify is not set as this is just a temporary call when setting the charge window
@@ -3260,14 +3300,22 @@ class Inverter:
         if (new_start != old_start) or (new_end != old_end) or (old_charge_schedule_enable == "off"):
             # For Solis inverters and fox we also have to press the update_charge_discharge button to send the times to the inverter
             if self.inv_time_button_press:
-                self.press_and_poll_button()
+                self.press_and_poll_button(side="charge")
 
-    def press_and_poll_button(self):
+    def press_and_poll_button(self, side="both"):
         """
         Press charge/discharge update button(s) for the inverter.
         Priority:
         1. charge_discharge_update_button
         2. charge_update_button and discharge_update_button
+
+        `side` is one of "charge", "discharge" or "both" - the side that actually changed and
+        needs its update pressed. A single combined button (schedule_write_button or
+        charge_discharge_update_button) always covers both sides regardless, so `side` only
+        matters when separate charge_update_button/discharge_update_button entities are
+        configured (e.g. some Solis setups) - pressing the unrelated side's button there writes
+        an unnecessary command to the inverter (and, on hardware that counts these towards flash/
+        EEPROM wear, batpred#2328).
         """
         success = True
 
@@ -3280,17 +3328,18 @@ class Inverter:
         elif entity_id_charge_discharge_updated_button:
             success = self._press_single_button_and_poll(entity_id_charge_discharge_updated_button)
         else:
-            # Try separate charge and discharge buttons
-            charge_button = self.base.get_arg("charge_update_button", indirect=False, index=self.id)
-            discharge_button = self.base.get_arg("discharge_update_button", indirect=False, index=self.id)
+            # Try separate charge and discharge buttons - only press the one(s) relevant to `side`
+            if side in ("charge", "both"):
+                charge_button = self.base.get_arg("charge_update_button", indirect=False, index=self.id)
+                if charge_button:
+                    if not self._press_single_button_and_poll(charge_button):
+                        success = False
 
-            if charge_button:
-                if not self._press_single_button_and_poll(charge_button):
-                    success = False
-
-            if discharge_button:
-                if not self._press_single_button_and_poll(discharge_button):
-                    success = False
+            if side in ("discharge", "both"):
+                discharge_button = self.base.get_arg("discharge_update_button", indirect=False, index=self.id)
+                if discharge_button:
+                    if not self._press_single_button_and_poll(discharge_button):
+                        success = False
 
         return success
 
