@@ -186,7 +186,7 @@ def test_alphaess_update_local_schedule_applies_each_field():
     """Each control entity change lands on the right field of the held schedule."""
     failed = False
     client = _client()
-    for entity, value, path in [
+    for entity, value, _path in [
         ("number.predbat_alphaess_al70_battery_schedule_reserve", 15, ("reserve",)),
         ("select.predbat_alphaess_al70_battery_schedule_charge_start_time", "02:30:00", ("charge", "start")),
         ("number.predbat_alphaess_al70_battery_schedule_charge_soc", 85, ("charge", "soc")),

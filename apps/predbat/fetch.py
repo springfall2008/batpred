@@ -263,7 +263,7 @@ class Fetch:
             # Extra load adding in (e.g. heat pump)
             load_extra = 0
             if load_forecast:
-                for offset in range(step):
+                for _offset in range(step):
                     load_extra += self.get_from_incrementing(load_forecast, minute_absolute, backwards=False)
             if load_adjust:
                 load_extra += load_adjust.get(minute_absolute, 0) * step / float(self.plan_interval_minutes)  # The kWh figure is for the plan interval period, so divide by plan_interval_minutes and times by step
@@ -506,11 +506,11 @@ class Fetch:
         if zero_periods:
             self.log("Warn: Found {} periods of zero load with power data, filling using power integration".format(len(zero_periods)))
             # Print the first 5 periods for debugging
-            for i, (period_start, period_end, base_value) in enumerate(zero_periods[:5]):
+            for _i, (period_start, period_end, base_value) in enumerate(zero_periods[:5]):
                 start_timestamp = self.now_utc - timedelta(minutes=period_start)
                 self.log("Zero load period starting at {} ({} minutes) for {} minutes with base value {}".format(start_timestamp.strftime(TIME_FORMAT), period_start, period_end - period_start + 1, base_value))
 
-            for period_start, period_end, base_value in zero_periods:
+            for period_start, period_end, _base_value in zero_periods:
                 # Integrate power data over this period
                 # First calculate total energy consumed in this period
                 total_energy = 0
@@ -664,7 +664,7 @@ class Fetch:
         if num_gaps > 0:
             self.log("Warn: Found {} gaps in load_today totalling {} minutes to fill using average data".format(len(gap_list), num_gaps))
             # Print the first 5 gaps for debugging
-            for i, (gap_start, gap_length) in enumerate(gap_list[:5]):
+            for _i, (gap_start, gap_length) in enumerate(gap_list[:5]):
                 gap_start_timestamp = self.now_utc - timedelta(minutes=gap_start)
                 self.log("Gap starting at {} ({} minutes) for {} minutes".format(gap_start_timestamp.strftime(TIME_FORMAT), gap_start, gap_length))
 

@@ -380,7 +380,7 @@ class FutureRate:
                 return pdata
 
         # Retry up to 3 minutes
-        for retry in range(3):
+        for _retry in range(3):
             pdata = self.download_futurerate_data_func(url)
             if pdata:
                 break

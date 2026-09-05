@@ -3530,7 +3530,7 @@ charge_start_service:
     """
     decoded_yaml = yaml.safe_load(dummy_yaml)
 
-    for repeat in range(2):
+    for _repeat in range(2):
         failed |= test_call_service_template(
             "test_service_complex5",
             my_predbat,

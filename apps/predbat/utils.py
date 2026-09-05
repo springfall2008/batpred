@@ -1772,10 +1772,9 @@ def find_charge_rate(
             rate = rate_w / MINUTE_WATT
             if rate_w >= min_rate_w:
                 charge_now = soc
-                minute = 0
                 rate_scale_max = 0
                 # Compute over the time period, include the completion time
-                for minute in range(0, minutes_left, PREDICT_STEP):
+                for _minute in range(0, minutes_left, PREDICT_STEP):
                     rate_scale = get_charge_rate_curve_cached(round(charge_now, 1), rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple)
                     highest_achievable_rate = max(highest_achievable_rate, rate_scale)
                     rate_scale *= battery_rate_max_scaling

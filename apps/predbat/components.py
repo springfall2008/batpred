@@ -813,7 +813,7 @@ class Components:
         return not failed
 
     async def stop(self, only=None):
-        for component_name, component_info in reversed(list(self.components.items())):
+        for component_name, _component_info in reversed(list(self.components.items())):
             if only and component_name != only:
                 continue
             component = self.components[component_name]

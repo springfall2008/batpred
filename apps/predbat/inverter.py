@@ -2282,7 +2282,7 @@ class Inverter:
             if old_value != new_value:
                 ledger.note_write_attempt(entity_id)
 
-        for retry in range(INVERTER_MAX_RETRY):
+        for _retry in range(INVERTER_MAX_RETRY):
             if entity_base == "time":
                 service = entity_base + "/set_value"
                 self.base.call_service_wrapper(service, time=new_value, entity_id=entity_id)
@@ -3309,7 +3309,7 @@ class Inverter:
         """
         local_tz = pytz.timezone(self.base.get_arg("timezone", "Europe/London"))
 
-        for retry in range(INVERTER_MAX_RETRY):
+        for _retry in range(INVERTER_MAX_RETRY):
             self.base.call_service_wrapper("button/press", entity_id=entity_id)
             self.sleep(self.inv_write_and_poll_sleep)
             state = self.base.get_state_wrapper(entity_id, refresh=True)

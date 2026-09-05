@@ -1466,7 +1466,7 @@ class OctopusAPI(ComponentBase):
             section = product_info.get(section_key, {})
             if not section:
                 continue
-            for region_key, region_data in section.items():
+            for _region_key, region_data in section.items():
                 if not isinstance(region_data, dict):
                     continue
                 for payment_type in payment_types:
@@ -2686,7 +2686,7 @@ class Octopus:
                 self.log("Octopus: Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
         # Retry up to 3 minutes
-        for retry in range(3):
+        for _retry in range(3):
             pdata = self.download_octopus_rates_func(url)
             if pdata:
                 break

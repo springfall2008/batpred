@@ -1000,7 +1000,7 @@ def _test_soc_not_mutated_and_override_passed(my_predbat, failed):
         failed = True
     else:
         # Every call: base soc_kw/soc_max must equal the original values.
-        for idx, (base_soc, base_max, pred_soc, pred_max) in enumerate(captured_soc):
+        for idx, (base_soc, base_max, _pred_soc, _pred_max) in enumerate(captured_soc):
             if base_soc != original_soc_kw:
                 print("ERROR: call {}: base soc_kw was mutated to {} (expected {})".format(idx, base_soc, original_soc_kw))
                 failed = True
