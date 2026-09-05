@@ -2975,6 +2975,10 @@ class Fetch:
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_min = self.get_arg("best_soc_min")
         self.best_soc_max = self.get_arg("best_soc_max")
+        self.best_soc_max_mode = None
+        if self.best_soc_max == "morning_cover":
+            self.best_soc_max_mode = "morning_cover"
+            self.best_soc_max = 0.0
         self.best_soc_keep = self.get_arg("best_soc_keep")
         self.best_soc_keep_weight = self.get_arg("best_soc_keep_weight")
         self.set_soc_minutes = self.plan_interval_minutes
