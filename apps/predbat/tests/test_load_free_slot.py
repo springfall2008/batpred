@@ -197,6 +197,30 @@ def test_load_free_slot(my_predbat):
     else:
         print("Test 5 passed - invalid times ignored")
 
+    # Test 5b: a good slot followed by an undecodable one - the bad slot must not
+    # re-apply its rate over the good slot's minute range (it has no range of its own)
+    print("*** Test 5b: undecodable slot after a good one keeps the good slot's rate")
+
+    # Reset
+    my_predbat.rate_export = {n: 5.0 for n in range(0, window_end + 24 * 60)}
+
+    good_then_bad = [
+        {"start": "2025-01-15T10:00:00+00:00", "end": "2025-01-15T11:00:00+00:00", "rate": 0.0},
+        {"start": "not-a-time", "end": "also-not-a-time", "rate": 3.0},
+    ]
+
+    rate_replicate = {}
+    my_predbat.load_free_slot(good_then_bad, my_predbat.rate_export, export=True, rate_replicate=rate_replicate)
+
+    for minute in range(10 * 60, 11 * 60):
+        if my_predbat.rate_export[minute] != 0.0:
+            print("ERROR: Good slot rate_export[{}] should stay 0.0, got {}".format(minute, my_predbat.rate_export[minute]))
+            failed = True
+            break
+
+    if not failed:
+        print("Test 5b passed - undecodable slot skipped, good slot's rate untouched")
+
     # Test 6: Slot outside forecast window
     print("*** Test 6: Slot outside forecast window")
 
@@ -204,7 +228,7 @@ def test_load_free_slot(my_predbat):
     my_predbat.rate_import = {n: 20.0 for n in range(0, window_end + 24 * 60)}
     my_predbat.load_scaling_dynamic = {n: 1.0 for n in range(0, window_end + 24 * 60)}
 
-    # Genuinely beyond the plan: starts after minutes_now + forecast_minutes (minute 4320)
+    # Genuinely beyond the plan: starts after minutes_now + forecast_minutes (minute 3960)
     future_slot = [{"start": "2025-01-18T10:00:00+00:00", "end": "2025-01-18T11:00:00+00:00", "rate": 0.0}]  # Day 4, past the window
 
     rate_replicate = {}
@@ -217,7 +241,7 @@ def test_load_free_slot(my_predbat):
         print("Test 6 passed - slot outside forecast window ignored")
 
     # Test 6b: the free session two days out that the plan DOES reach (#4931)
-    # From 18:00 on day 1 the plan runs to minute 4320, so a session at minute 3540 is inside it.
+    # From 18:00 on day 1 the plan runs to minute 3960, so a session at minute 3540 is inside it.
     # This was dropped when the bound was compared against forecast_minutes alone.
     print("*** Test 6b: Free session two days ahead, inside the plan window")
 
@@ -249,14 +273,15 @@ def test_load_free_slot(my_predbat):
     my_predbat.rate_import = {n: 20.0 for n in range(0, window_end + 24 * 60)}
     my_predbat.load_scaling_dynamic = {n: 1.0 for n in range(0, window_end + 24 * 60)}
 
-    # Slot straddling the end of the plan window (minute 4320 = 00:00 on day 4)
-    partial_slot = [{"start": "2025-01-17T23:00:00+00:00", "end": "2025-01-18T02:00:00+00:00", "rate": 0.0}]
+    # Slot straddling the end of the plan window: window_end = forecast_minutes + minutes_now
+    # = 2880 + 1080 = minute 3960 (18:00 on day 3, measured from midnight day 1)
+    partial_slot = [{"start": "2025-01-17T17:00:00+00:00", "end": "2025-01-17T19:00:00+00:00", "rate": 0.0}]
 
     rate_replicate = {}
     my_predbat.load_free_slot(partial_slot, my_predbat.rate_import, export=False, rate_replicate=rate_replicate)
 
-    # 23:00 on day 3 = minute 71*60 = 4260; the end is capped at window_end (4320)
-    start_partial = 71 * 60
+    # 17:00 on day 3 = minute 65*60 = 3900; the end is capped at window_end (3960)
+    start_partial = 65 * 60
     for minute in range(start_partial, window_end):
         if my_predbat.rate_import[minute] != 0.0:
             print("ERROR: Partial slot rate_import[{}] should be 0.0 (within forecast), got {}".format(minute, my_predbat.rate_import[minute]))
