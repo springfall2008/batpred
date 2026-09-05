@@ -132,6 +132,13 @@ GIVTCP_SENSORS = {
     # Identity, published so the version/firmware/serial are readable state rather than something
     # only a log line ever knew. Inverter.__init__ used to do a REST read of its own purely for
     # these three.
+    # The day's running energy totals. Predbat reads the HISTORY of these to build its load model
+    # (minute_data_load over max_days_previous), so device_class/state_class matter: they are what
+    # make Home Assistant record them as a daily accumulating total rather than a plain number.
+    "load_today": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:home-lightning-bolt"},
+    "import_today": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:transmission-tower-import"},
+    "export_today": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:transmission-tower-export"},
+    "pv_today": {"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "icon": "mdi:solar-power"},
     "givtcp_version": {"icon": "mdi:tag-outline"},
     "firmware_version": {"icon": "mdi:chip"},
     "serial_number": {"icon": "mdi:identifier"},
@@ -179,6 +186,10 @@ GIVTCP_FRIENDLY_NAMES = {
     "battery_soh": "Battery State of Health",
     "battery_dod": "Battery Depth of Discharge",
     "battery_dod_soh": "Battery Scaling",
+    "load_today": "Load Energy Today",
+    "import_today": "Import Energy Today",
+    "export_today": "Export Energy Today",
+    "pv_today": "PV Energy Today",
     "givtcp_version": "GivTCP Version",
     "firmware_version": "Firmware Version",
     "serial_number": "Serial Number",
@@ -199,7 +210,22 @@ GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS = [
     "inverter_time",
     "inverter_limit",
     "battery_calibration",
+    # The day's energy totals. Claimed through the same "only if every inverter published it" gate
+    # as the rest: a GivTCP that reports no Energy block would otherwise point these at entities
+    # that do not exist, and Predbat would plan against no load history at all.
+    "load_today",
+    "import_today",
+    "export_today",
+    "pv_today",
 ]
+
+# GivTCP's Energy.Today field name for each of those keys.
+GIVTCP_ENERGY_TODAY_FIELDS = {
+    "load_today": "Load_Energy_Today_kWh",
+    "import_today": "Import_Energy_Today_kWh",
+    "export_today": "Export_Energy_Today_kWh",
+    "pv_today": "PV_Energy_Today_kWh",
+}
 
 # apps.yaml keys automatic_config() points at the published entities - keys not listed here
 # (soc_max, battery_power_invert, ...) are left for the user/other discovery to configure.
@@ -294,8 +320,12 @@ class GivTCPComponent(ComponentBase):
     user's apps.yaml needs no changes to pick this component up.
     """
 
-    def initialize(self, rest_urls):
+    def initialize(self, rest_urls, automatic=True):
         rest_urls = rest_urls if isinstance(rest_urls, list) else [rest_urls]
+        # Whether to point Predbat's apps.yaml keys at the entities published here. Off means the
+        # user is configuring those themselves; the entities are published either way, so they can
+        # still be named by hand - and so nothing that reads them stops working when it is off.
+        self.automatic = automatic
         self.rest = []
         for n, url in enumerate(rest_urls):
             state = InverterRestState(id=n, rest_api=url)
@@ -588,6 +618,12 @@ class GivTCPComponent(ComponentBase):
                     self.log("Info: GivTCP: inverter {} battery_capacity_nominal is set - using the full design capacity and ignoring the reported state of health {}".format(n, soh))
                     soh = 1.0
 
+                for key, field in GIVTCP_ENERGY_TODAY_FIELDS.items():
+                    value = rest.energy_today(field)
+                    if value is not None:
+                        self.dashboard_item(self._entity_id("sensor", n, key), state=value, attributes=self._attributes(n, key), app="givtcp")
+                        published.add(key)
+
                 soc_max = design_capacity
                 if soc_max:
                     self.dashboard_item(self._entity_id("sensor", n, "soc_max"), state=soc_max, attributes=self._attributes(n, "soc_max"), app="givtcp")
@@ -643,6 +679,10 @@ class GivTCPComponent(ComponentBase):
         # Driven by the endpoints that answered discovery, not by the length of the configured
         # givtcp_rest list - counting the list would have Predbat build an Inverter against a URL
         # with nothing behind it and then plan and execute against a phantom battery.
+        if not self.automatic:
+            self.log("Info: GivTCP: givtcp_automatic is off - publishing entities but leaving apps.yaml to you")
+            return
+
         discovered = self.discovered
         if not discovered:
             self.log("Warn: GivTCP automatic_config: no inverters discovered, skipping configuration")

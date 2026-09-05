@@ -1556,7 +1556,15 @@ To check your REST is working open up the readData API point in a Web browser e.
 
 If you get a bunch of inverter information back then it's working!
 
-Note that Predbat will still retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
+With **givtcp_rest** set, Predbat reads the GivTCP REST API itself and publishes what it finds as its own
+entities (`sensor.predbat_givtcp_0_*` and friends), then points its own settings at them - including
+**inverter_type**, **num_inverters**, the control entities, and the daily energy totals **load_today**,
+**import_today**, **export_today** and **pv_today**. You do not need to configure any of those by hand,
+and anything you do set for them is overridden.
+
+- **givtcp_automatic** - Optional, defaults to `true`. Set to `false` to stop Predbat pointing its settings
+at those entities, so you can configure `apps.yaml` yourself. The entities are still published either way,
+so you can name them by hand - or point an individual setting at a sensor of your own.
 
 - **givtcp_rest_power_ignore** - Optional, defaults to false. When set to `true` for a given inverter, Predbat will use the configured sensor entities
 (load_power, pv_power, grid_power, battery_power) instead of reading power values from the GivTCP REST API.

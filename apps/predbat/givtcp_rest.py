@@ -199,6 +199,25 @@ class GivTCPRest:
         timeslots = rest_data.get("Timeslots", {})
         return timeslots.get("Battery_pause_start_time_slot", None) is not None and timeslots.get("Battery_pause_end_time_slot", None) is not None
 
+    def energy_today(self, name):
+        """
+        One of GivTCP's Energy.Today running totals in kWh, or None if it is not reported.
+
+        These are the day's accumulating totals - load, import, export and PV - which Predbat reads
+        the HISTORY of to build its load model, not just the current value. Both v2 and v3 report
+        them in the same place.
+        """
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return None
+        value = rest_data.get("Energy", {}).get("Today", {}).get(name, None)
+        if value is None:
+            return None
+        try:
+            return dp3(float(value))
+        except (ValueError, TypeError):
+            return None
+
     @property
     def soc_kwh(self):
         """Current battery SoC in kWh, or None if GivTCP hasn't reported it this cycle."""

@@ -355,6 +355,15 @@ COMPONENT_LIST = {
                 "required": True,
                 "config": "givtcp_rest",
             },
+            # Defaults True, unlike the other vendors' equivalents: GivTCP's REST API reports the
+            # whole inverter, so there is nothing a user has to supply for auto-config to work, and
+            # the point of setting givtcp_rest is not to then hand-write the entity list. Set it
+            # False to keep control of apps.yaml yourself - the entities are still published.
+            "automatic": {
+                "required": False,
+                "default": True,
+                "config": "givtcp_automatic",
+            },
         },
         "phase": 1,
     },

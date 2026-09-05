@@ -2574,6 +2574,7 @@ APPS_SCHEMA = {
     "validate_config_retries": {"type": "integer", "zero": True},
     "validate_config_retry_minutes": {"type": "integer", "zero": True},
     "givtcp_rest": {"type": "string_list", "entries": "num_inverters"},
+    "givtcp_automatic": {"type": "boolean"},
     "charge_rate": {"type": "sensor_list", "sensor_type": "float", "modify": True, "entries": "num_inverters"},
     "discharge_rate": {"type": "sensor_list", "sensor_type": "float", "modify": True, "entries": "num_inverters"},
     "battery_power": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},

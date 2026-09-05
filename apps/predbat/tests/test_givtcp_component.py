@@ -65,9 +65,9 @@ def _rest_data_blob(
     }
 
 
-def _make_component(rest_urls="http://givtcp:6345"):
+def _make_component(rest_urls="http://givtcp:6345", automatic=True):
     base = MockBase()
-    component = GivTCPComponent(base, rest_urls=rest_urls)
+    component = GivTCPComponent(base, rest_urls=rest_urls, automatic=automatic)
     return base, component
 
 
@@ -1964,6 +1964,120 @@ def test_every_control_and_sensor_has_a_friendly_name_defined(my_predbat=None):
     return 1 if failed else 0
 
 
+def test_energy_today_sensors_are_published_and_claimed(my_predbat=None):
+    """
+    The day's load/import/export/PV totals are published and auto-configured.
+
+    Predbat's whole load model comes from load_today's history, so a GivTCP-only install that
+    auto-configured everything else and left these four unset had no load data at all - the user
+    still had to name the GivTCP HA integration's own sensors in apps.yaml by serial number.
+
+    Read from the real captures rather than a hand-built blob, so the field names are pinned
+    against what GivTCP actually reports on both versions.
+    """
+    failed = False
+    for fixture in ("cases/rest_v2.json", "cases/rest_v3.json"):
+        base, component = _rest_from_fixture(fixture)
+        _mark_discovered(component)
+        run_async(component.publish_data())
+        run_async(component.automatic_config())
+
+        for key in ("load_today", "import_today", "export_today", "pv_today"):
+            entity_id = "sensor.predbat_givtcp_0_" + key
+            if entity_id not in base.entities:
+                print("ERROR: {}: {} was not published".format(fixture, entity_id))
+                failed = True
+                continue
+            state = base.entities[entity_id]["state"]
+            if not isinstance(state, float) or state < 0:
+                print("ERROR: {}: {} published {}, expected a kWh total".format(fixture, entity_id, state))
+                failed = True
+            attributes = base.entities[entity_id]["attributes"]
+            # Without these Home Assistant records the entity as a plain number, and the history
+            # Predbat reads back to build its load model is unusable
+            if attributes.get("device_class") != "energy" or attributes.get("state_class") != "total_increasing" or attributes.get("unit_of_measurement") != "kWh":
+                print("ERROR: {}: {} attributes {} are not a recordable energy total".format(fixture, entity_id, attributes))
+                failed = True
+            if base.args.get(key) != [entity_id]:
+                print("ERROR: {}: {} auto-configured as {}".format(fixture, key, base.args.get(key)))
+                failed = True
+
+    if not failed:
+        print("PASS: the day's energy totals are published and auto-configured on both versions")
+    return 1 if failed else 0
+
+
+def test_energy_today_keys_not_claimed_when_unreported(my_predbat=None):
+    """
+    A GivTCP with no Energy block leaves these four to the user's apps.yaml.
+
+    Same rule as every other discovery key: claiming one that was never published points the arg at
+    an entity that does not exist, and get_arg then returns its own default instead of the value the
+    user configured - here, that would mean planning against no load history at all.
+    """
+    failed = False
+    base, component = _make_component()
+    _mark_discovered(component)
+    blob = _rest_data_blob()
+    blob.pop("Energy", None)
+    component.rest[0].inverter.rest_data = blob
+
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    for key in ("load_today", "import_today", "export_today", "pv_today"):
+        if "sensor.predbat_givtcp_0_" + key in base.entities:
+            print("ERROR: published {} for a GivTCP reporting no Energy block".format(key))
+            failed = True
+        if key in base.args:
+            print("ERROR: claimed {} = {} for a GivTCP reporting no Energy block".format(key, base.args.get(key)))
+            failed = True
+
+    if not failed:
+        print("PASS: the energy totals are left to apps.yaml when GivTCP does not report them")
+    return 1 if failed else 0
+
+
+def test_automatic_config_can_be_turned_off(my_predbat=None):
+    """
+    givtcp_automatic: False publishes the entities but leaves apps.yaml alone.
+
+    Auto-discovery always wins over apps.yaml, so without an off switch a user who wants to name
+    the entities themselves - or point one key somewhere else entirely - has no way to. The
+    entities are still published, so their own apps.yaml can name them by hand.
+    """
+    failed = False
+    base, component = _make_component()
+    component.automatic = False
+    _mark_discovered(component)
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    if base.args:
+        print("ERROR: automatic_config wrote {} with givtcp_automatic off".format(sorted(base.args)))
+        failed = True
+    # The entities are still there to be named by hand
+    if "number.predbat_givtcp_0_charge_rate" not in base.entities:
+        print("ERROR: entities were not published with givtcp_automatic off")
+        failed = True
+
+    # And with it on, the same fixture does configure
+    base, component = _make_component()
+    _mark_discovered(component)
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+    if base.args.get("charge_rate") != ["number.predbat_givtcp_0_charge_rate"]:
+        print("ERROR: default (on) did not auto-configure, got {}".format(base.args.get("charge_rate")))
+        failed = True
+
+    if not failed:
+        print("PASS: givtcp_automatic gates auto-configuration without gating the entities")
+    return 1 if failed else 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -2061,6 +2175,9 @@ def test_givtcp_component(my_predbat=None):
         ("friendly_names", test_every_published_entity_has_a_friendly_name, "every published entity has a friendly name"),
         ("friendly_names_per_inverter", test_friendly_names_are_not_written_back_into_the_shared_tables, "friendly names are per-inverter copies"),
         ("friendly_names_complete", test_every_control_and_sensor_has_a_friendly_name_defined, "friendly name table covers every entity"),
+        ("energy_today_publish", test_energy_today_sensors_are_published_and_claimed, "day energy totals published and claimed"),
+        ("energy_today_absent", test_energy_today_keys_not_claimed_when_unreported, "energy totals unclaimed when unreported"),
+        ("automatic_off", test_automatic_config_can_be_turned_off, "givtcp_automatic can be turned off"),
     ]
 
     passed = 0
