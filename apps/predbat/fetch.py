@@ -914,6 +914,10 @@ class Fetch:
         self.rate_export_replicated = {}
         self.rate_slots = []
         self.io_adjusted = {}
+        # Built up by rate_add_io_slots() (per car) as it decides which dynamic-slot minutes
+        # trust_future_dynamic_iog_slots trusts; consumed by exclude_dynamic_io_slots() afterwards
+        # so both agree on the same trust decisions (#4516).
+        self.trusted_dynamic_minutes = set()
         self.low_rates = []
         self.high_export_rates = []
         self.octopus_slots = [[] for _ in range(self.num_cars)]
@@ -1181,6 +1185,10 @@ class Fetch:
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
                 import_rates = self.rate_add_io_slots(car_n, import_rates, self.octopus_slots[car_n])
+            # #4516: undo any dynamic (out-of-window) IOG dispatch discount that arrived via the
+            # rate feed itself (self.io_adjusted) rather than rate_add_io_slots()'s own overlay -
+            # see exclude_dynamic_io_slots()'s docstring for why both sources need handling.
+            import_rates = self.exclude_dynamic_io_slots(import_rates)
             self.load_saving_slot(self.octopus_saving_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             load_axle_slot(self, self.axle_sessions, import_rates, export=False, rate_replicate=self.rate_import_replicated)
@@ -1402,6 +1410,7 @@ class Fetch:
 
                 completed = []
                 planned = []
+                started = []
 
                 if entity_id and "octopus_intelligent_slot_action_config" in self.args:
                     config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
@@ -1415,16 +1424,32 @@ class Fetch:
                     try:
                         completed = self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches")
                         planned = self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches")
+                        # Not merged into octopus_slots or used for any rate/plan decision yet - read
+                        # only for the #4516 Stage 1 diagnostic timeline log below, to observe whether
+                        # this is a trustworthy earlier-than-completed confirmation signal before
+                        # building any gating logic on it (Stage 2, deferred).
+                        started = self.get_state_wrapper(entity_id=entity_id, attribute="started_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="startedDispatches")
                     except (ValueError, TypeError):
                         self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_slot may not be set correctly in apps.yaml".format(entity_id, car_n))
                         self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
-                # Completed and planned slots - merge from all cars
+                # #4516 Stage 1: diagnostic dispatch-timeline log, once per 30-minute boundary so
+                # log volume stays sane (dispatch decisions are 30-min-granular anyway). Purely
+                # observational - see build_dispatch_timeline()'s docstring.
+                if self.minutes_now % 30 == 0:
+                    timeline = self.build_dispatch_timeline(car_n, completed, started, planned)
+                    self.log("Octopus: Dispatch timeline car {} @ {} [-4h..+24h]: {}".format(car_n, self.time_abs_str(self.minutes_now), timeline))
+
+                # Completed and planned slots - merge from all cars. Tag provenance (copies, not
+                # in-place mutation, since get_state_wrapper may return a cached/shared list):
+                # completed dispatches are Octopus's metered, confirmed record; planned dispatches
+                # are still Octopus's own provisional schedule. See rate_add_io_slots() for how
+                # this gates trust_future_dynamic_iog_slots's "completed"/"started" levels (#4516).
                 if completed:
-                    self.octopus_slots[car_n] += completed
+                    self.octopus_slots[car_n] += [dict(slot, _confirmed=True) for slot in completed]
                 if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
-                    self.octopus_slots[car_n] += planned
+                    self.octopus_slots[car_n] += [dict(slot, _confirmed=False) for slot in planned]
 
                 # Extract vehicle data if we can get it
                 size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
@@ -2986,6 +3011,29 @@ class Fetch:
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
+        self.octopus_intelligent_limit_future_slots = self.get_arg("octopus_intelligent_limit_future_slots")
+        if self.octopus_intelligent_limit_future_slots and self.octopus_intelligent_charging and not self.octopus_intelligent_consider_full:
+            self.log(
+                "Warn: switch.predbat_octopus_intelligent_limit_future_slots is On but octopus_intelligent_consider_full is Off - "
+                "load_octopus_slots() never zeroes out the slots beyond what the car's real SoC/limit still needs, so this switch "
+                "has nothing to act on and future daytime IOG slots will be treated as low rate exactly as before. Turn "
+                "octopus_intelligent_consider_full On too for this to have any effect."
+            )
+            self.record_status(
+                "Warn: octopus_intelligent_limit_future_slots is On but octopus_intelligent_consider_full is Off - has no effect",
+                had_errors=True,
+            )
+        self.trust_future_dynamic_iog_slots = self.get_arg("trust_future_dynamic_iog_slots")
+        if self.trust_future_dynamic_iog_slots == "started" and "car_charging_now" not in self.args:
+            # Without car_charging_now, "started" has nothing to check beyond what "completed"
+            # already covers - degrades gracefully (self.car_charging_now defaults False per car)
+            # rather than failing, but silently, so warn once so it's not mistaken for working.
+            if not self.trust_future_dynamic_iog_slots_warned:
+                self.log("Warn: trust_future_dynamic_iog_slots is set to 'started' but car_charging_now is not configured in apps.yaml - it will behave the same as 'completed' until car_charging_now is set")
+                self.trust_future_dynamic_iog_slots_warned = True
+            self.record_status("Warn: trust_future_dynamic_iog_slots is 'started' but car_charging_now is not configured - behaves as 'completed'", had_errors=True)
+        else:
+            self.trust_future_dynamic_iog_slots_warned = False
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
