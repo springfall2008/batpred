@@ -506,7 +506,7 @@ def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, e
     # Non-REST Mode
     inv.rest_data = None
     ha.dummy_items["select.inverter_mode"] = prev_mode
-    inv.adjust_inverter_mode(True if mode == "Timed Export" else False, False)
+    inv.adjust_inverter_mode(True if mode == "Timed Export" else False)
     if ha.get_state("select.inverter_mode") != expect_mode:
         print("ERROR: Inverter mode should be {} got {}".format(expect_mode, ha.get_state("select.inverter_mode")))
         failed = True
@@ -521,7 +521,7 @@ def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, e
     dummy_rest.rest_data["Control"]["Mode"] = expect_mode
     ha.dummy_items["select.inverter_mode"] = prev_mode
 
-    inv.adjust_inverter_mode(True if mode == "Timed Export" else False, False)
+    inv.adjust_inverter_mode(True if mode == "Timed Export" else False)
     rest_command = dummy_rest.get_commands()
     if json.dumps([]) != json.dumps(rest_command):
         print("ERROR: Rest command should be [] got {}".format(rest_command))
@@ -561,7 +561,7 @@ def test_adjust_ge_eco_toggle(test_name, ha, inv, prev_eco_state, force_export, 
     inv.base.args["inverter_mode"] = "switch.enable_eco_mode"
     ha.dummy_items["switch.enable_eco_mode"] = prev_eco_state
 
-    inv.adjust_inverter_mode(force_export, False)
+    inv.adjust_inverter_mode(force_export)
 
     actual_state = ha.get_state("switch.enable_eco_mode")
     if actual_state != expect_eco_state:
@@ -607,7 +607,7 @@ def test_adjust_ge_eco_toggle_missing_entity(test_name, inv, force_export, inver
     inv.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
 
     try:
-        inv.adjust_inverter_mode(force_export, False)
+        inv.adjust_inverter_mode(force_export)
     except Exception as exc:
         print("ERROR: adjust_inverter_mode should not raise when inverter_mode entity is missing, got {}".format(exc))
         failed = True
@@ -1489,6 +1489,26 @@ def test_charge_window_rest_configured_but_no_data_yet(test_name, my_predbat, du
     return failed
 
 
+def _activate_inverter_component(my_predbat, name):
+    """Mark one inverter component active, as starting it for real would.
+
+    inverter_source_active() asks the component registry, not apps.yaml, so a test that only
+    sets the config key is describing a half-configured system: live, ge_cloud_direct being
+    true is exactly what causes the gecloud component to be created. Returns a restore().
+    """
+    from components import Components
+
+    original = my_predbat.components
+    my_predbat.components = Components(my_predbat)
+    my_predbat.components.components[name] = object()
+
+    def restore():
+        """Put back whatever registry the harness had."""
+        my_predbat.components = original
+
+    return restore
+
+
 def test_charge_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat, dummy_items):
     """
     Test charge window handling when ge_cloud_direct is configured but the cloud hasn't returned
@@ -1513,10 +1533,12 @@ def test_charge_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
     original_charge_end_time = my_predbat.args.pop("charge_end_time", None)
     original_ge_cloud_direct = my_predbat.args.get("ge_cloud_direct", None)
     my_predbat.args["ge_cloud_direct"] = True
+    restore_components = _activate_inverter_component(my_predbat, "gecloud")
     dummy_items["switch.scheduled_charge_enable"] = "on"
 
     def restore():
         """Restore the config this test mutated so later tests are unaffected."""
+        restore_components()
         if original_charge_start_time is not None:
             my_predbat.args["charge_start_time"] = original_charge_start_time
         if original_charge_end_time is not None:
@@ -1545,10 +1567,12 @@ def test_charge_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
         failed = True
 
     # The retry warning is the message a user now actually sees for this failure, so it must name
-    # GE Cloud rather than blaming apps.yaml - that misdirection is what made three separate live
-    # incidents look identical.
-    if "GE Cloud" not in my_predbat.current_status:
-        print(f"ERROR: {test_name} - status should name GE Cloud as the source that returned no data, got: {my_predbat.current_status}")
+    # the source rather than blaming apps.yaml - that misdirection is what made three separate live
+    # incidents look identical. It names this inverter's own type ("GivEnergy"), not a fleet-wide
+    # label: more than one inverter component can be active, and naming whichever was checked first
+    # sends the user to look at credentials for hardware they may not own.
+    if "GivEnergy" not in my_predbat.current_status:
+        print(f"ERROR: {test_name} - status should name the inverter type as the source that returned no data, got: {my_predbat.current_status}")
         failed = True
 
     restore()
@@ -1586,10 +1610,12 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
     original_discharge_end_time = my_predbat.args.pop("discharge_end_time", None)
     original_ge_cloud_direct = my_predbat.args.get("ge_cloud_direct", None)
     my_predbat.args["ge_cloud_direct"] = True
+    restore_components = _activate_inverter_component(my_predbat, "gecloud")
     dummy_items["switch.scheduled_charge_enable"] = "on"
 
     def restore():
         """Restore the config this test mutated so later tests are unaffected."""
+        restore_components()
         if original_charge_start_time is not None:
             my_predbat.args["charge_start_time"] = original_charge_start_time
         if original_charge_end_time is not None:
@@ -1622,10 +1648,11 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
         print(f"ERROR: {test_name} - discharge_end_time_minutes should be {my_predbat.forecast_minutes}, got {inv.discharge_end_time_minutes}")
         failed = True
 
-    # The retry warning is what a user actually sees for this failure, so it must name GE Cloud
-    # rather than sending them to apps.yaml - the same misdirection the charge window fixed.
-    if "GE Cloud" not in my_predbat.current_status:
-        print(f"ERROR: {test_name} - status should name GE Cloud as the source that returned no data, got: {my_predbat.current_status}")
+    # The retry warning is what a user actually sees for this failure, so it must name the
+    # inverter type rather than sending them to apps.yaml - the same misdirection the charge
+    # window fixed, and the same reason it is the type and not a fleet-wide label.
+    if "GivEnergy" not in my_predbat.current_status:
+        print(f"ERROR: {test_name} - status should name the inverter type as the source that returned no data, got: {my_predbat.current_status}")
         failed = True
 
     restore()

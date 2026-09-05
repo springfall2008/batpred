@@ -78,6 +78,40 @@ class Inverter:
         """
         time.sleep(seconds)
 
+    def inverter_source_active(self):
+        """
+        Whether some component is supplying this inverter's state, even if it has no data yet.
+
+        Separates "a source is configured but hasn't answered this cycle" - transient, so fall
+        back to safe defaults and retry - from "no source is configured at all", a setup gap that
+        will never resolve on its own and is reported as an error instead.
+
+        Asked of the component registry's "inverter" tag rather than of individual config keys.
+        The previous test was "givtcp_rest or ge_cloud_direct", which was not a statement about
+        inverters so much as the two sources that happened to exist when it was written: every
+        component added since (Fox, Solis, SolaX, DEYE, Sunsynk, AlphaESS, Enphase, Sigenergy,
+        Teslemetry, Gateway) fell through it into the permanent-setup-gap branch and raised on a
+        fetch hiccup.
+        """
+        components = getattr(self.base, "components", None)
+        return bool(components) and components.inverter_source_active()
+
+    def inverter_source_name(self):
+        """
+        The name of the component supplying this inverter, for a user-facing message.
+
+        Reports this inverter's own type rather than a fleet-wide label: more than one inverter
+        component can be active at once, so naming whichever happened to be checked first sends
+        the user to look at credentials for hardware they may not even own. Falls back to the
+        active component names when the type has no display name.
+        """
+        name = INVERTER_DEF.get(self.inverter_type, {}).get("name", None)
+        if name:
+            return name
+        components = getattr(self.base, "components", None)
+        names = components.inverter_source_names() if components else []
+        return ", ".join(names) if names else self.inverter_type
+
     def _poll_after_write(self, entity_id, matched, refresh=True, required_unit=None):
         """
         Spend one write_and_poll_sleep interval waiting for a written value, and return the last read.
@@ -1414,19 +1448,12 @@ class Inverter:
             if "charge_start_time" in self.base.args:
                 charge_start_time = time_string_to_stamp(self.base.get_arg("charge_start_time", index=self.id))
                 charge_end_time = time_string_to_stamp(self.base.get_arg("charge_end_time", index=self.id))
-            elif self.rest_api or self.base.get_arg("ge_cloud_direct", False, indirect=False):
+            elif self.inverter_source_active():
                 # A data source IS configured but hasn't returned anything this cycle - genuinely
                 # transient (a fetch hiccup, or before the first poll on a fresh start), so fall
                 # through to the same safe-defaults/retry-next-update handling below as a
                 # configured-but-currently-unusable value, rather than crashing the whole plan for
                 # something that should resolve itself.
-                #
-                # ge_cloud_direct belongs here as much as givtcp_rest does. The original comment
-                # named GivEnergy cloud "no devices" as the case this branch exists to catch, but
-                # gating solely on self.rest_api made that unreachable: ge_cloud_direct sets neither
-                # rest_api nor charge_start_time (it auto-configures the charge window at runtime,
-                # from the device the cloud returns), so a cloud-backed instance whose fetch fails
-                # fell straight past this into the permanent-setup-gap branch below.
                 charge_start_time = None
                 charge_end_time = None
             else:
@@ -1434,7 +1461,7 @@ class Inverter:
                 # will resolve on its own. Retrying every cycle forever would be misleading, so
                 # don't pretend to make a plan Predbat can't actually deliver (maintainer call on
                 # #4288/#4179 - see PR review discussion).
-                message = "Error: Inverter {} unable to read charge window time - no source is configured (set givtcp_rest, ge_cloud_direct, or charge_start_time/charge_start_hour in apps.yaml)".format(self.id)
+                message = "Error: Inverter {} unable to read charge window time - no source is configured (configure an inverter component, or set charge_start_time/charge_start_hour in apps.yaml)".format(self.id)
                 self.log(message)
                 self.base.record_status(message, had_errors=True)
                 raise ValueError(message)
@@ -1446,7 +1473,7 @@ class Inverter:
                 # real cause is upstream: a cloud account with no devices attached, revoked or
                 # rotated API credentials, or a lapsed entitlement, none of which Predbat can tell
                 # apart from here beyond naming where the data should have come from.
-                source = "GE Cloud" if (not self.rest_api and self.base.get_arg("ge_cloud_direct", False, indirect=False)) else "REST"
+                source = self.inverter_source_name()
                 hint = "check the {} credentials and that the account still has this inverter attached".format(source)
                 self.log("Warn: Inverter {} unable to read charge window time - {} returned no data, {}, will retry next update".format(self.id, source, hint))
                 self.base.record_status("Warn: Inverter {} unable to read charge window time - {} returned no data, {}".format(self.id, source, hint), had_errors=True)
@@ -1545,8 +1572,8 @@ class Inverter:
             export_source = "discharge_start_time"
             discharge_start = time_string_to_stamp(self.base.get_arg("discharge_start_time", index=self.id))
             discharge_end = time_string_to_stamp(self.base.get_arg("discharge_end_time", index=self.id))
-        elif self.rest_api or self.base.get_arg("ge_cloud_direct", False, indirect=False):
-            export_source = "REST" if self.rest_api else "GE Cloud"
+        elif self.inverter_source_active():
+            export_source = self.inverter_source_name()
             # Same reasoning as the charge window above, and it has to be here too or that fix is
             # defeated: on a cloud fetch failure the charge window degrades gracefully and then
             # this branch crashes the whole update loop on the very same cycle, so the inverter
@@ -1556,7 +1583,7 @@ class Inverter:
             discharge_end = None
         else:
             # No data source configured at all - a permanent setup gap, handled as such.
-            message = "Error: Inverter {} unable to read Export window - no source is configured (set givtcp_rest, ge_cloud_direct, or discharge_start_time in apps.yaml)".format(self.id)
+            message = "Error: Inverter {} unable to read Export window - no source is configured (configure an inverter component, or set discharge_start_time in apps.yaml)".format(self.id)
             self.log(message)
             self.base.record_status(message, had_errors=True)
             raise ValueError(message)
@@ -2288,7 +2315,7 @@ class Inverter:
 
             self.base.log("Inverter {} set pause mode to {}".format(self.id, new_pause_mode))
 
-    def adjust_inverter_mode(self, force_export, changed_start_end=False):
+    def adjust_inverter_mode(self, force_export):
         """
         Adjust inverter mode between force export and Demand mode (ECO)
 
@@ -2306,17 +2333,6 @@ class Inverter:
 
         """
         inverter_mode_configured = "inverter_mode" in self.base.args
-        # Inverter mode
-        #
-        # The sleep is a workaround for the lag between writing a window via GivTCP's own HA
-        # integration entities and GivTCP reflecting it back. It stays gated on rest_api because a
-        # GivTCP-REST inverter does not have that lag: GivTCPComponent applies the write and
-        # republishes the entity inline before the write call returns (see its _handle_write), the
-        # same way the direct REST path used to, so sleeping 30s every window change would be pure
-        # cost. Entities fed by anything else keep the workaround.
-        if changed_start_end and not self.rest_api:
-            self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
-            self.sleep(30)
         old_inverter_mode = self.base.get_arg("inverter_mode", index=self.id)
 
         if not self.inv_has_fox_inverter_mode and not self.inv_has_ge_eco_toggle:
@@ -2620,7 +2636,7 @@ class Inverter:
 
         # Force export, turn it on after we change the window
         if force_export:
-            self.adjust_inverter_mode(force_export, changed_start_end=changed_start_end)
+            self.adjust_inverter_mode(force_export)
             if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                 if self.inv_charge_control_immediate:
                     self.enable_charge_discharge_with_time_current("discharge", True)
