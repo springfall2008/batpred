@@ -881,22 +881,39 @@ class Components:
     Pass through events to the appropriate component
     """
 
+    def _entity_matches_filter(self, entity_id, event_filter):
+        """
+        Match an incoming HA event's entity_id against a COMPONENT_LIST entry's event_filter.
+
+        Every event_filter literal is written as "predbat_<component>_" for readability
+        (components.py:144 onwards), but the entities themselves are built from the user's
+        configured prefix (self.base.prefix, e.g. Fox's f"{self.prefix}_fox_..."), not the literal
+        word "predbat". Matching the literal directly meant any install with a non-default prefix
+        never matched anything, so no event from any of the 19 components ever reached its
+        handler - entity writes appeared to be accepted (the toggle press logs) but the
+        component's own state never updated, and nothing was ever sent onward to the inverter
+        (#4939). Swap the leading "predbat" for the real prefix before matching instead.
+        """
+        if event_filter.startswith("predbat_"):
+            event_filter = self.base.prefix + event_filter[len("predbat") :]
+        return event_filter in entity_id
+
     async def select_event(self, entity_id, value):
         for component_name, component in self.components.items():
             event_filter = COMPONENT_LIST[component_name].get("event_filter", None)
-            if component and event_filter and (event_filter in entity_id):
+            if component and event_filter and self._entity_matches_filter(entity_id, event_filter):
                 await component.select_event(entity_id, value)
 
     async def switch_event(self, entity_id, service):
         for component_name, component in self.components.items():
             event_filter = COMPONENT_LIST[component_name].get("event_filter", None)
-            if component and event_filter and (event_filter in entity_id):
+            if component and event_filter and self._entity_matches_filter(entity_id, event_filter):
                 await component.switch_event(entity_id, service)
 
     async def number_event(self, entity_id, value):
         for component_name, component in self.components.items():
             event_filter = COMPONENT_LIST[component_name].get("event_filter", None)
-            if component and event_filter and (event_filter in entity_id):
+            if component and event_filter and self._entity_matches_filter(entity_id, event_filter):
                 await component.number_event(entity_id, value)
 
     def is_all_alive(self):
