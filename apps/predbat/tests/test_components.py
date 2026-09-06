@@ -310,6 +310,17 @@ def test_event_dispatch_respects_configured_prefix(my_predbat):
     run_async(comps.select_event("select.predbat_fox_ABC123_charge_start_time", "01:00:00"))
     assert fake.select_events == [], "a leftover literal-predbat entity must not match a custom-prefix install"
 
+    print("Test 5: a short prefix must not match an unrelated entity that merely contains it partway through")
+    # Copilot review on #4962: the match is anchored to the start of the object_id, not a
+    # substring search of the whole entity_id - prefix "bat" turns the filter into "bat_fox_",
+    # which this unrelated entity's object_id contains but does not start with. This event comes
+    # through for every select/switch/number service call in the whole HA instance, not just
+    # Predbat's own entities, so an unanchored match could misroute a stranger's entity entirely.
+    base.prefix = "bat"
+    fake.select_events.clear()
+    run_async(comps.select_event("select.acrobat_fox_ABC123_charge_start_time", "01:00:00"))
+    assert fake.select_events == [], "an entity that merely contains the filter partway through its object_id must not match"
+
     print("✓ Test passed: event dispatch matches the configured prefix, in the default and custom case")
     return False
 

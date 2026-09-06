@@ -893,10 +893,21 @@ class Components:
         handler - entity writes appeared to be accepted (the toggle press logs) but the
         component's own state never updated, and nothing was ever sent onward to the inverter
         (#4939). Swap the leading "predbat" for the real prefix before matching instead.
+
+        This is called for every select/switch/number service event in the whole HA instance
+        (userinterface.py's select_event/switch_event/number_event pass every entity_id through,
+        not just Predbat's own), so the match is anchored to the start of the object_id - the
+        part after the domain's "." - rather than a substring search of the whole entity_id.
+        Otherwise a short or common prefix could accidentally match an unrelated entity whose
+        object_id merely contains the same characters partway through: prefix "bat" turns the
+        filter into "bat_fox_", which an unanchored search would also match inside
+        "select.acrobat_fox_...", an entity with nothing to do with this Fox component (#4939
+        review).
         """
         if event_filter.startswith("predbat_"):
             event_filter = self.base.prefix + event_filter[len("predbat") :]
-        return event_filter in entity_id
+        _, _, object_id = entity_id.partition(".")
+        return object_id.startswith(event_filter)
 
     async def select_event(self, entity_id, value):
         for component_name, component in self.components.items():
