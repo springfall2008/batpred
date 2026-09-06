@@ -3148,20 +3148,22 @@ def run_execute_tests(my_predbat):
     # Template mode (#4965): update_pred() early-returns before fetch_config_options(), so the
     # attributes update_status() reads were never created - the quick update must skip rather
     # than AttributeError every 120 seconds. Deleting the attribute reproduces that state.
-    my_predbat.args["template"] = True
+    saved_template = my_predbat.args.get("template")
+    had_skew = "inverter_clock_skew_discharge_start" in my_predbat.__dict__
     saved_skew = my_predbat.__dict__.pop("inverter_clock_skew_discharge_start", None)
+    my_predbat.args["template"] = True
     try:
         result = my_predbat.quick_inverter_data_update()
-    except AttributeError as e:
-        print("ERROR: quick_inverter_data_update raised AttributeError in template mode: {}".format(e))
-        failed = True
-        result = False
+    finally:
+        if had_skew:
+            my_predbat.inverter_clock_skew_discharge_start = saved_skew
+        if saved_template is None:
+            my_predbat.args.pop("template", None)
+        else:
+            my_predbat.args["template"] = saved_template
     if result is not False:
         print("ERROR: quick_inverter_data_update should return False in template mode")
         failed = True
-    if saved_skew is not None:
-        my_predbat.inverter_clock_skew_discharge_start = saved_skew
-    del my_predbat.args["template"]
     if failed:
         return failed
 
