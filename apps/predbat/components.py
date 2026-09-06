@@ -11,8 +11,9 @@
 
 """Component registry and lifecycle manager.
 
-Defines COMPONENT_LIST mapping all available components to their classes
-and configuration requirements, and provides the Components class for
+Defines COMPONENT_LIST mapping all available components to their classes (as
+"module.ClassName" paths, imported only when the component is enabled - see
+load_component_class()) and configuration requirements, and provides the Components class for
 initialising, starting, stopping, and restarting components in the correct
 phase order. Routes HA events to components based on entity prefix filtering.
 
@@ -31,50 +32,30 @@ Before the tag existed that question was asked as "givtcp_rest or ge_cloud_direc
 was simply the two sources that happened to have been wired up when the check was written.
 """
 
-from storage import StorageComponent
-from alphaess import AlphaESSAPI
-from solcast import SolarAPI
-from gecloud import GECloudDirect, GECloudData
-from ohme import OhmeAPI
-from myenergi import MyEnergiAPI
-from octopus import OctopusAPI
-from carbon import CarbonAPI
-from temperature import TemperatureAPI
-from axle import AxleAPI
-from solax import SolaxAPI
-from sigenergy import SigenergyAPI
-from teslemetry import TeslemetryAPI
-from solis import SolisAPI
-from alertfeed import AlertFeed
-from web import WebInterface
-from ha import HAInterface, HAHistory
-from db_manager import DatabaseManager
-from fox import FoxAPI
-from givtcp import GivTCPComponent
-from deye import DeyeAPI
-from sunsynk import SunsynkAPI
-from enphase import EnphaseAPI
-from kraken import KrakenAPI
-from web_mcp import PredbatMCPServer
-from chat import ChatAgent
-
-try:
-    from gateway import GatewayMQTT
-
-    HAS_GATEWAY = True
-except (ImportError, Exception):
-    HAS_GATEWAY = False
-    GatewayMQTT = None
-from load_ml_component import LoadMLComponent
+import importlib
 from datetime import datetime, timezone, timedelta
 import asyncio
 import os
 
 
+def load_component_class(component_info):
+    """Import a registry entry's module and return its component class.
+
+    "class" is the dotted "module.ClassName" path rather than the class itself so that a
+    component's module - and everything it imports - is only loaded once the component is
+    actually enabled. Load ML alone pulls in numpy (~13MB and a BLAS thread per core); the
+    inverter and tariff clients between them are another ~7MB that a typical install never
+    uses. Raises ImportError when the module needs a package that is not installed, which
+    is how gateway.py reports a missing protobuf.
+    """
+    module_name, _, class_name = component_info["class"].rpartition(".")
+    return getattr(importlib.import_module(module_name), class_name)
+
+
 COMPONENT_LIST = {
-    "storage": {"class": StorageComponent, "name": "Storage", "args": {}, "can_restart": True, "phase": 0},
+    "storage": {"class": "storage.StorageComponent", "name": "Storage", "args": {}, "can_restart": True, "phase": 0},
     "db": {
-        "class": DatabaseManager,
+        "class": "db_manager.DatabaseManager",
         "name": "Database Manager",
         "args": {
             "db_enable": {"required_true": True, "config": "db_enable"},
@@ -84,7 +65,7 @@ COMPONENT_LIST = {
         "phase": 0,
     },
     "ha": {
-        "class": HAInterface,
+        "class": "ha.HAInterface",
         "name": "Home Assistant Interface",
         "args": {
             "ha_url": {"required": False, "config": "ha_url", "default": "http://supervisor/core"},
@@ -96,9 +77,9 @@ COMPONENT_LIST = {
         "can_restart": False,
         "phase": 0,
     },
-    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0},
+    "ha_history": {"class": "ha.HAHistory", "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0},
     "web": {
-        "class": WebInterface,
+        "class": "web.WebInterface",
         "name": "Web Interface",
         "args": {
             "web_port": {"required": False, "config": "web_port", "default": 5052},
@@ -106,7 +87,7 @@ COMPONENT_LIST = {
         "phase": 0,
     },
     "mcp": {
-        "class": PredbatMCPServer,
+        "class": "web_mcp.PredbatMCPServer",
         "name": "MCP Server",
         "args": {
             "mcp_enable": {"required": True, "config": "mcp_enable", "default": False},
@@ -116,7 +97,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "chat": {
-        "class": ChatAgent,
+        "class": "chat.ChatAgent",
         "name": "AI Chat Agent",
         "can_restart": True,
         "phase": 1,
@@ -133,7 +114,7 @@ COMPONENT_LIST = {
         },
     },
     "solar": {
-        "class": SolarAPI,
+        "class": "solcast.SolarAPI",
         "name": "Solar API",
         "args": {
             "solcast_host": {"required": False, "config": "solcast_host", "default": "https://api.solcast.com.au/"},
@@ -156,7 +137,7 @@ COMPONENT_LIST = {
         "phase": 2,  # Solar component moved to phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
     },
     "gecloud": {
-        "class": GECloudDirect,
+        "class": "gecloud.GECloudDirect",
         "name": "GivEnergy Cloud Direct",
         "inverter": True,
         "event_filter": "predbat_gecloud_",
@@ -189,7 +170,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "gecloud_data": {
-        "class": GECloudData,
+        "class": "gecloud.GECloudData",
         "name": "GivEnergy Cloud Data",
         "args": {
             "ge_cloud_data": {
@@ -219,7 +200,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "octopus": {
-        "class": OctopusAPI,
+        "class": "octopus.OctopusAPI",
         "name": "Octopus Energy Direct",
         "event_filter": "predbat_octopus_",
         "args": {
@@ -242,7 +223,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "ohme": {
-        "class": OhmeAPI,
+        "class": "ohme.OhmeAPI",
         "name": "Ohme Charger",
         "event_filter": "predbat_ohme_",
         "args": {
@@ -276,7 +257,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "myenergi": {
-        "class": MyEnergiAPI,
+        "class": "myenergi.MyEnergiAPI",
         "name": "myenergi Zappi/Eddi",
         "event_filter": "predbat_myenergi_",
         "args": {
@@ -304,7 +285,7 @@ COMPONENT_LIST = {
         "can_restart": True,
     },
     "fox": {
-        "class": FoxAPI,
+        "class": "fox.FoxAPI",
         "name": "Fox API",
         "inverter": True,
         "event_filter": "predbat_fox_",
@@ -346,7 +327,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "givtcp": {
-        "class": GivTCPComponent,
+        "class": "givtcp.GivTCPComponent",
         "name": "GivTCP REST",
         "inverter": True,
         "event_filter": "predbat_givtcp_",
@@ -368,7 +349,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "deye": {
-        "class": DeyeAPI,
+        "class": "deye.DeyeAPI",
         "name": "DEYE Cloud",
         "inverter": True,
         "event_filter": "predbat_deye_",
@@ -405,7 +386,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "sunsynk": {
-        "class": SunsynkAPI,
+        "class": "sunsynk.SunsynkAPI",
         "name": "Sunsynk Cloud",
         "inverter": True,
         "event_filter": "predbat_sunsynk_",
@@ -440,7 +421,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "alphaess": {
-        "class": AlphaESSAPI,
+        "class": "alphaess.AlphaESSAPI",
         "name": "AlphaESS Cloud API",
         "inverter": True,
         "event_filter": "predbat_alphaess_",
@@ -468,7 +449,7 @@ COMPONENT_LIST = {
         "can_restart": True,
     },
     "enphase": {
-        "class": EnphaseAPI,
+        "class": "enphase.EnphaseAPI",
         "name": "Enphase API",
         "inverter": True,
         "event_filter": "predbat_enphase_",
@@ -502,7 +483,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "kraken": {
-        "class": KrakenAPI,
+        "class": "kraken.KrakenAPI",
         "name": "Kraken Energy (EDF/E.ON)",
         "event_filter": "predbat_kraken_",
         "args": {
@@ -567,7 +548,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "alert_feed": {
-        "class": AlertFeed,
+        "class": "alertfeed.AlertFeed",
         "name": "Alert Feed",
         "event_filter": "predbat_alertfeed_",
         "args": {
@@ -580,7 +561,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "carbon": {
-        "class": CarbonAPI,
+        "class": "carbon.CarbonAPI",
         "name": "Carbon Intensity API",
         "args": {
             "postcode": {"required": True, "config": "carbon_postcode"},
@@ -589,7 +570,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "temperature": {
-        "class": TemperatureAPI,
+        "class": "temperature.TemperatureAPI",
         "name": "External Temperature API",
         "args": {
             "temperature_enable": {"required_true": True, "config": "temperature_enable", "default": False},
@@ -600,7 +581,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "axle": {
-        "class": AxleAPI,
+        "class": "axle.AxleAPI",
         "name": "Axle Energy",
         "event_filter": "predbat_axle_",
         "args": {
@@ -617,7 +598,7 @@ COMPONENT_LIST = {
         "phase": 1,
     },
     "sigenergy": {
-        "class": SigenergyAPI,
+        "class": "sigenergy.SigenergyAPI",
         "name": "Sigenergy Cloud API",
         "inverter": True,
         "event_filter": "predbat_sigenergy_",
@@ -637,7 +618,7 @@ COMPONENT_LIST = {
         "can_restart": True,
     },
     "teslemetry": {
-        "class": TeslemetryAPI,
+        "class": "teslemetry.TeslemetryAPI",
         "name": "Tesla Powerwall (Teslemetry)",
         "inverter": True,
         "event_filter": "predbat_teslemetry_",
@@ -654,7 +635,7 @@ COMPONENT_LIST = {
         "can_restart": True,
     },
     "solax": {
-        "class": SolaxAPI,
+        "class": "solax.SolaxAPI",
         "name": "SolaX Cloud API",
         "inverter": True,
         "event_filter": "predbat_solax_",
@@ -674,7 +655,7 @@ COMPONENT_LIST = {
         "can_restart": True,
     },
     "solis": {
-        "class": SolisAPI,
+        "class": "solis.SolisAPI",
         "name": "Solis Cloud API",
         "inverter": True,
         "event_filter": "predbat_solis_",
@@ -700,7 +681,7 @@ COMPONENT_LIST = {
         "can_restart": True,
     },
     "load_ml": {
-        "class": LoadMLComponent,
+        "class": "load_ml_component.LoadMLComponent",
         "name": "ML Load Forecaster",
         "event_filter": "predbat_load_ml_",
         "args": {
@@ -712,11 +693,8 @@ COMPONENT_LIST = {
         "phase": 2,  # Load ML in phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
         "can_restart": True,
     },
-}
-
-if HAS_GATEWAY:
-    COMPONENT_LIST["gateway"] = {
-        "class": GatewayMQTT,
+    "gateway": {
+        "class": "gateway.GatewayMQTT",
         "name": "PredBat Gateway",
         "inverter": True,
         "event_filter": "predbat_gateway_",
@@ -731,7 +709,8 @@ if HAS_GATEWAY:
         },
         "phase": 1,
         "can_restart": True,
-    }
+    },
+}
 
 
 def secret_config_names():
@@ -741,8 +720,7 @@ def secret_config_names():
     cannot infer: account numbers (octopus_api_account, kraken_account_id), meter point numbers
     (kraken_mpan), site/system/plant ids, login identifiers (deye_username, kraken_email,
     ohme_login, myenergi_hub_serial - the digest auth username) and the id half of an
-    id/secret pair (deye_app_id, solax_client_id). Read from the live dict rather than
-    precomputed, so the conditionally-registered gateway component is included.
+    id/secret pair (deye_app_id, solax_client_id).
 
     Device serial numbers are deliberately not flagged: they address hardware rather than
     authenticate it, and they are what makes an integration bug report diagnosable - the same
@@ -814,7 +792,13 @@ class Components:
                     required_or_config = [component_info["args"][arg]["config"] for arg in required_or]
             if have_all_args:
                 self.log(f"Initialising {component_info['name']} interface")
-                self.components[component_name] = component_info["class"](self.base, **arg_dict)
+                try:
+                    component_class = load_component_class(component_info)
+                except ImportError as e:
+                    # The module needs a package this install lacks (gateway without protobuf)
+                    self.log(f"Warn: Skipping {component_info['name']} interface, {e}")
+                    continue
+                self.components[component_name] = component_class(self.base, **arg_dict)
             else:
                 configured_args = getattr(self.base, "args_from_apps_yaml", None)
                 if configured_args is None:
