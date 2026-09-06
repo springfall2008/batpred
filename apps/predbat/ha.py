@@ -430,7 +430,7 @@ class HAInterface(ComponentBase):
             # Propose in Feb 2027 that Predbat be changed to use the new service call
             res = self.api_call("/addons/self/info", core=False, silent=True)
             if res:
-                # get app slug name which is the actual directory name under /apps_configs that /config is mounted to
+                # get app slug name which is the actual directory name under /app_configs that /config is mounted to
                 self.slug = res["data"]["slug"]
                 self.log("Info: App slug is {}".format(self.slug))
 

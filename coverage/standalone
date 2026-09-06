@@ -9,7 +9,12 @@ cd ..
 #
 # At present have not changed Predbat deployment in order to not break installations that are still using an older HA supervisor
 # Propose in Feb 2027 that Predbat be changed to use the new directory name
-#cp /Volumes/addon_configs/6adb4f0d_predbat/*.py predbat_standalone
-cp /Volumes/addon_configs/6adb4f0d_predbat/apps_direct.yaml predbat_standalone/apps.yaml
+if [ -d /Volumes/app_configs/6adb4f0d_predbat ]; then
+    predbat_dir=/Volumes/app_configs/6adb4f0d_predbat
+else
+    predbat_dir=/Volumes/addon_configs/6adb4f0d_predbat
+fi
+#cp ${predbat_dir}/*.py predbat_standalone
+cp ${predbat_dir}/apps_direct.yaml predbat_standalone/apps.yaml
 cd predbat_standalone
 python3 hass.py
