@@ -16,6 +16,7 @@ allclose
 alphaess
 annualform
 Anson
+antiphase
 apexcharts
 apikey
 appdaemon
@@ -71,6 +72,7 @@ cdn
 Cerbo
 cexxxx
 ceyyyy
+CGNAT
 Chae
 Chaf
 chargedischarge
@@ -149,6 +151,7 @@ Dise
 Disf
 diverter
 dlimit
+dlopen
 dnoregion
 docstrings
 dstamp
@@ -191,6 +194,7 @@ ESSAPI
 etoday
 etok
 euids
+EVAC
 EVDC
 evergen
 evilspringfall
@@ -338,6 +342,8 @@ lookback
 lpignore
 lstrip
 luxpower
+malloc
+mallopt
 markdownlint
 matplotlib
 maximise
@@ -391,6 +397,7 @@ mypy
 nanmean
 nanstd
 nattribute
+nbytes
 ncalls
 nearr
 nemotron
@@ -424,6 +431,7 @@ ollama
 onblur
 onchange
 oncharge
+oneline
 onfocus
 oninput
 onmouseout
@@ -433,6 +441,7 @@ openrouter
 openweathermap
 overclaim
 overfitting
+oversizing
 overvoltage
 ownerapi
 parseable

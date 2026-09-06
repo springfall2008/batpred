@@ -1208,6 +1208,15 @@ class OctopusAPI(ComponentBase):
                 event_reward[event_id] = reward
                 event_code[event_id] = code
                 event_type[event_id] = event.get("eventType", None)
+            # A Weekend Happy Hour cannot be joined through the API - Octopus either allocates one
+            # or the user books it on the website - so listing it as available only produces join
+            # attempts the API rejects (#4593/#4595) and clutters the join selector with options
+            # that cannot be selected. BottleCapDave's integration stopped passing these through in
+            # v19.0.1 for the same reason; match that. The reward/code/type maps are populated above
+            # first, because a joined Happy Hour takes its event type from this list.
+            if event.get("eventType", None) == "WEEKEND_HAPPY_HOUR":
+                self.log("OctopusAPI: Not offering Weekend Happy Hour event code {} as available - it cannot be joined through the API".format(code))
+                continue
             target_regions = [region.get("regionId") for region in (event.get("targetRegion", None) or []) if region]
             if target_regions and account_region_id not in target_regions:
                 self.log("OctopusAPI: Skipping saving event code {} - not eligible for account region {} (event targets regions {})".format(code, account_region_id, target_regions))
@@ -1457,7 +1466,7 @@ class OctopusAPI(ComponentBase):
             section = product_info.get(section_key, {})
             if not section:
                 continue
-            for region_key, region_data in section.items():
+            for _region_key, region_data in section.items():
                 if not isinstance(region_data, dict):
                     continue
                 for payment_type in payment_types:
@@ -2677,7 +2686,7 @@ class Octopus:
                 self.log("Octopus: Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
         # Retry up to 3 minutes
-        for retry in range(3):
+        for _retry in range(3):
             pdata = self.download_octopus_rates_func(url)
             if pdata:
                 break
@@ -2823,11 +2832,12 @@ class Octopus:
     def load_free_slot(self, octopus_free_slots, rate_dict, export=False, rate_replicate=None):
         """
         Load octopus free session slot into rate_dict (in place)
+
+        A slot whose start/end cannot be decoded is skipped entirely - it must not
+        re-apply the previous slot's rate over the previous slot's minute range.
         """
         if rate_replicate is None:
             rate_replicate = {}
-        start_minutes = 0
-        end_minutes = 0
 
         for octopus_free_slot in octopus_free_slots:
             start = octopus_free_slot["start"]
@@ -2843,19 +2853,22 @@ class Octopus:
                     end = None
                     self.log("Warn: Octopus: Unable to decode Octopus free session start/end time {}".format(octopus_free_slot))
 
-            if start and end:
-                start_minutes = minutes_to_time(start, self.midnight_utc)
-                end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
+                if start and end:
+                    # forecast_minutes is a duration from minutes_now, while start/end are absolute
+                    # minutes from midnight_utc - so the window end is minutes_now + forecast_minutes.
+                    # load_saving_slot() and load_axle_slot() both bound themselves that way.
+                    start_minutes = minutes_to_time(start, self.midnight_utc)
+                    end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes + self.minutes_now)
 
-            if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < self.forecast_minutes:
-                self.log("Setting Octopus free session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
-                for minute in range(start_minutes, end_minutes):
-                    if export:
-                        rate_dict[minute] = rate
-                    else:
-                        rate_dict[minute] = min(rate, rate_dict[minute])
-                        self.load_scaling_dynamic[minute] = self.load_scaling_free
-                    rate_replicate[minute] = "saving"
+                    if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < (self.forecast_minutes + self.minutes_now):
+                        self.log("Setting Octopus free session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
+                        for minute in range(start_minutes, end_minutes):
+                            if export:
+                                rate_dict[minute] = rate
+                            else:
+                                rate_dict[minute] = min(rate, rate_dict[minute])
+                                self.load_scaling_dynamic[minute] = self.load_scaling_free
+                            rate_replicate[minute] = "saving"
 
     def load_saving_slot(self, octopus_saving_slots, rate_dict, export=False, rate_replicate=None):
         """
@@ -2953,6 +2966,43 @@ class Octopus:
 
         return start_minutes, end_minutes, kwh, source, location
 
+    def dispatch_billed_off_peak(self, source, location, end_minutes):
+        """
+        Decide whether an Octopus Intelligent dispatch should be priced at the off-peak rate.
+
+        The location test only applies to dispatches that haven't finished yet. Octopus bills a
+        completed smart-charge dispatch at the off-peak rate regardless of the location it ends up
+        reported at, and that label is not stable - a completed dispatch can be retroactively
+        relabelled AT_HOME to AWAY hours after it ran. Since rate_import is rebuilt from the tariff
+        every cycle, such a relabel would silently un-stamp the cheap rate on minutes that have
+        already been metered, and today_cost() re-prices the whole day, so the day's cost steps up
+        on an hour with no import at all (issue #4946). A slot still to come is a different matter
+        and keeps the location test: a genuinely-away car would otherwise have the planner import
+        against a cheap window that never materialises (the GH#4516 family).
+
+        A dispatch straddling minutes_now is deliberately treated as not-yet-completed, so its
+        already-elapsed minutes keep the location test until it finishes. Keying the exemption on
+        the start instead would stamp the whole remaining tail of a multi-hour window cheap, which
+        is the #4516 risk above; the residual is bounded by one in-progress dispatch and is
+        strictly narrower than the pre-#4946 behaviour, where every AWAY minute stayed mispriced.
+
+        This is only the off-peak *eligibility* test - callers still apply the midday-to-midday
+        slot cap on top, so a completed dispatch beyond the day's budget is still priced at
+        rate_max_base. That is deliberate: Octopus's 6-hour guarantee is a daily allowance and a
+        completed dispatch consumes it like any other.
+
+        :param source: Dispatch source, e.g. smart-charge, bump-charge or BOOST
+        :param location: Dispatch location label - AT_HOME, AWAY, UNABLE_TO_IDENTIFY or blank
+        :param end_minutes: Dispatch end time in minutes from midnight
+        :return: True if the dispatch is eligible for the off-peak rate
+        """
+        # Ignore bump-charge slots as their cost won't change
+        if source == "bump-charge" or source == "BOOST":
+            return False
+        if end_minutes <= self.minutes_now:
+            return True
+        return not location or location == "AT_HOME"
+
     def get_octopus_slot_max(self):
         """
         Resolve the Octopus Intelligent daily low-rate slot cap.
@@ -3048,7 +3098,7 @@ class Octopus:
             # approximation (real draw isn't perfectly uniform across the slot) but matches how
             # rate_add_io_slots() below treats rate as uniform per 30-min block too.
             chunks = [(start_minutes, end_minutes, kwh, self.rate_import.get(start_minutes, self.rate_min_base))]
-            if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
+            if octopus_slot_low_rate and self.dispatch_billed_off_peak(source, location, end_minutes):
                 slot_block_start = (start_minutes // 30) * 30
                 num_blocks = max(1, (end_minutes - slot_block_start + 29) // 30)
                 day_offset = (start_minutes - 720) // (24 * 60)
@@ -3078,6 +3128,8 @@ class Octopus:
                 end_minutes_original = chunk_end
                 start_minutes, end_minutes, kwh = chunk_start, chunk_end, chunk_kwh
 
+                # Emission is future-only, so dispatch_billed_off_peak()'s completed-dispatch exemption
+                # (#4946) can never apply here - a plain location test is equivalent and is kept as-is.
                 if (end_minutes > start_minutes) and (end_minutes > self.minutes_now) and (not location or location == "AT_HOME"):
                     kwh_expected = kwh * self.car_charging_loss
                     if octopus_intelligent_consider_full:
@@ -3153,11 +3205,14 @@ class Octopus:
                 # delivered nothing, so it shouldn't consume one of the day's capped low-rate slots.
                 # A future/still-active slot is left alone even at zero kWh - its kWh is usually
                 # synthesised rather than genuinely zero, and an in-progress dispatch is still real.
+                # This runs ahead of the completed-dispatch exemption below on purpose: a zero-kWh past
+                # dispatch is treated as never having happened, so it is dropped whatever its location.
                 if end_minutes <= self.minutes_now and kwh <= 0:
                     continue
 
-                # Ignore bump-charge slots as their cost won't change
-                if source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
+                # Off-peak eligibility (source, location and the completed-dispatch exemption for
+                # issue #4946) is shared with load_octopus_slots() so the two cap counters agree.
+                if self.dispatch_billed_off_peak(source, location, end_minutes):
                     # Round slots to 30 minute boundary
                     # Floor the start (round down) and ceiling the end (round up)
                     # This ensures any partial overlap with a 30-min slot marks the entire slot as off-peak
@@ -3181,10 +3236,16 @@ class Octopus:
                         else:
                             saved_slots.add(minute)
 
-                        # Calculate which day this minute belongs to (day boundary at midday)
+                        # Calculate which day this slot belongs to (day boundary at midday)
                         # Period 0 = noon today (720) to 11:59 tomorrow (2159), etc.
                         # Python's floor division handles negative numbers correctly
-                        day_offset = (minute - 720) // (24 * 60)
+                        #
+                        # Key this on the slot's START, not the current minute: a window that opens in
+                        # the evening and runs past noon the next day would otherwise cross into the
+                        # next period part-way through and be handed a second budget, re-stamping its
+                        # tail at rate_min_base in the middle of the day-rate block. load_octopus_slots
+                        # already charges a window to its start period the same way.
+                        day_offset = (start_minutes - 720) // (24 * 60)
 
                         # Initialise counter for this day if needed
                         if day_offset not in slots_per_day:

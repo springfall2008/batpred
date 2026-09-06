@@ -275,7 +275,7 @@ def _charge_averages_by_index(my_predbat, charge_windows):
     """
     window_sort, window_links, price_set, price_links = my_predbat.sort_window_by_price_combined(charge_windows, [])
     by_index = {}
-    for key, link in window_links.items():
+    for _key, link in window_links.items():
         if link["type"] == "c":
             by_index[link["id"]] = link["average"]
     return by_index

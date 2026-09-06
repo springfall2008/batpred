@@ -2092,7 +2092,7 @@ def test_teslemetry_side_layout_partitions_every_day():
     tomorrow = ["OFF_PEAK"] * 48
     layout = TeslemetryAPI._side_layout(today, tomorrow, today_dow=2)
     assert set(layout) == set(range(7))
-    for day, intervals in layout.items():
+    for _day, intervals in layout.items():
         covered = 0
         for frm, to, _tier in sorted(intervals):
             assert frm == covered  # no gap/overlap

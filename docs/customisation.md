@@ -541,8 +541,13 @@ When the Freeze Export override is active, [Predbat status](what-does-predbat-do
 
 ## Cloud coverage and load variance
 
-By default Predbat tries to model passing clouds by modulating the PV forecast data on a 5-minute interval up and down while retaining the same predicted total.
-The amount of modulation depends on the difference between the PV50% (default) and PV10% scenario produced by Solcast.
+By default Predbat tries to model passing clouds by modulating the PV forecast data on a 5-minute interval up and down while retaining the same predicted total over each half-hour.
+
+Each scenario is modulated toward the next forecast percentile above it: the PV10% scenario reaches up toward PV50%, PV50% reaches up toward PV90%, and PV90% - having no percentile above it - reaches toward a continuation of its own band, capped at your DC array size (see **pv_array_kwp** in [apps.yaml settings](apps-yaml.md)) plus 20% for cloud-edge enhancement.
+
+How many of each half-hour's six 5-minute steps are raised rather than lowered follows the shape of your own forecast band. Solcast's downside is typically about twice its upside, giving four steps raised and two lowered, which lets the peaks reach PV90% while the troughs still fall far enough to matter. The PV10% scenario takes the opposite pattern, so it dips exactly where PV50% peaks and both directions are covered within the same 5 minutes.
+
+If your forecast source publishes no PV90% data, Predbat falls back to the older model, which modulates by a single figure derived from the gap between the PV50% and PV10% forecasts.
 
 You can disable this feature (_expert mode only_) using **switch.predbat_metric_cloud_enable**.
 
@@ -823,7 +828,7 @@ This file contains a full export of your current Predbat config and is extremely
 
 Predbat automatically turns this switch back Off after 2 hours if it's still on, to bound the raw disk writes it triggers if left on by accident - if you need a longer debug session than that, you'll need to turn it back On again.
 
-**Note:** The **Create**/**Download** links on the web interface's **Debug** panel (including `predbat_debug.yaml`, `predbat.log`, and the debug history `.tgz`) only work from a web browser. The HA Companion app's built-in browser does not save files when you tap them - it just displays the raw content on screen instead. If you're on the Companion app, browse to the `debug/` folder under your Predbat config directory directly (e.g. with the File editor or Samba add-on) and pick the file up from there instead.
+**Note:** The **Create**/**Download** links on the web interface's **Debug** panel (including `predbat_debug.yaml`, `predbat.log`, and the debug history archive) only work from a web browser. The HA Companion app's built-in browser does not save files when you tap them - it just displays the raw content on screen instead. If you're on the Companion app, browse to the `debug/` folder under your Predbat config directory directly (e.g. with the File editor or Samba add-on) and pick the file up from there instead.
 
 The following automation might be useful to automatically turn off Predbat debug mode sooner than that, after turning it on to capture the debug logs:
 
@@ -864,9 +869,9 @@ Turning on `switch.predbat_debug_enable` only captures debug information from th
 - **input_number.predbat_debug_history_interval** - how many hours between automatic snapshots (default 3). With the defaults, 15 snapshots at 3-hourly intervals covers just under 48 hours.
 - **switch.predbat_debug_history_force_capture** - turn this on to trigger an immediate snapshot rather than waiting for the next scheduled one, useful from an automation that has just spotted something worth investigating. Predbat resets the switch back off itself once the snapshot has been taken, and still takes the snapshot even if `debug_history_enable` is off.
 
-Retained snapshots can all be downloaded together as a single `.tgz` archive from a link on the web interface's dashboard **Debug** panel, or individually from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
+Retained snapshots can all be downloaded together as a single gzip tarball from a link on the web interface's dashboard **Debug** panel. It downloads as `predbat_debug_history.tgz.dmp` - open it with `tar xzf predbat_debug_history.tgz.dmp`; the contents are an ordinary gzip tarball, only the filename differs from a `.tgz`. The trailing `.dmp` is there because some browsers unpack downloads by extension, and a history that arrives unpacked is both too large for GitHub's 25MB attachment limit and a file type GitHub will not accept, where the archive itself is usually under 5MB. Individual snapshots can also be downloaded from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
 
-Each snapshot is written as a plain `predbat_debug_<timestamp>.yaml` file into the same `debug/` folder as the `switch.predbat_debug_enable` output described above - useful in its own right (a full rolling history sitting on disk, not just what the switch happened to catch), and it's the way to get a snapshot to attach to a GitHub issue from the HA Companion app, where the `.tgz`/single-file download links above don't work (see the note above). These files are pruned in step with the ring buffer itself, so there are never more of them on disk than `debug_history_count` snapshots.
+Each snapshot is written as a plain `predbat_debug_<timestamp>.yaml.txt` file into the same `debug/` folder as the `switch.predbat_debug_enable` output described above - useful in its own right (a full rolling history sitting on disk, not just what the switch happened to catch), and it's the way to get a snapshot to attach to a GitHub issue from the HA Companion app, where the archive/single-file download links above don't work (see the note above). The contents are ordinary YAML; the `.txt` on the end is there because GitHub refuses to accept a `.yaml` file as an issue attachment, so a snapshot picked up from `debug/` can be attached to a bug report as-is with no renaming. These files are pruned in step with the ring buffer itself, so there are never more of them on disk than `debug_history_count` snapshots. Snapshots written by a version before this naming change (`predbat_debug_<timestamp>.yaml`) still download and are still pruned normally, but they keep the old plain-`.yaml` name on disk until that happens, so they need renaming to `.yaml.txt` before GitHub will accept them as an attachment.
 
 ## Updating Predbat
 
