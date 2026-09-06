@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 import yaml
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 from ha import run_async
 
 
@@ -20,10 +20,14 @@ def test_saving_session(my_predbat):
     print("Test saving session")
     ha = my_predbat.ha_interface
     failed = False
-    date_last_year = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
-    date_yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    date_before_yesterday = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    date_last_year = (my_predbat.midnight_utc - timedelta(days=365)).strftime("%Y-%m-%d")
+    date_yesterday = (my_predbat.midnight_utc - timedelta(days=1)).strftime("%Y-%m-%d")
+    date_before_yesterday = (my_predbat.midnight_utc - timedelta(days=2)).strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
     session_binary = f"""
@@ -104,7 +108,7 @@ friendly_name: Octoplus Saving Session Events (A-12345678)
     ]
 
     # Example format Sat 25/01
-    date_today_service = datetime.now().strftime("%a %d/%m")
+    date_today_service = my_predbat.midnight_utc.strftime("%a %d/%m")
     expected_service = [
         ["octopus_energy/join_octoplus_power_down_session_event", {"event_code": 987654, "entity_id": "event.octopus_energy_a_12345678_octoplus_saving_session_event"}],
         ["notify/notify", {"message": "Predbat: Joined Octopus saving event {} 18:30-19:30, 50.0 p/kWh".format(date_today_service)}],
@@ -283,7 +287,11 @@ def test_saving_session_notify_config(my_predbat):
     print("Test saving session notification configuration")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -421,7 +429,11 @@ def test_saving_session_axle_conflict(my_predbat):
     print("Test saving session Axle conflict avoidance (issue #4120)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -554,7 +566,11 @@ def test_saving_session_zero_rate_skip(my_predbat):
     print("Test saving session zero reward rate is skipped (issue #4593)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -682,7 +698,11 @@ def test_saving_session_min_octopoints_threshold(my_predbat):
     print("Test saving session minimum octopoints threshold (issue #4595)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -815,7 +835,11 @@ def test_saving_session_join_service_fallback(my_predbat):
     print("Test saving session join service fallback (issue #4548 point 3)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -1003,7 +1027,11 @@ def test_saving_session_auto_join_toggle(my_predbat):
     print("Test saving session auto-join toggle (issue #4120)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -1103,7 +1131,11 @@ def test_saving_session_custom_entity_no_rewrite_match(my_predbat):
     print("Test saving session with custom entity name that does not match the rewrite pattern (issue #4573)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -1177,7 +1209,11 @@ def test_saving_session_select_entity_join_defers_notify(my_predbat):
     print("Test select-entity join defers the joined notification (issue #4593)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -1244,7 +1280,11 @@ def test_saving_session_default_rate(my_predbat):
     print("Test saving session default rate injection")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -1369,7 +1409,11 @@ def test_saving_session_zero_octopoints_joined_is_free_slot(my_predbat):
     print("Test joined session free/saving split keys on eventType (issue #4851)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 

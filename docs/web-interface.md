@@ -51,10 +51,9 @@ all the input settings for Predbat and all Predbat's output data including the c
 This debug file enables your setup to be recreated to identify any configuration issues it may have or Predbat bugs to be re-created. Confidential information such as your Solcast API or GECloud API are redacted in the debug file.
 - **Download predbat.log** - provides a link to download the current [Predbat logfile](output-data.md#predbat-logfile) which contains progress and any error messages that occur whilst Predbat is running
 - **Download predbat_plan.html** - provides a link to download the current [Predbat HTML plan](output-data.md#viewing-the-predbat-plan)
-- **History** - a link to download every retained automatically-captured [debug history snapshot](customisation.md#debug-history) as a single `.tgz` archive, the same as `predbat_debug.yaml` above but covering a window of earlier points in time, without needing debug mode to have already been turned on. Individual snapshots for a specific plan time slot can also be downloaded from the **Debug** column on the plan's [History view](#plan-view).
+- **History** - a link to download every retained automatically-captured [debug history snapshot](customisation.md#debug-history) as a single gzip tarball (`predbat_debug_history.tgz.dmp` - open with `tar xzf predbat_debug_history.tgz.dmp`; the `.dmp` keeps browsers from unpacking it on download, which would push it past GitHub's attachment limit), the same as `predbat_debug.yaml` above but covering a window of earlier points in time, without needing debug mode to have already been turned on. Individual snapshots for a specific plan time slot can also be downloaded from the **Debug** column on the plan's [History view](#plan-view).
 
-Note that before you can attach a downloaded apps.yaml or predbat_debug.yaml file to a GitHub issue you must rename the file extension, e.g. to '.txt', so for example `apps.txt` and `predbat_debug.txt`.
-This is because GitHub does not accept .yaml file attachments.
+Note that GitHub does not accept .yaml file attachments. The debug file download arrives already named `predbat_debug.yaml.txt`, so it can be attached to an issue as-is, but a downloaded apps.yaml still needs renaming, e.g. to `apps.txt`, before GitHub will take it.
 
 Underneath the Debug panel is the Power Flow diagram.  The Power Flow gives an 'instantaneous Power' snapshot of your PV generation, Battery charge/discharge, Grid import/export and House consumption using the **power_xx** entities defined in `apps.yaml`.
 

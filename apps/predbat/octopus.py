@@ -1466,7 +1466,7 @@ class OctopusAPI(ComponentBase):
             section = product_info.get(section_key, {})
             if not section:
                 continue
-            for region_key, region_data in section.items():
+            for _region_key, region_data in section.items():
                 if not isinstance(region_data, dict):
                     continue
                 for payment_type in payment_types:
@@ -2686,7 +2686,7 @@ class Octopus:
                 self.log("Octopus: Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
         # Retry up to 3 minutes
-        for retry in range(3):
+        for _retry in range(3):
             pdata = self.download_octopus_rates_func(url)
             if pdata:
                 break
@@ -2832,11 +2832,12 @@ class Octopus:
     def load_free_slot(self, octopus_free_slots, rate_dict, export=False, rate_replicate=None):
         """
         Load octopus free session slot into rate_dict (in place)
+
+        A slot whose start/end cannot be decoded is skipped entirely - it must not
+        re-apply the previous slot's rate over the previous slot's minute range.
         """
         if rate_replicate is None:
             rate_replicate = {}
-        start_minutes = 0
-        end_minutes = 0
 
         for octopus_free_slot in octopus_free_slots:
             start = octopus_free_slot["start"]
@@ -2852,19 +2853,22 @@ class Octopus:
                     end = None
                     self.log("Warn: Octopus: Unable to decode Octopus free session start/end time {}".format(octopus_free_slot))
 
-            if start and end:
-                start_minutes = minutes_to_time(start, self.midnight_utc)
-                end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
+                if start and end:
+                    # forecast_minutes is a duration from minutes_now, while start/end are absolute
+                    # minutes from midnight_utc - so the window end is minutes_now + forecast_minutes.
+                    # load_saving_slot() and load_axle_slot() both bound themselves that way.
+                    start_minutes = minutes_to_time(start, self.midnight_utc)
+                    end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes + self.minutes_now)
 
-            if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < self.forecast_minutes:
-                self.log("Setting Octopus free session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
-                for minute in range(start_minutes, end_minutes):
-                    if export:
-                        rate_dict[minute] = rate
-                    else:
-                        rate_dict[minute] = min(rate, rate_dict[minute])
-                        self.load_scaling_dynamic[minute] = self.load_scaling_free
-                    rate_replicate[minute] = "saving"
+                    if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < (self.forecast_minutes + self.minutes_now):
+                        self.log("Setting Octopus free session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
+                        for minute in range(start_minutes, end_minutes):
+                            if export:
+                                rate_dict[minute] = rate
+                            else:
+                                rate_dict[minute] = min(rate, rate_dict[minute])
+                                self.load_scaling_dynamic[minute] = self.load_scaling_free
+                            rate_replicate[minute] = "saving"
 
     def load_saving_slot(self, octopus_saving_slots, rate_dict, export=False, rate_replicate=None):
         """
@@ -3190,10 +3194,16 @@ class Octopus:
                         else:
                             saved_slots.add(minute)
 
-                        # Calculate which day this minute belongs to (day boundary at midday)
+                        # Calculate which day this slot belongs to (day boundary at midday)
                         # Period 0 = noon today (720) to 11:59 tomorrow (2159), etc.
                         # Python's floor division handles negative numbers correctly
-                        day_offset = (minute - 720) // (24 * 60)
+                        #
+                        # Key this on the slot's START, not the current minute: a window that opens in
+                        # the evening and runs past noon the next day would otherwise cross into the
+                        # next period part-way through and be handed a second budget, re-stamping its
+                        # tail at rate_min_base in the middle of the day-rate block. load_octopus_slots
+                        # already charges a window to its start period the same way.
+                        day_offset = (start_minutes - 720) // (24 * 60)
 
                         # Initialise counter for this day if needed
                         if day_offset not in slots_per_day:

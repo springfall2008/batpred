@@ -890,7 +890,20 @@ See [Components - Sunsynk Cloud API](components.md#sunsynk-cloud-api-sunsynk) fo
 
 **EXPERIMENTAL:** Nobody on the Predbat project has AlphaESS hardware, so this integration's wire behaviour is inferred from AlphaESS's published Open API documentation and from the Home Assistant AlphaESS integration, rather than confirmed against real inverters. Every request and response is traced to the log by default, so a tester's log is usable evidence for an issue report - please open one if anything here doesn't match what you see.
 
-Predbat includes support for AlphaESS hybrid inverters via the AlphaESS Open API, providing direct cloud-based monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 access is required.
+Predbat includes support for AlphaESS hybrid inverters via the AlphaESS Open API, providing direct cloud-based monitoring and timed charge control - no local Modbus/RS485 access is required. It **cannot** control export, see below.
+
+#### AlphaESS cannot be used to control export
+
+**The AlphaESS Open API has no way to export your battery to the grid, so Predbat cannot make it do so.** This is a limitation of the API rather than of Predbat - see [issue #4701](https://github.com/springfall2008/batpred/issues/4701) for the field report and the evidence behind this section.
+
+The only battery controls the API offers are a grid-charge window with a target SoC (`updateChargeConfigInfo`) and a discharge window with an SoC floor (`updateDisChargeConfigInfo`), or both together on entitled systems (`setTimeChargeBySn`). There is no forced-export, working-mode or dispatch endpoint of any kind. In practice that means:
+
+- **Force Export does nothing.** AlphaESS's own documentation describes the discharge window as a *permission* window rather than a forced export: during the window the system runs in self-consumption mode, and outside it the battery is only allowed to charge. A programmed export window therefore has the battery cover house load and export nothing beyond genuine solar surplus, which is exactly what testers see.
+- **Freeze Export does nothing either.** Predbat implements Freeze Export by disabling charging while leaving the inverter in Demand mode, so that solar surplus reaches the grid instead of the battery. The API has no way to stop the battery charging from solar - `gridCharge` gates only *timed grid charging*, and with it off the system reverts to self-consumption, where surplus solar charges the battery as usual. The settings Predbat writes for Freeze Export come out identical to the ones it writes for Demand mode.
+
+**So set `select.predbat_mode` to `Control charge` on an AlphaESS system.** Predbat then plans and writes no export windows at all, and the plan contains only what the inverter can actually deliver: charging from the grid at cheap rates, and covering house load the rest of the time. Left in `Control charge & discharge`, Predbat builds a plan around exports that never happen, and it also programs the discharge window up to `plan_interval_minutes` ahead of each planned export slot - which, on the permission-window semantics above, bars the battery from covering house load until that window opens, so a load spike is met from the grid instead. That side effect has been reported separately, on leaving an Axle VPP event, in [issue #4723](https://github.com/springfall2008/batpred/issues/4723).
+
+Forced export *is* achievable on AlphaESS hardware over **local Modbus**, whose dispatch registers offer forced discharge, forced export and a solar-export-priority mode. None of that is reachable from the cloud API. If controlled export matters to you, a local Modbus integration feeding Predbat's standard inverter entities is the route to it, and the AlphaESS Cloud component is still useful for monitoring alongside.
 
 #### AlphaESS Cloud Configuration
 
@@ -927,7 +940,7 @@ AlphaESS's charge and discharge endpoints are whole-object replacements, and the
 
 Charge and discharge windows are snapped to the API's 15-minute grid (`:00`, `:15`, `:30`, `:45`) before being written. This is because off-grid values are accepted by the API without an error but then silently ignored by the device, which would otherwise look like a working configuration that quietly does nothing.
 
-Charge/discharge rate handling differs by system entitlement. Systems entitled to AlphaESS's periodic schedule API get a genuine power setpoint alongside up to six windows; systems that are not fall back to the older two-window endpoints, which have no rate field at all, so a **non-zero** rate you configure is simply not honoured there - only the window times and the enable flag reach the inverter. A **zero** rate is meaningful on both paths, however, because there is no separate pause endpoint - Predbat signals freeze charge or freeze export by writing a window with a zero rate, and both the legacy and periodic paths turn that into a disabled/held window rather than an open one.
+Charge/discharge rate handling differs by system entitlement. Systems entitled to AlphaESS's periodic schedule API get a genuine power setpoint alongside up to six windows; systems that are not fall back to the older two-window endpoints, which have no rate field at all, so a **non-zero** rate you configure is simply not honoured there - only the window times and the enable flag reach the inverter. A **zero** rate is meaningful on both paths, however, because there is no separate pause endpoint - Predbat signals a hold by writing a window with a zero rate, and both the legacy and periodic paths turn that into a held window (discharge time control on, with no permitted period) rather than an open one. That holds the battery out of *discharging*; nothing in the API can stop it charging from solar, which is why Freeze Export is not deliverable - see [AlphaESS cannot be used to control export](#alphaess-cannot-be-used-to-control-export).
 
 `battery_rate_max` is not reported by the API at all, so Predbat estimates it from the inverter's nominal AC power (`poinv`) rather than leave it unset - an unset value would silently fall back to a generic 2600W internal default instead. On a well-matched AlphaESS package `poinv` is close to the real battery rate, but where it isn't, correct it either with `battery_rate_max_scaling` (Predbat will suggest a value in the log once it has measured your actual achieved rate) or by setting `alphaess_battery_rate_max` directly to your pack's real limit in Watts.
 
@@ -1299,6 +1312,8 @@ Freeze Export disables charging but leaves the inverter in Demand mode, so by de
 
 Some inverters (observed on AlphaESS) do not behave that way: instead of covering house load they only leak a small fixed battery discharge during Freeze Export. If your inverter behaves this way, set this to the observed battery-side discharge rate in Watts so Predbat's prediction model matches reality.
 
+This does not apply to the built-in [AlphaESS Cloud](#alphaess-cloud-api) component, which cannot deliver Freeze Export at all - the observation above is necessarily from an AlphaESS controlled by some other means, since the Open API cannot disable charging.
+
 ```yaml
   inverter_freeze_export_discharge_rate: 269
 ```
@@ -1351,6 +1366,15 @@ This requires at least several days of historical data with charging periods of 
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set).
+- **givtcp_battery_dod** - Optional depth of discharge for a GivTCP (REST) battery, one per inverter, default 1.0.
+GivTCP does not report DoD, so set this if your battery cannot use its full nameplate capacity (e.g. 0.8 for an 80% DoD
+battery). Predbat publishes `battery_soh` (measured capacity / design capacity) and combines it with this value into
+`battery_dod_soh`, which `battery_scaling` is pointed at - so the planned battery size is design capacity x SoH x DoD.
+SoH comes from the per-module `Battery_Capacity` vs `Battery_Design_Capacity` the BMS reports under `Battery_Details`.
+- **battery_calibration** - Optional sensor name reporting whether the battery is currently being calibrated (`on`/`off`).
+A calibration cycle deliberately drives the battery outside its normal SoC range, so while one is running any plan would be
+wrong and Predbat disables itself for that inverter. Leave unset if your inverter does not report this - an absent sensor
+means "never calibrating". Set automatically for GivTCP (REST) users.
 
 #### Power Data
 
@@ -1532,7 +1556,29 @@ To check your REST is working open up the readData API point in a Web browser e.
 
 If you get a bunch of inverter information back then it's working!
 
-Note that Predbat will still retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
+With **givtcp_rest** set, Predbat reads the GivTCP REST API itself and publishes what it finds as its own
+entities (`sensor.predbat_givtcp_0_*` and friends), then points its own settings at them - including
+**inverter_type**, **num_inverters**, the control entities, and the daily energy totals **load_today**,
+**import_today**, **export_today** and **pv_today**. You do not need to configure any of those by hand.
+
+The four daily energy totals are the one exception to auto-configuration winning: if you name a sensor
+of your own for **load_today**, **import_today**, **export_today** or **pv_today** in `apps.yaml`,
+Predbat keeps yours. It reads days of recorded history back from these to build its load model, and
+repointing them at a sensor it has only just created would throw that history away and leave it
+planning with no load model until the days build back up. This applies per setting, so naming one of
+the four by hand leaves the other three auto-configured. Everything else Predbat auto-configures here
+is read as a current value rather than as history, and anything you set for those is still overridden.
+
+Predbat also publishes the battery flows and the lifetime counters -
+`sensor.predbat_givtcp_<n>_battery_{charge,discharge}_today` and
+`sensor.predbat_givtcp_<n>_{load,import,export,pv,battery_charge,battery_discharge}_total`. Nothing in
+Predbat reads these - they are there for you, since on a REST-only setup (GivTCP's own Home Assistant
+integration not installed) they are the only GivEnergy energy entities in Home Assistant, and grid
+in/out, solar and battery in/out are the set its Energy Dashboard asks for.
+
+- **givtcp_automatic** - Optional, defaults to `true`. Set to `false` to stop Predbat pointing its settings
+at those entities, so you can configure `apps.yaml` yourself. The entities are still published either way,
+so you can name them by hand - or point an individual setting at a sensor of your own.
 
 - **givtcp_rest_power_ignore** - Optional, defaults to false. When set to `true` for a given inverter, Predbat will use the configured sensor entities
 (load_power, pv_power, grid_power, battery_power) instead of reading power values from the GivTCP REST API.
@@ -1695,9 +1741,22 @@ scenario costs planning time, so if your machine is struggling you can turn On *
 while it is Off no PV90 scenario is simulated at all.
 See [Solar PV adjustment options](customisation.md#solar-pv-adjustment-options).
 
-Predbat models cloud coverage by using the difference between the PV and PV10 forecasts to work out a cloud factor,
-this modulates the PV output predictions up and down over the plan slot duration as if there were passing clouds.
-This can have an impact on planning, especially for things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.
+Predbat models cloud coverage by modulating each PV scenario toward the next forecast percentile above it - PV10 toward PV50, PV50 toward PV90 - up and down
+on a 5-minute interval while holding the total over each half hour. This can have an impact on planning, especially for things like freeze charging which could
+assume the PV will cover the house load but it might not due to clouds, and for systems whose array is large enough to clip against the inverter or export limit.
+
+### **pv_array_kwp**
+
+The total DC array size in kWp, used to cap how far the PV90 scenario's modulation may extrapolate above the forecast:
+
+```yaml
+  pv_array_kwp: 18.54
+```
+
+This is detected automatically from the `kwp` figures in your **forecast_solar** or **open_meteo_forecast** configuration, so you only need to set it when using
+Solcast or the Solcast HA integration, neither of which publishes an array size. Leaving it unset with such a source simply leaves the cap inactive.
+
+Set the DC array size, not your inverter rating - on a DC-oversized system these differ, and it is precisely that oversizing which causes clipping.
 
 See also [PV configuration options in Home Assistant](customisation.md#solar-pv-adjustment-options).
 

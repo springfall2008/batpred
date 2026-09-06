@@ -87,7 +87,7 @@ def collect_watch_files(roots, apps_file_path):
     py_files = []
     seen_files = set()
     for root_dir in roots:
-        for root, dirs, files in os.walk(root_dir):
+        for root, _dirs, files in os.walk(root_dir):
             for file in files:
                 if file.startswith("."):
                     continue
