@@ -661,7 +661,8 @@ def append_system_prompt(*parts):
     --append-system-prompt flags is not a documented way to supply two prompts, and the
     review/cleanup flows need both the gh-api endpoint steer and the journal capture text.
     """
-    return ["--append-system-prompt", "\n\n".join(part for part in parts if part)]
+    joined = "\n\n".join(part for part in parts if part)
+    return ["--append-system-prompt", joined] if joined else []
 
 
 def journal_queue_entries():
