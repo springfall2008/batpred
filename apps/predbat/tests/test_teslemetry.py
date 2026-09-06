@@ -861,6 +861,105 @@ def test_teslemetry_charge_window_accessor():
     assert api._charge_window() is None
 
 
+def _tbc_api(charge=None, discharge=None, reserve=15):
+    """Build a mock API with a committed schedule for the signal-tariff state tests."""
+    api = MockTeslemetryAPI()
+    api.schedule = {
+        "reserve": reserve,
+        "charge": charge or {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": 0},
+        "discharge": discharge or {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "enable": 0},
+    }
+    return api
+
+
+def test_teslemetry_tbc_charging_below_target_enables_grid_at_the_real_reserve():
+    """Below the charge target the tariff does the work: grid charging on, reserve left where Predbat set it."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1})
+    assert api.evaluate_schedule_tbc(3 * 60, 40) == {"export_rule": "pv_only", "grid_charging": True, "reserve": 15, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_at_target_holds_with_reserve_100_and_no_grid():
+    """At target it holds: reserve 100 stops discharge, grid charging off stops it importing to reach it."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1})
+    assert api.evaluate_schedule_tbc(3 * 60, 90) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 100, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_hold_deadband_survives_a_one_percent_sag():
+    """A freeze charge whose SOC has sagged 1% below the written target still holds, rather than importing."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 85, "enable": 1})
+    assert api.evaluate_schedule_tbc(3 * 60, 84)["grid_charging"] is False
+    assert api.evaluate_schedule_tbc(3 * 60, 84)["reserve"] == 100
+    # Two points below the target is a real shortfall, not sensor sag, so charging resumes.
+    assert api.evaluate_schedule_tbc(3 * 60, 83)["grid_charging"] is True
+
+
+def test_teslemetry_tbc_export_uses_the_real_reserve_not_the_export_target():
+    """Exporting leaves reserve at the real reserve; the export target is advisory under this mode.
+
+    Reserve is not overloaded as an export floor here: Tesla decides how much to move, and window
+    length is the lever for the target, so writing the target as a floor would second-guess that.
+    """
+    api = _tbc_api(discharge={"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}, reserve=5)
+    state = api.evaluate_schedule_tbc(18 * 60, 60)
+    assert state == {"export_rule": "battery_ok", "grid_charging": False, "reserve": 5, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_export_stops_at_the_target():
+    """Once down to the target the export rule drops back to pv_only, reserve still the real reserve."""
+    api = _tbc_api(discharge={"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}, reserve=5)
+    assert api.evaluate_schedule_tbc(18 * 60, 20) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 5, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_demand_is_autonomous_with_no_grid_charging():
+    """Outside both windows: autonomous on the base band, real reserve, and no route to import."""
+    api = _tbc_api()
+    assert api.evaluate_schedule_tbc(12 * 60, 50) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 15, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_charge_wins_over_an_overlapping_export():
+    """Charge is tested first, matching execute.py and the real-rate path's own precedence."""
+    api = _tbc_api(
+        charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1},
+        discharge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 20, "enable": 1},
+    )
+    assert api.evaluate_schedule_tbc(3 * 60, 40)["grid_charging"] is True
+
+
+def test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off():
+    """Predbat's own reserve hold (soc+1) lands in the band Tesla rejects and must round UP, not down.
+
+    execute.py writes adjust_reserve(soc+1) under set_reserve_hold, so a battery at 85% asks for 86.
+    Snapping that to 80 would let it discharge 6% during a hold; 100 actually holds, and grid
+    charging off is what stops it importing to reach 100.
+    """
+    api = _tbc_api(reserve=86)
+    assert api.evaluate_schedule_tbc(12 * 60, 85) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 100, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window():
+    """A hold reserve inside a charge window must not import to fill to 100 against the 0p band."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, reserve=86)
+    state = api.evaluate_schedule_tbc(3 * 60, 40)
+    assert state["reserve"] == 100
+    assert state["grid_charging"] is False
+
+
+def test_teslemetry_tbc_never_writes_a_reserve_in_the_invalid_band():
+    """Tesla snaps 81-99 to 80, so no state may ask for a reserve in that band, whatever is committed.
+
+    Sweeps every reserve Predbat could write, in each of the three states, since the reserve is now
+    the single value that reaches the device from all of them.
+    """
+    for reserve in range(0, 101):
+        states = [
+            _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, reserve=reserve).evaluate_schedule_tbc(3 * 60, 40),
+            _tbc_api(discharge={"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}, reserve=reserve).evaluate_schedule_tbc(18 * 60, 60),
+            _tbc_api(reserve=reserve).evaluate_schedule_tbc(12 * 60, 50),
+        ]
+        for state in states:
+            assert state["reserve"] <= 80 or state["reserve"] == 100
+
+
 def test_teslemetry_day_runs_groups_replicated_days():
     """_day_runs() itself: 6 identical days plus 1 different day collapse to 2 runs, not 7 singletons."""
     api = MockTeslemetryAPI()
@@ -2376,6 +2475,16 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_signal_tariff_is_independent_of_the_clock_and_rates()
     test_teslemetry_signal_tariff_without_windows_is_flat_base()
     test_teslemetry_charge_window_accessor()
+    test_teslemetry_tbc_charging_below_target_enables_grid_at_the_real_reserve()
+    test_teslemetry_tbc_at_target_holds_with_reserve_100_and_no_grid()
+    test_teslemetry_tbc_hold_deadband_survives_a_one_percent_sag()
+    test_teslemetry_tbc_export_uses_the_real_reserve_not_the_export_target()
+    test_teslemetry_tbc_export_stops_at_the_target()
+    test_teslemetry_tbc_demand_is_autonomous_with_no_grid_charging()
+    test_teslemetry_tbc_charge_wins_over_an_overlapping_export()
+    test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off()
+    test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window()
+    test_teslemetry_tbc_never_writes_a_reserve_in_the_invalid_band()
     test_teslemetry_day_runs_groups_replicated_days()
     test_teslemetry_day_runs_all_identical_single_run()
     test_teslemetry_set_tariff_posts_tou_settings()

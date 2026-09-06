@@ -572,6 +572,54 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return {"export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "self_consumption"}
         return {"export_rule": "pv_only", "grid_charging": True, "reserve": int(reserve), "mode": "self_consumption"}
 
+    @staticmethod
+    def _settable_reserve(percent):
+        """Map a requested reserve onto one the Powerwall will actually hold.
+
+        Since firmware 25.18.4 only 0-80 and exactly 100 are honoured; 81-99 are silently snapped
+        down to 80. A request in that band is Predbat asking to hold above 80 - execute.py writes
+        adjust_reserve(soc+1) under set_reserve_hold - and 80 would not hold it, leaving the battery
+        free to discharge back down to 80 during a window meant to keep SOC flat. So it rounds UP to
+        the one value above 80 that is honoured. Callers disable grid charging whenever this returns
+        SIGNAL_HOLD_RESERVE, which is what stops the device importing to reach it.
+        """
+        percent = int(percent)
+        if percent <= SIGNAL_MAX_SETTABLE_RESERVE:
+            return percent
+        return SIGNAL_HOLD_RESERVE
+
+    def evaluate_schedule_tbc(self, minutes_now, soc):
+        """Map the committed schedule to the device tuple under signal-tariff control (GH#4892).
+
+        Mode is autonomous in every state, because Tesla's optimiser only acts on the pushed tariff
+        under Time-Based Control - the tariff, not this tuple, is what asks for the charge or the
+        export. Reserve therefore stops being an overloaded charge signal and is simply the reserve
+        Predbat asked for, in every state; the charge and export target percentages are advisory
+        under this mode, since Tesla decides how much energy actually moves, and window length rather
+        than a reserve floor is the lever for them.
+
+        Grid charging is enabled only while a charge is actually wanted and no hold is in force, so
+        no other state can import unexpectedly whatever the optimiser decides.
+        """
+        charge = self.schedule.get("charge", {})
+        discharge = self.schedule.get("discharge", {})
+        reserve = self._settable_reserve(self.schedule.get("reserve", 20))
+        if self.in_window(minutes_now, charge):
+            target = int(charge.get("soc", 100))
+            if soc >= target - SIGNAL_HOLD_DEADBAND_PERCENT:
+                # At (or effectively at) target: hold. Reserve 100 stops the discharge and grid
+                # charging off stops it importing to reach that reserve; solar may still charge,
+                # which is what a freeze charge wants.
+                return {"export_rule": "pv_only", "grid_charging": False, "reserve": SIGNAL_HOLD_RESERVE, "mode": "autonomous"}
+            # Charging. A reserve that came back as SIGNAL_HOLD_RESERVE is a hold request Predbat
+            # made in its own right, and must not be turned into an import up to 100% against the 0p
+            # band, so grid charging is suppressed in that case.
+            return {"export_rule": "pv_only", "grid_charging": reserve < SIGNAL_HOLD_RESERVE, "reserve": reserve, "mode": "autonomous"}
+        if self.in_window(minutes_now, discharge):
+            target = int(discharge.get("soc", 10))
+            return {"export_rule": "battery_ok" if soc > target else "pv_only", "grid_charging": False, "reserve": reserve, "mode": "autonomous"}
+        return {"export_rule": "pv_only", "grid_charging": False, "reserve": reserve, "mode": "autonomous"}
+
     def publish_schedule_entities(self):
         """Publish the schedule entities from the pending schedule (pending == committed after boot/apply).
 
