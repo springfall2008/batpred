@@ -59,6 +59,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.schedule_loaded = False
         self.automatic = False
         self.automatic_done = False
+        self.tbc_control = False
         self.args_set = {}
         # OAuth state (production sets these via _init_oauth in initialize, which the mock bypasses).
         self.auth_method = "api_key"
@@ -793,6 +794,12 @@ def _signal_tier_at(tariff, day, minute, sell=False):
     return None
 
 
+async def _record_tariff(pushed, tariff):
+    """Stand in for set_tariff, capturing the tariff that would have been sent."""
+    pushed["tariff"] = tariff
+    return True
+
+
 def test_teslemetry_signal_tariff_mirrors_every_day():
     """The signal tariff writes one shape to all seven days, so no day-of-week logic is needed."""
     api = MockTeslemetryAPI()
@@ -1043,6 +1050,36 @@ def test_teslemetry_sync_tariff_read_only_no_push():
     api.base = SimpleNamespace(rate_import={m: 28.0 for m in range(2880)}, rate_export={m: 15.0 for m in range(2880)}, minutes_now=0, now=None, local_tz=None, get_arg=lambda a, d=None, **k: True if a == "set_read_only" else d)
     run_async(api.sync_tariff())
     assert not [r for r in api.requests_made if r[0] == "POST"]
+
+
+def test_teslemetry_tbc_control_defaults_off_and_uses_the_real_rate_tariff():
+    """With the trial setting off nothing changes: the real-rate builder is still what gets pushed."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.schedule = {"reserve": 15, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "enable": 0}}
+    assert api.tbc_control is False
+    pushed = {}
+    api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
+    run_async(api.sync_tariff())
+    # The real-rate path prices from rate_import, so a 28p flat import cannot render as the 0p/50p
+    # signal bands - asserting the absence of the signal shape rather than an exact legacy body.
+    assert pushed["tariff"]["energy_charges"]["AllYear"]["rates"] != {"SUPER_OFF_PEAK": 0.0, "PARTIAL_PEAK": 0.5, "ON_PEAK": 1.0}
+    assert api.evaluate_schedule(3 * 60, 40)["mode"] == "backup"
+
+
+def test_teslemetry_tbc_control_on_pushes_the_signal_tariff():
+    """With the trial setting on, the committed windows drive the signal bands and autonomous mode."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.tbc_control = True
+    api.schedule = {"reserve": 15, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}}
+    pushed = {}
+    api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
+    run_async(api.sync_tariff())
+    assert pushed["tariff"]["energy_charges"]["AllYear"]["rates"] == {"SUPER_OFF_PEAK": 0.0, "PARTIAL_PEAK": 0.5, "ON_PEAK": 1.0}
+    assert _signal_tier_at(pushed["tariff"], 0, 180) == "SUPER_OFF_PEAK"
+    assert _signal_tier_at(pushed["tariff"], 0, 1080) == "ON_PEAK"
+    assert api.evaluate_schedule(3 * 60, 40)["mode"] == "autonomous"
 
 
 def _assert_tou_periods_partition_day(tou_periods):
@@ -2491,6 +2528,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_set_tariff_asserts_optimization_strategy_economics()
     test_teslemetry_sync_tariff_dedupes_unchanged()
     test_teslemetry_sync_tariff_pushes_on_window_change()
+    test_teslemetry_tbc_control_defaults_off_and_uses_the_real_rate_tariff()
+    test_teslemetry_tbc_control_on_pushes_the_signal_tariff()
     test_teslemetry_sync_tariff_read_only_no_push()
     test_teslemetry_site_info_latches_without_nameplate_soc_max_from_live_status()
     test_teslemetry_run_site_info_latches_on_any_response()

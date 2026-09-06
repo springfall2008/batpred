@@ -557,7 +557,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         ON_PEAK boost over the committed discharge window (in the tariff) makes favourable; the tariff
         is no longer part of this per-cycle tuple. Every non-export state allows pv_only export so
         surplus solar is never curtailed.
+
+        With teslemetry_tbc_control set this delegates to evaluate_schedule_tbc, which drives Tesla's
+        own optimiser through the tariff instead of asserting a charge directly - see GH#4892.
         """
+        if getattr(self, "tbc_control", False):
+            return self.evaluate_schedule_tbc(minutes_now, soc)
         charge = self.schedule.get("charge", {})
         discharge = self.schedule.get("discharge", {})
         reserve = self.schedule.get("reserve", 20)
@@ -1337,10 +1342,16 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
 
         Cheap to call every cycle: set_tariff only reaches the API when the serialised tariff changes,
         i.e. on a genuine rate-band, discharge-window or day-of-week change. Gated on read-only mode.
+
+        With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one; it
+        depends only on the committed windows, so it re-pushes strictly less often.
         """
         if self._is_read_only():
             return True
-        tariff = self.build_tariff(self._discharge_window())
+        if getattr(self, "tbc_control", False):
+            tariff = self.build_signal_tariff(self._charge_window(), self._discharge_window())
+        else:
+            tariff = self.build_tariff(self._discharge_window())
         return await self.set_tariff(tariff)
 
     def _is_read_only(self):

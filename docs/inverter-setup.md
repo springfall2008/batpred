@@ -2972,9 +2972,12 @@ The component needs only your token in `apps.yaml` and no Home Assistant Tesla i
   teslemetry_key: 'your-teslemetry-token'
   teslemetry_site_id: 'your-energy-site-id'  # optional: omit to use the first site on your account
   teslemetry_automatic: True
+  teslemetry_tbc_control: False  # optional trial setting - see below
 ```
 
 Copy the template [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) over the top of your `apps.yaml` and edit for your system. See [Tesla Powerwall Teslemetry API](components.md#tesla-powerwall-teslemetry-api-teslemetry) for details.
+
+`teslemetry_tbc_control` is off by default, so nothing changes unless you switch it on. When it is on, Predbat pushes a control-signal tariff (0p over the charge window, 100p over the export window, 50p import elsewhere) and switches the Powerwall to Time-Based Control, so Tesla's own Opticaster runs the charge at full rate rather than the slower reserve-driven charge. It is a trial setting, and while it is on Predbat's charge and export target percentages are advisory, because Tesla decides how much energy actually moves. One known limitation: whenever the backup reserve resolves to 100% - whether because Predbat is holding the battery there or because you have genuinely configured a 100% reserve - grid charging is disabled, so the battery charges from solar only. This is deliberate: on a Powerwall, grid-charging up to a 100% reserve triggers the slow throttled charge this mode exists to avoid.
 
 ### Manual configuration via Home Assistant integrations
 
