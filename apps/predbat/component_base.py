@@ -24,6 +24,13 @@ import asyncio
 import time
 import traceback
 
+# Components typically come up in milliseconds, so the previous 1s poll spent nearly all of a
+# start-up wait asleep after the component was already live. Polling ten times a second makes
+# start-up feel immediate for no meaningful cost - one cheap flag check per tick. The wait is
+# bounded by a monotonic deadline rather than by counting ticks, so `timeout` stays honest in
+# seconds however often the flag is checked.
+API_START_POLL_SECONDS = 0.1
+
 
 class ComponentBase(ABC):
     """
@@ -355,10 +362,9 @@ class ComponentBase(ABC):
             bool: True if component started successfully, False if timeout
         """
         self.log(f"{self.__class__.__name__}: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < timeout:
-            time.sleep(1)
-            count += 1
+        deadline = time.monotonic() + timeout
+        while not self.api_started and time.monotonic() < deadline:
+            time.sleep(API_START_POLL_SECONDS)
         if not self.api_started:
             self.log(f"Warn: {self.__class__.__name__}: Failed to start")
             return False

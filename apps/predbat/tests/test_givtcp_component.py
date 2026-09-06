@@ -66,8 +66,23 @@ def _rest_data_blob(
 
 
 def _make_component(rest_urls="http://givtcp:6345", automatic=True):
+    """
+    A GivTCPComponent whose REST clients count their retry waits rather than taking them.
+
+    GivTCPRest paces its retry ladders with InverterRestState.sleep(), a blocking time.sleep():
+    2s between each of the five write-verification attempts, and 20s then 40s between read
+    attempts. Those are the right delays against a real inverter that may still be booting, but
+    in a test they are dead wall-clock - a single write that never verifies costs the whole
+    5 x 2s ladder, which was most of this module's runtime.
+
+    Recorded into inverter.slept rather than discarded, so a test that does want to assert on the
+    pacing still can. This mirrors test_givtcp_rest.py's own _client helper.
+    """
     base = MockBase()
     component = GivTCPComponent(base, rest_urls=rest_urls, automatic=automatic)
+    for rest in component.rest:
+        rest.inverter.slept = []
+        rest.inverter.sleep = rest.inverter.slept.append
     return base, component
 
 

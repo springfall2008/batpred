@@ -1319,7 +1319,11 @@ def _test_ohme_client_async_get_charge_session_retry(my_predbat=None):
 
     client._make_request = mock_make_request_with_retry
 
-    run_async(client.async_get_charge_session())
+    # async_get_charge_session waits a real second between attempts to give the charger time to
+    # leave CALCULATING. What is under test is that it retries at all, not how long it pauses
+    # first, so the wait is skipped rather than served.
+    with patch("ohme.asyncio.sleep", new_callable=AsyncMock):
+        run_async(client.async_get_charge_session())
 
     # Should have retried at least once
     assert call_count[0] >= 2, f"Expected at least 2 calls, got {call_count[0]}"

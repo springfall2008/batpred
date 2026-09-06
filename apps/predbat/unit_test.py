@@ -749,7 +749,10 @@ def main():
     parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name (can be used multiple times, use --list to see available tests)")
     parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
-    parser.add_argument("--quick", "-q", action="store_true", help="Skip slow tests (optimise_levels, optimise_windows, debug_cases)")
+    # Named from the registry rather than hard-coded: the previous literal list had drifted to
+    # name three tests that are not marked slow at all, while the four that are went unmentioned.
+    slow_test_names = ", ".join(name for name, _func, _desc, slow in TEST_REGISTRY if slow) or "none currently marked slow"
+    parser.add_argument("--quick", "-q", action="store_true", help=f"Skip slow tests ({slow_test_names})")
     parser.add_argument("--plot", action="store_true", help="Display failure plots on screen (blocks until closed); the PNG is written either way")
     parser.add_argument("--random-generate", action="store_true", help="Generate random benchmark scenarios and write to a YAML file")
     parser.add_argument("--random-count", type=int, default=100, metavar="N", help="Number of random scenarios to generate (default: 100)")
@@ -867,26 +870,30 @@ def main():
             skipped_count += 1
             continue
 
-        # Show descriptive message for keyword/specific tests, simple for full suite
-        print(f"**** Running: {name} - {desc} ****")
+        # Show descriptive message for keyword/specific tests, simple for full suite.
+        # The wall-clock stamps bracket each test so a run that stalls can be read straight
+        # from the log: the elapsed figure below only appears once a test returns, so a test
+        # still running (or one that hung) is identified by its unmatched start stamp.
+        print(f"**** Running: {name} - {desc} (start {time.strftime('%H:%M:%S')}) ****")
 
         start_time = time.time()
         test_failed = func(my_predbat)
         elapsed = time.time() - start_time
         total_time += elapsed
+        end_stamp = time.strftime("%H:%M:%S")
 
         if test_failed:
             if args.keyword or args.test:
-                print(f"**** ERROR: Test {name} FAILED in {elapsed:.2f}s ****")
+                print(f"**** ERROR: Test {name} FAILED in {elapsed:.2f}s (end {end_stamp}) ****")
             else:
-                print(f"**** {name}: FAILED in {elapsed:.2f}s ****")
+                print(f"**** {name}: FAILED in {elapsed:.2f}s (end {end_stamp}) ****")
             failed = True
             break
         else:
             if args.keyword or args.test:
-                print(f"**** Test {name} PASSED in {elapsed:.2f}s ****")
+                print(f"**** Test {name} PASSED in {elapsed:.2f}s (end {end_stamp}) ****")
             else:
-                print(f"**** {name}: PASSED in {elapsed:.2f}s ****")
+                print(f"**** {name}: PASSED in {elapsed:.2f}s (end {end_stamp}) ****")
 
     # Report results
     if failed:

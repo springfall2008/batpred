@@ -37,6 +37,13 @@ from const import (
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
+# A debug dump is several megabytes of deeply nested YAML and PyYAML's pure-Python parser spends
+# most of a replay's wall-clock on it - about 6s for a 5MB dump. CLoader pairs libyaml's C parser
+# with the very same (unsafe) Constructor that yaml.unsafe_load uses, so the Python-object tags
+# these dumps carry still load and the result is identical, roughly 6x faster. PyYAML is not
+# always built with libyaml, so fall back to the pure-Python loader when the C one is absent.
+DEBUG_YAML_LOADER = getattr(yaml, "CLoader", yaml.UnsafeLoader)
+
 
 class DebugYamlDumper(yaml.Dumper):
     """
@@ -765,7 +772,7 @@ class UserInterface:
         debug = {}
         if os.path.exists(filename):
             with open(filename, "r") as file:
-                debug = yaml.unsafe_load(file)
+                debug = yaml.load(file, Loader=DEBUG_YAML_LOADER)
         else:
             self.log("Warn: Debug file {} not found".format(filename))
             return

@@ -14,6 +14,7 @@ loop, the tool dispatch and the confirmation gate are all exercised without a ne
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -1710,6 +1711,25 @@ def _write_call_response(entity_id="input_number.predbat_best_soc_keep", value="
     return _tool_call_response("set_config", {"entity_id": entity_id, "value": value}, call_id="call_write")
 
 
+@contextlib.contextmanager
+def _fast_confirm_poll():
+    """Shorten await_confirmation's poll interval for tests whose answer arrives at once.
+
+    await_confirmation re-checks the pending confirmation every CONFIRM_POLL_SECONDS (0.2s). That
+    is the right cadence against a person at a browser, but a test whose background thread answers
+    in microseconds still sits out a whole tick, and these tests assert that the answer is
+    honoured - not how often the waiter looks for it. Shortened rather than removed so the polling
+    loop is still genuinely exercised. Same trick test_write_confirmation_timeout uses on
+    CONFIRM_TIMEOUT_SECONDS.
+    """
+    original = chat.CONFIRM_POLL_SECONDS
+    chat.CONFIRM_POLL_SECONDS = 0.002
+    try:
+        yield
+    finally:
+        chat.CONFIRM_POLL_SECONDS = original
+
+
 def _confirm_soon(agent, approved):
     """Answer the next pending confirmation from a background thread, as a browser would."""
 
@@ -1738,7 +1758,8 @@ def test_write_confirmation_approved(my_predbat):
     cid = asyncio.run(agent.store.create())
 
     _confirm_soon(agent, True)
-    asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+    with _fast_confirm_poll():
+        asyncio.run(agent.run_turn(cid, "raise best soc keep"))
 
     kinds = [event["type"] for event in agent.events_since(0, cid)[0]]
     for required in ("confirm", "confirm_result", "tool_start", "tool_end"):
@@ -1763,7 +1784,8 @@ def test_write_confirmation_rejected(my_predbat):
     cid = asyncio.run(agent.store.create())
 
     _confirm_soon(agent, False)
-    asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+    with _fast_confirm_poll():
+        asyncio.run(agent.run_turn(cid, "raise best soc keep"))
 
     results = [message for message in asyncio.run(agent.store.get_messages(cid)) if message["role"] == "tool"]
     if not results or "declined" not in str(results[0].get("content")).lower():
@@ -1853,7 +1875,8 @@ def test_set_apps_config_confirmation_gate_and_card(my_predbat):
         cid = asyncio.run(agent.store.create())
 
         _confirm_soon(agent, False)
-        asyncio.run(agent.run_turn(cid, "change the HA url"))
+        with _fast_confirm_poll():
+            asyncio.run(agent.run_turn(cid, "change the HA url"))
 
         events, _, _ = agent.events_since(0, cid)
         kinds = [event["type"] for event in events]
@@ -1913,7 +1936,8 @@ def test_set_apps_config_approved_writes_apps_yaml(my_predbat):
         cid = asyncio.run(agent.store.create())
 
         _confirm_soon(agent, True)
-        asyncio.run(agent.run_turn(cid, "change num_inverters"))
+        with _fast_confirm_poll():
+            asyncio.run(agent.run_turn(cid, "change num_inverters"))
 
         with open(os.path.join(temp_dir, "apps.yaml"), "r", encoding="utf-8") as handle:
             written = handle.read()
@@ -3138,7 +3162,8 @@ def test_stop_reaches_a_turn_parked_on_a_confirmation(my_predbat):
         approved = await agent.await_confirmation("call_x")
         return approved, time.monotonic() - started
 
-    approved, elapsed = asyncio.run(drive())
+    with _fast_confirm_poll():
+        approved, elapsed = asyncio.run(drive())
 
     if approved:
         print("ERROR: a stopped confirmation was treated as approved")

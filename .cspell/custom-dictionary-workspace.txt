@@ -327,6 +327,7 @@ ladybugdb
 larr
 libbi
 libc
+libyaml
 LIFEPO
 linebreak
 linestyle
