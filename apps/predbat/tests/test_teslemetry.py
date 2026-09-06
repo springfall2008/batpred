@@ -777,6 +777,90 @@ def test_teslemetry_quantise_in_range_excluded_price_no_keyerror():
     assert tier_at(17 * 60 + 10) == "ON_PEAK"  # the scheduled-export slot is boosted
 
 
+def _signal_tier_at(tariff, day, minute, sell=False):
+    """Return the tier name covering a minute on a day-of-week in a rendered signal tariff."""
+    seasons = tariff["sell_tariff"]["seasons"] if sell else tariff["seasons"]
+    for tier, block in seasons["AllYear"]["tou_periods"].items():
+        for period in block["periods"]:
+            if not (period["fromDayOfWeek"] <= day <= period["toDayOfWeek"]):
+                continue
+            start = period["fromHour"] * 60 + period["fromMinute"]
+            end = period["toHour"] * 60 + period["toMinute"]
+            if end == 0:
+                end = 1440
+            if start <= minute < end:
+                return tier
+    return None
+
+
+def test_teslemetry_signal_tariff_mirrors_every_day():
+    """The signal tariff writes one shape to all seven days, so no day-of-week logic is needed."""
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff((120, 300), (1020, 1140))  # charge 02:00-05:00, export 17:00-19:00
+    for day in range(7):
+        assert _signal_tier_at(tariff, day, 180) == "SUPER_OFF_PEAK"  # 03:00, inside the charge window
+        assert _signal_tier_at(tariff, day, 1080) == "ON_PEAK"  # 18:00, inside the export window
+        assert _signal_tier_at(tariff, day, 600) == "PARTIAL_PEAK"  # 10:00, outside both
+
+
+def test_teslemetry_signal_tariff_fixed_band_prices():
+    """Bands carry the fixed signal prices, with buy and sell equal inside both windows."""
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff((120, 300), (1020, 1140))
+    assert tariff["energy_charges"]["AllYear"]["rates"] == {"SUPER_OFF_PEAK": 0.0, "PARTIAL_PEAK": 0.5, "ON_PEAK": 1.0}
+    assert tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"] == {"SUPER_OFF_PEAK": 0.0, "PARTIAL_PEAK": 0.0, "ON_PEAK": 1.0}
+
+
+def test_teslemetry_signal_tariff_midnight_wrap_is_two_intervals():
+    """A window crossing midnight becomes two ranges on every day and still partitions the day."""
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff((1380, 300), None)  # charge 23:00 -> 05:00
+    for day in range(7):
+        assert _signal_tier_at(tariff, day, 1410) == "SUPER_OFF_PEAK"  # 23:30, before midnight
+        assert _signal_tier_at(tariff, day, 60) == "SUPER_OFF_PEAK"  # 01:00, after midnight
+        assert _signal_tier_at(tariff, day, 600) == "PARTIAL_PEAK"  # 10:00, outside
+        day_periods = {tier: {"periods": [p for p in block["periods"] if p["fromDayOfWeek"] <= day <= p["toDayOfWeek"]]} for tier, block in tariff["seasons"]["AllYear"]["tou_periods"].items()}
+        _assert_tou_periods_partition_day(day_periods)
+
+
+def test_teslemetry_signal_tariff_is_independent_of_the_clock_and_rates():
+    """Same windows -> byte-identical tariff whatever the day, time or real rates.
+
+    This is the property that stops a re-push firing at every midnight rollover: the real-rate path
+    re-serialises differently once the day index moves, and the signal path must not.
+    """
+    import json
+    from datetime import datetime
+
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    first = json.dumps(api.build_signal_tariff((120, 300), (1020, 1140)), sort_keys=True)
+    api.base.now = datetime(2026, 7, 23, 3, 30)  # different weekday and time of day
+    api.base.rate_import = {minute: 9.0 for minute in range(0, 2880)}  # and different real rates
+    second = json.dumps(api.build_signal_tariff((120, 300), (1020, 1140)), sort_keys=True)
+    assert first == second
+
+
+def test_teslemetry_signal_tariff_without_windows_is_flat_base():
+    """With neither window committed there is nothing cheap and nothing at peak - only the base band."""
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff(None, None)
+    assert set(tariff["seasons"]["AllYear"]["tou_periods"]) == {"PARTIAL_PEAK"}
+    assert tariff["energy_charges"]["AllYear"]["rates"] == {"PARTIAL_PEAK": 0.5}
+    assert tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"] == {"PARTIAL_PEAK": 0.0}
+
+
+def test_teslemetry_charge_window_accessor():
+    """_charge_window mirrors _discharge_window: None unless enabled with a non-empty span."""
+    api = MockTeslemetryAPI()
+    api.schedule = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "enable": 0}}
+    assert api._charge_window() == (120, 300)
+    api.schedule["charge"]["enable"] = 0
+    assert api._charge_window() is None
+    api.schedule["charge"].update({"enable": 1, "end_time": "02:00:00"})
+    assert api._charge_window() is None
+
+
 def test_teslemetry_day_runs_groups_replicated_days():
     """_day_runs() itself: 6 identical days plus 1 different day collapse to 2 runs, not 7 singletons."""
     api = MockTeslemetryAPI()
@@ -2286,6 +2370,12 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_build_tariff_consolidates_replicated_days()
     test_teslemetry_saving_session_spike_keeps_daily_shape()
     test_teslemetry_quantise_in_range_excluded_price_no_keyerror()
+    test_teslemetry_signal_tariff_mirrors_every_day()
+    test_teslemetry_signal_tariff_fixed_band_prices()
+    test_teslemetry_signal_tariff_midnight_wrap_is_two_intervals()
+    test_teslemetry_signal_tariff_is_independent_of_the_clock_and_rates()
+    test_teslemetry_signal_tariff_without_windows_is_flat_base()
+    test_teslemetry_charge_window_accessor()
     test_teslemetry_day_runs_groups_replicated_days()
     test_teslemetry_day_runs_all_identical_single_run()
     test_teslemetry_set_tariff_posts_tou_settings()

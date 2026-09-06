@@ -72,6 +72,34 @@ BOOST_TIER = "ON_PEAK"
 SLOTS_PER_DAY = 48
 SLOT_MINUTES = 30
 
+# Signal-tariff control mode (GH#4892). In this mode the pushed tariff stops describing real prices
+# and becomes a control signal saying when Predbat wants energy moved, so Tesla's own optimiser runs
+# the charge and reaches the full rate that reserve-driven charging cannot. Three fixed bands,
+# written identically to every day of the week, which is what makes the tariff a pure function of the
+# two committed windows - no clock, no day-of-week arithmetic, and no re-push at midnight.
+SIGNAL_CHEAP_TIER = "SUPER_OFF_PEAK"
+SIGNAL_BASE_TIER = "PARTIAL_PEAK"
+SIGNAL_PEAK_TIER = BOOST_TIER
+# GBP/kWh. Buy and sell match inside each window so the optimiser can never profit by charging to
+# re-export within the same band (the same invariant the real-rate path keeps by mirroring the boost
+# onto the buy side). The 0p sell floor outside both windows means deferring an export past its
+# window end earns nothing at all, rather than merely less.
+SIGNAL_BUY_PRICES = {SIGNAL_CHEAP_TIER: 0.0, SIGNAL_BASE_TIER: 0.5, SIGNAL_PEAK_TIER: 1.0}
+SIGNAL_SELL_PRICES = {SIGNAL_CHEAP_TIER: 0.0, SIGNAL_BASE_TIER: 0.0, SIGNAL_PEAK_TIER: 1.0}
+# Percent below the charge target that still counts as being at it. A freeze charge arrives as a
+# charge window whose target is the SOC at the moment execute.py wrote it, so house load can drop SOC
+# a fraction below that before the next cycle - without a deadband the state would flip out of hold
+# and import against the 0p band.
+SIGNAL_HOLD_DEADBAND_PERCENT = 1
+# The only reserve above 80 that Tesla still accepts: since firmware 25.18.4, 81-99 snap to 80.
+SIGNAL_HOLD_RESERVE = 100
+# Highest reserve below the snap band. A request above this is rounded UP to SIGNAL_HOLD_RESERVE
+# rather than left to be snapped down to 80 by the device: Predbat only asks for a reserve up here
+# when it wants a hold (execute.py writes soc+1 under set_reserve_hold), and 80 would not hold it.
+# Either way what Predbat models and what the battery honours must agree, which is the divergence
+# GH#4953/#4956 fixed for the reserve floor generally.
+SIGNAL_MAX_SETTABLE_RESERVE = 80
+
 OPTIONS_TIME_FULL = ["{:02d}:{:02d}:00".format(hour, minute) for hour in range(24) for minute in range(60)]
 
 DEFAULT_SCHEDULE = {
@@ -1113,6 +1141,60 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         start = self.time_to_minutes(discharge.get("start_time", "00:00:00"))
         end = self.time_to_minutes(discharge.get("end_time", "00:00:00"))
         return None if start == end else (start, end)
+
+    def _charge_window(self):
+        """Return (start_min, end_min) for the committed charge window when enabled, else None."""
+        charge = self.schedule.get("charge", {})
+        if not charge.get("enable"):
+            return None
+        start = self.time_to_minutes(charge.get("start_time", "00:00:00"))
+        end = self.time_to_minutes(charge.get("end_time", "00:00:00"))
+        return None if start == end else (start, end)
+
+    @staticmethod
+    def _window_intervals(window):
+        """Split a (start, end) minute window into non-wrapping [from, to) ranges inside one day.
+
+        A window whose start is after its end wraps midnight and becomes two ranges. Because the same
+        shape is written to every day of the week, that is all a midnight crossing needs here - there
+        is no "which day does this land on" question of the kind _boost_segments has to answer on the
+        real-rate path.
+        """
+        if not window:
+            return []
+        start, end = window
+        if start == end:
+            return []
+        if start < end:
+            return [(start, end)]
+        return [(start, 1440), (0, end)]
+
+    @staticmethod
+    def _signal_layout(charge_window, export_window):
+        """Return the per-day interval layout for the signal tariff, identical on all seven days.
+
+        Starts from a base band covering the whole day and carves the export then charge windows into
+        it. Predbat's optimiser guarantees the two windows never overlap, so the carve order decides
+        no minute's band; it is fixed only so the rendered output is deterministic.
+        """
+        intervals = [(0, 1440, SIGNAL_BASE_TIER)]
+        for window, tier in ((export_window, SIGNAL_PEAK_TIER), (charge_window, SIGNAL_CHEAP_TIER)):
+            for start, end in TeslemetryAPI._window_intervals(window):
+                intervals = TeslemetryAPI._carve_interval(intervals, start, end, tier)
+        return {day: list(intervals) for day in range(7)}
+
+    def build_signal_tariff(self, charge_window=None, export_window=None):
+        """Build the signal tariff: fixed 0p/50p/100p bands over the committed windows (GH#4892).
+
+        Deliberately takes no clock, no day-of-week and no live SOC, so the serialised body changes
+        only when a window changes - which is what makes set_tariff's write-on-change dedupe mean
+        something rather than firing once a day on the calendar alone. One layout serves both sides
+        and only the price map differs, so the buy and sell periods cannot drift apart.
+        """
+        layout = self._signal_layout(charge_window, export_window)
+        buy_charges, buy_periods = self._render_side(layout, SIGNAL_BUY_PRICES)
+        sell_charges, sell_periods = self._render_side(layout, SIGNAL_SELL_PRICES)
+        return self._assemble_tariff("PREDBAT", buy_charges, buy_periods, sell_charges, sell_periods)
 
     @staticmethod
     def _boost_price(*price_maps):
