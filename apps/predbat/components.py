@@ -33,6 +33,7 @@ was simply the two sources that happened to have been wired up when the check wa
 """
 
 import importlib
+import traceback
 from datetime import datetime, timezone, timedelta
 import asyncio
 import os
@@ -747,6 +748,10 @@ class Components:
     def __init__(self, base):
         self.components = {}
         self.component_tasks = {}
+        # Why a configured component could not be loaded or constructed, by name. Such a component
+        # stays inactive (get_component() returns None so its users degrade as for a disabled one)
+        # but load_error() lets the status page and health sensor show it as an error.
+        self.component_errors = {}
         self.base = base
         self.log = base.log
 
@@ -763,6 +768,7 @@ class Components:
             required_or_config = []
             self.components[component_name] = None
             self.component_tasks[component_name] = None
+            self.component_errors.pop(component_name, None)
 
             # Check required arguments
             arg_dict = {}
@@ -791,14 +797,19 @@ class Components:
                     have_all_args = False
                     required_or_config = [component_info["args"][arg]["config"] for arg in required_or]
             if have_all_args:
-                self.log(f"Initialising {component_info['name']} interface")
                 try:
                     component_class = load_component_class(component_info)
-                except ImportError as e:
-                    # The module needs a package this install lacks (gateway without protobuf)
-                    self.log(f"Warn: Skipping {component_info['name']} interface, {e}")
-                    continue
-                self.components[component_name] = component_class(self.base, **arg_dict)
+                    self.log(f"Initialising {component_info['name']} interface")
+                    self.components[component_name] = component_class(self.base, **arg_dict)
+                except Exception as e:
+                    # A component that will not import (a missing package, a syntax error) or
+                    # construct must not take Predbat down with it: record why, leave it inactive
+                    # and carry on with the others. It is reported as an error, not as disabled.
+                    self.log(f"Error: Cannot initialise {component_info['name']} interface, {e}")
+                    if not isinstance(e, ImportError):
+                        self.log("Error: " + traceback.format_exc())
+                    self.component_errors[component_name] = str(e)
+                    self.components[component_name] = None
             else:
                 configured_args = getattr(self.base, "args_from_apps_yaml", None)
                 if configured_args is None:
@@ -897,6 +908,15 @@ class Components:
         if name not in self.components:
             return False
         return self.components[name] is not None
+
+    def load_error(self, name):
+        """Why a configured component could not be initialised, or None if it loaded (or is not configured).
+
+        Kept apart from is_alive(): a component that never loaded is inactive, so its users already
+        cope with it as they would a disabled one, and is_all_alive() must not treat it as a dead
+        process to be restarted. It is the status reporting that needs to know the difference.
+        """
+        return self.component_errors.get(name, None)
 
     def is_alive(self, name):
         """Check if a single component is alive"""
