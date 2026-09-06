@@ -9,9 +9,15 @@ whatever that object references, so the dump's contents are decided by reachabil
 not by the key filter alone.
 """
 
+import io
+import os
+import re
+import tracemalloc
+
 import yaml
 
 from inverter import Inverter
+from userinterface import dump_debug_yaml
 
 
 def _plant_inverter(my_predbat):
@@ -125,9 +131,171 @@ def test_debug_yaml_survives_an_unpicklable_member(my_predbat=None):
     return 1 if failed else 0
 
 
+def _dict_with_aliases():
+    """
+    A debug-shaped dict where two top-level keys each alias the same object internally.
+
+    Both keys need an anchor of their own, which is exactly the case a per-key dump gets
+    wrong: each dumper numbers its anchors from one, so the second key repeats "&id001".
+    """
+    tariff = [0.1, 0.2, 0.3]
+    return {
+        "rate_import": {"today": tariff, "tomorrow": tariff, "windows": [tariff]},
+        "rate_export": {"today": tariff, "tomorrow": tariff},
+        "plan_ready": True,
+    }
+
+
+def test_per_key_dump_loads_as_one_document(my_predbat=None):
+    """
+    dump_debug_yaml() must write the dict one key at a time and still produce a file that loads.
+
+    The dump is streamed per key so the YAML node tree in memory is bounded by the largest
+    member rather than the whole dict (~150MB for a live system, whose freed pages then sit
+    on the heap as fragmentation for the rest of the run). Every top-level key is written by
+    a fresh Dumper, and a fresh Dumper restarts its anchor numbering, so two keys that each
+    contain an alias both write "&id001" and the file fails to load with "found duplicate
+    anchor". The shared anchor counter is what keeps the pieces one valid document.
+
+    Mutation check: dropping anchor_ids from DebugYamlDumper, or replacing dump_debug_yaml()'s
+    partial with plain yaml.Dumper, fails this.
+    """
+    failed = False
+    print("**** Testing the per-key debug yaml dump loads as a single document ****")
+
+    debug = _dict_with_aliases()
+
+    # First confirm the hazard is real, so a pass below means the guard did something
+    naive = io.StringIO()
+    for key in sorted(debug):
+        yaml.dump({key: debug[key]}, naive, Dumper=yaml.Dumper)
+    try:
+        yaml.safe_load(naive.getvalue())
+        print("ERROR: a per-key dump with plain yaml.Dumper loaded, so the duplicate-anchor hazard this guards is gone")
+        failed = True
+    except yaml.YAMLError:
+        pass
+
+    stream = io.StringIO()
+    dump_debug_yaml(debug, stream)
+    text = stream.getvalue()
+
+    try:
+        loaded = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        print("ERROR: the per-key debug yaml does not load: {}".format(e))
+        return 1
+
+    if loaded != debug:
+        print("ERROR: the per-key debug yaml did not round-trip, got {}".format(loaded))
+        failed = True
+    if list(loaded) != sorted(debug):
+        print("ERROR: expected the keys in sorted order, got {}".format(list(loaded)))
+        failed = True
+
+    anchors = re.findall(r"&(id\d+)", text)
+    if len(anchors) < 2:
+        print("ERROR: expected an anchor in each aliased key, found {}".format(anchors))
+        failed = True
+    if len(anchors) != len(set(anchors)):
+        print("ERROR: anchor names repeat across keys: {}".format(anchors))
+        failed = True
+
+    if not failed:
+        print("PASS: the per-key dump loads with {} unique anchors".format(len(anchors)))
+    return 1 if failed else 0
+
+
+def test_per_key_dump_bounds_the_node_tree(my_predbat=None):
+    """
+    The per-key dump's peak allocation must be a fraction of a whole-dict yaml.dump().
+
+    This is the reason dump_debug_yaml() exists: yaml.dump() represents the entire dict as
+    a tree of Node objects (~30x the size of the text) before emitting any of it, and that
+    transient peak is what a live system pays every debug snapshot.
+
+    Mutation check: replacing dump_debug_yaml()'s loop with yaml.dump(debug, stream) fails this.
+    """
+    failed = False
+    print("**** Testing the per-key debug yaml dump bounds the node tree ****")
+
+    debug = {"member_{}".format(n): [float(v) / 7 for v in range(2000)] for n in range(8)}
+
+    def peak_of(dump):
+        """Peak traced allocation while dump() writes debug to a throwaway stream."""
+        tracemalloc.start()
+        try:
+            dump(debug, io.StringIO())
+            _current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        return peak
+
+    whole = peak_of(lambda debug, stream: yaml.dump(debug, stream, Dumper=yaml.Dumper))
+    per_key = peak_of(dump_debug_yaml)
+
+    if per_key > whole * 0.5:
+        print("ERROR: per-key dump peaked at {} bytes against {} for the whole dict, expected under half".format(per_key, whole))
+        failed = True
+
+    if not failed:
+        print("PASS: per-key dump peaked at {:.0f}% of the whole-dict dump".format(100.0 * per_key / whole))
+    return 1 if failed else 0
+
+
+def test_create_debug_yaml_file_matches_the_string(my_predbat=None):
+    """
+    create_debug_yaml() must produce the same loadable document whether it writes a file or returns text.
+
+    The web UI download and the debug history capture take the string, the debug_enable switch
+    writes the file; both go through dump_debug_yaml() and both are loaded back by
+    read_debug_yaml() with yaml.unsafe_load(), so both have to be one valid document carrying
+    the same members.
+    """
+    failed = False
+    print("**** Testing create_debug_yaml() writes the document it returns ****")
+
+    original_inverters = my_predbat.inverters
+    filename = my_predbat.config_root + "/debug/predbat_debug_{}.yaml".format(my_predbat.now_utc.strftime("%H_%M_%S"))
+    try:
+        _plant_inverter(my_predbat)
+
+        text = my_predbat.create_debug_yaml(write_file=False)
+        from_text = yaml.unsafe_load(text)
+
+        my_predbat.create_debug_yaml(write_file=True)
+        with open(filename) as handle:
+            from_file = yaml.unsafe_load(handle)
+
+        for key in ("CONFIG_ITEMS", "inverters", "args"):
+            if key not in from_text:
+                print("ERROR: the returned debug yaml lacks '{}'".format(key))
+                failed = True
+        if sorted(from_text) != list(from_text):
+            print("ERROR: the returned debug yaml is not in key order")
+            failed = True
+        if set(from_file) != set(from_text):
+            print("ERROR: the written debug yaml has different members from the returned one: {}".format(set(from_file) ^ set(from_text)))
+            failed = True
+        if from_file["CONFIG_ITEMS"] != from_text["CONFIG_ITEMS"]:
+            print("ERROR: CONFIG_ITEMS differ between the written and returned debug yaml")
+            failed = True
+    finally:
+        my_predbat.inverters = original_inverters
+        if os.path.exists(filename):
+            os.remove(filename)
+
+    if not failed:
+        print("PASS: the written and returned debug yaml carry the same {} members".format(len(from_text)))
+    return 1 if failed else 0
+
+
 def run_debug_yaml_scope_tests(my_predbat):
     """Run every create_debug_yaml() scope test, returning a non-zero count on failure."""
     failed = 0
     failed += test_inverter_dump_does_not_reach_the_base_object(my_predbat)
     failed += test_debug_yaml_survives_an_unpicklable_member(my_predbat)
+    failed += test_per_key_dump_loads_as_one_document(my_predbat)
+    failed += test_per_key_dump_bounds_the_node_tree(my_predbat)
+    failed += test_create_debug_yaml_file_matches_the_string(my_predbat)
     return failed

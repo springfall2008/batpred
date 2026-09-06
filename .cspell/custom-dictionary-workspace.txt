@@ -151,6 +151,7 @@ Dise
 Disf
 diverter
 dlimit
+dlopen
 dnoregion
 docstrings
 dstamp
@@ -341,6 +342,7 @@ lookback
 lpignore
 lstrip
 luxpower
+mallopt
 markdownlint
 matplotlib
 maximise
