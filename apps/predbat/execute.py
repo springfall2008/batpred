@@ -16,7 +16,7 @@ reserve level adjustments, and multi-inverter balancing.
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import timedelta, datetime
-from const import MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
 from predbat_metrics import metrics
 from inverter import Inverter
@@ -26,12 +26,8 @@ import time
 Execute Predbat plan
 """
 
-# Per-inverter core charge/export states, used to resolve one headline status across a multi-inverter
-# fleet instead of letting whichever inverter is processed last silently win. Precedence lists are
-# ordered most-active-first so the most informative sub-state is shown when inverters within the same
-# side disagree (e.g. one still actively Charging while another has already reached Hold charging).
-CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
-EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
+# The precedence lists themselves live in const.py, as output.py's history reconstruction needs the
+# same most-active-first ordering to collapse a slot that changed state part way through (#4843).
 CHARGE_SIDE_STATES = set(CHARGE_STATE_PRECEDENCE)
 EXPORT_SIDE_STATES = set(EXPORT_STATE_PRECEDENCE)
 

@@ -93,20 +93,38 @@ class ComponentBase(ABC):
         """
         return self.base.set_arg(arg, value)
 
-    def set_arg_auto(self, arg, value):
+    def set_arg_auto(self, arg, value, overwrite=True):
         """
         Like set_arg(), but for auto-discovery code (typically automatic_config()) binding an
-        apps.yaml key to an auto-discovered entity/value. Auto-discovery still always wins - this
-        does not change that - but if the user had already set this key explicitly in apps.yaml,
-        silently discarding it left no way to notice (issue #4494 follow-up discussion, PR #4500).
-        Logs a one-time note per key when that happens, then behaves exactly like set_arg().
+        apps.yaml key to an auto-discovered entity/value.
+
+        With overwrite=True (the default) auto-discovery wins and replaces whatever the user set,
+        which is what every caller did before this option existed. Silently discarding an explicit
+        apps.yaml entry left no way to notice (issue #4494 follow-up discussion, PR #4500), so a
+        one-time note per key is logged when that happens.
+
+        With overwrite=False the user's own apps.yaml entry wins and is left exactly as written;
+        auto-discovery still fills the key in when the user set nothing. Callers use this for keys
+        whose recorder HISTORY Predbat reads rather than just their current state - repointing one
+        of those at a sensor Predbat has only just created throws that history away, which for the
+        daily energy totals the load model is built from means planning against no history at all
+        until the days build back up.
+
+        Either way the decision is per key, and neither message repeats for the same key.
         """
         raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
         raw_value = raw_args.get(arg)
+        user_configured = raw_value is not None and raw_value != value
         warned = getattr(self.base, "apps_yaml_override_warned", None)
-        if raw_value is not None and raw_value != value and warned is not None and arg not in warned:
+        if user_configured and warned is not None and arg not in warned:
             warned.add(arg)
-            self.log(f"Note: apps.yaml sets '{arg}: {raw_value}' but auto-discovery is using '{value}' instead - auto-discovery always wins currently; remove the apps.yaml entry to avoid this message")
+            if overwrite:
+                self.log(f"Note: apps.yaml sets '{arg}: {raw_value}' but auto-discovery is using '{value}' instead - auto-discovery wins for this setting; remove the apps.yaml entry to avoid this message")
+            else:
+                self.log(f"Info: apps.yaml sets '{arg}: {raw_value}' - keeping your apps.yaml setting rather than auto-discovering '{value}'")
+        if user_configured and not overwrite:
+            # Deliberately not calling set_arg() at all - the user's own value is already in self.args
+            return None
         return self.set_arg(arg, value)
 
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):

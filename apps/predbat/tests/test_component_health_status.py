@@ -40,6 +40,10 @@ class FakeComponents:
     def is_alive(self, name):
         return self.alive_map[name]
 
+    def load_error(self, name):
+        """Every fake component loaded; the load-failure path is covered in test_components."""
+        return None
+
     def get_error_count(self, name):
         return 0 if self.alive_map[name] else 1
 

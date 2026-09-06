@@ -2698,7 +2698,7 @@ async def test_gecloud_direct(api_key, write_entity=None, write_value=None, writ
             distinct_devices = {device for _, device, _, _ in matches}
             if not write_register_device and len(distinct_devices) > 1:
                 print(f"Warn: Register '{write_register_name}' matched {len(distinct_devices)} devices ({', '.join(sorted(distinct_devices))}) - writing to all of them. Pass --device to target just one.")
-            for entity_id, device, key, raw_name in matches:
+            for _entity_id, device, key, raw_name in matches:
                 print(f"Writing register '{raw_name}' (device={device}, setting_id={key}) = {write_register_value}")
                 result = await gecloud_direct.async_write_inverter_setting(device, key, write_register_value)
                 if result:

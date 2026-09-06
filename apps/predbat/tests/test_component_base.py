@@ -406,6 +406,58 @@ def test_component_base_set_arg_auto(my_predbat):
     return False
 
 
+def test_component_base_set_arg_auto_keeps_user_setting(my_predbat):
+    """
+    Test ComponentBase.set_arg_auto(overwrite=False): leaves a key the user set in apps.yaml alone.
+
+    Repointing an entity key at a freshly published sensor throws away that sensor's recorder
+    history. For the keys Predbat reads history from - the daily energy totals its load model is
+    built out of - that means planning against no history at all until days accumulate, so those
+    callers opt out of overwriting. The default stays overwrite=True, which is what keeps every
+    existing caller's behaviour unchanged.
+    """
+    print("\n*** Test: ComponentBase.set_arg_auto(overwrite=False) keeps the user's apps.yaml setting ***")
+
+    base = MockBase()
+    base.args_from_apps_yaml = {"load_today": ["sensor.my_own_load_today"]}
+    base.apps_yaml_override_warned = set()
+    set_calls = {}
+    base.set_arg = lambda arg, value: set_calls.__setitem__(arg, value)
+
+    component = TestComponent(base)
+
+    # The user configured this key, so overwrite=False must not touch it at all
+    component.set_arg_auto("load_today", ["sensor.predbat_givtcp_0_load_today"], overwrite=False)
+    assert "load_today" not in set_calls, f"User's apps.yaml setting should not be overwritten, got {set_calls.get('load_today')}"
+    assert any("load_today" in msg and "keeping your apps.yaml setting" in msg for msg in base.log_messages), "Should say the user's setting was kept"
+
+    # Said once when it happens, not on every automatic_config pass for the life of the process
+    component.set_arg_auto("load_today", ["sensor.predbat_givtcp_0_load_today"], overwrite=False)
+    kept_count = sum(1 for msg in base.log_messages if "load_today" in msg and "keeping your apps.yaml setting" in msg)
+    assert kept_count == 1, f"Kept message should not repeat, got {kept_count}"
+
+    # A key the user never configured is still auto-discovered - overwrite=False protects the
+    # user's own value, it does not stop auto-discovery filling in a key that has none
+    component.set_arg_auto("pv_today", ["sensor.predbat_givtcp_0_pv_today"], overwrite=False)
+    assert set_calls.get("pv_today") == ["sensor.predbat_givtcp_0_pv_today"], "An unconfigured key should still be auto-configured"
+
+    # The default is unchanged: auto-discovery still wins when overwrite is not passed
+    component.set_arg_auto("load_today", ["sensor.predbat_givtcp_0_load_today"])
+    assert set_calls.get("load_today") == ["sensor.predbat_givtcp_0_load_today"], "Default overwrite=True should still apply the auto-discovered value"
+
+    # Keeping the user's value must not depend on the warned-set bookkeeping being present -
+    # a component built outside PredBat.initialize() has neither snapshot attribute
+    bare_base = MockBase()
+    bare_base.args_from_apps_yaml = {"load_today": ["sensor.my_own_load_today"]}
+    bare_set_calls = {}
+    bare_base.set_arg = lambda arg, value: bare_set_calls.__setitem__(arg, value)
+    bare_component = TestComponent(bare_base)
+    bare_component.set_arg_auto("load_today", ["sensor.predbat_givtcp_0_load_today"], overwrite=False)
+    assert "load_today" not in bare_set_calls, "User's setting should be kept even without an apps_yaml_override_warned set"
+
+    print("PASS: set_arg_auto(overwrite=False) keeps an explicit apps.yaml setting and still fills in unset keys")
+
+
 def test_component_base_set_state_external(my_predbat):
     """
     Test ComponentBase.set_state_external() forwards to the HA interface with the attributes intact.
@@ -450,6 +502,7 @@ def test_component_base_all(my_predbat):
         ("run_timeout", test_component_base_run_timeout, "Hung run() triggers timeout, stack trace, and error count"),
         ("first_cleared_preset", test_component_base_first_cleared_when_run_presets_api_started, "first flag clears even when run() pre-sets api_started"),
         ("set_arg_auto", test_component_base_set_arg_auto, "set_arg_auto warns once on an apps.yaml override, silent otherwise"),
+        ("set_arg_auto_keep", test_component_base_set_arg_auto_keeps_user_setting, "set_arg_auto(overwrite=False) keeps an explicit apps.yaml setting"),
         ("set_state_external", test_component_base_set_state_external, "set_state_external forwards to the HA interface"),
     ]
 

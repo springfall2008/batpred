@@ -55,7 +55,7 @@ def test_str2time(my_predbat):
                     failed = True
 
             print(f"Test 2 ({mode_name}): both implementations agree")
-            for time_str, expect in valid_cases:
+            for time_str, _expect in valid_cases:
                 result = str2time(time_str)
                 legacy = str2time_strptime(time_str)
                 if result != legacy:

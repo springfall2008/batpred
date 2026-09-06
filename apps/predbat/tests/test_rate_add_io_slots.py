@@ -384,6 +384,27 @@ def run_rate_add_io_slots_tests(my_predbat):
 
     failed |= run_rate_add_io_slots_test("test19_zero_kwh_future_not_excluded", my_predbat, slots, True, 12, expected_rates)
 
+    # Test 20: The midday cap boundary must not re-stamp the day-rate tail of an overnight window.
+    # The cap counter is keyed on the current minute, so a dispatch window that starts in the evening
+    # and runs past noon the next day fills its budget against day -1 (21:00-03:00) and is then handed
+    # a *fresh* budget at 12:00, re-stamping 12:00-15:00 at the off-peak rate in the middle of the
+    # day-rate block. Reported on Octopus Intelligent Go (8p off-peak / 33.72p day): the planner saw
+    # "Best charge window [12:00-13:30 @ 8.0p]", exported the battery into a 10.08p outgoing window at
+    # 11:00-12:00 and bought it back at the real 33.72p.
+    # Here 4.0 stands for the off-peak rate and 10.0 for the day rate.
+    print("\n**** Test 20: Midday reset must not stamp the day-rate tail of an overnight window ****")
+    slot_start = midnight_utc - timedelta(hours=3)  # 21:00 yesterday, minute -180
+    slot_end = midnight_utc + timedelta(hours=15)  # 15:00 today, minute 900
+    slots = [{"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 124.04, "source": "smart-charge", "location": "AT_HOME"}]
+
+    expected_rates = {}
+    for minute in range(-180, 180):  # 21:00 -> 03:00: the first 12 slots, legitimately off-peak
+        expected_rates[minute] = 4.0
+    for minute in range(720, 900):  # 12:00 -> 15:00: day rate, must NOT be re-stamped off-peak
+        expected_rates[minute] = 10.0
+
+    failed |= run_rate_add_io_slots_test("test20_midday_reset_stamps_day_rate", my_predbat, slots, True, 12, expected_rates)
+
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes
 

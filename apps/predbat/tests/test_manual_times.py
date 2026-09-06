@@ -305,6 +305,139 @@ def run_test_manual_times(my_predbat):
     else:
         print("PASS: T10 Selecting same time with different rates correctly updates the rate")
 
+    # Test 11: A stored slot must survive calculate_yesterday()'s temporary clock shift (#4900)
+    # It sets minutes_now to 0 and winds midnight_utc back a day for the duration of the
+    # savings calculation, and a web request decoding the selection can land inside that window.
+    print("Test 11: Manual times survive the yesterday-savings clock shift")
+
+    my_predbat.midnight_utc = datetime(2025, 12, 19, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.midnight = my_predbat.midnight_utc.astimezone(my_predbat.local_tz)
+    my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=120)
+    my_predbat.minutes_now = 120
+
+    my_predbat.manual_select("manual_export", "off")
+    my_predbat.manual_select("manual_export", "Fri 05:30")
+    stored_before = my_predbat.config_index["manual_export"].get("value")
+
+    save_minutes_now = my_predbat.minutes_now
+    save_midnight_utc = my_predbat.midnight_utc
+    my_predbat.minutes_now = 0
+    my_predbat.midnight_utc = my_predbat.midnight_utc - timedelta(days=1)
+    my_predbat.manual_times("manual_export", update=False)
+    my_predbat.manual_times("manual_export")
+    my_predbat.minutes_now = save_minutes_now
+    my_predbat.midnight_utc = save_midnight_utc
+
+    stored_after = my_predbat.config_index["manual_export"].get("value")
+    manual_export_times = my_predbat.manual_times("manual_export")
+
+    if stored_after != stored_before:
+        print("ERROR: T11 Stored selection moved from {} to {} across the clock shift".format(stored_before, stored_after))
+        failed = True
+    elif 330 not in manual_export_times:
+        print("ERROR: T11 Expected minute 330 (05:30 today) but got {}".format(manual_export_times))
+        failed = True
+    else:
+        print("PASS: T11 Manual export slot still resolves to {} after the clock shift".format(manual_export_times))
+
+    # Test 12: The same for manual rates, and a read-only decode must not touch the stored item
+    print("Test 12: Manual rates survive the shift and update=False does not write back")
+
+    my_predbat.manual_select("manual_soc", "off")
+    my_predbat.manual_select("manual_soc", "Fri 05:30=100.0")
+    stored_before = my_predbat.config_index["manual_soc"].get("value")
+    options_before = list(my_predbat.config_index["manual_soc"].get("options", []))
+
+    save_minutes_now = my_predbat.minutes_now
+    save_midnight_utc = my_predbat.midnight_utc
+    my_predbat.minutes_now = 0
+    my_predbat.midnight_utc = my_predbat.midnight_utc - timedelta(days=1)
+    my_predbat.manual_rates("manual_soc", update=False)
+    stored_readonly = my_predbat.config_index["manual_soc"].get("value")
+    options_readonly = list(my_predbat.config_index["manual_soc"].get("options", []))
+    my_predbat.manual_rates("manual_soc")
+    my_predbat.minutes_now = save_minutes_now
+    my_predbat.midnight_utc = save_midnight_utc
+
+    stored_after = my_predbat.config_index["manual_soc"].get("value")
+    manual_soc_keep = my_predbat.manual_rates("manual_soc")
+
+    if stored_readonly != stored_before or options_readonly != options_before:
+        print("ERROR: T12 update=False rewrote the stored item {} / options changed {}".format(stored_readonly, options_readonly != options_before))
+        failed = True
+    elif stored_after != stored_before:
+        print("ERROR: T12 Stored selection moved from {} to {} across the clock shift".format(stored_before, stored_after))
+        failed = True
+    elif manual_soc_keep.get(330, None) != 100.0:
+        print("ERROR: T12 Expected SoC override 100.0 at minute 330 but got {}".format(manual_soc_keep.get(330, None)))
+        failed = True
+    else:
+        print("PASS: T12 Manual SoC override survives the clock shift and read-only decode")
+
+    # Test 13: A click landing inside the shift must not silently drop a slot more than a day
+    # out - the 48 hour horizon is checked against the decoded minutes, so a clock a day behind
+    # pushed anything beyond 24 hours past the limit (#4900)
+    print("Test 13: A selection made during the clock shift keeps far-future slots")
+
+    my_predbat.manual_select("manual_export", "off")
+    my_predbat.manual_select("manual_export", "Fri 05:30")
+    my_predbat.manual_select("manual_export", "Sat 18:00")
+
+    save_minutes_now = my_predbat.minutes_now
+    save_midnight_utc = my_predbat.midnight_utc
+    my_predbat.minutes_now = 0
+    my_predbat.midnight_utc = my_predbat.midnight_utc - timedelta(days=1)
+    my_predbat.manual_select("manual_export", "Fri 06:00")
+    my_predbat.minutes_now = save_minutes_now
+    my_predbat.midnight_utc = save_midnight_utc
+
+    manual_export_times = my_predbat.manual_times("manual_export")
+    expected_minutes = {330, 360, 2520}
+
+    if not expected_minutes.issubset(set(manual_export_times)):
+        print("ERROR: T13 Expected minutes {} but got {}".format(expected_minutes, manual_export_times))
+        failed = True
+    else:
+        print("PASS: T13 Selecting during the clock shift kept every slot: {}".format(manual_export_times))
+
+    # Test 14: A rate override several days out survives
+    # Rate overrides carry a 7 day horizon, not the 48 hours a manual charge/export slot gets:
+    # they are future tariff data that only has to be remembered until the plan reaches them,
+    # which is how a supplier's free-electricity hour announced days ahead can be entered.
+    print("Test 14: Rate override beyond 48 hours is retained")
+    my_predbat.midnight_utc = datetime(2025, 12, 19, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.midnight = my_predbat.midnight_utc.astimezone(my_predbat.local_tz)
+    my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=0)  # Start at midnight
+    my_predbat.minutes_now = 0
+    my_predbat.manual_select("manual_import_rates", "off")
+
+    far_day = (my_predbat.now_utc + timedelta(days=4)).strftime("%a")
+    far_minute = 4 * 24 * 60 + 12 * 60
+    my_predbat.manual_select("manual_import_rates", "{} 12:00=0.0".format(far_day))
+    manual_import_far = my_predbat.manual_rates("manual_import_rates", default_rate=10.0)
+
+    if far_minute not in manual_import_far:
+        print("ERROR: T14 Expected minute {} ({} 12:00) to survive but got {}".format(far_minute, far_day, sorted(manual_import_far)))
+        failed = True
+    elif manual_import_far[far_minute] != 0.0:
+        print("ERROR: T14 Expected rate 0.0 at minute {} but got {}".format(far_minute, manual_import_far[far_minute]))
+        failed = True
+    else:
+        print("PASS: T14 Rate override 4 days ahead retained at minute {} rate {}".format(far_minute, manual_import_far[far_minute]))
+
+    # Test 15: the same distance out is still rejected for a manual TIME slot, which stays bounded
+    # by the plan horizon - Predbat can only act on a slot the plan actually reaches.
+    print("Test 15: Manual time beyond 48 hours is still dropped")
+    my_predbat.manual_select("manual_demand", "off")
+    my_predbat.manual_select("manual_demand", "{} 12:00".format(far_day))
+    manual_demand_far = my_predbat.manual_times("manual_demand")
+
+    if far_minute in manual_demand_far:
+        print("ERROR: T15 Expected minute {} to be dropped from manual_demand but got {}".format(far_minute, manual_demand_far))
+        failed = True
+    else:
+        print("PASS: T15 Manual demand 4 days ahead correctly dropped: {}".format(manual_demand_far))
+
     # Restore time context to current time
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc =  my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -314,4 +447,6 @@ def run_test_manual_times(my_predbat):
     # Clean up
     my_predbat.manual_select("manual_demand", "off")
     my_predbat.manual_select("manual_import_rates", "off")
+    my_predbat.manual_select("manual_export", "off")
+    my_predbat.manual_select("manual_soc", "off")
     return failed

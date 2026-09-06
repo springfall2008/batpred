@@ -113,6 +113,7 @@ The main loop (`update_pred()`) runs every 5 minutes: fetch data → run optimiz
 - Can be independently enabled/disabled
 - Has health monitoring with exponential backoff
 - Routes HA events via entity prefix filtering
+- Is registered in `COMPONENT_LIST` by its `"module.ClassName"` path and imported only when enabled (`load_component_class()`), so startup no longer compiles every component - the `components` test in the quick suite imports them all instead
 
 ### Key Data Flow
 

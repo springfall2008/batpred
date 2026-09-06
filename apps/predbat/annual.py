@@ -2048,7 +2048,7 @@ class AnnualPredictor:
                     progress(completed, total_units, "Interpolating {} month(s)".format(len(interpolatable)))
                 wanted = [month for month, _, _ in interpolatable]
                 rows = build_interpolated_rows(anchor_rows, year, monthly_pv, months=wanted)
-                for month, days_in_month, standing_charge_p in interpolatable:
+                for month, _days_in_month, standing_charge_p in interpolatable:
                     row = rows.get(month)
                     if not row:
                         continue

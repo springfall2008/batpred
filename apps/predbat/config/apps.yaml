@@ -45,6 +45,9 @@ pred_bat:
   #
   # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
   #
+  # Only needed if you are NOT using givtcp_rest below - with REST set Predbat publishes these four
+  # itself from GivTCP's own daily totals and points itself at them.
+  #
   load_today:
     - sensor.givtcp_{geserial}_load_energy_today_kwh
   import_today:
@@ -88,6 +91,11 @@ pred_bat:
     - 'http://homeassistant.local:6345'
     - 'http://homeassistant.local:6346'
 
+  # Set this to False to keep control of apps.yaml yourself - Predbat still publishes its GivTCP
+  # entities, but stops pointing the settings below at them, so you can name them by hand or point
+  # a setting somewhere else entirely. Defaults to True.
+  #givtcp_automatic: False
+
   # When enabled automatic restart will restart the app if communication fails
   # Example below is auto-restart for GivTCP app itself
   #auto_restart:
@@ -99,8 +107,9 @@ pred_bat:
   #  - service: button.press
   #    entity_id: button.givtcp_{geserial}_reboot_invertor
 
-  # If not using REST then instead set the Control here (one for each inverter)
-  # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
+  # Only needed if you are NOT using givtcp_rest above - with REST set, Predbat publishes and
+  # configures all of these itself and anything you put here is overridden.
+  # Set one entry for each inverter.
   charge_rate:
     - number.givtcp_{geserial}_battery_charge_rate
     - number.givtcp2_{geserial2}_battery_charge_rate
