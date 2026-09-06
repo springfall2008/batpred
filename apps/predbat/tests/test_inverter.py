@@ -3132,6 +3132,9 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_min2", ha, inv, 3, 4, device_min=5, device_max=100, expect_reserve=5)
     failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_max1", ha, inv, 10, 80, device_min=4, device_max=50, expect_reserve=50)
     failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_no_bounds", ha, inv, 4, 10, device_min=None, device_max=None, expect_reserve=10)
+    # A fractional floor must not round down to a value under it, or the write is clamped and
+    # confirmed to something else and never converges
+    failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_min_fractional", ha, inv, 4, 4, device_min=4.2, device_max=100, expect_reserve=5)
     if failed:
         return failed
 
@@ -3148,7 +3151,10 @@ def run_inverter_tests(my_predbat_dummy):
     # GH#4953: the plan must be built to the same floor the write is clamped to, or it counts on
     # capacity the inverter will never release
     failed |= test_reserve_model_device_bounds("reserve_model_device_min", my_predbat, ha, set_reserve_min=4, device_min=5, device_max=100, expect_reserve_percent=5)
-    failed |= test_reserve_model_device_bounds("reserve_model_device_min_fractional", my_predbat, ha, set_reserve_min=4, device_min=4.2, device_max=100, expect_reserve_percent=4)
+    # A fractional bound rounds towards the value the register accepts, not to nearest: 4.2 must
+    # become 5, since modelling or writing 4 is under the device's floor
+    failed |= test_reserve_model_device_bounds("reserve_model_device_min_fractional", my_predbat, ha, set_reserve_min=4, device_min=4.2, device_max=100, expect_reserve_percent=5)
+    failed |= test_reserve_model_device_bounds("reserve_model_device_max_fractional", my_predbat, ha, set_reserve_min=100, device_min=5, device_max=99.7, expect_reserve_percent=99)
     failed |= test_reserve_model_device_bounds("reserve_model_device_min_below_config", my_predbat, ha, set_reserve_min=10, device_min=5, device_max=100, expect_reserve_percent=10)
     failed |= test_reserve_model_device_bounds("reserve_model_device_max", my_predbat, ha, set_reserve_min=60, device_min=5, device_max=50, expect_reserve_percent=50)
     failed |= test_reserve_model_device_bounds("reserve_model_no_bounds", my_predbat, ha, set_reserve_min=4, device_min=None, device_max=None, expect_reserve_percent=4)

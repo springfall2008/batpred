@@ -17,6 +17,7 @@ target SoC setting, and reserve management via both REST API and Home
 Assistant entity writes with polling validation.
 """
 
+import math
 import os
 import time
 import pytz
@@ -1735,8 +1736,11 @@ class Inverter:
         model's known floor instead (GivTCP does this with GE's 4%), so a user who has configured
         battery_min_soc lower has that reflected in what is published.
 
-        The rounding is the caller's contract as much as this one's - a floor rounds up and a ceiling
-        rounds down, so the value returned is always one the register accepts. Both the write
+        The rounding is the caller's contract as much as this one's: reserve is written as a whole
+        percent, so a floor takes the ceiling and a ceiling takes the floor and the value returned is
+        always one the register accepts. Rounding to nearest instead would turn a published floor of
+        4.2 into 4 - under the bound, so the write is clamped-and-confirmed to something else and
+        retries forever, which is the GH#4826 failure this is meant to prevent. Both the write
         (GH#4826) and the modelled reserve (GH#4953) go through here so the two cannot disagree about
         what the battery will hold.
         """
@@ -1745,10 +1749,10 @@ class Inverter:
             return None, None
 
         bounds = []
-        for attribute, round_up in (("min", True), ("max", False)):
+        for attribute, round_towards_accepted in (("min", math.ceil), ("max", math.floor)):
             value = self.base.get_state_wrapper(reserve_entity, attribute=attribute, default=None)
             try:
-                bounds.append(int(float(value) + 0.5) if round_up else int(float(value)))
+                bounds.append(round_towards_accepted(float(value)))
             except (ValueError, TypeError):
                 # Absent, empty or unparseable - no bound to honour rather than a bound of zero
                 bounds.append(None)
