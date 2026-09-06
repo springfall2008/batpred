@@ -26,6 +26,12 @@ def _slot(start, end):
     return {"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "source": "smart-charge", "location": "AT_HOME"}
 
 
+def _bare_slot(start, end):
+    """A slot with only start/end - the real shape of a started_dispatches entry from the HA
+    Octopus Energy integration (no kWh, source or location)."""
+    return {"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT)}
+
+
 def run_dispatch_timeline_tests(my_predbat):
     """
     Test for build_dispatch_timeline() - the #4516 Stage 1 diagnostic dispatch-timeline render.
@@ -160,7 +166,23 @@ def run_dispatch_timeline_tests(my_predbat):
             print("  ERROR: a zero-limit window is not a charge, expected {!r}, got {!r}".format(expected, timeline))
             failed = True
 
-        print("Test 11: a charge window where there is no slot leaves dots untouched")
+        print("Test 11: a bare started slot (start/end only, no kWh/source/location) still renders as S")
+        # Copilot review on #4948: real started_dispatches entries from the HA Octopus Energy
+        # integration carry only start/end. decode_octopus_slot()'s "remove empty slots" check
+        # (no kWh, source or location) would otherwise decode a real one as empty, so 'S' could
+        # never render for real data - every other test here uses _slot(), which adds source and
+        # location and masked this.
+        slot_start = midnight_utc + timedelta(hours=10)  # now
+        slot_end = slot_start + timedelta(minutes=30)
+        timeline = my_predbat.build_dispatch_timeline(0, [], [_bare_slot(slot_start, slot_end)], [])
+        expected = list("." * NUM_BLOCKS)
+        expected[NOW_BLOCK] = "S"
+        expected = "".join(expected)
+        if timeline != expected:
+            print("  ERROR: a bare start/end-only started slot should still render as S, expected {!r}, got {!r}".format(expected, timeline))
+            failed = True
+
+        print("Test 12: a charge window where there is no slot leaves dots untouched")
         my_predbat.charge_window_best = [{"start": 14 * 60, "end": 14 * 60 + 30}]
         my_predbat.charge_limit_best = [5.0]
         timeline = my_predbat.build_dispatch_timeline(0, [], [], [])

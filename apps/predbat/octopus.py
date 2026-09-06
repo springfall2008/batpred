@@ -2910,9 +2910,14 @@ class Octopus:
                         if not export:
                             self.load_scaling_dynamic[minute] = self.load_scaling_saving
 
-    def decode_octopus_slot(self, car_n, slot, raw=False):
+    def decode_octopus_slot(self, car_n, slot, raw=False, boundaries_only=False):
         """
         Decode IOG slot
+
+        boundaries_only skips the kWh/source/location handling below - including the "remove
+        empty slots" check, which real HA-integration started_dispatches entries (start/end only,
+        no kWh, source or location) would otherwise trip, decoding them as empty (#4516 Stage 1's
+        build_dispatch_timeline() review). Only start/end are meaningful there.
         """
         if "start" in slot:
             start = datetime.strptime(slot["start"], TIME_FORMAT)
@@ -2935,6 +2940,9 @@ class Octopus:
 
         if start_minutes == end_minutes:
             return 0, 0, 0, source, location
+
+        if boundaries_only:
+            return start_minutes, end_minutes, 0, source, location
 
         cap_minutes = end_minutes - start_minutes
 
@@ -3012,7 +3020,7 @@ class Octopus:
 
         def mark(slots, char):
             for slot in slots or []:
-                start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True)
+                start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
                 if start_minutes == end_minutes:
                     continue
                 start_offset = start_minutes - self.minutes_now
