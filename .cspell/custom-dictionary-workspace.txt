@@ -342,6 +342,7 @@ lookback
 lpignore
 lstrip
 luxpower
+malloc
 mallopt
 markdownlint
 matplotlib
