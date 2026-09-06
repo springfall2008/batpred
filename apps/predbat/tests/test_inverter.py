@@ -19,6 +19,7 @@ from predbat import PredBat
 from inverter import Inverter
 from givtcp_rest import GivTCPRest
 from config import INVERTER_DEF
+from const import MINUTE_WATT
 
 
 def test_foxess_support_discharge_freeze_matches_foxcloud():
@@ -294,6 +295,51 @@ def test_adjust_reserve_device_bounds(test_name, ha, inv, prev_reserve, reserve,
     if ha.get_state("number.reserve") != expect_reserve:
         print("ERROR: Reserve should be {} got {}".format(expect_reserve, ha.get_state("number.reserve")))
         failed = True
+
+    return failed
+
+
+def test_battery_rate_max_source(test_name, my_predbat, ha, inverter_type, charge_rate_arg, charge_rate_max, battery_rate_max_arg, expect_rate_raw):
+    """
+    Test
+       Inverter.__init__ picks the battery rate maximum from the right source for GE-family
+       inverters.
+
+    The charge_rate entity's max attribute stays authoritative when there is one. Percentage-rated
+    models (the 3-phase units) have no absolute charge power register at all, so GECloud leaves
+    charge_rate unset - there the correctly-fetched battery_rate_max must be used rather than the
+    2600W fallback, which otherwise caps planning and every rate written back (GH#4908).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved = {arg: my_predbat.args.get(arg, None) for arg in ("inverter_type", "charge_rate", "battery_rate_max")}
+    try:
+        my_predbat.args["inverter_type"] = [inverter_type]
+        my_predbat.args["charge_rate"] = charge_rate_arg
+        my_predbat.args["battery_rate_max"] = battery_rate_max_arg
+        if charge_rate_arg:
+            ha.dummy_items["number.charge_rate"] = {"state": 1100, "max": charge_rate_max}
+        if battery_rate_max_arg:
+            ha.dummy_items["sensor.battery_rate_max"] = 9984
+
+        inv = Inverter(my_predbat, 0)
+        if inv.battery_rate_max_raw != expect_rate_raw:
+            print("ERROR: battery_rate_max_raw should be {} got {}".format(expect_rate_raw, inv.battery_rate_max_raw))
+            failed = True
+        # The planned charge/discharge/export rates are all clamped against the raw value, so a
+        # wrong source shows up as a capped plan rather than just a cosmetic attribute
+        if round(inv.battery_rate_max_charge * MINUTE_WATT) != expect_rate_raw:
+            print("ERROR: battery_rate_max_charge should be {}W got {}W".format(expect_rate_raw, round(inv.battery_rate_max_charge * MINUTE_WATT)))
+            failed = True
+    finally:
+        for arg, value in saved.items():
+            if value is None:
+                my_predbat.args.pop(arg, None)
+            else:
+                my_predbat.args[arg] = value
+        ha.dummy_items["number.charge_rate"] = 1100
+        ha.dummy_items.pop("sensor.battery_rate_max", None)
 
     return failed
 
@@ -3049,6 +3095,16 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_min2", ha, inv, 3, 4, device_min=5, device_max=100, expect_reserve=5)
     failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_max1", ha, inv, 10, 80, device_min=4, device_max=50, expect_reserve=50)
     failed |= test_adjust_reserve_device_bounds("adjust_reserve_device_no_bounds", ha, inv, 4, 10, device_min=None, device_max=None, expect_reserve=10)
+    if failed:
+        return failed
+
+    # GH#4908: percentage-rated GivEnergy models publish no absolute charge power register, so the
+    # rate must come from battery_rate_max rather than the 2600W fallback - without regressing the
+    # models that do have one, where the register's own maximum stays authoritative
+    failed |= test_battery_rate_max_source("battery_rate_max_charge_rate_entity", my_predbat, ha, "GEC", "number.charge_rate", charge_rate_max=3000, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=3000)
+    failed |= test_battery_rate_max_source("battery_rate_max_percent_only", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
+    failed |= test_battery_rate_max_source("battery_rate_max_percent_only_ge", my_predbat, ha, "GE", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
+    failed |= test_battery_rate_max_source("battery_rate_max_no_source", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg=None, expect_rate_raw=2600)
     if failed:
         return failed
 

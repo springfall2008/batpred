@@ -334,7 +334,16 @@ class Inverter:
         self.soc_max = self.nominal_capacity * self.battery_scaling
 
         if self.inverter_type in ["GE", "GEC", "GEE"]:
-            self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
+            # Not every GivEnergy model has an absolute charge power register to read the maximum
+            # from - the 3-phase units rate the battery as a percentage instead. GECloud leaves
+            # charge_rate unset for those, so the attribute read below silently returns the 2600W
+            # default however capable the inverter really is, and every rate Predbat plans and
+            # writes is scaled against it. Fall back to battery_rate_max, which GECloud already
+            # populates from the device's own reported max_charge_rate (GH#4908).
+            if self.base.get_arg("charge_rate", indirect=False, index=self.id):
+                self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
+            else:
+                self.battery_rate_max_raw = self.base.get_arg("battery_rate_max", index=self.id, default=2600.0, required_unit="W")
         elif "battery_rate_max" in self.base.args:
             self.battery_rate_max_raw = self.base.get_arg("battery_rate_max", index=self.id, default=2600.0, required_unit="W")
         else:
