@@ -217,17 +217,19 @@ def run_rate_add_io_slots_tests(my_predbat):
 
     failed |= run_rate_add_io_slots_test("test9_yesterday", my_predbat, slots, True, 12, expected_rates)
 
-    # Test 10: Location not AT_HOME should be ignored
-    print("\n**** Test 10: Non-home location ignored ****")
-    slot_start = midnight_utc + timedelta(hours=2)
+    # Test 10: Location not AT_HOME on a slot that hasn't happened yet should be ignored.
+    # (minutes_now is 10:00, so a 14:00 slot is still to come.)  A genuinely-away car would
+    # otherwise have the planner import against a cheap window that never materialises.
+    print("\n**** Test 10: Non-home location on a future slot ignored ****")
+    slot_start = midnight_utc + timedelta(hours=14)
     slot_end = slot_start + timedelta(minutes=30)
     slots = [{"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AWAY"}]
 
     expected_rates = {}
-    for minute in range(120, 150):
-        expected_rates[minute] = 10.0  # Should stay at default (not AT_HOME)
+    for minute in range(840, 870):
+        expected_rates[minute] = 10.0  # Should stay at default (not AT_HOME, and not yet completed)
 
-    failed |= run_rate_add_io_slots_test("test10_away_location", my_predbat, slots, True, 12, expected_rates)
+    failed |= run_rate_add_io_slots_test("test10_away_location_future", my_predbat, slots, True, 12, expected_rates)
 
     # Test 11: Day boundary test - slot exactly at midnight
     print("\n**** Test 11: Slot at midnight boundary ****")
@@ -383,6 +385,71 @@ def run_rate_add_io_slots_tests(my_predbat):
             expected_rates[minute] = 4.0 if i < 12 else 10.0  # the zero-kWh slot at i=4 still consumes a cap slot
 
     failed |= run_rate_add_io_slots_test("test19_zero_kwh_future_not_excluded", my_predbat, slots, True, 12, expected_rates)
+
+    # Test 20: A completed dispatch is priced off-peak whatever location it is reported at (issue #4946).
+    # Octopus bills completed smart-charge energy at the off-peak rate regardless of location, and the
+    # label is not stable - the same completed dispatch can be relabelled AT_HOME to AWAY hours later,
+    # which used to un-stamp the cheap rate and step the day's reported cost up on an hour with no import.
+    print("\n**** Test 20: Completed AWAY dispatch is still off-peak (issue #4946) ****")
+    slot_start = midnight_utc + timedelta(hours=2)  # 02:00, fully in the past (minutes_now is 10:00)
+    slot_end = slot_start + timedelta(minutes=30)
+    slots = [{"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AWAY"}]
+
+    expected_rates = {}
+    for minute in range(120, 150):
+        expected_rates[minute] = 4.0  # Completed, so priced the same as AT_HOME
+
+    failed |= run_rate_add_io_slots_test("test20_completed_away_is_off_peak", my_predbat, slots, True, 12, expected_rates)
+
+    # Test 21: The same holds for the other non-home label Octopus reports, UNABLE_TO_IDENTIFY
+    print("\n**** Test 21: Completed UNABLE_TO_IDENTIFY dispatch is still off-peak ****")
+    slot_start = midnight_utc + timedelta(hours=3)
+    slot_end = slot_start + timedelta(minutes=30)
+    slots = [{"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "UNABLE_TO_IDENTIFY"}]
+
+    expected_rates = {}
+    for minute in range(180, 210):
+        expected_rates[minute] = 4.0
+
+    failed |= run_rate_add_io_slots_test("test21_completed_unknown_location_is_off_peak", my_predbat, slots, True, 12, expected_rates)
+
+    # Test 22: An in-progress AWAY dispatch has not completed yet, so it keeps the location test -
+    # the relaxation is scoped to slots that have finished, not ones that merely started.
+    # Anchored on minutes_now rather than a wall-clock hour: rate minutes are indexed from local
+    # midnight, so a fixed UTC hour lands either side of minutes_now depending on the DST offset.
+    print("\n**** Test 22: In-progress AWAY dispatch still ignored ****")
+    in_progress_start = my_predbat.minutes_now - 15  # started 15 minutes ago, runs 15 minutes more
+    slot_start = midnight_utc + timedelta(minutes=in_progress_start)
+    slot_end = slot_start + timedelta(minutes=30)
+    slots = [{"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AWAY"}]
+
+    expected_rates = {}
+    block_start = (in_progress_start // 30) * 30
+    block_end = ((in_progress_start + 30 + 29) // 30) * 30
+    for minute in range(block_start, block_end):  # every 30-min block the slot would round out to
+        expected_rates[minute] = 10.0  # Should stay at default - not completed, and not AT_HOME
+
+    failed |= run_rate_add_io_slots_test("test22_in_progress_away_ignored", my_predbat, slots, True, 12, expected_rates)
+
+    # Test 23: The bump-charge / BOOST exclusions are unaffected by the completed-dispatch relaxation -
+    # their cost doesn't change, so they must stay excluded even once location no longer blocks them
+    print("\n**** Test 23: Completed bump-charge / BOOST still excluded ****")
+    slot_start = midnight_utc + timedelta(hours=4)
+    slot_end = slot_start + timedelta(minutes=30)
+    boost_start = midnight_utc + timedelta(hours=5)
+    boost_end = boost_start + timedelta(minutes=30)
+    slots = [
+        {"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "bump-charge", "location": "AWAY"},
+        {"start": boost_start.strftime(TIME_FORMAT), "end": boost_end.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "BOOST", "location": "AWAY"},
+    ]
+
+    expected_rates = {}
+    for minute in range(240, 270):  # 04:00 - 04:30 bump-charge
+        expected_rates[minute] = 10.0
+    for minute in range(300, 330):  # 05:00 - 05:30 BOOST
+        expected_rates[minute] = 10.0
+
+    failed |= run_rate_add_io_slots_test("test23_completed_bump_charge_still_excluded", my_predbat, slots, True, 12, expected_rates)
 
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes

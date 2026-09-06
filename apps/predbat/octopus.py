@@ -3169,8 +3169,20 @@ class Octopus:
                 if end_minutes <= self.minutes_now and kwh <= 0:
                     continue
 
+                # The location test only applies to dispatches that haven't finished yet. Octopus bills a
+                # completed smart-charge dispatch at the off-peak rate regardless of the location it ends
+                # up reported at, and that label is not stable - a completed dispatch can be retroactively
+                # relabelled AT_HOME to AWAY hours after it ran. Since rate_import is rebuilt from the
+                # tariff every cycle, such a relabel would silently un-stamp the cheap rate on minutes that
+                # have already been metered, and today_cost() re-prices the whole day, so the day's cost
+                # steps up on an hour with no import at all (issue #4946). A slot still to come is a
+                # different matter and keeps the location test: a genuinely-away car would otherwise have
+                # the planner import against a cheap window that never materialises.
+                dispatch_completed = end_minutes <= self.minutes_now
+                location_at_home = dispatch_completed or not location or location == "AT_HOME"
+
                 # Ignore bump-charge slots as their cost won't change
-                if source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
+                if source != "bump-charge" and source != "BOOST" and location_at_home:
                     # Round slots to 30 minute boundary
                     # Floor the start (round down) and ceiling the end (round up)
                     # This ensures any partial overlap with a 30-min slot marks the entire slot as off-peak
