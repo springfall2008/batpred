@@ -1559,8 +1559,15 @@ If you get a bunch of inverter information back then it's working!
 With **givtcp_rest** set, Predbat reads the GivTCP REST API itself and publishes what it finds as its own
 entities (`sensor.predbat_givtcp_0_*` and friends), then points its own settings at them - including
 **inverter_type**, **num_inverters**, the control entities, and the daily energy totals **load_today**,
-**import_today**, **export_today** and **pv_today**. You do not need to configure any of those by hand,
-and anything you do set for them is overridden.
+**import_today**, **export_today** and **pv_today**. You do not need to configure any of those by hand.
+
+The four daily energy totals are the one exception to auto-configuration winning: if you name a sensor
+of your own for **load_today**, **import_today**, **export_today** or **pv_today** in `apps.yaml`,
+Predbat keeps yours. It reads days of recorded history back from these to build its load model, and
+repointing them at a sensor it has only just created would throw that history away and leave it
+planning with no load model until the days build back up. This applies per setting, so naming one of
+the four by hand leaves the other three auto-configured. Everything else Predbat auto-configures here
+is read as a current value rather than as history, and anything you set for those is still overridden.
 
 Predbat also publishes the battery flows and the lifetime counters -
 `sensor.predbat_givtcp_<n>_battery_{charge,discharge}_today` and

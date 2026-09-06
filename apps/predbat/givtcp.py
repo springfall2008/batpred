@@ -246,6 +246,20 @@ GIVTCP_ENERGY_TODAY_FIELDS = {
     "pv_today": "PV_Energy_Today_kWh",
 }
 
+# The keys automatic_config() will NOT overwrite when the user named a sensor of their own in
+# apps.yaml - they are passed to set_arg_auto(overwrite=False).
+#
+# These four are the only keys claimed here whose recorder HISTORY Predbat reads:
+# minute_data_load()/minute_data_import_export() go back max_days_previous days. A user who was
+# already naming the GivTCP HA integration's own sensors has months of that history behind them,
+# and repointing the key at a sensor this component only just created throws it away - Predbat then
+# plans with no load model at all until the days build back up. Everything else claimed here
+# (soc_max, the controls, the power figures) is read as a current value, where a repoint costs
+# nothing, so those keep overwriting as before.
+#
+# Applied per key, so naming one of the four by hand does not opt the other three out.
+GIVTCP_AUTO_CONFIG_USER_WINS_KEYS = tuple(GIVTCP_ENERGY_TODAY_FIELDS)
+
 # Everything else the Energy block carries, as key -> (section, field). From the same snapshot at no
 # extra cost, and published but NOT auto-configured: Predbat has no apps.yaml key that consumes a
 # battery flow or a lifetime counter, so there is nothing to point at them.
@@ -806,7 +820,11 @@ class GivTCPComponent(ComponentBase):
                 continue
             # Indexed by REST endpoint, not by position: _parse_entity feeds self.rest[n] on every
             # write, so renumbering would route the surviving inverter's writes at a dead client.
-            self.set_arg_auto(key, [self._entity_id(domain, n, key) for n in discovered])
+            #
+            # overwrite=False on the history-bearing energy totals leaves a sensor the user named
+            # themselves in place, so its recorded history survives - set_arg_auto still fills the
+            # key in when they named nothing.
+            self.set_arg_auto(key, [self._entity_id(domain, n, key) for n in discovered], overwrite=key not in GIVTCP_AUTO_CONFIG_USER_WINS_KEYS)
 
     def _parse_entity(self, entity_id):
         """entity_id -> (inverter index, control name), or (None, None) if it doesn't match."""

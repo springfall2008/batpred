@@ -2078,6 +2078,58 @@ def test_automatic_config_can_be_turned_off(my_predbat=None):
     return 1 if failed else 0
 
 
+def test_energy_today_keys_keep_the_users_own_sensors(my_predbat=None):
+    """
+    An apps.yaml entry for one of the day's energy totals wins over auto-configuration.
+
+    These four are the only keys automatic_config() claims whose recorder HISTORY Predbat reads -
+    minute_data_load()/minute_data_import_export() go back max_days_previous days. A user who was
+    already naming the GivTCP HA integration's own sensors has months of that history; repointing
+    them at a sensor this component only just created discards it, and Predbat plans against no
+    load model until the days build back up. Everything else auto-config claims is read as a
+    current value, so it keeps overwriting as before.
+
+    Claimed per key, so naming one of the four by hand does not opt the other three out.
+    """
+    failed = False
+    base, component = _rest_from_fixture("cases/rest_v3.json")
+    _mark_discovered(component)
+    # The user named their own load sensor in apps.yaml; the rest were left to Predbat
+    base.args_from_apps_yaml = {"load_today": ["sensor.givtcp_load_energy_today_kwh"]}
+    base.apps_yaml_override_warned = set()
+    base.args["load_today"] = ["sensor.givtcp_load_energy_today_kwh"]
+
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    if base.args.get("load_today") != ["sensor.givtcp_load_energy_today_kwh"]:
+        print("ERROR: the user's own load_today sensor was replaced by {}".format(base.args.get("load_today")))
+        failed = True
+
+    # The entity is still published either way - only the apps.yaml pointing changes
+    if "sensor.predbat_givtcp_0_load_today" not in base.entities:
+        print("ERROR: load_today entity was not published when the user's own sensor was kept")
+        failed = True
+
+    # Per key: the three the user did not name are still auto-configured
+    for key in ("import_today", "export_today", "pv_today"):
+        if base.args.get(key) != ["sensor.predbat_givtcp_0_" + key]:
+            print("ERROR: {} should still be auto-configured, got {}".format(key, base.args.get(key)))
+            failed = True
+
+    # Keys read as a current value rather than as history still overwrite as before
+    if base.args.get("charge_rate") != ["number.predbat_givtcp_0_charge_rate"]:
+        print("ERROR: charge_rate should still be auto-configured, got {}".format(base.args.get("charge_rate")))
+        failed = True
+    if base.args.get("soc_kw") != ["sensor.predbat_givtcp_0_soc_kw"]:
+        print("ERROR: soc_kw should still be auto-configured, got {}".format(base.args.get("soc_kw")))
+        failed = True
+
+    if not failed:
+        print("PASS: an explicit apps.yaml energy sensor is kept, per key, while everything else auto-configures")
+    return 1 if failed else 0
+
+
 def test_extra_energy_figures_are_published_but_not_claimed(my_predbat=None):
     """
     The battery flows and the lifetime counters are published, and deliberately not auto-configured.
@@ -2224,6 +2276,7 @@ def test_givtcp_component(my_predbat=None):
         ("friendly_names_complete", test_every_control_and_sensor_has_a_friendly_name_defined, "friendly name table covers every entity"),
         ("energy_today_publish", test_energy_today_sensors_are_published_and_claimed, "day energy totals published and claimed"),
         ("energy_today_absent", test_energy_today_keys_not_claimed_when_unreported, "energy totals unclaimed when unreported"),
+        ("energy_today_user_wins", test_energy_today_keys_keep_the_users_own_sensors, "an apps.yaml energy sensor wins over auto-config"),
         ("energy_extra", test_extra_energy_figures_are_published_but_not_claimed, "battery flows and lifetime totals published, not claimed"),
         ("automatic_off", test_automatic_config_can_be_turned_off, "givtcp_automatic can be turned off"),
     ]
