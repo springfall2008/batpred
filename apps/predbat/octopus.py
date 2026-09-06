@@ -2910,9 +2910,14 @@ class Octopus:
                         if not export:
                             self.load_scaling_dynamic[minute] = self.load_scaling_saving
 
-    def decode_octopus_slot(self, car_n, slot, raw=False):
+    def decode_octopus_slot(self, car_n, slot, raw=False, boundaries_only=False):
         """
         Decode IOG slot
+
+        boundaries_only skips the kWh/source/location handling below - including the "remove
+        empty slots" check, which real HA-integration started_dispatches entries (start/end only,
+        no kWh, source or location) would otherwise trip, decoding them as empty (#4516 Stage 1's
+        build_dispatch_timeline() review). Only start/end are meaningful there.
         """
         if "start" in slot:
             start = datetime.strptime(slot["start"], TIME_FORMAT)
@@ -2935,6 +2940,9 @@ class Octopus:
 
         if start_minutes == end_minutes:
             return 0, 0, 0, source, location
+
+        if boundaries_only:
+            return start_minutes, end_minutes, 0, source, location
 
         cap_minutes = end_minutes - start_minutes
 
@@ -3020,6 +3028,98 @@ class Octopus:
         if OctopusAPI.has_six_hour_cap(tariff_code):
             return OCTOPUS_SLOT_MAX_CAPPED
         return OCTOPUS_SLOT_MAX_DEFAULT
+
+    def build_dispatch_timeline(self, car_n, completed, started, planned, window_before_hours=4, window_after_hours=24, step=30):
+        """
+        Build a fixed-width, one-character-per-block dispatch status string for the diagnostic
+        timeline log (#4516 Stage 1 - not yet used for any rate/plan decision, purely observational).
+
+        Each character covers `step` minutes, offset from now, spanning
+        [-window_before_hours, +window_after_hours). '.' = nothing known, 'P' = planned
+        (provisional), 'S' = started, 'C' = completed. Where lists disagree on the same block, the
+        most-confirmed status wins (completed > started > planned) - reflects Octopus's own view
+        having moved on, not a genuine simultaneous claim.
+
+        The letter is lowercased where Predbat's own plan charges in that block, so 'p' is a
+        provisional slot Predbat is relying on and 'P' one it is not. That distinction is the
+        point: a slot that disappears having never been planned against costs nothing, while one
+        Predbat committed an import to is a plan that will not happen.
+
+        Stacking consecutive lines (a heartbeat one per 30-minute boundary, plus one on any
+        earlier change - see the caller in fetch.py) in a monospace log viewer reveals dispatch
+        lifecycle as diagonal stripes: a specific dispatch drifts one column per line as `now`
+        advances, so a rescinded slot shows as a stripe that stops before reaching the `now`
+        column, while a genuinely-delivered one runs through into 'C'.
+        """
+        total_before = window_before_hours * 60
+        total_after = window_after_hours * 60
+        num_blocks = (total_before + total_after) // step
+        status = ["."] * num_blocks
+
+        def mark(slots, char):
+            for slot in slots or []:
+                start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+                if start_minutes == end_minutes:
+                    continue
+                start_offset = start_minutes - self.minutes_now
+                end_offset = end_minutes - self.minutes_now
+                block_start = max(0, (start_offset + total_before) // step)
+                block_end = min(num_blocks, -(-(end_offset + total_before) // step))  # ceil division
+                for block in range(int(block_start), int(block_end)):
+                    status[block] = char
+
+        mark(planned, "P")
+        mark(started, "S")
+        mark(completed, "C")
+
+        # Lowercase where Predbat's own plan plans to import - so a stripe shows not just the
+        # dispatch's lifecycle but whether Predbat had committed a charge window to it. A slot
+        # that reads 'p' and then vanishes before reaching the now column is one Predbat planned
+        # around and lost, which is the case a plain P/S/C timeline cannot distinguish from a
+        # slot nothing depended on.
+        #
+        # This runs in fetch, before the planner, so the windows are the *previous* cycle's plan -
+        # one 5-minute cycle stale against 30-minute blocks. That is deliberate: what Predbat
+        # believed while the slot was still live is the more useful thing to record.
+        for window_n, window in enumerate(self.charge_window_best or []):
+            if window_n < len(self.charge_limit_best or []) and self.charge_limit_best[window_n] <= 0:
+                continue
+            start_offset = window.get("start", 0) - self.minutes_now
+            end_offset = window.get("end", 0) - self.minutes_now
+            block_start = max(0, (start_offset + total_before) // step)
+            block_end = min(num_blocks, -(-(end_offset + total_before) // step))
+            for block in range(int(block_start), int(block_end)):
+                if status[block] in ("P", "S", "C"):
+                    status[block] = status[block].lower()
+
+        return "".join(status)
+
+    def dispatch_timeline_should_log(self, car_n, timeline):
+        """
+        Decide whether fetch.py should log a dispatch-timeline diagnostic line this cycle, and
+        what marker to append if so.
+
+        A 30-minute heartbeat always logs - dispatch decisions are 30-min-granular anyway, so log
+        volume stays sane at that cadence - but a change from the last logged timeline for this
+        car also logs immediately outside that boundary, marked with a trailing ' *' (#4948
+        review). Without this, a provisional slot that appears and disappears entirely within one
+        half-hour window would never appear in this log at all, however briefly Predbat's own
+        plan relied on it - exactly the pattern this diagnostic exists to catch.
+
+        The marker is a suffix, appended by the caller after build_dispatch_timeline()'s
+        fixed-width string, rather than a prefix - so heartbeat and change-triggered lines still
+        stack column-for-column in a monospace viewer. That alignment is the whole point of the
+        render: consecutive lines are meant to line up into diagonal stripes.
+
+        Records the new timeline as "last logged" as a side effect whenever this returns True, so
+        a caller must log with the returned marker exactly when told to, and no other times.
+        """
+        is_heartbeat = self.minutes_now % 30 == 0
+        changed = timeline != self.dispatch_timeline_last.get(car_n)
+        if not (is_heartbeat or changed):
+            return False, ""
+        self.dispatch_timeline_last[car_n] = timeline
+        return True, "" if is_heartbeat else " *"
 
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """
