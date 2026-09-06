@@ -43,8 +43,11 @@ class CarbonAPI(ComponentBase):
 
         self.log("Carbon API: Fetching latest carbon data for postcode {}".format(self.postcode))
 
-        date_now = datetime.now().strftime("%Y-%m-%d")
-        date_plus_48 = (datetime.now() + timedelta(hours=48)).strftime("%Y-%m-%d")
+        # The API takes an ISO8601 YYYY-MM-DDThh:mmZ datetime and returns the 48 hours following it,
+        # which is the entire forecast horizon it publishes, so one request from now covers everything
+        # available. It has to be built in UTC - a local date is a day out between midnight and 01:00
+        # under BST. Asking from a date further ahead than the horizon just returns an empty body.
+        date_from = datetime.now(timezone.utc).strftime(TIME_FORMAT_CARBON)
         postcode = self.postcode
 
         # Shorten postcode, remove anything after the space as we just need the stem
@@ -53,52 +56,51 @@ class CarbonAPI(ComponentBase):
 
         collected_data = []
 
-        for date in [date_now, date_plus_48]:
-            url = f"https://api.carbonintensity.org.uk/regional/intensity/{date}/fw48h/postcode/{postcode}"
-            try:
-                timeout = aiohttp.ClientTimeout(total=30)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(url) as response:
-                        if response.status == 200:
-                            try:
-                                data = await response.json()
-                                if data:
-                                    data_points = data.get("data", {}).get("data", [])
-                                    if data_points:
-                                        record_api_call("carbon")
-                                        self.update_success_timestamp()
-                                        self.last_updated_timestamp = self.last_updated_time()
-                                        for point in data_points:
-                                            from_time = point.get("from", None)
-                                            to_time = point.get("to", None)
-                                            intensity = point.get("intensity", {}).get("forecast", None)
-                                            try:
-                                                # Use TIME_FORMAT_CARBON to parse time strings
-                                                from_time = datetime.strptime(from_time, TIME_FORMAT_CARBON).replace(tzinfo=timezone.utc)
-                                                to_time = datetime.strptime(to_time, TIME_FORMAT_CARBON).replace(tzinfo=timezone.utc)
-                                            except Exception:
-                                                from_time = None
-                                                to_time = None
-                                            if from_time and to_time and intensity is not None:
-                                                # Store using string of TIME_FORMAT_HA
-                                                collected_data.append({"from": from_time.strftime(TIME_FORMAT_HA), "to": to_time.strftime(TIME_FORMAT_HA), "intensity": intensity})
-                                    else:
-                                        self.failures_total += 1
-                                        self.log("Warn: Carbon API: No data points found in response for postcode {} and date {}".format(postcode, date))
-                                else:  # Carbon API returns 200 but no data if the postcode or date can't be found
+        url = f"https://api.carbonintensity.org.uk/regional/intensity/{date_from}/fw48h/postcode/{postcode}"
+        try:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        try:
+                            data = await response.json()
+                            if data:
+                                data_points = data.get("data", {}).get("data", [])
+                                if data_points:
+                                    record_api_call("carbon")
+                                    self.update_success_timestamp()
+                                    self.last_updated_timestamp = self.last_updated_time()
+                                    for point in data_points:
+                                        from_time = point.get("from", None)
+                                        to_time = point.get("to", None)
+                                        intensity = point.get("intensity", {}).get("forecast", None)
+                                        try:
+                                            # Use TIME_FORMAT_CARBON to parse time strings
+                                            from_time = datetime.strptime(from_time, TIME_FORMAT_CARBON).replace(tzinfo=timezone.utc)
+                                            to_time = datetime.strptime(to_time, TIME_FORMAT_CARBON).replace(tzinfo=timezone.utc)
+                                        except Exception:
+                                            from_time = None
+                                            to_time = None
+                                        if from_time and to_time and intensity is not None:
+                                            # Store using string of TIME_FORMAT_HA
+                                            collected_data.append({"from": from_time.strftime(TIME_FORMAT_HA), "to": to_time.strftime(TIME_FORMAT_HA), "intensity": intensity})
+                                else:
                                     self.failures_total += 1
-                                    self.log("Error: Carbon API: No carbon data returned for postcode {} and date {}".format(postcode, date))
-                            except Exception as e:
-                                self.log(f"Warn: Carbon API: Failed to parse JSON response: {e}")
-                                record_api_call("carbon", False, "decode_error")
-                        else:
-                            self.failures_total += 1
-                            self.log(f"Warn: Carbon API: Failed to fetch data, API status code {response.status}")
-                            record_api_call("carbon", False, "server_error")
-            except (aiohttp.ClientError, Exception) as e:
-                self.failures_total += 1
-                self.log(f"Warn: Carbon API: Request failed: {e}")
-                record_api_call("carbon", False, "connection_error")
+                                    self.log("Warn: Carbon API: No data points found in response for postcode {} and date {}".format(postcode, date_from))
+                            else:  # Carbon API returns 200 but no data if the postcode or date can't be found
+                                self.failures_total += 1
+                                self.log("Error: Carbon API: No carbon data returned for postcode {} and date {}".format(postcode, date_from))
+                        except Exception as e:
+                            self.log(f"Warn: Carbon API: Failed to parse JSON response: {e}")
+                            record_api_call("carbon", False, "decode_error")
+                    else:
+                        self.failures_total += 1
+                        self.log(f"Warn: Carbon API: Failed to fetch data, API status code {response.status}")
+                        record_api_call("carbon", False, "server_error")
+        except (aiohttp.ClientError, Exception) as e:
+            self.failures_total += 1
+            self.log(f"Warn: Carbon API: Request failed: {e}")
+            record_api_call("carbon", False, "connection_error")
         if collected_data:
             self.carbon_data_points = collected_data
             self.publish_carbon_data()

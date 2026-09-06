@@ -1743,6 +1743,42 @@ class Fetch:
 
         return rates, replicated_rates
 
+    def carbon_replicate(self, carbon_data):
+        """
+        Extend the carbon intensity forecast forward to cover the whole plan horizon.
+
+        The Carbon Intensity API only publishes about 48 hours ahead, and publishes a good deal
+        less than that whenever the upstream forecast is late, so the tail of the plan can easily
+        have no data at all. A missing minute is scored as zero gCO2/kWh by prediction.py, which
+        makes the uncovered part of the plan look carbon free and biases the optimiser towards it,
+        so fill the gaps the same way rate_replicate does for missing rates - repeat the same time
+        of day 24 hours earlier, falling back to the last known value where there is no such point
+        yet. Carbon intensity has a strong daily cycle (the solar dip and the evening peak), so the
+        previous day is a far better estimate than either zero or a flat average.
+
+        Nothing is invented before the first real value, so an empty forecast stays empty rather
+        than becoming a plan full of fabricated zeroes.
+
+        :param carbon_data: carbon intensity in gCO2/kWh by minute relative to now
+        :return: the extended data and a dict of which minutes were replicated
+        """
+        replicated_carbon = {}
+        carbon_last = None
+        minute = 0
+
+        while minute < self.forecast_minutes:
+            if minute in carbon_data:
+                carbon_last = carbon_data[minute]
+            elif carbon_last is not None:
+                # Take the same time of day yesterday, which may itself have been replicated
+                # so that the daily cycle keeps repeating across the whole horizon
+                previous_day = minute - 24 * 60
+                carbon_data[minute] = carbon_data[previous_day] if previous_day in carbon_data else carbon_last
+                replicated_carbon[minute] = True
+            minute += 1
+
+        return carbon_data, replicated_carbon
+
     def calc_pv_light_dark(self):
         """
         Decide whether a dawn light/dark boundary is worth computing at all, and return it via
@@ -2779,6 +2815,9 @@ class Fetch:
             data_all = self.get_state_wrapper(entity_id=entity_id, attribute="forecast")
             if data_all:
                 carbon_data, _ = minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
+                carbon_data, carbon_replicated = self.carbon_replicate(carbon_data)
+                if carbon_replicated:
+                    self.log("Warn: Carbon intensity forecast only covers {} hours of the {} hour plan, replicating it forward to cover the rest".format(dp1(min(carbon_replicated) / 60), dp1(self.forecast_minutes / 60)))
 
         entity_id = self.prefix + ".carbon_now"
         state = self.get_state_wrapper(entity_id=entity_id)
