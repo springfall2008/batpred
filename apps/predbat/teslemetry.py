@@ -162,6 +162,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.automatic = automatic
         self.automatic_done = False
         self.tbc_control = tbc_control
+        self._reserve_band_warned = False
         self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.schedule_loaded = False
@@ -580,8 +581,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return {"export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "self_consumption"}
         return {"export_rule": "pv_only", "grid_charging": True, "reserve": int(reserve), "mode": "self_consumption"}
 
-    @staticmethod
-    def _settable_reserve(percent):
+    def _settable_reserve(self, percent):
         """Map a requested reserve onto one the Powerwall will actually hold.
 
         Since firmware 25.18.4 only 0-80 and exactly 100 are honoured; 81-99 are silently snapped
@@ -589,11 +589,17 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         adjust_reserve(soc+1) under set_reserve_hold - and 80 would not hold it, leaving the battery
         free to discharge back down to 80 during a window meant to keep SOC flat. So it rounds UP to
         the one value above 80 that is honoured. Callers disable grid charging whenever this returns
-        SIGNAL_HOLD_RESERVE, which is what stops the device importing to reach it.
+        SIGNAL_HOLD_RESERVE, which is what stops the device importing to reach it - including a
+        `set_reserve_min` anywhere in 81-99 (a plausible Powerwall value on its own), which lands here
+        too and then holds grid charging off in every state, permanently. Logged once, not every
+        cycle, so a trial user can see why nothing is charging.
         """
         percent = int(percent)
         if percent <= SIGNAL_MAX_SETTABLE_RESERVE:
             return percent
+        if not self._reserve_band_warned:
+            self._reserve_band_warned = True
+            self.log("Info: Teslemetry reserve request of {}% is in the 81-99 band Tesla rejects - using 100% instead, which also disables grid charging".format(percent))
         return SIGNAL_HOLD_RESERVE
 
     def evaluate_schedule_tbc(self, minutes_now, soc):
@@ -1210,9 +1216,11 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
     def _window_intervals(window):
         """Split a (start, end) minute window into non-wrapping [from, to) ranges inside one day.
 
-        A window whose start is after its end wraps midnight and becomes two ranges. Because the same
-        shape is written to every day of the week, that is all a midnight crossing needs here - there
-        is no "which day does this land on" question of the kind _boost_segments has to answer on the
+        A window whose start is after its end wraps midnight and becomes two ranges - unless it ends
+        exactly at midnight (end == 0), in which case the [start, 1440) half already is the whole
+        window and a [0, 0) tail must not be emitted (see the comment below). Because the same shape
+        is written to every day of the week, that is all a midnight crossing needs here - there is no
+        "which day does this land on" question of the kind _boost_segments has to answer on the
         real-rate path.
         """
         if not window:
@@ -1222,7 +1230,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return []
         if start < end:
             return [(start, end)]
-        return [(start, 1440), (0, end)]
+        # end == 0 means "runs to midnight": the [start, 1440) half is the whole window. A [0, 0)
+        # tail renders as fromHour/toHour 0,0 - the same encoding _render_side uses for end-of-day
+        # (to >= 1440) - so emitting it would carve the band over the entire day instead of none of it.
+        return [(start, 1440)] if end == 0 else [(start, 1440), (0, end)]
 
     @staticmethod
     def _signal_layout(charge_window, export_window):

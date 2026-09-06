@@ -60,6 +60,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.automatic = False
         self.automatic_done = False
         self.tbc_control = False
+        self._reserve_band_warned = False
         self.args_set = {}
         # OAuth state (production sets these via _init_oauth in initialize, which the mock bypasses).
         self.auth_method = "api_key"
@@ -830,6 +831,34 @@ def test_teslemetry_signal_tariff_midnight_wrap_is_two_intervals():
         _assert_tou_periods_partition_day(day_periods)
 
 
+def test_teslemetry_signal_tariff_charge_window_ending_at_midnight_is_one_interval():
+    """A charge window ending exactly at midnight must carve only itself, not a spurious all-day band.
+
+    _window_intervals used to turn a (1380, 0) window into [(1380, 1440), (0, 0)]; the zero-length
+    (0, 0) tail renders as fromHour/fromMinute/toHour/toMinute 0,0,0,0, which is byte-identical to
+    this module's own end-of-day encoding, so it carved SUPER_OFF_PEAK across the whole day on every
+    day of the week (GH#4892 review). This guards both the partition invariant and the actual bands.
+    """
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff((1380, 0), None)  # charge 23:00 -> 00:00
+    for day in range(7):
+        assert _signal_tier_at(tariff, day, 1380) == "SUPER_OFF_PEAK"  # 23:00, inside the charge window
+        assert _signal_tier_at(tariff, day, 600) == "PARTIAL_PEAK"  # 10:00, outside - must stay base
+        day_periods = {tier: {"periods": [p for p in block["periods"] if p["fromDayOfWeek"] <= day <= p["toDayOfWeek"]]} for tier, block in tariff["seasons"]["AllYear"]["tou_periods"].items()}
+        _assert_tou_periods_partition_day(day_periods)
+
+
+def test_teslemetry_signal_tariff_export_window_ending_at_midnight_is_one_interval():
+    """The same midnight-tail bug on the export side must not carve a spurious all-day ON_PEAK band."""
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff(None, (1320, 0))  # export 22:00 -> 00:00
+    for day in range(7):
+        assert _signal_tier_at(tariff, day, 1320) == "ON_PEAK"  # 22:00, inside the export window
+        assert _signal_tier_at(tariff, day, 600) == "PARTIAL_PEAK"  # 10:00, outside - must stay base
+        day_periods = {tier: {"periods": [p for p in block["periods"] if p["fromDayOfWeek"] <= day <= p["toDayOfWeek"]]} for tier, block in tariff["seasons"]["AllYear"]["tou_periods"].items()}
+        _assert_tou_periods_partition_day(day_periods)
+
+
 def test_teslemetry_signal_tariff_is_independent_of_the_clock_and_rates():
     """Same windows -> byte-identical tariff whatever the day, time or real rates.
 
@@ -941,6 +970,17 @@ def test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off():
     """
     api = _tbc_api(reserve=86)
     assert api.evaluate_schedule_tbc(12 * 60, 85) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 100, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_reserve_band_warning_logs_once():
+    """The 81-99 reserve-band diagnostic fires once per instance, not on every cycle, so a trial user
+    can see why grid charging is off without the log filling up with a repeat every 5 minutes."""
+    api = _tbc_api(reserve=86)
+    api.evaluate_schedule_tbc(12 * 60, 50)
+    api.evaluate_schedule_tbc(12 * 60, 50)
+    warnings = [msg for msg in api.log_messages if "81-99 band" in msg]
+    assert len(warnings) == 1
+    assert "86%" in warnings[0]
 
 
 def test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window():
@@ -1393,7 +1433,13 @@ def test_teslemetry_inverter_def_tesla():
 
 
 def test_teslemetry_component_registry_config():
-    """Component registry exposes the automatic arg, can_restart, and the schema accepts teslemetry_automatic."""
+    """Component registry exposes the automatic and tbc_control args, can_restart, and the schema accepts both.
+
+    tbc_control is asserted here, not just exercised behaviourally, because MockTeslemetryAPI.__init__
+    sets self.tbc_control directly - every behavioural test on this branch would still pass even if
+    components.py declared the arg under a different key, the same "fixture encodes the bug" shape
+    that already bit this branch once (GH#4892).
+    """
     from components import COMPONENT_LIST
     from config import APPS_SCHEMA
 
@@ -1401,8 +1447,11 @@ def test_teslemetry_component_registry_config():
     assert entry["args"]["automatic"]["config"] == "teslemetry_automatic"
     assert entry["args"]["automatic"]["default"] is False
     assert entry["args"]["automatic"]["required"] is False
+    assert entry["args"]["tbc_control"]["config"] == "teslemetry_tbc_control"
+    assert entry["args"]["tbc_control"]["default"] is False
     assert entry.get("can_restart") is True
     assert APPS_SCHEMA["teslemetry_automatic"] == {"type": "boolean"}
+    assert APPS_SCHEMA["teslemetry_tbc_control"] == {"type": "boolean"}
 
 
 def test_teslemetry_time_to_minutes():
@@ -2519,6 +2568,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_signal_tariff_mirrors_every_day()
     test_teslemetry_signal_tariff_fixed_band_prices()
     test_teslemetry_signal_tariff_midnight_wrap_is_two_intervals()
+    test_teslemetry_signal_tariff_charge_window_ending_at_midnight_is_one_interval()
+    test_teslemetry_signal_tariff_export_window_ending_at_midnight_is_one_interval()
     test_teslemetry_signal_tariff_is_independent_of_the_clock_and_rates()
     test_teslemetry_signal_tariff_without_windows_is_flat_base()
     test_teslemetry_charge_window_accessor()
@@ -2530,6 +2581,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_tbc_demand_is_autonomous_with_no_grid_charging()
     test_teslemetry_tbc_charge_wins_over_an_overlapping_export()
     test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off()
+    test_teslemetry_tbc_reserve_band_warning_logs_once()
     test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window()
     test_teslemetry_tbc_never_writes_a_reserve_in_the_invalid_band()
     test_teslemetry_day_runs_groups_replicated_days()
