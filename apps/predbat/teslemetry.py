@@ -1133,23 +1133,22 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             now = datetime.now(getattr(self, "local_tz", None) or timezone.utc)
         return now.weekday()
 
+    def _committed_window(self, direction):
+        """Return (start_min, end_min) for a committed charge/discharge window when enabled, else None."""
+        window = self.schedule.get(direction, {})
+        if not window.get("enable"):
+            return None
+        start = self.time_to_minutes(window.get("start_time", "00:00:00"))
+        end = self.time_to_minutes(window.get("end_time", "00:00:00"))
+        return None if start == end else (start, end)
+
     def _discharge_window(self):
         """Return (start_min, end_min) for the committed discharge window when enabled, else None."""
-        discharge = self.schedule.get("discharge", {})
-        if not discharge.get("enable"):
-            return None
-        start = self.time_to_minutes(discharge.get("start_time", "00:00:00"))
-        end = self.time_to_minutes(discharge.get("end_time", "00:00:00"))
-        return None if start == end else (start, end)
+        return self._committed_window("discharge")
 
     def _charge_window(self):
         """Return (start_min, end_min) for the committed charge window when enabled, else None."""
-        charge = self.schedule.get("charge", {})
-        if not charge.get("enable"):
-            return None
-        start = self.time_to_minutes(charge.get("start_time", "00:00:00"))
-        end = self.time_to_minutes(charge.get("end_time", "00:00:00"))
-        return None if start == end else (start, end)
+        return self._committed_window("charge")
 
     @staticmethod
     def _window_intervals(window):
