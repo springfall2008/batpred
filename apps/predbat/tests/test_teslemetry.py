@@ -1082,6 +1082,16 @@ def test_teslemetry_tbc_control_on_pushes_the_signal_tariff():
     assert api.evaluate_schedule(3 * 60, 40)["mode"] == "autonomous"
 
 
+def test_teslemetry_initialize_sets_tbc_control_from_component_arg():
+    """The component registry constructs the class as initialize(**arg_dict) with tbc_control taken
+    from apps.yaml; initialize must store that onto self, or the trial setting can be turned on in
+    apps.yaml and still have no effect, because getattr(self, "tbc_control", False) would never see it."""
+    api = MockTeslemetryAPI()
+    assert api.tbc_control is False
+    api.initialize(tbc_control=True)
+    assert api.tbc_control is True
+
+
 def _assert_tou_periods_partition_day(tou_periods):
     """Assert the tou_periods cover every minute of the (circular) day exactly once — no overlaps, no gaps."""
     covered = [0] * (24 * 60)
@@ -2530,6 +2540,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_sync_tariff_pushes_on_window_change()
     test_teslemetry_tbc_control_defaults_off_and_uses_the_real_rate_tariff()
     test_teslemetry_tbc_control_on_pushes_the_signal_tariff()
+    test_teslemetry_initialize_sets_tbc_control_from_component_arg()
     test_teslemetry_sync_tariff_read_only_no_push()
     test_teslemetry_site_info_latches_without_nameplate_soc_max_from_live_status()
     test_teslemetry_run_site_info_latches_on_any_response()
