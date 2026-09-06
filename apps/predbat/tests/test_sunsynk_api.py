@@ -756,9 +756,6 @@ def _run_with_hard_timeout(coro, seconds=5):
     bytecode instructions, so it fires even inside a loop that never truly yields.
     """
     if not hasattr(signal, "SIGALRM"):
-        return run_async_local(coro)
-
-    if not hasattr(signal, "SIGALRM"):
         import asyncio
 
         return run_async_local(asyncio.wait_for(coro, timeout=seconds))
