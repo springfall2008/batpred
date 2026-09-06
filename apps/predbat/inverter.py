@@ -17,6 +17,7 @@ target SoC setting, and reserve management via both REST API and Home
 Assistant entity writes with polling validation.
 """
 
+import math
 import os
 import time
 import pytz
@@ -444,11 +445,26 @@ class Inverter:
             self.base.expose_config("set_reserve_min" + reserve_min_postfix, battery_min_soc)
             self.reserve_min = battery_min_soc
 
-        self.base.log("Inverter {} Reserve min: {}%, battery_min: {}%".format(self.id, self.reserve_min, dp0(battery_min_soc)))
+        device_min, device_max = self.reserve_device_bounds()
+        if device_min is None and device_max is None:
+            register_bounds = ""
+        else:
+            register_bounds = ", register accepts {} to {}".format("{}%".format(device_min) if device_min is not None else "any", "{}%".format(device_max) if device_max is not None else "any")
+        self.base.log("Inverter {} Reserve min: {}%, battery_min: {}%{}".format(self.id, self.reserve_min, dp0(battery_min_soc), register_bounds))
         if (self.base.set_reserve_enable and self.inv_has_reserve_soc) or not self.inv_has_reserve_soc:
             self.reserve_percent = self.reserve_min
         else:
             self.reserve_percent = self.reserve_percent_current
+
+        # adjust_reserve() already clamps what it writes to these same bounds (GH#4826), so they are
+        # what the inverter is actually holding. Model that floor too, rather than planning against a
+        # bottom of the battery the write path will never ask for and the battery will never release
+        # (GH#4953). Applies whichever branch above chose reserve_percent: the limit is the device's,
+        # not a policy, so set_reserve_enable does not change it.
+        if device_min is not None:
+            self.reserve_percent = max(self.reserve_percent, device_min)
+        if device_max is not None:
+            self.reserve_percent = min(self.reserve_percent, device_max)
         self.reserve = dp3(self.soc_max * self.reserve_percent / 100.0)
 
         # Max inverter rate override
@@ -1710,6 +1726,38 @@ class Inverter:
                     f"Inverter {self.id} Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
                 )
 
+    def reserve_device_bounds(self):
+        """
+        Return the (min, max) reserve percentages the inverter will accept, as whole percent, or
+        None for either bound the component does not publish.
+
+        Components publish the bounds onto the reserve entity's min/max attributes. They are not
+        always discovered from the device: where an API reports no bound the component publishes the
+        model's known floor instead (GivTCP does this with GE's 4%), so a user who has configured
+        battery_min_soc lower has that reflected in what is published.
+
+        The rounding is the caller's contract as much as this one's: reserve is written as a whole
+        percent, so a floor takes the ceiling and a ceiling takes the floor and the value returned is
+        always one the register accepts. Rounding to nearest instead would turn a published floor of
+        4.2 into 4 - under the bound, so the write is clamped-and-confirmed to something else and
+        retries forever, which is the GH#4826 failure this is meant to prevent. Both the write
+        (GH#4826) and the modelled reserve (GH#4953) go through here so the two cannot disagree about
+        what the battery will hold.
+        """
+        reserve_entity = self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="%")
+        if not reserve_entity:
+            return None, None
+
+        bounds = []
+        for attribute, round_towards_accepted in (("min", math.ceil), ("max", math.floor)):
+            value = self.base.get_state_wrapper(reserve_entity, attribute=attribute, default=None)
+            try:
+                bounds.append(round_towards_accepted(float(value)))
+            except (ValueError, TypeError):
+                # Absent, empty or unparseable - no bound to honour rather than a bound of zero
+                bounds.append(None)
+        return bounds[0], bounds[1]
+
     def adjust_reserve(self, reserve):
         """
         Adjust the output reserve target %
@@ -1739,27 +1787,11 @@ class Inverter:
         reserve = min(reserve, self.reserve_max)
 
         reserve_entity = self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="%")
-        if reserve_entity:
-            # Components publish the bounds the inverter will accept onto the entity's min/max
-            # attributes; respect them so we never ask for a value the device will silently clamp and
-            # confirm - otherwise write_and_poll_value's poll-back never matches the un-clamped target
-            # and the same failing write retries forever (GH#4826).
-            #
-            # Not always discovered from the device: where an API reports no bound the component
-            # publishes the model's known floor instead (GivTCP does this with GE's 4%), so a user
-            # who has configured battery_min_soc lower has that reflected in what is published.
-            device_min = self.base.get_state_wrapper(reserve_entity, attribute="min", default=None)
-            device_max = self.base.get_state_wrapper(reserve_entity, attribute="max", default=None)
-            if device_min not in (None, ""):
-                try:
-                    reserve = max(reserve, int(float(device_min) + 0.5))
-                except (ValueError, TypeError):
-                    pass
-            if device_max not in (None, ""):
-                try:
-                    reserve = min(reserve, int(float(device_max)))
-                except (ValueError, TypeError):
-                    pass
+        device_min, device_max = self.reserve_device_bounds()
+        if device_min is not None:
+            reserve = max(reserve, device_min)
+        if device_max is not None:
+            reserve = min(reserve, device_max)
 
         if current_reserve != reserve:
             self.base.log("Inverter {} Current Reserve is {}% and new target is {}%".format(self.id, dp0(current_reserve), dp0(reserve)))

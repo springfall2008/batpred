@@ -20,6 +20,9 @@ service calls) to the appropriate handlers.
 import os
 from datetime import timedelta
 from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key
+import functools
+import io
+import itertools
 import json
 import yaml
 import re
@@ -33,6 +36,44 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
+
+
+class DebugYamlDumper(yaml.Dumper):
+    """
+    yaml.Dumper whose anchor ids are drawn from a counter shared by every dumper writing the same stream.
+
+    dump_debug_yaml() emits the debug dict with one yaml.dump() call per top-level key, and each call
+    gets a fresh Dumper whose anchor numbering restarts at id001. Two keys that each contain an internal
+    alias would then both be labelled &id001, and the file would no longer load as a single document
+    ("found duplicate anchor"). Sharing the counter keeps every anchor in the stream unique.
+    """
+
+    def __init__(self, stream, anchor_ids=None, **kwargs):
+        """anchor_ids is the shared itertools.count(); without one this is a plain yaml.Dumper"""
+        super().__init__(stream, **kwargs)
+        self.anchor_ids = anchor_ids
+
+    def generate_anchor(self, node):
+        """Name the next anchor from the shared counter rather than this dumper's own"""
+        if self.anchor_ids is None:
+            return super().generate_anchor(node)
+        return "id{:03d}".format(next(self.anchor_ids))
+
+
+def dump_debug_yaml(debug, stream):
+    """
+    Write the debug dict to stream as one YAML document, one top-level key at a time.
+
+    yaml.dump() builds a Node object for every scalar in the data before it emits a byte, so dumping
+    the whole dict at once costs around thirty times the size of the output - ~150MB for a typical
+    5MB debug file, which set Predbat's peak memory and left ~30MB of heap fragmentation behind
+    at idle. Dumping per key bounds the node tree by the largest key instead (~20MB here). The
+    output is the same sorted single document; the only difference is that an object shared between
+    two top-level keys is written out twice rather than aliased.
+    """
+    dumper = functools.partial(DebugYamlDumper, anchor_ids=itertools.count(1))
+    for key in sorted(debug):
+        yaml.dump({key: debug[key]}, stream, Dumper=dumper)
 
 
 class UserInterface:
@@ -802,11 +843,13 @@ class UserInterface:
 
         if write_file:
             with open(filename, "w") as file:
-                yaml.dump(debug, file)
+                dump_debug_yaml(debug, file)
             self.log("Wrote debug yaml to {}".format(filename_p))
         else:
             # Return the debug yaml as a string
-            return yaml.dump(debug)
+            text = io.StringIO()
+            dump_debug_yaml(debug, text)
+            return text.getvalue()
 
     def create_entity_list(self):
         """

@@ -1520,11 +1520,11 @@ def test_component_oauth_refresh_failure_stops_the_poll():
 
 def test_component_registration():
     """The component is registered with matching config keys and event filter."""
-    from components import COMPONENT_LIST
+    from components import COMPONENT_LIST, load_component_class
     from config import APPS_SCHEMA
 
     entry = COMPONENT_LIST["myenergi"]
-    assert entry["class"] is MyEnergiAPI
+    assert load_component_class(entry) is MyEnergiAPI
     assert entry["event_filter"] == "predbat_myenergi_"
     assert entry["phase"] == 1
     assert entry["can_restart"] is True

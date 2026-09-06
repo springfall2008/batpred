@@ -4861,7 +4861,7 @@ chart.render();
             is_alive = self.base.components.is_alive(component_name)
             is_active = component_name in active_components
 
-            if is_active and not is_alive:
+            if (is_active and not is_alive) or self.base.components.load_error(component_name):
                 error_components.append(component_name)
             elif is_active and is_alive:
                 active_healthy_components.append(component_name)
@@ -4894,18 +4894,26 @@ chart.render();
             is_alive = self.base.components.is_alive(component_name)
             can_restart = self.base.components.can_restart(component_name)
             is_active = component_name in active_components
+            # Configured but failed to import or construct: inactive, yet shown as an error
+            load_error = self.base.components.load_error(component_name)
 
             # Get last updated time
             last_updated_time = self.base.components.last_updated_time(component_name)
             time_ago_text = format_time_ago(last_updated_time)
 
             # Create component card
-            card_class = "active" if is_active else "inactive"
-            if is_active and not is_alive:
-                card_class += " error"
+            if load_error:
+                # Not "inactive" as well: that rule would paint over the error border
+                card_class = "error"
+            elif is_active and not is_alive:
+                card_class = "active error"
+            elif is_active:
+                card_class = "active"
+            else:
+                card_class = "inactive"
 
             # Add data-disabled attribute for filtering
-            disabled_attr = 'data-disabled="true"' if not is_active else 'data-disabled="false"'
+            disabled_attr = 'data-disabled="true"' if not (is_active or load_error) else 'data-disabled="false"'
 
             text += f'<div class="component-card {card_class}" {disabled_attr}>\n'
             text += f'<div class="component-header">\n'
@@ -4914,13 +4922,13 @@ chart.render();
             # Status indicator
             if is_active and is_alive:
                 text += '<span class="status-indicator status-healthy">●</span><span class="status-text">Active</span>\n'
-            elif is_active and not is_alive:
+            elif (is_active and not is_alive) or load_error:
                 text += '<span class="status-indicator status-error">●</span><span class="status-text">Error</span>\n'
             else:
                 text += '<span class="status-indicator status-inactive">●</span><span class="status-text">Disabled</span>\n'
 
-            # Add restart button for active components
-            if is_active and can_restart:
+            # Add restart button for active and failed components
+            if (is_active or load_error) and can_restart:
                 text += f'<button class="restart-button" onclick="restartComponent(\'{component_name}\')" title="Restart this component">Restart</button>\n'
 
             # Add edit button for all components
@@ -4933,6 +4941,10 @@ chart.render();
 
             # Add last updated time
             text += f'<p><strong>Last Updated:</strong> <span class="last-updated-time">{time_ago_text}</span></p>\n'
+
+            # Say why a component could not be initialised
+            if load_error:
+                text += f'<p><strong>Error:</strong> <span class="error-count-high">{html_module.escape(load_error)}</span></p>\n'
 
             # Add error count
             error_count = self.base.components.get_error_count(component_name)

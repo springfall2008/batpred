@@ -76,7 +76,7 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
-from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths, mask_secret_args
+from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths, mask_secret_args, malloc_trim, limit_malloc_arenas, MALLOC_ARENA_LIMIT
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
@@ -913,6 +913,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     component = self.components.get_component(component_name)
                     if not component.is_calculating():
                         failed_components.append(COMPONENT_LIST.get(component_name, {}).get("name", component_name))
+                elif self.components.load_error(component_name):
+                    # Configured but could not be imported or constructed - an error, not merely disabled
+                    component_status[component_name] = "error"
+                    all_healthy = False
+                    error_count += 1
+                    failed_components.append(COMPONENT_LIST.get(component_name, {}).get("name", component_name))
                 elif is_active:
                     component_status[component_name] = "running"
                 else:
@@ -1333,6 +1339,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.pv_forecast_minute10_step = {}
 
         gc.collect()
+        # Collecting frees the objects; on glibc the pages stay with the process until trimmed
+        malloc_trim()
 
         # Schedule inverter update for 30 seconds time to allow the inverter to process the changes we just made before we fetch the data again
         # This allows the power flow to update for the user more quickly.
@@ -1865,6 +1873,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.args_from_apps_yaml = mask_secret_args(self.args)
         self.apps_yaml_override_warned = set()  # {arg} already warned about via set_arg_auto()
         self.log("Predbat: Startup {}".format(__name__))
+        # Cap glibc's per-thread malloc arenas before the component threads exist to be given one each
+        if limit_malloc_arenas():
+            self.log("Limited malloc arenas to {}".format(MALLOC_ARENA_LIMIT))
         self.update_time(print=False)
         self.started_time = self.now_utc_real
         run_every = RUN_EVERY * 60

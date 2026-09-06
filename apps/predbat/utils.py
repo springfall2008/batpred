@@ -18,6 +18,7 @@ and historical data extraction from incrementing energy counters.
 
 import re
 import array
+import ctypes
 import os
 from datetime import datetime, timedelta, timezone, time
 from io import StringIO
@@ -1884,3 +1885,61 @@ def is_edge_block_body(text):
         return False
     stripped = text.lstrip().lower()
     return stripped.startswith(HTML_DOCUMENT_PREFIXES) or any(marker in stripped for marker in CDN_BLOCK_MARKERS)
+
+
+# glibc's mallopt() parameter for the arena cap (from malloc.h)
+M_ARENA_MAX = -8
+
+# Arenas glibc is allowed to create for Predbat's threads, see limit_malloc_arenas()
+MALLOC_ARENA_LIMIT = 2
+
+
+def _libc_function(name, argtypes, restype):
+    """
+    Look up a C library function by name through ctypes, or return None where it does not exist.
+
+    Resolved against the running process (dlopen(NULL)), so it finds glibc's allocator extensions on
+    Linux without naming a library, and returns None on macOS, musl (Alpine) or Windows, where the
+    symbol is simply absent. Any failure to load or resolve counts as "not available", never an error.
+    """
+    try:
+        function = getattr(ctypes.CDLL(None), name)
+    except (OSError, AttributeError):
+        return None
+    function.argtypes = argtypes
+    function.restype = restype
+    return function
+
+
+def malloc_trim():
+    """
+    Hand the heap's free pages back to the operating system, returning True if any memory was released.
+
+    Predbat's memory use is spiky - the plan search, and above all the debug yaml dump, allocate far
+    more than the steady state keeps - and glibc holds on to the freed pages rather than returning
+    them, so RSS stays at the high-water mark of the last cycle and the process looks bigger than it
+    is to the Home Assistant supervisor. malloc_trim(0) releases every free page it can find across
+    all arenas; it takes a few milliseconds and is safe to call from any thread. A no-op that returns
+    False on platforms without glibc.
+    """
+    trim = _libc_function("malloc_trim", [ctypes.c_size_t], ctypes.c_int)
+    if trim is None:
+        return False
+    return bool(trim(0))
+
+
+def limit_malloc_arenas(max_arenas=MALLOC_ARENA_LIMIT):
+    """
+    Cap the number of malloc arenas glibc may create, returning True if the cap was applied.
+
+    glibc gives each thread that allocates its own arena, up to eight per core, and every arena keeps
+    its own pool of freed-but-retained memory. Predbat runs a thread (with its own event loop and
+    executor) per component, so it spreads its allocations across dozens of arenas and pays that
+    retention dozens of times over. Two arenas is plenty for threads that are idle nearly all the
+    time. Only affects arenas created after the call, so run it before the component threads start.
+    A no-op that returns False on platforms without glibc.
+    """
+    mallopt = _libc_function("mallopt", [ctypes.c_int, ctypes.c_int], ctypes.c_int)
+    if mallopt is None:
+        return False
+    return bool(mallopt(M_ARENA_MAX, max_arenas))
