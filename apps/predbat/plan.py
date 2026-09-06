@@ -4403,7 +4403,16 @@ class Plan:
                     else:
                         self.export_limits_best[window_n] = 0.0
                 elif self.export_window_best[window_n]["start"] in self.manual_freeze_export_times:
-                    self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
+                    if not self.set_export_freeze:
+                        # execute.py forces set_export_freeze off for an inverter whose INVERTER_DEF
+                        # says support_discharge_freeze is False, but this override wrote a freeze
+                        # anyway - so the plan assumed a hold the hardware cannot perform. Drop to
+                        # demand rather than a forced export: the user asked to hold the battery, and
+                        # exporting it is the opposite of that request (GH#4892).
+                        self.log("Warn: Manual freeze export time {} dropped to demand as this inverter does not support freeze export".format(self.time_abs_str(self.export_window_best[window_n]["start"])))
+                        self.export_limits_best[window_n] = EXPORT_LIMIT_IDLE
+                    else:
+                        self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
 
     def prefill_charge_limit_best(self):
         """
