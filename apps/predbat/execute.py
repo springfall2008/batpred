@@ -1068,6 +1068,11 @@ class Execute:
         """
         Quick update of inverter data for dashboard
         """
+        # While template mode is set update_pred() early-returns before fetch_config_options(),
+        # so the attributes update_status() reads (e.g. inverter_clock_skew_discharge_start)
+        # were never created - running the quick update would AttributeError every cycle (#4965)
+        if self.get_arg("template", False):
+            return False
         if self.inverters is None:
             return False
         # Its own control-ledger cycle. This runs every 120s and reaches update_status(), which

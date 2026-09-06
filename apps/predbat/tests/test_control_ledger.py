@@ -1845,6 +1845,8 @@ def test_every_entry_point_opens_its_own_cycle():
     stub = Execute.__new__(Execute)
     ledger = ControlLedger()
     stub.control_ledger = ledger
+    # The template-mode guard reads config before anything else; answer with the default (off)
+    stub.get_arg = lambda arg, default=None, **kwargs: default
     stub.inverters = []
     stub.fetch_inverter_data = lambda create=True: False
     before = ledger.cycle
