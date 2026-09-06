@@ -27,7 +27,7 @@ from aiohttp.test_utils import make_mocked_request
 from ruamel.yaml import YAML
 
 import web_chat
-from chat import AgentNotReadyError
+from chat import AgentNotReadyError, PROVIDER_DEFAULT_URLS
 from components import Components
 from tests.test_chat import _make_agent
 from web import WebInterface
@@ -1142,6 +1142,13 @@ def test_model_catalogue(my_predbat):
         return {"data": [{"id": "good/model", "name": "Good", "supported_parameters": ["tools", "temperature"], "context_length": 1000000}, {"id": "bad/model", "name": "Bad", "supported_parameters": ["temperature"]}]}
 
     agent._fetch_model_catalogue = fake_catalogue
+    # list_models() will not dial an endpoint no usable provider is configured for - see
+    # test_the_catalogue_is_not_fetched_with_no_provider_configured in test_chat.py - and this
+    # bare instance never reached initialize(), so it starts with none. Built by the real builder
+    # rather than hand-rolled, so the entry is the shape provider_ready() actually reads.
+    agent.providers = chat_module.build_providers({"openrouter": {"url": "https://openrouter.example/api/v1", "api_key": "test-key"}})
+    agent.active_provider = "openrouter"
+
     models = asyncio.run(agent.list_models())
     ids = [entry["id"] for entry in models]
     if "good/model" not in ids:
@@ -2542,8 +2549,11 @@ def test_model_picker_free_only_filter(my_predbat):
     browsable and keeps a user from picking something billable by accident. Unticking shows
     everything.
 
-    "Free" means the catalogue quotes zero both ways. The routing models quote -1, because their
-    cost depends on where they route - they must not be offered as free.
+    Which models are free is decided by the server, not from the quoted price here: only that side
+    knows what the endpoint is. Reading it from the price - which this did - meant a local endpoint
+    publishing no pricing had every model treated as not-free, so the filter emptied the picker on
+    an Ollama server where everything is free. With the box ticked by default, that was the first
+    thing a new Ollama user saw. See is_free_model() in chat.py for the rule itself.
 
     Mutation checks: defaulting the filter off, dropping the current-model exemption, or letting
     a non-free model through, each fails below.
@@ -2557,9 +2567,10 @@ def test_model_picker_free_only_filter(my_predbat):
     if free_check is None:
         print("ERROR: there is no isFreeModel() to filter on")
         return True
-    # Anchored to the formatter, so "varies" (the -1 routing models) can never read as free.
-    if "formatModelPrice" not in free_check or "'free'" not in free_check:
-        print("ERROR: isFreeModel() does not decide from the formatted price: {!r}".format(free_check))
+    # Anchored to the server's own answer. Deriving it here from the price is the bug: a local
+    # endpoint quotes none, and "no price" is not "not free".
+    if "model.free" not in free_check or "formatModelPrice" in free_check:
+        print("ERROR: isFreeModel() does not take the server's answer: {!r}".format(free_check))
         failed = True
 
     default_read = _extract_function_body(script, "readFreeOnly")
@@ -2616,23 +2627,41 @@ def test_busy_banner_only_points_at_another_conversation(my_predbat):
     offer a way there. On the conversation already open it was describing the transcript directly
     below it and offering to switch to where the user already was.
 
+    The decision now lives in refreshBanner() rather than in setBusy(), because restating it at
+    each call site is what let handleTitle restate it inverted (#4840). setBusy() is still checked
+    for delegating to it, so the rule cannot quietly move back into one caller and drift again.
+
     Mutation check: calling showBanner() unconditionally fails this.
     """
     failed = False
     print("**** Testing the busy banner only points elsewhere ****")
     script = web_chat.get_chat_script()
 
-    body = _extract_function_body(script, "setBusy")
+    body = _extract_function_body(script, "refreshBanner")
     if body is None:
-        print("ERROR: there is no setBusy() to inspect")
+        print("ERROR: there is no refreshBanner() to inspect")
         return True
     if "state.conversation" not in body:
-        print("ERROR: setBusy() does not compare the busy conversation with the open one: {!r}".format(body))
+        print("ERROR: refreshBanner() does not compare the busy conversation with the open one: {!r}".format(body))
         failed = True
     # Both outcomes must be reachable: shown for another conversation, hidden for this one.
     if "showBanner" not in body or "hideBanner" not in body:
-        print("ERROR: setBusy() cannot both show and hide the banner: {!r}".format(body))
+        print("ERROR: refreshBanner() cannot both show and hide the banner: {!r}".format(body))
         failed = True
+
+    for name in ("setBusy", "setIdle"):
+        caller = _extract_function_body(script, name)
+        if caller is None or "refreshBanner" not in caller:
+            print("ERROR: {}() no longer routes the banner decision through refreshBanner(): {!r}".format(name, caller))
+            failed = True
+        # A direct hideBanner()/showBanner() call is the shape the inverted rule grew in: whoever
+        # calls one decides for themselves, and that decision drifted. refreshBanner() is the only
+        # place allowed to choose. Comments are stripped first - naming the old call while
+        # explaining why it is no longer made must not read as making it.
+        code = re.sub(r"//[^\n]*", "", caller or "")
+        if "hideBanner" in code or "showBanner" in code:
+            print("ERROR: {}() still reaches for the banner directly instead of leaving the decision to refreshBanner(): {!r}".format(name, caller))
+            failed = True
 
     return failed
 
@@ -2752,8 +2781,24 @@ def test_provider_list_route_never_hands_a_key_to_the_browser(my_predbat):
         print("ERROR: the provider types offered are missing openrouter/ollama: {}".format(sorted(types)))
         failed = True
     else:
-        if types["ollama"]["url"] != "http://localhost:11434/v1" or types["ollama"]["model"] != "gpt-oss:20b":
-            print("ERROR: ollama defaults are wrong: {}".format(types["ollama"]))
+        # The Ollama form is prefilled with Ollama's own cloud rather than localhost. localhost is
+        # the right reading of an existing entry that names no url - which is why
+        # PROVIDER_DEFAULT_URLS still says so - but it is almost never right for a new install,
+        # because Predbat runs inside its Home Assistant container where localhost is the
+        # container. The note is what makes that a suggestion rather than a trap.
+        if types["ollama"]["url"] != "https://ollama.com/v1" or types["ollama"]["model"] != "gpt-oss:120b":
+            print("ERROR: the ollama form is not prefilled with the cloud endpoint: {}".format(types["ollama"]))
+            failed = True
+        if "localhost" not in types["ollama"].get("note", ""):
+            print("ERROR: nothing tells the user how to point Ollama at their own server: {}".format(types["ollama"].get("note")))
+            failed = True
+        # Resolution of an existing apps.yaml entry is deliberately unchanged, so an install that
+        # relies on the localhost fallback today keeps working.
+        if PROVIDER_DEFAULT_URLS["ollama"] != "http://localhost:11434/v1":
+            print("ERROR: the apps.yaml fallback for ollama changed, which repoints working installs")
+            failed = True
+        if types["openrouter"].get("note"):
+            print("ERROR: a type with nothing to explain carries a note anyway: {}".format(types["openrouter"]))
             failed = True
         if types["ollama"]["needs_key"] or not types["openrouter"]["needs_key"]:
             print("ERROR: needs_key is wrong for ollama/openrouter: {}".format(types))
@@ -3143,6 +3188,21 @@ def test_settings_script_wires_the_provider_routes(my_predbat):
         if marker not in script:
             print("ERROR: the settings script is missing {!r}".format(marker))
             failed = True
+    # The type's setup note has to reach the form, not just the payload: it is the only thing that
+    # explains a prefilled URL at the moment somebody is deciding whether to keep it.
+    if 'id="chat-provider-url-note"' not in web_chat.get_chat_body():
+        print("ERROR: the URL field has nowhere to show its note")
+        failed = True
+    open_form = script[script.index("function openProviderForm") : script.index("function closeProviderForm")]
+    if "chat-provider-url-note" not in open_form or "defaults.note" not in open_form:
+        print("ERROR: opening the form does not show the type's note: {!r}".format(open_form))
+        failed = True
+    # And not over an existing provider, where it would explain a default the user did not choose
+    # against the URL they did.
+    if "entry ?" not in open_form:
+        print("ERROR: the note is shown when editing an existing provider, not only when adding")
+        failed = True
+
     if "original_name: entry.original_name" not in script:
         print("ERROR: the save payload does not carry original_name, so a rename would lose the key")
         failed = True
@@ -3154,6 +3214,13 @@ def test_settings_script_wires_the_provider_routes(my_predbat):
         if marker not in script:
             print("ERROR: the conversation dropdown is missing {!r}".format(marker))
             failed = True
+    # A provider where nothing is free - Ollama Cloud, for one - hits the free filter with no
+    # search term, and "No free model matches \"\"" reads as a broken picker rather than a ticked
+    # box. Saying how many models are behind the filter is what turns it into an instruction.
+    if "Nothing this provider offers is free" not in script:
+        print("ERROR: a provider with no free models has no empty-state message of its own")
+        failed = True
+
     if "'chat-no-provider'" not in script:
         print("ERROR: nothing shows or hides the no-provider banner")
         failed = True
@@ -3719,10 +3786,139 @@ def test_provider_selector_sits_in_the_footer_beside_the_model_picker(my_predbat
     return failed
 
 
+def test_title_event_does_not_offer_to_switch_to_the_open_conversation(my_predbat):
+    """A title arriving mid-turn must not raise the 'replying elsewhere' banner (#4840).
+
+    The banner exists to say a reply is happening in a conversation the user is NOT looking at, and
+    offers a link to switch to it. 'title' events are scoped server-side to the conversation being
+    viewed, so `state.busy.conversation_id === state.conversation` inside handleTitle is true
+    exactly when the busy conversation is the one already on screen - the case setBusy deliberately
+    hides the banner for. Showing it there offered to switch the user to the transcript in front of
+    them, captioned with a title the header had not caught up with yet.
+    """
+    failed = False
+    print("**** Testing title event does not raise the switch-to banner ****")
+
+    script = web_chat.get_chat_script()
+
+    body = _extract_function_body(script, "handleTitle")
+    if body is None:
+        print("ERROR: no handleTitle function found")
+        return True
+
+    if "showBanner" in body:
+        print("ERROR: handleTitle still calls showBanner, which offers to switch to the conversation already open: {!r}".format(body))
+        failed = True
+
+    # The header reads its title from state.titles (see updateChatTitle), which handleTitle never
+    # updated - so the header went on saying 'New chat' until the user switched away and back.
+    if "state.titles" not in body:
+        print("ERROR: handleTitle does not update state.titles, so the header keeps the old title: {!r}".format(body))
+        failed = True
+    if "updateChatTitle" not in body:
+        print("ERROR: handleTitle does not refresh the header title: {!r}".format(body))
+        failed = True
+
+    # One place decides whether the banner belongs on screen, so setBusy and handleTitle cannot
+    # drift apart again.
+    decide = _extract_function_body(script, "refreshBanner")
+    if decide is None:
+        print("ERROR: no refreshBanner function - the show/hide rule still lives in more than one place")
+        return True
+    if "!==" not in decide:
+        print("ERROR: refreshBanner does not test that the busy conversation is a DIFFERENT one: {!r}".format(decide))
+        failed = True
+    if "showBanner" not in decide or "hideBanner" not in decide:
+        print("ERROR: refreshBanner should own both sides of the decision: {!r}".format(decide))
+        failed = True
+
+    busy = _extract_function_body(script, "setBusy")
+    if busy is None or "refreshBanner" not in busy:
+        print("ERROR: setBusy no longer delegates the banner decision to refreshBanner: {!r}".format(busy))
+        failed = True
+
+    if not failed:
+        print("✓ Test passed: a title event leaves the banner alone and refreshes the header")
+    return failed
+
+
+def test_own_message_is_shown_without_waiting_for_the_server_echo(my_predbat):
+    """Hitting send must render your own message immediately, not only when the SSE echo lands.
+
+    The bubble was previously drawn solely by handleUser(), from the server's 'user' event. Miss
+    that one event - createAndSend() sends before openStream() has run, and the history snapshot
+    and event cursor are taken under different locks on different threads - and the message was
+    gone from the transcript until a conversation switch rebuilt it from history, which is exactly
+    what users hit. Drawing it on send removes the dependency entirely.
+
+    The echo must then not draw it a second time, so handleUser() adopts the pending bubble when
+    there is one, and still appends when there is not - a second browser watching the same
+    conversation never sent anything and must render the message normally.
+    """
+    failed = False
+    print("**** Testing own message renders without the server echo ****")
+    script = web_chat.get_chat_script()
+
+    send = _extract_function_body(script, "sendMessage")
+    if send is None:
+        print("ERROR: no sendMessage function found")
+        return True
+    if "appendBubble('user'" not in send:
+        print("ERROR: sendMessage does not draw the user bubble itself: {!r}".format(send))
+        failed = True
+
+    handle = _extract_function_body(script, "handleUser")
+    if handle is None:
+        print("ERROR: no handleUser function found")
+        return True
+    # Must still append when nothing is pending, or a second browser shows no message at all.
+    if "appendBubble" not in handle:
+        print("ERROR: handleUser must still append when no local bubble is pending: {!r}".format(handle))
+        failed = True
+    if "pendingUserBubble" not in handle:
+        print("ERROR: handleUser does not adopt the locally drawn bubble, so the echo duplicates it: {!r}".format(handle))
+        failed = True
+
+    # renderHistory() rebuilds the transcript from scratch; a pending marker surviving that would
+    # make the next echo adopt a bubble that is no longer in the document.
+    render = _extract_function_body(script, "renderHistory")
+    if render is None or "pendingUserBubble" not in render:
+        print("ERROR: renderHistory does not clear the pending user bubble: {!r}".format(render))
+        failed = True
+
+    # The send must not race the stream being opened for a brand new conversation.
+    create = _extract_function_body(script, "createAndSend")
+    if create is None:
+        print("ERROR: no createAndSend function found")
+        return True
+    if "selectConversation(payload.id).then(" not in create:
+        print("ERROR: createAndSend does not chain the send off the conversation load, so it still races openStream(): {!r}".format(create))
+        failed = True
+
+    # A send that never landed must take its optimistic bubble back down, or the transcript shows
+    # a message the server never stored - the mirror of the bug this fixes, visible until a reload.
+    send_fn = _extract_function_body(script, "doSend")
+    if send_fn is None or "pendingUserBubble" not in send_fn:
+        print("ERROR: doSend leaves the optimistic bubble up when the send fails: {!r}".format(send_fn))
+        failed = True
+
+    # selectConversation() has to hand the promise back for that chaining to be possible at all.
+    select = _extract_function_body(script, "selectConversation")
+    if select is None or "return loadConversationData(" not in select:
+        print("ERROR: selectConversation does not return its load promise: {!r}".format(select))
+        failed = True
+
+    if not failed:
+        print("✓ Test passed: your own message renders on send and the echo does not duplicate it")
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
     failed |= test_routes_always_registered_handlers_404_unconfigured(my_predbat)
+    failed |= test_title_event_does_not_offer_to_switch_to_the_open_conversation(my_predbat)
+    failed |= test_own_message_is_shown_without_waiting_for_the_server_echo(my_predbat)
     failed |= test_chat_routes_survive_the_real_phase_order(my_predbat)
     failed |= test_send_is_busy_and_unknown_is_404(my_predbat)
     failed |= test_delete_refuses_the_active_conversation(my_predbat)

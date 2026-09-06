@@ -24,7 +24,7 @@ import time
 from aiohttp import web
 from ruamel.yaml import YAML
 
-from chat import AgentNotReadyError, ChatBusyError, PROVIDER_DEFAULT_URLS, PROVIDERS, conversation_model_for, default_model_for
+from chat import AgentNotReadyError, ChatBusyError, PROVIDER_DEFAULT_URLS, PROVIDER_SETUP_HINTS, PROVIDERS, conversation_model_for, default_model_for
 from utils import ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH
 
 SSE_POLL_SECONDS = 0.1
@@ -267,10 +267,19 @@ class WebChat:
     async def _snapshot_and_cursor(agent, conversation_id):
         """Return a message snapshot and the event cursor as of the same instant.
 
-        events_since() is synchronous and lock-guarded, so calling it immediately after awaiting
-        snapshot() - both inside this one coroutine - leaves no gap in which a concurrently
-        running turn could append a message and emit its event between the two. See the comment
-        at the call site in html_chat_history for why that gap mattered.
+        events_since() is synchronous and lock-guarded, and no await separates it from snapshot()
+        returning, so nothing on this loop can run between the two. That is narrower than it
+        sounds: the two halves take different locks - the store's and the agent's - and a turn
+        appends its message from the component thread, so a genuine thread interleave between
+        list(messages) and events_since() can still yield a snapshot without the message whose
+        event is already below the returned cursor. Such a message is neither rendered from
+        history nor replayed from the stream.
+
+        The window is tiny and closing it properly means one lock over both, which is a wider
+        change than it is worth here: the Chat tab no longer depends on this for the user's own
+        message, which it now draws on send rather than waiting for the echoed event (see
+        sendMessage() and handleUser() in get_chat_script()). See the comment at the call site in
+        html_chat_history for the gap this does close.
         """
         messages = await agent.store.snapshot(conversation_id)
         _, cursor, _ = agent.events_since(0, conversation_id)
@@ -712,8 +721,25 @@ def provider_type_choices():
     configured has to dial somewhere - and wrong here, where it would prefill a form for a local
     or generic OpenAI-compatible endpoint with openrouter.ai and invite the user to save it.
     A type with no genuine default offers none, and the URL field starts empty.
+
+    PROVIDER_SETUP_HINTS overrides both where a fresh setup wants something different from what an
+    existing entry resolves to - see its comment for why Ollama does. The note it carries is shown
+    under the URL field, which is the only place a prefilled value can be explained at the moment
+    somebody is deciding whether to keep it.
     """
-    return [{"type": name, "url": PROVIDER_DEFAULT_URLS.get(name, ""), "model": default_model_for(name) or "", "needs_key": bool(settings["needs_key"])} for name, settings in PROVIDERS.items()]
+    choices = []
+    for name, settings in PROVIDERS.items():
+        hint = PROVIDER_SETUP_HINTS.get(name, {})
+        choices.append(
+            {
+                "type": name,
+                "url": hint.get("url", PROVIDER_DEFAULT_URLS.get(name, "")),
+                "model": hint.get("model", default_model_for(name) or ""),
+                "needs_key": bool(settings["needs_key"]),
+                "note": hint.get("note", ""),
+            }
+        )
+    return choices
 
 
 def plain_yaml_value(value):
@@ -2080,6 +2106,7 @@ def get_chat_body():
             <div class="chat-field">
                 <label for="chat-provider-url">URL</label>
                 <input type="text" id="chat-provider-url" {autofill_off} spellcheck="false">
+                <span id="chat-provider-url-note" class="chat-field-note"></span>
             </div>
             <div class="chat-field">
                 <label for="chat-provider-key">API key</label>
@@ -2513,10 +2540,12 @@ function updateModelNote() {
 }
 
 function isFreeModel(model) {
-    // Free means the catalogue quotes zero for both directions, which is what formatModelPrice
-    // already reduces to. The routing models, which quote -1 because their cost depends on where
-    // they route, are not free and must not be offered as if they were.
-    return formatModelPrice(model) === 'free';
+    // Decided by the server, which is the only side that knows what the endpoint is - see
+    // is_free_model() in chat.py. Reading it from the quoted price here, which is what this did,
+    // meant a local endpoint publishing no pricing had every model treated as not-free, and
+    // "show only free models" - ticked by default - emptied the picker on an Ollama server where
+    // everything is free.
+    return model.free === true;
 }
 
 function appendFreeOnlyRow(list) {
@@ -2609,7 +2638,18 @@ function renderModelResults(filter) {
         empty.className = 'chat-model-empty';
         // Naming the filter matters here: with it on, a search for a paid model returns nothing
         // and the reason is a checkbox the user may have forgotten is ticked.
-        empty.textContent = state.freeOnly ? 'No free model matches "' + filter + '" - untick "Show only free models" to search them all' : 'No model matches "' + filter + '"';
+        //
+        // The no-search-term case is its own message rather than 'No free model matches ""',
+        // because it is a real configuration - a provider where nothing is free, such as Ollama
+        // Cloud - rather than a search that found nothing. Saying how many models are behind the
+        // filter is what turns "this is broken" into "untick that".
+        if (!state.freeOnly) {
+            empty.textContent = filter ? 'No model matches "' + filter + '"' : 'No models offered';
+        } else if (filter) {
+            empty.textContent = 'No free model matches "' + filter + '" - untick "Show only free models" to search them all';
+        } else {
+            empty.textContent = 'Nothing this provider offers is free - untick "Show only free models" to see ' + (state.models || []).length + ' paid models';
+        }
         list.appendChild(empty);
     } else if (matches.length > shown.length) {
         var more = document.createElement('div');
@@ -2632,11 +2672,24 @@ function openModelList() {
     var offered = (state.models || []).filter(function (model) { return !state.freeOnly || isFreeModel(model); });
     input.placeholder = 'Search ' + offered.length + (state.freeOnly ? ' free' : '') + ' models...';
     byId('chat-model-list').style.display = 'block';
+    // The list opens upward from the footer at the very bottom of the page (see #chat-model-list's
+    // `bottom: 100%`), so the CSS max-height of 320px assumes there is always that much room above
+    // it. On a short window there is not, and the list renders above the safe area where it is
+    // clipped by the viewport or painted over by .menu-bar - the page-wide fixed nav (web_helper.py,
+    // z-index: 1000) every Predbat page reserves body's padding-top for. Reaching the true top of
+    // the viewport is not enough: that bar's own height has to be subtracted too, or a short window
+    // still hides the top of the list underneath it. Clamp to what is actually free below it - the
+    // list is already scrollable, so less height just means scrolling to see the rest.
+    var wrapTop = byId('chat-model-wrap').getBoundingClientRect().top;
+    var menuBar = document.querySelector('.menu-bar');
+    var safeTop = menuBar ? menuBar.getBoundingClientRect().bottom : 0;
+    byId('chat-model-list').style.maxHeight = Math.max(0, Math.min(320, wrapTop - safeTop - 12)) + 'px';
     renderModelResults('');
 }
 
 function closeModelList() {
     byId('chat-model-list').style.display = 'none';
+    byId('chat-model-list').style.maxHeight = '';
     var input = byId('chat-model');
     input.value = modelLabel(effectiveModel());
     input.placeholder = '';
@@ -2800,25 +2853,43 @@ function hideBanner() {
     banner.innerHTML = '';
 }
 
+// The banner exists to say a reply is happening SOMEWHERE ELSE, and to offer a way there. On the
+// conversation already open it would be telling the user about the thing in front of them and
+// offering to switch to where they already are - the transcript is the status there.
+//
+// This is the only place that decides between the two. Callers set state.busy - or clear it - and
+// then ask; none of them call showBanner/hideBanner themselves. The rule used to be restated at
+// each call site, and handleTitle restated it inverted, raising the banner precisely when the busy
+// conversation WAS the one on screen (#4840). One owner is what stops that recurring.
+function refreshBanner() {
+    if (state.busy && state.busy.conversation_id && state.busy.conversation_id !== state.conversation) {
+        showBanner(state.busy.conversation_id, state.busy.title);
+    } else {
+        hideBanner();
+    }
+}
+
 function setBusy(conversationId, title, turnId) {
     state.busy = { conversation_id: conversationId, title: title, turn_id: turnId };
     setComposerDisabled(true);
-    // The banner exists to say a reply is happening SOMEWHERE ELSE, and to offer a way there.
-    // On the conversation already open it was telling the user about the thing in front of them
-    // and offering to switch to where they already are. The transcript is the status here.
-    if (conversationId && conversationId === state.conversation) {
-        hideBanner();
-    } else {
-        showBanner(conversationId, title);
-    }
+    refreshBanner();
     byId('chat-stop').classList.add('visible');
 }
 
 function setIdle() {
     state.busy = null;
     setComposerDisabled(false);
-    hideBanner();
+    // Reached with state.busy already cleared, so this takes the hide branch - the same outcome as
+    // the direct call it replaces, but without a second place that decides for itself.
+    refreshBanner();
     byId('chat-stop').classList.remove('visible');
+    // Every caller of setIdle() - the 'idle' SSE event, reconcileBusy() correcting a stale banner
+    // on reconnect, and the no-active-turn branch of loadConversationData() - means the server has
+    // no turn running. The thinking bubble is separate UI state driven by its own set of SSE
+    // handlers (see clearThinkingBubble()'s callers), so a client that missed the 'idle' event
+    // itself (a dropped connection, a thrown handler) previously had no way to notice the mismatch
+    // even once reconcileBusy() caught up on reconnect - the banner cleared but the bubble did not.
+    clearThinkingBubble();
 }
 
 function stopTurn() {
@@ -3279,7 +3350,18 @@ function handleRetry(data) {
     startRetryCountdown(data);
 }
 
+// The bubble sendMessage() drew for a message this browser has sent but not yet seen echoed
+// back. Held so the echo can adopt it instead of drawing a second copy; null at every other time.
+var pendingUserBubble = null;
+
 function handleUser(data) {
+    // This browser already drew it on send, so consume that bubble rather than appending a
+    // duplicate. Another browser watching the same conversation has nothing pending and appends
+    // normally, which is why the echo is still what renders it there.
+    if (pendingUserBubble) {
+        pendingUserBubble = null;
+        return;
+    }
     appendBubble('user', data.text || '');
 }
 
@@ -3401,9 +3483,21 @@ function handleTitle(data) {
             setTitleText(titleNode, data.title || '');
         }
     }
-    if (state.busy && state.busy.conversation_id === state.conversation) {
-        showBanner(state.busy.conversation_id, data.title);
+    // The header reads its title from state.titles (updateChatTitle), which nothing updated on a
+    // title event - so it went on saying 'New chat' until the user switched away and back, while
+    // the row in the list already showed the real name.
+    if (state.conversation) {
+        state.titles = state.titles || {};
+        state.titles[state.conversation] = data.title || '';
+        updateChatTitle();
     }
+    // A title event is scoped by the server to the conversation being viewed, so it can only ever
+    // rename the one on screen. Keep the busy record in step so that switching away afterwards
+    // shows the banner with the name the conversation now has, then let refreshBanner decide.
+    if (state.busy && state.busy.conversation_id === state.conversation) {
+        state.busy.title = data.title;
+    }
+    refreshBanner();
 }
 
 // Cached-token counts are diagnostic (proof prompt caching is actually landing hits, not merely
@@ -3495,6 +3589,10 @@ function renderHistory(payload) {
     confirmCards = {};
     pendingBubble = null;
     pendingText = '';
+    // The transcript this pointed into has just been thrown away, and the rebuilt history already
+    // contains the message. Leaving it set would make the next echo adopt a detached node and
+    // swallow a message this browser had not drawn.
+    pendingUserBubble = null;
     (payload.messages || []).forEach(function (message) {
         if (message.role === 'user') {
             appendBubble('user', message.content || '');
@@ -3730,7 +3828,9 @@ function selectConversation(id) {
     highlightActiveRow(id);
     updateChatTitle();
     setConversationPanel(false);
-    loadConversationData(id).catch(function (error) { console.error('Failed to load chat history', error); });
+    // Returned, not just fired: createAndSend() has to wait for this before sending, because
+    // openStream() runs at the end of it and a send that beats it races the event cursor.
+    return loadConversationData(id).catch(function (error) { console.error('Failed to load chat history', error); });
 }
 
 function handleReload() {
@@ -3960,6 +4060,13 @@ function doSend(conversationId, text) {
         })
         .then(function () { refreshConversations(); })
         .catch(function (error) {
+            // The message never landed, so take the bubble sendMessage() drew back down rather
+            // than leaving the transcript claiming something was said that the server never
+            // stored - a 409 because a turn is already running is the common way here.
+            if (pendingUserBubble) {
+                pendingUserBubble.remove();
+                pendingUserBubble = null;
+            }
             if (!error || error.message !== 'busy') {
                 console.error('Failed to send message', error);
             }
@@ -3970,9 +4077,14 @@ function createAndSend(text) {
     fetch('./chat/conversations', { method: 'POST' })
         .then(function (response) { return response.json(); })
         .then(function (payload) {
-            selectConversation(payload.id);
-            doSend(payload.id, text);
-            refreshConversations();
+            // Chained rather than fired alongside: selectConversation() opens the event stream at
+            // the end of its load, and sending before that leaves the turn's own events arriving
+            // with nothing listening, recoverable only through the cursor.
+            return selectConversation(payload.id).then(function () {
+                pendingUserBubble = appendBubble('user', text);
+                doSend(payload.id, text);
+                refreshConversations();
+            });
         })
         .catch(function (error) { console.error('Failed to start conversation', error); });
 }
@@ -3988,6 +4100,10 @@ function sendMessage() {
         createAndSend(text);
         return;
     }
+    // Drawn here rather than waiting for the server to echo it back as a 'user' event. That echo
+    // is a single event, and a single missed event left the message invisible until a conversation
+    // switch rebuilt the transcript from history - see handleUser().
+    pendingUserBubble = appendBubble('user', text);
     doSend(state.conversation, text);
 }
 
@@ -4257,6 +4373,9 @@ function openProviderForm(index) {
     byId('chat-provider-key').value = '';
     byId('chat-provider-model-options').innerHTML = '';
     setProviderNote('chat-provider-model-note', '');
+    // Only when adding. Editing an existing provider must not explain a prefilled default over
+    // the URL the user actually chose and is looking at.
+    setProviderNote('chat-provider-url-note', entry ? '' : (defaults.note || ''));
     updateKeyNote();
     byId('chat-provider-form').classList.add('open');
     showSettingsError('');
@@ -4281,6 +4400,15 @@ function updateKeyNote() {
     if (entry && (entry.has_key || entry.api_key)) {
         input.placeholder = 'A key is already saved - leave blank to keep it';
         setProviderNote('chat-provider-key-note', 'Type a new key to replace it. Clearing it is not possible from here - remove the provider instead.');
+        return;
+    }
+    // A type whose form is prefilled with a hosted endpoint cannot claim a key is unnecessary -
+    // it is, for the endpoint sitting in the URL box above - but it is genuinely not needed if the
+    // user follows the note and points it at their own server. Said once, covering both, rather
+    // than reimplementing the server's is-this-address-local rule in the browser to guess which.
+    if (defaults && defaults.note) {
+        input.placeholder = 'Needed for a hosted endpoint';
+        setProviderNote('chat-provider-key-note', 'Needed for the hosted endpoint above. Leave it empty if you change the URL to a server of your own.');
         return;
     }
     if (defaults && !defaults.needs_key) {
@@ -4311,6 +4439,7 @@ function changeProviderType() {
     }
     byId('chat-provider-model-options').innerHTML = '';
     setProviderNote('chat-provider-model-note', '');
+    setProviderNote('chat-provider-url-note', defaults.note || '');
     updateKeyNote();
 }
 

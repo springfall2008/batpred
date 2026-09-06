@@ -21,6 +21,7 @@ from sigenergy import (
     SIGENERGY_ACTIVE_MODE_SELF,
     SIGENERGY_CODE_IN_OTHER_VPP,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
+    SIGENERGY_LOG_REDACT_KEYS,
     SIGENERGY_MODE_MSC,
     SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
@@ -1339,6 +1340,113 @@ def test_sigenergy_publish_mqtt_success(my_predbat):
     decoded = json.loads(payload)
     assert decoded["activeMode"] == "charge", "Payload content correct"
     assert decoded["systemId"] == "SIG1", "systemId in payload"
+
+    return failed
+
+
+def test_sigenergy_redact(my_predbat):
+    """Test redact masks credential keys at any depth and leaves the rest alone."""
+    failed = False
+
+    redacted = SigenergyAPI.redact({"accessToken": "live-token", "systemId": "SIG1"})
+    assert redacted["accessToken"] == "<redacted>", "accessToken masked"
+    assert redacted["systemId"] == "SIG1", "Non-credential key untouched"
+
+    # Nested inside a list, as the battery command payload nests its commands
+    nested = SigenergyAPI.redact({"commands": [{"systemId": "SIG1", "password": "hunter2"}]})
+    assert nested["commands"][0]["password"] == "<redacted>", "Credential masked inside a nested list"
+    assert nested["commands"][0]["systemId"] == "SIG1", "Nested non-credential key untouched"
+
+    # Nested inside a dict, exercising the dict-value recursion branch
+    nested_dict = SigenergyAPI.redact({"outer": {"accessToken": "live-token", "systemId": "SIG1"}})
+    assert nested_dict["outer"]["accessToken"] == "<redacted>", "Credential masked inside a nested dict"
+    assert nested_dict["outer"]["systemId"] == "SIG1", "Nested-dict non-credential key untouched"
+
+    # Every documented credential key is covered — iterate the constant so keys added
+    # to SIGENERGY_LOG_REDACT_KEYS later are automatically tested too
+    for key in SIGENERGY_LOG_REDACT_KEYS:
+        assert SigenergyAPI.redact({key: "secret"})[key] == "<redacted>", "Key {} masked".format(key)
+
+    # json.dumps() serialises tuples as arrays, so redaction must cover them or a
+    # tuple-shaped payload would be published as JSON yet logged unmasked
+    nested_tuple = SigenergyAPI.redact({"commands": ({"password": "hunter2"},)})
+    assert nested_tuple["commands"][0]["password"] == "<redacted>", "Credential masked inside a nested tuple"
+
+    # Scalars and lists of scalars pass straight through
+    assert SigenergyAPI.redact("plain") == "plain", "String passthrough"
+    assert SigenergyAPI.redact([1, 2]) == [1, 2], "List passthrough"
+    assert SigenergyAPI.redact(None) is None, "None passthrough"
+
+    return failed
+
+
+def test_sigenergy_publish_mqtt_redacts_token(my_predbat):
+    """Test _publish_mqtt keeps the live token on the wire but masks it in the log (#4920)."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "tok123"
+    api.mqtt_host = "openapi-eu.sigencloud.com" # cspell:disable-line
+    api.mqtt_port = 8883
+
+    mock_client = _make_mock_aiomqtt_client()
+    # The nested command carries a credential too, mirroring the shape of the #4920 leak:
+    # a top-level-only redaction would mask accessToken but still leak the nested password
+    payload = {"accessToken": "live-secret-token", "commands": [{"systemId": "SIG1", "activeMode": "charge", "password": "nested-secret"}]}
+
+    with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+        with patch("sigenergy.aiomqtt.Client", return_value=mock_client):
+            ok = run_async(SigenergyAPI._publish_mqtt(api, "openapi/instruction/command", payload))
+
+    assert ok is True, "_publish_mqtt should return True on success"
+
+    # The broker still receives the real token — redaction is log-only
+    topic, wire_payload = mock_client.publishes[0]
+    import json
+
+    assert topic == "openapi/instruction/command", "Published to the command topic"
+    assert json.loads(wire_payload)["accessToken"] == "live-secret-token", "Real token still published to the broker"
+    assert json.loads(wire_payload)["commands"][0]["password"] == "nested-secret", "Nested credential still published to the broker"
+
+    published_logs = [m for m in api.log_messages if "MQTT published" in m]
+    assert len(published_logs) == 1, "Exactly one publish log line expected"
+    assert "live-secret-token" not in published_logs[0], "Token must not appear in the log"
+    assert "nested-secret" not in published_logs[0], "Nested credential must not appear in the log"
+    assert "<redacted>" in published_logs[0], "Token replaced with the redaction marker"
+    assert "SIG1" in published_logs[0], "Non-credential payload content still logged"
+
+    # The caller's payload dict is not mutated by redaction
+    assert payload["accessToken"] == "live-secret-token", "Caller payload left unmodified"
+
+    return failed
+
+
+def test_sigenergy_request_log_redacts_credentials(my_predbat):
+    """Test _request masks credential-bearing keys in its request and response log lines."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.get_access_token = AsyncMock(return_value="tok123")
+
+    fake_response = {"code": 0, "msg": "ok", "data": {"accessToken": "resp-token", "systemId": "SIG1"}}
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.SIGENERGY_MIN_REQUEST_INTERVAL", 0):
+        with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+            result = run_async(SigenergyAPI._request(api, "POST", "/openapi/test", params={"token": "query-secret"}, json_data={"password": "hunter2", "systemId": "SIG1"}))
+
+    assert result == {"accessToken": "resp-token", "systemId": "SIG1"}, "Response data returned unchanged"
+
+    request_logs = [m for m in api.log_messages if "Requesting" in m]
+    assert len(request_logs) == 1, "Exactly one request log line expected"
+    assert "query-secret" not in request_logs[0], "params credential must not appear in the request log"
+    assert "hunter2" not in request_logs[0], "json_data credential must not appear in the request log"
+    assert "SIG1" in request_logs[0], "Non-credential request content still logged"
+
+    response_logs = [m for m in api.log_messages if "Response from" in m]
+    assert len(response_logs) == 1, "Exactly one response log line expected"
+    assert "resp-token" not in response_logs[0], "Response credential must not appear in the response log"
+    assert "SIG1" in response_logs[0], "Non-credential response content still logged"
 
     return failed
 
@@ -3047,6 +3155,9 @@ def run_sigenergy_tests(my_predbat):
         ("apply_controls_deduplication", test_sigenergy_apply_controls_deduplication),
         ("apply_controls_export_mode", test_sigenergy_apply_controls_export_mode),
         ("publish_mqtt_success", test_sigenergy_publish_mqtt_success),
+        ("redact", test_sigenergy_redact),
+        ("publish_mqtt_redacts_token", test_sigenergy_publish_mqtt_redacts_token),
+        ("request_log_redacts_credentials", test_sigenergy_request_log_redacts_credentials),
         ("publish_mqtt_failure", test_sigenergy_publish_mqtt_failure),
         ("send_battery_command_mqtt", test_sigenergy_send_battery_command_mqtt),
         ("send_battery_command_no_token", test_sigenergy_send_battery_command_no_token),

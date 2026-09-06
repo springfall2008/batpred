@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.54.0"
+THIS_VERSION = "v9.0.0"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -76,7 +76,7 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
-from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths
+from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths, mask_secret_args, malloc_trim, limit_malloc_arenas, MALLOC_ARENA_LIMIT
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
@@ -371,6 +371,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.metric_battery_value_export_scaling = 0.8
         self.calculate_pv90_plan = False
         self.pv_metric90_weight = 0.15
+        # DC array size in kWp, capping the p90 cloud model's extrapolation. Auto-detected from the
+        # forecast provider (see resolve_pv_array_kwp); 0 leaves the cap inert.
+        self.pv_array_kwp = 0.0
         self.load_scaling90 = 0.7
         self.metric_future_rate_offset_import = 0.0
         self.metric_future_rate_offset_export = 0.0
@@ -496,6 +499,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_intelligent_consider_full = False
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
+        self.dispatch_timeline_last = {}
         self.ge_url_cache = {}
         self.github_url_cache = {}
         self.load_minutes = {}
@@ -542,6 +546,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.savings_last_updated = None
         self.cost_yesterday_car = 0.0
         self.cost_total_car = 0.0
+        self.carbon_yesterday = 0.0
         self.rate_import = {}
         self.rate_import_replicated = {}
         self.rate_export = {}
@@ -911,6 +916,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     component = self.components.get_component(component_name)
                     if not component.is_calculating():
                         failed_components.append(COMPONENT_LIST.get(component_name, {}).get("name", component_name))
+                elif self.components.load_error(component_name):
+                    # Configured but could not be imported or constructed - an error, not merely disabled
+                    component_status[component_name] = "error"
+                    all_healthy = False
+                    error_count += 1
+                    failed_components.append(COMPONENT_LIST.get(component_name, {}).get("name", component_name))
                 elif is_active:
                     component_status[component_name] = "running"
                 else:
@@ -1181,6 +1192,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             else:
                 cost_total_car = 0
 
+            if self.carbon_enable:
+                carbon_total = self.load_previous_value_from_ha(self.prefix + ".carbon_total")
+                try:
+                    carbon_total = float(carbon_total)
+                except (ValueError, TypeError):
+                    carbon_total = 0.0
+            else:
+                carbon_total = 0.0
+
             # Increment total at 1am once we have today's data stable (cloud data can lag)
             if self.minutes_now > 60 and savings_total_last_updated and savings_total_last_updated != todays_date and scheduled and not self.set_read_only:
                 savings_total_predbat += self.savings_today_predbat
@@ -1189,6 +1209,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 savings_total_actual += self.savings_today_actual
                 savings_total_last_updated = todays_date
                 cost_total_car += self.cost_yesterday_car
+                if self.carbon_enable:
+                    carbon_total += self.carbon_yesterday
 
             self.dashboard_item(
                 self.prefix + ".savings_total_predbat",
@@ -1255,6 +1277,20 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                         "last_updated": savings_total_last_updated,
                     },
                 )
+            if self.carbon_enable:
+                self.dashboard_item(
+                    self.prefix + ".carbon_total",
+                    state=dp2(carbon_total),
+                    attributes={
+                        "friendly_name": "Total carbon emissions",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "g",
+                        "kg": dp2(carbon_total / 1000.0),
+                        "icon": "mdi:carbon-molecule",
+                        "start_date": savings_total_start_date,
+                        "last_updated": savings_total_last_updated,
+                    },
+                )
 
         # Car SoC increment
         if scheduled:
@@ -1306,6 +1342,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.pv_forecast_minute10_step = {}
 
         gc.collect()
+        # Collecting frees the objects; on glibc the pages stay with the process until trimmed
+        malloc_trim()
 
         # Schedule inverter update for 30 seconds time to allow the inverter to process the changes we just made before we fetch the data again
         # This allows the power flow to update for the user more quickly.
@@ -1344,7 +1382,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if files:
             # Notify before killing threads so the WebSocket is still healthy
             if self.get_arg("set_system_notify"):
-                self.call_notify("Predbat: update to: {}".format(version))
+                self.call_notify(f"{self.prefix.capitalize()}: update to: {version}")
 
             # Kill the current threads
             self.log("Kill current threads before update")
@@ -1832,9 +1870,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # (auto_config/load_user_config) or any component's automatic_config() touches self.args -
         # lets ComponentBase.set_arg_auto() tell "user explicitly configured this" apart from
         # "Predbat defaulted it" or "another component already overwrote it" (issue #4494 follow-up).
-        self.args_from_apps_yaml = copy.deepcopy(self.args)
+        # Masked at the source (set_arg_auto() is only ever called with auto-discovery targets
+        # like battery_scaling or sensor entity ids, never credential-shaped keys) so this second
+        # copy of apps.yaml can never carry a real secret regardless of how it's later dumped.
+        self.args_from_apps_yaml = mask_secret_args(self.args)
         self.apps_yaml_override_warned = set()  # {arg} already warned about via set_arg_auto()
         self.log("Predbat: Startup {}".format(__name__))
+        # Cap glibc's per-thread malloc arenas before the component threads exist to be given one each
+        if limit_malloc_arenas():
+            self.log("Limited malloc arenas to {}".format(MALLOC_ARENA_LIMIT))
         self.update_time(print=False)
         self.started_time = self.now_utc_real
         run_every = RUN_EVERY * 60
@@ -1875,7 +1919,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             slug = self.ha_interface.get_slug()
             if slug:
                 # and use slug name to determine printable config_root pathname when writing debug info to the log file
-                self.config_root_p = "/addon_configs/" + slug
+                self.config_root_p = "/app_configs/" + slug
 
             self.log("Config root is {} and printable config_root_p is now {}".format(self.config_root, self.config_root_p))
 

@@ -14,6 +14,7 @@ loop, the tool dispatch and the confirmation gate are all exercised without a ne
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -27,13 +28,21 @@ import aiohttp
 import chat
 from chat import (
     CHAT_DEFAULTS,
+    PROVIDERS,
     PROVIDER_DEFAULT_MODELS,
     build_providers,
     extract_providers,
     COMPLETION_MAX_ATTEMPTS,
     COMPLETION_RATE_LIMIT_DELAYS_SECONDS,
     COMPLETION_RATE_LIMIT_MAX_ATTEMPTS,
+    is_free_model,
+    LOCAL_MODEL_CACHE_MINUTES,
     max_attempts_for,
+    MODEL_CACHE_MINUTES,
+    MODEL_CACHE_VERSION,
+    NO_PROVIDER_MESSAGE,
+    ollama_native_url,
+    ollama_tags_to_catalogue,
     model_cache_name,
     resolve_provider,
     parse_retry_after,
@@ -1702,6 +1711,25 @@ def _write_call_response(entity_id="input_number.predbat_best_soc_keep", value="
     return _tool_call_response("set_config", {"entity_id": entity_id, "value": value}, call_id="call_write")
 
 
+@contextlib.contextmanager
+def _fast_confirm_poll():
+    """Shorten await_confirmation's poll interval for tests whose answer arrives at once.
+
+    await_confirmation re-checks the pending confirmation every CONFIRM_POLL_SECONDS (0.2s). That
+    is the right cadence against a person at a browser, but a test whose background thread answers
+    in microseconds still sits out a whole tick, and these tests assert that the answer is
+    honoured - not how often the waiter looks for it. Shortened rather than removed so the polling
+    loop is still genuinely exercised. Same trick test_write_confirmation_timeout uses on
+    CONFIRM_TIMEOUT_SECONDS.
+    """
+    original = chat.CONFIRM_POLL_SECONDS
+    chat.CONFIRM_POLL_SECONDS = 0.002
+    try:
+        yield
+    finally:
+        chat.CONFIRM_POLL_SECONDS = original
+
+
 def _confirm_soon(agent, approved):
     """Answer the next pending confirmation from a background thread, as a browser would."""
 
@@ -1730,7 +1758,8 @@ def test_write_confirmation_approved(my_predbat):
     cid = asyncio.run(agent.store.create())
 
     _confirm_soon(agent, True)
-    asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+    with _fast_confirm_poll():
+        asyncio.run(agent.run_turn(cid, "raise best soc keep"))
 
     kinds = [event["type"] for event in agent.events_since(0, cid)[0]]
     for required in ("confirm", "confirm_result", "tool_start", "tool_end"):
@@ -1755,7 +1784,8 @@ def test_write_confirmation_rejected(my_predbat):
     cid = asyncio.run(agent.store.create())
 
     _confirm_soon(agent, False)
-    asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+    with _fast_confirm_poll():
+        asyncio.run(agent.run_turn(cid, "raise best soc keep"))
 
     results = [message for message in asyncio.run(agent.store.get_messages(cid)) if message["role"] == "tool"]
     if not results or "declined" not in str(results[0].get("content")).lower():
@@ -1845,7 +1875,8 @@ def test_set_apps_config_confirmation_gate_and_card(my_predbat):
         cid = asyncio.run(agent.store.create())
 
         _confirm_soon(agent, False)
-        asyncio.run(agent.run_turn(cid, "change the HA url"))
+        with _fast_confirm_poll():
+            asyncio.run(agent.run_turn(cid, "change the HA url"))
 
         events, _, _ = agent.events_since(0, cid)
         kinds = [event["type"] for event in events]
@@ -1905,7 +1936,8 @@ def test_set_apps_config_approved_writes_apps_yaml(my_predbat):
         cid = asyncio.run(agent.store.create())
 
         _confirm_soon(agent, True)
-        asyncio.run(agent.run_turn(cid, "change num_inverters"))
+        with _fast_confirm_poll():
+            asyncio.run(agent.run_turn(cid, "change num_inverters"))
 
         with open(os.path.join(temp_dir, "apps.yaml"), "r", encoding="utf-8") as handle:
             written = handle.read()
@@ -2602,12 +2634,13 @@ def test_retry_after_header_is_honoured(my_predbat):
 
 
 def test_retry_backoff_sequence_is_one_then_three_seconds(my_predbat):
-    """Three attempts that all fail with a plain retryable error back off 1s then 3s - the module
-    constants named in the task, not hand-rolled numbers - and the suite never actually sleeps for
-    either, since agent._retry_sleep only records what was requested.
+    """Every attempt that fails with a plain retryable error backs off on retry_delay_for()'s own
+    schedule - the module constants named in the task, not hand-rolled numbers, with the last entry
+    of COMPLETION_RETRY_DELAYS_SECONDS repeating once the schedule runs out - and the suite never
+    actually sleeps for any of them, since agent._retry_sleep only records what was requested.
     """
     failed = False
-    print("**** Testing the plain retry backoff sequence is 1s then 3s ****")
+    print("**** Testing the plain retry backoff sequence follows the configured schedule ****")
     agent = _agent_with_fake(my_predbat, *[_mid_stream_error_response() for _ in range(COMPLETION_MAX_ATTEMPTS)])
     cid = asyncio.run(agent.store.create())
 
@@ -2615,8 +2648,12 @@ def test_retry_backoff_sequence_is_one_then_three_seconds(my_predbat):
     asyncio.run(agent.run_turn(cid, "hello"))
     elapsed = time.monotonic() - started
 
-    if agent.retry_sleeps != list(COMPLETION_RETRY_DELAYS_SECONDS):
-        print("ERROR: expected the backoff sequence {}, agent requested {}".format(list(COMPLETION_RETRY_DELAYS_SECONDS), agent.retry_sleeps))
+    # One backoff per retry, i.e. every attempt but the first - derived via retry_delay_for() itself
+    # rather than list(COMPLETION_RETRY_DELAYS_SECONDS), since the schedule now has fewer entries
+    # than there are retries and the tail value repeats for the rest.
+    expected = [retry_delay_for(attempt, False) for attempt in range(1, COMPLETION_MAX_ATTEMPTS)]
+    if agent.retry_sleeps != expected:
+        print("ERROR: expected the backoff sequence {}, agent requested {}".format(expected, agent.retry_sleeps))
         failed = True
     if elapsed > 2:
         print("ERROR: the turn took {:.2f}s - the injected sleep is not actually replacing the real backoff".format(elapsed))
@@ -2983,7 +3020,7 @@ def test_turn_error_is_detailed_and_stored_but_never_replayed(my_predbat):
     ]
     # A 502 is retryable, so the fake needs a response for every attempt - otherwise the turn
     # fails for running out of canned replies rather than for the error under test.
-    agent = _agent_with_fake(my_predbat, error_chunk, error_chunk, error_chunk)
+    agent = _agent_with_fake(my_predbat, *[error_chunk for _ in range(COMPLETION_MAX_ATTEMPTS)])
     cid = asyncio.run(agent.store.create())
     asyncio.run(agent.run_turn(cid, "is it sunny"))
 
@@ -3125,7 +3162,8 @@ def test_stop_reaches_a_turn_parked_on_a_confirmation(my_predbat):
         approved = await agent.await_confirmation("call_x")
         return approved, time.monotonic() - started
 
-    approved, elapsed = asyncio.run(drive())
+    with _fast_confirm_poll():
+        approved, elapsed = asyncio.run(drive())
 
     if approved:
         print("ERROR: a stopped confirmation was treated as approved")
@@ -3480,6 +3518,265 @@ def test_a_conversation_model_does_not_survive_a_provider_switch(my_predbat):
     return failed
 
 
+def test_ollama_cloud_models_are_listed_but_not_free(my_predbat):
+    """A cloud model reaches the picker, and is not offered as free.
+
+    Ollama's cloud models run on somebody else's hardware and are paid for, but the server
+    offering them is your own and publishes no prices - so the "local endpoint, therefore free"
+    rule is exactly wrong for them, and "show only free models" would otherwise hand a user a
+    billable model under a filter asking for the opposite.
+
+    Only /api/tags says which models those are: remote_model and remote_host appear there and not
+    in the OpenAI-compatible /v1/models shim. Both endpoints list the same models - checked
+    against a live server with a cloud model pulled - so this is about telling them apart, not
+    about which are visible.
+    """
+    failed = False
+    print("**** Testing that Ollama cloud models are listed but not free ****")
+
+    # The shape /api/tags really returns, taken from a live server.
+    tags = {
+        "models": [
+            {"name": "gpt-oss:20b", "model": "gpt-oss:20b", "details": {}},
+            {"name": "gpt-oss:120b-cloud", "model": "gpt-oss:120b-cloud", "remote_model": "gpt-oss:120b", "remote_host": "https://ollama.com", "details": {}},
+        ]
+    }
+    catalogue = ollama_tags_to_catalogue(tags)
+    if [entry["id"] for entry in catalogue["data"]] != ["gpt-oss:20b", "gpt-oss:120b-cloud"]:
+        print("ERROR: the tags response did not become a catalogue: {}".format(catalogue))
+        return True
+    if catalogue["data"][0]["remote"] or not catalogue["data"][1]["remote"]:
+        print("ERROR: remote was not read from remote_model/remote_host: {}".format(catalogue))
+        failed = True
+
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "http://192.168.0.33:11434/v1"}})
+    agent.select_provider("ollama")
+
+    async def no_details(models, base_url=None):
+        """Skip the live /api/show enrichment."""
+        return models
+
+    agent._add_ollama_details = no_details
+    models = {entry["id"]: entry for entry in asyncio.run(agent._catalogue_to_models(catalogue, agent.provider, agent.base_url, None))}
+
+    if "gpt-oss:120b-cloud" not in models:
+        print("ERROR: the cloud model did not reach the picker: {}".format(sorted(models)))
+        failed = True
+    elif models["gpt-oss:120b-cloud"]["free"]:
+        print("ERROR: a cloud model was offered as free: {}".format(models["gpt-oss:120b-cloud"]))
+        failed = True
+    if not models.get("gpt-oss:20b", {}).get("free"):
+        print("ERROR: a genuinely local model stopped being free: {}".format(models.get("gpt-oss:20b")))
+        failed = True
+
+    # The native endpoint is derived from the OpenAI base by stripping a trailing /v1 - and only
+    # a whole trailing segment, or "/v1beta" would be truncated to nothing and a quite different
+    # server asked for its models.
+    for base, expected in (
+        ("http://192.168.0.33:11434/v1", "http://192.168.0.33:11434/api/tags"),
+        ("https://ollama.com/v1", "https://ollama.com/api/tags"),
+        ("http://192.168.0.33:11434", "http://192.168.0.33:11434/api/tags"),
+        ("https://host/v1beta", "https://host/v1beta/api/tags"),
+    ):
+        if ollama_native_url(base, "/api/tags") != expected:
+            print("ERROR: {} derived {}, expected {}".format(base, ollama_native_url(base, "/api/tags"), expected))
+            failed = True
+
+    # Ollama is free on your own machine and paid for at ollama.com, serving the identical API and
+    # publishing no prices either way - so where it is decides whether its models are free.
+    hosted = resolve_provider("ollama", "https://ollama.com/v1")[1]
+    local = resolve_provider("ollama", "http://192.168.0.33:11434/v1")[1]
+    if hosted["metered"] is not True or local["metered"] is not False:
+        print("ERROR: metered is not decided by where the endpoint is: hosted={} local={}".format(hosted["metered"], local["metered"]))
+        failed = True
+    if is_free_model(hosted, None, None):
+        print("ERROR: a model on hosted Ollama was offered as free")
+        failed = True
+    # And resolving one must not have edited the shared table for everybody else.
+    if PROVIDERS["ollama"]["metered"] is not False:
+        print("ERROR: resolving a hosted provider mutated the shared PROVIDERS table")
+        failed = True
+
+    # Only Ollama itself speaks Ollama's native API. 'local' is the generic OpenAI-compatible
+    # option - llama.cpp, LM Studio and the rest - which serve neither /api/tags nor /api/show, so
+    # claiming otherwise would 404 the whole catalogue and leave those endpoints with no models at
+    # all, not merely make some pointless requests.
+    for name, native in (("ollama", True), ("local", False), ("openai", False), ("openrouter", False)):
+        if PROVIDERS[name]["ollama_details"] is not native:
+            print("ERROR: {} has ollama_details={}, expected {}".format(name, PROVIDERS[name]["ollama_details"], native))
+            failed = True
+
+    # A local catalogue is what you just changed by pulling something, so it must not be trusted
+    # for a day the way a hosted one is - that is exactly "I pulled a model and it never appeared".
+    if LOCAL_MODEL_CACHE_MINUTES >= MODEL_CACHE_MINUTES:
+        print("ERROR: a local catalogue is cached as long as a hosted one: {} vs {}".format(LOCAL_MODEL_CACHE_MINUTES, MODEL_CACHE_MINUTES))
+        failed = True
+    return failed
+
+
+def test_stop_reaches_a_turn_that_is_still_streaming(my_predbat):
+    """Stop ends a turn mid-completion, rather than waiting for the model to finish talking.
+
+    Every other stop check sits between tool rounds or between tool calls. The completion itself
+    is the longest part of a turn - minutes on a reasoning model - and is exactly when somebody
+    reaches for Stop, so pressing it there did nothing at all until the model finished on its own,
+    with the timer visibly climbing.
+
+    What the model had already said is kept: the browser has rendered those deltas, and dropping
+    them would make them vanish on the next reload with nothing to explain it. Only the text -
+    half-built tool_calls from an interrupted stream must never be stored, because an assistant
+    message whose tool_calls were never answered makes the provider reject every later turn.
+    """
+    failed = False
+    print("**** Testing that Stop reaches a streaming turn ****")
+
+    agent = _agent_with_fake(my_predbat, [])
+    cid = asyncio.run(agent.store.create())
+    delivered = []
+
+    async def stream_until_stopped(payload):
+        """Stream a few words, then behave as a model that keeps talking indefinitely."""
+        for index in range(200):
+            # Stop lands after the third chunk, standing in for the user pressing the button while
+            # the model is still going.
+            if index == 3:
+                agent.stop_requested = (agent.active or {}).get("turn_id")
+            delivered.append(index)
+            yield {"choices": [{"delta": {"content": "word{} ".format(index)}}]}
+        yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    agent._stream_chunks = stream_until_stopped
+    asyncio.run(agent.run_turn(cid, "tell me everything"))
+
+    # It stopped near where the button was pressed rather than draining all 200 chunks.
+    if len(delivered) > 10:
+        print("ERROR: the stream ran on for {} chunks after Stop".format(len(delivered)))
+        failed = True
+
+    events = agent.events_since(0, cid)[0]
+    errors = [event for event in events if event["type"] == "error"]
+    if not errors:
+        print("ERROR: nothing told the user the turn had stopped")
+        failed = True
+    elif "Stopped" not in errors[-1]["data"].get("message", ""):
+        # A deliberate Stop is not a timeout, and saying "took longer than 1800 seconds" to
+        # somebody who pressed the button is simply untrue.
+        print("ERROR: a deliberate stop was reported as a timeout: {}".format(errors[-1]["data"]))
+        failed = True
+
+    stored = asyncio.run(agent.store.get_messages(cid))
+    assistants = [message for message in stored if message.get("role") == "assistant"]
+    if not assistants:
+        print("ERROR: the partial answer was dropped, so it vanishes on the next reload")
+        failed = True
+    elif "word0" not in (assistants[-1].get("content") or ""):
+        print("ERROR: what the model had already said was not kept: {}".format(assistants[-1]))
+        failed = True
+    if any(message.get("tool_calls") for message in stored):
+        print("ERROR: an interrupted stream stored tool_calls that were never answered: {}".format(stored))
+        failed = True
+
+    # And a stop aimed at a finished turn cannot cut the next one short.
+    agent2 = _agent_with_fake(my_predbat, _text_response("all done here"))
+    cid2 = asyncio.run(agent2.store.create())
+    agent2.stop_requested = 999
+    asyncio.run(agent2.run_turn(cid2, "and again"))
+    replies = [message for message in asyncio.run(agent2.store.get_messages(cid2)) if message.get("role") == "assistant"]
+    # Checked on the words rather than the sentence: _text_response streams each word as its own
+    # delta with no separator, so the stored content runs the words together - asserting the spaced
+    # sentence would fail on the fixture's shape rather than on anything this test is about.
+    if not replies or "done" not in (replies[-1].get("content") or ""):
+        print("ERROR: a stale stop id cut a different turn short: {}".format(replies))
+        failed = True
+    if [event for event in agent2.events_since(0, cid2)[0] if event["type"] == "error"]:
+        print("ERROR: a stale stop id reported the next turn as stopped")
+        failed = True
+
+    # The turn-id match itself, asserted directly. submit_turn() already clears stop_requested at
+    # the start of every turn, so no end-to-end path can reach a mismatched id - which makes this
+    # defence in depth, and means only a direct check can show it works. It is what keeps a stop
+    # aimed at one turn from ending whichever turn has since claimed the single slot.
+    agent2.deadline = time.monotonic() + 60
+    agent2.active = {"turn_id": 7}
+    agent2.stop_requested = 6
+    if agent2.stop_reason() is not None:
+        print("ERROR: a stop aimed at another turn ended this one: {}".format(agent2.stop_reason()))
+        failed = True
+    agent2.stop_requested = 7
+    if agent2.stop_reason() != "stopped":
+        print("ERROR: a stop aimed at the running turn was ignored: {}".format(agent2.stop_reason()))
+        failed = True
+    # And a blown deadline with no stop is a timeout, not a stop.
+    agent2.stop_requested = None
+    agent2.deadline = 0
+    if agent2.stop_reason() != "timeout":
+        print("ERROR: a blown deadline was not reported as a timeout: {}".format(agent2.stop_reason()))
+        failed = True
+    return failed
+
+
+def test_local_models_are_free_however_little_pricing_they_publish(my_predbat):
+    """Every model on an unmetered endpoint is free, including one that quotes no price at all.
+
+    Ollama's /v1/models has no pricing field, so the picker - which worked the answer out from the
+    quoted price - treated every local model as not-free and the "show only free models" filter
+    emptied the list. The box is ticked by default, so an Ollama user's first sight of the picker
+    was an empty one on a server where nothing costs anything.
+
+    The rule has to live here rather than in the browser because only this side knows what the
+    endpoint is: an absent price means "free" on a local server and "unknown, so assume not" on a
+    metered one.
+    """
+    failed = False
+    print("**** Testing that local models count as free ****")
+
+    metered = PROVIDERS["openrouter"]
+    unmetered = PROVIDERS["ollama"]
+
+    # The case that was broken: no pricing at all, on hardware you own.
+    if not is_free_model(unmetered, None, None):
+        print("ERROR: a local model with no quoted price is not free")
+        failed = True
+    if not is_free_model(unmetered, "0.000002", "0.00001"):
+        print("ERROR: a local model is not free even when a price is somehow quoted")
+        failed = True
+
+    # And the metered rules are unchanged. A quoted zero is free; a routing model quoting -1 is
+    # not, because its cost depends on where it routes; an absent price is not free either.
+    if not is_free_model(metered, "0", "0"):
+        print("ERROR: a zero-priced hosted model is not free")
+        failed = True
+    if is_free_model(metered, "-1", "-1"):
+        print("ERROR: a routing model quoting -1 was offered as free")
+        failed = True
+    if is_free_model(metered, "0.000002", "0.00001"):
+        print("ERROR: a billable model was offered as free")
+        failed = True
+    if is_free_model(metered, None, None):
+        print("ERROR: a hosted model with no quoted price was assumed free")
+        failed = True
+
+    # And it reaches the catalogue entries the picker actually filters on, including the
+    # apps.yaml default injected when the catalogue could not be read - which for a local
+    # endpoint is exactly the situation this bug left with an empty picker.
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "http://localhost:11434/v1", "model": "gpt-oss:20b"}})
+    agent.select_provider("ollama")
+
+    async def no_details(models, base_url=None):
+        """Skip the live /api/show enrichment."""
+        return models
+
+    agent._add_ollama_details = no_details
+    entries = asyncio.run(agent._catalogue_to_models({"data": [{"id": "qwen3:latest"}]}, agent.provider, agent.base_url, agent.default_model))
+    if not entries or not all(entry.get("free") for entry in entries):
+        print("ERROR: not every local catalogue entry is marked free: {}".format(entries))
+        failed = True
+    if "gpt-oss:20b" not in [entry["id"] for entry in entries]:
+        print("ERROR: the apps.yaml default was not offered: {}".format(entries))
+        failed = True
+    return failed
+
+
 def test_a_working_catalogue_clears_the_previous_failure(my_predbat):
     """A reason from an earlier failed fetch does not outlive it.
 
@@ -3508,6 +3805,133 @@ def test_a_working_catalogue_clears_the_previous_failure(my_predbat):
     return failed
 
 
+def _list_models_without_a_wire(my_predbat, providers):
+    """Run list_models() against a recording storage and a fetch that must not be called.
+
+    Returns (models, dialled, cache_names, catalogue_error). Both recorders matter and neither
+    substitutes for the other: dialled proves whether the endpoint was contacted, cache_names
+    proves whether the answer was written to storage - the two halves of what an unconfigured
+    install was doing every day.
+    """
+    dialled = []
+
+    async def fetch_should_not_run():
+        """Record the call and return a healthy catalogue, so a fetch that runs is not also empty."""
+        dialled.append(True)
+        return {"data": [{"id": "vendor/hosted", "supported_parameters": ["tools"]}]}
+
+    class RecordingStorage:
+        """Storage stand-in that records every fetch_cached name and otherwise behaves normally."""
+
+        def __init__(self):
+            """Start with nothing recorded."""
+            self.names = []
+
+        async def fetch_cached(self, module, filename, fetch_fn, fresh_minutes=30, stale_minutes=35, format="yaml"):
+            """Record the name asked for, then fetch as the real helper does on a cold cache."""
+            self.names.append(filename)
+            return await fetch_fn()
+
+    class StubComponents:
+        """Serves the recording storage to ComponentBase's read-only storage property."""
+
+        def __init__(self, storage):
+            """Hold the storage stand-in this registry should hand out."""
+            self.storage = storage
+
+        def get_component(self, name):
+            """Return the storage stand-in, and nothing else."""
+            return self.storage if name == "storage" else None
+
+    agent = _make_agent(my_predbat, providers=providers)
+    agent._fetch_model_catalogue = fetch_should_not_run
+    recorder = RecordingStorage()
+    # agent.storage is a read-only property reading base.components, so the registry is what has
+    # to be swapped - and put back, since my_predbat is shared with every other test.
+    previous_components = getattr(my_predbat, "components", None)
+    my_predbat.components = StubComponents(recorder)
+    try:
+        models = asyncio.run(agent.list_models())
+    finally:
+        my_predbat.components = previous_components
+    return models, dialled, recorder.names, agent.catalogue_error
+
+
+def test_the_catalogue_is_not_fetched_with_no_provider_configured(my_predbat):
+    """An install with nothing configured neither dials OpenRouter nor caches its catalogue.
+
+    The chat component is always started, even with nothing set up, because the Chat tab is what
+    configures it. With no provider, select_provider() falls back to OpenRouter's default URL with
+    no key - and OpenRouter serves /models unauthenticated, so the fetch came back 200 with the
+    whole several-hundred-model catalogue rather than the 401 that would have stopped it. Every
+    page view of the setup page therefore made an outbound request no user asked for, and cached
+    roughly 760KB of it for a day, for a catalogue that cannot be used until a provider exists.
+
+    The turn path already refuses here (see test_turn_refuses_with_no_provider_configured); this
+    is the same guard on the other path that reaches the wire.
+
+    Mutation check: dropping the provider_ready() guard from list_models() dials the endpoint and
+    writes the catalogue to storage.
+    """
+    failed = False
+    print("**** Testing that no provider configured means no catalogue fetch ****")
+
+    models, dialled, names, error = _list_models_without_a_wire(my_predbat, {})
+
+    if dialled:
+        print("ERROR: the catalogue endpoint was dialled with no provider configured")
+        failed = True
+    if names:
+        print("ERROR: the catalogue was written to storage with no provider configured: {}".format(names))
+        failed = True
+    if models:
+        print("ERROR: models were offered with no provider configured: {}".format(models))
+        failed = True
+    if error != NO_PROVIDER_MESSAGE:
+        print("ERROR: the picker was not told why there is no catalogue: {!r}".format(error))
+        failed = True
+    return failed
+
+
+def test_the_catalogue_is_not_fetched_for_a_provider_missing_its_key(my_predbat):
+    """A hosted provider written down without its key is not ready, so its catalogue is not fetched.
+
+    Half-configured is the commoner shape of the same bug: an entry exists, so select_provider()
+    makes it active and active_provider is not None, but it has no key and cannot answer a turn.
+    Guarding on "nothing is selected" would let this one straight through to the same
+    unauthenticated fetch, which is why the guard is provider_ready() - the predicate the turn
+    path already uses.
+
+    The picker still offers the model the entry names, because that is what it names; the guard is
+    about not reaching the wire, not about hiding what apps.yaml says.
+
+    Mutation check: guarding on active_provider is None instead of provider_ready() dials the
+    endpoint for this install.
+    """
+    failed = False
+    print("**** Testing that a provider missing its key does not fetch a catalogue ****")
+
+    providers = {"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1"}}
+    models, dialled, names, error = _list_models_without_a_wire(my_predbat, providers)
+
+    if dialled:
+        print("ERROR: the catalogue endpoint was dialled for a provider with no key")
+        failed = True
+    if names:
+        print("ERROR: the catalogue was written to storage for a provider with no key: {}".format(names))
+        failed = True
+    # The model the entry names is still offered - _catalogue_to_models() always includes the
+    # configured one, which is what makes a custom endpoint serving no /models at all usable. What
+    # must not appear is anything that could only have come off the wire.
+    if "vendor/hosted" in [entry["id"] for entry in models]:
+        print("ERROR: a fetched catalogue was served for a provider with no key: {}".format(models))
+        failed = True
+    if error != NO_PROVIDER_MESSAGE:
+        print("ERROR: the picker was not told why there is no catalogue: {!r}".format(error))
+        failed = True
+    return failed
+
+
 def test_model_catalogue_is_cached_per_endpoint(my_predbat):
     """Each endpoint's model list is cached under its own name, not one shared "models".
 
@@ -3529,6 +3953,11 @@ def test_model_catalogue_is_cached_per_endpoint(my_predbat):
         failed = True
     if openrouter == "models":
         print("ERROR: the cache name is still the shared literal")
+        failed = True
+    # Versioned, so a change to how entries are built does not spend a day being served from a
+    # cache written before it - the "free" flag was exactly that kind of change.
+    if "_v{}_".format(MODEL_CACHE_VERSION) not in openrouter:
+        print("ERROR: the cache name carries no schema version: {}".format(openrouter))
         failed = True
 
     # And the name list_models() actually asks storage for is that one, per provider.
@@ -3613,11 +4042,285 @@ def test_model_catalogue_is_cached_per_endpoint(my_predbat):
     return failed
 
 
+def test_ollama_context_length_is_what_the_server_will_actually_give(my_predbat):
+    """The picker must report the usable context, not the model's architectural ceiling.
+
+    /api/show returns the context length baked into the model - 262144 for Qwen3.8 27B. The
+    server caps every model at OLLAMA_CONTEXT_LENGTH (an Ollama app setting on macOS), so the
+    context the model will actually be loaded with can be half that. Reporting the ceiling makes
+    the Chat tab's context counter measure fullness against a limit that does not exist: it reads
+    50% at the point the window is genuinely full, which is precisely how a turn overflows without
+    warning.
+
+    /api/ps reports context_length for each loaded model, which is the effective value.
+    """
+    failed = False
+    print("**** Testing Ollama context length comes from the server, not the model ****")
+
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "http://127.0.0.1:11434/v1"}})
+    agent.select_provider("ollama")
+
+    shown = {"qwen3.8:27b": 262144, "gpt-oss:20b": 131072, "never-loaded:8b": 262144}
+    loaded = {"qwen3.8:27b": 131072, "gpt-oss:20b": 131072}
+
+    class _Response:
+        """Minimal aiohttp response stand-in for the stubbed session."""
+
+        def __init__(self, payload):
+            self.status = 200
+            self._payload = payload
+
+        async def json(self):
+            """Return the canned body."""
+            return self._payload
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    class _Session:
+        """Stubbed session answering /api/show and /api/ps from the dicts above."""
+
+        def post(self, url, json=None):
+            """Answer an /api/show POST."""
+            model = (json or {}).get("model")
+            return _Response({"capabilities": ["tools"], "model_info": {"qwen35.context_length": shown[model]}})
+
+        def get(self, url):
+            """Answer an /api/ps GET."""
+            return _Response({"models": [{"model": name, "context_length": ctx} for name, ctx in loaded.items()]})
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    original_session = chat.aiohttp.ClientSession
+    chat.aiohttp.ClientSession = lambda *args, **kwargs: _Session()
+    try:
+        models = asyncio.run(agent._add_ollama_details([{"id": name} for name in shown]))
+    finally:
+        chat.aiohttp.ClientSession = original_session
+
+    by_id = {entry["id"]: entry for entry in models}
+
+    if by_id["qwen3.8:27b"].get("context_length") != 131072:
+        print("ERROR: a loaded model should report the server's 131072, not its 262144 ceiling, got {}".format(by_id["qwen3.8:27b"].get("context_length")))
+        failed = True
+
+    if by_id["gpt-oss:20b"].get("context_length") != 131072:
+        print("ERROR: a model whose ceiling already matches the server should be unchanged, got {}".format(by_id["gpt-oss:20b"].get("context_length")))
+        failed = True
+
+    # Nothing is known about a model the server has never loaded, so its own ceiling is the only
+    # answer available - better than inventing one.
+    if by_id["never-loaded:8b"].get("context_length") != 262144:
+        print("ERROR: an unloaded model should fall back to its own ceiling, got {}".format(by_id["never-loaded:8b"].get("context_length")))
+        failed = True
+
+    if not failed:
+        print("✓ Test passed: Ollama context length reflects what the server will give")
+    return failed
+
+
+def test_ollama_context_length_survives_a_server_that_cannot_answer(my_predbat):
+    """A server that will not serve /api/ps must leave every model on its own ceiling.
+
+    Ollama Cloud answers /api/ps with 401 while serving /api/show unauthenticated, and an older
+    local server may not have the endpoint at all. Neither may cost the catalogue its context
+    lengths - the fallback is exactly the behaviour from before /api/ps was consulted.
+    """
+    failed = False
+    print("**** Testing Ollama context length survives an unavailable /api/ps ****")
+
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "https://ollama.com/v1"}})
+    agent.select_provider("ollama")
+
+    class _ShowResponse:
+        """An /api/show answer carrying the model's own ceiling."""
+
+        status = 200
+
+        async def json(self):
+            """Return the canned body."""
+            return {"capabilities": ["tools"], "model_info": {"qwen35.context_length": 262144}}
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    class _Unauthorized:
+        """What ollama.com returns for /api/ps without a key.
+
+        The body deliberately carries a models array as well as the error. A refusal is not always
+        an empty envelope - a proxy or captive portal can answer with a plausible-looking payload -
+        and without the status check the values in it would be trusted. A body with nothing usable
+        in it would let that check be deleted with every test still passing.
+        """
+
+        status = 401
+
+        async def json(self):
+            """Return an error body that would poison the result if the status were ignored."""
+            return {"error": "unauthorized", "models": [{"model": "qwen3.8:27b", "context_length": 4096}]}
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    class _Session:
+        """Serves /api/show but refuses /api/ps, as Ollama Cloud does."""
+
+        def __init__(self, ps_raises=False):
+            self.ps_raises = ps_raises
+
+        def post(self, url, json=None):
+            """Answer the /api/show POST."""
+            return _ShowResponse()
+
+        def get(self, url):
+            """Refuse the /api/ps GET, by status or by raising."""
+            if self.ps_raises:
+                raise chat.aiohttp.ClientError("connection refused")
+            return _Unauthorized()
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    original_session = chat.aiohttp.ClientSession
+    try:
+        for label, raises in (("401", False), ("a transport error", True)):
+            chat.aiohttp.ClientSession = lambda *args, **kwargs: _Session(ps_raises=raises)
+            models = asyncio.run(agent._add_ollama_details([{"id": "qwen3.8:27b"}]))
+            context = models[0].get("context_length") if models else None
+            if context != 262144:
+                print("ERROR: /api/ps answering {} should leave the model on its 262144 ceiling, got {}".format(label, context))
+                failed = True
+
+        # Ollama Cloud refuses /api/ps with or without a key - verified against ollama.com, where a
+        # key good enough for /v1/models and /api/tags still gets a 401 here, because "loaded" is a
+        # local-server idea. A catalogue with nothing local in it has nothing the endpoint could
+        # override, so it should not spend a round trip finding that out.
+        asked = _Session()
+        calls = []
+        asked.get = lambda url: calls.append(url) or _Unauthorized()
+        chat.aiohttp.ClientSession = lambda *args, **kwargs: asked
+        asyncio.run(agent._add_ollama_details([{"id": "gpt-oss:120b-cloud", "remote": True}]))
+        if calls:
+            print("ERROR: a cloud-only catalogue should not call /api/ps, but it called {}".format(calls))
+            failed = True
+    finally:
+        chat.aiohttp.ClientSession = original_session
+
+    if not failed:
+        print("✓ Test passed: an unavailable /api/ps leaves the ceiling in place")
+    return failed
+
+
+def test_ollama_zero_context_length_is_treated_as_absent(my_predbat):
+    """A context length of zero means "unknown", not "a zero-token window".
+
+    Characterisation test, not a new behaviour: it pins a deliberate choice a reviewer read as an
+    accidental truthiness bug (#4859). No model has a zero-token context, so a 0 from either
+    endpoint is a placeholder or a bug, and letting it through would replace a perfectly good
+    figure with a useless one. The whole chain already agrees - _ollama_loaded_context() keeps only
+    truthy values, and on the client contextLengthForModel() returns `context_length || null` while
+    renderContextUsage() shows the token count alone when the limit is falsy.
+    """
+    failed = False
+    print("**** Testing a zero Ollama context length is treated as absent ****")
+
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "http://127.0.0.1:11434/v1"}})
+    agent.select_provider("ollama")
+
+    class _Response:
+        """Minimal aiohttp response stand-in."""
+
+        def __init__(self, payload):
+            self.status = 200
+            self._payload = payload
+
+        async def json(self):
+            """Return the canned body."""
+            return self._payload
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    class _Session:
+        """A server reporting a zero context for a loaded model."""
+
+        def post(self, url, json=None):
+            """Answer /api/show with a real ceiling."""
+            return _Response({"capabilities": ["tools"], "model_info": {"qwen35.context_length": 262144}})
+
+        def get(self, url):
+            """Answer /api/ps with a zero, as a placeholder or a bug would."""
+            return _Response({"models": [{"model": "qwen3.8:27b", "context_length": 0}]})
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    original_session = chat.aiohttp.ClientSession
+    chat.aiohttp.ClientSession = lambda *args, **kwargs: _Session()
+    try:
+        models = asyncio.run(agent._add_ollama_details([{"id": "qwen3.8:27b"}]))
+    finally:
+        chat.aiohttp.ClientSession = original_session
+
+    context = models[0].get("context_length") if models else None
+    if context != 262144:
+        print("ERROR: a zero from /api/ps should not replace the 262144 ceiling, got {}".format(context))
+        failed = True
+
+    if not failed:
+        print("✓ Test passed: a zero context length falls back rather than propagating")
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
     failed |= test_model_catalogue_is_cached_per_endpoint(my_predbat)
+    failed |= test_ollama_context_length_is_what_the_server_will_actually_give(my_predbat)
+    failed |= test_ollama_context_length_survives_a_server_that_cannot_answer(my_predbat)
+    failed |= test_ollama_zero_context_length_is_treated_as_absent(my_predbat)
     failed |= test_a_working_catalogue_clears_the_previous_failure(my_predbat)
+    failed |= test_the_catalogue_is_not_fetched_with_no_provider_configured(my_predbat)
+    failed |= test_the_catalogue_is_not_fetched_for_a_provider_missing_its_key(my_predbat)
+    failed |= test_local_models_are_free_however_little_pricing_they_publish(my_predbat)
+    failed |= test_stop_reaches_a_turn_that_is_still_streaming(my_predbat)
+    failed |= test_ollama_cloud_models_are_listed_but_not_free(my_predbat)
     failed |= test_a_conversation_model_does_not_survive_a_provider_switch(my_predbat)
     failed |= test_component_gating(my_predbat)
     failed |= test_provider_detection_and_payload(my_predbat)

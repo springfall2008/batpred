@@ -7131,8 +7131,10 @@ def get_plan_renderer_js():
         });
         // A split cell's first half is always a demand_before_export_* code paired with the export
         // reason as its second half - prefix "Then" (no comma) so the two read as one narrative
-        // instead of two disconnected sentences.
-        if (reasons.length === 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && reasons[0].code.indexOf('demand_before_export_') === 0) {
+        // instead of two disconnected sentences. Length is >= 2 rather than == 2 because a history
+        // slot that held more than one state appends a mixed_slot_states note after the pair, and
+        // that must not cost the narrative its "Then".
+        if (reasons.length >= 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && reasons[0].code.indexOf('demand_before_export_') === 0) {
             rendered[1] = 'Then ' + rendered[1].charAt(0).toLowerCase() + rendered[1].slice(1);
         }
         return rendered.filter(Boolean).join(' ');
@@ -7717,7 +7719,15 @@ def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, 
     text += """
 <script>
 // Apply dark mode immediately before CSS is parsed to prevent flash of white
-if (localStorage.getItem('darkMode') === 'true') {
+// Falls back to the OS/browser prefers-color-scheme setting when the user hasn't made an explicit choice (batpred#4800)
+function getDarkModePreference() {
+    const storedDarkMode = localStorage.getItem('darkMode');
+    if (storedDarkMode !== null) {
+        return storedDarkMode === 'true';
+    }
+    return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+if (getDarkModePreference()) {
     document.documentElement.classList.add('dark-mode');
     document.addEventListener('DOMContentLoaded', function() {
         if (document.body) {
@@ -8037,7 +8047,7 @@ window.onload = function() {
     applyDarkMode();
 };
 function applyDarkMode() {
-    const darkModeEnabled = localStorage.getItem('darkMode') === 'true';
+    const darkModeEnabled = getDarkModePreference();
     if (darkModeEnabled) {
         document.body.classList.add('dark-mode');
         document.documentElement.classList.add('dark-mode');
@@ -8057,6 +8067,22 @@ function applyDarkMode() {
         }
     }
 };
+
+// Re-apply if the OS/browser theme changes while no explicit preference is stored (batpred#4800)
+if (window.matchMedia) {
+    const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleDarkModePreferenceChange = function() {
+        if (localStorage.getItem('darkMode') === null) {
+            applyDarkMode();
+        }
+    };
+    // Safari < 14 and Chrome < 39 only implement the older, deprecated addListener() method
+    if (darkModeMediaQuery.addEventListener) {
+        darkModeMediaQuery.addEventListener('change', handleDarkModePreferenceChange);
+    } else if (darkModeMediaQuery.addListener) {
+        darkModeMediaQuery.addListener(handleDarkModePreferenceChange);
+    }
+}
 
 function toggleDarkMode() {
     const isDarkMode = document.body.classList.toggle('dark-mode');
@@ -8122,6 +8148,14 @@ function downloadLiveApps() {
         window.location.href = './debug_apps_live?masked=0';
     } else {
         window.location.href = './debug_apps_live?masked=1';
+    }
+}
+
+function downloadFileApps() {
+    if (confirm(`Download apps.yaml with real credentials?\\n\\nOK = full unmasked file\\nCancel = masked file (credentials redacted)`)) {
+        window.location.href = './debug_apps?masked=0';
+    } else {
+        window.location.href = './debug_apps?masked=1';
     }
 }
 

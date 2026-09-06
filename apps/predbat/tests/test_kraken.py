@@ -1,6 +1,7 @@
 # src/batpred/apps/predbat/tests/test_kraken.py
 import asyncio
 import time
+from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import sys
@@ -1776,84 +1777,11 @@ def test_run_no_devices_does_not_save_cache_every_cycle():
 
 def run_kraken_tests(my_predbat=None):
     """Run all KrakenAPI tests. Returns True on failure, False on success."""
-    tests = [
-        test_initialize_sets_base_url_from_provider,
-        test_initialize_sets_current_tariff_none,
-        test_initialize_with_export_config,
-        test_graphql_query_success,
-        test_graphql_query_auth_error_retries,
-        test_graphql_query_oauth_failed_returns_none,
-        test_find_tariffs_detects_change,
-        test_find_tariffs_no_change,
-        test_find_tariffs_graphql_failure,
-        test_find_tariffs_skips_export_on_import_discovery,
-        test_find_tariffs_discovers_export_on_same_account,
-        test_build_rates_url,
-        test_build_rates_url_eon,
-        test_fetch_rates_single_page,
-        test_fetch_rates_no_tariff,
-        test_get_entity_name,
-        test_run_first_discovers_tariff_and_fetches_rates,
-        test_run_returns_false_on_auth_failure,
-        test_run_refetches_rates_when_stale,
-        test_run_skips_refetch_when_cache_fresh,
-        test_run_first_restores_cache_and_skips_fetch,
-        test_save_and_load_kraken_cache_round_trip,
-        test_data_age_minutes,
-        test_discover_smart_devices_filters_live_ev,
-        test_normalize_dispatches_field_mapping,
-        test_normalize_dispatches_trims_in_progress_planned,
-        test_normalize_dispatches_does_not_trim_completed,
-        test_merge_completed_dispatches_dedup_and_prune,
-        test_fetch_dispatches_populates_device,
-        test_publish_dispatch_sensors_active_state_and_wiring,
-        test_run_fetches_and_wires_dispatches,
-        test_run_no_devices_does_not_save_cache_every_cycle,
-        test_run_wires_export_when_discovered,
-        test_find_active_tariff_prefers_configured_mpan,
-        test_standing_charge_converts_pence_to_pounds,
-        test_export_discovery_clears_stale_when_not_found,
-        test_export_discovery_strategy1_no_fallthrough_on_network_failure,
-        test_normalize_rate_timestamps_flat_rate_both_null,
-        test_normalize_rate_timestamps_normal_rates_unchanged,
-        test_normalize_rate_timestamps_empty_list,
-        test_normalize_rate_timestamps_mixed_null_and_real,
-        test_email_auth_obtains_token_when_oauth_mixin_is_base,
-        test_api_key_auth_obtains_token_when_oauth_mixin_is_base,
-        test_oauth_mode_unaffected_by_kraken_auth_mixin,
-        test_find_tariffs_stores_import_mpan,
-        test_fetch_rates_graphql_parses_applicable_rates,
-        test_fetch_rates_graphql_normalizes_null_timestamps,
-        test_fetch_rates_graphql_returns_none_on_empty_response,
-        test_fetch_rates_graphql_returns_none_on_graphql_failure,
-        test_fetch_rates_graphql_window_derived_from_forecast_hours,
-        test_fetch_rates_graphql_window_default_forecast_hours,
-        test_fetch_rates_rest_404_falls_back_to_graphql_for_import,
-        test_fetch_rates_rest_404_no_fallback_without_import_mpan,
-        test_fetch_rates_rest_404_falls_back_to_graphql_for_export,
-        test_fetch_rates_export_404_uses_export_account_for_split_accounts,
-        test_fetch_rates_rest_410_falls_back_to_graphql_for_import,
-        test_find_active_tariff_uses_direction_for_seg_export_code,
-        test_find_active_tariff_direction_overrides_export_substring,
-        test_find_active_tariff_falls_back_to_substring_without_direction,
-        test_build_rest_auth_uses_basic_auth_for_api_key,
-        test_build_rest_auth_uses_jwt_header_for_oauth,
-        test_fetch_rates_404_retries_authenticated_and_succeeds,
-        test_fetch_rates_404_authenticated_retry_still_404_falls_back_to_graphql,
-        test_fetch_rates_404_graphql_fallback_empty_counts_one_failure,
-        test_connection_nodes_extracts_edges,
-        test_fetch_rates_graphql_parses_connection_edges,
-        test_fetch_rates_graphql_paginates_via_cursor,
-        test_fetch_standing_charges_graphql_parses_connection_edges,
-        test_fetch_rates_transient_error_does_not_fall_back_to_graphql,
-        test_fetch_standing_charges_rest_404_falls_back_to_graphql,
-        test_fetch_standing_charges_rest_404_no_fallback_without_import_mpan,
-        test_fetch_standing_charges_rest_410_falls_back_to_graphql,
-        test_fetch_standing_charges_graphql_returns_value,
-        test_fetch_standing_charges_graphql_returns_none_on_empty,
-        test_fetch_standing_charges_graphql_returns_none_on_graphql_failure,
-        test_fetch_standing_charges_transient_error_does_not_fall_back_to_graphql,
-    ]
+    # Discovered, not listed: a hardcoded list silently skips any test added below it, and
+    # unit_test.py invokes this runner rather than pytest discovery.
+    module = sys.modules[__name__]
+    # dir() gives a stable alphabetical order; these tests are independent of each other.
+    tests = [obj for name in dir(module) if name.startswith("test_") and callable(obj := getattr(module, name))]
     for test_func in tests:
         try:
             test_func()
@@ -1865,3 +1793,39 @@ def run_kraken_tests(my_predbat=None):
             return True
         print(f"  OK: {test_func.__name__}")
     return False
+
+
+def test_kraken_api_edge_block_uses_all_bound_backoff_helpers():
+    """Regression: KrakenAPI binds KrakenAuthMixin methods onto the instance one by one, so a
+    helper reached from a bound method must be bound alongside it or it is AttributeError at
+    runtime. Drive a real KrakenAPI through block -> suppression -> recovery so all three
+    (start_token_mint_backoff, log_token_mint_backoff, clear_token_mint_backoff) are exercised.
+    """
+    import kraken as kraken_module
+
+    assert kraken_module._KrakenAuthMixin is not None, "KrakenAuthMixin must be importable for this test"
+
+    api = make_kraken_api(auth_method="email", email="user@eon.com", password="secret123", key=None)
+
+    async def _blocked(_input_vars):
+        api.token_mint_edge_blocked = True
+        return None
+
+    # start_token_mint_backoff
+    api._kraken_token_request = AsyncMock(side_effect=_blocked)
+    assert asyncio.run(api.check_and_refresh_oauth_token()) is False
+    assert api.oauth_failed is False, "a CDN block must not latch oauth_failed"
+    assert api.token_mint_block_count == 1
+
+    # log_token_mint_backoff - suppressed call inside the window
+    api._kraken_token_request = AsyncMock()
+    assert asyncio.run(api.check_and_refresh_oauth_token()) is False
+    api._kraken_token_request.assert_not_called()
+
+    # clear_token_mint_backoff - deadline elapsed, mint succeeds
+    api.token_mint_blocked_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    api._kraken_token_request = AsyncMock(return_value={"token": "recovered-jwt", "refreshToken": "recovered-refresh", "exp": int(time.time()) + 3600})
+    assert asyncio.run(api.check_and_refresh_oauth_token()) is True
+    assert api.access_token == "recovered-jwt"
+    assert api.token_mint_blocked_until is None
+    assert api.token_mint_block_count == 0

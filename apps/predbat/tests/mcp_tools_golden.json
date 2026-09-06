@@ -79,7 +79,7 @@
     },
     {
       "name": "get_log",
-      "description": "Get the Predbat log (predbat.log), filtered by level, search term and age - use this to diagnose warnings and errors. Lines are returned oldest-first.",
+      "description": "Get the Predbat log (predbat.log), filtered by level, search term, regex and time window - use this to diagnose warnings and errors. Lines are returned oldest-first. Very long lines are cut to keep the response small; read one back in full with 'line_number'.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -97,13 +97,33 @@
             "type": "string",
             "description": "Only return lines containing this text, case-insensitive (optional)"
           },
+          "pattern": {
+            "type": "string",
+            "description": "Only return lines matching this Python regular expression, case-insensitive (optional). Combined with 'search' and 'filter' rather than replacing them"
+          },
           "hours": {
             "type": "number",
             "description": "Only return lines written in the last N hours (optional)"
           },
+          "start": {
+            "type": "string",
+            "description": "Only return lines at or after this point: a date (2026-08-28), a time today (17:00 or 17:00:30) or both (2026-08-28 17:00). Combined with 'hours' if both are given, narrower wins (optional)"
+          },
+          "end": {
+            "type": "string",
+            "description": "Only return lines at or before this point, same formats as 'start'. A bare date covers the whole of that day (optional)"
+          },
+          "line_number": {
+            "type": "integer",
+            "description": "Return this one line in full, ignoring every other filter (optional). Use it to read back a line the response cut short - a truncated line names its own number in the marker it carries"
+          },
+          "context": {
+            "type": "integer",
+            "description": "With 'line_number', also return this many lines either side (default 0, maximum 50)"
+          },
           "max_lines": {
             "type": "integer",
-            "description": "Maximum number of lines to return. The most recent matching lines are the ones kept, but they are returned oldest-first (default 500, maximum 5000)"
+            "description": "Maximum number of lines to return. The most recent matching lines are the ones kept, but they are returned oldest-first (default 200, maximum 5000)"
           }
         },
         "required": []

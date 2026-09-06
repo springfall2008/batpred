@@ -190,7 +190,7 @@ Example usage in VSCode
 | `get_config` | Every Predbat setting, with its current value and its default |
 | `get_apps` | Your `apps.yaml` configuration, with credentials redacted |
 | `get_apps_config` | The current value of one `apps.yaml` key, with a credential-like value redacted |
-| `get_log` | Lines from `predbat.log`, filtered by level, search term and age |
+| `get_log` | Lines from `predbat.log`, filtered by level, search term, regular expression and time window |
 | `get_state` | Predbat's internal state variables - the same data a debug yaml carries |
 | `get_entities` | All Predbat entities and their states |
 | `search_entities` | Search *every* Home Assistant entity id with a regular expression, not just Predbat's own - requires `switch.predbat_ai_ha_state_enable` |
@@ -212,8 +212,48 @@ look wrong"*, or *"find the warnings in the last 24 hours of my log and explain 
 | -------- | ----------- |
 | `filter` | `all`, `info`, `warnings` (the default) or `errors` |
 | `search` | Only return lines containing this text, case-insensitive |
+| `pattern` | Only return lines matching this Python regular expression, case-insensitive |
 | `hours` | Only return lines written in the last N hours |
-| `max_lines` | How many lines to return - the most recent matches are the ones kept, but they come back oldest-first (default 500, maximum 5000) |
+| `start` | Only return lines at or after this point in time |
+| `end` | Only return lines at or before this point in time |
+| `max_lines` | How many lines to return - the most recent matches are the ones kept, but they come back oldest-first (default 200, maximum 5000) |
+| `line_number` | Return this one line in full, ignoring every other filter |
+| `context` | With `line_number`, also return this many lines either side |
+
+All of these narrow the result together rather than replacing one another, so
+`filter: errors` with `pattern: "inverter [12]"` returns only the errors that also mention those
+inverters.
+
+`start` and `end` each accept a date, a time, or both:
+
+| Value | Means |
+| ----- | ----- |
+| `2026-08-28` | As `start`, the beginning of that day; as `end`, the end of it - so `end: 2026-08-28` includes everything that happened that day |
+| `17:00` or `17:00:30` | That time today |
+| `2026-08-28 17:00` | Exactly that moment |
+
+`hours` still works and can be combined with `start`, in which case the narrower of the two wins.
+A line with no timestamp of its own - the second and later lines of a traceback - belongs to the
+entry above it, so a multi-line entry is kept or dropped as a whole.
+
+#### Keeping the response small enough to be useful
+
+`max_lines` bounds how many lines come back, not how big they are, and some Predbat log lines are
+enormous - a single Octopus GraphQL response is one 20KB line. Left unchecked, a few hundred of
+those made a tool result of nearly a megabyte, which overflowed the model's context and cost the
+assistant the rest of the conversation.
+
+So the response has three guards. Beyond `max_lines`, any single line longer than about a thousand
+characters is cut and marked with how much was left off, and the response as a whole stops at a
+total size budget - `truncated_reason` says which of the two ended it. A cut line still tells you
+its number, and passing that back as `line_number` returns it in full:
+
+```text
+2026-08-30 09:58:11: OctopusAPI: Fetched saving sessions... [+19069 chars, get_log line_number=26793]
+```
+
+Line numbers count from the start of the previous (rotated) log through the current one, so they
+stay valid as the log grows but not across a rotation.
 
 `get_state` exposes the same internal state a `predbat_debug.yaml` carries, but a variable at a
 time rather than as a 5MB file. Called with no arguments it returns every variable small enough
@@ -230,9 +270,14 @@ with `max_bytes`.
 | `max_bytes` | Per-variable size budget before a value is described instead of returned (default 2048, maximum 262144) |
 
 `get_state` and `get_apps` both redact credentials. `get_apps` replaces credential-like values
-(anything whose name contains `_key`, `password`, `secret` or `token`) with `xxx`, so your API
-keys are not sent to your AI provider; pass `masked: false` if you deliberately want the raw
-values. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
+with `xxx`, so your API keys are not sent to your AI provider; pass `masked: false` if you
+deliberately want the raw values. A value counts as a credential if its name contains `_key`,
+`password`, `secret` or `token`, **or** if the component registry flags it explicitly - which
+covers the credentials a name alone cannot reveal, such as your Octopus account number, a Kraken
+MPAN, a site or plant id, and login identifiers like `deye_username`, `kraken_email` and
+`myenergi_hub_serial` (the myenergi API's digest-auth username). Inverter serial numbers are
+deliberately *not* redacted: they identify hardware rather than authenticate it, and they are
+what makes an integration bug report diagnosable. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
 return anything a debug dump would not - credentials, the Home Assistant interface, loaded
 secrets and the URL caches are not reachable through it at all. `get_apps_config` uses the same
 credential check as `get_apps`, but with no `masked: false` escape hatch at all - there is no
@@ -603,7 +648,7 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `octopus_api_key` | Your Octopus Energy API key |
 | `account_id` | String | Yes | - | `octopus_api_account` | Your Octopus Energy account number (starts with A-) |
-| `automatic` | Boolean | No | true | `octopus_automatic` | Set to `true` to automatically configure Predbat to use this Component (no need to update apps.yaml) |
+| `automatic` | Boolean | No | true | `octopus_automatic` | Set to `true` to automatically configure Predbat to use this Component (no need to update `apps.yaml`) |
 
 #### How to get your API credentials (octopus)
 
@@ -662,7 +707,7 @@ Select control my battery for 'Events Only'.
 1. Log in to your Axle Energy VPP portal at <https://vpp.axle.energy>
 2. Navigate to the Home Assistant integration section
 3. Copy your API key
-4. Paste it into `axle_api_key` in apps.yaml
+4. Paste it into **axle_api_key** in `apps.yaml`
 
 #### Sensor Attributes (axle)
 
@@ -989,7 +1034,7 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `fox_key` | Your Fox ESS API key |
-| `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required) |
+| `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual `apps.yaml` updates required) |
 | `automatic_ignore_pv` | Boolean | No | false | `fox_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Fox Cloud from overwriting `pv_power` and `pv_today` config. Useful for AC-coupled setups where PV is measured independently and Fox Cloud reports zero/absent PV data |
 
 ---
@@ -1132,6 +1177,7 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
     - Leave `soc_max` unset and allow Predbat to automatically detect battery size from historical charging data (requires several days of data)
 - Supports both V1 (older firmware) and V2 (newer firmware) time window formats
 - Automatic configuration available - sets up all required Predbat sensors automatically
+- **PV-only inverters**: an inverter Solis Cloud reports as having no battery is never managed as a battery inverter and is never written to, but its generation is still included in `pv_today` and `pv_power` so the array total covers the whole roof. Its load and grid readings are left out, as those registers can overlap with the battery inverter's on a shared-CT installation - set `pv_today`/`pv_power`/`load_today` manually with `solis_cloud_pv_load_ignore: true` if you need something different
 - **Inverter timezone must match Predbat's `timezone` setting**: charge/discharge slot times are written to the inverter as plain `HH:MM` values with no timezone attached. The inverter interprets these using its own configured timezone, not Predbat's. If your inverter's timezone is set to UTC (or anything other than Predbat's `timezone`, `Europe/London` by default), the resulting charge/discharge windows will be offset by the difference - for example, a full hour out whenever British Summer Time is in effect. Set the inverter's own timezone to match Predbat's `timezone` setting to avoid this.
 
 #### Configuration Options (solis)
@@ -1141,7 +1187,7 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
 | `api_key` | String | Yes | - | `solis_api_key` | Your Solis Cloud API Key (KeyId) |
 | `api_secret` | String | Yes | - | `solis_api_secret` | Your Solis Cloud API Secret (KeySecret) |
 | `inverter_sn` | String/List | No | - | `solis_inverter_sn` | Inverter serial number(s) - Leave unset to see all. Single string or list of strings for multiple inverters |
-| `automatic` | Boolean | No | false | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual apps.yaml sensor updates required) |
+| `automatic` | Boolean | No | false | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual `apps.yaml` sensor updates required) |
 | `base_url` | String | No | Auto-detected | `solis_base_url` | Solis Cloud API base URL (automatically selects correct region) |
 | `control_enable` | Boolean | No | true | `solis_control_enable` | Enable/disable control commands (set to false for monitoring only) |
 | `nominal_voltage` | Float | No | - | `solis_nominal_voltage` | Your battery's nominal pack voltage (e.g. cell count x nominal cell voltage), used only for the battery capacity sensor. Not the same as the live measured battery voltage. Without it, the capacity sensor is still published but flagged unreliable - see [apps.yaml](apps-yaml.md#solis-cloud-api) |
@@ -1322,7 +1368,7 @@ See [Sunsynk Cloud setup](inverter-setup.md#sunsynk-cloud) for the full walkthro
 
 #### What it does (alphaess)
 
-Integrates with AlphaESS SMILE/Storion hybrid inverters via the AlphaESS Open API, providing cloud-based monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 access is required. Predbat discovers every battery system bound to the developer AppID, publishes monitoring sensors and derived ratings (including EV charger power and energy where one is fitted), and writes schedule control entities that map directly onto the AlphaESS charge and discharge schedule fields.
+Integrates with AlphaESS SMILE/Storion hybrid inverters via the AlphaESS Open API, providing cloud-based monitoring and timed charge control - no local Modbus/RS485 access is required. It cannot control export, see the notes below. Predbat discovers every battery system bound to the developer AppID, publishes monitoring sensors and derived ratings (including EV charger power and energy where one is fitted), and writes schedule control entities that map directly onto the AlphaESS charge and discharge schedule fields.
 
 #### When to enable (alphaess)
 
@@ -1334,7 +1380,9 @@ Integrates with AlphaESS SMILE/Storion hybrid inverters via the AlphaESS Open AP
 
 - **EXPERIMENTAL:** nobody on the Predbat project has AlphaESS hardware, so behaviour is inferred from AlphaESS's published Open API documentation and the Home Assistant AlphaESS integration rather than confirmed against real inverters. Every request and response is traced to the log (`api_debug`, on by default) with credentials redacted, so a tester can capture evidence for an issue report. Run the [diagnostics CLI](inverter-setup.md#alphaess-cloud) against your own system before trusting Predbat with control
 - **Control is on by default**, the same as `sunsynk_control_enable`. Set `alphaess_control_enable: false` for monitoring only. `switch.predbat_set_read_only` additionally holds back Predbat's own automatic writes, including its periodic re-apply
-- **Both write endpoints are documented as writable once per 24 hours.** Predbat therefore only writes when the payload actually changes, gates charge and discharge independently so one does not consume the other's budget, and paces writes with `alphaess_min_write_interval`. A schedule is committed in stages (window, then enable, then target SoC), so a small, capped number of corrections is allowed through within 60 seconds of a successful write - without it the inverter would run a schedule Predbat had already superseded until the interval expired
+- **Both write endpoints are documented as writable once per 24 hours.** Predbat therefore only writes when the payload actually changes, gates charge and discharge independently so one does not consume the other's budget, and paces writes with `alphaess_min_write_interval`
+A schedule is committed in stages (window, then enable, then target SoC), so a small, capped number of corrections is allowed through within 60 seconds of a successful write - without it the inverter would run a schedule Predbat had already superseded until the interval expired
+- **Export cannot be controlled at all.** The Open API has no forced-export, working-mode or dispatch endpoint, and AlphaESS document the discharge window as a *permission* window - during it the system runs in self-consumption, outside it the battery may only charge - so Force Export exports nothing beyond genuine solar surplus. Freeze Export is equally undeliverable, because nothing in the API stops the battery charging from solar. Set `select.predbat_mode` to `Control charge` on these systems, and see [AlphaESS cannot be used to control export](apps-yaml.md#alphaess-cannot-be-used-to-control-export)
 - Predbat's controls map straight onto the schedule fields and the inverter does the timing. `batUseCap` carries the export target while an export window is programmed and the reserve otherwise, because the API has only one field for the discharge floor. A **zero** charge or discharge rate is how Predbat signals a freeze, since AlphaESS has no pause endpoint
 - Times sit on a **15-minute grid** (`00:00` to `23:45`). Off-grid values are accepted by the API and then silently ignored by the inverter, so Predbat snaps windows inward and disables any window that snapping collapses
 - Newer systems may be entitled to the periodic scheduling API (six windows a day, with a power setpoint per window). Predbat probes this once per system; a `6017` response means the account or hardware is not entitled and Predbat falls back to the universally available two-window endpoints. On that legacy path a non-zero charge rate is not honoured by the hardware
@@ -1622,7 +1670,7 @@ For a detailed explanation of how the neural network works and comprehensive con
 | `load_ml_max_days_history` | Integer | No | 28 | `load_ml_max_days_history` | Maximum days of load history to fetch from HA on each poll (bounded by HA recorder retention) |
 | `load_ml_database_days` | Integer | No | 90 | `load_ml_database_days` | Days of history to accumulate in the on-disk database (`predbat_ml_history.npz`); set to 0 to disable the database |
 
-Note: `load_today`, `pv_today` and `car_charging_energy` apps.yaml configuration items are also used, but these should already be set in Predbat.
+Note: **load_today**, **pv_today** and **car_charging_energy** `apps.yaml` configuration items are also used, but these should already be set in Predbat.
 
 #### Configuration example (load_ml)
 

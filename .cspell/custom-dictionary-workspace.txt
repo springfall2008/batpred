@@ -16,6 +16,7 @@ allclose
 alphaess
 annualform
 Anson
+antiphase
 apexcharts
 apikey
 appdaemon
@@ -71,6 +72,7 @@ cdn
 Cerbo
 cexxxx
 ceyyyy
+CGNAT
 Chae
 Chaf
 chargedischarge
@@ -149,6 +151,7 @@ Dise
 Disf
 diverter
 dlimit
+dlopen
 dnoregion
 docstrings
 dstamp
@@ -191,6 +194,7 @@ ESSAPI
 etoday
 etok
 euids
+EVAC
 EVDC
 evergen
 evilspringfall
@@ -211,6 +215,7 @@ fline
 FLOMASTA
 fontsize
 fontweight
+footgun
 Forestfire
 formaction
 formmethod
@@ -233,6 +238,7 @@ getaffinity
 getall
 getrusage
 Ginlong
+gitnexus
 GivEnergy
 givtcp
 gnueabihf
@@ -282,6 +288,7 @@ inteless
 INTELLI
 intelligentdevice
 interp
+interprocedural
 intraday
 inva
 invb
@@ -308,6 +315,7 @@ Kostal
 kostalplenticore
 kostalplenticoreg
 Krakenflex
+Kuzu
 kvar
 kvarh
 kwargs
@@ -315,9 +323,11 @@ kwhb
 labelcolor
 labelledby
 labelnames
+ladybugdb
 larr
 libbi
 libc
+libyaml
 LIFEPO
 linebreak
 linestyle
@@ -333,6 +343,8 @@ lookback
 lpignore
 lstrip
 luxpower
+malloc
+mallopt
 markdownlint
 matplotlib
 maximise
@@ -386,6 +398,7 @@ mypy
 nanmean
 nanstd
 nattribute
+nbytes
 ncalls
 nearr
 nemotron
@@ -419,6 +432,7 @@ ollama
 onblur
 onchange
 oncharge
+oneline
 onfocus
 oninput
 onmouseout
@@ -428,6 +442,7 @@ openrouter
 openweathermap
 overclaim
 overfitting
+oversizing
 overvoltage
 ownerapi
 parseable
@@ -652,6 +667,7 @@ unpickles
 unpushed
 unreachability
 unredacted
+unregisters
 unreproduced
 unsmoothed
 unstaged

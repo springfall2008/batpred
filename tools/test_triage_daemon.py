@@ -39,6 +39,7 @@ class DaemonPathsTestCase(unittest.TestCase):
         self._patch("LOG_DIR", self.log_dir)
         self._patch("CLONE_DIR", base / "batpred")
         self._patch("SCRATCH_DIR", base / "scratch")
+        self._patch("QUEUE_DIR", base / "journal-queue")
 
     def _patch(self, name, value):
         """Patch a module-level constant on triage_daemon for the duration of the test."""
@@ -230,6 +231,18 @@ class DuplicateGuardTests(unittest.TestCase):
         self.assertIn("--repo", args)
         self.assertEqual(args[args.index("--repo") + 1], "springfall2008/batpred")
 
+    @patch("triage_daemon.subprocess.run")
+    def test_find_pr_number_for_issue_returns_the_number(self, mock_run):
+        """A matching search result's PR number is returned, not just a bool."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742}]))
+        self.assertEqual(triage_daemon.find_pr_number_for_issue(4720), 4742)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_find_pr_number_for_issue_returns_none_when_no_match(self, mock_run):
+        """An empty search result means no PR exists yet for this issue."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([]))
+        self.assertIsNone(triage_daemon.find_pr_number_for_issue(4720))
+
 
 class IsActionableTests(unittest.TestCase):
     """Tests for is_actionable(), new - guards against implementing a closed,
@@ -288,10 +301,11 @@ class LabelSwapTests(unittest.TestCase):
     @patch("triage_daemon.subprocess.run")
     def test_mark_pr_opened_swaps_labels(self, mock_run):
         """Removes BOT_PR and adds BOT_PR_OPENED, scoped to the configured repo."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742}]))
         triage_daemon.mark_pr_opened(4720)
-        args = mock_run.call_args[0][0]
+        first_call_args = mock_run.call_args_list[0].args[0]
         self.assertEqual(
-            args,
+            first_call_args,
             [
                 "gh",
                 "issue",
@@ -305,6 +319,26 @@ class LabelSwapTests(unittest.TestCase):
                 "BOT_PR_OPENED",
             ],
         )
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_flags_the_pr_for_review(self, mock_run):
+        """Once the issue's label is swapped, the PR itself is found and flagged
+        BOT_REVIEW - /issue-pr's own quality gate is pre-commit and a targeted test,
+        not an LLM review of the diff, so this is what actually triggers one."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742}]))
+        triage_daemon.mark_pr_opened(4720)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW"], calls)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_skips_flagging_when_no_pr_found(self, mock_run):
+        """Defensive path: an empty PR search (e.g. a race with the PR being closed
+        between the caller's has_existing_pr() check and this call) must not crash
+        trying to flag a PR number that doesn't exist."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([]))
+        triage_daemon.mark_pr_opened(4720)  # must not raise
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any(call[:3] == ["gh", "pr", "edit"] for call in calls))
 
     @patch("triage_daemon.subprocess.run")
     def test_mark_pr_failed_swaps_labels(self, mock_run):
@@ -326,6 +360,17 @@ class LabelSwapTests(unittest.TestCase):
                 "BOT_PR_FAILED",
             ],
         )
+
+
+class FlagPrForReviewTests(unittest.TestCase):
+    """Tests for flag_pr_for_review(), new - adds BOT_REVIEW to a PR directly."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_adds_bot_review_to_the_pr_scoped_to_repo(self, mock_run):
+        """Adds the label to the PR (not the issue), scoped to the configured repo."""
+        triage_daemon.flag_pr_for_review(4742)
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args, ["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW"])
 
 
 class PermissionModelTests(unittest.TestCase):
@@ -602,7 +647,9 @@ class PermissionModelTests(unittest.TestCase):
         self.assertIn("Bash(gh api repos/springfall2008/batpred/*)", cleanup)
 
     def test_cleanup_allowed_tools_grants_write_access(self):
-        """Commit/push/pre-commit, matching the PR flow's write capability."""
+        """Commit/push/pre-commit, matching the PR flow's write capability - the
+        merge grant is checked separately below, since it's a set of enumerated
+        spellings rather than a single entry."""
         cleanup = set(triage_daemon.ALLOWED_TOOLS_CLEANUP.split(","))
         self.assertTrue(
             {
@@ -613,6 +660,33 @@ class PermissionModelTests(unittest.TestCase):
                 "Bash(./run_pre_commit)",
             }.issubset(cleanup)
         )
+
+    def test_cleanup_is_the_only_flow_granted_git_merge(self):
+        """git merge is only needed to sync a checked-out PR branch with main - no
+        other flow checks out an existing branch that can be behind, so granting it
+        more broadly would expand the permission surface with no matching use-case."""
+        cleanup = triage_daemon.ALLOWED_TOOLS_CLEANUP.split(",")
+        for entry in triage_daemon._CLEANUP_EXTRA_MERGE:
+            self.assertIn(entry, cleanup)
+        for flow in [triage_daemon.ALLOWED_TOOLS, triage_daemon.ALLOWED_TOOLS_PR, triage_daemon.ALLOWED_TOOLS_REVIEW]:
+            merge_entries = [entry for entry in flow.split(",") if entry.startswith("Bash(git merge")]
+            self.assertEqual(merge_entries, [])
+
+    def test_cleanup_merge_grant_is_scoped_to_origin_main(self):
+        """Regression test for the Copilot review on PR #4882: a bare "Bash(git
+        merge*)" would let the agent merge any ref, contradicting pr-cleanup/SKILL.md's
+        guardrail that it should only ever merge origin/main. Every enumerated entry
+        must name origin/main explicitly, or be the exact --abort escape hatch."""
+        for entry in triage_daemon._CLEANUP_EXTRA_MERGE:
+            self.assertTrue("origin/main" in entry or entry == "Bash(git merge --abort)", entry)
+
+    def test_cleanup_merge_grant_covers_a_flag_before_the_ref(self):
+        """Regression test for the same Copilot review comment: prefix-glob matching
+        is literal, so "git merge --no-edit origin/main" - the exact form SKILL.md's
+        step 2 instructs, to avoid hanging on an interactive editor prompt - needs its
+        own entry rather than relying on a bare "git merge origin/main*" rule to cover
+        a flag that comes before the ref."""
+        self.assertIn("Bash(git merge --no-edit origin/main*)", triage_daemon._CLEANUP_EXTRA_MERGE)
 
 
 class GhApiFormPromptTests(unittest.TestCase):
@@ -640,6 +714,15 @@ class GhApiFormPromptTests(unittest.TestCase):
         """The #4758 run degraded to printing the comments it could not post, which read as a
         completed review in the log. The prompt asks for a denial to be stated plainly."""
         self.assertIn("denied", triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT)
+
+    def test_requires_disclosure_on_every_posted_comment_or_reply(self):
+        """/code-review's own instructions live in a skill we don't own, so this appended
+        prompt is the only lever available to make its inline comments disclose they're
+        automated - and it doubles as a belt-and-braces backup for /pr-cleanup's replies,
+        which already ask for disclosure directly in their own SKILL.md."""
+        prompt = triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT
+        self.assertIn("must open with", prompt)
+        self.assertIn("Automated comment from the triage bot", prompt)
 
 
 class PrReviewActivityCountTests(unittest.TestCase):
@@ -691,6 +774,261 @@ class SyncRepoTests(unittest.TestCase):
         self.assertLess(calls.index(checkout_call), calls.index(reset_call))
 
 
+class EffectiveOllamaModelTests(unittest.TestCase):
+    """Tests for effective_ollama_model(), new - the priority logic behind --ollama
+    (every claude invocation) vs --ollama_review (review-only invocations)."""
+
+    def setUp(self):
+        """Every test starts from the no-flag default, regardless of test order."""
+        for name in ("OLLAMA_MODEL", "OLLAMA_REVIEW_MODEL"):
+            patcher = patch.object(triage_daemon, name, None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_none_by_default(self):
+        """With neither flag set, every invocation uses the default Claude model."""
+        self.assertIsNone(triage_daemon.effective_ollama_model())
+        self.assertIsNone(triage_daemon.effective_ollama_model(review_only=True))
+
+    def test_ollama_applies_regardless_of_review_only(self):
+        """--ollama (OLLAMA_MODEL) covers every invocation, including PR creation."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.effective_ollama_model(review_only=False), "glm-5.3-flash:cloud")
+            self.assertEqual(triage_daemon.effective_ollama_model(review_only=True), "glm-5.3-flash:cloud")
+
+    def test_ollama_review_only_applies_when_review_only_is_true(self):
+        """--ollama_review (OLLAMA_REVIEW_MODEL) is ignored unless the caller marks
+        this invocation review_only - this is what keeps PR creation (which never
+        passes review_only=True) on the default Claude model."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            self.assertIsNone(triage_daemon.effective_ollama_model(review_only=False))
+            self.assertEqual(triage_daemon.effective_ollama_model(review_only=True), "glm-5.3-flash:cloud")
+
+    def test_ollama_takes_precedence_over_ollama_review(self):
+        """If both somehow end up set, the blanket --ollama model wins."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "full-model"), patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "review-model"):
+            self.assertEqual(triage_daemon.effective_ollama_model(review_only=True), "full-model")
+
+
+class ClaudeModelArgsTests(unittest.TestCase):
+    """Tests for claude_model_args(), new - the --ollama/--ollama_review-to---model
+    plumbing shared by every 'claude' invocation (triage, triage_followup, create_pr,
+    review_pr, cleanup_pr)."""
+
+    def setUp(self):
+        """Every test starts from the no-flag default, regardless of test order."""
+        for name in ("OLLAMA_MODEL", "OLLAMA_REVIEW_MODEL"):
+            patcher = patch.object(triage_daemon, name, None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_empty_by_default(self):
+        """With no --ollama, no --model flag is added to any claude invocation."""
+        self.assertEqual(triage_daemon.claude_model_args(), [])
+
+    def test_selects_the_configured_model(self):
+        """--ollama's model name is passed straight through as --model, :cloud suffix included."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_model_args(), ["--model", "glm-5.3-flash:cloud"])
+
+    def test_review_only_model_used_when_review_only_true(self):
+        """claude_model_args(review_only=True) picks up --ollama_review when set -
+        the call form triage()/triage_followup()/review_pr()/cleanup_pr() use."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_model_args(review_only=True), ["--model", "glm-5.3-flash:cloud"])
+
+    def test_review_only_model_ignored_by_default(self):
+        """claude_model_args() with no argument - the form create_pr() uses - ignores
+        --ollama_review, so PR creation is unaffected by it."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_model_args(), [])
+
+
+class ClaudeEnvTests(unittest.TestCase):
+    """Tests for claude_env(), new - the Anthropic-compatible env overrides Ollama's
+    Claude Code integration documents (https://docs.ollama.com/integrations/claude-code)."""
+
+    def setUp(self):
+        """Every test starts from the no-flag default, regardless of test order."""
+        for name in ("OLLAMA_MODEL", "OLLAMA_REVIEW_MODEL"):
+            patcher = patch.object(triage_daemon, name, None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_none_by_default(self):
+        """With no --ollama, env=None so subprocess.run() inherits the daemon's own
+        environment unchanged - no ANTHROPIC_* overrides pointing at Ollama."""
+        self.assertIsNone(triage_daemon.claude_env())
+
+    def test_adds_the_documented_overrides_when_configured(self):
+        """--ollama sets exactly the three env vars Ollama's integration guide documents."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"):
+            env = triage_daemon.claude_env()
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+        self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "ollama")
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "")
+
+    def test_preserves_the_rest_of_the_process_environment(self):
+        """The overrides sit on top of the daemon's own environment, not a bare dict -
+        the gh/git subcommands inside the claude session still need PATH, HOME, etc."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"), patch.dict("os.environ", {"SOME_OTHER_VAR": "keep-me"}):
+            env = triage_daemon.claude_env()
+        self.assertEqual(env.get("SOME_OTHER_VAR"), "keep-me")
+
+    def test_review_only_env_used_when_review_only_true(self):
+        """claude_env(review_only=True) picks up --ollama_review when set."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            env = triage_daemon.claude_env(review_only=True)
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    def test_review_only_env_ignored_by_default(self):
+        """claude_env() with no argument - the form create_pr() uses - ignores --ollama_review."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            env = triage_daemon.claude_env()
+        self.assertIsNone(env)
+
+
+class ClaudeBudgetArgsTests(unittest.TestCase):
+    """Tests for claude_budget_args(), new - regression tests for issue #4881: a
+    triage run against an Ollama model completed its real work and then kept running
+    until Claude Code's (Anthropic-priced) cost estimate crossed --max-budget-usd,
+    aborting with a false failure that made the daemon retry an already-finished issue."""
+
+    def setUp(self):
+        """Every test starts from the no-flag default, regardless of test order."""
+        for name in ("OLLAMA_MODEL", "OLLAMA_REVIEW_MODEL"):
+            patcher = patch.object(triage_daemon, name, None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_caps_spend_by_default(self):
+        """With no --ollama flag, the budget cap applies as before."""
+        self.assertEqual(triage_daemon.claude_budget_args("10.00"), ["--max-budget-usd", "10.00"])
+
+    def test_omitted_when_ollama_is_active(self):
+        """--ollama's cost estimate is meaningless for a non-Anthropic model, so the
+        cap is dropped entirely rather than left in place to fire falsely."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_budget_args("10.00", review_only=True), [])
+
+    def test_omitted_when_ollama_review_is_active_for_a_review_only_call(self):
+        """Same as --ollama, for the review-only flows --ollama_review covers."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_budget_args("10.00", review_only=True), [])
+
+    def test_still_applies_to_pr_creation_under_ollama_review(self):
+        """--ollama_review never touches create_pr() (review_only=False there) - it
+        still runs on the real Claude model, so its budget cap must still apply."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_budget_args("25.00"), ["--max-budget-usd", "25.00"])
+
+    def test_omitted_from_pr_creation_under_the_blanket_ollama_flag(self):
+        """Unlike --ollama_review, --ollama covers every invocation including
+        create_pr() - its budget cap is dropped there too."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"):
+            self.assertEqual(triage_daemon.claude_budget_args("25.00"), [])
+
+
+class ParseArgsTests(unittest.TestCase):
+    """Tests for parse_args(), new - the --ollama/--ollama_review CLI flags."""
+
+    def test_defaults_to_no_ollama_model(self):
+        """Without either flag, both args are None - every claude invocation uses the default model."""
+        with patch("sys.argv", ["triage_daemon.py"]):
+            args = triage_daemon.parse_args()
+        self.assertIsNone(args.ollama)
+        self.assertIsNone(args.ollama_review)
+
+    def test_parses_the_ollama_model_flag(self):
+        """--ollama <model> is captured verbatim, :cloud suffix included."""
+        with patch("sys.argv", ["triage_daemon.py", "--ollama", "glm-5.3-flash:cloud"]):
+            args = triage_daemon.parse_args()
+        self.assertEqual(args.ollama, "glm-5.3-flash:cloud")
+        self.assertIsNone(args.ollama_review)
+
+    def test_parses_the_ollama_review_model_flag(self):
+        """--ollama_review <model> is captured verbatim, separately from --ollama."""
+        with patch("sys.argv", ["triage_daemon.py", "--ollama_review", "glm-5.3-flash:cloud"]):
+            args = triage_daemon.parse_args()
+        self.assertEqual(args.ollama_review, "glm-5.3-flash:cloud")
+        self.assertIsNone(args.ollama)
+
+    def test_ollama_and_ollama_review_are_mutually_exclusive(self):
+        """Passing both is a usage error rather than a silently-resolved precedence -
+        --ollama already covers every flow --ollama_review does, so combining them
+        would just be ambiguous about which one the user actually meant."""
+        with patch("sys.argv", ["triage_daemon.py", "--ollama", "model-a", "--ollama_review", "model-b"]):
+            with self.assertRaises(SystemExit):
+                triage_daemon.parse_args()
+
+
+class TriageTests(DaemonPathsTestCase):
+    """Tests for triage(), exercised directly here for the first time - previously
+    only covered indirectly through the orchestrators, which mock it out."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_invokes_claude_with_the_triage_permission_set(self, mock_run):
+        """Runs the /issue-triage skill with the read-only allow/deny lists."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("/issue-triage 4720", cmd[2])
+        self.assertIn(triage_daemon.ALLOWED_TOOLS, cmd)
+        self.assertIn(triage_daemon.DISALLOWED_TOOLS, cmd)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_no_model_flag_or_env_override_by_default(self, mock_run):
+        """Without --ollama, the invocation is unchanged: no --model flag, env=None
+        so the claude subprocess talks to Anthropic's API as normal."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("--model", cmd)
+        self.assertIsNone(mock_run.call_args.kwargs["env"])
+
+    @patch("triage_daemon.subprocess.run")
+    def test_adds_the_ollama_model_flag_and_env_when_configured(self, mock_run):
+        """--ollama appends --model <name> to the cmd and routes the subprocess at
+        Ollama's Claude Code compatible endpoint via the env overrides."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_ollama_review_model_also_applies_to_triage(self, mock_run):
+        """--ollama_review covers first-pass triage too, not just the blanket --ollama."""
+        self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_writes_a_log_file(self, mock_run):
+        """A per-issue log file is created under LOG_DIR."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        self.assertTrue((self.log_dir / "issue-4720.log").exists())
+
+    @patch("triage_daemon.subprocess.run")
+    def test_drops_the_budget_cap_when_ollama_is_configured(self, mock_run):
+        """Regression test for issue #4881: --max-budget-usd's cost estimate fired
+        falsely against an Ollama model, so it must not be passed at all in that mode."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("--max-budget-usd", cmd)
+
+
 class CreatePrTests(DaemonPathsTestCase):
     """Tests for create_pr(), new in the bot PR flow."""
 
@@ -719,6 +1057,50 @@ class CreatePrTests(DaemonPathsTestCase):
         mock_run.return_value = MagicMock(returncode=0)
         triage_daemon.create_pr(4720)
         self.assertTrue((self.log_dir / "issue-4720-pr.log").exists())
+
+    @patch("triage_daemon.subprocess.run")
+    def test_adds_the_ollama_model_flag_and_env_when_configured(self, mock_run):
+        """Same --ollama wiring as triage() - this flow also shells out to 'claude'."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_ollama_review_model_does_not_apply_to_pr_creation(self, mock_run):
+        """--ollama_review is scoped to the review-only flows - PR creation must still
+        run on the default Claude model even when --ollama_review is set."""
+        self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("--model", cmd)
+        self.assertIsNone(mock_run.call_args.kwargs["env"])
+
+    @patch("triage_daemon.subprocess.run")
+    def test_budget_cap_still_applies_under_ollama_review(self, mock_run):
+        """--ollama_review never touches PR creation - it still runs on the real
+        Claude model, so its budget cap (a real spend control there) must stay."""
+        self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--max-budget-usd", cmd)
+        self.assertEqual(cmd[cmd.index("--max-budget-usd") + 1], "25.00")
+
+    @patch("triage_daemon.subprocess.run")
+    def test_budget_cap_dropped_under_the_blanket_ollama_flag(self, mock_run):
+        """Unlike --ollama_review, --ollama covers PR creation too, so its budget
+        cap - meaningless against a non-Anthropic model - is dropped here as well."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("--max-budget-usd", cmd)
 
 
 class ProcessBotPrIssueTests(unittest.TestCase):
@@ -901,6 +1283,30 @@ class TriageFollowupTests(DaemonPathsTestCase):
         triage_daemon.triage_followup(4720)
         self.assertTrue((self.log_dir / "issue-4720-followup.log").exists())
 
+    @patch("triage_daemon.subprocess.run")
+    def test_adds_the_ollama_model_flag_and_env_when_configured(self, mock_run):
+        """Same --ollama wiring as triage() - this flow also shells out to 'claude'."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage_followup(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_ollama_review_model_also_applies_to_followup(self, mock_run):
+        """--ollama_review covers the follow-up review too."""
+        self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage_followup(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
 
 class ProcessBotReviewIssueTests(unittest.TestCase):
     """Tests for process_bot_review_issue(), covering all three BOT_REVIEW paths:
@@ -1073,7 +1479,7 @@ class ReviewPrTests(DaemonPathsTestCase):
         triage_daemon.review_pr(4742)
         cmd = mock_run.call_args[0][0]
         self.assertIn("--append-system-prompt", cmd)
-        self.assertEqual(cmd[cmd.index("--append-system-prompt") + 1], triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT)
+        self.assertIn(triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT, cmd[cmd.index("--append-system-prompt") + 1])
 
     @patch("triage_daemon.subprocess.run")
     def test_raises_on_a_non_zero_exit(self, mock_run):
@@ -1088,6 +1494,30 @@ class ReviewPrTests(DaemonPathsTestCase):
         mock_run.return_value = MagicMock(returncode=0)
         triage_daemon.review_pr(4742)
         self.assertTrue((self.log_dir / "pr-4742-review.log").exists())
+
+    @patch("triage_daemon.subprocess.run")
+    def test_adds_the_ollama_model_flag_and_env_when_configured(self, mock_run):
+        """Same --ollama wiring as triage() - this flow also shells out to 'claude'."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.review_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_ollama_review_model_also_applies_to_pr_review(self, mock_run):
+        """--ollama_review covers PR review too - it's one of the review-only flows."""
+        self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.review_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
 
 
 class ProcessBotReviewPrTests(unittest.TestCase):
@@ -1210,7 +1640,7 @@ class CleanupPrTests(DaemonPathsTestCase):
         triage_daemon.cleanup_pr(4742)
         cmd = mock_run.call_args[0][0]
         self.assertIn("--append-system-prompt", cmd)
-        self.assertEqual(cmd[cmd.index("--append-system-prompt") + 1], triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT)
+        self.assertIn(triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT, cmd[cmd.index("--append-system-prompt") + 1])
 
     @patch("triage_daemon.subprocess.run")
     def test_raises_on_a_non_zero_exit(self, mock_run):
@@ -1225,6 +1655,30 @@ class CleanupPrTests(DaemonPathsTestCase):
         mock_run.return_value = MagicMock(returncode=0)
         triage_daemon.cleanup_pr(4742)
         self.assertTrue((self.log_dir / "pr-4742-cleanup.log").exists())
+
+    @patch("triage_daemon.subprocess.run")
+    def test_adds_the_ollama_model_flag_and_env_when_configured(self, mock_run):
+        """Same --ollama wiring as triage() - this flow also shells out to 'claude'."""
+        self._patch("OLLAMA_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.cleanup_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_ollama_review_model_also_applies_to_cleanup(self, mock_run):
+        """--ollama_review covers PR cleanup too - it's one of the review-only flows."""
+        self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.cleanup_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
 
 
 class ProcessBotCleanupPrTests(unittest.TestCase):
@@ -1261,6 +1715,297 @@ class ProcessBotCleanupPrTests(unittest.TestCase):
         printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
         self.assertIn("Add confirmed findings", printed)
         self.assertIn("https://github.com/springfall2008/batpred/pull/4742", printed)
+
+
+class CommentDisclosureTests(unittest.TestCase):
+    """Regression tests ensuring every comment triage_daemon.py posts directly (as
+    opposed to a comment an LLM invocation composes at runtime - those get their own
+    disclosure instructions in the relevant SKILL.md, or in GH_API_ENDPOINT_FIRST_PROMPT
+    for /code-review, which is covered by GhApiFormPromptTests instead) opens with a
+    plain "Automated ..." disclosure, so a maintainer never mistakes one for a human's."""
+
+    @staticmethod
+    def _body_of_first_comment_call(mock_run):
+        """Return the --body argument of the first `gh issue/pr comment` call made,
+        skipping any subsequent label-edit calls the same function also makes."""
+        for call in mock_run.call_args_list:
+            args = call.args[0]
+            if args[:2] in (["gh", "issue"], ["gh", "pr"]) and "comment" in args:
+                return args[args.index("--body") + 1]
+        raise AssertionError(f"no comment call found among {mock_run.call_args_list}")
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_not_actionable_discloses(self, mock_run):
+        triage_daemon.mark_pr_not_actionable(4720)
+        self.assertTrue(self._body_of_first_comment_call(mock_run).startswith("Automated"))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_review_failed_discloses(self, mock_run):
+        triage_daemon.mark_review_failed(3100)
+        self.assertTrue(self._body_of_first_comment_call(mock_run).startswith("Automated"))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_review_failed_discloses(self, mock_run):
+        triage_daemon.mark_pr_review_failed(4742)
+        self.assertTrue(self._body_of_first_comment_call(mock_run).startswith("Automated"))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_cleanup_failed_discloses(self, mock_run):
+        triage_daemon.mark_pr_cleanup_failed(4742)
+        self.assertTrue(self._body_of_first_comment_call(mock_run).startswith("Automated"))
+
+
+class JournalQueueTests(DaemonPathsTestCase):
+    """The queue is where a flow parks a finding for the daily journal PR to pick up."""
+
+    def test_queue_lives_outside_the_clone(self):
+        """sync_repo() runs `git reset --hard` and `git clean -fd` on the clone before every
+        flow, so anything queued inside it would be destroyed before the flush ever saw it.
+        That is why every earlier attempt to have the bot maintain the journal came to
+        nothing, permissions aside."""
+        self.assertFalse(str(triage_daemon.QUEUE_DIR).startswith(str(triage_daemon.CLONE_DIR)))
+
+    def test_every_flow_may_write_to_the_queue(self):
+        """All five flows capture findings, so the queue's Edit grant has to be in the shared
+        base list rather than added per flow."""
+        rule = f"Edit({triage_daemon.QUEUE_SCOPE})"
+        for name in ("ALLOWED_TOOLS", "ALLOWED_TOOLS_PR", "ALLOWED_TOOLS_REVIEW", "ALLOWED_TOOLS_CLEANUP"):
+            with self.subTest(allowlist=name):
+                self.assertIn(rule, getattr(triage_daemon, name).split(","))
+
+    def test_entries_are_empty_when_the_queue_has_never_been_written(self):
+        """A fresh install has no queue directory at all; that is not an error."""
+        self.assertEqual(triage_daemon.journal_queue_entries(), [])
+
+    def test_entries_are_sorted_and_only_markdown(self):
+        """Sorted so the flush reads them in a stable order, and filtered so a stray download
+        or editor swap file in the directory cannot be mistaken for a finding."""
+        triage_daemon.QUEUE_DIR.mkdir(parents=True)
+        for name in ("4931-b.md", "4900-a.md", "notes.txt"):
+            (triage_daemon.QUEUE_DIR / name).write_text("x")
+        self.assertEqual([p.name for p in triage_daemon.journal_queue_entries()], ["4900-a.md", "4931-b.md"])
+
+
+class JournalCapturePromptTests(unittest.TestCase):
+    """JOURNAL_CAPTURE_PROMPT is how a flow learns to capture at all. No skill asked for this
+    before, which is why journal upkeep was self-motivated and patchy - and /code-review is a
+    built-in skill whose SKILL.md we do not own, so an appended system prompt is the only
+    lever that reaches every flow."""
+
+    def test_names_the_queue_directory(self):
+        """Concrete enough to act on: the agent has to be told where to write."""
+        self.assertIn(str(triage_daemon.QUEUE_DIR), triage_daemon.JOURNAL_CAPTURE_PROMPT)
+
+    def test_asks_only_for_what_was_verified(self):
+        """The journal's value is that its entries are checkable. A queue full of hypotheses
+        would poison it faster than leaving it stale."""
+        prompt = triage_daemon.JOURNAL_CAPTURE_PROMPT
+        self.assertIn("verified", prompt)
+        self.assertIn("how you verified", prompt)
+
+    def test_tells_the_agent_to_skip_when_there_is_nothing_worth_saying(self):
+        """Most runs learn nothing new. Without an explicit opt-out the model writes something
+        anyway, and the daily PR fills with restatements of what the journal already says."""
+        self.assertIn("nothing", triage_daemon.JOURNAL_CAPTURE_PROMPT.lower())
+
+
+class JournalCaptureReachesEveryFlowTests(DaemonPathsTestCase):
+    """Every claude-invoking flow must carry the capture instruction."""
+
+    def _appended_system_prompt(self, mock_run):
+        """Return the --append-system-prompt value from the mocked claude invocation."""
+        cmd = mock_run.call_args[0][0]
+        return cmd[cmd.index("--append-system-prompt") + 1]
+
+    def _run_flow(self, flow, *args):
+        """Invoke one flow with subprocess.run mocked, returning its appended system prompt."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            flow(*args)
+            return self._appended_system_prompt(mock_run)
+
+    def test_every_flow_appends_the_capture_prompt(self):
+        """Triage, follow-up, PR creation, PR review and PR cleanup all capture."""
+        flows = [
+            (triage_daemon.triage, 4931),
+            (triage_daemon.triage_followup, 4931),
+            (triage_daemon.create_pr, 4931),
+            (triage_daemon.review_pr, 4941),
+            (triage_daemon.cleanup_pr, 4941),
+        ]
+        for flow, arg in flows:
+            with self.subTest(flow=flow.__name__):
+                self.assertIn(triage_daemon.JOURNAL_CAPTURE_PROMPT, self._run_flow(flow, arg))
+
+    def test_review_and_cleanup_keep_the_gh_api_steer_as_well(self):
+        """These two already carried GH_API_ENDPOINT_FIRST_PROMPT. Appending the capture text
+        must add to it, not replace it - the #4758 fix depends on that steer surviving."""
+        for flow, arg in ((triage_daemon.review_pr, 4941), (triage_daemon.cleanup_pr, 4941)):
+            with self.subTest(flow=flow.__name__):
+                appended = self._run_flow(flow, arg)
+                self.assertIn(triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT, appended)
+                self.assertIn(triage_daemon.JOURNAL_CAPTURE_PROMPT, appended)
+
+    def test_only_one_append_system_prompt_flag_is_passed(self):
+        """Two --append-system-prompt flags is not a documented way to pass two prompts, so
+        the parts are joined into a single value instead."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            triage_daemon.review_pr(4941)
+            self.assertEqual(mock_run.call_args[0][0].count("--append-system-prompt"), 1)
+
+
+class JournalFlushGateTests(DaemonPathsTestCase):
+    """The flush runs at most once a day, and only when something is waiting."""
+
+    def _queue(self, count):
+        """Put `count` candidate files in the queue directory."""
+        triage_daemon.QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+        for i in range(count):
+            (triage_daemon.QUEUE_DIR / f"{i}.md").write_text("finding")
+
+    def test_no_flush_when_the_queue_is_empty(self):
+        """A quiet day opens no PR at all, rather than an empty one."""
+        self.assertFalse(triage_daemon.should_flush_journal({}, "2026-09-05"))
+
+    def test_flush_when_something_is_queued_and_today_has_not_run(self):
+        self._queue(1)
+        self.assertTrue(triage_daemon.should_flush_journal({}, "2026-09-05"))
+
+    def test_no_second_flush_on_the_same_day(self):
+        """The daemon polls every 5 minutes; without the date gate a non-empty queue would
+        open a PR on every poll."""
+        self._queue(1)
+        state = {"last_journal_flush": "2026-09-05"}
+        self.assertFalse(triage_daemon.should_flush_journal(state, "2026-09-05"))
+
+    def test_flushes_again_the_next_day(self):
+        self._queue(1)
+        state = {"last_journal_flush": "2026-09-04"}
+        self.assertTrue(triage_daemon.should_flush_journal(state, "2026-09-05"))
+
+    def test_a_single_finding_is_enough(self):
+        """One verified finding is worth a PR - the daily gate already bounds the review
+        burden, so there is no minimum batch size on top of it."""
+        self._queue(1)
+        self.assertTrue(triage_daemon.should_flush_journal({}, "2026-09-05"))
+
+
+class JournalPermissionTests(unittest.TestCase):
+    """The flush flow can push and open a PR, so its blast radius is deliberately the
+    narrowest of any flow: two files, and no other repo write."""
+
+    def _allowed(self):
+        return triage_daemon.ALLOWED_TOOLS_JOURNAL.split(",")
+
+    def test_does_not_grant_clone_wide_edit(self):
+        """Every other flow may edit anywhere in the clone. This one may not - it is the only
+        flow that can push, so a prompt-injected edit to apps/predbat would land on a branch."""
+        self.assertNotIn(f"Edit({triage_daemon.EDIT_SCOPE})", self._allowed())
+
+    def test_grants_exactly_the_journal_and_the_dictionary(self):
+        """cspell is a pre-commit hook and a journal entry naming a new vendor term fails it,
+        so the dictionary has to be writable too - and nothing else does."""
+        edits = sorted(rule for rule in self._allowed() if rule.startswith("Edit("))
+        self.assertEqual(edits, sorted([f"Edit({triage_daemon.JOURNAL_SCOPE})", f"Edit({triage_daemon.DICTIONARY_SCOPE})"]))
+
+    def test_cannot_write_the_queue_it_reads(self):
+        """The flush consumes candidates; it never needs to author one. Reading them comes
+        from --add-dir, not from an Edit grant."""
+        self.assertNotIn(f"Edit({triage_daemon.QUEUE_SCOPE})", self._allowed())
+
+    def test_can_commit_push_and_open_a_pr(self):
+        """The whole point of the flow: land the entries as a PR for a human to merge."""
+        for command in ("git add -A", "git commit -m x", "git push origin bot/debug-journal-2026-09-05", "gh pr create --draft"):
+            with self.subTest(command=command):
+                self.assertTrue(any(bash_rule_matches(rule, command) for rule in self._allowed() if rule.startswith("Bash(")))
+
+    def test_cannot_merge_its_own_pr(self):
+        """A human merge is the review gate. Losing it would make the bot the only reviewer of
+        its own edits to the file every other flow trusts."""
+        denied = triage_daemon.DISALLOWED_TOOLS_JOURNAL.split(",")
+        self.assertTrue(any(bash_rule_matches(rule, "gh pr merge 5000") for rule in denied if rule.startswith("Bash(")))
+
+    def test_still_blocks_force_push_variants(self):
+        """Same defence in depth as the PR flow: it can push, so it must not rewrite history."""
+        denied = triage_daemon.DISALLOWED_TOOLS_JOURNAL.split(",")
+        for command in ("git push --force origin main", "git push origin main -f", "git push --force-with-lease"):
+            with self.subTest(command=command):
+                self.assertTrue(any(bash_rule_matches(rule, command) for rule in denied if rule.startswith("Bash(")))
+
+    def test_does_not_inherit_the_broad_gh_grant(self):
+        """Same reasoning as the review and cleanup flows: a catch-all would silently re-widen
+        every scoped carve-out below it."""
+        self.assertNotIn("Bash(gh *)", self._allowed())
+
+    def test_does_not_grant_a_direct_push_to_main(self):
+        """main is protection-gated and the design is explicitly PR-and-human-merge, so the
+        allowlist names the bot branch prefix rather than any ref."""
+        self.assertFalse(any(bash_rule_matches(rule, "git push origin main") for rule in self._allowed() if rule.startswith("Bash(git push")))
+
+
+class JournalFlushInvocationTests(DaemonPathsTestCase):
+    """What the flush actually runs."""
+
+    def test_invokes_the_journal_update_skill_under_its_own_permission_set(self):
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            triage_daemon.flush_journal()
+            cmd = mock_run.call_args[0][0]
+        self.assertIn("/journal-update", cmd[cmd.index("-p") + 1])
+        self.assertEqual(cmd[cmd.index("--allowedTools") + 1], triage_daemon.ALLOWED_TOOLS_JOURNAL)
+        self.assertEqual(cmd[cmd.index("--disallowedTools") + 1], triage_daemon.DISALLOWED_TOOLS_JOURNAL)
+
+    def test_tells_the_skill_where_the_queue_is(self):
+        """The queue lives outside the clone, so the path has to be passed in and added to the
+        session's directory scope for Read/Grep."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            triage_daemon.flush_journal()
+            cmd = mock_run.call_args[0][0]
+        self.assertIn(str(triage_daemon.QUEUE_DIR), cmd[cmd.index("-p") + 1])
+        self.assertIn(str(triage_daemon.QUEUE_DIR), cmd[cmd.index("--add-dir") + 1 :])
+
+
+class JournalQueueArchiveTests(DaemonPathsTestCase):
+    """Consumed candidates are moved aside, not deleted."""
+
+    def _queue(self, *names):
+        triage_daemon.QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (triage_daemon.QUEUE_DIR / name).write_text("finding")
+        return triage_daemon.journal_queue_entries()
+
+    def test_a_successful_flush_empties_the_queue(self):
+        """Otherwise the next day folds the same findings in again."""
+        self._queue("4931-a.md")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            triage_daemon.flush_journal()
+        self.assertEqual(triage_daemon.journal_queue_entries(), [])
+
+    def test_a_failed_flush_leaves_the_queue_intact(self):
+        """A finding must survive a flush that never opened a PR - the daemon has already
+        stamped the date, so tomorrow's run is its next chance."""
+        self._queue("4931-a.md")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1)
+            triage_daemon.flush_journal()
+        self.assertEqual([p.name for p in triage_daemon.journal_queue_entries()], ["4931-a.md"])
+
+    def test_consumed_findings_are_kept_not_deleted(self):
+        """A candidate the flush decided to drop is still evidence of what was seen."""
+        self._queue("4931-a.md")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            triage_daemon.flush_journal()
+        self.assertTrue((triage_daemon.QUEUE_DIR / "processed" / "4931-a.md").exists())
+
+    def test_archived_findings_are_not_queued_again(self):
+        """journal_queue_entries() must not recurse into the archive."""
+        self._queue("4931-a.md")
+        triage_daemon.archive_journal_queue(triage_daemon.journal_queue_entries())
+        self.assertFalse(triage_daemon.should_flush_journal({}, "2026-09-06"))
 
 
 if __name__ == "__main__":
