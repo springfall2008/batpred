@@ -3008,9 +3008,10 @@ class Octopus:
         point: a slot that disappears having never been planned against costs nothing, while one
         Predbat committed an import to is a plan that will not happen.
 
-        Stacking consecutive lines (one per 30-minute boundary) in a monospace log viewer reveals
-        dispatch lifecycle as diagonal stripes: a specific dispatch drifts one column per line as
-        `now` advances, so a rescinded slot shows as a stripe that stops before reaching the `now`
+        Stacking consecutive lines (a heartbeat one per 30-minute boundary, plus one on any
+        earlier change - see the caller in fetch.py) in a monospace log viewer reveals dispatch
+        lifecycle as diagonal stripes: a specific dispatch drifts one column per line as `now`
+        advances, so a rescinded slot shows as a stripe that stops before reaching the `now`
         column, while a genuinely-delivered one runs through into 'C'.
         """
         total_before = window_before_hours * 60
@@ -3055,6 +3056,33 @@ class Octopus:
                     status[block] = status[block].lower()
 
         return "".join(status)
+
+    def dispatch_timeline_should_log(self, car_n, timeline):
+        """
+        Decide whether fetch.py should log a dispatch-timeline diagnostic line this cycle, and
+        what marker to append if so.
+
+        A 30-minute heartbeat always logs - dispatch decisions are 30-min-granular anyway, so log
+        volume stays sane at that cadence - but a change from the last logged timeline for this
+        car also logs immediately outside that boundary, marked with a trailing ' *' (#4948
+        review). Without this, a provisional slot that appears and disappears entirely within one
+        half-hour window would never appear in this log at all, however briefly Predbat's own
+        plan relied on it - exactly the pattern this diagnostic exists to catch.
+
+        The marker is a suffix, appended by the caller after build_dispatch_timeline()'s
+        fixed-width string, rather than a prefix - so heartbeat and change-triggered lines still
+        stack column-for-column in a monospace viewer. That alignment is the whole point of the
+        render: consecutive lines are meant to line up into diagonal stripes.
+
+        Records the new timeline as "last logged" as a side effect whenever this returns True, so
+        a caller must log with the returned marker exactly when told to, and no other times.
+        """
+        is_heartbeat = self.minutes_now % 30 == 0
+        changed = timeline != self.dispatch_timeline_last.get(car_n)
+        if not (is_heartbeat or changed):
+            return False, ""
+        self.dispatch_timeline_last[car_n] = timeline
+        return True, "" if is_heartbeat else " *"
 
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """

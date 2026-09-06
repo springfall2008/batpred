@@ -9,9 +9,10 @@
 # pylint: disable=attribute-defined-outside-init
 
 """
-Unit tests for Octopus.build_dispatch_timeline() - the #4516 Stage 1 diagnostic dispatch-timeline
-render helper. Purely observational (not used for any rate/plan decision yet), so these tests only
-check the rendered status string, not any side effect on rates or the plan.
+Unit tests for Octopus.build_dispatch_timeline() and dispatch_timeline_should_log() - the #4516
+Stage 1 diagnostic dispatch-timeline render and its heartbeat/change-triggered logging decision.
+Purely observational (not used for any rate/plan decision yet), so these tests only check the
+rendered status string and the logging decision, not any side effect on rates or the plan.
 """
 
 from datetime import datetime, timedelta
@@ -43,6 +44,7 @@ def run_dispatch_timeline_tests(my_predbat):
     saved_now_utc = my_predbat.now_utc
     saved_midnight_utc = my_predbat.midnight_utc
     saved_minutes_now = my_predbat.minutes_now
+    saved_dispatch_timeline_last = my_predbat.dispatch_timeline_last
     saved_charge_window_best = my_predbat.charge_window_best
     saved_charge_limit_best = my_predbat.charge_limit_best
 
@@ -193,10 +195,52 @@ def run_dispatch_timeline_tests(my_predbat):
         my_predbat.charge_window_best = []
         my_predbat.charge_limit_best = []
 
+        # ------------------------------------------------------------------
+        # dispatch_timeline_should_log() - #4948 review: a heartbeat every 30 minutes alone would
+        # miss a provisional slot that appears and disappears entirely within one half-hour window.
+        my_predbat.dispatch_timeline_last = {}
+
+        print("Test 13: minute 0 (a 30-min boundary) always logs, unmarked, as a heartbeat")
+        my_predbat.minutes_now = 10 * 60  # 10:00, a boundary
+        should_log, marker = my_predbat.dispatch_timeline_should_log(0, "....")
+        if not (should_log and marker == ""):
+            print("  ERROR: expected a heartbeat to log with no marker, got should_log={!r} marker={!r}".format(should_log, marker))
+            failed = True
+
+        print("Test 14: off-boundary with no change since the last log does not log")
+        my_predbat.minutes_now = 10 * 60 + 5  # not a boundary
+        should_log, marker = my_predbat.dispatch_timeline_should_log(0, "....")
+        if should_log:
+            print("  ERROR: an unchanged timeline off-boundary should not log, got should_log={!r} marker={!r}".format(should_log, marker))
+            failed = True
+
+        print("Test 15: off-boundary with a change logs immediately, marked")
+        should_log, marker = my_predbat.dispatch_timeline_should_log(0, "...P")
+        if not (should_log and marker == " *"):
+            print("  ERROR: a changed timeline off-boundary should log marked ' *', got should_log={!r} marker={!r}".format(should_log, marker))
+            failed = True
+
+        print("Test 16: the same changed timeline does not log again next cycle")
+        my_predbat.minutes_now += 5
+        should_log, marker = my_predbat.dispatch_timeline_should_log(0, "...P")
+        if should_log:
+            print("  ERROR: a timeline unchanged since the change-triggered log should not log again, got should_log={!r} marker={!r}".format(should_log, marker))
+            failed = True
+
+        print("Test 17: cars are tracked independently")
+        my_predbat.minutes_now = 11 * 60 + 5  # off-boundary, car 0 already logged "...P"
+        should_log, marker = my_predbat.dispatch_timeline_should_log(1, "...P")
+        if not (should_log and marker == " *"):
+            print("  ERROR: a second car's first-seen timeline should log independently of car 0's, got should_log={!r} marker={!r}".format(should_log, marker))
+            failed = True
+
+        my_predbat.dispatch_timeline_last = {}
+
     finally:
         my_predbat.now_utc = saved_now_utc
         my_predbat.midnight_utc = saved_midnight_utc
         my_predbat.minutes_now = saved_minutes_now
+        my_predbat.dispatch_timeline_last = saved_dispatch_timeline_last
         my_predbat.charge_window_best = saved_charge_window_best
         my_predbat.charge_limit_best = saved_charge_limit_best
 

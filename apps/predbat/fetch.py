@@ -1425,12 +1425,12 @@ class Fetch:
                         self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_slot may not be set correctly in apps.yaml".format(entity_id, car_n))
                         self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
-                # #4516 Stage 1: diagnostic dispatch-timeline log, once per 30-minute boundary so
-                # log volume stays sane (dispatch decisions are 30-min-granular anyway). Purely
-                # observational - see build_dispatch_timeline()'s docstring.
-                if self.minutes_now % 30 == 0:
-                    timeline = self.build_dispatch_timeline(car_n, completed, started, planned)
-                    self.log("Octopus: Dispatch timeline car {} @ {} [-4h..+24h]: {}".format(car_n, self.time_abs_str(self.minutes_now), timeline))
+                # #4516 Stage 1: diagnostic dispatch-timeline log. Purely observational - see
+                # build_dispatch_timeline()'s and dispatch_timeline_should_log()'s docstrings.
+                timeline = self.build_dispatch_timeline(car_n, completed, started, planned)
+                should_log, marker = self.dispatch_timeline_should_log(car_n, timeline)
+                if should_log:
+                    self.log("Octopus: Dispatch timeline car {} @ {} [-4h..+24h]: {}{}".format(car_n, self.time_abs_str(self.minutes_now), timeline, marker))
 
                 # Completed and planned slots - merge from all cars
                 if completed:
