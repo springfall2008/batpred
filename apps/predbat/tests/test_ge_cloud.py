@@ -3209,7 +3209,12 @@ def _test_async_get_inverter_settings_success(my_predbat):
 
         ge_cloud.async_read_inverter_setting = mock_read_setting
 
-        result = await ge_cloud.async_get_inverter_settings("test123")
+        # async_get_inverter_settings paces itself with a 0.2s sleep per setting so a large
+        # register list does not burst the GE Cloud rate limit. The reads here are local mocks
+        # with no rate limit to respect, so the pacing is skipped - as the retry/backoff tests
+        # in this file already do.
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            result = await ge_cloud.async_get_inverter_settings("test123")
 
         # Result structure: {sid: {"name": ..., "value": ..., "validation_rules": ..., "validation": ...}}
         if 1 not in result or result[1]["value"] != "75":
@@ -3246,7 +3251,9 @@ def _test_async_get_inverter_settings_partial_failure(my_predbat):
 
         # Provide previous data - previous dict structure matches result structure
         previous = {2: {"name": "charge_power", "value": "2500", "validation": {}, "validation_rules": {}}}
-        result = await ge_cloud.async_get_inverter_settings("test123", previous=previous)
+        # Local mocks, so skip the rate-limit pacing - see the success case above.
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            result = await ge_cloud.async_get_inverter_settings("test123", previous=previous)
 
         if result[1]["value"] != "75":
             print("ERROR: Expected setting 1 value='75', got {}".format(result.get(1)))
