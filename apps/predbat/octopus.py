@@ -2966,6 +2966,43 @@ class Octopus:
 
         return start_minutes, end_minutes, kwh, source, location
 
+    def dispatch_billed_off_peak(self, source, location, end_minutes):
+        """
+        Decide whether an Octopus Intelligent dispatch should be priced at the off-peak rate.
+
+        The location test only applies to dispatches that haven't finished yet. Octopus bills a
+        completed smart-charge dispatch at the off-peak rate regardless of the location it ends up
+        reported at, and that label is not stable - a completed dispatch can be retroactively
+        relabelled AT_HOME to AWAY hours after it ran. Since rate_import is rebuilt from the tariff
+        every cycle, such a relabel would silently un-stamp the cheap rate on minutes that have
+        already been metered, and today_cost() re-prices the whole day, so the day's cost steps up
+        on an hour with no import at all (issue #4946). A slot still to come is a different matter
+        and keeps the location test: a genuinely-away car would otherwise have the planner import
+        against a cheap window that never materialises (the GH#4516 family).
+
+        A dispatch straddling minutes_now is deliberately treated as not-yet-completed, so its
+        already-elapsed minutes keep the location test until it finishes. Keying the exemption on
+        the start instead would stamp the whole remaining tail of a multi-hour window cheap, which
+        is the #4516 risk above; the residual is bounded by one in-progress dispatch and is
+        strictly narrower than the pre-#4946 behaviour, where every AWAY minute stayed mispriced.
+
+        This is only the off-peak *eligibility* test - callers still apply the midday-to-midday
+        slot cap on top, so a completed dispatch beyond the day's budget is still priced at
+        rate_max_base. That is deliberate: Octopus's 6-hour guarantee is a daily allowance and a
+        completed dispatch consumes it like any other.
+
+        :param source: Dispatch source, e.g. smart-charge, bump-charge or BOOST
+        :param location: Dispatch location label - AT_HOME, AWAY, UNABLE_TO_IDENTIFY or blank
+        :param end_minutes: Dispatch end time in minutes from midnight
+        :return: True if the dispatch is eligible for the off-peak rate
+        """
+        # Ignore bump-charge slots as their cost won't change
+        if source == "bump-charge" or source == "BOOST":
+            return False
+        if end_minutes <= self.minutes_now:
+            return True
+        return not location or location == "AT_HOME"
+
     def get_octopus_slot_max(self):
         """
         Resolve the Octopus Intelligent daily low-rate slot cap.
@@ -3061,7 +3098,7 @@ class Octopus:
             # approximation (real draw isn't perfectly uniform across the slot) but matches how
             # rate_add_io_slots() below treats rate as uniform per 30-min block too.
             chunks = [(start_minutes, end_minutes, kwh, self.rate_import.get(start_minutes, self.rate_min_base))]
-            if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
+            if octopus_slot_low_rate and self.dispatch_billed_off_peak(source, location, end_minutes):
                 slot_block_start = (start_minutes // 30) * 30
                 num_blocks = max(1, (end_minutes - slot_block_start + 29) // 30)
                 day_offset = (start_minutes - 720) // (24 * 60)
@@ -3091,6 +3128,8 @@ class Octopus:
                 end_minutes_original = chunk_end
                 start_minutes, end_minutes, kwh = chunk_start, chunk_end, chunk_kwh
 
+                # Emission is future-only, so dispatch_billed_off_peak()'s completed-dispatch exemption
+                # (#4946) can never apply here - a plain location test is equivalent and is kept as-is.
                 if (end_minutes > start_minutes) and (end_minutes > self.minutes_now) and (not location or location == "AT_HOME"):
                     kwh_expected = kwh * self.car_charging_loss
                     if octopus_intelligent_consider_full:
@@ -3166,23 +3205,14 @@ class Octopus:
                 # delivered nothing, so it shouldn't consume one of the day's capped low-rate slots.
                 # A future/still-active slot is left alone even at zero kWh - its kWh is usually
                 # synthesised rather than genuinely zero, and an in-progress dispatch is still real.
+                # This runs ahead of the completed-dispatch exemption below on purpose: a zero-kWh past
+                # dispatch is treated as never having happened, so it is dropped whatever its location.
                 if end_minutes <= self.minutes_now and kwh <= 0:
                     continue
 
-                # The location test only applies to dispatches that haven't finished yet. Octopus bills a
-                # completed smart-charge dispatch at the off-peak rate regardless of the location it ends
-                # up reported at, and that label is not stable - a completed dispatch can be retroactively
-                # relabelled AT_HOME to AWAY hours after it ran. Since rate_import is rebuilt from the
-                # tariff every cycle, such a relabel would silently un-stamp the cheap rate on minutes that
-                # have already been metered, and today_cost() re-prices the whole day, so the day's cost
-                # steps up on an hour with no import at all (issue #4946). A slot still to come is a
-                # different matter and keeps the location test: a genuinely-away car would otherwise have
-                # the planner import against a cheap window that never materialises.
-                dispatch_completed = end_minutes <= self.minutes_now
-                location_at_home = dispatch_completed or not location or location == "AT_HOME"
-
-                # Ignore bump-charge slots as their cost won't change
-                if source != "bump-charge" and source != "BOOST" and location_at_home:
+                # Off-peak eligibility (source, location and the completed-dispatch exemption for
+                # issue #4946) is shared with load_octopus_slots() so the two cap counters agree.
+                if self.dispatch_billed_off_peak(source, location, end_minutes):
                     # Round slots to 30 minute boundary
                     # Floor the start (round down) and ceiling the end (round up)
                     # This ensures any partial overlap with a 30-min slot marks the entire slot as off-peak

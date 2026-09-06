@@ -436,8 +436,10 @@ def run_rate_add_io_slots_tests(my_predbat):
 
     # Test 23: An in-progress AWAY dispatch has not completed yet, so it keeps the location test -
     # the relaxation is scoped to slots that have finished, not ones that merely started.
-    # Anchored on minutes_now rather than a wall-clock hour: rate minutes are indexed from local
-    # midnight, so a fixed UTC hour lands either side of minutes_now depending on the DST offset.
+    # Anchored on minutes_now rather than a wall-clock hour so the slot straddles "now" by
+    # construction. (minutes_now is in fact a fixed 600 here - both it and the slot times are built
+    # from the same aware midnight_utc, which despite its name is local midnight - but pinning the
+    # boundary case to minutes_now keeps the test honest if that harness setup ever changes.)
     print("\n**** Test 23: In-progress AWAY dispatch still ignored ****")
     in_progress_start = my_predbat.minutes_now - 15  # started 15 minutes ago, runs 15 minutes more
     slot_start = midnight_utc + timedelta(minutes=in_progress_start)
@@ -471,6 +473,32 @@ def run_rate_add_io_slots_tests(my_predbat):
         expected_rates[minute] = 10.0
 
     failed |= run_rate_add_io_slots_test("test24_completed_bump_charge_still_excluded", my_predbat, slots, True, 12, expected_rates)
+
+    # Test 25: A completed non-home dispatch consumes the day's low-rate budget, so a later planned
+    # AT_HOME slot in the same midday-to-midday period goes over the cap. This is the other half of
+    # the #4946 relaxation: once a completed AWAY dispatch is billed off-peak it must also spend a
+    # block, and load_octopus_slots() shares the same predicate so its counter agrees (test in
+    # test_octopus_slots.py). Both slots sit in period -1: the cap is keyed on the slot start, so
+    # 13:00 yesterday and 11:00 today are the same midday-to-midday window.
+    print("\n**** Test 25: Completed AWAY dispatch consumes cap budget ****")
+    completed_start = midnight_utc - timedelta(days=1) + timedelta(hours=13)  # 13:00 yesterday, minute -660
+    completed_end = completed_start + timedelta(hours=1)  # two 30-min blocks, the whole cap
+    planned_start = midnight_utc + timedelta(hours=11)  # 11:00 today, still ahead of the midday boundary
+    planned_end = planned_start + timedelta(minutes=30)
+    slots = [
+        # completed_dispatches are merged ahead of planned_dispatches by fetch.py, and this
+        # function does not sort, so the completed slot claims the budget first
+        {"start": completed_start.strftime(TIME_FORMAT), "end": completed_end.strftime(TIME_FORMAT), "charge_in_kwh": 5.0, "source": "smart-charge", "location": "AWAY"},
+        {"start": planned_start.strftime(TIME_FORMAT), "end": planned_end.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"},
+    ]
+
+    expected_rates = {}
+    for minute in range(-660, -600):  # the completed AWAY dispatch is priced off-peak
+        expected_rates[minute] = 4.0
+    for minute in range(660, 690):  # ...and the planned slot is over the 2-block cap, so day rate
+        expected_rates[minute] = 10.0
+
+    failed |= run_rate_add_io_slots_test("test25_completed_away_consumes_cap", my_predbat, slots, True, 2, expected_rates)
 
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes
