@@ -15,9 +15,12 @@
 TIME_FORMAT_CARBON = "%Y-%m-%dT%H:%MZ"
 
 from datetime import datetime, timezone, timedelta
+import asyncio
+import sys
 import aiohttp
 from const import TIME_FORMAT_HA
 from component_base import ComponentBase
+from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 
 
@@ -137,3 +140,89 @@ class CarbonAPI(ComponentBase):
             await self.automatic_config()
 
         return True
+
+
+class MockBase(SharedMockBase):  # pragma: no cover
+    """Mock base for the Carbon command-line harness, with its own cache root."""
+
+    def __init__(self):
+        """Initialise the shared mock with the Carbon cache root."""
+        super().__init__(config_root="./temp_carbon")
+
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        """Publish an entity, summarising the forecast rather than dumping every half hour slot."""
+        if attributes and "forecast" in attributes:
+            attributes = dict(attributes)
+            attributes["forecast"] = "... {} points".format(len(attributes["forecast"]))
+        super().dashboard_item(entity_id, state=state, attributes=attributes, app=app)
+
+
+async def test_carbon_api(postcode, show_slots=False):  # pragma: no cover
+    """
+    Test the Carbon Intensity API against a real postcode and run one fetch cycle.
+
+    Reports how far ahead the forecast actually reaches, which is the thing most likely to be
+    wrong - the API publishes at most 48 hours and often far less when the upstream forecast is
+    late, and the shortfall is otherwise invisible until the plan silently scores the uncovered
+    minutes as zero carbon.
+    """
+    print(f"Testing Carbon Intensity API for postcode {postcode}")
+
+    mock_base = MockBase()
+
+    carbon_api = CarbonAPI(mock_base, postcode=postcode, automatic=True)
+    await carbon_api.run(0, True)
+
+    points = carbon_api.carbon_data_points
+    print("\nCollected {} data point(s), failures {}".format(len(points), carbon_api.failures_total))
+
+    if not points:
+        print("ERROR: No carbon data returned - check the postcode is a real UK one, and that the API is up")
+        await carbon_api.final()
+        return 1
+
+    now_utc = datetime.now(timezone.utc)
+    first_from = datetime.strptime(points[0]["from"], TIME_FORMAT_HA)
+    last_to = datetime.strptime(points[-1]["to"], TIME_FORMAT_HA)
+    hours_ahead = (last_to - now_utc).total_seconds() / 3600.0
+
+    print("Covers {} -> {}".format(first_from.strftime("%Y-%m-%d %H:%M %Z"), last_to.strftime("%Y-%m-%d %H:%M %Z")))
+    print("Forward coverage from now: {:.1f} hours".format(hours_ahead))
+
+    intensities = [point["intensity"] for point in points]
+    print("Intensity gCO2/kWh: min {}, max {}, average {:.0f}".format(min(intensities), max(intensities), sum(intensities) / len(intensities)))
+    print("Published sensor state: {}".format(mock_base.get_state_wrapper("sensor.predbat_carbon_intensity")))
+
+    if hours_ahead < 48:
+        print("\nWarn: the API is publishing only {:.1f} hours ahead, short of the 48 hours it can supply.".format(hours_ahead))
+        print("      Predbat fills the rest with carbon_replicate() (fetch.py), repeating the previous day.")
+
+    if show_slots:
+        print("\nForecast slots:")
+        for point in points:
+            slot_from = datetime.strptime(point["from"], TIME_FORMAT_HA)
+            marker = " <- now" if slot_from <= now_utc < datetime.strptime(point["to"], TIME_FORMAT_HA) else ""
+            print("  {}  {:>4} gCO2/kWh{}".format(slot_from.strftime("%Y-%m-%d %H:%M"), point["intensity"], marker))
+
+    await carbon_api.final()
+    print("\nTest completed")
+    return 0
+
+
+def main():  # pragma: no cover
+    """
+    Main function for command line execution to test the Carbon Intensity API.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test Carbon Intensity API")
+    parser.add_argument("--postcode", required=True, help="Outward postcode to fetch carbon intensity for (e.g. BS16)")
+    parser.add_argument("--slots", action="store_true", help="Print every half hour forecast slot as well as the summary")
+
+    args = parser.parse_args()
+
+    return asyncio.run(test_carbon_api(args.postcode, show_slots=args.slots))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
