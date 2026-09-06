@@ -5667,7 +5667,7 @@ class Plan:
                     active_params_list.append("{}m start offset".format(start_offset))
                 if end_offset > 0:
                     active_params_list.append("{}m end offset".format(end_offset))
-                if amplification is not None and abs(amplification - 1.0) > 1e-4:
+                if amplification is not None and abs(amplification - 1.0) > 1e-4 and getattr(self, "clipping_mode", "") != "Dynamic ClearSky":
                     active_params_list.append("{}x amplification".format(dp2(amplification)))
                 if limit_override > 0:
                     active_params_list.append("{}kW limit override".format(dp2(limit_override)))

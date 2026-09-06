@@ -22,6 +22,7 @@ def run_clipping_tests(my_predbat):
     failed |= test_clipping_buffer_offsets(my_predbat)
     failed |= test_clipping_auto_tune_sync(my_predbat)
     failed |= test_clipping_status_overrides_display(my_predbat)
+    failed |= test_clipping_status_dynamic_clearsky_omits_amplification(my_predbat)
     failed |= test_predict_clipping_target_soc_best_dynamic(my_predbat)
     return failed
 
@@ -431,6 +432,115 @@ def test_clipping_status_overrides_display(my_predbat):
                 failed = True
             if attrs.get("clipping_buffer_max_kwh_override") != 4.0:
                 print("ERROR: attribute clipping_buffer_max_kwh_override mismatch")
+                failed = True
+
+    finally:
+        if original_prediction is not None:
+            my_predbat.prediction = original_prediction
+        elif hasattr(my_predbat, "prediction"):
+            del my_predbat.prediction
+        my_predbat.dashboard_item = original_dashboard_item
+        my_predbat.scenario_summary_title = original_summary_title
+        my_predbat.scenario_summary = original_summary
+        my_predbat.scenario_summary_state = original_summary_state
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_clipping_status_dynamic_clearsky_omits_amplification(my_predbat):
+    """Assert that when clipping_mode is 'Dynamic ClearSky', amplification is omitted from status text."""
+    print("**** test_clipping_status_dynamic_clearsky_omits_amplification ****")
+    failed = False
+    setup(my_predbat)
+
+    from unittest.mock import MagicMock
+
+    my_predbat.clipping_buffer_enable = True
+    my_predbat.clipping_mode = "Dynamic ClearSky"
+    my_predbat.clipping_amplification = 1.37
+    my_predbat.clipping_auto_tune = False
+
+    # Mock self.prediction
+    mock_prediction = MagicMock()
+    mock_prediction.run_prediction.return_value = (0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0, 0.0, 0.0, 0.0, 0.0, {0: 1.0, 60: 1.0, 480: 1.0, 720: 1.0}, [0.0], 0.0, 0.0, 0.0, 0.0)
+    mock_prediction.predict_soc_time = {0: 1.0}
+    mock_prediction.first_charge = 0
+    mock_prediction.first_charge_soc = 0.0
+    mock_prediction.predict_car_soc_time = [{0: 0.0}]
+    mock_prediction.predict_battery_power = {0: 0.0}
+    mock_prediction.predict_state = {0: 0.0}
+    mock_prediction.predict_battery_cycle = {0: 0.0}
+    mock_prediction.predict_pv_power = {0: 0.0}
+    mock_prediction.predict_grid_power = {0: 0.0}
+    mock_prediction.predict_load_power = {0: 0.0}
+    mock_prediction.final_export_kwh = 0.0
+    mock_prediction.export_kwh_h0 = 0.0
+    mock_prediction.final_load_kwh = 0.0
+    mock_prediction.load_kwh_h0 = 0.0
+    mock_prediction.metric_time = {0: 0.0}
+    mock_prediction.record_time = {0: 0.0}
+    mock_prediction.predict_iboost = {0: 0.0}
+    mock_prediction.predict_carbon_g = {0: 0.0}
+    mock_prediction.load_kwh_time = {0: 0.0}
+    mock_prediction.pv_kwh_time = {0: 0.0}
+    mock_prediction.import_kwh_time = {0: 0.0}
+    mock_prediction.export_kwh_time = {0: 0.0}
+    mock_prediction.final_pv_kwh = 0.0
+    mock_prediction.export_to_first_charge = 0.0
+    mock_prediction.pv_kwh_h0 = 0.0
+    mock_prediction.final_import_kwh = 0.0
+    mock_prediction.final_import_kwh_house = 0.0
+    mock_prediction.final_import_kwh_battery = 0.0
+    mock_prediction.hours_left = 24.0
+    mock_prediction.final_car_soc = [0.0]
+    mock_prediction.import_kwh_h0 = 0.0
+    mock_prediction.predict_export = {0: 0.0}
+    mock_prediction.predict_soc_best = {0: 1.0}
+    mock_prediction.predict_iboost_best = {0: 0.0}
+    mock_prediction.predict_metric_best = {0: 0.0}
+    mock_prediction.predict_carbon_best = {0: 0.0}
+    mock_prediction.predict_clipped_best = {0: 0.0}
+    mock_prediction.debug_enable = False
+
+    original_prediction = getattr(my_predbat, "prediction", None)
+    my_predbat.prediction = mock_prediction
+
+    original_summary_title = my_predbat.scenario_summary_title
+    original_summary = my_predbat.scenario_summary
+    original_summary_state = my_predbat.scenario_summary_state
+
+    my_predbat.scenario_summary_title = lambda x: "dummy_title"
+    my_predbat.scenario_summary = lambda x, y: "dummy_summary"
+    my_predbat.scenario_summary_state = lambda x: "dummy_state"
+
+    exposed_items = {}
+    original_dashboard_item = my_predbat.dashboard_item
+
+    def mock_dashboard_item(name, state=None, attributes=None):
+        exposed_items[name] = {"state": state, "attributes": attributes}
+
+    my_predbat.dashboard_item = mock_dashboard_item
+
+    try:
+        my_predbat.run_prediction(my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, 24 * 60, save="best")
+
+        status_key = my_predbat.prefix + ".clipping_status"
+        if status_key not in exposed_items:
+            print("ERROR: clipping_status was not published to dashboard")
+            failed = True
+        else:
+            item = exposed_items[status_key]
+            state = item["state"]
+            attrs = item["attributes"]
+
+            if "amplification" in state:
+                print("ERROR: Unexpected amplification mentioned in status state '{}' under Dynamic ClearSky mode".format(state))
+                failed = True
+
+            if attrs.get("clipping_mode") != "Dynamic ClearSky":
+                print("ERROR: Expected clipping_mode attribute 'Dynamic ClearSky', got '{}'".format(attrs.get("clipping_mode")))
                 failed = True
 
     finally:
