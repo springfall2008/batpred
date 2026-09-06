@@ -1947,7 +1947,7 @@ def _libc_function(name, argtypes, restype):
     """
     try:
         function = getattr(ctypes.CDLL(None), name)
-    except (OSError, AttributeError):
+    except (OSError, AttributeError, TypeError):
         return None
     function.argtypes = argtypes
     function.restype = restype
