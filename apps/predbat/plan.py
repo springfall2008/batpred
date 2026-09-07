@@ -4797,6 +4797,14 @@ class Plan:
                         "soc_now": dp3(self.soc_kw),
                         "soc_max": dp3(self.soc_max),
                         "soc_now_percent": dp2(calc_percent_limit(self.soc_kw, self.soc_max)),
+                        # What this plan expects the battery to hold one and eight hours out. Recorded as
+                        # plain attributes so Home Assistant keeps them in history: results/today are
+                        # rewritten every cycle, so the forecast made for a given moment is gone by the
+                        # time that moment arrives and there is nothing left to score the plan against.
+                        # Read back with a matching time offset these sit alongside the measured SoC and
+                        # show whether the model tracks the hardware.
+                        "soc_h1": dp3(self.predict_soc_best.get(60, final_soc)),
+                        "soc_h8": dp3(self.predict_soc_best.get(60 * 8, final_soc)),
                     },
                 )
                 self.dashboard_item(
