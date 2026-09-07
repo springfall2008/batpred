@@ -2839,6 +2839,12 @@ class Octopus:
     def decode_octopus_slot(self, car_n, slot, raw=False):
         """
         Decode IOG slot
+
+        The sixth return value, kwh_valid, is False only when a present charge_in_kwh/energy/
+        chargeKwh value couldn't be parsed as a number - not when kwh is legitimately absent (and
+        synthesised from the slot duration) or the slot is a genuine zero-length/empty entry. This
+        lets callers tell a malformed dispatch entry apart from a real zero-kWh one (#4483 review
+        follow-up, Speshman) even though both end up with kwh == 0.
         """
         if "start" in slot:
             start = datetime.strptime(slot["start"], TIME_FORMAT)
@@ -2860,7 +2866,7 @@ class Octopus:
             end_minutes = max(min(end_minutes, self.forecast_minutes + self.minutes_now), start_minutes)
 
         if start_minutes == end_minutes:
-            return 0, 0, 0, source, location
+            return 0, 0, 0, source, location, True
 
         cap_minutes = end_minutes - start_minutes
 
@@ -2874,23 +2880,25 @@ class Octopus:
 
         # Remove empty slots
         if kwh is None and location == "" and source == "":
-            return 0, 0, 0, source, location
+            return 0, 0, 0, source, location, True
 
         # Create kWh if missing
         if kwh is None:
             kwh = org_minutes * self.car_charging_rate[car_n] / 60.0
 
+        kwh_valid = True
         try:
             kwh = abs(float(kwh))
         except (ValueError, TypeError):
             kwh = 0.0
+            kwh_valid = False
 
         if org_minutes > 0:
             kwh = kwh * cap_minutes / org_minutes
         else:
             kwh = 0
 
-        return start_minutes, end_minutes, kwh, source, location
+        return start_minutes, end_minutes, kwh, source, location, kwh_valid
 
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """
@@ -2909,7 +2917,7 @@ class Octopus:
 
         # Decode the slots
         for slot in octopus_slots:
-            start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot)
+            start_minutes, end_minutes, kwh, source, location, _ = self.decode_octopus_slot(car_n, slot)
             # Octopus zeros chargeKwh once it calculates the car has hit its target SoC, but the
             # dispatch window stays open and the charger may still draw power. Preserve active slots
             # with a duration-based kwh so the "Hold for car" guard in execute.py still fires.
@@ -3064,7 +3072,6 @@ class Octopus:
         slots_added_set = set()
         plan_interval_minutes = self.plan_interval_minutes
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
-        current_block = (self.minutes_now // 30) * 30
 
         # #4482: Octopus often grants more daytime dispatch slots than the car actually needs - it
         # can't see the car's real SoC, only Predbat can (car_charging_soc/car_charging_limit).
@@ -3086,7 +3093,12 @@ class Octopus:
         if octopus_slots:
             # Add in IO slots
             for slot in octopus_slots:
-                start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot, raw=True)
+                start_minutes, end_minutes, kwh, source, location, kwh_valid = self.decode_octopus_slot(car_n, slot, raw=True)
+                # The dispatch's real (unrounded) start, kept apart from the 30-min-rounded
+                # start_minutes below - used only for the "already underway" check (#4808) so a
+                # dispatch starting partway through the current settlement period isn't treated as
+                # already started from the top of that period.
+                raw_start_minutes = start_minutes
 
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
@@ -3130,7 +3142,13 @@ class Octopus:
                         # slot already underway or completed is trusted regardless of what
                         # car_charging_slots now says about future need, and the fixed window is
                         # never affected since it's guaranteed cheap by the tariff itself.
-                        needed = (not limit_future_slots) or (slot_start <= current_block) or (slot_start in expected_blocks) or self.minute_in_iog_fixed_window(slot_start)
+                        #
+                        # "Already underway" compares the dispatch's real start (#4808, review
+                        # follow-up on #4483 from Speshman) rather than its 30-min-rounded
+                        # slot_start, so a dispatch starting partway through the current
+                        # settlement period isn't trusted early just because the period itself has
+                        # begun.
+                        needed = (not limit_future_slots) or (raw_start_minutes <= self.minutes_now) or (slot_start in expected_blocks) or self.minute_in_iog_fixed_window(slot_start)
 
                         # Whether this dispatch entry actually delivers charge to the car. A
                         # zero-kWh entry (e.g. a plug-independent SMART grid-flex event - #4483
@@ -3142,15 +3160,13 @@ class Octopus:
                         # octopus_slot_count_zero_kwh restores the old behaviour of counting every
                         # dispatch entry, zero-kWh or not, toward the cap like any other.
                         #
-                        # Scoped to source == "SMART" (#4483 review follow-up, Speshman): kwh only
-                        # ever reaches 0 either from a genuine zero-kWh entry or from
-                        # decode_octopus_slot() silently coercing malformed/unparseable input to
-                        # 0.0 - the two are indistinguishable by value alone. Requiring the source
-                        # this feature was actually built for narrows a parse failure exploiting the
-                        # exemption to the coincidence of also carrying source=="SMART", rather than
-                        # any garbage entry with any source bypassing both the cap and the
-                        # #4482 need-check.
-                        zero_kwh_exempt = (kwh <= 0) and (source == "SMART") and not self.octopus_slot_count_zero_kwh
+                        # Scoped to source == "SMART" and kwh_valid (#4483 review follow-up,
+                        # Speshman): kwh only ever reaches 0 either from a genuine zero-kWh entry
+                        # or from decode_octopus_slot() failing to parse charge_in_kwh - the two
+                        # are indistinguishable by value alone, and a malformed entry can carry
+                        # source=="SMART" too. Requiring kwh_valid closes that gap entirely,
+                        # regardless of source, rather than just narrowing it to a coincidence.
+                        zero_kwh_exempt = (kwh <= 0) and kwh_valid and (source == "SMART") and not self.octopus_slot_count_zero_kwh
 
                         # At the start of each 30-min slot, decide if we can add it
                         if minute % 30 == 0:

@@ -409,6 +409,22 @@ def run_rate_add_io_slots_tests(my_predbat):
     expected_rates_21 = {minute: 4.0 for minute in range(570, 600)}  # 09:30-10:00
     failed |= run_rate_add_io_slots_test("test21_current_dispatch_stays_low_rate", my_predbat, slots_21, True, 12, expected_rates_21)
 
+    # Test 21b (#4808, review follow-up on #4483 from Speshman): a dispatch starting partway
+    # through the current settlement period must not be treated as already underway just because
+    # the period itself has started - only compares the dispatch's real start against minutes_now,
+    # not the 30-min-rounded slot_start against the rounded current block.
+    print("\n**** Test 21b: A dispatch starting later in the current period is not yet underway ****")
+    my_predbat.octopus_intelligent_limit_future_slots = True
+    now_minutes_21b = my_predbat.minutes_now  # whatever "now" actually is - built relative to it, not a hardcoded wall-clock time
+    slot_start_21b = midnight_utc + timedelta(minutes=now_minutes_21b + 20)  # 20 minutes into the current period - genuinely still future
+    slot_end_21b = slot_start_21b + timedelta(minutes=30)
+    slots_21b = [{"start": slot_start_21b.strftime(TIME_FORMAT), "end": slot_end_21b.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"}]
+    my_predbat.car_charging_slots[0] = []  # Car doesn't need it
+    rounded_start_21b = (now_minutes_21b // 30) * 30
+    rounded_end_21b = ((now_minutes_21b + 20 + 30 + 29) // 30) * 30
+    expected_rates_21b = {minute: 10.0 for minute in range(rounded_start_21b, rounded_end_21b)}  # rejected, not yet started, not needed
+    failed |= run_rate_add_io_slots_test("test21b_mid_period_future_dispatch_not_yet_underway", my_predbat, slots_21b, True, 12, expected_rates_21b)
+
     # Test 22: feature disabled - existing (unconditional) behaviour is unchanged even with an
     # empty car_charging_slots that would otherwise have excluded every block.
     print("\n**** Test 22: Switch off restores unconditional low rate ****")
@@ -613,6 +629,18 @@ def run_rate_add_io_slots_tests(my_predbat):
     slot_start_minute_30 = int((slot_start_30 - midnight_utc).total_seconds() / 60)
     expected_rates_30 = {minute: 10.0 for minute in range(slot_start_minute_30, slot_start_minute_30 + 30)}  # rejected, not needed, not exempt
     failed |= run_rate_add_io_slots_test("test30_zero_kwh_non_smart_source_not_exempt", my_predbat, slots_30, True, 12, expected_rates_30)
+
+    # Test 31 (#4807): a malformed charge_in_kwh (not a genuine zero-kWh event) must not get the
+    # exemption even when its source is "SMART" - decode_octopus_slot() coerces the unparseable
+    # value to kwh==0 the same way a real zero-kWh entry would, so source alone can't tell them
+    # apart. kwh_valid closes that gap.
+    print("\n**** Test 31: Malformed charge_in_kwh with source SMART is not exempt ****")
+    slot_start_31 = midnight_utc + timedelta(hours=14)  # future, out-of-window
+    slot_end_31 = slot_start_31 + timedelta(minutes=30)
+    slots_31 = [{"start": slot_start_31.strftime(TIME_FORMAT), "end": slot_end_31.strftime(TIME_FORMAT), "charge_in_kwh": "not-a-number", "source": "SMART", "location": ""}]
+    slot_start_minute_31 = int((slot_start_31 - midnight_utc).total_seconds() / 60)
+    expected_rates_31 = {minute: 10.0 for minute in range(slot_start_minute_31, slot_start_minute_31 + 30)}  # rejected, not needed, not exempt
+    failed |= run_rate_add_io_slots_test("test31_malformed_smart_kwh_not_exempt", my_predbat, slots_31, True, 12, expected_rates_31)
 
     my_predbat.octopus_slot_count_zero_kwh = True  # Restore default for any subsequent tests
     my_predbat.octopus_intelligent_limit_future_slots = False  # Restore default for any subsequent tests
