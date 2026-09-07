@@ -58,7 +58,7 @@ It lists every config item that differs from its default, recalculates the plan,
 
 ### Debugging notes
 
-`.claude/skills/issue-triage/references/debug-journal.md` records what past investigations found: per-integration API quirks, symptom-to-module pointers, and traps such as stale kernel binaries and test-order pollution. Read it before debugging an integration or a "the plan is wrong" report, and add to it when you learn something a future session would want.
+`tools/debug-journal.md` records what past investigations found: per-integration API quirks, symptom-to-module pointers, and traps such as stale kernel binaries and test-order pollution. Read it before debugging an integration or a "the plan is wrong" report, and add to it when you learn something a future session would want.
 
 ## Code Quality
 

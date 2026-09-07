@@ -18,6 +18,11 @@ from unittest.mock import MagicMock, patch
 import triage_daemon
 
 
+# What `gh pr list --json number` prints once the flush has opened its PR. The flush reads
+# this to decide whether the queue may be consumed, so the tests need both shapes.
+OPENED_PR_JSON = '[{"number": 4980}]'
+
+
 def bash_rule_matches(rule, command):
     """Simulate Claude Code's Bash(...) permission-rule prefix-glob matching against a command."""
     pattern = rule.removeprefix("Bash(").removesuffix(")")
@@ -1909,6 +1914,16 @@ class JournalPermissionTests(unittest.TestCase):
         edits = sorted(rule for rule in self._allowed() if rule.startswith("Edit("))
         self.assertEqual(edits, sorted([f"Edit({triage_daemon.JOURNAL_SCOPE})", f"Edit({triage_daemon.DICTIONARY_SCOPE})"]))
 
+    def test_the_journal_lives_outside_the_dot_claude_directory(self):
+        """Claude Code refuses the Edit and Write tools anywhere under `.claude/`, and no
+        allowlist entry overrides it - not an exact file path, not a clone-wide glob. While
+        the journal lived at `.claude/skills/issue-triage/references/debug-journal.md` every
+        flush verified its candidates and then found it could not write a byte, so the file
+        went unmaintained from 2026-09-05 until the move. Reads were never affected, which is
+        why the rest of the bot looked healthy."""
+        self.assertFalse(triage_daemon.JOURNAL_RELPATH.startswith(".claude/"))
+        self.assertIn(f"Edit({triage_daemon.JOURNAL_SCOPE})", self._allowed())
+
     def test_cannot_write_the_queue_it_reads(self):
         """The flush consumes candidates; it never needs to author one. Reading them comes
         from --add-dir, not from an Edit grant."""
@@ -1949,9 +1964,9 @@ class JournalFlushInvocationTests(DaemonPathsTestCase):
 
     def test_invokes_the_journal_update_skill_under_its_own_permission_set(self):
         with patch("triage_daemon.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            triage_daemon.flush_journal()
-            cmd = mock_run.call_args[0][0]
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.flush_journal("2026-09-07")
+            cmd = mock_run.call_args_list[0][0][0]
         self.assertIn("/journal-update", cmd[cmd.index("-p") + 1])
         self.assertEqual(cmd[cmd.index("--allowedTools") + 1], triage_daemon.ALLOWED_TOOLS_JOURNAL)
         self.assertEqual(cmd[cmd.index("--disallowedTools") + 1], triage_daemon.DISALLOWED_TOOLS_JOURNAL)
@@ -1960,9 +1975,9 @@ class JournalFlushInvocationTests(DaemonPathsTestCase):
         """The queue lives outside the clone, so the path has to be passed in and added to the
         session's directory scope for Read/Grep."""
         with patch("triage_daemon.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            triage_daemon.flush_journal()
-            cmd = mock_run.call_args[0][0]
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.flush_journal("2026-09-07")
+            cmd = mock_run.call_args_list[0][0][0]
         self.assertIn(str(triage_daemon.QUEUE_DIR), cmd[cmd.index("-p") + 1])
         self.assertIn(str(triage_daemon.QUEUE_DIR), cmd[cmd.index("--add-dir") + 1 :])
 
@@ -1980,8 +1995,8 @@ class JournalQueueArchiveTests(DaemonPathsTestCase):
         """Otherwise the next day folds the same findings in again."""
         self._queue("4931-a.md")
         with patch("triage_daemon.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            triage_daemon.flush_journal()
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.flush_journal("2026-09-07")
         self.assertEqual(triage_daemon.journal_queue_entries(), [])
 
     def test_a_failed_flush_leaves_the_queue_intact(self):
@@ -1990,16 +2005,46 @@ class JournalQueueArchiveTests(DaemonPathsTestCase):
         self._queue("4931-a.md")
         with patch("triage_daemon.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1)
-            triage_daemon.flush_journal()
+            triage_daemon.flush_journal("2026-09-07")
         self.assertEqual([p.name for p in triage_daemon.journal_queue_entries()], ["4931-a.md"])
 
     def test_consumed_findings_are_kept_not_deleted(self):
         """A candidate the flush decided to drop is still evidence of what was seen."""
         self._queue("4931-a.md")
         with patch("triage_daemon.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            triage_daemon.flush_journal()
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.flush_journal("2026-09-07")
         self.assertTrue((triage_daemon.QUEUE_DIR / "processed" / "4931-a.md").exists())
+
+    def test_a_blocked_flush_that_exits_zero_leaves_the_queue_intact(self):
+        """The regression that stalled the journal on 2026-09-07. `claude -p` denied the
+        permissions it needed, explained itself and exited 0, so the old exit-code check
+        archived three verified candidates having landed nothing - and the non-recursive
+        queue glob meant they were never offered to a later flush."""
+        self._queue("4965-a.md", "4967-b.md", "4973-c.md")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="[]")
+            triage_daemon.flush_journal("2026-09-07")
+        self.assertEqual([p.name for p in triage_daemon.journal_queue_entries()], ["4965-a.md", "4967-b.md", "4973-c.md"])
+        self.assertFalse((triage_daemon.QUEUE_DIR / "processed").exists())
+
+    def test_an_unreachable_github_does_not_archive(self):
+        """A failed lookup must not be read as "no PR needed". Leaving the queue costs one
+        re-verify tomorrow; archiving on a failed check loses the finding for good."""
+        self._queue("4931-a.md")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [MagicMock(returncode=0), MagicMock(returncode=1, stdout="")]
+            triage_daemon.flush_journal("2026-09-07")
+        self.assertEqual([p.name for p in triage_daemon.journal_queue_entries()], ["4931-a.md"])
+
+    def test_the_pr_is_looked_up_by_todays_journal_branch(self):
+        """The branch name is the only link between the flush and the PR it opened."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.journal_pr_opened("2026-09-07")
+            cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--head") + 1], "bot/debug-journal-2026-09-07")
+        self.assertEqual(cmd[cmd.index("--state") + 1], "all")
 
     def test_archived_findings_are_not_queued_again(self):
         """journal_queue_entries() must not recurse into the archive."""
