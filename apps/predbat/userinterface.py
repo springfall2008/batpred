@@ -1495,13 +1495,15 @@ class UserInterface:
         minutes_now = int((self.now_utc - midnight_utc).total_seconds() / 60)
         return midnight_utc, minutes_now
 
-    def manual_rates(self, config_item, exclude=[], new_value=None, default_rate=0, update=True):
+    def manual_rates(self, config_item, exclude=None, new_value=None, default_rate=0, update=True):
         """
         Update manual rates sensor
 
         Set update=False to decode the stored selection without writing it back - read-only
         callers should use this. See the note in manual_times() for the shared time origin.
         """
+        if exclude is None:
+            exclude = []
         rate_overrides_minutes = {}
         rate_overrides = []
         plan_interval = self.get_arg("plan_interval_minutes", 30)
@@ -1581,7 +1583,7 @@ class UserInterface:
 
         return rate_overrides_minutes
 
-    def manual_times(self, config_item, exclude=[], new_value=None, update=True):
+    def manual_times(self, config_item, exclude=None, new_value=None, update=True):
         """
         Update manual times sensor
 
@@ -1594,6 +1596,8 @@ class UserInterface:
         Set update=False to decode the stored selection without writing it back, which is what a
         read-only caller wants.
         """
+        if exclude is None:
+            exclude = []
         time_overrides = []
         plan_interval = self.get_arg("plan_interval_minutes", 30)
         midnight_utc, minutes_now_real = self.manual_time_origin()

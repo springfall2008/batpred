@@ -685,7 +685,7 @@ def simple_scenario(
     charge=0,
     charge_period_divide=1,
     discharge=100,
-    charge_window_best=[],
+    charge_window_best=None,
     charge_limit_best=None,
     inverter_loss=1.0,
     inverter_freeze_export_discharge_rate=0.0,
@@ -744,6 +744,8 @@ def simple_scenario(
     """
     No PV, No Load
     """
+    if charge_window_best is None:
+        charge_window_best = []
     if not quiet:
         print("Run scenario {}".format(name))
 
