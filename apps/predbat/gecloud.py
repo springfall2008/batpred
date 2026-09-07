@@ -367,10 +367,8 @@ def parse_site_export_limit(limits):
     and the flag means something else. A site with no limit reports a null import/export
     instead, which is what the published examples show.
 
-    A stated zero is treated as no limit rather than as a block on all exporting: nothing here
-    distinguishes a genuine zero-export connection from an unpopulated field, and inventing a
-    zero would stop Predbat exporting at all. Set export_limit: 0 in apps.yaml for a site that
-    really cannot export.
+    A stated zero is a real zero-export connection and is applied as one - a site with no limit
+    set reports a null import/export rather than a zero.
 
     Returns:
         A (watts, reason) tuple. watts is a float when a limit was found and None otherwise,
@@ -392,11 +390,8 @@ def parse_site_export_limit(limits):
 
     for candidate in candidates:
         watts = coerce_watts(candidate)
-        if watts is None:
-            continue
-        if watts == 0:
-            return None, "the site states a zero export limit, which is too ambiguous to apply; set export_limit: 0 explicitly if your site really cannot export"
-        return watts, ""
+        if watts is not None:
+            return watts, ""
     return None, "the site export limit {} was not understood".format(export)
 
 

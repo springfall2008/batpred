@@ -6094,11 +6094,9 @@ def _test_site_export_limit(my_predbat):
             watts, reason = parse_site_export_limit(limits)
             assert watts is None and reason, limits
 
-        # A stated zero is not applied: nothing separates a genuine zero-export connection from an
-        # unpopulated field, and inventing a zero would stop Predbat exporting at all
+        # A stated zero is a real zero-export connection - a site with no limit reports a null export
         for limits in [{"export": {"enabled": True, "power": {"watts": 0}}}, {"export": 0}, {"export": {"power": {"watts": 0.0}}}]:
-            watts, reason = parse_site_export_limit(limits)
-            assert watts is None and "zero export limit" in reason, limits
+            assert parse_site_export_limit(limits) == (0.0, ""), limits
 
         enabled = {"limits": {"export": {"enabled": True, "power": {"watts": 8000}}}, "id": 42}
 
@@ -6126,6 +6124,11 @@ def _test_site_export_limit(my_predbat):
         assert ge.config_args["export_limit"] == ["sensor.predbat_gecloud_bat0_export_limit"]
         assert published(ge, "bat0") == 8000
 
+        # A site that blocks export entirely is applied as zero, not treated as unset
+        ge = await configure(make_ge([42], {"limits": {"export": {"enabled": True, "power": {"watts": 0}}}}))
+        assert ge.config_args["export_limit"] == ["sensor.predbat_gecloud_bat0_export_limit"]
+        assert published(ge, "bat0") == 0
+
         # An explicit export_limit wins, including a zero one, but the site is still read and published
         for override in [3000, 0, [2000, 3000]]:
             ge = await configure(make_ge([42, 42], enabled, override=override))
@@ -6140,7 +6143,7 @@ def _test_site_export_limit(my_predbat):
         assert not any("No site grid export limit" in message for message in ge.log_messages), ge.log_messages
 
         # Nothing is wired or published when the site reports no limit, or cannot be read at all
-        for response in [None, {}, {"limits": None}, {"limits": {"export": None}}, {"limits": {"export": {"enabled": True, "power": {"watts": 0}}}}]:
+        for response in [None, {}, {"limits": None}, {"limits": {"export": None}}, {"limits": {"export": {"enabled": True}}}]:
             ge = await configure(make_ge([42], response))
             assert "export_limit" not in ge.config_args, response
             assert published(ge, "bat0") is None, response

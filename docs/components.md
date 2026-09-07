@@ -530,9 +530,8 @@ simply not published and nothing else changes.
 
 The limit is taken from the power the site states, whatever its `enabled` flag says -
 sites with a limit set and applied report it as disabled anyway. A site with no limit
-reports none at all, and a site that states a zero limit is left alone rather than having
-its exports blocked on an ambiguous reading; set `export_limit: 0` yourself if your site
-really cannot export.
+reports none at all rather than a zero, so a stated zero is applied as a real zero-export
+connection.
 
 The site details are cached in Predbat's storage and re-read every 12 hours, so a restart
 normally costs no extra API call and a limit changed in the GivEnergy portal is picked up
