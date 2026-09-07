@@ -4970,7 +4970,17 @@ class Plan:
                     else:
                         self.export_limits_best[window_n] = 0.0
                 elif self.export_window_best[window_n]["start"] in self.manual_freeze_export_times:
-                    self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
+                    if not self.set_export_freeze:
+                        # set_export_freeze is False either because execute.py forced it off for an
+                        # inverter whose INVERTER_DEF says support_discharge_freeze is False, or because
+                        # the user turned off the non-expert "Set Export Freeze" switch - but this
+                        # override wrote a freeze anyway, so the plan assumed a hold that will not
+                        # happen. Drop to demand rather than a forced export: the user asked to hold
+                        # the battery, and exporting it is the opposite of that request (GH#4892).
+                        self.log("Warn: Manual freeze export time {} dropped to demand as set_export_freeze is disabled (inverter capability or user setting)".format(self.time_abs_str(self.export_window_best[window_n]["start"])))
+                        self.export_limits_best[window_n] = EXPORT_LIMIT_IDLE
+                    else:
+                        self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
 
     def prefill_charge_limit_best(self):
         """
@@ -5355,6 +5365,14 @@ class Plan:
                         "soc_now": dp3(self.soc_kw),
                         "soc_max": dp3(self.soc_max),
                         "soc_now_percent": dp2(calc_percent_limit(self.soc_kw, self.soc_max)),
+                        # What this plan expects the battery to hold one and eight hours out. Recorded as
+                        # plain attributes so Home Assistant keeps them in history: results/today are
+                        # rewritten every cycle, so the forecast made for a given moment is gone by the
+                        # time that moment arrives and there is nothing left to score the plan against.
+                        # Read back with a matching time offset these sit alongside the measured SoC and
+                        # show whether the model tracks the hardware.
+                        "soc_h1": dp3(self.predict_soc_best.get(60, final_soc)),
+                        "soc_h8": dp3(self.predict_soc_best.get(60 * 8, final_soc)),
                     },
                 )
                 self.dashboard_item(

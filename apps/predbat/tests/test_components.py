@@ -20,6 +20,7 @@ import components
 from components import COMPONENT_LIST, Components, load_component_class
 from component_base import ComponentBase
 from mock_base import MockBase
+from tests.test_infra import run_async
 
 
 def _skip_warnings(base):
@@ -239,6 +240,91 @@ def test_load_error_is_reported_as_a_component_error(my_predbat):
     return False
 
 
+class _RecordingComponent:
+    """Fake component that just records which events it received."""
+
+    def __init__(self):
+        self.select_events = []
+        self.switch_events = []
+        self.number_events = []
+
+    async def select_event(self, entity_id, value):
+        self.select_events.append((entity_id, value))
+
+    async def switch_event(self, entity_id, service):
+        self.switch_events.append((entity_id, service))
+
+    async def number_event(self, entity_id, value):
+        self.number_events.append((entity_id, value))
+
+
+def test_event_dispatch_respects_configured_prefix(my_predbat):
+    """
+    Regression test for #4939: Components.select_event/switch_event/number_event must route an
+    event to a component using the install's actual configured prefix, not the literal word
+    "predbat" baked into COMPONENT_LIST's event_filter entries.
+
+    Every event_filter is written as "predbat_<component>_" for readability, but the entities
+    themselves are built from base.prefix (e.g. Fox's f"{self.prefix}_fox_..."). Matching the
+    literal directly meant any install with a non-default prefix never matched anything - a
+    button press or toggle on the real entity was silently dropped before it reached the
+    component's own handler, with no error and no warning, on all 19 components.
+    """
+    print("**** test_event_dispatch_respects_configured_prefix ****")
+
+    base = LoggingMockBase()
+    comps = Components(base)
+    fake = _RecordingComponent()
+    comps.components["fox"] = fake
+
+    print("Test 1: default prefix 'predbat' - the literal filter matches, as it always has")
+    base.prefix = "predbat"
+    run_async(comps.select_event("select.predbat_fox_ABC123_charge_start_time", "01:00:00"))
+    run_async(comps.switch_event("switch.predbat_fox_ABC123_battery_schedule_charge_write", "turn_on"))
+    run_async(comps.number_event("number.predbat_fox_ABC123_battery_schedule_charge_soc", 80))
+    assert fake.select_events == [("select.predbat_fox_ABC123_charge_start_time", "01:00:00")]
+    assert fake.switch_events == [("switch.predbat_fox_ABC123_battery_schedule_charge_write", "turn_on")]
+    assert fake.number_events == [("number.predbat_fox_ABC123_battery_schedule_charge_soc", 80)]
+
+    print("Test 2: a custom prefix - the entity is built from it and must still be routed (the #4939 bug: this dispatched nothing)")
+    base.prefix = "custom"
+    fake.select_events.clear()
+    fake.switch_events.clear()
+    fake.number_events.clear()
+    run_async(comps.select_event("select.custom_fox_ABC123_charge_start_time", "01:00:00"))
+    run_async(comps.switch_event("switch.custom_fox_ABC123_battery_schedule_charge_write", "turn_on"))
+    run_async(comps.number_event("number.custom_fox_ABC123_battery_schedule_charge_soc", 80))
+    assert fake.select_events == [("select.custom_fox_ABC123_charge_start_time", "01:00:00")], fake.select_events
+    assert fake.switch_events == [("switch.custom_fox_ABC123_battery_schedule_charge_write", "turn_on")], fake.switch_events
+    assert fake.number_events == [("number.custom_fox_ABC123_battery_schedule_charge_soc", 80)], fake.number_events
+
+    print("Test 3: a custom prefix must not make it match some OTHER component's entity")
+    fake.select_events.clear()
+    run_async(comps.select_event("select.custom_octopus_some_setting", "on"))
+    assert fake.select_events == [], "an unrelated component's entity must not be routed to fox"
+
+    print("Test 4: a stale predbat_-prefixed entity id must not match once the install has a custom prefix")
+    # e.g. left over in HA from before the user set a custom prefix - once base.prefix is
+    # "custom" the effective filter is "custom_fox_", which this entity does not contain.
+    fake.select_events.clear()
+    run_async(comps.select_event("select.predbat_fox_ABC123_charge_start_time", "01:00:00"))
+    assert fake.select_events == [], "a leftover literal-predbat entity must not match a custom-prefix install"
+
+    print("Test 5: a short prefix must not match an unrelated entity that merely contains it partway through")
+    # Copilot review on #4962: the match is anchored to the start of the object_id, not a
+    # substring search of the whole entity_id - prefix "bat" turns the filter into "bat_fox_",
+    # which this unrelated entity's object_id contains but does not start with. This event comes
+    # through for every select/switch/number service call in the whole HA instance, not just
+    # Predbat's own entities, so an unanchored match could misroute a stranger's entity entirely.
+    base.prefix = "bat"
+    fake.select_events.clear()
+    run_async(comps.select_event("select.acrobat_fox_ABC123_charge_start_time", "01:00:00"))
+    assert fake.select_events == [], "an entity that merely contains the filter partway through its object_id must not match"
+
+    print("✓ Test passed: event dispatch matches the configured prefix, in the default and custom case")
+    return False
+
+
 def test_components_all(my_predbat):
     """Run all components.py tests"""
     tests = [
@@ -249,6 +335,7 @@ def test_components_all(my_predbat):
         ("load_error_is_reported_as_a_component_error", test_load_error_is_reported_as_a_component_error, "record_final_run_status() shows a load failure as a component error"),
         ("gecloud_data_no_warning_from_global_days_previous", test_gecloud_data_no_warning_from_global_days_previous, "days_previous alone must not trigger a GE Cloud Data warning"),
         ("gecloud_data_warns_when_actually_misconfigured", test_gecloud_data_warns_when_actually_misconfigured, "GE Cloud Data still warns once genuinely (partially) configured"),
+        ("event_dispatch_respects_configured_prefix", test_event_dispatch_respects_configured_prefix, "event dispatch matches the configured prefix, not the literal word 'predbat' (#4939)"),
     ]
 
     failed = []

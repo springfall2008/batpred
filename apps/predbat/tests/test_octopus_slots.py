@@ -340,6 +340,44 @@ def run_load_octopus_slots_tests(my_predbat):
     else:
         my_predbat.args["octopus_slot_max"] = saved_octopus_slot_max
 
+    # --- completed non-home dispatch consumes the daily low-rate budget (#4946) ---
+    # rate_add_io_slots() prices a completed dispatch off-peak whatever location it ends up
+    # reported at, because Octopus bills it that way and the label is not stable. This function's
+    # cap counter shares that predicate (dispatch_billed_off_peak) so the two agree: a completed
+    # AWAY dispatch must spend its blocks here too, otherwise the planner's rate_import would show
+    # a later planned slot at the day rate while car_charging_slots priced it off-peak.
+    print("**** Checking completed AWAY dispatch consumes the low-rate cap ****")
+    saved_minutes_now = my_predbat.minutes_now
+    saved_octopus_slot_max = my_predbat.args.get("octopus_slot_max")
+    my_predbat.args["octopus_slot_max"] = 2
+
+    # Both slots are in the same midday-to-midday period (the cap is keyed on the slot start)
+    cap_slots = [
+        # completed_dispatches, merged first by fetch.py: 12:30-13:30 yesterday relative to a
+        # 14:05 "now", i.e. fully in the past and spending both of the period's two blocks
+        {"start": (midnight_utc + timedelta(hours=12, minutes=30)).strftime(TIME_FORMAT), "end": (midnight_utc + timedelta(hours=13, minutes=30)).strftime(TIME_FORMAT), "charge_in_kwh": 5.0, "source": "smart-charge", "location": "AWAY"},
+        # planned_dispatch still to come, at home - over the cap, so it must be priced at rate_max_base
+        {"start": (midnight_utc + timedelta(hours=15)).strftime(TIME_FORMAT), "end": (midnight_utc + timedelta(hours=15, minutes=30)).strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"},
+    ]
+
+    my_predbat.car_charging_soc[0] = 0.0
+    my_predbat.car_charging_limit[0] = 100.0
+    my_predbat.car_charging_loss = 1.0
+    result = my_predbat.load_octopus_slots(0, cap_slots, False)
+
+    if len(result) != 1 or result[0]["start"] != 900 or result[0]["end"] != 930:
+        print("ERROR: Only the future planned slot (900-930) should be emitted, got {}".format(result))
+        failed = True
+    elif result[0]["average"] != my_predbat.rate_max_base:
+        print("ERROR: Planned slot should be over the cap at {} (the completed AWAY dispatch spent both blocks), got {}".format(my_predbat.rate_max_base, result[0]["average"]))
+        failed = True
+
+    my_predbat.minutes_now = saved_minutes_now
+    if saved_octopus_slot_max is None:
+        my_predbat.args.pop("octopus_slot_max", None)
+    else:
+        my_predbat.args["octopus_slot_max"] = saved_octopus_slot_max
+
     if failed:
         return failed
 

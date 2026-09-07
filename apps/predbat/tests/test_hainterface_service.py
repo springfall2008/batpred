@@ -818,7 +818,9 @@ def test_hainterface_set_state_external_sensor(my_predbat=None):
     # Mock set_state
     set_state_called = []
     original_set_state = ha_interface.set_state
-    def mock_set_state(entity_id, state, attributes={}):
+    def mock_set_state(entity_id, state, attributes=None):
+        if attributes is None:
+            attributes = {}
         set_state_called.append((entity_id, state, attributes))
         # Don't call original_set_state to avoid API call
         # Just update state_data directly
@@ -854,7 +856,9 @@ def test_hainterface_set_state_external_watch_list(my_predbat=None):
     ha_interface = create_ha_interface(mock_base, ha_key="test_key")
 
     # Mock set_state to prevent API calls
-    def mock_set_state(entity_id, state, attributes={}):
+    def mock_set_state(entity_id, state, attributes=None):
+        if attributes is None:
+            attributes = {}
         ha_interface.state_data[entity_id.lower()] = {"state": state, "attributes": attributes}
     ha_interface.set_state = mock_set_state
 
@@ -899,7 +903,9 @@ def test_hainterface_set_state_external_no_change(my_predbat=None):
     ha_interface = create_ha_interface(mock_base, ha_key="test_key")
 
     # Mock set_state to prevent API calls
-    def mock_set_state(entity_id, state, attributes={}):
+    def mock_set_state(entity_id, state, attributes=None):
+        if attributes is None:
+            attributes = {}
         ha_interface.state_data[entity_id.lower()] = {"state": state, "attributes": attributes}
     ha_interface.set_state = mock_set_state
 

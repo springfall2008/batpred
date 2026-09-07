@@ -520,6 +520,38 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 | `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
 
+#### Site export limits (gecloud)
+
+Predbat reads your site's details from GivEnergy at startup, just after the device list,
+and publishes any enforced grid export limit it finds as
+`sensor.predbat_gecloud_<serial>_export_limit` alongside the other per-inverter sensors.
+The API key needs site read permission for this optional lookup; without it the sensor is
+simply not published and nothing else changes.
+
+Only an export limit GivEnergy reports as enabled is applied. A site describes its
+connection's declared capacity the same way it describes a curtailment, marked as
+disabled, and that is no restriction on what you may export. A site with no limit at all
+reports none rather than a zero, so an enforced zero is applied as a real zero-export
+connection.
+
+The site details are cached in Predbat's storage and re-read every 12 hours, so a restart
+normally costs no extra API call and a limit changed in the GivEnergy portal is picked up
+within half a day. A failed read retries after 30 minutes and keeps the cached value in
+the meantime.
+
+With `ge_cloud_automatic: true`, automatic configuration points `export_limit` at those
+sensors when a limit was read. The site limit is divided between Predbat's logical
+inverters so their total is the site limit, including the single logical controller a
+Gateway presents. An `export_limit` you set in `apps.yaml` takes precedence, including a
+zero limit, and a site with no limit leaves Predbat's unrestricted default in place.
+
+Automatic detection requires all contributing inverters to belong to one known site;
+otherwise configure `export_limit` explicitly.
+
+This is the site's grid export limit, not its solar inverter rating. For an AC-coupled
+solar inverter whose rating is not exposed by the API, configure `pv_ac_limit` separately
+in watts. Neither limit changes the detected battery inverter power rating.
+
 #### EV chargers (gecloud)
 
 Every GivEnergy EV charger on the account is polled alongside the inverters and publishes
@@ -648,7 +680,7 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `octopus_api_key` | Your Octopus Energy API key |
 | `account_id` | String | Yes | - | `octopus_api_account` | Your Octopus Energy account number (starts with A-) |
-| `automatic` | Boolean | No | true | `octopus_automatic` | Set to `true` to automatically configure Predbat to use this Component (no need to update apps.yaml) |
+| `automatic` | Boolean | No | true | `octopus_automatic` | Set to `true` to automatically configure Predbat to use this Component (no need to update `apps.yaml`) |
 
 #### How to get your API credentials (octopus)
 
@@ -707,7 +739,7 @@ Select control my battery for 'Events Only'.
 1. Log in to your Axle Energy VPP portal at <https://vpp.axle.energy>
 2. Navigate to the Home Assistant integration section
 3. Copy your API key
-4. Paste it into `axle_api_key` in apps.yaml
+4. Paste it into **axle_api_key** in `apps.yaml`
 
 #### Sensor Attributes (axle)
 
@@ -1034,7 +1066,7 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `fox_key` | Your Fox ESS API key |
-| `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required) |
+| `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual `apps.yaml` updates required) |
 | `automatic_ignore_pv` | Boolean | No | false | `fox_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Fox Cloud from overwriting `pv_power` and `pv_today` config. Useful for AC-coupled setups where PV is measured independently and Fox Cloud reports zero/absent PV data |
 
 ---
@@ -1072,6 +1104,7 @@ Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST A
 | `site_id` | String or String List | No | First account site | `teslemetry_site_id` | Optional Tesla energy site id (or list of ids) to filter the sites discovered from the account; leave unset to use the first site on the account automatically |
 | `base_url` | String | No | `https://api.teslemetry.com` | `teslemetry_base_url` | REST base URL; for direct Fleet API set this to your regional Fleet endpoint (e.g. `https://fleet-api.prd.eu.vn.cloud.tesla.com`) |
 | `automatic` | Boolean | No | false | `teslemetry_automatic` | Set to `true` to automatically configure Predbat to use the Powerwall (no manual apps.yaml inverter settings required) |
+| `tbc_control` | Boolean | No | false | `teslemetry_tbc_control` | Trial setting - see [Teslemetry component (beta)](inverter-setup.md#teslemetry-component-beta) for what it does and its known limitation |
 | `auth_method` | String | No | `api_key` | `teslemetry_auth_method` | `api_key` (static Teslemetry token) or `oauth` (direct Tesla Fleet API). In `oauth` mode the OAuth flow and token refresh are handled for you by predbat.com - the same way the Fox integration works - so `oauth` requires connecting via predbat.com; self-hosted users use `api_key` |
 
 ---
@@ -1187,7 +1220,7 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
 | `api_key` | String | Yes | - | `solis_api_key` | Your Solis Cloud API Key (KeyId) |
 | `api_secret` | String | Yes | - | `solis_api_secret` | Your Solis Cloud API Secret (KeySecret) |
 | `inverter_sn` | String/List | No | - | `solis_inverter_sn` | Inverter serial number(s) - Leave unset to see all. Single string or list of strings for multiple inverters |
-| `automatic` | Boolean | No | false | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual apps.yaml sensor updates required) |
+| `automatic` | Boolean | No | false | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual `apps.yaml` sensor updates required) |
 | `base_url` | String | No | Auto-detected | `solis_base_url` | Solis Cloud API base URL (automatically selects correct region) |
 | `control_enable` | Boolean | No | true | `solis_control_enable` | Enable/disable control commands (set to false for monitoring only) |
 | `nominal_voltage` | Float | No | - | `solis_nominal_voltage` | Your battery's nominal pack voltage (e.g. cell count x nominal cell voltage), used only for the battery capacity sensor. Not the same as the live measured battery voltage. Without it, the capacity sensor is still published but flagged unreliable - see [apps.yaml](apps-yaml.md#solis-cloud-api) |
@@ -1670,7 +1703,7 @@ For a detailed explanation of how the neural network works and comprehensive con
 | `load_ml_max_days_history` | Integer | No | 28 | `load_ml_max_days_history` | Maximum days of load history to fetch from HA on each poll (bounded by HA recorder retention) |
 | `load_ml_database_days` | Integer | No | 90 | `load_ml_database_days` | Days of history to accumulate in the on-disk database (`predbat_ml_history.npz`); set to 0 to disable the database |
 
-Note: `load_today`, `pv_today` and `car_charging_energy` apps.yaml configuration items are also used, but these should already be set in Predbat.
+Note: **load_today**, **pv_today** and **car_charging_energy** `apps.yaml` configuration items are also used, but these should already be set in Predbat.
 
 #### Configuration example (load_ml)
 

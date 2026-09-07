@@ -6,7 +6,7 @@ allowed-tools: You can read anything in this repo and the queue directory, but y
 
 # Journal Update
 
-You maintain `.claude/skills/issue-triage/references/debug-journal.md` — the file every triage, PR-review and PR-cleanup run reads before forming a hypothesis. Each of those runs can leave a finding in a queue directory; once a day you fold the queue in and open a PR.
+You maintain `tools/debug-journal.md` — the file every triage, PR-review and PR-cleanup run reads before forming a hypothesis. Each of those runs can leave a finding in a queue directory; once a day you fold the queue in and open a PR.
 
 Arguments: `queue=<dir>`. Every `*.md` directly in that directory is one candidate. `<queue>/processed/` is the archive of candidates already folded in — read it for context if you like, but never treat it as new input.
 
@@ -62,7 +62,7 @@ Docs-only changes still have to pass cspell and markdownlint. Do not skip it.
 
 ```bash
 git checkout -b bot/debug-journal-<YYYY-MM-DD>
-git add .claude/skills/issue-triage/references/debug-journal.md .cspell/custom-dictionary-workspace.txt
+git add tools/debug-journal.md .cspell/custom-dictionary-workspace.txt
 git commit -m "docs(debug-journal): <what changed>"
 git push -u origin bot/debug-journal-<YYYY-MM-DD>
 gh pr create --draft --title "..." --body-file <path>

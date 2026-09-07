@@ -975,6 +975,12 @@ class ChatAgent(ComponentBase):
     # still reach.
     provider_name = "openrouter"
     provider = PROVIDERS["openrouter"]
+    # Same reasoning, for the two provider_ready() reads: list_models() now asks whether anything
+    # is configured before it will dial an endpoint, and an agent that never reached initialize()
+    # has configured nothing - so "no providers, none active" is both the truthful answer and the
+    # safe one.
+    providers = []
+    active_provider = None
 
     def initialize(self, config=None):
         """Store configuration and build the conversation store and event buffer.
@@ -1255,11 +1261,25 @@ class ChatAgent(ComponentBase):
         for it) - the Chat tab's footer uses it to show how full the context window is against the
         model actually in use, alongside the token count itself; see html_chat_models() and
         renderContextUsage() in web_chat.py.
+
+        An install with no usable provider fetches nothing at all and offers only whatever model
+        apps.yaml already names; see the guard below for why that is not merely an optimisation.
         """
         catalogue = None
         # Cleared per call: a cache hit never runs the fetch, so a reason left over from an
         # earlier failure would be reported against a catalogue that arrived perfectly well.
         self.catalogue_error = None
+        # Nothing usable is configured, so no endpoint's catalogue means anything here - and the
+        # fallback base_url is OpenRouter's, whose /models is served unauthenticated. The fetch
+        # therefore came back 200 rather than the 401 that would have stopped it, so an install
+        # with nothing set up made an outbound request on every view of the setup page and cached
+        # several hundred KB of a catalogue it cannot use. provider_ready() rather than "nothing
+        # is selected": an entry written down without its key is active but equally unusable, and
+        # it is the same predicate the turn path already refuses on. An endpoint the user is
+        # still typing into is probe_models()' job, which deliberately does not come through here.
+        if not self.provider_ready():
+            self.catalogue_error = NO_PROVIDER_MESSAGE
+            return await self._catalogue_to_models(None, self.provider, self.base_url, self.default_model)
         storage = self.storage
         try:
             if storage:

@@ -98,7 +98,7 @@ class PredbatMetrics:
         self.charge_rate_kw = _gauge("predbat_charge_rate_kw", "Current max charge rate in kW")
         self.discharge_rate_kw = _gauge("predbat_discharge_rate_kw", "Current max discharge rate in kW")
         self.inverter_register_writes_total = _counter("predbat_inverter_register_writes_total", "Total inverter register writes")
-        self.grid_power = _gauge("predbat_grid_power", "Current grid power in kW (positive for import, negative for export)")
+        self.grid_power = _gauge("predbat_grid_power", "Current grid power in kW (negative for import, positive for export)")
         self.load_power = _gauge("predbat_load_power", "Current load power in kW")
         self.pv_power = _gauge("predbat_pv_power", "Current PV power in kW")
         self.battery_power = _gauge("predbat_battery_power", "Current battery power in kW (positive for discharge, negative for charge)")

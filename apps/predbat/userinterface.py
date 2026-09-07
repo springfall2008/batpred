@@ -37,6 +37,13 @@ from const import (
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
+# A debug dump is several megabytes of deeply nested YAML and PyYAML's pure-Python parser spends
+# most of a replay's wall-clock on it - about 6s for a 5MB dump. CLoader pairs libyaml's C parser
+# with the very same (unsafe) Constructor that yaml.unsafe_load uses, so the Python-object tags
+# these dumps carry still load and the result is identical, roughly 6x faster. PyYAML is not
+# always built with libyaml, so fall back to the pure-Python loader when the C one is absent.
+DEBUG_YAML_LOADER = getattr(yaml, "CLoader", yaml.UnsafeLoader)
+
 
 class DebugYamlDumper(yaml.Dumper):
     """
@@ -669,7 +676,7 @@ class UserInterface:
                     self.log("Restore setting: {} = {} (was {})".format(item["name"], item["default"], item["value"]))
                     await self.async_expose_config(item["name"], item["default"], event=True)
             if self.get_arg("set_system_notify"):
-                await self.async_call_notify("Predbat settings restored from default")
+                await self.async_call_notify(f"{self.prefix.capitalize()} settings restored from default")
         else:
             filepath = os.path.join(self.save_restore_dir, filename)
             if os.path.exists(filepath):
@@ -684,7 +691,7 @@ class UserInterface:
                             self.log("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                             await self.async_expose_config(item["name"], item["value"], event=True)
                 if self.get_arg("set_system_notify"):
-                    await self.async_call_notify("Predbat settings restored from {}".format(filename))
+                    await self.async_call_notify(f"{self.prefix.capitalize()} settings restored from {filename}")
         await self.async_expose_config("saverestore", None)
 
     def load_current_config(self):
@@ -756,7 +763,7 @@ class UserInterface:
             yaml.dump(self.CONFIG_ITEMS, file)
         self.log("Saved Predbat settings to {}".format(filepath_p))
         if self.get_arg("set_system_notify"):
-            await self.async_call_notify("Predbat settings saved to {}".format(filename))
+            await self.async_call_notify(f"{self.prefix.capitalize()} settings saved to {filename}")
 
     def read_debug_yaml(self, filename):
         """
@@ -765,7 +772,7 @@ class UserInterface:
         debug = {}
         if os.path.exists(filename):
             with open(filename, "r") as file:
-                debug = yaml.unsafe_load(file)
+                debug = yaml.load(file, Loader=DEBUG_YAML_LOADER)
         else:
             self.log("Warn: Debug file {} not found".format(filename))
             return
@@ -1488,13 +1495,15 @@ class UserInterface:
         minutes_now = int((self.now_utc - midnight_utc).total_seconds() / 60)
         return midnight_utc, minutes_now
 
-    def manual_rates(self, config_item, exclude=[], new_value=None, default_rate=0, update=True):
+    def manual_rates(self, config_item, exclude=None, new_value=None, default_rate=0, update=True):
         """
         Update manual rates sensor
 
         Set update=False to decode the stored selection without writing it back - read-only
         callers should use this. See the note in manual_times() for the shared time origin.
         """
+        if exclude is None:
+            exclude = []
         rate_overrides_minutes = {}
         rate_overrides = []
         plan_interval = self.get_arg("plan_interval_minutes", 30)
@@ -1574,7 +1583,7 @@ class UserInterface:
 
         return rate_overrides_minutes
 
-    def manual_times(self, config_item, exclude=[], new_value=None, update=True):
+    def manual_times(self, config_item, exclude=None, new_value=None, update=True):
         """
         Update manual times sensor
 
@@ -1587,6 +1596,8 @@ class UserInterface:
         Set update=False to decode the stored selection without writing it back, which is what a
         read-only caller wants.
         """
+        if exclude is None:
+            exclude = []
         time_overrides = []
         plan_interval = self.get_arg("plan_interval_minutes", 30)
         midnight_utc, minutes_now_real = self.manual_time_origin()

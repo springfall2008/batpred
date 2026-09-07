@@ -63,6 +63,7 @@ INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST comma
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
 PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
+CAR_CHARGING_LIMIT_UNCAPPED = 9999.0  # Model-facing car charge limit (kWh) that makes predict()'s fill clamp inert - larger than any real car battery (#4967)
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
 # How far ahead a manual override may be placed. The two horizons differ on purpose: a manual
 # charge/export/freeze/demand slot is bounded by the plan, since Predbat can only act on a slot the

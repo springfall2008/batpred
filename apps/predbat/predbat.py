@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.0.0"
+THIS_VERSION = "v9.0.1"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -196,10 +196,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         return state
 
-    def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
+    def set_state_wrapper(self, entity_id, state, attributes=None, required_unit=None):
         """
         Wrapper function to get state from HA
         """
+        if attributes is None:
+            attributes = {}
         if not self.ha_interface:
             self.log("Error: set_state_wrapper - No HA interface available")
             return False
@@ -464,6 +466,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.charge_window_best = []
         self.car_charging_battery_size = [100]
         self.car_charging_limit = [100]
+        # Per-car charge limit as the prediction model should see it, or None to use car_charging_limit.
+        # Set by fetch_sensor_data_cars() for cars on Octopus Intelligent dispatch slots (#4967).
+        self.car_charging_limit_model = None
         self.car_charging_soc = [0]
         self.car_charging_soc_next = [None]
         self.car_charging_rate = [7.4]
@@ -497,6 +502,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_intelligent_consider_full = False
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
+        self.dispatch_timeline_last = {}
         self.ge_url_cache = {}
         self.github_url_cache = {}
         self.load_minutes = {}
@@ -630,6 +636,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_join_service_power_down = None
         self.calculate_savings_max_charge_slots = 1
         self.inverter_data_last_fetch = None
+        # Pre-initialise the inverter clock skew offsets (set for real in fetch_config_options());
+        # anything that runs before that first fetch, e.g. in template mode, must read 0 rather
+        # than AttributeError on an unset attribute (#4965)
+        self.inverter_clock_skew_start = 0
+        self.inverter_clock_skew_end = 0
+        self.inverter_clock_skew_discharge_start = 0
+        self.inverter_clock_skew_discharge_end = 0
         self.octopus_url_cache_loaded = False
         self.github_url_cache_loaded = False
         self.load_forecast_history = False
@@ -965,6 +978,23 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 extra=status_extra,
             )
 
+    def update_car_manual_soc(self):
+        """
+        Write the predicted next car SoC back to the manual car SoC tracker for cars using car_charging_manual_soc
+        """
+        for car_n in range(self.num_cars):
+            if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
+                car_postfix = "" if car_n == 0 else "_" + str(car_n)
+                self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
+                if self.car_charging_soc_next[car_n] is not None:
+                    soc_next = self.car_charging_soc_next[car_n]
+                    # The modelled car SoC can run past the real charge limit when the prediction's fill
+                    # clamp is inert (octopus_intelligent_consider_full off, #4967) - the tracked manual
+                    # SoC stands in for a measurement, so keep it within the real per-car limit
+                    if car_n < len(self.car_charging_limit):
+                        soc_next = min(soc_next, self.car_charging_limit[car_n])
+                    self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
+
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -981,7 +1011,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.download_predbat_releases()
 
         # Check if we are still running the template configuration, if so don't run the plan
-        if self.get_arg("template", False):
+        if self.is_template_mode():
             self.log("Error: You have not completed editing the apps.yaml template, Predbat cannot run. Please comment out 'Template: True' line in apps.yaml to start Predbat running")
             self.record_status("Error: Template Configuration, remove 'Template: True' line in apps.yaml to start predbat running", had_errors=True)
             return
@@ -1299,12 +1329,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Car SoC increment
         if scheduled:
-            for car_n in range(self.num_cars):
-                if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
-                    car_postfix = "" if car_n == 0 else "_" + str(car_n)
-                    self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
-                    if self.car_charging_soc_next[car_n] is not None:
-                        self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(self.car_charging_soc_next[car_n]))
+            self.update_car_manual_soc()
 
         # Holiday days left countdown, subtract a day at midnight every day
         if scheduled and self.holiday_days_left > 0 and self.minutes_now < RUN_EVERY:
@@ -1387,7 +1412,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if files:
             # Notify before killing threads so the WebSocket is still healthy
             if self.get_arg("set_system_notify"):
-                self.call_notify("Predbat: update to: {}".format(version))
+                self.call_notify(f"{self.prefix.capitalize()}: update to: {version}")
 
             # Kill the current threads
             self.log("Kill current threads before update")
@@ -1924,7 +1949,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             slug = self.ha_interface.get_slug()
             if slug:
                 # and use slug name to determine printable config_root pathname when writing debug info to the log file
-                self.config_root_p = "/addon_configs/" + slug
+                self.config_root_p = "/app_configs/" + slug
 
             self.log("Config root is {} and printable config_root_p is now {}".format(self.config_root, self.config_root_p))
 
@@ -2122,7 +2147,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         """
         Called every N second for balance inverters
         """
-        if self.get_arg("template", False):
+        if self.is_template_mode():
             return
 
         if not self.prediction_started and self.balance_inverters_enable and not self.set_read_only:

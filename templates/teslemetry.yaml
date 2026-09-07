@@ -35,6 +35,7 @@ pred_bat:
   teslemetry_key: 'xxxx'
   teslemetry_site_id: '123456'  # optional: omit to use the first site on your account
   teslemetry_automatic: True
+  #teslemetry_tbc_control: True
   #teslemetry_base_url: 'https://api.teslemetry.com'
   # For direct Tesla Fleet API (OAuth) instead of the Teslemetry proxy, connect via predbat.com -
   # it sets teslemetry_auth_method: oauth, puts the Fleet access token in teslemetry_key, and sets

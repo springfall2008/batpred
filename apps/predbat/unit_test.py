@@ -65,6 +65,7 @@ from tests.test_optimise_swap_export import run_optimise_swap_export_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
 from tests.test_car_charging_smart import run_car_charging_smart_tests
+from tests.test_battery_accuracy import run_battery_accuracy_tests
 from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_active_flag import test_active_flag
 from tests.test_component_health_status import test_component_health_status
@@ -230,6 +231,7 @@ from tests.test_annual_weather import test_annual_weather, test_annual_weather_o
 from tests.test_annual_tariff import test_annual_tariff
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_iog_charge_skew import run_iog_charge_skew_tests
+from tests.test_dispatch_timeline import run_dispatch_timeline_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
@@ -535,6 +537,7 @@ def main():
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),
+        ("dispatch_timeline", run_dispatch_timeline_tests, "Dispatch timeline diagnostic tests (#4516 Stage 1)", False),
         ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
         ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
@@ -597,6 +600,7 @@ def main():
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
+        ("battery_accuracy", run_battery_accuracy_tests, "Battery prediction accuracy recording tests", False),
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),
         ("clone_windows", run_clone_windows_tests, "Clone windows tests", False),
         ("window_cache", run_window_cache_tests_isolated, "Window bounds cache tests", False),
@@ -756,7 +760,10 @@ def main():
     parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name (can be used multiple times, use --list to see available tests)")
     parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
-    parser.add_argument("--quick", "-q", action="store_true", help="Skip slow tests (optimise_levels, optimise_windows, debug_cases)")
+    # Named from the registry rather than hard-coded: the previous literal list had drifted to
+    # name three tests that are not marked slow at all, while the four that are went unmentioned.
+    slow_test_names = ", ".join(name for name, _func, _desc, slow in TEST_REGISTRY if slow) or "none currently marked slow"
+    parser.add_argument("--quick", "-q", action="store_true", help=f"Skip slow tests ({slow_test_names})")
     parser.add_argument("--plot", action="store_true", help="Display failure plots on screen (blocks until closed); the PNG is written either way")
     parser.add_argument("--random-generate", action="store_true", help="Generate random benchmark scenarios and write to a YAML file")
     parser.add_argument("--random-count", type=int, default=100, metavar="N", help="Number of random scenarios to generate (default: 100)")
@@ -874,26 +881,30 @@ def main():
             skipped_count += 1
             continue
 
-        # Show descriptive message for keyword/specific tests, simple for full suite
-        print(f"**** Running: {name} - {desc} ****")
+        # Show descriptive message for keyword/specific tests, simple for full suite.
+        # The wall-clock stamps bracket each test so a run that stalls can be read straight
+        # from the log: the elapsed figure below only appears once a test returns, so a test
+        # still running (or one that hung) is identified by its unmatched start stamp.
+        print(f"**** Running: {name} - {desc} (start {time.strftime('%H:%M:%S')}) ****")
 
         start_time = time.time()
         test_failed = func(my_predbat)
         elapsed = time.time() - start_time
         total_time += elapsed
+        end_stamp = time.strftime("%H:%M:%S")
 
         if test_failed:
             if args.keyword or args.test:
-                print(f"**** ERROR: Test {name} FAILED in {elapsed:.2f}s ****")
+                print(f"**** ERROR: Test {name} FAILED in {elapsed:.2f}s (end {end_stamp}) ****")
             else:
-                print(f"**** {name}: FAILED in {elapsed:.2f}s ****")
+                print(f"**** {name}: FAILED in {elapsed:.2f}s (end {end_stamp}) ****")
             failed = True
             break
         else:
             if args.keyword or args.test:
-                print(f"**** Test {name} PASSED in {elapsed:.2f}s ****")
+                print(f"**** Test {name} PASSED in {elapsed:.2f}s (end {end_stamp}) ****")
             else:
-                print(f"**** {name}: PASSED in {elapsed:.2f}s ****")
+                print(f"**** {name}: PASSED in {elapsed:.2f}s (end {end_stamp}) ****")
 
     # Report results
     if failed:

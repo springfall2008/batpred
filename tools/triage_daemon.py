@@ -135,13 +135,38 @@ QUEUE_DIR = BASE_DIR / "journal-queue"
 QUEUE_SCOPE = f"//{QUEUE_DIR.relative_to(QUEUE_DIR.anchor).as_posix()}/**"
 # The two files the daily flush may touch. Scoped to the exact paths rather than the clone,
 # because this is the only flow that can both edit and push.
-JOURNAL_RELPATH = ".claude/skills/issue-triage/references/debug-journal.md"
+# The journal must NOT live under .claude/: Claude Code refuses the Edit and Write tools
+# anywhere in that directory and no allowlist entry overrides it, so a journal kept beside
+# the skill that reads it verifies fine and then silently fails to be written. Reads are
+# unaffected, which is what made that failure so quiet. See test_triage_daemon.py's
+# test_the_journal_lives_outside_the_dot_claude_directory.
+JOURNAL_RELPATH = "tools/debug-journal.md"
 DICTIONARY_RELPATH = ".cspell/custom-dictionary-workspace.txt"
 JOURNAL_PATH = CLONE_DIR / JOURNAL_RELPATH
 DICTIONARY_PATH = CLONE_DIR / DICTIONARY_RELPATH
 JOURNAL_SCOPE = f"//{JOURNAL_PATH.relative_to(JOURNAL_PATH.anchor).as_posix()}"
 DICTIONARY_SCOPE = f"//{DICTIONARY_PATH.relative_to(DICTIONARY_PATH.anchor).as_posix()}"
 JOURNAL_BRANCH_PREFIX = "bot/debug-journal-"
+# Branch prefixes the PR flow may create, matching issue-pr/SKILL.md.
+PR_BRANCH_PREFIXES = ("fix/", "feat/")
+# The clone's own refusal to update main, and the only layer that actually enforces it.
+# Permission rules are prefix globs over a command string: they cannot see what a ref
+# expression resolves to, so "git push origin HEAD:main" reads to them as an ordinary
+# push. That is precisely how an unreviewed commit reached upstream main on 2026-09-06 -
+# a cleanup run could not push to a fork-owned PR branch, improvised a push to origin,
+# and the CI credential's branch-protection bypass let it through. A pre-push hook is
+# handed the resolved remote ref by git itself, so it holds however the command is spelled.
+PUSH_GUARD_HOOK = """#!/bin/sh
+# Installed by tools/triage_daemon.py before every flow - edits will be overwritten.
+# The triage bot opens pull requests; a human merges them. It never updates main.
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        echo "pre-push: refusing to update main - the triage bot opens pull requests, it does not merge them." >&2
+        exit 1
+    fi
+done
+exit 0
+"""
 _ALLOWED_TOOLS_NON_GH = [
     # Git history, and the re-sync/discard the skill does before investigating
     "Bash(git log*)",
@@ -216,10 +241,16 @@ _ALLOWED_TOOLS_BASE = ["Bash(gh *)"] + _ALLOWED_TOOLS_NON_GH
 ALLOWED_TOOLS = ",".join(_ALLOWED_TOOLS_BASE)
 # The /issue-pr invocation needs everything the read-only triage flow has, plus
 # committing/pushing its branch, opening the PR, and running pre-commit as a quality gate.
+# One entry per (flag, prefix) spelling rather than a bare "git push*": prefix-glob
+# matching is literal, and an unscoped push grant is what let "git push origin HEAD:main"
+# through on 2026-09-06. The bare "git push" form is kept for a follow-up push once the
+# branch has an upstream. PUSH_GUARD_HOOK is the layer that actually enforces this; these
+# rules stop the attempt earlier and say why.
+_PR_PUSH_ALLOWED = ["Bash(git push)"] + [f"Bash(git push{flag} origin {prefix}*)" for prefix in PR_BRANCH_PREFIXES for flag in ("", " -u")]
 _ALLOWED_TOOLS_PR_EXTRA = [
     "Bash(git add*)",
     "Bash(git commit*)",
-    "Bash(git push*)",
+    *_PR_PUSH_ALLOWED,
     "Bash(gh pr create*)",
     "Bash(./run_pre_commit*)",
     "Bash(./run_pre_commit)",
@@ -261,7 +292,19 @@ _PR_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr creat
 # ...", "git push ... -f" and "--force"/"--force-with-lease", without also catching
 # "-flow", "-fix", "-format" or any other word that merely contains "-f".
 _PR_FORCE_PUSH_DENIALS = ["Bash(git push* --force*)", "Bash(git push* -f)", "Bash(git push* -f *)"]
-DISALLOWED_TOOLS_PR = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _PR_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
+# --no-verify skips the pre-push hook, so it has to be denied wherever pushing is granted
+# or the guard is one flag away from being off. The rest name main directly: belt and
+# braces with the hook, and they fail the run with a legible reason rather than a hook
+# rejection buried in git output. "*" matches the empty string, so each covers the form
+# with and without trailing arguments.
+_PUSH_TO_MAIN_DENIALS = [
+    "Bash(git push* --no-verify*)",
+    "Bash(git push* origin main*)",
+    "Bash(git push*:main)",
+    "Bash(git push*:main *)",
+    "Bash(git push*refs/heads/main*)",
+]
+DISALLOWED_TOOLS_PR = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _PR_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS + _PUSH_TO_MAIN_DENIALS)
 # The review and cleanup flows do NOT inherit the broad "Bash(gh *)" grant: with it
 # present, carving a scoped exception out of the gh api denial below would do nothing,
 # since "Bash(gh *)" already allows every gh api call once that denial is lifted, and
@@ -320,16 +363,21 @@ _CLEANUP_EXTRA_MERGE = [
     "Bash(git merge --no-edit origin/main*)",
     "Bash(git merge --abort)",
 ]
+# Only the bare "git push" - the one form pr-cleanup/SKILL.md uses. Cleanup works on a
+# branch `gh pr checkout` has already given an upstream, so it never needs to name a remote
+# or a ref, and naming one is how the 2026-09-06 push to main was spelled. A PR whose head
+# is a fork cannot be pushed to with this credential at all; fetch_bot_cleanup_prs() now
+# filters those out rather than leaving the run to improvise a target.
 _CLEANUP_EXTRA_WRITE = [
     "Bash(git add*)",
     "Bash(git commit*)",
-    "Bash(git push*)",
+    "Bash(git push)",
     "Bash(./run_pre_commit*)",
     "Bash(./run_pre_commit)",
 ]
 ALLOWED_TOOLS_CLEANUP = ",".join(_ALLOWED_GH_PR_READ + _CLEANUP_EXTRA_GH + _ALLOWED_TOOLS_NON_GH + _CLEANUP_EXTRA_MERGE + _CLEANUP_EXTRA_WRITE + _REVIEW_EXTRA_ALLOWED)
 _CLEANUP_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)"} | _REVIEW_REMOVED_DENIALS
-DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _CLEANUP_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
+DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _CLEANUP_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS + _PUSH_TO_MAIN_DENIALS)
 # The other half of the #4758 fix. /code-review is a built-in skill, so the command form it
 # has to use cannot be pinned in a SKILL.md we own - it goes in as an appended system prompt
 # on the two flows holding the scoped gh api grant. Belt and braces with _REVIEW_EXTRA_ALLOWED
@@ -361,7 +409,7 @@ _JOURNAL_DROPPED_EDITS = {f"Edit({EDIT_SCOPE})", f"Edit({SCRATCH_SCOPE})", f"Edi
 ALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _ALLOWED_TOOLS_NON_GH if rule not in _JOURNAL_DROPPED_EDITS] + [f"Edit({JOURNAL_SCOPE})", f"Edit({DICTIONARY_SCOPE})"] + _ALLOWED_TOOLS_JOURNAL_EXTRA)
 # gh pr merge/close stay denied from the base list - the bot never merges its own journal PR.
 _JOURNAL_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr create*)"}
-DISALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _DISALLOWED_TOOLS_BASE if rule not in _JOURNAL_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
+DISALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _DISALLOWED_TOOLS_BASE if rule not in _JOURNAL_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS + _PUSH_TO_MAIN_DENIALS)
 
 # Appended to every flow's system prompt. Until this existed no skill asked for a journal
 # finding at all, so upkeep was self-motivated and happened in maybe one run in ten - and
@@ -580,6 +628,21 @@ def mark_pr_not_actionable(issue_number):
     mark_pr_failed(issue_number)
 
 
+def install_push_guard():
+    """Write the clone's pre-push hook, which refuses any update to main.
+
+    Rewritten before every flow rather than once at setup. `.git/hooks` is not tracked, so
+    `git clean -fd` never restores it and a hook removed by hand would stay removed - and
+    this is the only layer that sees what a ref expression actually resolves to, so it must
+    not be possible for it to be quietly missing.
+    """
+    hooks_dir = CLONE_DIR / ".git" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    hook_path = hooks_dir / "pre-push"
+    hook_path.write_text(PUSH_GUARD_HOOK)
+    hook_path.chmod(0o755)
+
+
 def sync_repo():
     """Sync the clone to origin/main, always returning to main first.
 
@@ -593,6 +656,7 @@ def sync_repo():
     # Drop untracked leftovers from the previous run's investigation. Not -x:
     # coverage/venv/ is gitignored and expensive to rebuild every issue.
     subprocess.run(["git", "-C", str(CLONE_DIR), "clean", "-fd"], check=True)
+    install_push_guard()
 
 
 def reset_scratch():
@@ -705,7 +769,30 @@ def archive_journal_queue(entries):
         entry.replace(archive_dir / entry.name)
 
 
-def flush_journal():
+def journal_pr_opened(today):
+    """True when a pull request exists for today's journal branch.
+
+    The flush is only allowed to consume the queue once its findings are safely on a
+    branch a maintainer can see. A `claude -p` run that is denied the permissions it needs
+    still exits 0 - it stops and explains rather than crashing - so the exit code alone
+    cannot distinguish "folded everything in" from "could not write a single byte". Asking
+    GitHub whether the PR exists is the only check that actually means the work landed.
+    """
+    branch = f"{JOURNAL_BRANCH_PREFIX}{today}"
+    result = subprocess.run(
+        ["gh", "pr", "list", "--repo", REPO, "--head", branch, "--state", "all", "--json", "number"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        # Treat an unreachable API as "no PR": leaving the queue intact costs a re-verify
+        # tomorrow, whereas archiving on a failed check silently loses the findings.
+        return False
+    return bool(json.loads(result.stdout or "[]"))
+
+
+def flush_journal(today):
     """Fold the queued findings into the debug journal and open a PR for a human to merge.
 
     Deliberately not a straight append. The skill re-checks each candidate against current
@@ -744,8 +831,17 @@ def flush_journal():
         log_handle.flush()
         result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== journal update exited {result.returncode} ====\n")
-    if result.returncode == 0:
+    # Archive only once the findings are on a branch a maintainer can review. Exit 0 from a
+    # blocked run would otherwise sweep verified candidates into processed/ having landed
+    # nothing, and journal_queue_entries()'s non-recursive glob means they are never
+    # offered again - the failure mode that lost GH#4965/#4967/#4973 on 2026-09-07.
+    if result.returncode == 0 and journal_pr_opened(today):
         archive_journal_queue(consumed)
+    else:
+        print(
+            f"[triage] journal: no PR for {JOURNAL_BRANCH_PREFIX}{today} - leaving {len(consumed)} finding(s) queued for the next flush",
+            flush=True,
+        )
     print(f"[triage] journal: exited {result.returncode}", flush=True)
 
 
@@ -928,10 +1024,22 @@ def fetch_bot_review_prs():
     return json.loads(result.stdout)
 
 
+def pr_head_is_fork(pr):
+    """True when the PR's head branch lives in someone else's fork of the repo.
+
+    The bot's credential can write to REPO and nowhere else, so a fork-head PR branch is
+    not writable however the command is spelled. Left undetected that is a dead end a run has
+    to discover for itself mid-flight, which on 2026-09-06 it did by retrying against
+    `origin` - i.e. this repo's main.
+    """
+    owner = (pr.get("headRepositoryOwner") or {}).get("login")
+    return bool(owner) and owner != REPO.split("/")[0]
+
+
 def fetch_bot_cleanup_prs():
     """Return open PRs currently labelled BOT_CLEANUP, each with its title."""
     result = subprocess.run(
-        ["gh", "pr", "list", "--repo", REPO, "--state", "open", "--label", "BOT_CLEANUP", "--json", "number,title", "--limit", "100"],
+        ["gh", "pr", "list", "--repo", REPO, "--state", "open", "--label", "BOT_CLEANUP", "--json", "number,title,headRepositoryOwner", "--limit", "100"],
         capture_output=True,
         text=True,
         check=True,
@@ -1002,6 +1110,34 @@ def mark_pr_review_failed(pr_number, reason=""):
 def remove_pr_cleanup_label(pr_number):
     """Remove BOT_CLEANUP once fixes have been committed and pushed, so it isn't reprocessed."""
     subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_CLEANUP"], check=True)
+
+
+def mark_pr_cleanup_unsupported(pr_number):
+    """Explain that a fork-head PR cannot be cleaned up, and clear the trigger label.
+
+    Uses the same BOT_FAILED swap as a real failure so the PR stops being picked up every
+    poll, but says what is actually wrong - the maintainer's options are to push the branch
+    into this repo or to apply the review by hand.
+    """
+    subprocess.run(
+        [
+            "gh",
+            "pr",
+            "comment",
+            str(pr_number),
+            "--repo",
+            REPO,
+            "--body",
+            "Automated cleanup skipped: this PR's head branch lives in a fork, and the bot's credential can only write to "
+            f"`{REPO}`, so it cannot push the fixes back to this PR. Re-open the change from a branch in `{REPO}` to use the "
+            "cleanup flow, or apply the review feedback manually.",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_CLEANUP", "--add-label", "BOT_FAILED"],
+        check=True,
+    )
 
 
 def mark_pr_cleanup_failed(pr_number):
@@ -1208,6 +1344,10 @@ def process_bot_cleanup_pr(pr):
     """
     pr_number = pr["number"]
     print(f'[cleanup-pr] PR #{pr_number}: "{pr["title"]}" - {pr_url(pr_number)}', flush=True)
+    if pr_head_is_fork(pr):
+        print(f"[cleanup-pr] PR #{pr_number}: head branch is in a fork - not writable with this credential, skipping", flush=True)
+        mark_pr_cleanup_unsupported(pr_number)
+        return
     sync_repo()
     reset_scratch()
     try:
@@ -1281,7 +1421,7 @@ def main():
                 state["last_journal_flush"] = today
                 save_state(state)
                 sync_repo()
-                flush_journal()
+                flush_journal(today)
         except subprocess.CalledProcessError as exc:
             print(f"[triage] error: {exc}", flush=True)
         time.sleep(POLL_SECONDS)

@@ -72,6 +72,34 @@ BOOST_TIER = "ON_PEAK"
 SLOTS_PER_DAY = 48
 SLOT_MINUTES = 30
 
+# Signal-tariff control mode (GH#4892). In this mode the pushed tariff stops describing real prices
+# and becomes a control signal saying when Predbat wants energy moved, so Tesla's own optimiser runs
+# the charge and reaches the full rate that reserve-driven charging cannot. Three fixed bands,
+# written identically to every day of the week, which is what makes the tariff a pure function of the
+# two committed windows - no clock, no day-of-week arithmetic, and no re-push at midnight.
+SIGNAL_CHEAP_TIER = "SUPER_OFF_PEAK"
+SIGNAL_BASE_TIER = "PARTIAL_PEAK"
+SIGNAL_PEAK_TIER = BOOST_TIER
+# GBP/kWh. Buy and sell match inside each window so the optimiser can never profit by charging to
+# re-export within the same band (the same invariant the real-rate path keeps by mirroring the boost
+# onto the buy side). The 0p sell floor outside both windows means deferring an export past its
+# window end earns nothing at all, rather than merely less.
+SIGNAL_BUY_PRICES = {SIGNAL_CHEAP_TIER: 0.0, SIGNAL_BASE_TIER: 0.5, SIGNAL_PEAK_TIER: 1.0}
+SIGNAL_SELL_PRICES = {SIGNAL_CHEAP_TIER: 0.0, SIGNAL_BASE_TIER: 0.0, SIGNAL_PEAK_TIER: 1.0}
+# Percent below the charge target that still counts as being at it. A freeze charge arrives as a
+# charge window whose target is the SOC at the moment execute.py wrote it, so house load can drop SOC
+# a fraction below that before the next cycle - without a deadband the state would flip out of hold
+# and import against the 0p band.
+SIGNAL_HOLD_DEADBAND_PERCENT = 1
+# The only reserve above 80 that Tesla still accepts: since firmware 25.18.4, 81-99 snap to 80.
+SIGNAL_HOLD_RESERVE = 100
+# Highest reserve below the snap band. A request above this is rounded UP to SIGNAL_HOLD_RESERVE
+# rather than left to be snapped down to 80 by the device: Predbat only asks for a reserve up here
+# when it wants a hold (execute.py writes soc+1 under set_reserve_hold), and 80 would not hold it.
+# Either way what Predbat models and what the battery honours must agree, which is the divergence
+# GH#4953/#4956 fixed for the reserve floor generally.
+SIGNAL_MAX_SETTABLE_RESERVE = 80
+
 OPTIONS_TIME_FULL = ["{:02d}:{:02d}:00".format(hour, minute) for hour in range(24) for minute in range(60)]
 
 DEFAULT_SCHEDULE = {
@@ -88,7 +116,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
     DEFAULT_IMPORT_RATE = 0.28
     DEFAULT_EXPORT_RATE = 0.15
 
-    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
+    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, tbc_control=False, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
         """Initialise the Teslemetry component from configuration.
 
         Args:
@@ -100,6 +128,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             base_url: REST API base URL (Teslemetry by default, swappable for a direct Fleet API connection;
                 in oauth mode set this to the regional Fleet endpoint).
             automatic: Automatically configure Predbat's inverter args to use this component (fox-style).
+            tbc_control: Trial setting (teslemetry_tbc_control). When set, evaluate_schedule and
+                sync_tariff switch to the signal-tariff / Time-Based Control path - see GH#4892.
             auth_method: "api_key" (default, static Teslemetry token) or "oauth" (direct Fleet API; token
                 refresh is driven externally by predbat.com via OAuthMixin's oauth-refresh edge function).
             token_expires_at: OAuth access-token expiry (ISO string or epoch); only used in oauth mode.
@@ -131,6 +161,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self._last_sent = {}
         self.automatic = automatic
         self.automatic_done = False
+        self.tbc_control = tbc_control
+        self._reserve_band_warned = False
         self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.schedule_loaded = False
@@ -529,7 +561,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         ON_PEAK boost over the committed discharge window (in the tariff) makes favourable; the tariff
         is no longer part of this per-cycle tuple. Every non-export state allows pv_only export so
         surplus solar is never curtailed.
+
+        With teslemetry_tbc_control set this delegates to evaluate_schedule_tbc, which drives Tesla's
+        own optimiser through the tariff instead of asserting a charge directly - see GH#4892.
         """
+        if getattr(self, "tbc_control", False):
+            return self.evaluate_schedule_tbc(minutes_now, soc)
         charge = self.schedule.get("charge", {})
         discharge = self.schedule.get("discharge", {})
         reserve = self.schedule.get("reserve", 20)
@@ -543,6 +580,64 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
                 return {"export_rule": "battery_ok", "grid_charging": False, "reserve": target, "mode": "autonomous"}
             return {"export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "self_consumption"}
         return {"export_rule": "pv_only", "grid_charging": True, "reserve": int(reserve), "mode": "self_consumption"}
+
+    def _settable_reserve(self, percent):
+        """Map a requested reserve onto one the Powerwall will actually hold.
+
+        Since firmware 25.18.4 only 0-80 and exactly 100 are honoured; 81-99 are silently snapped
+        down to 80. A request in that band is Predbat asking to hold above 80 - execute.py writes
+        adjust_reserve(soc+1) under set_reserve_hold - and 80 would not hold it, leaving the battery
+        free to discharge back down to 80 during a window meant to keep SOC flat. So it rounds UP to
+        the one value above 80 that is honoured. Callers disable grid charging whenever this returns
+        SIGNAL_HOLD_RESERVE, which is what stops the device importing to reach it - including a
+        `set_reserve_min` anywhere in 81-99 (a plausible Powerwall value on its own), which lands here
+        too and then holds grid charging off in every state, permanently. A request of exactly 100 is
+        already honoured and passes through without a diagnostic; only a value the device would have
+        silently moved is logged, once rather than every cycle, so a trial user can see why nothing
+        is charging.
+        """
+        percent = int(percent)
+        if percent <= SIGNAL_MAX_SETTABLE_RESERVE:
+            return percent
+        # Exactly 100 is honoured by the device as asked, so it is not being changed under the
+        # caller's feet and warrants no diagnostic - and warning for it would burn the one-shot flag
+        # and silence the real 81-99 case later, which is the case the diagnostic exists for.
+        if percent < SIGNAL_HOLD_RESERVE and not self._reserve_band_warned:
+            self._reserve_band_warned = True
+            self.log("Info: Teslemetry reserve request of {}% is in the 81-99 band Tesla rejects - using 100% instead, which also disables grid charging".format(percent))
+        return SIGNAL_HOLD_RESERVE
+
+    def evaluate_schedule_tbc(self, minutes_now, soc):
+        """Map the committed schedule to the device tuple under signal-tariff control (GH#4892).
+
+        Mode is autonomous in every state, because Tesla's optimiser only acts on the pushed tariff
+        under Time-Based Control - the tariff, not this tuple, is what asks for the charge or the
+        export. Reserve therefore stops being an overloaded charge signal and is simply the reserve
+        Predbat asked for, in every state; the charge and export target percentages are advisory
+        under this mode, since Tesla decides how much energy actually moves, and window length rather
+        than a reserve floor is the lever for them.
+
+        Grid charging is enabled only while a charge is actually wanted and no hold is in force, so
+        no other state can import unexpectedly whatever the optimiser decides.
+        """
+        charge = self.schedule.get("charge", {})
+        discharge = self.schedule.get("discharge", {})
+        reserve = self._settable_reserve(self.schedule.get("reserve", 20))
+        if self.in_window(minutes_now, charge):
+            target = int(charge.get("soc", 100))
+            if soc >= target - SIGNAL_HOLD_DEADBAND_PERCENT:
+                # At (or effectively at) target: hold. Reserve 100 stops the discharge and grid
+                # charging off stops it importing to reach that reserve; solar may still charge,
+                # which is what a freeze charge wants.
+                return {"export_rule": "pv_only", "grid_charging": False, "reserve": SIGNAL_HOLD_RESERVE, "mode": "autonomous"}
+            # Charging. A reserve that came back as SIGNAL_HOLD_RESERVE is a hold request Predbat
+            # made in its own right, and must not be turned into an import up to 100% against the 0p
+            # band, so grid charging is suppressed in that case.
+            return {"export_rule": "pv_only", "grid_charging": reserve < SIGNAL_HOLD_RESERVE, "reserve": reserve, "mode": "autonomous"}
+        if self.in_window(minutes_now, discharge):
+            target = int(discharge.get("soc", 10))
+            return {"export_rule": "battery_ok" if soc > target else "pv_only", "grid_charging": False, "reserve": reserve, "mode": "autonomous"}
+        return {"export_rule": "pv_only", "grid_charging": False, "reserve": reserve, "mode": "autonomous"}
 
     def publish_schedule_entities(self):
         """Publish the schedule entities from the pending schedule (pending == committed after boot/apply).
@@ -1061,6 +1156,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         already finished today (end <= now) rolls to tomorrow; otherwise it stays today. A midnight-wrapped
         window splits across today and tomorrow, except when we are already inside its post-midnight tail
         (now < end), where only today's head [0, end) still needs the boost.
+
+        A window ending exactly at midnight has no tomorrow tail at all: [start, 1440) already is the
+        whole window. Emitting the empty [0, 0) tail anyway would carve a zero-length interval, which
+        _render_side encodes as fromHour/fromMinute/toHour/toMinute all zero - the same encoding it uses
+        for a period running to the end of the day - so tomorrow would be priced at the boost rate from
+        end to end.
         """
         start_min, end_min = window
         if start_min < end_min:
@@ -1068,6 +1169,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return [(offset, start_min, end_min)]
         if now_min < end_min:
             return [(0, 0, end_min)]
+        if end_min == 0:
+            return [(0, start_min, 1440)]
         return [(0, start_min, 1440), (1, 0, end_min)]
 
     @staticmethod
@@ -1105,14 +1208,72 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             now = datetime.now(getattr(self, "local_tz", None) or timezone.utc)
         return now.weekday()
 
+    def _committed_window(self, direction):
+        """Return (start_min, end_min) for a committed charge/discharge window when enabled, else None."""
+        window = self.schedule.get(direction, {})
+        if not window.get("enable"):
+            return None
+        start = self.time_to_minutes(window.get("start_time", "00:00:00"))
+        end = self.time_to_minutes(window.get("end_time", "00:00:00"))
+        return None if start == end else (start, end)
+
     def _discharge_window(self):
         """Return (start_min, end_min) for the committed discharge window when enabled, else None."""
-        discharge = self.schedule.get("discharge", {})
-        if not discharge.get("enable"):
-            return None
-        start = self.time_to_minutes(discharge.get("start_time", "00:00:00"))
-        end = self.time_to_minutes(discharge.get("end_time", "00:00:00"))
-        return None if start == end else (start, end)
+        return self._committed_window("discharge")
+
+    def _charge_window(self):
+        """Return (start_min, end_min) for the committed charge window when enabled, else None."""
+        return self._committed_window("charge")
+
+    @staticmethod
+    def _window_intervals(window):
+        """Split a (start, end) minute window into non-wrapping [from, to) ranges inside one day.
+
+        A window whose start is after its end wraps midnight and becomes two ranges - unless it ends
+        exactly at midnight (end == 0), in which case the [start, 1440) half already is the whole
+        window and a [0, 0) tail must not be emitted (see the comment below). Because the same shape
+        is written to every day of the week, that is all a midnight crossing needs here - there is no
+        "which day does this land on" question of the kind _boost_segments has to answer on the
+        real-rate path.
+        """
+        if not window:
+            return []
+        start, end = window
+        if start == end:
+            return []
+        if start < end:
+            return [(start, end)]
+        # end == 0 means "runs to midnight": the [start, 1440) half is the whole window. A [0, 0)
+        # tail renders as fromHour/toHour 0,0 - the same encoding _render_side uses for end-of-day
+        # (to >= 1440) - so emitting it would carve the band over the entire day instead of none of it.
+        return [(start, 1440)] if end == 0 else [(start, 1440), (0, end)]
+
+    @staticmethod
+    def _signal_layout(charge_window, export_window):
+        """Return the per-day interval layout for the signal tariff, identical on all seven days.
+
+        Starts from a base band covering the whole day and carves the export then charge windows into
+        it. Predbat's optimiser guarantees the two windows never overlap, so the carve order decides
+        no minute's band; it is fixed only so the rendered output is deterministic.
+        """
+        intervals = [(0, 1440, SIGNAL_BASE_TIER)]
+        for window, tier in ((export_window, SIGNAL_PEAK_TIER), (charge_window, SIGNAL_CHEAP_TIER)):
+            for start, end in TeslemetryAPI._window_intervals(window):
+                intervals = TeslemetryAPI._carve_interval(intervals, start, end, tier)
+        return {day: list(intervals) for day in range(7)}
+
+    def build_signal_tariff(self, charge_window=None, export_window=None):
+        """Build the signal tariff: fixed 0p/50p/100p bands over the committed windows (GH#4892).
+
+        Deliberately takes no clock, no day-of-week and no live SOC, so the serialised body changes
+        only when a window changes - which is what makes set_tariff's write-on-change dedupe mean
+        something rather than firing once a day on the calendar alone. One layout serves both sides
+        and only the price map differs, so the buy and sell periods cannot drift apart.
+        """
+        layout = self._signal_layout(charge_window, export_window)
+        buy_charges, buy_periods = self._render_side(layout, SIGNAL_BUY_PRICES)
+        sell_charges, sell_periods = self._render_side(layout, SIGNAL_SELL_PRICES)
+        return self._assemble_tariff("PREDBAT", buy_charges, buy_periods, sell_charges, sell_periods)
 
     @staticmethod
     def _boost_price(*price_maps):
@@ -1208,10 +1369,16 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
 
         Cheap to call every cycle: set_tariff only reaches the API when the serialised tariff changes,
         i.e. on a genuine rate-band, discharge-window or day-of-week change. Gated on read-only mode.
+
+        With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one; it
+        depends only on the committed windows, so it re-pushes strictly less often.
         """
         if self._is_read_only():
             return True
-        tariff = self.build_tariff(self._discharge_window())
+        if getattr(self, "tbc_control", False):
+            tariff = self.build_signal_tariff(self._charge_window(), self._discharge_window())
+        else:
+            tariff = self.build_tariff(self._discharge_window())
         return await self.set_tariff(tariff)
 
     def _is_read_only(self):

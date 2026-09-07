@@ -807,6 +807,9 @@ def reset_sample_state(predbat):
     # function BEFORE that leg sets them, never after.
     predbat.car_charging_planned = [False]
     predbat.car_charging_limit = [0.0]
+    # Annual plans cars on the plan_car_charging path where the real fill clamp must hold, so make
+    # sure no model-facing limit override leaks in from a live IOG fetch (#4967)
+    predbat.car_charging_limit_model = None
     predbat.car_charging_soc = [0.0]
     predbat.car_charging_rate = [DEFAULT_CAR_RATE_KW]
     predbat.car_charging_battery_size = [50.0]
