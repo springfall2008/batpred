@@ -520,6 +520,38 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 | `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
 
+#### Site export limits (gecloud)
+
+Predbat reads your site's details from GivEnergy at startup, just after the device list,
+and publishes any enforced grid export limit it finds as
+`sensor.predbat_gecloud_<serial>_export_limit` alongside the other per-inverter sensors.
+The API key needs site read permission for this optional lookup; without it the sensor is
+simply not published and nothing else changes.
+
+Only an export limit GivEnergy reports as enabled is applied. A site describes its
+connection's declared capacity the same way it describes a curtailment, marked as
+disabled, and that is no restriction on what you may export. A site with no limit at all
+reports none rather than a zero, so an enforced zero is applied as a real zero-export
+connection.
+
+The site details are cached in Predbat's storage and re-read every 12 hours, so a restart
+normally costs no extra API call and a limit changed in the GivEnergy portal is picked up
+within half a day. A failed read retries after 30 minutes and keeps the cached value in
+the meantime.
+
+With `ge_cloud_automatic: true`, automatic configuration points `export_limit` at those
+sensors when a limit was read. The site limit is divided between Predbat's logical
+inverters so their total is the site limit, including the single logical controller a
+Gateway presents. An `export_limit` you set in `apps.yaml` takes precedence, including a
+zero limit, and a site with no limit leaves Predbat's unrestricted default in place.
+
+Automatic detection requires all contributing inverters to belong to one known site;
+otherwise configure `export_limit` explicitly.
+
+This is the site's grid export limit, not its solar inverter rating. For an AC-coupled
+solar inverter whose rating is not exposed by the API, configure `pv_ac_limit` separately
+in watts. Neither limit changes the detected battery inverter power rating.
+
 #### EV chargers (gecloud)
 
 Every GivEnergy EV charger on the account is polled alongside the inverters and publishes
