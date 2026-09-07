@@ -561,12 +561,21 @@ class Inverter:
             # too, so a real user-configured entity is never clobbered.
             max_charge = self.battery_rate_max_charge * MINUTE_WATT
             max_discharge = self.battery_rate_max_discharge * MINUTE_WATT
-            if "charge_rate" not in self.base.args:
-                self.create_missing_arg("charge_rate", max_charge)
-                self.base.args["charge_rate"][id] = self.create_entity("charge_rate", max_charge, uom="W", device_class="power")
-            if "discharge_rate" not in self.base.args:
-                self.create_missing_arg("discharge_rate", max_discharge)
-                self.base.args["discharge_rate"][id] = self.create_entity("discharge_rate", max_discharge, uom="W", device_class="power")
+            # Gate per inverter index, not on key presence: in a mixed multi-inverter config the
+            # arg can be a list shorter than the inverter count, or carry a None in this
+            # inverter's slot, which get_current_charge_rate() would still resolve to
+            # battery_rate_max_raw - the #3311 fault - even though the key exists. A single
+            # (non-list) user value applies to every inverter and is still never overwritten.
+            for rate_arg, rate_default in (("charge_rate", max_charge), ("discharge_rate", max_discharge)):
+                configured = self.base.args.get(rate_arg)
+                if configured is not None and not isinstance(configured, list):
+                    continue
+                if isinstance(configured, list) and id < len(configured) and configured[id] not in (None, ""):
+                    continue
+                self.create_missing_arg(rate_arg, rate_default)
+                while len(self.base.args[rate_arg]) <= id:
+                    self.base.args[rate_arg].append(rate_default)
+                self.base.args[rate_arg][id] = self.create_entity(rate_arg, rate_default, uom="W", device_class="power")
 
         if not self.inv_has_ge_inverter_mode and not self.inv_has_fox_inverter_mode and not self.inv_has_ge_eco_toggle:
             self.create_missing_arg("inverter_mode", "Eco")

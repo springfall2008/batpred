@@ -674,6 +674,48 @@ def test_low_power_mode_entity_not_clobbered_when_already_configured(test_name, 
     return failed
 
 
+def test_low_power_mode_entity_filled_for_partial_multi_inverter_list(test_name, my_predbat):
+    """
+    Copilot review on #4645: gating auto-creation on `"charge_rate" not in args` misses a mixed
+    multi-inverter config where charge_rate is a list shorter than the inverter count (or carries a
+    None in one slot). The key exists, so the old guard skipped creation, and
+    get_current_charge_rate() for that inverter still fell back to battery_rate_max_raw - the #3311
+    fault - for the source-less "power" inverter in slot 1. The per-index gate must fill slot 1
+    while leaving inverter 0's real configured entity untouched.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    saved_args = {key: my_predbat.args.get(key) for key in ["inverter_type", "givtcp_rest", "charge_rate", "discharge_rate", "charge_rate_percent", "discharge_rate_percent"]}
+    try:
+        my_predbat.args["inverter_type"] = ["GE", "GE"]
+        my_predbat.args["givtcp_rest"] = None
+        my_predbat.args["charge_rate"] = ["number.real_charge_rate"]  # only inverter 0 configured
+        my_predbat.args["discharge_rate"] = ["number.real_discharge_rate"]
+        for key in ["charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        Inverter(my_predbat, 1)
+
+        if my_predbat.args["charge_rate"][0] != "number.real_charge_rate":
+            print("ERROR: {} inverter 0's configured charge_rate was clobbered, now {}".format(test_name, my_predbat.args["charge_rate"][0]))
+            failed = True
+        if len(my_predbat.args["charge_rate"]) <= 1 or my_predbat.args["charge_rate"][1] in (None, "", "number.real_charge_rate"):
+            print("ERROR: {} charge_rate slot for inverter 1 was not auto-filled: {}".format(test_name, my_predbat.args["charge_rate"]))
+            failed = True
+        if len(my_predbat.args["discharge_rate"]) <= 1 or my_predbat.args["discharge_rate"][1] in (None, "", "number.real_discharge_rate"):
+            print("ERROR: {} discharge_rate slot for inverter 1 was not auto-filled: {}".format(test_name, my_predbat.args["discharge_rate"]))
+            failed = True
+    finally:
+        for key, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+
+    return failed
+
+
 def test_low_power_mode_entity_not_created_for_rest_driven_power_inverter(test_name, my_predbat):
     """
     Companion to test_low_power_mode_entity_created_for_script_driven_power_inverter - a genuinely
@@ -3254,6 +3296,7 @@ def run_inverter_tests(my_predbat_dummy):
     # dummy entity, unlike genuinely REST-driven "power" inverters (GE with givtcp_rest set)
     failed |= test_low_power_mode_entity_created_for_script_driven_power_inverter("low_power_entity_created_script_driven", my_predbat)
     failed |= test_low_power_mode_entity_not_clobbered_when_already_configured("low_power_entity_not_clobbered", my_predbat)
+    failed |= test_low_power_mode_entity_filled_for_partial_multi_inverter_list("low_power_entity_partial_multi_inverter", my_predbat)
     failed |= test_low_power_mode_entity_not_created_for_rest_driven_power_inverter("low_power_entity_not_created_rest_driven", my_predbat)
     if failed:
         return failed
