@@ -5376,6 +5376,28 @@ class Plan:
         plan = self.sort_window_by_time(plan)
         return plan
 
+    def car_slot_is_away(self, start, end):
+        """
+        Is the car marked as away for any part of this slot?
+
+        manual_car_away is a per-slot override saying the car will not be plugged in - out at the
+        shops, at work, anywhere. Predbat cannot tell that in advance: car_charging_planned reports
+        whether the car is plugged in now, so the plan happily schedules an afternoon charge for a car
+        that will not be there, and only discovers otherwise when the afternoon arrives.
+
+        Overlap rather than an exact start match, so an away marker suppresses any window it touches
+        rather than only one that happens to begin on the same minute.
+
+        Args:
+        - start, end: absolute minutes of the slot, half-open
+
+        Returns:
+        - bool: True when the car is away for any part of it
+        """
+        if not self.manual_car_away_times:
+            return False
+        return any((start < away + self.plan_interval_minutes) and (end > away) for away in self.manual_car_away_times)
+
     def car_solar_load_forecast(self):
         """
         Build the central-case house load forecast used to size solar car slots
@@ -5620,6 +5642,16 @@ class Plan:
 
             length = 0
             kwh = 0
+
+            # The car is not here, so nothing can go into it - not cheap import, not surplus solar.
+            # Tested before the have-enough check below so a skipped slot cannot end the loop: the
+            # charge it would have taken has to move to a slot the car is actually present for.
+            if self.car_slot_is_away(start, end):
+                continue
+
+            # Stop once we have enough charge, allow small margin for rounding
+            if (car_soc + 0.1) >= self.car_charging_limit[car_n]:
+                break
 
             # Enough charge for what this window is allowed to deliver. Skip rather than stop: solar
             # windows come first and reach higher, so a later bought window may still owe the minimum

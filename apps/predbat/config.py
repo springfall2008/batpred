@@ -1386,6 +1386,17 @@ CONFIG_ITEMS = [
         "manual": True,
     },
     {
+        "name": "manual_car_away",
+        "friendly_name": "Manual car away",
+        "type": "select",
+        "options": ["off"],
+        "icon": "mdi:car-off",
+        "default": "off",
+        "restore": False,
+        "manual": True,
+        "enable": "num_cars",
+    },
+    {
         "name": "manual_import_rates",
         "friendly_name": "Manual import rates",
         "type": "select",
