@@ -5475,6 +5475,44 @@ class Plan:
             total += surplus * overlap / step
         return total
 
+    def car_solar_reserved_for_car(self, load_step, car_n=0):
+        """
+        Surplus the car needs from the slots it will actually be present for, in kWh
+
+        The battery-priority hold assumes the car can catch up later, which is only true while the car
+        is going to be there. Mark the afternoon away and the morning becomes the car's last chance,
+        so banking it for a battery that has the whole day to fill is the wrong way round - and at a
+        100% priority level the car would never see a solar window at all.
+
+        Returns what the car still needs, capped by what the present slots can actually deliver, so
+        the hold gives up exactly that much and no more. Zero when no away time is set, which leaves
+        the everyday behaviour untouched.
+
+        Args:
+        - load_step: house load forecast, as used for the surplus calculation
+        - car_n: which car
+
+        Returns:
+        - float: kWh to keep back for the car, 0.0 when there is nothing to reserve
+        """
+        if not self.manual_car_away_times or car_n >= self.num_cars:
+            return 0.0
+        needed = self.car_charging_limit[car_n] - self.car_charging_soc[car_n]
+        if needed <= 0:
+            return 0.0
+        available = 0.0
+        rate_limit = self.car_charging_rate[car_n] * self.plan_interval_minutes / 60.0
+        start_minute = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
+        for minute in range(start_minute, self.minutes_now + self.forecast_minutes, self.plan_interval_minutes):
+            slot_start = max(minute, self.minutes_now)
+            slot_end = minute + self.plan_interval_minutes
+            if slot_end <= slot_start or self.car_slot_is_away(slot_start, slot_end):
+                continue
+            available += min(self.car_solar_surplus_kwh(slot_start, slot_end, load_step), rate_limit)
+            if available >= needed:
+                return needed
+        return min(needed, available)
+
     def plan_car_charging_solar_windows(self, load_step=None):
         """
         Find the slots where forecast solar is worth diverting to the car
@@ -5515,6 +5553,11 @@ class Plan:
         # the pack as the held surplus fills it. Walking it forward means "full enough" is judged at the
         # time of each slot rather than from the SoC right now, so a pack that gets there mid-morning
         # releases the car mid-morning rather than holding all day.
+        # Surplus the car can only get from the slots it will be present for. The hold below gives up
+        # exactly this much, so away time moves the car's charge earlier instead of removing it: the
+        # battery still has the rest of the day, the car does not.
+        reserved_for_car = self.car_solar_reserved_for_car(load_step)
+        given_to_car = 0.0
         battery_priority_kwh = self.soc_max * min(max(self.car_charging_solar_battery_soc, 0), 100) / 100.0
         battery_estimate = self.soc_kw
         start_minute = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
@@ -5534,7 +5577,7 @@ class Plan:
             # The battery gets the surplus until it is predicted to reach the configured level. What it
             # cannot physically take in the slot is not held back - that would strand surplus that the
             # car could have used and the grid will otherwise buy at the midday rate.
-            if battery_estimate < battery_priority_kwh:
+            if battery_estimate < battery_priority_kwh and given_to_car >= reserved_for_car:
                 to_battery = min(
                     surplus_kwh,
                     battery_priority_kwh - battery_estimate,
@@ -5553,6 +5596,8 @@ class Plan:
                 continue
             # Price the slot at the export rate: solar sent to the car is not bought, it is export
             # given up, so that is its real cost and what the plan should show
+            # Count what this window hands over, so the hold resumes once the car's reserved share is met
+            given_to_car += min(surplus_kwh, self.car_charging_rate[0] * (slot_end - slot_start) / 60.0) if self.num_cars else 0.0
             windows.append({"start": minute, "end": slot_end, "average": export_rate, "solar": True, "power_kw": dp2(power_kw)})
 
         if slot_count:
