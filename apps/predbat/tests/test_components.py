@@ -240,6 +240,57 @@ def test_load_error_is_reported_as_a_component_error(my_predbat):
     return False
 
 
+class _FakeInverterComponent:
+    """Stand-in for an inverter component reporting a given error count and start state."""
+
+    def __init__(self, errors=0, api_started=True):
+        """Record the health this fake component should report back."""
+        self.count_errors = errors
+        self.api_started = api_started
+
+    def get_error_count(self):
+        """Errors recorded so far, as ComponentBase.get_error_count() reports them."""
+        return self.count_errors
+
+
+def test_inverter_source_status_lists_components_and_errors(my_predbat):
+    """inverter_source_status() names every configured inverter component and whether it is in error.
+
+    Issue #4990: on a Solis install with no inverter_type in apps.yaml, a SolisCloud comms failure
+    surfaced as "check the GivEnergy credentials" - the assumed inverter type was the only thing
+    Predbat could name. The window warnings now list the inverter components that really are
+    configured, so this is the data those messages are built from.
+    """
+    base = LoggingMockBase()
+    comps = Components(base)
+    # The reported case: still in its startup retry loop, so api_started is False, but errors have
+    # been counted - the count is what must be reported, or a live comms failure reads as "starting".
+    comps.components["solis"] = _FakeInverterComponent(errors=3, api_started=False)
+    comps.components["gecloud"] = _FakeInverterComponent()
+    comps.components["alphaess"] = _FakeInverterComponent(api_started=False)
+    comps.components["sunsynk"] = _FakeInverterComponent(errors=1)
+    # Failed to construct: inactive, so absent from inverter_source_names(), but exactly the
+    # component a user needs told about.
+    comps.components["fox"] = None
+    comps.component_errors["fox"] = "No module named 'foo'"
+    # Active but not an inverter source - must not be listed as one.
+    comps.components["storage"] = _FakeInverterComponent()
+
+    status = comps.inverter_source_status()
+
+    assert "Solis Cloud API (in error, 3 errors so far)" in status, status
+    assert "GivEnergy Cloud Direct (OK)" in status, status
+    assert "AlphaESS Cloud API (still starting, no data yet)" in status, status
+    assert "Sunsynk Cloud (in error, 1 error so far)" in status, status
+    assert "Fox API (failed to start: No module named 'foo')" in status, status
+    assert not [entry for entry in status if entry.startswith("Storage")], status
+    # Nothing configured at all must be an empty list, not a line claiming health.
+    assert Components(base).inverter_source_status() == [], "an unconfigured registry must report no inverter components"
+
+    print("✓ Test passed: inverter_source_status lists configured inverter components with their error state")
+    return False
+
+
 class _RecordingComponent:
     """Fake component that just records which events it received."""
 
@@ -336,6 +387,7 @@ def test_components_all(my_predbat):
         ("gecloud_data_no_warning_from_global_days_previous", test_gecloud_data_no_warning_from_global_days_previous, "days_previous alone must not trigger a GE Cloud Data warning"),
         ("gecloud_data_warns_when_actually_misconfigured", test_gecloud_data_warns_when_actually_misconfigured, "GE Cloud Data still warns once genuinely (partially) configured"),
         ("event_dispatch_respects_configured_prefix", test_event_dispatch_respects_configured_prefix, "event dispatch matches the configured prefix, not the literal word 'predbat' (#4939)"),
+        ("inverter_source_status_lists_components_and_errors", test_inverter_source_status_lists_components_and_errors, "configured inverter components are listed with whether each is in error (#4990)"),
     ]
 
     failed = []

@@ -1760,6 +1760,95 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
     return failed
 
 
+class _FakeInverterComponent:
+    """Stand-in for a registered inverter component with a given error count and start state."""
+
+    def __init__(self, errors=0, api_started=True):
+        """Record the health this fake component should report back."""
+        self.count_errors = errors
+        self.api_started = api_started
+
+    def get_error_count(self):
+        """Errors recorded so far, as ComponentBase.get_error_count() reports them."""
+        return self.count_errors
+
+
+def test_window_warning_names_components_when_type_unset(test_name, my_predbat, dummy_items):
+    """
+    Issue #4990: a Solis Cloud comms failure must not be reported as a GivEnergy credential problem.
+
+    inverter_type defaults to GE when apps.yaml does not set it, and on a Solis install it is
+    automatic_config() that sets it - which only runs once discovery has succeeded. So a SolisCloud
+    outage at startup leaves the type at the GE default, and the window-read warnings then tell a
+    Solis owner to "check the GivEnergy credentials", naming hardware they do not own and a
+    credential they cannot have got wrong.
+
+    With the type merely assumed the message must instead say so and list the inverter components
+    that ARE configured, with whether each is in error. An explicitly configured GE keeps the
+    original credentials wording: there the type is the user's own statement about their hardware.
+    """
+    from components import Components
+
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_args = {key: my_predbat.args.pop(key, None) for key in ("inverter_type", "charge_start_time", "charge_end_time", "discharge_start_time", "discharge_end_time")}
+    original_components = my_predbat.components
+    dummy_items["switch.scheduled_charge_enable"] = "on"
+
+    def restore():
+        """Restore the config and registry this test mutated so later tests are unaffected."""
+        my_predbat.components = original_components
+        for key, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+
+    def run_update(component_name, component):
+        """Register one inverter component, run a full update with no window data, return the status."""
+        my_predbat.components = Components(my_predbat)
+        my_predbat.components.components[component_name] = component
+        inv = Inverter(my_predbat, 0)
+        inv.sleep = dummy_sleep
+        inv.inv_has_charge_enable_time = True
+        inv.rest_api = None
+        inv.rest_data = None
+        my_predbat.current_status = ""
+        inv.update_status(my_predbat.minutes_now)
+        return my_predbat.current_status or ""
+
+    try:
+        # Case 1: inverter_type absent, Solis component registered and erroring - the reported case.
+        status = run_update("solis", _FakeInverterComponent(errors=3, api_started=False))
+        if "GivEnergy credentials" in status:
+            print(f"ERROR: {test_name} - an assumed inverter type must not send a Solis owner to check GivEnergy credentials, got: {status}")
+            failed = True
+        if "no inverter_type is set" not in status:
+            print(f"ERROR: {test_name} - status should say inverter_type was never set, got: {status}")
+            failed = True
+        if "Solis Cloud API" not in status:
+            print(f"ERROR: {test_name} - status should list the configured inverter component, got: {status}")
+            failed = True
+        if "in error, 3 errors so far" not in status:
+            print(f"ERROR: {test_name} - status should say whether the listed component is in error, got: {status}")
+            failed = True
+
+        # Case 2: inverter_type explicitly configured - the credentials wording is still right.
+        my_predbat.args["inverter_type"] = ["GE"]
+        status = run_update("gecloud", _FakeInverterComponent())
+        if "check the GivEnergy credentials" not in status:
+            print(f"ERROR: {test_name} - a configured GE type should still name its credentials, got: {status}")
+            failed = True
+        if "no inverter_type is set" in status:
+            print(f"ERROR: {test_name} - inverter_type was set, so the status must not claim otherwise, got: {status}")
+            failed = True
+    finally:
+        restore()
+
+    return failed
+
+
 def test_export_window_no_source_configured_raises(test_name, my_predbat, dummy_items):
     """With no source configured at all this is a real apps.yaml gap and must still raise.
 
@@ -3556,6 +3645,7 @@ charge_start_service:
     failed |= test_charge_window_ge_cloud_configured_but_no_data_yet("charge_window_ge_cloud_configured_but_no_data_yet", my_predbat, dummy_items)
     failed |= test_export_window_ge_cloud_configured_but_no_data_yet("export_window_ge_cloud_configured_but_no_data_yet", my_predbat, dummy_items)
     failed |= test_export_window_no_source_configured_raises("export_window_no_source_configured_raises", my_predbat, dummy_items)
+    failed |= test_window_warning_names_components_when_type_unset("window_warning_names_components_when_type_unset", my_predbat, dummy_items)
     if failed:
         return failed
 

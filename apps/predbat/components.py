@@ -997,6 +997,44 @@ class Components:
         """The display names of every active inverter component, for user-facing messages."""
         return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False)]
 
+    def inverter_source_status(self):
+        """
+        Every configured inverter component paired with whether it is currently in error.
+
+        The name of an inverter type is not much help when nobody chose it: with inverter_type
+        absent from apps.yaml the only thing Predbat can name is the assumed GE default, which on
+        the Solis install in #4990 read as "check the GivEnergy credentials". What the user needs
+        instead is which inverter components they actually have configured and which of those is
+        failing, so a component-level fault is reported as a component-level fault.
+
+        Components that failed to construct are included even though they are inactive, and so
+        absent from inverter_source_names(): a component that never loaded is precisely the one
+        worth telling the user about.
+        """
+        status = []
+        for name, component_info in COMPONENT_LIST.items():
+            if not component_info.get("inverter", False):
+                continue
+            load_error = self.component_errors.get(name, None)
+            component = self.components.get(name, None)
+            if load_error:
+                state = "failed to start: {}".format(load_error)
+            elif not component:
+                continue
+            else:
+                # Counted errors first: a component that is retrying its startup has never set
+                # api_started, so "still starting" would hide a comms failure that is already
+                # being reported. getattr keeps this working for components that predate the flag.
+                errors = self.get_error_count(name) or 0
+                if errors:
+                    state = "in error, {} error{} so far".format(errors, "s" if errors != 1 else "")
+                elif not getattr(component, "api_started", True):
+                    state = "still starting, no data yet"
+                else:
+                    state = "OK"
+            status.append("{} ({})".format(component_info["name"], state))
+        return status
+
     def get_all(self):
         all_components = [name for name in self.components.keys()]
         return all_components
