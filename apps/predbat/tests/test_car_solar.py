@@ -20,8 +20,8 @@ power, because a charge-on-solar charger modulates to whatever is spare. set_hou
 makes that testable: it drives the load forecast directly instead of through the fixture's history.
 """
 
-from const import PREDICT_STEP
-from utils import dp2
+from const import PREDICT_STEP, EXPORT_MODE_TARGET
+from utils import dp2, export_mode_of
 from tests.test_infra import reset_inverter, reset_rates, update_rates_import, update_rates_export
 from prediction import Prediction
 
@@ -461,6 +461,64 @@ def test_solar_battery_priority_level(my_predbat):
     return failed
 
 
+def test_away_moves_solar_earlier(my_predbat):
+    """Away time makes the battery-priority hold yield, so the car charges while it is still here.
+
+    The hold assumes the car can catch up later, which stops being true the moment the afternoon is
+    marked away - and at a 100% priority level the car would otherwise never see a solar window at
+    all. Reported from a live system: marking the afternoon away made the car charge from the grid
+    at 30p instead of moving to the morning sun.
+    """
+    print("  - test_away_moves_solar_earlier")
+    failed = False
+    setup_car(my_predbat, car_kwh=30.0, ready_ahead=1200, rate=7.0, house_kw=1.0)
+    reset_rates(my_predbat, 30.0, 5.0)
+    my_predbat.car_charging_solar = True
+    my_predbat.soc_max = 27.0
+    my_predbat.soc_kw = 0.0
+    my_predbat.battery_rate_max_charge = 10.0 / 60.0
+    my_predbat.battery_rate_max_scaling = 1.0
+    my_predbat.car_charging_solar_battery_soc = 100
+    set_pv(my_predbat, 8.0, start_offset=120, length=480)
+    low_rates = [{"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": 30.0} for n in range(40)]
+    update_rates_import(my_predbat, low_rates)
+
+    my_predbat.manual_car_away_times = []
+    baseline = [slot for slot in my_predbat.plan_car_charging(0, low_rates) if slot.get("solar")]
+    if not baseline:
+        print("ERROR: expected some solar charging with no away markers")
+        return True
+    baseline_first = baseline[0]["start"] - my_predbat.minutes_now
+
+    # Mark the afternoon away - the car's remaining chances are all in the morning
+    my_predbat.manual_car_away_times = [my_predbat.minutes_now + m for m in range(300, 600, 30)]
+    plan = my_predbat.plan_car_charging(0, low_rates)
+    solar = [slot for slot in plan if slot.get("solar")]
+
+    if not solar:
+        print("ERROR: away time removed solar charging entirely instead of moving it earlier")
+        failed = True
+    else:
+        moved_to = solar[0]["start"] - my_predbat.minutes_now
+        if moved_to >= baseline_first:
+            print("ERROR: solar should start earlier than {} once the afternoon is away, got {}".format(baseline_first, moved_to))
+            failed = True
+
+    for slot in plan:
+        if my_predbat.car_slot_is_away(slot["start"], slot["end"]):
+            print("ERROR: planned a slot the car is away for: {}-{}".format(slot["start"], slot["end"]))
+            failed = True
+
+    # With no away time set the hold is untouched, which is the everyday case
+    my_predbat.manual_car_away_times = []
+    if my_predbat.car_solar_reserved_for_car(my_predbat.car_solar_load_forecast()) != 0.0:
+        print("ERROR: nothing should be reserved for the car when no away time is set")
+        failed = True
+
+    my_predbat.car_charging_solar_battery_soc = 0
+    return failed
+
+
 def test_solar_windows_ignore_ready_time(my_predbat):
     """Solar windows run to the forecast horizon, so a morning ready time does not exclude daylight."""
     print("  - test_solar_windows_ignore_ready_time")
@@ -531,7 +589,9 @@ def run_car_export_tradeoff(my_predbat, export_rate, from_battery, car_kwh=8.0):
     my_predbat.optimise_all_windows(result[0], result[8])
 
     final = my_predbat.run_prediction(my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=end_record, save="best")
-    exported = bool(my_predbat.export_limits_best) and my_predbat.export_limits_best[0] < 100
+    # Export limits are a packed structure since #5047, so ask the accessor rather than comparing the
+    # raw value - a tuple is not less than 100, and reading it as one silently reports "did not export"
+    exported = bool(my_predbat.export_limits_best) and export_mode_of(my_predbat.export_limits_best[0]) == EXPORT_MODE_TARGET
     return exported, final[1] + final[2]
 
 
@@ -600,6 +660,7 @@ def run_car_solar_tests(my_predbat):
         "car_charging_now",
         "car_charging_solar",
         "car_charging_solar_excess",
+        "manual_car_away_times",
         "car_charging_solar_battery_soc",
         "battery_rate_max_charge",
         "battery_rate_max_scaling",
@@ -622,6 +683,7 @@ def run_car_solar_tests(my_predbat):
         failed |= test_solar_slot_size_follows_surplus(my_predbat)
         failed |= test_solar_slot_capped_by_charger(my_predbat)
         failed |= test_solar_battery_priority_level(my_predbat)
+        failed |= test_away_moves_solar_earlier(my_predbat)
         if failed:
             return failed
         failed |= test_car_export_tradeoff(my_predbat)
