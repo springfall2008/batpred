@@ -1064,10 +1064,27 @@ class Execute:
         self.publish_inverter_config()
         return True
 
+    def is_template_mode(self):
+        """
+        True while the apps.yaml template is unedited ('Template: True'), so the plan must not run
+        """
+        return self.get_arg("template", False)
+
     def quick_inverter_data_update(self):
         """
         Quick update of inverter data for dashboard
         """
+        # While template mode is set update_pred() early-returns before fetch_config_options(), so
+        # the attributes update_status() reads (e.g. inverter_clock_skew_discharge_start) were
+        # never created - running it would AttributeError every cycle, and for inverters without
+        # has_charge_enable_time it would reach write_and_poll_switch("scheduled_charge_enable")
+        # and write the real device with no plan in place (#4965)
+        if self.is_template_mode():
+            # fetch_inverter_data() and the plan run never stamp this in template mode, so without
+            # a stamp here the 120s throttle in update_pred() would pass on every tick of
+            # update_time_loop instead of once per INVERTER_QUICK_UPDATE_SECONDS
+            self.inverter_data_last_fetch = datetime.now()
+            return False
         if self.inverters is None:
             return False
         # Its own control-ledger cycle. This runs every 120s and reaches update_status(), which
