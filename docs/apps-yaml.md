@@ -2339,6 +2339,14 @@ Skews the setting of the charge slot registers vs the predicted start time
 
 Skews the setting of the discharge slot registers vs the predicted start time
 
+Predbat compares the inverter's own clock against the computer clock on every update and reports the result in the log
+(`Inverter time ..., Predbat computer time ..., difference N minutes`). None of the `inverter_clock_skew_*` settings are
+applied automatically, so if that difference is 5 minutes or more Predbat also logs a `Warn:` line, repeated at most once
+an hour per inverter, reminding you to correct the inverter clock or to compensate for it with the settings above.
+At 30 minutes or more the warning becomes an error and Predbat will trigger your `auto_restart` commands if configured.
+An uncorrected skew shifts the start and end of every charge and export slot Predbat writes, which typically shows up as
+unexpected grid import at the edges of each window.
+
 ### Battery size scaling
 
 ```yaml

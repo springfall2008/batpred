@@ -23,7 +23,20 @@ import time
 import pytz
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
-from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, EXPORT_LIMIT_IDLE, INVERTER_WRITE_POLL_INTERVAL, INVERTER_WRITE_POLL_MAX_INTERVAL
+from const import (
+    MINUTE_WATT,
+    TIME_FORMAT,
+    TIME_FORMAT_OCTOPUS,
+    INVERTER_TEST,
+    TIME_FORMAT_SECONDS,
+    INVERTER_MAX_RETRY,
+    EXPORT_LIMIT_IDLE,
+    INVERTER_WRITE_POLL_INTERVAL,
+    INVERTER_WRITE_POLL_MAX_INTERVAL,
+    INVERTER_CLOCK_SKEW_RESTART_MINUTES,
+    INVERTER_CLOCK_SKEW_WARN_MINUTES,
+    INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES,
+)
 from control_ledger import generation_from_state, OWNED, UNOWNED
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
 
@@ -137,6 +150,36 @@ class Inverter:
             self.sleep(step)
             waited += step
             delay = min(delay * 2, INVERTER_WRITE_POLL_MAX_INTERVAL)
+
+    def check_clock_skew(self, tdiff, now_utc):
+        """
+        Act on the measured inverter clock skew in minutes, warning (and restarting) on a large skew and warning periodically on a moderate one
+        """
+        skew_message = "Inverter time is {}, Predbat computer time {}, this is {} minutes skewed".format(self.inverter_time, now_utc, tdiff)
+
+        if abs(tdiff) >= INVERTER_CLOCK_SKEW_RESTART_MINUTES:
+            message = "Warn: {}, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(skew_message)
+            self.base.log(message)
+            self.base.record_status(message, had_errors=True)
+            # Trigger restart
+            self.auto_restart("Clock skew >={} minutes".format(INVERTER_CLOCK_SKEW_RESTART_MINUTES))
+            return
+
+        # Below the restart threshold nothing is restarted, but a steady moderate skew still shifts every
+        # charge and export slot Predbat writes, so say so periodically rather than every cycle (#4989)
+        self.base.restart_active = False
+        if abs(tdiff) >= INVERTER_CLOCK_SKEW_WARN_MINUTES:
+            last_warn = self.base.clock_skew_warn_time.get(self.id, None)
+            if (last_warn is None) or ((now_utc - last_warn) >= timedelta(minutes=INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES)):
+                self.base.clock_skew_warn_time[self.id] = now_utc
+                self.base.log(
+                    "Warn: Inverter {} {}. This is below the {} minute restart threshold but will still shift every charge and export slot Predbat writes - correct the inverter clock, or compensate for it with inverter_clock_skew_start/inverter_clock_skew_end and inverter_clock_skew_discharge_start/inverter_clock_skew_discharge_end in apps.yaml".format(
+                        self.id, skew_message, INVERTER_CLOCK_SKEW_RESTART_MINUTES
+                    )
+                )
+        else:
+            # Back within tolerance, forget the last warning so a recurrence is reported promptly
+            self.base.clock_skew_warn_time.pop(self.id, None)
 
     def auto_restart(self, reason):
         """
@@ -416,22 +459,7 @@ class Inverter:
             tdiff = dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
             if not quiet:
                 self.base.log("Inverter time {}, Predbat computer time {}, difference {} minutes".format(self.inverter_time, now_utc, tdiff))
-            if abs(tdiff) >= 30:
-                self.base.log(
-                    "Warn: Inverter time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
-                        self.inverter_time, now_utc, tdiff
-                    )
-                )
-                self.base.record_status(
-                    "Warn: Inverter time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
-                        self.inverter_time, now_utc, tdiff
-                    ),
-                    had_errors=True,
-                )
-                # Trigger restart
-                self.auto_restart("Clock skew >=10 minutes")
-            else:
-                self.base.restart_active = False
+            self.check_clock_skew(tdiff, now_utc)
 
         # Get the expected minimum reserve value for the current inverter
         reserve_min_postfix = "" if self.id == 0 else "_" + str(self.id)
