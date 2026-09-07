@@ -32,11 +32,11 @@ index dc41a05..a650649 100644
 +                            full_hysteresis_active=self.battery_full_hysteresis_active,
                          )
                          new_charge_rate = int(new_charge_rate * MINUTE_WATT)
- 
+
 @@ -867,6 +868,42 @@ class Execute:
          self.inverter_needs_reset = False
          self.inverter_needs_reset_force = ""
- 
+
 +    def update_battery_full_hysteresis(self):
 +        """
 +        Track whether the battery has recently reached 100% SoC and has not yet dropped below the
@@ -81,7 +81,7 @@ index dc41a05..a650649 100644
          self.reserve_percent = calc_percent_limit(self.reserve, self.soc_max)
          self.reserve_current_percent = calc_percent_limit(self.reserve_current, self.soc_max)
 +        self.update_battery_full_hysteresis()
- 
+
          if self.debug_enable:
              self.log(
 diff --git a/apps/predbat/fetch.py b/apps/predbat/fetch.py
@@ -110,7 +110,7 @@ index 62f0455..13aac97 100644
 +            full_hysteresis_active=(calc_percent_limit(soc, self.soc_max) >= 100.0),
          )
          return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
- 
+
 @@ -2593,6 +2597,7 @@ class Output:
                  "version": THIS_VERSION_DISPLAY,
                  "error": (had_errors or self.had_errors),
@@ -118,7 +118,7 @@ index 62f0455..13aac97 100644
 +                "battery_full_hysteresis_active": self.battery_full_hysteresis_active,
              },
          )
- 
+
 diff --git a/apps/predbat/predbat.py b/apps/predbat/predbat.py
 index 2845610..c05e34f 100644
 --- a/apps/predbat/predbat.py
@@ -146,7 +146,7 @@ index 17aca26..187c971 100644
              self.best_soc_keep_weight = base.best_soc_keep_weight
              self.best_soc_min = base.best_soc_min
 @@ -680,10 +682,22 @@ class Prediction(PredictionBatch):
- 
+
          # Simulate each forward minute
          minute = 0
 +        # Battery full hysteresis: seed from the real, live state (set on the base object from actual
@@ -175,7 +175,7 @@ index 17aca26..187c971 100644
 +                    full_hysteresis_active=full_hysteresis_active,
                  )
                  charge_rate_now_curve_step = charge_rate_now_curve * step
- 
+
 diff --git a/apps/predbat/prediction_kernel.cpp b/apps/predbat/prediction_kernel.cpp
 index 1f71f63..945c292 100644
 --- a/apps/predbat/prediction_kernel.cpp
@@ -194,7 +194,7 @@ index 1f71f63..945c292 100644
      double iboost_rate_threshold;
      double iboost_rate_threshold_export;
 +    double battery_soc_full_hysteresis; // % SoC must drop below 100 before charging resumes; 0 = feature off
- 
+
      int32_t n_steps;
      int32_t minutes_now;
 @@ -229,6 +230,7 @@ struct PkContext {
@@ -203,7 +203,7 @@ index 1f71f63..945c292 100644
      int32_t has_iboost_plan;
 +    int32_t battery_full_hysteresis_active; // seed state: 1 if the real battery is currently within the hysteresis band
  };
- 
+
  // Per-scenario inputs; field order MUST match the ctypes Structure in prediction_kernel.py.
 @@ -698,6 +700,11 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
      int32_t iboost_running = 0;
@@ -214,13 +214,13 @@ index 1f71f63..945c292 100644
 +    // find_charge_rate's early-return clamp to battery_rate_min while active.
 +    const double battery_soc_full_hysteresis = c->battery_soc_full_hysteresis;
 +    bool full_hysteresis_active = battery_soc_full_hysteresis > 0.0 && c->battery_full_hysteresis_active != 0;
- 
+
      // Battery behaviour - prediction.py:501-521
      const double inverter_loss = c->inverter_loss;
 @@ -731,6 +738,18 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
          const int32_t minute_absolute = minute + c->minutes_now;
          double reserve_expected = reserve;
- 
+
 +        // Battery full hysteresis - mirrors prediction.py's per-minute update, evaluated before the
 +        // step's own charge-rate computation so it applies to this step immediately if it is the one
 +        // where soc first reaches (or drops below) the threshold.
@@ -252,19 +252,19 @@ index 1f71f63..945c292 100644
 +                charge_rate_now_curve = rate_curve_pct(soc_percent_round1, battery_rate_max_charge_combined, battery_rate_max_charge_combined, c->temp_charge_cap[k], c->charge_curve, battery_rate_min) * battery_rate_max_scaling;
 +            }
              charge_rate_now_curve_step = charge_rate_now_curve * step;
- 
+
              battery_draw = -std::max({std::min(charge_rate_now_curve_step, std::max(charge_limit_n - soc, pv_now)), 0.0, -battery_to_max});
 diff --git a/apps/predbat/prediction_kernel.py b/apps/predbat/prediction_kernel.py
 index 371fae6..775e4b3 100644
 --- a/apps/predbat/prediction_kernel.py
 +++ b/apps/predbat/prediction_kernel.py
 @@ -32,7 +32,7 @@ from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in
- 
+
  # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
  KERNEL_ABI_VERSION = 5
 -KERNEL_PARITY_REVISION = 10
 +KERNEL_PARITY_REVISION = 11
- 
+
  # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
  KERNEL_MAX_CARS = PREDBAT_MAX_CARS
 @@ -106,6 +106,7 @@ class PkContext(ctypes.Structure):
@@ -281,14 +281,14 @@ index 371fae6..775e4b3 100644
          ("has_iboost_plan", ctypes.c_int32),
 +        ("battery_full_hysteresis_active", ctypes.c_int32),
      ]
- 
- 
+
+
 @@ -689,6 +691,7 @@ def create_kernel_context(pred, static_cache=None):
          ctx.iboost_min_soc = pred.iboost_min_soc
          ctx.iboost_rate_threshold = pred.iboost_rate_threshold
          ctx.iboost_rate_threshold_export = pred.iboost_rate_threshold_export
 +        ctx.battery_soc_full_hysteresis = pred.battery_soc_full_hysteresis
- 
+
          ctx.n_steps = n_steps
          ctx.minutes_now = minutes_now
 @@ -719,6 +722,7 @@ def create_kernel_context(pred, static_cache=None):
@@ -296,7 +296,7 @@ index 371fae6..775e4b3 100644
          ctx.has_rate_gas = 1 if pred.rate_gas else 0
          ctx.has_iboost_plan = 1 if pred.iboost_plan else 0
 +        ctx.battery_full_hysteresis_active = 1 if pred.battery_full_hysteresis_active else 0
- 
+
          handle = lib.pk_context_create(ctypes.byref(ctx))
          if handle:
 diff --git a/apps/predbat/unit_test.py b/apps/predbat/unit_test.py
@@ -350,7 +350,7 @@ index 4f6b679..c2c6010 100644
 @@ -1257,6 +1264,11 @@ def find_charge_rate(
      if current_charge_rate is None:
          current_charge_rate = max_rate
- 
+
 +    if full_hysteresis_active:
 +        if log_to:
 +            log_to("Battery full hysteresis active: SoC recently reached 100%, holding charge current at minimum until it drops through the hysteresis band")
@@ -358,7 +358,7 @@ index 4f6b679..c2c6010 100644
 +
      battery_temperature_curve_tuple = charge_curve_to_tuple(battery_temperature_curve)
      battery_charge_power_curve_tuple = charge_curve_to_tuple(battery_charge_power_curve)
- 
+
 diff --git a/docs/customisation.md b/docs/customisation.md
 index 51f34e7..231fd02 100644
 --- a/docs/customisation.md
@@ -366,7 +366,7 @@ index 51f34e7..231fd02 100644
 @@ -462,6 +462,14 @@ explains how the low-power charging works and shows how Predbat automatically cr
  **input_number.predbat_charge_low_power_margin** (requires **switch.predbat_set_charge_low_power** to be turned On) Controls how many minutes before the completion time to target finishing charging,
  this defaults to 10 but can be changed between 0 and 30.
- 
+
 +**input_number.predbat_battery_soc_full_hysteresis** (_expert_mode_) Some inverters clamp their maximum charge current to (near) zero once the
 +battery reaches 100% SoC, and will not resume accepting charge current until the SoC has dropped a few percent below full - even though Predbat's
 +own target SoC is still set to 100%. Left at its default of 0 this has no effect. Set it to the drop (in %) your inverter requires before it will
@@ -377,7 +377,7 @@ index 51f34e7..231fd02 100644
 +
  **switch.predbat_set_reserve_enable** (_expert_mode_) When turned On (the default) the battery reserve setting is used to hold the battery charge level
  once it has been reached or to protect against discharging beyond the set limit.
- 
+
 diff --git a/apps/predbat/tests/test_battery_full_hysteresis.py b/apps/predbat/tests/test_battery_full_hysteresis.py
 new file mode 100644
 index 0000000..33b47c8
