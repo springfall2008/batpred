@@ -10,7 +10,9 @@ mocked - nothing here touches a real repo, GitHub, or Claude Code session.
 import fnmatch
 import json
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -1706,8 +1708,25 @@ class PushGuardHookTests(DaemonPathsTestCase):
         hook = Path(self.tmp_dir.name) / "pre-push"
         hook.write_text(triage_daemon.PUSH_GUARD_HOOK)
         hook.chmod(0o755)
+        cmd = [str(hook)]
+        if sys.platform == "win32":
+            sh = shutil.which("sh") or shutil.which("bash")
+            if not sh:
+                git_bin = shutil.which("git")
+                if git_bin:
+                    candidate = Path(git_bin).resolve().parents[1] / "bin" / "sh.exe"
+                    if candidate.exists():
+                        sh = str(candidate)
+                    else:
+                        candidate = Path(git_bin).resolve().parents[1] / "usr" / "bin" / "sh.exe"
+                        if candidate.exists():
+                            sh = str(candidate)
+            if sh:
+                cmd = [sh, str(hook)]
+            else:
+                self.skipTest("No sh/bash found to run shell hook on Windows")
         return subprocess.run(
-            [str(hook)],
+            cmd,
             input=f"refs/heads/local abc123 {remote_ref} def456\n",
             capture_output=True,
             text=True,
