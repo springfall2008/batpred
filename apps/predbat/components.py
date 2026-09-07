@@ -632,6 +632,7 @@ COMPONENT_LIST = {
             "site_id": {"required": False, "secret": True, "config": "teslemetry_site_id"},
             "base_url": {"required": False, "config": "teslemetry_base_url", "default": "https://api.teslemetry.com"},
             "automatic": {"required": False, "default": False, "config": "teslemetry_automatic"},
+            "tbc_control": {"required": False, "default": False, "config": "teslemetry_tbc_control"},
             "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
             "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
             "token_hash": {"required": False, "secret": True, "config": "teslemetry_token_hash"},
@@ -885,22 +886,50 @@ class Components:
     Pass through events to the appropriate component
     """
 
+    def _entity_matches_filter(self, entity_id, event_filter):
+        """
+        Match an incoming HA event's entity_id against a COMPONENT_LIST entry's event_filter.
+
+        Every event_filter literal is written as "predbat_<component>_" for readability
+        (components.py:144 onwards), but the entities themselves are built from the user's
+        configured prefix (self.base.prefix, e.g. Fox's f"{self.prefix}_fox_..."), not the literal
+        word "predbat". Matching the literal directly meant any install with a non-default prefix
+        never matched anything, so no event from any of the 19 components ever reached its
+        handler - entity writes appeared to be accepted (the toggle press logs) but the
+        component's own state never updated, and nothing was ever sent onward to the inverter
+        (#4939). Swap the leading "predbat" for the real prefix before matching instead.
+
+        This is called for every select/switch/number service event in the whole HA instance
+        (userinterface.py's select_event/switch_event/number_event pass every entity_id through,
+        not just Predbat's own), so the match is anchored to the start of the object_id - the
+        part after the domain's "." - rather than a substring search of the whole entity_id.
+        Otherwise a short or common prefix could accidentally match an unrelated entity whose
+        object_id merely contains the same characters partway through: prefix "bat" turns the
+        filter into "bat_fox_", which an unanchored search would also match inside
+        "select.acrobat_fox_...", an entity with nothing to do with this Fox component (#4939
+        review).
+        """
+        if event_filter.startswith("predbat_"):
+            event_filter = self.base.prefix + event_filter[len("predbat") :]
+        _, _, object_id = entity_id.partition(".")
+        return object_id.startswith(event_filter)
+
     async def select_event(self, entity_id, value):
         for component_name, component in self.components.items():
             event_filter = COMPONENT_LIST[component_name].get("event_filter", None)
-            if component and event_filter and (event_filter in entity_id):
+            if component and event_filter and self._entity_matches_filter(entity_id, event_filter):
                 await component.select_event(entity_id, value)
 
     async def switch_event(self, entity_id, service):
         for component_name, component in self.components.items():
             event_filter = COMPONENT_LIST[component_name].get("event_filter", None)
-            if component and event_filter and (event_filter in entity_id):
+            if component and event_filter and self._entity_matches_filter(entity_id, event_filter):
                 await component.switch_event(entity_id, service)
 
     async def number_event(self, entity_id, value):
         for component_name, component in self.components.items():
             event_filter = COMPONENT_LIST[component_name].get("event_filter", None)
-            if component and event_filter and (event_filter in entity_id):
+            if component and event_filter and self._entity_matches_filter(entity_id, event_filter):
                 await component.number_event(entity_id, value)
 
     def is_all_alive(self):

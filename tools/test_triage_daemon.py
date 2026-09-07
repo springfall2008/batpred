@@ -9,6 +9,7 @@ mocked - nothing here touches a real repo, GitHub, or Claude Code session.
 
 import fnmatch
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -16,6 +17,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import triage_daemon
+
+
+# What `gh pr list --json number` prints once the flush has opened its PR. The flush reads
+# this to decide whether the queue may be consumed, so the tests need both shapes.
+OPENED_PR_JSON = '[{"number": 4980}]'
 
 
 def bash_rule_matches(rule, command):
@@ -412,7 +418,9 @@ class PermissionModelTests(unittest.TestCase):
         self.assertTrue(base.issubset(pr))
 
     def test_pr_allowed_tools_adds_exactly_the_expected_entries(self):
-        """The only additions are add/commit/push/pr-create/pre-commit."""
+        """The only additions are add/commit/push/pr-create/pre-commit. The push entries are
+        enumerated per branch prefix rather than a bare `git push*`: an unscoped grant is what
+        let a cleanup run push to upstream main on 2026-09-06."""
         base = set(triage_daemon.ALLOWED_TOOLS.split(","))
         pr = set(triage_daemon.ALLOWED_TOOLS_PR.split(","))
         self.assertEqual(
@@ -420,12 +428,17 @@ class PermissionModelTests(unittest.TestCase):
             {
                 "Bash(git add*)",
                 "Bash(git commit*)",
-                "Bash(git push*)",
+                "Bash(git push)",
+                "Bash(git push origin fix/*)",
+                "Bash(git push -u origin fix/*)",
+                "Bash(git push origin feat/*)",
+                "Bash(git push -u origin feat/*)",
                 "Bash(gh pr create*)",
                 "Bash(./run_pre_commit*)",
                 "Bash(./run_pre_commit)",
             },
         )
+        self.assertNotIn("Bash(git push*)", pr)
 
     def test_pr_disallowed_tools_still_blocks_force_push_variants(self):
         """Even though the PR flow can push, force-push stays denied - defense in depth
@@ -655,11 +668,14 @@ class PermissionModelTests(unittest.TestCase):
             {
                 "Bash(git add*)",
                 "Bash(git commit*)",
-                "Bash(git push*)",
+                "Bash(git push)",
                 "Bash(./run_pre_commit*)",
                 "Bash(./run_pre_commit)",
             }.issubset(cleanup)
         )
+        # Only the bare form: `gh pr checkout` has already set the branch's upstream, so
+        # cleanup never needs to name a remote or a ref.
+        self.assertNotIn("Bash(git push*)", cleanup)
 
     def test_cleanup_is_the_only_flow_granted_git_merge(self):
         """git merge is only needed to sync a checked-out PR branch with main - no
@@ -1681,13 +1697,169 @@ class CleanupPrTests(DaemonPathsTestCase):
         self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
 
 
+class PushGuardHookTests(DaemonPathsTestCase):
+    """The clone's pre-push hook - the only layer that sees what a ref expression resolves
+    to, and therefore the only one that actually stops a push to main."""
+
+    def _run_hook(self, remote_ref):
+        """Feed the hook one ref update on stdin exactly as git does, return its exit code."""
+        hook = Path(self.tmp_dir.name) / "pre-push"
+        hook.write_text(triage_daemon.PUSH_GUARD_HOOK)
+        hook.chmod(0o755)
+        return subprocess.run(
+            [str(hook)],
+            input=f"refs/heads/local abc123 {remote_ref} def456\n",
+            capture_output=True,
+            text=True,
+        )
+
+    def test_refuses_a_push_to_main(self):
+        """The 2026-09-06 incident: `git push origin HEAD:main` reaches the hook as a plain
+        `refs/heads/main` remote ref, whatever it was spelled as on the command line."""
+        result = self._run_hook("refs/heads/main")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("refusing to update main", result.stderr)
+
+    def test_allows_a_push_to_any_other_branch(self):
+        """The bot's whole job is pushing branches; only main is off limits."""
+        for ref in ("refs/heads/fix/thing-4975", "refs/heads/bot/debug-journal-2026-09-07", "refs/heads/maintenance"):
+            with self.subTest(ref=ref):
+                self.assertEqual(self._run_hook(ref).returncode, 0)
+
+    def test_sync_repo_installs_the_hook_before_every_flow(self):
+        """`.git/hooks` is untracked, so `git clean -fd` never restores it and a hook removed
+        by hand would stay removed. Rewriting it each sync is what makes it dependable."""
+        (triage_daemon.CLONE_DIR / ".git" / "hooks").mkdir(parents=True, exist_ok=True)
+        with patch("triage_daemon.subprocess.run"):
+            triage_daemon.sync_repo()
+        hook = triage_daemon.CLONE_DIR / ".git" / "hooks" / "pre-push"
+        self.assertTrue(hook.exists())
+        self.assertTrue(os.access(hook, os.X_OK))
+
+    def test_install_push_guard_overwrites_a_tampered_hook(self):
+        """A run that neutered the hook must not have that survive into the next flow."""
+        hooks = triage_daemon.CLONE_DIR / ".git" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        (hooks / "pre-push").write_text("#!/bin/sh\nexit 0\n")
+        triage_daemon.install_push_guard()
+        self.assertEqual((hooks / "pre-push").read_text(), triage_daemon.PUSH_GUARD_HOOK)
+
+
+class PushToMainPermissionTests(unittest.TestCase):
+    """No flow that can push may push to main. Deny rules are belt and braces with the hook:
+    they stop the attempt earlier and fail with a legible reason."""
+
+    MAIN_SPELLINGS = (
+        "git push origin main",
+        "git push -u origin main",
+        "git push origin HEAD:main",
+        "git push origin HEAD:refs/heads/main",
+        "git push origin refs/heads/main",
+        "git push --force origin main",
+    )
+
+    def _denied(self, flow, command):
+        rules = getattr(triage_daemon, f"DISALLOWED_TOOLS_{flow}").split(",")
+        return any(bash_rule_matches(rule, command) for rule in rules if rule.startswith("Bash("))
+
+    def _allowed(self, flow, command):
+        rules = getattr(triage_daemon, f"ALLOWED_TOOLS_{flow}").split(",")
+        return any(bash_rule_matches(rule, command) for rule in rules if rule.startswith("Bash("))
+
+    def test_no_flow_may_push_to_main(self):
+        """The regression: on 2026-09-06 a cleanup run pushed an unreviewed commit to upstream
+        main because the flow held an unscoped `Bash(git push*)` grant."""
+        for flow in ("PR", "CLEANUP", "JOURNAL"):
+            for command in self.MAIN_SPELLINGS:
+                with self.subTest(flow=flow, command=command):
+                    self.assertTrue(self._denied(flow, command))
+
+    def test_no_flow_may_skip_the_pre_push_hook(self):
+        """--no-verify would turn the hook off, which would leave nothing enforcing any of this."""
+        for flow in ("PR", "CLEANUP", "JOURNAL"):
+            for command in ("git push --no-verify", "git push --no-verify origin HEAD:main"):
+                with self.subTest(flow=flow, command=command):
+                    self.assertTrue(self._denied(flow, command))
+
+    def test_the_pr_flow_can_still_push_its_own_branches(self):
+        """Scoping the grant must not cost the flow its actual job."""
+        for command in ("git push", "git push -u origin fix/thing-4975", "git push -u origin feat/thing-4975", "git push origin fix/thing-4975"):
+            with self.subTest(command=command):
+                self.assertTrue(self._allowed("PR", command) and not self._denied("PR", command))
+
+    def test_the_cleanup_flow_gets_only_the_bare_push_its_skill_uses(self):
+        """`gh pr checkout` gives the branch an upstream, so cleanup never needs to name a
+        remote or a ref - and naming one is how the push to main was spelled."""
+        self.assertTrue(self._allowed("CLEANUP", "git push"))
+        for command in ("git push origin fix/thing-4975", "git push -u origin some-branch"):
+            with self.subTest(command=command):
+                self.assertFalse(self._allowed("CLEANUP", command))
+
+    def test_the_journal_flow_keeps_its_own_branch_grant(self):
+        """The narrowest grant of the three, and unaffected by the new denials."""
+        self.assertTrue(self._allowed("JOURNAL", "git push -u origin bot/debug-journal-2026-09-07"))
+        self.assertFalse(self._denied("JOURNAL", "git push -u origin bot/debug-journal-2026-09-07"))
+
+
+class ForkHeadCleanupTests(unittest.TestCase):
+    """A fork-head PR branch is not writable with this credential. Detecting that up front is
+    what stops a run discovering it mid-flight and improvising a different target."""
+
+    def test_detects_a_fork_head(self):
+        """The shape that led to the 2026-09-06 push to main."""
+        self.assertTrue(triage_daemon.pr_head_is_fork({"number": 4846, "headRepositoryOwner": {"login": "gcoan"}}))
+
+    def test_a_branch_in_this_repo_is_not_a_fork(self):
+        """The ordinary case must be unaffected."""
+        self.assertFalse(triage_daemon.pr_head_is_fork({"number": 4968, "headRepositoryOwner": {"login": "springfall2008"}}))
+
+    def test_missing_owner_is_not_treated_as_a_fork(self):
+        """Absent data should not silently disable the cleanup flow for every PR."""
+        for pr in ({"number": 1}, {"number": 2, "headRepositoryOwner": None}):
+            with self.subTest(pr=pr):
+                self.assertFalse(triage_daemon.pr_head_is_fork(pr))
+
+    def test_the_query_asks_for_the_head_owner(self):
+        """pr_head_is_fork() can only work if the field is actually fetched."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="[]")
+            triage_daemon.fetch_bot_cleanup_prs()
+            cmd = mock_run.call_args[0][0]
+        self.assertIn("headRepositoryOwner", cmd[cmd.index("--json") + 1])
+
+
+class ForkHeadSkipTests(unittest.TestCase):
+    """A fork-head PR is skipped with an explanation rather than attempted."""
+
+    def setUp(self):
+        """Patch every collaborator process_bot_cleanup_pr() calls."""
+        self.patches = {}
+        for name in ["sync_repo", "reset_scratch", "cleanup_pr", "remove_pr_cleanup_label", "mark_pr_cleanup_failed", "mark_pr_cleanup_unsupported"]:
+            patcher = patch.object(triage_daemon, name)
+            self.patches[name] = patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_a_fork_head_pr_is_never_checked_out_or_cleaned(self):
+        """Nothing should run against a PR whose fixes could not be pushed back anyway."""
+        triage_daemon.process_bot_cleanup_pr({"number": 4846, "title": "x", "headRepositoryOwner": {"login": "gcoan"}})
+        self.patches["sync_repo"].assert_not_called()
+        self.patches["cleanup_pr"].assert_not_called()
+        self.patches["mark_pr_cleanup_unsupported"].assert_called_once_with(4846)
+
+    def test_the_label_is_cleared_so_it_is_not_retried_every_poll(self):
+        """Left labelled, such a PR would be picked up on every cycle forever."""
+        triage_daemon.process_bot_cleanup_pr({"number": 4846, "title": "x", "headRepositoryOwner": {"login": "gcoan"}})
+        self.patches["remove_pr_cleanup_label"].assert_not_called()
+        self.patches["mark_pr_cleanup_unsupported"].assert_called_once()
+
+
 class ProcessBotCleanupPrTests(unittest.TestCase):
     """Tests for process_bot_cleanup_pr(), new - the BOT_CLEANUP orchestrator."""
 
     def setUp(self):
         """Patch every collaborator process_bot_cleanup_pr() calls."""
         self.patches = {}
-        for name in ["sync_repo", "reset_scratch", "cleanup_pr", "remove_pr_cleanup_label", "mark_pr_cleanup_failed"]:
+        for name in ["sync_repo", "reset_scratch", "cleanup_pr", "remove_pr_cleanup_label", "mark_pr_cleanup_failed", "mark_pr_cleanup_unsupported"]:
             patcher = patch.object(triage_daemon, name)
             self.patches[name] = patcher.start()
             self.addCleanup(patcher.stop)
@@ -1909,6 +2081,16 @@ class JournalPermissionTests(unittest.TestCase):
         edits = sorted(rule for rule in self._allowed() if rule.startswith("Edit("))
         self.assertEqual(edits, sorted([f"Edit({triage_daemon.JOURNAL_SCOPE})", f"Edit({triage_daemon.DICTIONARY_SCOPE})"]))
 
+    def test_the_journal_lives_outside_the_dot_claude_directory(self):
+        """Claude Code refuses the Edit and Write tools anywhere under `.claude/`, and no
+        allowlist entry overrides it - not an exact file path, not a clone-wide glob. While
+        the journal lived at `.claude/skills/issue-triage/references/debug-journal.md` every
+        flush verified its candidates and then found it could not write a byte, so the file
+        went unmaintained from 2026-09-05 until the move. Reads were never affected, which is
+        why the rest of the bot looked healthy."""
+        self.assertFalse(triage_daemon.JOURNAL_RELPATH.startswith(".claude/"))
+        self.assertIn(f"Edit({triage_daemon.JOURNAL_SCOPE})", self._allowed())
+
     def test_cannot_write_the_queue_it_reads(self):
         """The flush consumes candidates; it never needs to author one. Reading them comes
         from --add-dir, not from an Edit grant."""
@@ -1949,9 +2131,9 @@ class JournalFlushInvocationTests(DaemonPathsTestCase):
 
     def test_invokes_the_journal_update_skill_under_its_own_permission_set(self):
         with patch("triage_daemon.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            triage_daemon.flush_journal()
-            cmd = mock_run.call_args[0][0]
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.flush_journal("2026-09-07")
+            cmd = mock_run.call_args_list[0][0][0]
         self.assertIn("/journal-update", cmd[cmd.index("-p") + 1])
         self.assertEqual(cmd[cmd.index("--allowedTools") + 1], triage_daemon.ALLOWED_TOOLS_JOURNAL)
         self.assertEqual(cmd[cmd.index("--disallowedTools") + 1], triage_daemon.DISALLOWED_TOOLS_JOURNAL)
@@ -1960,9 +2142,9 @@ class JournalFlushInvocationTests(DaemonPathsTestCase):
         """The queue lives outside the clone, so the path has to be passed in and added to the
         session's directory scope for Read/Grep."""
         with patch("triage_daemon.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            triage_daemon.flush_journal()
-            cmd = mock_run.call_args[0][0]
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.flush_journal("2026-09-07")
+            cmd = mock_run.call_args_list[0][0][0]
         self.assertIn(str(triage_daemon.QUEUE_DIR), cmd[cmd.index("-p") + 1])
         self.assertIn(str(triage_daemon.QUEUE_DIR), cmd[cmd.index("--add-dir") + 1 :])
 
@@ -1980,8 +2162,8 @@ class JournalQueueArchiveTests(DaemonPathsTestCase):
         """Otherwise the next day folds the same findings in again."""
         self._queue("4931-a.md")
         with patch("triage_daemon.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            triage_daemon.flush_journal()
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.flush_journal("2026-09-07")
         self.assertEqual(triage_daemon.journal_queue_entries(), [])
 
     def test_a_failed_flush_leaves_the_queue_intact(self):
@@ -1990,16 +2172,46 @@ class JournalQueueArchiveTests(DaemonPathsTestCase):
         self._queue("4931-a.md")
         with patch("triage_daemon.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1)
-            triage_daemon.flush_journal()
+            triage_daemon.flush_journal("2026-09-07")
         self.assertEqual([p.name for p in triage_daemon.journal_queue_entries()], ["4931-a.md"])
 
     def test_consumed_findings_are_kept_not_deleted(self):
         """A candidate the flush decided to drop is still evidence of what was seen."""
         self._queue("4931-a.md")
         with patch("triage_daemon.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            triage_daemon.flush_journal()
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.flush_journal("2026-09-07")
         self.assertTrue((triage_daemon.QUEUE_DIR / "processed" / "4931-a.md").exists())
+
+    def test_a_blocked_flush_that_exits_zero_leaves_the_queue_intact(self):
+        """The regression that stalled the journal on 2026-09-07. `claude -p` denied the
+        permissions it needed, explained itself and exited 0, so the old exit-code check
+        archived three verified candidates having landed nothing - and the non-recursive
+        queue glob meant they were never offered to a later flush."""
+        self._queue("4965-a.md", "4967-b.md", "4973-c.md")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="[]")
+            triage_daemon.flush_journal("2026-09-07")
+        self.assertEqual([p.name for p in triage_daemon.journal_queue_entries()], ["4965-a.md", "4967-b.md", "4973-c.md"])
+        self.assertFalse((triage_daemon.QUEUE_DIR / "processed").exists())
+
+    def test_an_unreachable_github_does_not_archive(self):
+        """A failed lookup must not be read as "no PR needed". Leaving the queue costs one
+        re-verify tomorrow; archiving on a failed check loses the finding for good."""
+        self._queue("4931-a.md")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [MagicMock(returncode=0), MagicMock(returncode=1, stdout="")]
+            triage_daemon.flush_journal("2026-09-07")
+        self.assertEqual([p.name for p in triage_daemon.journal_queue_entries()], ["4931-a.md"])
+
+    def test_the_pr_is_looked_up_by_todays_journal_branch(self):
+        """The branch name is the only link between the flush and the PR it opened."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.journal_pr_opened("2026-09-07")
+            cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--head") + 1], "bot/debug-journal-2026-09-07")
+        self.assertEqual(cmd[cmd.index("--state") + 1], "all")
 
     def test_archived_findings_are_not_queued_again(self):
         """journal_queue_entries() must not recurse into the archive."""

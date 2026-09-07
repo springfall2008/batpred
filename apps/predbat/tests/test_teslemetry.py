@@ -59,6 +59,8 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.schedule_loaded = False
         self.automatic = False
         self.automatic_done = False
+        self.tbc_control = False
+        self._reserve_band_warned = False
         self.args_set = {}
         # OAuth state (production sets these via _init_oauth in initialize, which the mock bypasses).
         self.auth_method = "api_key"
@@ -79,8 +81,10 @@ class MockTeslemetryAPI(TeslemetryAPI):
         # guard returned False.
         self.base = SimpleNamespace(ha_interface=SimpleNamespace(set_state_external=self._capture_external), get_arg=lambda a, d=None, **k: d)
 
-    async def _capture_external(self, entity_id, state, attributes={}):
+    async def _capture_external(self, entity_id, state, attributes=None):
         """Capture set_state_external calls made against Predbat's own config entities."""
+        if attributes is None:
+            attributes = {}
         self.external_states[entity_id] = state
 
     @property
@@ -98,8 +102,10 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.dashboard_items[entity] = {"state": state, "attributes": attributes}
         self.entity_states[entity] = state
 
-    def set_state_wrapper(self, entity_id, state, attributes={}):
+    def set_state_wrapper(self, entity_id, state, attributes=None):
         """Capture entity state updates."""
+        if attributes is None:
+            attributes = {}
         self.entity_states[entity_id] = state
 
     def get_state_wrapper(self, entity_id=None, default=None, **kwargs):
@@ -667,6 +673,27 @@ def test_teslemetry_build_tariff_periods_partition_each_day():
             _assert_tou_periods_partition_day(day_periods)
 
 
+def test_teslemetry_build_tariff_export_window_ending_at_midnight_spares_tomorrow():
+    """An export window ending exactly at midnight must not price the whole of the next day at peak.
+
+    _boost_segments splits a midnight-wrapping window into a head on today and a tail on tomorrow. When
+    the window ends at 00:00 that tail is empty, and an empty [0, 0) segment renders as
+    fromHour/fromMinute/toHour/toMinute all zero - the same encoding _render_side uses for a period
+    running to the end of the day. Tomorrow would then carry a full-day ON_PEAK band, priced by
+    _boost_price at twice the highest real band, on top of its real bands."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    tariff = api.build_tariff((1380, 0), now_min=600)  # 23:00 -> 00:00, now 10:00
+    today_dow = api.base.now.weekday()
+    tomorrow_dow = (today_dow + 1) % 7
+    for tou_periods in (tariff["seasons"]["AllYear"]["tou_periods"], tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]):
+        boost_days = {day for day in range(7) for p in tou_periods.get("ON_PEAK", {"periods": []})["periods"] if p["fromDayOfWeek"] <= day <= p["toDayOfWeek"]}
+        assert boost_days == {today_dow}, "the boost belongs only to today's 23:00-24:00, not to tomorrow"
+        for day in range(7):
+            day_periods = {tier: {"periods": [p for p in block["periods"] if p["fromDayOfWeek"] <= day <= p["toDayOfWeek"]]} for tier, block in tou_periods.items()}
+            _assert_tou_periods_partition_day(day_periods)
+
+
 def test_teslemetry_build_tariff_consolidates_replicated_days():
     """Days sharing tomorrow's replicated pattern (issue #4346) collapse into ranged periods, not one
     per individual day - 6 near-identical days should render as at most 2 contiguous-day periods per
@@ -777,6 +804,250 @@ def test_teslemetry_quantise_in_range_excluded_price_no_keyerror():
     assert tier_at(17 * 60 + 10) == "ON_PEAK"  # the scheduled-export slot is boosted
 
 
+def _signal_tier_at(tariff, day, minute, sell=False):
+    """Return the tier name covering a minute on a day-of-week in a rendered signal tariff."""
+    seasons = tariff["sell_tariff"]["seasons"] if sell else tariff["seasons"]
+    for tier, block in seasons["AllYear"]["tou_periods"].items():
+        for period in block["periods"]:
+            if not (period["fromDayOfWeek"] <= day <= period["toDayOfWeek"]):
+                continue
+            start = period["fromHour"] * 60 + period["fromMinute"]
+            end = period["toHour"] * 60 + period["toMinute"]
+            if end == 0:
+                end = 1440
+            if start <= minute < end:
+                return tier
+    return None
+
+
+async def _record_tariff(pushed, tariff):
+    """Stand in for set_tariff, capturing the tariff that would have been sent."""
+    pushed["tariff"] = tariff
+    return True
+
+
+def test_teslemetry_signal_tariff_mirrors_every_day():
+    """The signal tariff writes one shape to all seven days, so no day-of-week logic is needed."""
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff((120, 300), (1020, 1140))  # charge 02:00-05:00, export 17:00-19:00
+    for day in range(7):
+        assert _signal_tier_at(tariff, day, 180) == "SUPER_OFF_PEAK"  # 03:00, inside the charge window
+        assert _signal_tier_at(tariff, day, 1080) == "ON_PEAK"  # 18:00, inside the export window
+        assert _signal_tier_at(tariff, day, 600) == "PARTIAL_PEAK"  # 10:00, outside both
+
+
+def test_teslemetry_signal_tariff_fixed_band_prices():
+    """Bands carry the fixed signal prices, with buy and sell equal inside both windows."""
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff((120, 300), (1020, 1140))
+    assert tariff["energy_charges"]["AllYear"]["rates"] == {"SUPER_OFF_PEAK": 0.0, "PARTIAL_PEAK": 0.5, "ON_PEAK": 1.0}
+    assert tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"] == {"SUPER_OFF_PEAK": 0.0, "PARTIAL_PEAK": 0.0, "ON_PEAK": 1.0}
+
+
+def test_teslemetry_signal_tariff_midnight_wrap_is_two_intervals():
+    """A window crossing midnight becomes two ranges on every day and still partitions the day."""
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff((1380, 300), None)  # charge 23:00 -> 05:00
+    for day in range(7):
+        assert _signal_tier_at(tariff, day, 1410) == "SUPER_OFF_PEAK"  # 23:30, before midnight
+        assert _signal_tier_at(tariff, day, 60) == "SUPER_OFF_PEAK"  # 01:00, after midnight
+        assert _signal_tier_at(tariff, day, 600) == "PARTIAL_PEAK"  # 10:00, outside
+        day_periods = {tier: {"periods": [p for p in block["periods"] if p["fromDayOfWeek"] <= day <= p["toDayOfWeek"]]} for tier, block in tariff["seasons"]["AllYear"]["tou_periods"].items()}
+        _assert_tou_periods_partition_day(day_periods)
+
+
+def test_teslemetry_signal_tariff_charge_window_ending_at_midnight_is_one_interval():
+    """A charge window ending exactly at midnight must carve only itself, not a spurious all-day band.
+
+    _window_intervals used to turn a (1380, 0) window into [(1380, 1440), (0, 0)]; the zero-length
+    (0, 0) tail renders as fromHour/fromMinute/toHour/toMinute 0,0,0,0, which is byte-identical to
+    this module's own end-of-day encoding, so it carved SUPER_OFF_PEAK across the whole day on every
+    day of the week (GH#4892 review). This guards both the partition invariant and the actual bands.
+    """
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff((1380, 0), None)  # charge 23:00 -> 00:00
+    for day in range(7):
+        assert _signal_tier_at(tariff, day, 1380) == "SUPER_OFF_PEAK"  # 23:00, inside the charge window
+        assert _signal_tier_at(tariff, day, 600) == "PARTIAL_PEAK"  # 10:00, outside - must stay base
+        day_periods = {tier: {"periods": [p for p in block["periods"] if p["fromDayOfWeek"] <= day <= p["toDayOfWeek"]]} for tier, block in tariff["seasons"]["AllYear"]["tou_periods"].items()}
+        _assert_tou_periods_partition_day(day_periods)
+
+
+def test_teslemetry_signal_tariff_export_window_ending_at_midnight_is_one_interval():
+    """The same midnight-tail bug on the export side must not carve a spurious all-day ON_PEAK band."""
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff(None, (1320, 0))  # export 22:00 -> 00:00
+    for day in range(7):
+        assert _signal_tier_at(tariff, day, 1320) == "ON_PEAK"  # 22:00, inside the export window
+        assert _signal_tier_at(tariff, day, 600) == "PARTIAL_PEAK"  # 10:00, outside - must stay base
+        day_periods = {tier: {"periods": [p for p in block["periods"] if p["fromDayOfWeek"] <= day <= p["toDayOfWeek"]]} for tier, block in tariff["seasons"]["AllYear"]["tou_periods"].items()}
+        _assert_tou_periods_partition_day(day_periods)
+
+
+def test_teslemetry_signal_tariff_is_independent_of_the_clock_and_rates():
+    """Same windows -> byte-identical tariff whatever the day, time or real rates.
+
+    This is the property that stops a re-push firing at every midnight rollover: the real-rate path
+    re-serialises differently once the day index moves, and the signal path must not.
+    """
+    import json
+    from datetime import datetime
+
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    first = json.dumps(api.build_signal_tariff((120, 300), (1020, 1140)), sort_keys=True)
+    api.base.now = datetime(2026, 7, 23, 3, 30)  # different weekday and time of day
+    api.base.rate_import = {minute: 9.0 for minute in range(0, 2880)}  # and different real rates
+    second = json.dumps(api.build_signal_tariff((120, 300), (1020, 1140)), sort_keys=True)
+    assert first == second
+
+
+def test_teslemetry_signal_tariff_without_windows_is_flat_base():
+    """With neither window committed there is nothing cheap and nothing at peak - only the base band."""
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff(None, None)
+    assert set(tariff["seasons"]["AllYear"]["tou_periods"]) == {"PARTIAL_PEAK"}
+    assert tariff["energy_charges"]["AllYear"]["rates"] == {"PARTIAL_PEAK": 0.5}
+    assert tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"] == {"PARTIAL_PEAK": 0.0}
+
+
+def test_teslemetry_charge_window_accessor():
+    """_charge_window mirrors _discharge_window: None unless enabled with a non-empty span."""
+    api = MockTeslemetryAPI()
+    api.schedule = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "enable": 0}}
+    assert api._charge_window() == (120, 300)
+    api.schedule["charge"]["enable"] = 0
+    assert api._charge_window() is None
+    api.schedule["charge"].update({"enable": 1, "end_time": "02:00:00"})
+    assert api._charge_window() is None
+
+
+def _tbc_api(charge=None, discharge=None, reserve=15):
+    """Build a mock API with a committed schedule for the signal-tariff state tests."""
+    api = MockTeslemetryAPI()
+    api.schedule = {
+        "reserve": reserve,
+        "charge": charge or {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": 0},
+        "discharge": discharge or {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "enable": 0},
+    }
+    return api
+
+
+def test_teslemetry_tbc_charging_below_target_enables_grid_at_the_real_reserve():
+    """Below the charge target the tariff does the work: grid charging on, reserve left where Predbat set it."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1})
+    assert api.evaluate_schedule_tbc(3 * 60, 40) == {"export_rule": "pv_only", "grid_charging": True, "reserve": 15, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_at_target_holds_with_reserve_100_and_no_grid():
+    """At target it holds: reserve 100 stops discharge, grid charging off stops it importing to reach it."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1})
+    assert api.evaluate_schedule_tbc(3 * 60, 90) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 100, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_hold_deadband_survives_a_one_percent_sag():
+    """A freeze charge whose SOC has sagged 1% below the written target still holds, rather than importing."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 85, "enable": 1})
+    assert api.evaluate_schedule_tbc(3 * 60, 84)["grid_charging"] is False
+    assert api.evaluate_schedule_tbc(3 * 60, 84)["reserve"] == 100
+    # Two points below the target is a real shortfall, not sensor sag, so charging resumes.
+    assert api.evaluate_schedule_tbc(3 * 60, 83)["grid_charging"] is True
+
+
+def test_teslemetry_tbc_export_uses_the_real_reserve_not_the_export_target():
+    """Exporting leaves reserve at the real reserve; the export target is advisory under this mode.
+
+    Reserve is not overloaded as an export floor here: Tesla decides how much to move, and window
+    length is the lever for the target, so writing the target as a floor would second-guess that.
+    """
+    api = _tbc_api(discharge={"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}, reserve=5)
+    state = api.evaluate_schedule_tbc(18 * 60, 60)
+    assert state == {"export_rule": "battery_ok", "grid_charging": False, "reserve": 5, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_export_stops_at_the_target():
+    """Once down to the target the export rule drops back to pv_only, reserve still the real reserve."""
+    api = _tbc_api(discharge={"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}, reserve=5)
+    assert api.evaluate_schedule_tbc(18 * 60, 20) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 5, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_demand_is_autonomous_with_no_grid_charging():
+    """Outside both windows: autonomous on the base band, real reserve, and no route to import."""
+    api = _tbc_api()
+    assert api.evaluate_schedule_tbc(12 * 60, 50) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 15, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_charge_wins_over_an_overlapping_export():
+    """Charge is tested first, matching execute.py and the real-rate path's own precedence."""
+    api = _tbc_api(
+        charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1},
+        discharge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 20, "enable": 1},
+    )
+    assert api.evaluate_schedule_tbc(3 * 60, 40)["grid_charging"] is True
+
+
+def test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off():
+    """Predbat's own reserve hold (soc+1) lands in the band Tesla rejects and must round UP, not down.
+
+    execute.py writes adjust_reserve(soc+1) under set_reserve_hold, so a battery at 85% asks for 86.
+    Snapping that to 80 would let it discharge 6% during a hold; 100 actually holds, and grid
+    charging off is what stops it importing to reach 100.
+    """
+    api = _tbc_api(reserve=86)
+    assert api.evaluate_schedule_tbc(12 * 60, 85) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 100, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_reserve_band_warning_logs_once():
+    """The 81-99 reserve-band diagnostic fires once per instance, not on every cycle, so a trial user
+    can see why grid charging is off without the log filling up with a repeat every 5 minutes."""
+    api = _tbc_api(reserve=86)
+    api.evaluate_schedule_tbc(12 * 60, 50)
+    api.evaluate_schedule_tbc(12 * 60, 50)
+    warnings = [msg for msg in api.log_messages if "81-99 band" in msg]
+    assert len(warnings) == 1
+    assert "86%" in warnings[0]
+
+
+def test_teslemetry_tbc_reserve_of_exactly_100_is_not_reported_as_the_rejected_band():
+    """A reserve of exactly 100 is honoured by the device, so it must neither log nor burn the one-shot
+    flag - doing so would both misreport 100 as rejected and silence the real 81-99 case afterwards,
+    which is the only case the diagnostic exists for. Predbat reaches 100 on its own: execute.py writes
+    adjust_reserve(min(soc_percent + 1, 100)), which is exactly 100 on a full battery."""
+    api = _tbc_api(reserve=100)
+    assert api.evaluate_schedule_tbc(12 * 60, 100)["reserve"] == 100
+    assert [msg for msg in api.log_messages if "81-99 band" in msg] == []
+    # The genuine band case must still be reported on the same instance afterwards.
+    api.schedule["reserve"] = 86
+    api.evaluate_schedule_tbc(12 * 60, 85)
+    warnings = [msg for msg in api.log_messages if "81-99 band" in msg]
+    assert len(warnings) == 1
+    assert "86%" in warnings[0]
+
+
+def test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window():
+    """A hold reserve inside a charge window must not import to fill to 100 against the 0p band."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, reserve=86)
+    state = api.evaluate_schedule_tbc(3 * 60, 40)
+    assert state["reserve"] == 100
+    assert state["grid_charging"] is False
+
+
+def test_teslemetry_tbc_never_writes_a_reserve_in_the_invalid_band():
+    """Tesla snaps 81-99 to 80, so no state may ask for a reserve in that band, whatever is committed.
+
+    Sweeps every reserve Predbat could write, in each of the three states, since the reserve is now
+    the single value that reaches the device from all of them.
+    """
+    for reserve in range(0, 101):
+        states = [
+            _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, reserve=reserve).evaluate_schedule_tbc(3 * 60, 40),
+            _tbc_api(discharge={"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}, reserve=reserve).evaluate_schedule_tbc(18 * 60, 60),
+            _tbc_api(reserve=reserve).evaluate_schedule_tbc(12 * 60, 50),
+        ]
+        for state in states:
+            assert state["reserve"] <= 80 or state["reserve"] == 100
+
+
 def test_teslemetry_day_runs_groups_replicated_days():
     """_day_runs() itself: 6 identical days plus 1 different day collapse to 2 runs, not 7 singletons."""
     api = MockTeslemetryAPI()
@@ -860,6 +1131,46 @@ def test_teslemetry_sync_tariff_read_only_no_push():
     api.base = SimpleNamespace(rate_import={m: 28.0 for m in range(2880)}, rate_export={m: 15.0 for m in range(2880)}, minutes_now=0, now=None, local_tz=None, get_arg=lambda a, d=None, **k: True if a == "set_read_only" else d)
     run_async(api.sync_tariff())
     assert not [r for r in api.requests_made if r[0] == "POST"]
+
+
+def test_teslemetry_tbc_control_defaults_off_and_uses_the_real_rate_tariff():
+    """With the trial setting off nothing changes: the real-rate builder is still what gets pushed."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.schedule = {"reserve": 15, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "enable": 0}}
+    assert api.tbc_control is False
+    pushed = {}
+    api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
+    run_async(api.sync_tariff())
+    # The real-rate path prices from rate_import, so a 28p flat import cannot render as the 0p/50p
+    # signal bands - asserting the absence of the signal shape rather than an exact legacy body.
+    assert pushed["tariff"]["energy_charges"]["AllYear"]["rates"] != {"SUPER_OFF_PEAK": 0.0, "PARTIAL_PEAK": 0.5, "ON_PEAK": 1.0}
+    assert api.evaluate_schedule(3 * 60, 40)["mode"] == "backup"
+
+
+def test_teslemetry_tbc_control_on_pushes_the_signal_tariff():
+    """With the trial setting on, the committed windows drive the signal bands and autonomous mode."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.tbc_control = True
+    api.schedule = {"reserve": 15, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}}
+    pushed = {}
+    api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
+    run_async(api.sync_tariff())
+    assert pushed["tariff"]["energy_charges"]["AllYear"]["rates"] == {"SUPER_OFF_PEAK": 0.0, "PARTIAL_PEAK": 0.5, "ON_PEAK": 1.0}
+    assert _signal_tier_at(pushed["tariff"], 0, 180) == "SUPER_OFF_PEAK"
+    assert _signal_tier_at(pushed["tariff"], 0, 1080) == "ON_PEAK"
+    assert api.evaluate_schedule(3 * 60, 40)["mode"] == "autonomous"
+
+
+def test_teslemetry_initialize_sets_tbc_control_from_component_arg():
+    """The component registry constructs the class as initialize(**arg_dict) with tbc_control taken
+    from apps.yaml; initialize must store that onto self, or the trial setting can be turned on in
+    apps.yaml and still have no effect, because getattr(self, "tbc_control", False) would never see it."""
+    api = MockTeslemetryAPI()
+    assert api.tbc_control is False
+    api.initialize(tbc_control=True)
+    assert api.tbc_control is True
 
 
 def _assert_tou_periods_partition_day(tou_periods):
@@ -1163,7 +1474,13 @@ def test_teslemetry_inverter_def_tesla():
 
 
 def test_teslemetry_component_registry_config():
-    """Component registry exposes the automatic arg, can_restart, and the schema accepts teslemetry_automatic."""
+    """Component registry exposes the automatic and tbc_control args, can_restart, and the schema accepts both.
+
+    tbc_control is asserted here, not just exercised behaviourally, because MockTeslemetryAPI.__init__
+    sets self.tbc_control directly - every behavioural test on this branch would still pass even if
+    components.py declared the arg under a different key, the same "fixture encodes the bug" shape
+    that already bit this branch once (GH#4892).
+    """
     from components import COMPONENT_LIST
     from config import APPS_SCHEMA
 
@@ -1171,8 +1488,11 @@ def test_teslemetry_component_registry_config():
     assert entry["args"]["automatic"]["config"] == "teslemetry_automatic"
     assert entry["args"]["automatic"]["default"] is False
     assert entry["args"]["automatic"]["required"] is False
+    assert entry["args"]["tbc_control"]["config"] == "teslemetry_tbc_control"
+    assert entry["args"]["tbc_control"]["default"] is False
     assert entry.get("can_restart") is True
     assert APPS_SCHEMA["teslemetry_automatic"] == {"type": "boolean"}
+    assert APPS_SCHEMA["teslemetry_tbc_control"] == {"type": "boolean"}
 
 
 def test_teslemetry_time_to_minutes():
@@ -2283,15 +2603,39 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_build_tariff_fallback_flat_when_no_rates()
     test_teslemetry_build_tariff_boost_clamps_above_high_rates()
     test_teslemetry_build_tariff_periods_partition_each_day()
+    test_teslemetry_build_tariff_export_window_ending_at_midnight_spares_tomorrow()
     test_teslemetry_build_tariff_consolidates_replicated_days()
     test_teslemetry_saving_session_spike_keeps_daily_shape()
     test_teslemetry_quantise_in_range_excluded_price_no_keyerror()
+    test_teslemetry_signal_tariff_mirrors_every_day()
+    test_teslemetry_signal_tariff_fixed_band_prices()
+    test_teslemetry_signal_tariff_midnight_wrap_is_two_intervals()
+    test_teslemetry_signal_tariff_charge_window_ending_at_midnight_is_one_interval()
+    test_teslemetry_signal_tariff_export_window_ending_at_midnight_is_one_interval()
+    test_teslemetry_signal_tariff_is_independent_of_the_clock_and_rates()
+    test_teslemetry_signal_tariff_without_windows_is_flat_base()
+    test_teslemetry_charge_window_accessor()
+    test_teslemetry_tbc_charging_below_target_enables_grid_at_the_real_reserve()
+    test_teslemetry_tbc_at_target_holds_with_reserve_100_and_no_grid()
+    test_teslemetry_tbc_hold_deadband_survives_a_one_percent_sag()
+    test_teslemetry_tbc_export_uses_the_real_reserve_not_the_export_target()
+    test_teslemetry_tbc_export_stops_at_the_target()
+    test_teslemetry_tbc_demand_is_autonomous_with_no_grid_charging()
+    test_teslemetry_tbc_charge_wins_over_an_overlapping_export()
+    test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off()
+    test_teslemetry_tbc_reserve_band_warning_logs_once()
+    test_teslemetry_tbc_reserve_of_exactly_100_is_not_reported_as_the_rejected_band()
+    test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window()
+    test_teslemetry_tbc_never_writes_a_reserve_in_the_invalid_band()
     test_teslemetry_day_runs_groups_replicated_days()
     test_teslemetry_day_runs_all_identical_single_run()
     test_teslemetry_set_tariff_posts_tou_settings()
     test_teslemetry_set_tariff_asserts_optimization_strategy_economics()
     test_teslemetry_sync_tariff_dedupes_unchanged()
     test_teslemetry_sync_tariff_pushes_on_window_change()
+    test_teslemetry_tbc_control_defaults_off_and_uses_the_real_rate_tariff()
+    test_teslemetry_tbc_control_on_pushes_the_signal_tariff()
+    test_teslemetry_initialize_sets_tbc_control_from_component_arg()
     test_teslemetry_sync_tariff_read_only_no_push()
     test_teslemetry_site_info_latches_without_nameplate_soc_max_from_live_status()
     test_teslemetry_run_site_info_latches_on_any_response()

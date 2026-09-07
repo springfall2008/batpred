@@ -30,6 +30,7 @@ import shutil
 import html as html_module
 import urllib.parse
 import traceback
+import bisect
 import threading
 import io
 from io import StringIO
@@ -248,6 +249,57 @@ def resolve_group_unit_and_name(entity_id, dashboard_values, live_unit=None, liv
         unit = live_unit or ""
         friendly_name = live_friendly_name or ""
     return unit or "(no unit)", friendly_name or entity_id
+
+
+def subtract_series(base, subtract, max_gap_seconds=300):
+    """Subtract one time series from another, matching on nearest time rather than on exact timestamp.
+
+    The two series come from different entities, which Home Assistant records independently - their
+    samples land a moment apart and prune_today() keys each result on its own source timestamp, so a
+    dict lookup by key misses essentially every time and silently subtracts nothing, leaving two
+    identical lines on the chart.
+
+    Nearest rather than most-recent-at-or-before: both are published in the same cycle, so the skew
+    between them is jitter rather than a real time difference, and it falls either way. Taking only
+    the earlier sample would pair a load reading with a car value from the previous cycle whenever the
+    jitter went the wrong way - visible the moment the car stops, where a stale reading would wipe out
+    the whole house figure for one point.
+
+    Clamped at zero: the two sensors run on their own cadences, so one can momentarily exceed the
+    other, and that has to read as nothing left rather than as negative power.
+
+    Matching is bounded by max_gap_seconds, one publish cycle. Beyond that the nearest sample is not
+    evidence of anything - a car sensor that stopped reporting hours ago would otherwise keep being
+    subtracted from every later point, wiping out the house figure for as long as it stayed away.
+
+    Args:
+    - base: {timestamp: value} to subtract from
+    - subtract: {timestamp: value} to subtract, may be empty
+    - max_gap_seconds: how far a sample may be from a base point and still count
+
+    Returns:
+    - dict: same keys as base, or empty when there is nothing to subtract
+    """
+    if not base or not subtract:
+        return {}
+    points = sorted((str2time(stamp), value) for stamp, value in subtract.items())
+    times = [point[0] for point in points]
+    result = {}
+    for stamp, value in base.items():
+        when = str2time(stamp)
+        index = bisect.bisect_left(times, when)
+        candidates = []
+        if index < len(points):
+            candidates.append(points[index])
+        if index > 0:
+            candidates.append(points[index - 1])
+        other = 0
+        if candidates:
+            nearest = min(candidates, key=lambda point: abs((point[0] - when).total_seconds()))
+            if abs((nearest[0] - when).total_seconds()) <= max_gap_seconds:
+                other = nearest[1]
+        result[stamp] = dp4(max(value - other, 0))
+    return result
 
 
 class WebInterface(ComponentBase):
@@ -3187,6 +3239,11 @@ chart.render();
         soc_kw_h0[now_str] = self.base.soc_kw
         soc_kw = self.get_entity_results(self.prefix + ".soc_kw")
         soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
+        # What earlier plans predicted for now, shifted forward by the horizon they were made at, so
+        # each lands on the moment it was forecasting and can be read straight against Actual.
+        soc_best_history = self.get_history_with_now_attrs(self.prefix + ".soc_kw_best", 7)
+        soc_kw_best_h1 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60)
+        soc_kw_best_h8 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8)
         soc_kw_best10 = self.get_entity_results(self.prefix + ".soc_kw_best10")
         soc_kw_base10 = self.get_entity_results(self.prefix + ".soc_kw_base10")
         charge_limit_kw = self.get_entity_results(self.prefix + ".charge_limit_kw")
@@ -3220,6 +3277,8 @@ chart.render();
                 {"name": "Best", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "4", "stroke_curve": "smooth", "color": "#eb2323"},
                 {"name": "Best10", "data": soc_kw_best10, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#cd23eb"},
                 {"name": "Actual", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8"},
+                {"name": "Predicted (+1h)", "data": soc_kw_best_h1, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#f5a442"},
+                {"name": "Predicted (+8h)", "data": soc_kw_best_h8, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#9b59b6"},
                 {"name": "Charge Limit Base", "data": charge_limit_kw, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#15eb8b"},
                 {
                     "name": "Charge Limit Best",
@@ -3482,6 +3541,18 @@ chart.render();
             load_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_power", 7, required=False))
             load_power = prune_today(load_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
 
+            # Car charging, and the house with it taken back out. load_power is whatever the inverter
+            # reports as house load, and on a charger inside the CT clamp that includes the car - while
+            # the ML forecast it is plotted against has the car subtracted out (car_charging_hold in
+            # load_ml_component). Comparing the two directly makes every charging session look like a
+            # forecast miss the model was never trying to make. Both series are shown rather than only
+            # the corrected one: the car draw is real and worth seeing, it just is not what the model
+            # is predicting. Absent when no charger is configured, in which case neither series is
+            # drawn and the chart is exactly as it was.
+            car_charging_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".car_charging_power", 7, required=False))
+            car_charging_power = prune_today(car_charging_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
+            load_power_no_car = subtract_series(load_power, car_charging_power)
+
             # Get ML predicted load energy (cumulative) and convert to power (kW)
             load_ml_forecast_energy = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
             load_ml_forecast_power = {}
@@ -3523,6 +3594,8 @@ chart.render();
 
             series_data = [
                 {"name": "Load Power (Actual)", "data": load_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kW"},
+                {"name": "Load Power (Actual, less car)", "data": load_power_no_car, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#2ca02c", "unit": "kW"},
+                {"name": "Car Charging Power", "data": car_charging_power, "opacity": "0.6", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e377c2", "unit": "kW"},
                 {"name": "Load Power (ML Predicted Future)", "data": load_ml_forecast_power, "opacity": "0.5", "stroke_width": "3", "chart_type": "area", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kW"},
                 {"name": "Load Power ML History", "data": power_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#eb2323"},
                 {"name": "Load Power ML History +1h", "data": power_today_h1, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#716d63"},

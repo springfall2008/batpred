@@ -1142,6 +1142,13 @@ def test_model_catalogue(my_predbat):
         return {"data": [{"id": "good/model", "name": "Good", "supported_parameters": ["tools", "temperature"], "context_length": 1000000}, {"id": "bad/model", "name": "Bad", "supported_parameters": ["temperature"]}]}
 
     agent._fetch_model_catalogue = fake_catalogue
+    # list_models() will not dial an endpoint no usable provider is configured for - see
+    # test_the_catalogue_is_not_fetched_with_no_provider_configured in test_chat.py - and this
+    # bare instance never reached initialize(), so it starts with none. Built by the real builder
+    # rather than hand-rolled, so the entry is the shape provider_ready() actually reads.
+    agent.providers = chat_module.build_providers({"openrouter": {"url": "https://openrouter.example/api/v1", "api_key": "test-key"}})
+    agent.active_provider = "openrouter"
+
     models = asyncio.run(agent.list_models())
     ids = [entry["id"] for entry in models]
     if "good/model" not in ids:

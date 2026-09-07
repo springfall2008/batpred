@@ -24,6 +24,13 @@ import asyncio
 import time
 import traceback
 
+# Components typically come up in milliseconds, so the previous 1s poll spent nearly all of a
+# start-up wait asleep after the component was already live. Polling ten times a second makes
+# start-up feel immediate for no meaningful cost - one cheap flag check per tick. The wait is
+# bounded by a monotonic deadline rather than by counting ticks, so `timeout` stays honest in
+# seconds however often the flag is checked.
+API_START_POLL_SECONDS = 0.1
+
 
 class ComponentBase(ABC):
     """
@@ -328,10 +335,12 @@ class ComponentBase(ABC):
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         return self.base.get_state_wrapper(entity_id, default=default, attribute=attribute, refresh=refresh, required_unit=required_unit, raw=raw)
 
-    def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
+    def set_state_wrapper(self, entity_id, state, attributes=None, required_unit=None):
+        if attributes is None:
+            attributes = {}
         return self.base.set_state_wrapper(entity_id, state, attributes=attributes, required_unit=required_unit)
 
-    async def set_state_external(self, entity_id, state, attributes={}):
+    async def set_state_external(self, entity_id, state, attributes=None):
         """Change one of Predbat's OWN entities as if a user had, updating its CONFIG_ITEMS value.
 
         Distinct from set_state_wrapper, which only writes the entity state: components use this when
@@ -339,6 +348,8 @@ class ComponentBase(ABC):
         for an AC-coupled Powerwall), where writing the state alone would move the displayed entity
         without changing the value the planner reads.
         """
+        if attributes is None:
+            attributes = {}
         return await self.base.ha_interface.set_state_external(entity_id, state, attributes=attributes)
 
     def call_notify(self, message):
@@ -355,10 +366,9 @@ class ComponentBase(ABC):
             bool: True if component started successfully, False if timeout
         """
         self.log(f"{self.__class__.__name__}: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < timeout:
-            time.sleep(1)
-            count += 1
+        deadline = time.monotonic() + timeout
+        while not self.api_started and time.monotonic() < deadline:
+            time.sleep(API_START_POLL_SECONDS)
         if not self.api_started:
             self.log(f"Warn: {self.__class__.__name__}: Failed to start")
             return False
