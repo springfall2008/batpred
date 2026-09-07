@@ -352,16 +352,29 @@ def coerce_watts(value):
 
 def parse_site_export_limit(limits):
     """
-    Read a site's enabled export power limit, in watts, from the GivEnergy site metadata.
+    Read a site's grid export power limit, in watts, from the GivEnergy site metadata.
 
-    The published API schema says a site carries import/export limits but not how an enabled
-    one is encoded, so every shape GivEnergy plausibly returns is accepted - a bare number, a
-    numeric string, or a nested object - and anything else is reported as not understood
-    rather than guessed at, leaving the configured/default limit in place.
+    The published API schema says a site carries import/export limits but not how one is
+    encoded, so every shape GivEnergy plausibly returns is accepted - a bare number, a numeric
+    string, or a nested object - and anything else is reported as not understood rather than
+    guessed at, leaving the configured/default limit in place.
+
+    The object's "enabled" flag is deliberately not treated as a gate. Live sites with export
+    limits set and applied in the GivEnergy portal report them as disabled anyway, for example
+    {"import": {"enabled": False, "power": {"watts": 23000, "amps": 100}},
+     "export": {"enabled": False, "power": {"watts": 6000, "amps": 26.1}}} on a site whose
+    export really is capped at 6kW off a 100A supply. So the power a limit states is the limit,
+    and the flag means something else. A site with no limit reports a null import/export
+    instead, which is what the published examples show.
+
+    A stated zero is treated as no limit rather than as a block on all exporting: nothing here
+    distinguishes a genuine zero-export connection from an unpopulated field, and inventing a
+    zero would stop Predbat exporting at all. Set export_limit: 0 in apps.yaml for a site that
+    really cannot export.
 
     Returns:
-        A (watts, reason) tuple. watts is a float when an enabled limit was found and None
-        otherwise, with reason saying why for the log.
+        A (watts, reason) tuple. watts is a float when a limit was found and None otherwise,
+        with reason saying why for the log.
     """
     if not isinstance(limits, dict):
         return None, "the site data carries no limits"
@@ -370,25 +383,20 @@ def parse_site_export_limit(limits):
     if export is None:
         return None, "the site has no export limit"
 
-    if not isinstance(export, dict):
-        watts = coerce_watts(export)
-        if watts is None:
-            return None, "the site export limit {} was not understood".format(export)
-        return watts, ""
+    if isinstance(export, dict):
+        power = export.get("power", None)
+        candidates = [power.get("watts", None), power.get("value", None)] if isinstance(power, dict) else [power]
+        candidates += [export.get("watts", None), export.get("value", None), export.get("limit", None)]
+    else:
+        candidates = [export]
 
-    enabled = export.get("enabled", True)
-    if isinstance(enabled, str):
-        enabled = enabled.strip().lower() not in ("false", "0", "no", "off", "")
-    if not enabled:
-        return None, "the site export limit is disabled"
-
-    power = export.get("power", None)
-    candidates = [power.get("watts", None), power.get("value", None)] if isinstance(power, dict) else [power]
-    candidates += [export.get("watts", None), export.get("value", None), export.get("limit", None)]
     for candidate in candidates:
         watts = coerce_watts(candidate)
-        if watts is not None:
-            return watts, ""
+        if watts is None:
+            continue
+        if watts == 0:
+            return None, "the site states a zero export limit, which is too ambiguous to apply; set export_limit: 0 explicitly if your site really cannot export"
+        return watts, ""
     return None, "the site export limit {} was not understood".format(export)
 
 
