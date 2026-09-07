@@ -352,27 +352,27 @@ def coerce_watts(value):
 
 def parse_site_export_limit(limits):
     """
-    Read a site's grid export power limit, in watts, from the GivEnergy site metadata.
+    Read a site's enforced grid export power limit, in watts, from the GivEnergy site metadata.
 
     The published API schema says a site carries import/export limits but not how one is
     encoded, so every shape GivEnergy plausibly returns is accepted - a bare number, a numeric
     string, or a nested object - and anything else is reported as not understood rather than
     guessed at, leaving the configured/default limit in place.
 
-    The object's "enabled" flag is deliberately not treated as a gate. Live sites with export
-    limits set and applied in the GivEnergy portal report them as disabled anyway, for example
-    {"import": {"enabled": False, "power": {"watts": 23000, "amps": 100}},
-     "export": {"enabled": False, "power": {"watts": 6000, "amps": 26.1}}} on a site whose
-    export really is capped at 6kW off a 100A supply. So the power a limit states is the limit,
-    and the flag means something else. A site with no limit reports a null import/export
-    instead, which is what the published examples show.
+    The object's "enabled" flag separates an enforced curtailment from a merely declared
+    connection capacity, and only an enforced one is applied - confirmed across a fleet survey.
+    A site reports its supply rating the same way it reports a limit, so
+    {"import": {"enabled": False, "power": {"watts": 46000, "amps": 200}},
+     "export": {"enabled": True, "power": {"watts": 4500, "amps": 19.6}}} is a 200A supply whose
+    export really is curtailed to 4.5kW, while a disabled export at 6kW is the connection's
+    declared capacity and no restriction on Predbat. A site with no limit at all reports a null
+    import/export, which is what the published examples show.
 
-    A stated zero is a real zero-export connection and is applied as one - a site with no limit
-    set reports a null import/export rather than a zero.
+    An enforced zero is a real zero-export connection and is applied as one.
 
     Returns:
-        A (watts, reason) tuple. watts is a float when a limit was found and None otherwise,
-        with reason saying why for the log.
+        A (watts, reason) tuple. watts is a float when an enforced limit was found and None
+        otherwise, with reason saying why for the log.
     """
     if not isinstance(limits, dict):
         return None, "the site data carries no limits"
@@ -382,6 +382,11 @@ def parse_site_export_limit(limits):
         return None, "the site has no export limit"
 
     if isinstance(export, dict):
+        enabled = export.get("enabled", True)
+        if isinstance(enabled, str):
+            enabled = enabled.strip().lower() not in ("false", "0", "no", "off", "")
+        if not enabled:
+            return None, "the site export limit is not enforced, so it states the connection capacity rather than a curtailment"
         power = export.get("power", None)
         candidates = [power.get("watts", None), power.get("value", None)] if isinstance(power, dict) else [power]
         candidates += [export.get("watts", None), export.get("value", None), export.get("limit", None)]

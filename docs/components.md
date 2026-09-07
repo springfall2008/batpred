@@ -523,14 +523,15 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 #### Site export limits (gecloud)
 
 Predbat reads your site's details from GivEnergy at startup, just after the device list,
-and publishes any grid export limit it finds as
+and publishes any enforced grid export limit it finds as
 `sensor.predbat_gecloud_<serial>_export_limit` alongside the other per-inverter sensors.
 The API key needs site read permission for this optional lookup; without it the sensor is
 simply not published and nothing else changes.
 
-The limit is taken from the power the site states, whatever its `enabled` flag says -
-sites with a limit set and applied report it as disabled anyway. A site with no limit
-reports none at all rather than a zero, so a stated zero is applied as a real zero-export
+Only an export limit GivEnergy reports as enabled is applied. A site describes its
+connection's declared capacity the same way it describes a curtailment, marked as
+disabled, and that is no restriction on what you may export. A site with no limit at all
+reports none rather than a zero, so an enforced zero is applied as a real zero-export
 connection.
 
 The site details are cached in Predbat's storage and re-read every 12 hours, so a restart
