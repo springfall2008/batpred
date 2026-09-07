@@ -628,6 +628,7 @@ COMPONENT_LIST = {
             "site_id": {"required": False, "secret": True, "config": "teslemetry_site_id"},
             "base_url": {"required": False, "config": "teslemetry_base_url", "default": "https://api.teslemetry.com"},
             "automatic": {"required": False, "default": False, "config": "teslemetry_automatic"},
+            "tbc_control": {"required": False, "default": False, "config": "teslemetry_tbc_control"},
             "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
             "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
             "token_hash": {"required": False, "secret": True, "config": "teslemetry_token_hash"},

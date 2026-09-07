@@ -2728,6 +2728,7 @@ APPS_SCHEMA = {
     "teslemetry_site_id": {"type": "string|string_list"},
     "teslemetry_base_url": {"type": "string", "empty": False},
     "teslemetry_automatic": {"type": "boolean"},
+    "teslemetry_tbc_control": {"type": "boolean"},
     "teslemetry_auth_method": {"type": "string", "empty": False},
     "teslemetry_token_expires_at": {"type": "string", "empty": False},
     "teslemetry_token_hash": {"type": "string", "empty": False},
