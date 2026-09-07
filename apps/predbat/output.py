@@ -1030,8 +1030,10 @@ class Output:
             pv_window_kwh=pv_window_kwh,
             # Cosmetic best-effort for this single display snapshot: the plan's own simulation already
             # suppresses charging (and so the soc trajectory) while hysteresis is genuinely active, this
-            # only catches the leading edge where soc is already sitting at 100% for this window.
-            full_hysteresis_active=(calc_percent_limit(soc, self.soc_max) >= 100.0),
+            # only catches the leading edge where soc is already sitting at 100% for this window. Precise
+            # float percent, not calc_percent_limit's rounding, for consistency with the simulation/live
+            # control's own precision (matters at sub-1% hysteresis settings).
+            full_hysteresis_active=((soc / self.soc_max * 100.0) >= 100.0 if self.soc_max > 0 else False),
         )
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
@@ -2597,7 +2599,11 @@ class Output:
                 "version": THIS_VERSION_DISPLAY,
                 "error": (had_errors or self.had_errors),
                 "error_count": error_count,
-                "battery_full_hysteresis_active": self.battery_full_hysteresis_active,
+                # Per-inverter dict (not just the fleet-wide aggregate) since each inverter's own BMS
+                # clamp is independent - Inverter.update_full_hysteresis() reads this same attribute
+                # back on restart, keyed by inverter id.
+                "battery_full_hysteresis_active": {str(inverter.id): getattr(inverter, "full_hysteresis_active", False) for inverter in self.inverters},
+                "battery_full_hysteresis_active_any": self.battery_full_hysteresis_active,
             },
         )
 

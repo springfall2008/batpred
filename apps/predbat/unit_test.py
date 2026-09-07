@@ -135,7 +135,14 @@ from tests.test_window import run_window_sort_tests, run_intersect_window_tests,
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
-from tests.test_battery_full_hysteresis import test_find_charge_rate_hysteresis_clamps_to_min, test_battery_full_hysteresis_state_machine, test_battery_full_hysteresis_restores_after_restart, test_battery_full_hysteresis_kernel_parity
+from tests.test_battery_full_hysteresis import (
+    test_find_charge_rate_hysteresis_clamps_to_zero,
+    test_get_charge_rate_curve_cached_hysteresis_clamps_to_zero,
+    test_inverter_full_hysteresis_state_machine,
+    test_inverter_full_hysteresis_restores_after_restart,
+    test_multi_inverter_full_hysteresis_independence,
+    test_battery_full_hysteresis_kernel_parity,
+)
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_times import run_test_manual_times
@@ -495,9 +502,11 @@ def main():
         ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
-        ("battery_full_hysteresis_clamp", test_find_charge_rate_hysteresis_clamps_to_min, "Battery full hysteresis clamps find_charge_rate to minimum", False),
-        ("battery_full_hysteresis_state", test_battery_full_hysteresis_state_machine, "Battery full hysteresis state machine transitions", False),
-        ("battery_full_hysteresis_restore", test_battery_full_hysteresis_restores_after_restart, "Battery full hysteresis restores state across a restart", False),
+        ("battery_full_hysteresis_clamp", test_find_charge_rate_hysteresis_clamps_to_zero, "Battery full hysteresis clamps find_charge_rate to zero", False),
+        ("battery_full_hysteresis_curve_clamp", test_get_charge_rate_curve_cached_hysteresis_clamps_to_zero, "Battery full hysteresis clamps the shared charge-rate curve function (covers PV/export charging paths too)", False),
+        ("battery_full_hysteresis_state", test_inverter_full_hysteresis_state_machine, "Battery full hysteresis per-inverter state machine transitions", False),
+        ("battery_full_hysteresis_restore", test_inverter_full_hysteresis_restores_after_restart, "Battery full hysteresis restores per-inverter state across a restart", False),
+        ("battery_full_hysteresis_multi_inverter", test_multi_inverter_full_hysteresis_independence, "Battery full hysteresis: one inverter full does not affect another inverter's state", False),
         ("battery_full_hysteresis_kernel_parity", test_battery_full_hysteresis_kernel_parity, "Battery full hysteresis: C++ kernel vs Python engine parity", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
         ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),

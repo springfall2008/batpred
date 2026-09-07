@@ -277,7 +277,7 @@ class Execute:
                             self.battery_temperature_charge_curve,
                             current_charge_rate=current_charge_rate / MINUTE_WATT,
                             pv_window_kwh=pv_window_kwh,
-                            full_hysteresis_active=self.battery_full_hysteresis_active,
+                            full_hysteresis_active=getattr(inverter, "full_hysteresis_active", False),
                         )
                         new_charge_rate = int(new_charge_rate * MINUTE_WATT)
 
@@ -868,40 +868,21 @@ class Execute:
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
 
-    def update_battery_full_hysteresis(self):
+    def update_battery_full_hysteresis_aggregate(self):
         """
-        Track whether the battery has recently reached 100% SoC and has not yet dropped below the
-        configured battery_soc_full_hysteresis band. Some inverters clamp their real max charge current
-        to (near) zero for the whole of this band regardless of the target SoC requested, so both the
-        plan simulation and the live charge rate control hold off charging while this is active rather
-        than commanding a rate the inverter will not actually deliver.
+        The plan simulation models one combined virtual battery (see the fleet-wide aggregation in
+        fetch_inverter_data below), so it cannot track each inverter's hysteresis state individually the
+        way live control now does (Inverter.update_full_hysteresis - each inverter's own BMS clamps
+        independently). As a conservative seed for the simulation's initial condition, treat the fleet as
+        hysteresis-active if ANY inverter currently is: this avoids the simulation planning a charge that
+        has already been proven impossible on at least one physical inverter, at the cost of being overly
+        cautious about the others - a known limitation of the single-combined-battery model shared with
+        the rest of the codebase, not something this setting can fully resolve on its own.
 
-        The active/inactive state must survive a restart (SoC does not reset to a known point when
-        Predbat restarts), so it is round-tripped as an attribute on the predbat.status sensor the same
-        way other cross-restart values (e.g. error_count) are - read back here on first use, then
-        re-published every cycle by publish_status_first/update_pred alongside the rest of that sensor's
-        attributes.
+        This is purely derived from the per-inverter flags (the source of truth, persisted individually
+        by each Inverter) - it is not itself restored from a sensor.
         """
-        hysteresis = self.battery_soc_full_hysteresis
-
-        if self.battery_full_hysteresis_active is None:
-            # First read since this process started - restore whatever was last published, defaulting to
-            # not-active if there is no prior state (e.g. first ever run) rather than assuming the worst.
-            restored = self.get_state_wrapper(self.prefix + ".status", attribute="battery_full_hysteresis_active", default=False)
-            self.battery_full_hysteresis_active = bool(restored)
-
-        if not hysteresis or self.soc_max <= 0:
-            self.battery_full_hysteresis_active = False
-            return
-
-        if self.soc_percent >= 100.0:
-            if not self.battery_full_hysteresis_active:
-                self.log("Battery full hysteresis: SoC reached 100%, holding off charging until it drops below {}%".format(dp2(100.0 - hysteresis)))
-            self.battery_full_hysteresis_active = True
-        elif self.soc_percent <= (100.0 - hysteresis):
-            if self.battery_full_hysteresis_active:
-                self.log("Battery full hysteresis: SoC dropped to {}%, resuming normal charging".format(self.soc_percent))
-            self.battery_full_hysteresis_active = False
+        self.battery_full_hysteresis_active = any(getattr(inverter, "full_hysteresis_active", False) for inverter in self.inverters)
         # Else: SoC is inside the hysteresis band - leave the existing state alone either way
 
     def fetch_inverter_data(self, create=True):
@@ -1072,7 +1053,7 @@ class Execute:
         self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
         self.reserve_percent = calc_percent_limit(self.reserve, self.soc_max)
         self.reserve_current_percent = calc_percent_limit(self.reserve_current, self.soc_max)
-        self.update_battery_full_hysteresis()
+        self.update_battery_full_hysteresis_aggregate()
 
         if self.debug_enable:
             self.log(

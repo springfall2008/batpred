@@ -43,7 +43,7 @@
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
 #define PK_ABI_VERSION 5
-#define PK_PARITY_REVISION 11
+#define PK_PARITY_REVISION 13
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_LIMIT_FREEZE 99.0 // const.py EXPORT_LIMIT_FREEZE
@@ -740,12 +740,15 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
         // Battery full hysteresis - mirrors prediction.py's per-minute update, evaluated before the
         // step's own charge-rate computation so it applies to this step immediately if it is the one
-        // where soc first reaches (or drops below) the threshold.
+        // where soc first reaches (or drops below) the threshold. Uses a precise float percent (not
+        // calc_percent_limit's integer rounding, which mirrors Python's round(soc,1)+int(+0.5) curve
+        // lookup convention but would make a sub-1% hysteresis band meaningless) - matches
+        // prediction.py's equivalent fix.
         if (battery_soc_full_hysteresis > 0.0) {
-            const int32_t soc_percent_now = calc_percent_limit(soc, soc_max);
-            if (soc_percent_now >= 100) {
+            const double soc_percent_now = (soc_max > 0.0) ? (soc / soc_max * 100.0) : 0.0;
+            if (soc_percent_now >= 100.0) {
                 full_hysteresis_active = true;
-            } else if (static_cast<double>(soc_percent_now) <= (100.0 - battery_soc_full_hysteresis)) {
+            } else if (soc_percent_now <= (100.0 - battery_soc_full_hysteresis)) {
                 full_hysteresis_active = false;
             }
         }
@@ -943,7 +946,12 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         // the percent at bucket edges so it is observable. The precomputed bucket boundaries give
         // the identical percent from a binary search, with no round_py in the loop at all.
         const int32_t soc_percent_round1 = soc >= 0.0 ? static_cast<int32_t>(std::upper_bound(soc_pct_threshold.begin() + 1, soc_pct_threshold.end(), soc) - (soc_pct_threshold.begin() + 1)) : percent_via_round(soc, soc_max);
-        double charge_rate_now_curve = rate_curve_pct(soc_percent_round1, charge_rate_now, battery_rate_max_charge, c->temp_charge_cap[k], c->charge_curve, battery_rate_min) * battery_rate_max_scaling;
+        // Battery full hysteresis applies to every charging path (PV self-consumption and export
+        // recapture here, not just the scheduled-window branch below), so it is applied at this one
+        // shared per-step charge-curve computation - mirrors get_charge_rate_curve_cached in utils.py.
+        // rate_curve_pct is also used for discharge (see below), so the clamp is applied at the call
+        // site rather than inside rate_curve_pct itself, which must stay charge/discharge-agnostic.
+        double charge_rate_now_curve = full_hysteresis_active ? 0.0 : rate_curve_pct(soc_percent_round1, charge_rate_now, battery_rate_max_charge, c->temp_charge_cap[k], c->charge_curve, battery_rate_min) * battery_rate_max_scaling;
         double charge_rate_now_curve_step = charge_rate_now_curve * step;
         double discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_discharge, c->temp_discharge_cap[k], c->discharge_curve, battery_rate_min) * battery_rate_max_scaling_discharge;
         double discharge_rate_now_curve_step = discharge_rate_now_curve * step;
@@ -986,7 +994,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                         reduce_by = reduce_by - battery_draw * inverter_loss;
                         if (inverter_hybrid) {
                             // Note: Python passes the un-rounded soc for the DC-rate lookup here
-                            const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
+                            const double charge_rate_now_curve_dc = full_hysteresis_active ? 0.0 : rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
                             const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step;
                             battery_draw = std::max({-reduce_by * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step});
                         } else {
@@ -1015,7 +1023,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                         reduce_by = reduce_by - battery_draw;
                         battery_draw = 0;
                         if (c->inverter_can_charge_during_export) {
-                            const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
+                            const double charge_rate_now_curve_dc = full_hysteresis_active ? 0.0 : rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
                             const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step;
                             battery_draw = std::max({-reduce_by, -battery_to_max, -charge_rate_now_curve_dc_step});
                         }
@@ -1053,11 +1061,13 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             }
             // find_charge_rate with set_charge_low_power off (always the case for scenario runs)
             // reduces to the max rate and its curve value - utils.py:1145,1237-1238
-            // Battery full hysteresis short-circuits find_charge_rate to battery_rate_min before that -
-            // utils.py find_charge_rate's early return when full_hysteresis_active.
+            // Battery full hysteresis short-circuits find_charge_rate to 0.0 before that - utils.py
+            // find_charge_rate's early return when full_hysteresis_active. Not battery_rate_min:
+            // that models a different, unrelated inverter quirk (trickle current even when
+            // commanded to 0), the opposite of what is being modelled here.
             if (full_hysteresis_active) {
-                charge_rate_now = battery_rate_min;
-                charge_rate_now_curve = battery_rate_min;
+                charge_rate_now = 0.0;
+                charge_rate_now_curve = 0.0;
             } else {
                 charge_rate_now = battery_rate_max_charge_combined;
                 charge_rate_now_curve = rate_curve_pct(soc_percent_round1, battery_rate_max_charge_combined, battery_rate_max_charge_combined, c->temp_charge_cap[k], c->charge_curve, battery_rate_min) * battery_rate_max_scaling;
@@ -1113,7 +1123,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 if (inverter_hybrid) {
                     const double charge_rate_now_dc = battery_rate_max_charge_dc;
                     // Note: Python passes the un-rounded soc for the DC-rate lookup here
-                    const double charge_rate_now_curve_dc = rate_curve(soc, charge_rate_now_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
+                    const double charge_rate_now_curve_dc = full_hysteresis_active ? 0.0 : rate_curve(soc, charge_rate_now_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
                     const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step * charge_rate_scale;
 
                     const double virtual_inverter_limit = inverter_limit + pv_now;
@@ -1139,7 +1149,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 if (diff < 0 && std::fabs(diff) > export_limit && c->inverter_can_charge_during_export && c->inverter_support_feedin_first) {
                     const double over_limit = std::fabs(diff) - export_limit;
                     if (inverter_hybrid) {
-                        const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
+                        const double charge_rate_now_curve_dc = full_hysteresis_active ? 0.0 : rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
                         const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step;
                         battery_draw = std::max({-over_limit * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step});
                     } else {

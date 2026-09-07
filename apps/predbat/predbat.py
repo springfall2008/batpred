@@ -353,7 +353,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.soc_percent = 0
         self.soc_max = 10.0
         self.battery_soc_full_hysteresis = 0
-        self.battery_full_hysteresis_active = None
+        # Derived each cycle in update_battery_full_hysteresis_aggregate() as True if ANY inverter's own
+        # (per-inverter, persisted) full_hysteresis_active flag is set - used only to seed the plan
+        # simulation's initial condition, since the simulation models one combined virtual battery and
+        # cannot track each inverter's hysteresis state individually. Live control uses each inverter's
+        # own flag directly (see inverter.py) rather than this aggregate.
+        self.battery_full_hysteresis_active = False
         self.battery_temperature = 20
         self.end_record = 24 * 60 * 2
         self.predict_soc = {}

@@ -155,6 +155,7 @@ class Inverter:
         self.soc_percent = 0
         self.soc_max = None
         self.nominal_capacity = None
+        self.full_hysteresis_active = None
         self.rest_data = None
         self.inverter_limit = 7500.0 / MINUTE_WATT
         self.export_limit = 99999.0 / MINUTE_WATT
@@ -1362,6 +1363,54 @@ class Inverter:
             self.base.set_state_wrapper(entity_id, state=value, attributes=attributes)
         return entity_id
 
+    def update_full_hysteresis(self):
+        """
+        Track whether THIS inverter has recently reached 100% SoC and has not yet dropped below the
+        configured battery_soc_full_hysteresis band. Some inverters clamp their real max charge current
+        to (near) zero for the whole of this band regardless of the target SoC requested - see
+        battery_soc_full_hysteresis in config.py/docs.
+
+        This is tracked per-inverter rather than against a fleet-wide combined SoC: in a multi-inverter
+        setup each inverter's own BMS clamps independently, so a fleet-average SoC could sit well inside
+        the safe range while one physical inverter has already hit its own 100% clamp (under-triggering
+        for that inverter), or the reverse (over-triggering on inverters that have not).
+
+        The active/inactive state must survive a restart (SoC does not reset to a known point when
+        Predbat restarts), so it is round-tripped as a per-inverter entry in a dict attribute on the
+        shared predbat.status sensor - read back here on first use, then re-published every cycle by
+        record_status() alongside the rest of that sensor's attributes.
+        """
+        hysteresis = self.base.battery_soc_full_hysteresis
+
+        if self.full_hysteresis_active is None:
+            # First read since this process started - restore whatever was last published for this
+            # inverter's id, defaulting to not-active if there is no prior state (e.g. first ever run)
+            # rather than assuming the worst.
+            restored_all = self.base.get_state_wrapper(self.base.prefix + ".status", attribute="battery_full_hysteresis_active", default={})
+            try:
+                self.full_hysteresis_active = bool(restored_all.get(str(self.id), False)) if isinstance(restored_all, dict) else False
+            except (AttributeError, TypeError):
+                self.full_hysteresis_active = False
+
+        if not hysteresis or self.soc_max <= 0:
+            self.full_hysteresis_active = False
+            return
+
+        # Precise float percent, not the integer-rounding calc_percent_limit() used for soc_percent
+        # elsewhere: hysteresis is configurable down to 0.5% steps, and rounding first would make
+        # anything finer than 1% meaningless and could shift the transition by up to 0.5% either way.
+        soc_percent_precise = self.soc_kw / self.soc_max * 100.0
+
+        if soc_percent_precise >= 100.0:
+            if not self.full_hysteresis_active:
+                self.log("Inverter {} battery full hysteresis: SoC reached 100%, holding off charging until it drops below {}%".format(self.id, dp2(100.0 - hysteresis)))
+            self.full_hysteresis_active = True
+        elif soc_percent_precise <= (100.0 - hysteresis):
+            if self.full_hysteresis_active:
+                self.log("Inverter {} battery full hysteresis: SoC dropped to {}%, resuming normal charging".format(self.id, dp2(soc_percent_precise)))
+            self.full_hysteresis_active = False
+        # Else: SoC is inside the hysteresis band - leave the existing state alone either way
+
     def update_status(self, minutes_now, quiet=False):
         """
         Update the following with inverter status.
@@ -1431,6 +1480,7 @@ class Inverter:
             self.soc_percent = 0
         else:
             self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
+        self.update_full_hysteresis()
 
         if self.rest_data and ("Power" in self.rest_data) and not self.base.get_arg("givtcp_rest_power_ignore", default=False, index=self.id):
             pdetails = self.rest_data["Power"]
