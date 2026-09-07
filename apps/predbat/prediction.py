@@ -106,7 +106,12 @@ class Prediction(PredictionBatch):
             self.calculate_export_on_pv = base.calculate_export_on_pv
             self.charge_low_power_margin = base.charge_low_power_margin
             self.car_charging_slots = base.car_charging_slots
-            self.car_charging_limit = base.car_charging_limit
+            # Model-facing car charge limit (#4967): fetch raises this above the real limit for cars
+            # following an Octopus Intelligent dispatch plan with consider_full off, making the fill
+            # clamp in predict() (and in the C++ kernel, whose context is built from this attribute)
+            # inert for them without predict() knowing anything about the tariff. None - including a
+            # replayed debug dump from before this attribute existed - means use the real limits.
+            self.car_charging_limit = base.car_charging_limit_model if base.car_charging_limit_model is not None else base.car_charging_limit
             self.car_charging_from_battery = base.car_charging_from_battery
             self.iboost_enable = base.iboost_enable
             self.iboost_on_export = base.iboost_on_export
@@ -835,7 +840,6 @@ class Prediction(PredictionBatch):
             # Iboost
             iboost_rate_okay = True
             iboost_amount = 0
-            iboost_freeze = False
 
             # IBoost energy rate control
             if self.iboost_enable:
@@ -870,7 +874,6 @@ class Prediction(PredictionBatch):
 
                 # Freeze discharge on iboost
                 if iboost_amount > 0 and self.iboost_prevent_discharge and set_charge_window:
-                    iboost_freeze = True
                     discharge_rate_now = battery_rate_min  # 0
 
                 # Iboost running

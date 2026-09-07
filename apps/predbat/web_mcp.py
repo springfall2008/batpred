@@ -20,13 +20,34 @@ import asyncio
 import json
 from typing import Any, Dict
 from datetime import datetime, timezone, timedelta
-from utils import calc_percent_limit, get_override_time_from_string
-import re
 from aiohttp import web
 import secrets
 import jwt as pyjwt
 import hashlib
 from component_base import ComponentBase
+from agent_tools import (  # noqa: F401
+    PredbatTools,
+    TOOL_DEFS,
+    mcp_tool_list,
+    openai_tool_list,
+    MCPArgumentError,
+    parse_number_argument,
+    compile_filter_argument,
+    parse_bool_argument,
+    json_safe_value,
+    summarise_state_value,
+    measure_state_value,
+    LOG_FILTER_TYPES,
+    MCP_LOG_DEFAULT_LINES,
+    MCP_LOG_MAX_LINES,
+    MCP_LOG_MAX_LINE_CHARS,
+    MCP_LOG_DEFAULT_MAX_BYTES,
+    MCP_STATE_DEFAULT_MAX_BYTES,
+    MCP_STATE_MAX_BYTES_LIMIT,
+    MCP_STATE_TOTAL_BYTES_LIMIT,
+    MCP_STATE_LARGE_COLLECTION,
+    MCP_STATE_SAMPLE_ENTRIES,
+)
 
 
 """
@@ -226,6 +247,7 @@ class PredbatMCPServer(ComponentBase):
                 # Try to decode without verification to see what's in the token (for debugging)
                 try:
                     unverified = pyjwt.decode(token, options={"verify_signature": False})
+                    self.log(f"MCP: Token claims (unverified): {unverified}")
                 except Exception as e2:
                     self.log(f"MCP: Could not even decode without verification: {e2}")
 
@@ -724,7 +746,6 @@ class PredbatMCPServer(ComponentBase):
         """Handle authorization_code grant type"""
         code = data.get("code")
         client_id = data.get("client_id")
-        client_secret = data.get("client_secret")
         redirect_uri = data.get("redirect_uri")
         code_verifier = data.get("code_verifier")  # For PKCE
         resource = data.get("resource")  # RECOMMENDED by MCP spec (RFC 8707)
@@ -906,19 +927,15 @@ class PredbatMCPServer(ComponentBase):
             return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": f"Server error: {str(e)}"}}, status=500)
 
 
-class MCPServerWrapper:
+class MCPServerWrapper(PredbatTools):
     """
     Wrapper class for the MCP Server to provide HTTP-based MCP functionality for web interface
     """
 
     def __init__(self, base, log_func=None):
-        """Initialise the MCP server wrapper"""
-        self.base = base
-        self.prefix = base.prefix
-        self.log = log_func or print
+        """Initialise the MCP server wrapper over the shared tool layer."""
+        super().__init__(base, log_func=log_func)
         self.is_running = False
-        self.plan_interval_minutes = base.plan_interval_minutes
-
         if log_func:
             log_func("Creating HTTP MCP Server with Predbat integration")
 
@@ -945,201 +962,6 @@ class MCPServerWrapper:
             JSON response following MCP protocol
         """
         return await self.handle_mcp_request(request, self)
-
-    async def _execute_get_plan(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the get_plan tool"""
-        try:
-            raw_plan = self.base.get_state_wrapper(self.base.prefix + ".plan_html", attribute="raw", default=None)
-            # Check if we have plan data available
-            if not raw_plan:
-                return {"success": False, "error": "No plan data available", "data": None}
-
-            # Return the complete plan data
-            return {"success": True, "error": None, "data": raw_plan, "timestamp": datetime.now().isoformat(), "description": "Current Predbat battery plan including forecasts, costs, and operational states"}
-        except Exception as e:
-            return {"success": False, "error": f"Error retrieving plan data: {str(e)}", "data": None}
-
-    async def _execute_get_entities(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Get current Predbat entities
-        """
-        try:
-            filter = arguments.get("filter", None)
-            entities = self.base.dashboard_values
-            returned_entities = []
-            for entity in entities:
-                if isinstance(entity, str):
-                    entity_id = entity
-                else:
-                    entity_id = entity.get("entity_id", "")
-                if filter:
-                    if not re.search(filter, entity_id):
-                        continue
-                if isinstance(entity, str):
-                    value = {"entity_id": entity_id}
-                else:
-                    value = {
-                        "entity_id": entity.get("entity_id"),
-                        "state": entity.get("state"),
-                        "friendly_name": entity.get("friendly_name"),
-                    }
-                    if "unit_of_measurement" in entity:
-                        value["unit_of_measurement"] = entity.get("unit_of_measurement")
-                    if "device_class" in entity:
-                        value["device_class"] = entity.get("device_class")
-                    if "state_class" in entity:
-                        value["state_class"] = entity.get("state_class")
-                    if "icon" in entity:
-                        value["icon"] = entity.get("icon")
-                returned_entities.append(value)
-            return {"success": True, "error": None, "data": returned_entities, "timestamp": datetime.now().isoformat(), "description": "The current Predbat entities and their states"}
-
-        except Exception as e:
-            return {"success": False, "error": f"Error retrieving entities data: {str(e)}", "data": None}
-
-    async def _execute_set_plan_override(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute a plan override request
-        """
-        try:
-            action = arguments.get("action", None)
-            time_str = arguments.get("time", None)
-
-            if not action or not time_str:
-                return {"success": False, "error": "Missing required parameters", "data": None}
-
-            action = action.lower()
-            action = action.replace(" ", "_")
-
-            now_utc = self.base.now_utc
-            override_time = get_override_time_from_string(now_utc, time_str, self.plan_interval_minutes)
-            if not override_time:
-                return {"success": False, "error": "Invalid time format. Use 'Day HH:MM' format e.g. Sat 14:30", "data": None}
-
-            minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 17 * 60:
-                return {"success": False, "error": "Override time must be within 17 hours from now.", "data": None}
-
-            selection_option = "{}".format(override_time.strftime("%H:%M:%S"))
-            clear_option = "[{}]".format(override_time.strftime("%H:%M:%S"))
-            if action == "clear":
-                await self.base.async_manual_select("manual_demand", selection_option)
-                await self.base.async_manual_select("manual_demand", clear_option)
-            else:
-                if action == "demand":
-                    await self.base.async_manual_select("manual_demand", selection_option)
-                elif action == "charge":
-                    await self.base.async_manual_select("manual_charge", selection_option)
-                elif action == "export":
-                    await self.base.async_manual_select("manual_export", selection_option)
-                elif action == "freeze_charge":
-                    await self.base.async_manual_select("manual_freeze_charge", selection_option)
-                elif action == "freeze_export":
-                    await self.base.async_manual_select("manual_freeze_export", selection_option)
-                else:
-                    return {"success": False, "error": "Unknown action {}".format(action), "data": None}
-
-            # Refresh plan
-            self.base.update_pending = True
-            self.base.plan_valid = False
-            return {"success": True, "error": None, "data": {"action": action, "time": override_time.isoformat()}, "timestamp": datetime.now().isoformat(), "description": f"Plan override applied: {action} at {override_time.isoformat()}"}
-        except Exception as e:
-            return {"success": False, "error": f"Error applying plan override: {str(e)}", "data": None}
-
-    async def _execute_get_config(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Get full HA configuration for Predbat
-        """
-        try:
-            entity_id_filter = arguments.get("filter", None)
-            config_return = []
-            for item in self.base.CONFIG_ITEMS:
-                if entity_id_filter:
-                    entity_id = item.get("entity", None)
-                    if entity_id and re.search(entity_id_filter, entity_id):
-                        config_return.append(item)
-                else:
-                    config_return.append(item)
-            return {"success": True, "error": None, "data": config_return, "timestamp": datetime.now().isoformat(), "description": "The contents of the Predbat configuration settings"}
-
-        except Exception as e:
-            return {"success": False, "error": f"Error retrieving apps.yaml data: {str(e)}", "data": None}
-
-    async def _execute_get_apps(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the get_apps tool"""
-        try:
-            configuration = self.base.args
-            return_configuration = {}
-            config_id_filter = arguments.get("filter", None)
-            for key, value in configuration.items():
-                if config_id_filter:
-                    if re.search(config_id_filter, key):
-                        return_configuration[key] = value
-                else:
-                    return_configuration[key] = value
-
-            return {"success": True, "error": None, "data": return_configuration, "timestamp": datetime.now().isoformat(), "description": "The contents of the Predbat apps.yaml configuration"}
-
-        except Exception as e:
-            return {"success": False, "error": f"Error retrieving Predbat apps.yaml data: {str(e)}", "data": None}
-
-    async def _execute_get_status(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the get_status tool"""
-
-        try:
-            debug_enable, _ = self.base.get_ha_config("debug_enable", None)
-            read_only, _ = self.base.get_ha_config("set_read_only", None)
-            predbat_mode, _ = self.base.get_ha_config("mode", None)
-            num_cars, _ = self.base.get_ha_config("num_cars", None)
-            status_entity = self.prefix + ".status"
-            last_updated = self.base.get_state_wrapper(status_entity, attribute="last_updated", default=None)
-            soc_percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
-            grid_power = self.base.grid_power
-            battery_power = self.base.battery_power
-            pv_power = self.base.pv_power
-            load_power = self.base.load_power
-            status_data = {
-                "is_running": self.base.is_running(),
-                "status": self.base.get_state_wrapper(status_entity),
-                "current_soc": self.base.soc_kw,
-                "soc_max": self.base.soc_max,
-                "soc_percent": soc_percent,
-                "reserve": self.base.reserve,
-                "mode": predbat_mode,
-                "num_cars": num_cars,
-                "carbon_enable": self.base.carbon_enable,
-                "iboost_enable": self.base.iboost_enable,
-                "forecast_minutes": self.base.forecast_minutes,
-                "debug_enable": debug_enable,
-                "read_only": read_only,
-                "last_updated": last_updated,
-                "grid_power": grid_power,
-                "battery_power": battery_power,
-                "pv_power": pv_power,
-                "load_power": load_power,
-            }
-
-            return {"success": True, "error": None, "data": status_data, "timestamp": datetime.now().isoformat()}
-
-        except Exception as e:
-            return {"success": False, "error": f"Error retrieving status: {str(e)}", "data": None}
-
-    async def _execute_set_config(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the set_config tool"""
-        try:
-            entity_id = arguments.get("entity_id")
-            value = arguments.get("value")
-
-            if not entity_id or value is None:
-                return {"success": False, "error": "Both 'entity_id' and 'value' must be provided", "data": None}
-
-            # Update the configuration setting
-            await self.set_state_external(entity_id, value)
-
-            return {"success": True, "error": None, "data": {"entity_id": entity_id, "new_value": value}, "timestamp": datetime.now().isoformat(), "description": f"Configuration setting '{entity_id}' updated successfully"}
-
-        except Exception as e:
-            return {"success": False, "error": f"Error setting configuration: {str(e)}", "data": None}
 
     async def handle_mcp_request(self, request, mcp_server):
         """
@@ -1197,77 +1019,17 @@ class MCPServerWrapper:
 
     async def _handle_tools_list(self, params):
         """Handle MCP tools/list request"""
-        return {
-            "tools": [
-                {"name": "get_plan", "description": "Get the current Predbat battery plan data including forecast, costs, and state information", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-                {"name": "get_status", "description": "Get the current Predbat system status and configuration", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-                {
-                    "name": "get_apps",
-                    "description": "Get predbat apps.yaml static configuration data",
-                    "inputSchema": {"type": "object", "properties": {"filter": {"type": "string", "description": "The configuration item name to filter on, as a Python regex (optional)"}}, "required": []},
-                },
-                {
-                    "name": "get_config",
-                    "description": "Get the current Predbat live configuration settings",
-                    "inputSchema": {"type": "object", "properties": {"filter": {"type": "string", "description": "The entity ID name to filter on, as a Python regex (optional)"}}, "required": []},
-                },
-                {
-                    "name": "get_entities",
-                    "description": "Get the current Predbat entities",
-                    "inputSchema": {"type": "object", "properties": {"filter": {"type": "string", "description": "The configuration item name to filter on, as a Python regex (optional)"}}, "required": []},
-                },
-                {
-                    "name": "set_config",
-                    "description": "Set Predbat configuration setting",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {"entity_id": {"type": "string", "description": "The entity ID of the configuration setting to update"}, "value": {"type": "string", "description": "The new value for the configuration setting"}},
-                        "required": ["entity_id", "value"],
-                    },
-                },
-                {
-                    "name": "set_plan_override",
-                    "description": "Override the current Predbat plan for a specific 30 minute period with a manual action",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "action": {"type": "string", "description": "The action to perform: demand, charge, export, freeze_charge, freeze_export, clear"},
-                            "time": {"type": "string", "description": 'The time at which to perform the action, in "Day HH:MM" format (24-hour), covers one 30-minute period'},
-                        },
-                        "required": ["action", "time"],
-                    },
-                },
-            ]
-        }
+        return {"tools": mcp_tool_list()}
 
     async def _handle_tools_call(self, params):
         """Handle MCP tools/call request"""
-        tool_name = params.get("name")
-        arguments = params.get("arguments", {})
-
         try:
-            if tool_name == "get_plan":
-                result = await self._execute_get_plan(arguments)
-            elif tool_name == "get_status":
-                result = await self._execute_get_status(arguments)
-            elif tool_name == "get_apps":
-                result = await self._execute_get_apps(arguments)
-            elif tool_name == "get_config":
-                result = await self._execute_get_config(arguments)
-            elif tool_name == "get_entities":
-                result = await self._execute_get_entities(arguments)
-            elif tool_name == "set_config":
-                result = await self._execute_set_config(arguments)
-            elif tool_name == "set_plan_override":
-                result = await self._execute_set_plan_override(arguments)
-            else:
-                return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": f"Unknown tool: {tool_name}"})}], "isError": True}
-
-            # Return result in MCP format
-            return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
-
+            result = await self.execute(params.get("name"), params.get("arguments", {}))
         except Exception as e:
             return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": f"Tool execution failed: {str(e)}"})}], "isError": True}
+        if not result.get("success") and str(result.get("error", "")).startswith("Unknown tool"):
+            return {"content": [{"type": "text", "text": json.dumps(result)}], "isError": True}
+        return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
 
 
 def create_mcp_server(base, log_func=None):

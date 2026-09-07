@@ -153,6 +153,8 @@ async def test_octopus_tou_windows(my_predbat):
     - Test 9: a manually configured window may be given in UTC with utc: true
     - Test 10: manual configuration beats the meter's own TOU labels
     - Test 11: an hour of 24 is normalised to 0, matching how basic_rates parses times
+    - Test 12: an IOG meter's TOU labels never become a recurring schedule (issue: phantom slot)
+    - Test 13: a TOU-derived window on a local wall-clock tariff holds across a DST change
     """
     print("\n**** Running Octopus TOU window tests ****")
     failed = False
@@ -365,5 +367,61 @@ async def test_octopus_tou_windows(my_predbat):
         failed = True
     else:
         print("PASS: hour 24 normalised to hour 0, and a 24:00 end still closes the day")
+
+    # ------------------------------------------------------------------
+    # Test 12: an IOG meter's TOU labels must not become a fixed schedule
+    #
+    # On Intelligent Octopus Go the off-peak buckets cover the guaranteed overnight window plus
+    # whichever ad-hoc dispatch slots Octopus granted that night. Those dispatch slots are decided
+    # night by night, so projecting them forward as a recurring window invents a cheap slot the
+    # customer has not been given. These are one real customer's labels: 21:00-21:30 UTC is a bonus
+    # dispatch that landed on most of the sampled nights, 22:30-04:30 UTC is the genuine window.
+    # ------------------------------------------------------------------
+    print("\n*** Test 12: IOG dispatch labels do not become a recurring window ***")
+    api12 = _make_api(my_predbat, day_rate=30.3, night_rate=6.9, now=_NOW_BST)
+    _stub_tou(api12, [(1260, 1290), (1350, 1440), (0, 270)])  # 22:00-22:30 and 23:30-05:30 BST
+    slots12 = _night_slots_local(await _run(api12, base_url, "E-1R-IOG-SMB-VAR-24-10-29-A"), 6.9)
+
+    phantom = [(s, e) for s, e in slots12 if (s.hour, s.minute) == (22, 0)]
+    if not slots12:
+        print("ERROR: no night slots produced for the IOG meter")
+        failed = True
+    elif phantom:
+        print("ERROR: a 22:00 dispatch slot became a recurring off-peak window - {} occurrences".format(len(phantom)))
+        failed = True
+    elif any((s.hour, s.minute) != (23, 30) or (e.hour, e.minute) != (5, 30) for s, e in slots12):
+        print("ERROR: IOG window is not 23:30-05:30 local - got {}".format([(s.strftime("%H:%M"), e.strftime("%H:%M")) for s, e in slots12[:3]]))
+        failed = True
+    else:
+        print("PASS: IOG keeps its guaranteed 23:30-05:30 local window and ignores the dispatch label")
+
+    # ------------------------------------------------------------------
+    # Test 13: a TOU-derived window on a local wall-clock tariff survives DST
+    #
+    # The measurement labels are UTC instants, so a GO meter sampled during BST reports its
+    # 00:30-05:30 local window as 23:30-04:30 UTC. Holding that UTC offset fixed runs the window an
+    # hour early once the clocks go back, which the 9-day schedule spans when the change is near.
+    # ------------------------------------------------------------------
+    print("\n*** Test 13: TOU window on a local-anchored tariff holds across DST ***")
+    api13 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=LONDON.localize(datetime(2026, 10, 22, 12, 0, 0)))
+    _stub_tou(api13, [(1410, 1440), (0, 270)])  # 23:30-04:30 UTC, which is 00:30-05:30 BST
+    all_slots13 = _night_slots_local(await _run(api13, base_url, "E-1R-GO-VAR-22-10-14-M"), 7.00)
+
+    # The changeover day itself is excluded: a window that spans the 02:00 change comes out an hour
+    # short, because the schedule builder adds a timedelta to an already-localised midnight and so
+    # keeps that day's opening UTC offset for the whole window. That is pre-existing behaviour of
+    # every local-anchored window - the hard-wired GO window produces the same two entries on this
+    # date with no TOU labels involved at all - so it is not what this test is pinning down.
+    slots13 = [(s, e) for s, e in all_slots13 if (s.month, s.day) != (10, 25)]
+
+    drifted = [(s, e) for s, e in slots13 if (s.hour, s.minute) != (0, 30) or (e.hour, e.minute) != (5, 30)]
+    if not slots13:
+        print("ERROR: no night slots produced for the GO meter across the DST change")
+        failed = True
+    elif drifted:
+        print("ERROR: TOU window drifted off local time across the DST change - {} of {} slots wrong, e.g. {}".format(len(drifted), len(slots13), [(s.strftime("%d %H:%M"), e.strftime("%H:%M")) for s, e in drifted[:3]]))
+        failed = True
+    else:
+        print("PASS: TOU-derived window stays 00:30-05:30 local on both sides of the DST change")
 
     return failed

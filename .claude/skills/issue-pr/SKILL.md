@@ -25,7 +25,7 @@ Fetch it with `gh issue view <number> --json title,body,labels,comments`. The bo
   git describe --tags
   ```
 
-- Read [../issue-triage/references/debug-journal.md](../issue-triage/references/debug-journal.md) before forming an implementation approach — it maps common symptoms to modules and records known per-integration behaviour from past investigations. Its entries are dated observations, not current truth — confirm anything you rely on against the working tree.
+- Read [tools/debug-journal.md](../../../tools/debug-journal.md) before forming an implementation approach — it maps common symptoms to modules and records known per-integration behaviour from past investigations. Its entries are dated observations, not current truth — confirm anything you rely on against the working tree.
 - Read the relevant source area named in the triage comment's root-cause pointer, or that the issue's classification points to.
 - Check `git log`/`git blame` on that area — the triage comment may already cover this, but confirm nothing has changed on `main` since triage ran.
 
@@ -94,7 +94,7 @@ This is the last step on success — there is nothing further to report; the dae
 
 ## 7. On failure
 
-If step 4's quality gate failed, or an earlier step couldn't proceed (e.g. the fix genuinely needs information only a maintainer has), post exactly one comment on the issue via `gh issue comment <number> --body "..."` explaining plainly what you attempted and what failed — never word it so a skipped step reads as one you completed (same guardrail as the triage skill). Then stop. Do not commit, push, or open a PR — the daemon detects this outcome itself by finding no PR referencing the issue afterwards.
+If step 4's quality gate failed, or an earlier step couldn't proceed (e.g. the fix genuinely needs information only a maintainer has), post exactly one comment on the issue via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated PR-creation attempt (a maintainer will review before any action is taken), followed by what you attempted and what failed — never word it so a skipped step reads as one you completed (same guardrail as the triage skill). Then stop. Do not commit, push, or open a PR — the daemon detects this outcome itself by finding no PR referencing the issue afterwards.
 
 ## Guardrails
 

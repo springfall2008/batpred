@@ -11,6 +11,7 @@ import os
 import json
 import time
 from compare import Compare
+from const import CLOUD_FACTOR_PV10
 from prediction import Prediction
 from tests.test_infra import reset_inverter
 
@@ -205,7 +206,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         )
         my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute, my_predbat.minutes_now, forward=True, cloud_factor=my_predbat.metric_cloud_coverage)
         my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(
-            my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + 0.2, 1.0) if my_predbat.metric_cloud_coverage else None, flip=True
+            my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if my_predbat.metric_cloud_coverage else None, flip=True
         )
 
     pv_step = my_predbat.pv_forecast_minute_step

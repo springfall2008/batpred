@@ -56,9 +56,6 @@ def create_test_history_data(my_predbat, num_days=7, slow=False):
 
     total_minutes = num_days * 24 * 60
 
-    # DEBUG: Counter for printing first few charging entries
-    debug_charging_count = 0
-
     # Generate data for each minute going backwards in time
     for minutes in range(0, total_minutes, 5):
         timestamp = base_time + timedelta(minutes=minutes)

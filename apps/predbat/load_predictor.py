@@ -1260,7 +1260,6 @@ class LoadPredictor:
         X_train_norm = X_train
 
         X_val_norm = self._normalize_features(X_val, fit=False, in_place=True)
-        y_val_norm = self._normalize_targets(y_val, fit=False)
 
         # Initialise weights if needed
         if not self.model_initialized or (is_initial and self.weights is None):

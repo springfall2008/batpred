@@ -1089,7 +1089,6 @@ class LoadMLComponent(ComponentBase):
         reset_amount = 0
         load_today_h1 = 0
         load_today_h8 = 0
-        load_today_now = 0
         power_today_now = 0
         power_today_h1 = 0
         power_today_h8 = 0

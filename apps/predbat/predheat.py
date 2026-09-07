@@ -411,7 +411,6 @@ class PredHeat:
                     heat_power_in = heat_power_out / (self.heat_cop * cop_adjust)
 
                 energy_now_in = heat_power_in * PREDICT_STEP / 60.0 / 1000.0
-                energy_now_out = heat_power_out * PREDICT_STEP / 60.0 / 1000.0
 
                 cost += energy_now_in * self.rate_import.get(minute_absolute, 0)
                 heat_energy += energy_now_in

@@ -271,7 +271,7 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
     call_args = api6.async_graphql_query.call_args
     kwargs = call_args[1]
 
-    if "returns_data" not in kwargs or kwargs["returns_data"] != False:
+    if "returns_data" not in kwargs or kwargs["returns_data"] is not False:
         print(f"ERROR: Expected returns_data=False, got {kwargs}")
         failed = True
     else:
@@ -413,7 +413,7 @@ async def test_octopus_join_saving_session(my_predbat):
     call_args = api4.async_graphql_query.call_args
     kwargs = call_args[1]
 
-    if "returns_data" not in kwargs or kwargs["returns_data"] != False:
+    if "returns_data" not in kwargs or kwargs["returns_data"] is not False:
         print(f"ERROR: Expected returns_data=False, got {kwargs}")
         failed = True
     else:
@@ -536,7 +536,7 @@ async def test_octopus_get_saving_sessions(my_predbat):
         if context != "get-saving-sessions":
             print(f"ERROR: Expected context 'get-saving-sessions', got {context}")
             failed = True
-        elif "ignore_errors" not in kwargs or kwargs["ignore_errors"] != True:
+        elif "ignore_errors" not in kwargs or kwargs["ignore_errors"] is not True:
             print(f"ERROR: Expected ignore_errors=True, got {kwargs}")
             failed = True
         else:
@@ -643,7 +643,7 @@ async def test_octopus_get_saving_sessions(my_predbat):
     call_args = api6.async_graphql_query.call_args
     kwargs = call_args[1]
 
-    if "ignore_errors" not in kwargs or kwargs["ignore_errors"] != True:
+    if "ignore_errors" not in kwargs or kwargs["ignore_errors"] is not True:
         print(f"ERROR: Expected ignore_errors=True, got {kwargs}")
         failed = True
     else:
@@ -1017,7 +1017,6 @@ async def test_octopus_fetch_tariffs(my_predbat):
         print("PASS: FLUX-IMPORT rates stored correctly as export fallback")
 
     # Verify the URL constructed has FLUX-IMPORT, not FLUX-EXPORT
-    wrong_url_called = any(flux_export_product in url and "standard-unit-rates" in url and url != f"https://api.octopus.energy/v1/products/{flux_export_product}/electricity-tariffs/{flux_export_tariff}/standard-unit-rates/" for url in urls_called8)
     expected_flux_import_url = f"https://api.octopus.energy/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff}/standard-unit-rates/"
     if expected_flux_import_url not in urls_called8:
         print(f"ERROR: Expected exact URL {expected_flux_import_url}, got {urls_called8}")
