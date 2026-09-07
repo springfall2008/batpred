@@ -591,13 +591,18 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         the one value above 80 that is honoured. Callers disable grid charging whenever this returns
         SIGNAL_HOLD_RESERVE, which is what stops the device importing to reach it - including a
         `set_reserve_min` anywhere in 81-99 (a plausible Powerwall value on its own), which lands here
-        too and then holds grid charging off in every state, permanently. Logged once, not every
-        cycle, so a trial user can see why nothing is charging.
+        too and then holds grid charging off in every state, permanently. A request of exactly 100 is
+        already honoured and passes through without a diagnostic; only a value the device would have
+        silently moved is logged, once rather than every cycle, so a trial user can see why nothing
+        is charging.
         """
         percent = int(percent)
         if percent <= SIGNAL_MAX_SETTABLE_RESERVE:
             return percent
-        if not self._reserve_band_warned:
+        # Exactly 100 is honoured by the device as asked, so it is not being changed under the
+        # caller's feet and warrants no diagnostic - and warning for it would burn the one-shot flag
+        # and silence the real 81-99 case later, which is the case the diagnostic exists for.
+        if percent < SIGNAL_HOLD_RESERVE and not self._reserve_band_warned:
             self._reserve_band_warned = True
             self.log("Info: Teslemetry reserve request of {}% is in the 81-99 band Tesla rejects - using 100% instead, which also disables grid charging".format(percent))
         return SIGNAL_HOLD_RESERVE

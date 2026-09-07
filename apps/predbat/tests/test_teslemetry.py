@@ -983,6 +983,22 @@ def test_teslemetry_tbc_reserve_band_warning_logs_once():
     assert "86%" in warnings[0]
 
 
+def test_teslemetry_tbc_reserve_of_exactly_100_is_not_reported_as_the_rejected_band():
+    """A reserve of exactly 100 is honoured by the device, so it must neither log nor burn the one-shot
+    flag - doing so would both misreport 100 as rejected and silence the real 81-99 case afterwards,
+    which is the only case the diagnostic exists for. Predbat reaches 100 on its own: execute.py writes
+    adjust_reserve(min(soc_percent + 1, 100)), which is exactly 100 on a full battery."""
+    api = _tbc_api(reserve=100)
+    assert api.evaluate_schedule_tbc(12 * 60, 100)["reserve"] == 100
+    assert [msg for msg in api.log_messages if "81-99 band" in msg] == []
+    # The genuine band case must still be reported on the same instance afterwards.
+    api.schedule["reserve"] = 86
+    api.evaluate_schedule_tbc(12 * 60, 85)
+    warnings = [msg for msg in api.log_messages if "81-99 band" in msg]
+    assert len(warnings) == 1
+    assert "86%" in warnings[0]
+
+
 def test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window():
     """A hold reserve inside a charge window must not import to fill to 100 against the 0p band."""
     api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, reserve=86)
@@ -2582,6 +2598,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_tbc_charge_wins_over_an_overlapping_export()
     test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off()
     test_teslemetry_tbc_reserve_band_warning_logs_once()
+    test_teslemetry_tbc_reserve_of_exactly_100_is_not_reported_as_the_rejected_band()
     test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window()
     test_teslemetry_tbc_never_writes_a_reserve_in_the_invalid_band()
     test_teslemetry_day_runs_groups_replicated_days()
