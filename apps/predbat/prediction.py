@@ -111,8 +111,7 @@ class Prediction(PredictionBatch):
             # clamp in predict() (and in the C++ kernel, whose context is built from this attribute)
             # inert for them without predict() knowing anything about the tariff. None - including a
             # replayed debug dump from before this attribute existed - means use the real limits.
-            car_charging_limit_model = getattr(base, "car_charging_limit_model", None)
-            self.car_charging_limit = car_charging_limit_model if car_charging_limit_model is not None else base.car_charging_limit
+            self.car_charging_limit = base.car_charging_limit_model if base.car_charging_limit_model is not None else base.car_charging_limit
             self.car_charging_from_battery = base.car_charging_from_battery
             self.iboost_enable = base.iboost_enable
             self.iboost_on_export = base.iboost_on_export

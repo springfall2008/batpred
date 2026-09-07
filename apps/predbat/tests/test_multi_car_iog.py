@@ -510,6 +510,37 @@ def run_iog_model_limit_fetch_test(testname, my_predbat):
     failed = False
     print("**** Running Test: multi_car_iog {} ****".format(testname))
 
+    # fetch_sensor_data_cars() rewrites a lot of shared fixture state (including car_charging_loss,
+    # which it reads from the config item, not args) - snapshot and restore everything this test
+    # touches so a module that runs after this one is not polluted (the shared-fixture trap)
+    snapshot_attrs = [
+        "num_cars",
+        "car_charging_planned",
+        "car_charging_now",
+        "car_charging_plan_smart",
+        "car_charging_plan_max_price",
+        "car_charging_plan_time",
+        "car_charging_battery_size",
+        "car_charging_limit",
+        "car_charging_limit_model",
+        "car_charging_rate",
+        "car_charging_slots",
+        "car_charging_exclusive",
+        "car_charging_manual_soc",
+        "car_charging_soc",
+        "car_charging_soc_next",
+        "car_charging_loss",
+        "octopus_intelligent_charging",
+        "octopus_intelligent_ignore_unplugged",
+        "octopus_intelligent_consider_full",
+        "octopus_slots",
+        "now_utc",
+        "minutes_now",
+    ]
+    saved = {attr: copy.deepcopy(getattr(my_predbat, attr)) for attr in snapshot_attrs if hasattr(my_predbat, attr)}
+    arg_keys = ["car_charging_loss", "car_charging_soc", "car_charging_limit", "octopus_intelligent_slot"]
+    saved_args = {key: copy.deepcopy(my_predbat.args[key]) for key in arg_keys if key in my_predbat.args}
+
     my_predbat.num_cars = 2
     my_predbat.car_charging_planned = [True, False]
     my_predbat.car_charging_now = [False, False]
@@ -598,6 +629,15 @@ def run_iog_model_limit_fetch_test(testname, my_predbat):
     if not my_predbat.car_charging_slots[0]:
         print("ERROR: car 0 should still have IOG slots with consider_full on (limit not yet reached), got none")
         failed = True
+
+    # Restore the shared fixture state captured above
+    for key in arg_keys:
+        if key in saved_args:
+            my_predbat.args[key] = saved_args[key]
+        else:
+            my_predbat.args.pop(key, None)
+    for attr, value in saved.items():
+        setattr(my_predbat, attr, value)
 
     if failed:
         print("Test: {} FAILED".format(testname))
