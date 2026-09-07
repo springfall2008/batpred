@@ -522,15 +522,26 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 
 #### Site export limits (gecloud)
 
-With `ge_cloud_automatic: true`, startup configuration reads the site's enabled export
-limit from GivEnergy. The API key needs the `api:site:read` scope for this optional lookup.
-An explicit `export_limit` in your configuration takes precedence, including a zero limit.
-The limit is shared across Predbat's logical inverters so it is counted once for the site.
+Predbat reads your site's details from GivEnergy at startup, just after the device list,
+and publishes any enabled grid export limit as
+`sensor.predbat_gecloud_<serial>_export_limit` alongside the other per-inverter sensors.
+The API key needs site read permission for this optional lookup; without it the sensor is
+simply not published and nothing else changes.
 
-If site data is unavailable, invalid or disabled, the configured/default limit is retained.
+The site details are cached in Predbat's storage and re-read every 12 hours, so a restart
+normally costs no extra API call and a limit changed in the GivEnergy portal is picked up
+within half a day. A failed read retries after 30 minutes and keeps the cached value in
+the meantime.
+
+With `ge_cloud_automatic: true`, automatic configuration points `export_limit` at those
+sensors when a limit was read. The site limit is divided between Predbat's logical
+inverters so their total is the site limit, including the single logical controller a
+Gateway presents. An `export_limit` you set in `apps.yaml` takes precedence, including a
+zero limit, and a site with no enabled limit leaves Predbat's unrestricted default in
+place.
+
 Automatic detection requires all contributing inverters to belong to one known site;
-otherwise configure `export_limit` explicitly. Restart Predbat after changing the site
-limit to repeat automatic detection.
+otherwise configure `export_limit` explicitly.
 
 This is the site's grid export limit, not its solar inverter rating. For an AC-coupled
 solar inverter whose rating is not exposed by the API, configure `pv_ac_limit` separately
