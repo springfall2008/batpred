@@ -1824,7 +1824,7 @@ whether you are within an Octopus Energy "smart charge" slot
 - **evcc_host** - evcc base URL, e.g. `http://192.168.1.50:7070`. Setting it enables the [evcc component](components.md#evcc-ev-charger-evcc)
 - **evcc_api_key** - Optional evcc API key; omit on an unauthenticated LAN instance
 - **evcc_automatic** - Let the evcc component fill in the `car_charging_*` keys. Keys you set yourself are never overwritten
-- **evcc_control** - Allow Predbat to set the evcc loadpoint charging mode (default off)
+- **evcc_control** - Initial setting of **switch.predbat_evcc_control**. Letting Predbat set the evcc charging mode is turned on and off per loadpoint with **switch.predbat_evcc_control**/**_1**/**_2**... in the Predbat config, indexed by the car **evcc_loadpoints** maps that loadpoint to (default off)
 - **evcc_loadpoints** - Per-car list of evcc loadpoint ids (1-based) or titles; `off` skips a car
 - **evcc_solar**, **evcc_use_minpv**, **evcc_poll_seconds**, **evcc_mode_refresh_minutes**, **evcc_override_minutes**, **evcc_phase_voltage**, **evcc_soc_max_age_hours**, **evcc_timeout** - see [the component documentation](components.md#evcc-ev-charger-evcc)
 - **ohme_login** - Ohme EV charger account login

@@ -20,7 +20,7 @@ import copy
 import pytz
 
 from components import COMPONENT_LIST
-from config import APPS_SCHEMA
+from config import APPS_SCHEMA, CONFIG_ITEMS
 from evcc import (
     EVCC_MODE_MINPV,
     EVCC_MODE_NOW,
@@ -123,8 +123,11 @@ class MockEvccAPI(EvccAPI):
         return self.args.get(arg, default)
 
     def set_arg(self, arg, value):
-        """Write an apps.yaml arg."""
-        self.args[arg] = value
+        """Write an apps.yaml arg, or remove it when set to None, as the real set_arg does."""
+        if value is None:
+            self.args.pop(arg, None)
+        else:
+            self.args[arg] = value
 
     def update_success_timestamp(self):
         """No-op for the mock."""
@@ -370,6 +373,25 @@ def test_publish_and_auto_config():
     controlled.loadpoint_map = {0: 0}
     controlled.automatic_config()
     check("no_now_when_control", "car_charging_now" in controlled.args, False, failures)
+
+    # Control is a config switch, so it can come on after car_charging_now was already wired up
+    switched = MockEvccAPI(host="http://evcc", automatic=True, control=False)
+    switched.state = SAMPLE_STATE
+    switched.loadpoint_map = {0: 0}
+    switched.automatic_config()
+    check("now_wired_when_free", switched.args["car_charging_now"], ["binary_sensor.predbat_evcc_charging"], failures)
+    switched.args["evcc_control"] = True
+    switched.read_switches()
+    switched.automatic_config()
+    check("now_unwired_when_control", switched.args.get("car_charging_now"), None, failures)
+
+    # ...and it is per loadpoint, so a controlled car 0 must not take car 1 off it
+    mixed = MockEvccAPI(host="http://evcc", automatic=True, args={"evcc_control": True})
+    mixed.state = SAMPLE_STATE
+    mixed.loadpoint_map = {0: 0, 1: 0}
+    mixed.automatic_config()
+    check("now_per_car", mixed.args["car_charging_now"], [None, "binary_sensor.predbat_evcc_charging_1"], failures)
+    check("status_control_list", [car_n for car_n in sorted(mixed.loadpoint_map) if mixed.car_controlled(car_n)], [0], failures)
     return failures
 
 
@@ -461,9 +483,13 @@ def test_desired_mode_and_gates():
     check("control_disabled", api.should_write(0, EVCC_MODE_OFF, "export_better", True), (False, "control_disabled"), failures)
     api.control = True
 
-    api.control_enabled[0] = False
-    check("switch_off", api.should_write(0, EVCC_MODE_OFF, "export_better", True), (False, "switch_off"), failures)
-    api.control_enabled[0] = True
+    # Control is per loadpoint: turning car 0's switch off leaves any other car alone
+    api.args["evcc_control"] = False
+    api.args["evcc_control_1"] = True
+    check("switch_off_car0", api.should_write(0, EVCC_MODE_OFF, "export_better", True), (False, "control_disabled"), failures)
+    check("switch_on_car1", api.should_write(1, EVCC_MODE_OFF, "export_better", True)[0], True, failures)
+    del api.args["evcc_control"]
+    del api.args["evcc_control_1"]
 
     api.args["set_read_only"] = True
     check("read_only", api.should_write(0, EVCC_MODE_OFF, "export_better", True), (False, "read_only"), failures)
@@ -743,6 +769,20 @@ def test_registry_and_schema():
         if spec.get("config") not in APPS_SCHEMA:
             print("ERROR: evcc_registry: arg {} config key {} not in APPS_SCHEMA".format(name, spec.get("config")))
             failures.append(name)
+
+    # The two user switches are Predbat config items, which is what puts them on the config page
+    config_index = {item["name"]: item for item in CONFIG_ITEMS}
+    check("config_item_guest_hold", config_index.get("evcc_guest_hold", {}).get("type"), "switch", failures)
+    check("config_default_guest_hold", config_index.get("evcc_guest_hold", {}).get("default"), False, failures)
+
+    # Control is per loadpoint - one switch per car, so a heat pump on another loadpoint can be
+    # left to evcc while the car charger is driven by Predbat
+    for car_n in range(8):
+        name = "evcc_control" + ("" if car_n == 0 else "_{}".format(car_n))
+        item = config_index.get(name, {})
+        check("config_item_" + name, item.get("type"), "switch", failures)
+        check("config_default_" + name, item.get("default"), False, failures)
+        check("config_enable_" + name, item.get("enable_condition"), "num_cars > {}".format(car_n), failures)
     return failures
 
 
@@ -1003,15 +1043,15 @@ def test_guest_car_battery_hold():
     # A car evcc could not identify, actually drawing power
     api = publish(connected=True, charging=True)
     check("guest_on", api.entities["binary_sensor.predbat_evcc_guest_charging"]["state"], "on", failures)
-    # ...but the hold is opt-in, so nothing is asked of Predbat until the switch is turned on
+    # ...but the hold is opt-in, so nothing is asked of Predbat until the config switch is turned on
     check("switch_defaults_off", api.guest_hold(), False, failures)
     check("base_flag_off", api.base.evcc_guest_charging, False, failures)
-    check("switch_published", api.entities["switch.predbat_evcc_guest_hold"]["state"], "off", failures)
+    check("hold_published_off", api.entities["binary_sensor.predbat_evcc_guest_hold"]["state"], "off", failures)
 
     api.guest_hold_enabled = True
     check("holds", api.guest_hold(), True, failures)
     check("base_flag_on", api.base.evcc_guest_charging, True, failures)
-    check("switch_on", api.entities["switch.predbat_evcc_guest_hold"]["state"], "on", failures)
+    check("hold_published_on", api.entities["binary_sensor.predbat_evcc_guest_hold"]["state"], "on", failures)
 
     # Every state that is not a guest drawing power leaves the battery alone
     for label, connected, charging, vehicle in (("known", True, True, "db:3"), ("guest_idle", True, False, ""), ("empty", False, False, "")):
@@ -1020,17 +1060,28 @@ def test_guest_car_battery_hold():
         check("no_hold_{}".format(label), api.guest_hold(), False, failures)
         check("sensor_off_{}".format(label), api.entities["binary_sensor.predbat_evcc_guest_charging"]["state"], "off", failures)
 
-    # The switch survives a restart through the entity it published
-    restarted = MockEvccAPI(host="http://evcc")
+    # Both switches are Predbat config items, so they show up on the config page and survive a
+    # restart with the rest of the config rather than being read back off our own entity
+    restarted = MockEvccAPI(host="http://evcc", control=False, args={"evcc_guest_hold": True, "evcc_control": True})
     restarted.loadpoint_map = {0: 0}
-    restarted.entities["switch.predbat_evcc_guest_hold"] = {"state": "on", "attributes": {}}
-    restarted.guest_hold()
-    check("restored", restarted.guest_hold_enabled, True, failures)
+    restarted.read_switches()
+    check("hold_from_config", restarted.guest_hold_enabled, True, failures)
+    check("control_from_config", restarted.car_controlled(0), True, failures)
 
-    # Turning it off in Home Assistant is applied through the component's own event queue
+    # Turning one off in Home Assistant just brings the next cycle forward - the value itself
+    # comes from the config item on the next read_switches()
     run_async(restarted.switch_event("switch.predbat_evcc_guest_hold", "turn_off"))
     restarted.handle_switch_event(*restarted.queued_events.pop(0))
+    check("refresh_forced", restarted.force_refresh, True, failures)
+    restarted.args["evcc_guest_hold"] = False
+    restarted.read_switches()
     check("switched_off", restarted.guest_hold_enabled, False, failures)
+
+    # An unset config item falls back to what the component was built with
+    unset = MockEvccAPI(host="http://evcc", control=True)
+    unset.read_switches()
+    check("control_default_kept", unset.car_controlled(0), True, failures)
+    check("hold_default_off", unset.guest_hold_enabled, False, failures)
     return failures
 
 

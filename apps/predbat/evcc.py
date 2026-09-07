@@ -372,7 +372,8 @@ class EvccAPI(ComponentBase):
             host: evcc base URL or host[:port]
             api_key: optional long-lived evcc API key; no Authorization header is sent without it
             automatic: auto-configure the car_charging_* keys from evcc
-            control: allow writing the loadpoint charge mode back to evcc
+            control: fallback for switch.predbat_evcc_control[_n], used only while those config
+                switches do not exist yet (no cars configured)
             loadpoints: optional per-car list of evcc loadpoint ids (1-based) or titles
             solar: model evcc's PV diversion (sets car_charging_solar)
             use_minpv: prefer evcc's minpv mode over pv when Predbat wants solar charging
@@ -416,11 +417,12 @@ class EvccAPI(ComponentBase):
         self.last_write = {}
         self.override_until = {}
         self.last_connected = {}
-        self.control_enabled = {}
         self.guest_charging = {}
-        # Off by default: evcc loses identification of a car from time to time (its API goes down),
-        # and holding the battery on that alone would force expensive import nobody asked for
-        self.guest_hold_enabled = None
+        # Last seen state of the Predbat config switches, so read_switches() can spot a change.
+        # Guest hold is off by default: evcc loses identification of a car from time to time (its
+        # API goes down), and holding the battery on that alone would force expensive import
+        self.control_enabled = {}
+        self.guest_hold_enabled = False
 
         # Snapshot apps.yaml before any set_arg, so auto-config can tell a user's own value from
         # one it wrote itself on an earlier cycle
@@ -438,6 +440,25 @@ class EvccAPI(ComponentBase):
     def entity(self, domain, name, car_n):
         """Build a published entity id for a car."""
         return "{}.{}_evcc_{}{}".format(domain, self.prefix, name, self.car_postfix(car_n))
+
+    def config_entity(self, name):
+        """Build the entity id Predbat gives one of our CONFIG_ITEMS switches."""
+        return "switch.{}_{}".format(self.prefix, name)
+
+    def control_key(self, car_n):
+        """Config key for this car's control switch, switch.predbat_evcc_control[_n]."""
+        return "evcc_control" + self.car_postfix(car_n)
+
+    def car_controlled(self, car_n):
+        """
+        True when Predbat may write the charge mode for this car's loadpoint.
+
+        Per loadpoint, not per instance: one evcc drives several loadpoints and only some of them
+        are car chargers, so a heat pump alongside the car must be left to evcc whatever is done
+        with the car. evcc_control in apps.yaml is only the fallback when the switch does not
+        exist yet (no cars configured), which is also what the tests drive it with.
+        """
+        return bool(self.get_arg(self.control_key(car_n), self.control))
 
     def user_configured(self, key):
         """
@@ -776,7 +797,7 @@ class EvccAPI(ComponentBase):
                 "missing_fields": self.missing_fields,
                 "overridden": self.overridden_keys,
                 "errors": self.get_error_count(),
-                "control": self.control,
+                "control": [car_n for car_n in sorted(self.loadpoint_map) if self.car_controlled(car_n)],
             },
             app="evcc",
         )
@@ -812,10 +833,14 @@ class EvccAPI(ComponentBase):
         self.auto_set("car_charging_ready_time", per_car("sensor", "plan_time"))
         self.auto_set("car_charging_planned_response", ["yes", "on", "true", "connected", "charging"])
 
-        if not self.control:
-            # With evcc_control on, Predbat drives the mode, so car_charging_now would be a mirror
-            # of Predbat's own decision and the plan would chase its own tail
-            self.auto_set("car_charging_now", per_car("binary_sensor", "charging"))
+        # For a car Predbat drives, car_charging_now would be a mirror of Predbat's own decision
+        # and the plan would chase its own tail - so it is wired up only for the cars whose control
+        # switch is off, and taken back off a car whose switch is turned on later
+        charging_now = [self.entity("binary_sensor", "charging", car_n) if (car_n in self.loadpoint_map and not self.car_controlled(car_n)) else None for car_n in range(count)]
+        if any(charging_now):
+            self.auto_set("car_charging_now", charging_now)
+        elif not self.user_configured("car_charging_now"):
+            self.set_arg("car_charging_now", None)
 
         if self.solar:
             self.publish_solar_enabled(count)
@@ -893,12 +918,10 @@ class EvccAPI(ComponentBase):
         """
         if mode is None:
             return False, reason
-        if not self.control:
+        if not self.car_controlled(car_n):
             return False, "control_disabled"
         if not connected:
             return False, "not_connected"
-        if not self.control_enabled.get(car_n, True):
-            return False, "switch_off"
         if self.get_arg("set_read_only", False):
             return False, "read_only"
         if not getattr(self.base, "plan_valid", False):
@@ -1065,33 +1088,47 @@ class EvccAPI(ComponentBase):
                 attributes={"friendly_name": "Predbat evcc override", "icon": "mdi:hand-back-left", "until": self.override_until[car_n].isoformat() if self.override_until.get(car_n) else None, "observed_mode": observed},
                 app="evcc",
             )
-            if self.control:
-                self.dashboard_item(self.entity("switch", "control", car_n), state="on" if self.control_enabled.get(car_n, True) else "off", attributes={"friendly_name": "Predbat evcc control enabled", "icon": "mdi:robot"}, app="evcc")
+
+    def read_switches(self):
+        """
+        Notice a change to the user switches Predbat keeps for us in its own config.
+
+        They are CONFIG_ITEMS rather than entities this component publishes: that is what puts them
+        alongside every other Predbat switch in the web UI and in the saved config. Nothing is read
+        from them here beyond noticing a change - car_controlled() reads each one live - but a
+        change has to be acted on, so it is logged and the auto-configuration is redone.
+        """
+        for car_n in sorted(self.loadpoint_map):
+            enabled = self.car_controlled(car_n)
+            if enabled != self.control_enabled.get(car_n, enabled):
+                self.log("EvccAPI: charge mode control on car {}'s loadpoint switched {}".format(car_n, "on" if enabled else "off"))
+                # car_charging_now follows the switch, so the auto-configuration has to be redone
+                self.config_signature = None
+            self.control_enabled[car_n] = enabled
+
+        guest_hold = bool(self.get_arg("evcc_guest_hold", False))
+        if guest_hold != self.guest_hold_enabled:
+            self.log("EvccAPI: guest car battery hold switched {}".format("on" if guest_hold else "off"))
+        self.guest_hold_enabled = guest_hold
 
     def guest_hold(self):
         """
-        Publish the guest-hold switch and tell Predbat whether the battery must be held right now.
-
-        The switch is the component's own, like switch.predbat_evcc_control, and is seeded from the
-        entity it published last time so a restart does not silently turn the user's choice back off -
-        the same reason restore_sticky and restore_saved_mode read their own sensors back.
+        Tell Predbat whether the home battery must be held right now for an unidentified car.
 
         Predbat gets one boolean rather than the switch and the state separately, because the decision
-        is the component's: only it knows which car on which loadpoint evcc failed to identify.
+        is the component's: only it knows which car on which loadpoint evcc failed to identify. The
+        switch itself lives in the config (see read_switches); what is published here is what the
+        component did with it, so "why is the battery held" is answerable from one entity.
         """
-        if self.guest_hold_enabled is None:
-            state = self.get_state_wrapper(entity_id=self.entity("switch", "guest_hold", 0))
-            self.guest_hold_enabled = str(state).lower() == "on"
-
         holding = self.guest_hold_enabled and any(self.guest_charging.get(car_n, False) for car_n in self.loadpoint_map)
         if holding != bool(getattr(self.base, "evcc_guest_charging", False)):
             self.log("EvccAPI: home battery hold for an unidentified car {}".format("on" if holding else "off"))
         self.base.evcc_guest_charging = holding
 
         self.dashboard_item(
-            self.entity("switch", "guest_hold", 0),
-            state="on" if self.guest_hold_enabled else "off",
-            attributes={"friendly_name": "Predbat evcc hold battery for a guest car", "icon": "mdi:home-battery-outline", "holding": holding},
+            self.entity("binary_sensor", "guest_hold", 0),
+            state="on" if holding else "off",
+            attributes={"friendly_name": "Predbat evcc holding battery for a guest car", "icon": "mdi:home-battery-outline", "enabled": self.guest_hold_enabled},
             app="evcc",
         )
         return holding
@@ -1103,16 +1140,14 @@ class EvccAPI(ComponentBase):
         self.queued_events.append((entity_id, service))
 
     def handle_switch_event(self, entity_id, service):
-        """Apply a queued switch change to the control kill switch or the guest battery hold."""
-        if entity_id == self.entity("switch", "guest_hold", 0):
-            self.guest_hold_enabled = service == "turn_on"
-            self.log("EvccAPI: guest car battery hold switched {}".format("on" if self.guest_hold_enabled else "off"))
+        """
+        React to one of our config switches being toggled.
+
+        The value itself is read back from the config item by read_switches - all this does is bring
+        the next cycle forward, so a kill switch takes effect now rather than at the next poll.
+        """
+        if entity_id == self.config_entity("evcc_guest_hold") or entity_id.startswith(self.config_entity("evcc_control")):
             self.force_refresh = True
-        for car_n in self.loadpoint_map:
-            if entity_id == self.entity("switch", "control", car_n):
-                self.control_enabled[car_n] = service == "turn_on"
-                self.log("EvccAPI: car {} control switched {}".format(car_n, "on" if self.control_enabled[car_n] else "off"))
-                self.force_refresh = True
 
     # ------------------------------------------------------------------ main loop
 
@@ -1138,6 +1173,8 @@ class EvccAPI(ComponentBase):
         while self.queued_events:
             entity_id, service = self.queued_events.pop(0)
             self.handle_switch_event(entity_id, service)
+
+        self.read_switches()
 
         due = first or self.force_refresh or (seconds % self.poll_seconds) < 60
         if not due:

@@ -389,7 +389,9 @@ pred_bat:
   # See https://springfall2008.github.io/batpred/components/#evcc-ev-charger-evcc
   #evcc_host: 'http://192.168.1.50:7070'
   #evcc_automatic: True
-  # Let Predbat set the evcc charging mode (solar / fast / off). Off by default - enable deliberately.
+  # Let Predbat set the evcc charging mode (solar / fast / off). This is one switch per loadpoint,
+  # switch.predbat_evcc_control[_1/2/3...] in the Predbat config, so a heat pump on another
+  # loadpoint stays evcc's; the setting here only says how the first one starts out. Off by default.
   #evcc_control: True
 
   # Octopus Energy direct integration

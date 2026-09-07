@@ -709,6 +709,95 @@ CONFIG_ITEMS = [
         "default": True,
         "enable_condition": "num_cars > 0",
     },
+    # What is switched is one evcc loadpoint, not the car: one evcc instance drives several
+    # loadpoints and only some of them are car chargers, so a heat pump on another loadpoint must
+    # be left to evcc whatever is done with the charger. They are indexed by Predbat car because
+    # that is what evcc_loadpoints maps to a loadpoint, and what num_cars gates. The component
+    # reads these live, so they are the runtime control rather than a startup option.
+    # evcc_control in apps.yaml seeds the first one's default.
+    {
+        "name": "evcc_control",
+        "friendly_name": "evcc control - let Predbat set the charge mode on Car 0's loadpoint",
+        "type": "switch",
+        "icon": "mdi:robot",
+        "default": False,
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 0",
+    },
+    {
+        "name": "evcc_control_1",
+        "friendly_name": "evcc control - let Predbat set the charge mode on Car 1's loadpoint",
+        "type": "switch",
+        "icon": "mdi:robot",
+        "default": False,
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 1",
+    },
+    {
+        "name": "evcc_control_2",
+        "friendly_name": "evcc control - let Predbat set the charge mode on Car 2's loadpoint",
+        "type": "switch",
+        "icon": "mdi:robot",
+        "default": False,
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 2",
+    },
+    {
+        "name": "evcc_control_3",
+        "friendly_name": "evcc control - let Predbat set the charge mode on Car 3's loadpoint",
+        "type": "switch",
+        "icon": "mdi:robot",
+        "default": False,
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 3",
+    },
+    {
+        "name": "evcc_control_4",
+        "friendly_name": "evcc control - let Predbat set the charge mode on Car 4's loadpoint",
+        "type": "switch",
+        "icon": "mdi:robot",
+        "default": False,
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 4",
+    },
+    {
+        "name": "evcc_control_5",
+        "friendly_name": "evcc control - let Predbat set the charge mode on Car 5's loadpoint",
+        "type": "switch",
+        "icon": "mdi:robot",
+        "default": False,
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 5",
+    },
+    {
+        "name": "evcc_control_6",
+        "friendly_name": "evcc control - let Predbat set the charge mode on Car 6's loadpoint",
+        "type": "switch",
+        "icon": "mdi:robot",
+        "default": False,
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 6",
+    },
+    {
+        "name": "evcc_control_7",
+        "friendly_name": "evcc control - let Predbat set the charge mode on Car 7's loadpoint",
+        "type": "switch",
+        "icon": "mdi:robot",
+        "default": False,
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 7",
+    },
+    {
+        # Off by default: evcc loses identification of a car from time to time (its API goes
+        # down), and holding the battery on that alone would force expensive import
+        "name": "evcc_guest_hold",
+        "friendly_name": "evcc hold home battery for an unidentified car",
+        "type": "switch",
+        "icon": "mdi:home-battery-outline",
+        "default": False,
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 0",
+    },
     {
         "name": "car_charging_manual_soc",
         "friendly_name": "Car charging manual SOC (Car 0)",

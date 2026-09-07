@@ -540,7 +540,14 @@ becomes a 1.38kW minimum, 3.68kW maximum and a 0.23kW step - instead of you work
   departure plan's target, because evcc stops there whatever the plan asks for - so a plan for 100%
   with the loadpoint dialled back to 70% plans grid slots for 70%, rather than buying import for
   charge that is never delivered. `sensor.predbat_evcc_plan_soc` says so in its `capped` attribute.
-- Mode control is off by default. Enable it deliberately with `evcc_control: True`.
+- Mode control is off by default and is **per loadpoint**. What each switch turns on is Predbat
+  writing the charge mode to **one evcc loadpoint** - the one `evcc_loadpoints` maps that car to.
+  One evcc instance usually drives more than a car charger (a heat pump, an immersion heater), so
+  enable it deliberately, on the loadpoints you want Predbat to drive and no others. The switches
+  are indexed by Predbat car, because that is what a loadpoint is mapped to:
+  **switch.predbat_evcc_control** for car 0, **switch.predbat_evcc_control_1/2/3...** for further
+  cars. `evcc_control: True` in `apps.yaml` seeds the first one for anybody who set it there before
+  the switches existed.
 - `car_charging_energy` is **not** auto-configured; evcc reports session energy in Wh and the unit is not
   consistent across versions, so wire it yourself if you want it.
 - One loadpoint maps to one Predbat car. Two cars sharing a single loadpoint is not modelled.
@@ -559,7 +566,7 @@ becomes a 1.38kW minimum, 3.68kW maximum and a 0.23kW step - instead of you work
 | `host` | String | Yes | - | `evcc_host` | evcc base URL, e.g. `http://192.168.1.50:7070`. A bare host gets `http://` and port 7070 added |
 | `api_key` | String | No | - | `evcc_api_key` | Long-lived evcc API key (`evcc_...`). Omit it entirely on an unauthenticated LAN instance |
 | `automatic` | Boolean | No | `False` | `evcc_automatic` | Point Predbat's `car_charging_*` keys at the entities this component publishes |
-| `control` | Boolean | No | `False` | `evcc_control` | Allow Predbat to write the loadpoint charging mode back to evcc |
+| `control` | Boolean | No | `False` | `evcc_control` | Initial setting of **switch.predbat_evcc_control**. Mode control is turned on and off per loadpoint with those switches in the Predbat config |
 | `loadpoints` | List | No | - | `evcc_loadpoints` | One entry per Predbat car: an evcc loadpoint id (1-based) or title, or `off` to skip that car. Defaults to a one-to-one mapping |
 | `solar` | Boolean | No | `True` | `evcc_solar` | Model evcc's PV diversion by turning **switch.predbat_car_charging_solar** on - see the note above |
 | `use_minpv` | Boolean | No | `False` | `evcc_use_minpv` | Use evcc's `minpv` mode instead of `pv` when Predbat wants solar charging |
@@ -591,14 +598,14 @@ Per car, with `_1`, `_2` … postfixes for later cars:
 | `sensor.predbat_evcc_target_mode` | The mode in effect on the loadpoint: evcc's own while Predbat is not intervening, the borrowed one while it is. `reason` says what Predbat did about it, `predbat_mode` and `decision` what it wanted and why, `write_target` what was actually sent |
 | `sensor.predbat_evcc_restore_mode` | The mode owed back to evcc during a takeover, or `none` |
 | `binary_sensor.predbat_evcc_override` | On when somebody changed the mode in evcc and Predbat has backed off |
-| `switch.predbat_evcc_control` | Runtime kill switch for mode writing (only when `evcc_control` is set) |
-| `switch.predbat_evcc_guest_hold` | Hold the home battery while an unidentified car charges. Off by default |
+| `binary_sensor.predbat_evcc_guest_hold` | On while the home battery is actually being held for an unidentified car |
 | `sensor.predbat_evcc_priority_soc` | The site's home battery priority SoC. With `evcc_automatic` it also sets **input_number.predbat_car_charging_solar_min_soc**, but only when the value in evcc changes, so your own adjustments are not undone every poll |
 | `sensor.predbat_evcc_status` | `ok` / `degraded` / `unreachable`, with the evcc version and any missing fields |
 
 #### Mode control (evcc)
 
-With `evcc_control: True`, Predbat **borrows** the loadpoint rather than driving it. evcc already does
+With a loadpoint's **switch.predbat_evcc_control** on, Predbat **borrows** that loadpoint rather
+than driving it. evcc already does
 almost everything Predbat would ask for, so Predbat only steps in for the two decisions evcc cannot reach
 on its own, and hands the loadpoint straight back afterwards:
 
@@ -628,8 +635,8 @@ applies when it is plugged back in - so a loadpoint you set to `off` between ses
 plug-in is not mistaken for Predbat's doing. (evcc's configured defaults are not readable over the API
 without an `evcc_api_key`; Predbat does not need them, it simply leaves those moments alone.)
 
-Writes only happen when the plan is valid and fresh, `switch.predbat_set_read_only` is off, and the runtime
-switch is on; every refusal is published as the `reason` attribute on `sensor.predbat_evcc_target_mode`, so
+Writes only happen when the plan is valid and fresh, `switch.predbat_set_read_only` is off, and that
+loadpoint's **switch.predbat_evcc_control** is on; every refusal is published as the `reason` attribute on `sensor.predbat_evcc_target_mode`, so
 "why is nothing happening" is answerable from that entity alone. If you change the mode in evcc's own UI
 during a takeover, Predbat backs off for `evcc_override_minutes` and abandons the hand-back - the mode you
 chose is now the one that stands, and the next takeover starts from it.
@@ -637,7 +644,7 @@ chose is now the one that stands, and the next takeover starts from it.
 #### Guest cars (evcc)
 
 A car evcc cannot identify is not in Predbat's plan, but it is still real load, and the home battery
-would quietly cover it. **switch.predbat_evcc_guest_hold** stops that: while
+would quietly cover it. **switch.predbat_evcc_guest_hold** in the Predbat config stops that: while
 `binary_sensor.predbat_evcc_guest_charging` is on, Predbat holds the battery the same way it does
 during a planned car slot - pausing discharge, or dropping the discharge rate and lifting the reserve -
 so the guest's charge is bought from the grid. The plan status shows `Hold for car`.
@@ -657,7 +664,9 @@ load history like any other unexpected demand.
 ```yaml
   evcc_host: 'http://192.168.1.50:7070'
   evcc_automatic: True
-  # Enable only once you have watched sensor.predbat_evcc_target_mode and are happy with it
+  # Mode control is switch.predbat_evcc_control[_1/2/3...] in the Predbat config, one per loadpoint;
+  # this only sets how the first one starts out. Enable it only once you have watched
+  # sensor.predbat_evcc_target_mode and are happy with it
   #evcc_control: True
 ```
 
