@@ -519,6 +519,9 @@ class Compare:
         my_predbat = self.pb
 
         my_predbat.car_charging_slots = [[] for car_n in range(my_predbat.num_cars)]
+        # Compare re-plans car charging on the rate-based path (plan_car_charging), where the real
+        # fill clamp must hold - drop any model-facing limit override left by the live IOG fetch (#4967)
+        my_predbat.car_charging_limit_model = None
 
         for car_n in range(my_predbat.num_cars):
             total_car_kwh = 0
@@ -576,6 +579,7 @@ class Compare:
         save_octopus_intelligent_charging = my_predbat.octopus_intelligent_charging
         save_car_charging_plan_smart = copy.deepcopy(my_predbat.car_charging_plan_smart)
         save_car_charging_limit = copy.deepcopy(my_predbat.car_charging_limit)
+        save_car_charging_limit_model = copy.deepcopy(my_predbat.car_charging_limit_model)
         save_car_charging_soc = copy.deepcopy(my_predbat.car_charging_soc)
         save_car_charging_battery_size = copy.deepcopy(my_predbat.car_charging_battery_size)
         save_car_charging_slots = copy.deepcopy(my_predbat.car_charging_slots)
@@ -683,6 +687,7 @@ class Compare:
             my_predbat.export_today_now = save_export_today_now
             my_predbat.octopus_intelligent_charging = save_octopus_intelligent_charging
             my_predbat.car_charging_limit = save_car_charging_limit
+            my_predbat.car_charging_limit_model = save_car_charging_limit_model
             my_predbat.car_charging_soc = save_car_charging_soc
             my_predbat.car_charging_battery_size = save_car_charging_battery_size
             my_predbat.car_charging_slots = save_car_charging_slots

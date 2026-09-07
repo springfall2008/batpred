@@ -31,6 +31,7 @@ from const import (
     PREDBAT_MODE_MONITOR,
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
+    CAR_CHARGING_LIMIT_UNCAPPED,
     LOW_POWER_PV_LIGHT_FRACTION,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
@@ -1399,6 +1400,10 @@ class Fetch:
         else:
             entity_id_list = []
 
+        # Cars whose charging plan came from Octopus Intelligent dispatch slots this cycle - used
+        # below to decide which cars get a model-facing charge limit override (#4967)
+        iog_slot_cars = []
+
         if entity_id_list:
             # Process each car's intelligent slot configuration
             for car_n in range(min(len(entity_id_list), self.num_cars)):
@@ -1500,6 +1505,7 @@ class Fetch:
                     if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
                         self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
                         if self.car_charging_slots[car_n]:
+                            iog_slot_cars.append(car_n)
                             self.log(
                                 "Car {} using Octopus Intelligent, charging planned - charging limit {}, ready time {} - battery size {}".format(
                                     car_n, self.car_charging_limit[car_n], self.car_charging_plan_time[car_n], self.car_charging_battery_size[car_n]
@@ -1515,6 +1521,19 @@ class Fetch:
         else:
             # Disable octopus charging if we don't have the slot sensor
             self.octopus_intelligent_charging = False
+
+        # Model-facing car charge limit (#4967). With octopus_intelligent_consider_full off (the
+        # default) the prediction must trust the Octopus dispatch plan rather than modelling the car
+        # filling up, so cars carrying IOG slots get an uncapped limit for predict()'s fill clamp
+        # (which also releases the battery discharge hold once the modelled car "fills"). The real
+        # car_charging_limit is left untouched - execute.py's "car is full" decision, the
+        # plan_car_charging path and load_octopus_slots all still need it. None means no override.
+        if iog_slot_cars and not self.octopus_intelligent_consider_full:
+            self.car_charging_limit_model = self.car_charging_limit[:]
+            for car_n in iog_slot_cars:
+                self.car_charging_limit_model[car_n] = CAR_CHARGING_LIMIT_UNCAPPED
+        else:
+            self.car_charging_limit_model = None
 
         # Log final car SoC (initialised before the IOG loop, updated per-car after Octopus battery_size is read)
         if self.num_cars:

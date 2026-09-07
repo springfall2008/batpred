@@ -466,6 +466,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.charge_window_best = []
         self.car_charging_battery_size = [100]
         self.car_charging_limit = [100]
+        # Per-car charge limit as the prediction model should see it, or None to use car_charging_limit.
+        # Set by fetch_sensor_data_cars() for cars on Octopus Intelligent dispatch slots (#4967).
+        self.car_charging_limit_model = None
         self.car_charging_soc = [0]
         self.car_charging_soc_next = [None]
         self.car_charging_rate = [7.4]
@@ -967,6 +970,23 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 extra=status_extra,
             )
 
+    def update_car_manual_soc(self):
+        """
+        Write the predicted next car SoC back to the manual car SoC tracker for cars using car_charging_manual_soc
+        """
+        for car_n in range(self.num_cars):
+            if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
+                car_postfix = "" if car_n == 0 else "_" + str(car_n)
+                self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
+                if self.car_charging_soc_next[car_n] is not None:
+                    soc_next = self.car_charging_soc_next[car_n]
+                    # The modelled car SoC can run past the real charge limit when the prediction's fill
+                    # clamp is inert (octopus_intelligent_consider_full off, #4967) - the tracked manual
+                    # SoC stands in for a measurement, so keep it within the real per-car limit
+                    if car_n < len(self.car_charging_limit):
+                        soc_next = min(soc_next, self.car_charging_limit[car_n])
+                    self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(soc_next))
+
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -1301,12 +1321,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Car SoC increment
         if scheduled:
-            for car_n in range(self.num_cars):
-                if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
-                    car_postfix = "" if car_n == 0 else "_" + str(car_n)
-                    self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
-                    if self.car_charging_soc_next[car_n] is not None:
-                        self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(self.car_charging_soc_next[car_n]))
+            self.update_car_manual_soc()
 
         # Holiday days left countdown, subtract a day at midnight every day
         if scheduled and self.holiday_days_left > 0 and self.minutes_now < RUN_EVERY:
