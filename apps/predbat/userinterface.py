@@ -19,7 +19,10 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key
+import functools
+import io
+import itertools
 import json
 import yaml
 import re
@@ -28,30 +31,56 @@ from const import (
     TIME_FORMAT,
     PREDBAT_MODE_OPTIONS,
     PREDBAT_MODE_MONITOR,
+    MANUAL_RATE_MAX_MINUTES,
+    MANUAL_TIME_MAX_MINUTES,
 )
-from config import CONFIG_API_OVERRIDE
-from predbat import THIS_VERSION
+from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
+from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
-DEBUG_EXCLUDE_LIST = [
-    "ha_interface",
-    "components",
-    "prediction",
-    "logfile",
-    "predheat",
-    "inverters",
-    "run_list",
-    "threads",
-    "EVENT_LISTEN_LIST",
-    "local_tz",
-    "CONFIG_ITEMS",
-    "config_index",
-    "comparison",
-    "plugin_system",
-    "ge_url_cache",
-    "github_url_cache",
-    "octopus_url_cache",
-    "secrets",
-]
+# A debug dump is several megabytes of deeply nested YAML and PyYAML's pure-Python parser spends
+# most of a replay's wall-clock on it - about 6s for a 5MB dump. CLoader pairs libyaml's C parser
+# with the very same (unsafe) Constructor that yaml.unsafe_load uses, so the Python-object tags
+# these dumps carry still load and the result is identical, roughly 6x faster. PyYAML is not
+# always built with libyaml, so fall back to the pure-Python loader when the C one is absent.
+DEBUG_YAML_LOADER = getattr(yaml, "CLoader", yaml.UnsafeLoader)
+
+
+class DebugYamlDumper(yaml.Dumper):
+    """
+    yaml.Dumper whose anchor ids are drawn from a counter shared by every dumper writing the same stream.
+
+    dump_debug_yaml() emits the debug dict with one yaml.dump() call per top-level key, and each call
+    gets a fresh Dumper whose anchor numbering restarts at id001. Two keys that each contain an internal
+    alias would then both be labelled &id001, and the file would no longer load as a single document
+    ("found duplicate anchor"). Sharing the counter keeps every anchor in the stream unique.
+    """
+
+    def __init__(self, stream, anchor_ids=None, **kwargs):
+        """anchor_ids is the shared itertools.count(); without one this is a plain yaml.Dumper"""
+        super().__init__(stream, **kwargs)
+        self.anchor_ids = anchor_ids
+
+    def generate_anchor(self, node):
+        """Name the next anchor from the shared counter rather than this dumper's own"""
+        if self.anchor_ids is None:
+            return super().generate_anchor(node)
+        return "id{:03d}".format(next(self.anchor_ids))
+
+
+def dump_debug_yaml(debug, stream):
+    """
+    Write the debug dict to stream as one YAML document, one top-level key at a time.
+
+    yaml.dump() builds a Node object for every scalar in the data before it emits a byte, so dumping
+    the whole dict at once costs around thirty times the size of the output - ~150MB for a typical
+    5MB debug file, which set Predbat's peak memory and left ~30MB of heap fragmentation behind
+    at idle. Dumping per key bounds the node tree by the largest key instead (~20MB here). The
+    output is the same sorted single document; the only difference is that an object shared between
+    two top-level keys is written out twice rather than aliased.
+    """
+    dumper = functools.partial(DebugYamlDumper, anchor_ids=itertools.count(1))
+    for key in sorted(debug):
+        yaml.dump({key: debug[key]}, stream, Dumper=dumper)
 
 
 class UserInterface:
@@ -124,7 +153,7 @@ class UserInterface:
                 return final
 
         # Resolve templated data
-        for repeat in range(2):
+        for _repeat in range(2):
             if isinstance(value, str) and "{" in value:
                 try:
                     if extra_args:
@@ -189,7 +218,13 @@ class UserInterface:
             overrides = self.get_manual_api(arg)
             if isinstance(default, list):
                 value = self.get_arg(arg, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index, domain=domain, can_override=False)
+                is_dict_list = self.is_multi_instance_override(arg)
                 for override in overrides:
+                    # dict_list index only dedupes at write time, it has no output position (#4405)
+                    if is_dict_list:
+                        value.append(override.get("value", None))
+                        self.log("Note: API Overridden arg {} value {} appended".format(arg, value))
+                        continue
                     override_index = override.get("index", 0)
                     if override_index is None:
                         override_index = 0
@@ -254,20 +289,33 @@ class UserInterface:
 
         if isinstance(default, float):
             # Convert to float?
-            try:
-                value = float(value)
-            except (ValueError, TypeError):
-                self.log("Warn: Return bad float value {} from {} using default {}".format(value, arg, default))
-                self.record_status("Warn: Return bad float value {} from {}".format(value, arg), had_errors=True)
+            if value is None:
+                # Nothing resolved - not configured, or an out-of-range index on a per-inverter list
+                # (resolve_arg has already logged "Out of range index ..."). That is exactly what the
+                # caller's default is for, so apply it quietly rather than reporting an error: flagging
+                # it pins the warning on the status sensor and ends every run as "Read-Only with Errors"
+                # for a gap the caller already handles. A value that is present but unparseable is a
+                # genuine fault and is still reported below.
                 value = default
+            else:
+                try:
+                    value = float(value)
+                except (ValueError, TypeError):
+                    self.log("Warn: Return bad float value {} from {} using default {}".format(value, arg, default))
+                    self.record_status("Warn: Return bad float value {} from {}".format(value, arg), had_errors=True)
+                    value = default
         elif isinstance(default, int) and not isinstance(default, bool):
             # Convert to int?
-            try:
-                value = int(float(value))
-            except (ValueError, TypeError):
-                self.log("Warn: Return bad int value {} from {} using default {}".format(value, arg, default))
-                self.record_status("Warn: Return bad int value {} from {}".format(value, arg), had_errors=True)
+            if value is None:
+                # See the float case above - a missing value is what the default is for, not an error
                 value = default
+            else:
+                try:
+                    value = int(float(value))
+                except (ValueError, TypeError):
+                    self.log("Warn: Return bad int value {} from {} using default {}".format(value, arg, default))
+                    self.record_status("Warn: Return bad int value {} from {}".format(value, arg), had_errors=True)
+                    value = default
         elif isinstance(default, bool) and isinstance(value, str):
             # Convert to Boolean
             if value.lower() in ["on", "true", "yes", "enabled", "enable", "connected"]:
@@ -572,7 +620,6 @@ class UserInterface:
 
         if enable:
             enabled_value = self.get_arg(enable, default=False)
-            citem = self.config_index.get(enable, None)
             if enable_condition:
                 # Evaluate the condition in python
                 try:
@@ -601,7 +648,7 @@ class UserInterface:
             os.mkdir(self.save_restore_dir)
 
         PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
-        for root, dirs, files in os.walk(self.save_restore_dir):
+        for root, _dirs, files in os.walk(self.save_restore_dir):
             for name in files:
                 filepath = os.path.join(root, name)
                 if filepath.endswith(".yaml") and not name.startswith("."):
@@ -629,7 +676,7 @@ class UserInterface:
                     self.log("Restore setting: {} = {} (was {})".format(item["name"], item["default"], item["value"]))
                     await self.async_expose_config(item["name"], item["default"], event=True)
             if self.get_arg("set_system_notify"):
-                await self.async_call_notify("Predbat settings restored from default")
+                await self.async_call_notify(f"{self.prefix.capitalize()} settings restored from default")
         else:
             filepath = os.path.join(self.save_restore_dir, filename)
             if os.path.exists(filepath):
@@ -644,7 +691,7 @@ class UserInterface:
                             self.log("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                             await self.async_expose_config(item["name"], item["value"], event=True)
                 if self.get_arg("set_system_notify"):
-                    await self.async_call_notify("Predbat settings restored from {}".format(filename))
+                    await self.async_call_notify(f"{self.prefix.capitalize()} settings restored from {filename}")
         await self.async_expose_config("saverestore", None)
 
     def load_current_config(self):
@@ -716,7 +763,7 @@ class UserInterface:
             yaml.dump(self.CONFIG_ITEMS, file)
         self.log("Saved Predbat settings to {}".format(filepath_p))
         if self.get_arg("set_system_notify"):
-            await self.async_call_notify("Predbat settings saved to {}".format(filename))
+            await self.async_call_notify(f"{self.prefix.capitalize()} settings saved to {filename}")
 
     def read_debug_yaml(self, filename):
         """
@@ -725,7 +772,7 @@ class UserInterface:
         debug = {}
         if os.path.exists(filename):
             with open(filename, "r") as file:
-                debug = yaml.unsafe_load(file)
+                debug = yaml.load(file, Loader=DEBUG_YAML_LOADER)
         else:
             self.log("Warn: Debug file {} not found".format(filename))
             return
@@ -770,10 +817,10 @@ class UserInterface:
         # Store all predbat member variables into debug
         for key in self.__dict__:
             if not key.startswith("__") and not callable(getattr(self, key)):
-                if (key.startswith("db")) or ("_key" in key) or key in DEBUG_EXCLUDE_LIST:
+                if is_debug_excluded_key(key):
                     pass
                 else:
-                    if key == "args":
+                    if key in ("args", "args_from_apps_yaml"):
                         debug[key] = mask_secret_args(self.__dict__[key])
                     else:
                         debug[key] = self.__dict__[key]
@@ -784,6 +831,17 @@ class UserInterface:
                 if not key.startswith("__") and not callable(getattr(inverter, key)):
                     if key.startswith("base"):
                         pass
+                    elif getattr(inverter.__dict__[key], "base", None) is not None:
+                        # A helper object that keeps its own back-reference to Predbat (the GivTCP
+                        # REST client, Inverter.givtcp). yaml.dump() walks arbitrary objects through
+                        # __reduce_ex__(), so emitting one serialises the entire PredBat graph
+                        # through its .base: the dump either dies on the first unpicklable thing it
+                        # meets - an in-flight coroutine, the open log file - or, worse, succeeds and
+                        # writes ha_interface's access token and every other member
+                        # is_debug_excluded_key() deliberately drops into the file users attach to
+                        # public bug reports. Skipping "base" alone was enough only while every
+                        # such reference was named that.
+                        pass
                     else:
                         inverter_debug[key] = inverter.__dict__[key]
             inverters_debug.append(inverter_debug)
@@ -792,11 +850,13 @@ class UserInterface:
 
         if write_file:
             with open(filename, "w") as file:
-                yaml.dump(debug, file)
+                dump_debug_yaml(debug, file)
             self.log("Wrote debug yaml to {}".format(filename_p))
         else:
             # Return the debug yaml as a string
-            return yaml.dump(debug)
+            text = io.StringIO()
+            dump_debug_yaml(debug, text)
+            return text.getvalue()
 
     def create_entity_list(self):
         """
@@ -804,7 +864,7 @@ class UserInterface:
         """
 
         text = ""
-        text += "# Predbat Dashboard - {}\n".format(THIS_VERSION)
+        text += "# Predbat Dashboard - {}\n".format(THIS_VERSION_DISPLAY)
         text += "type: entities\n"
         text += "Title: Predbat\n"
         text += "entities:\n"
@@ -1177,6 +1237,22 @@ class UserInterface:
                 command_index = int(command_split[1])
         return command, command_index
 
+    def is_multi_instance_override(self, command):
+        """
+        True if the command is a dict_list override (e.g. rates_import_override)
+        """
+        return APPS_SCHEMA.get(command, {}).get("type") == "dict_list"
+
+    def strip_command_args(self, command):
+        """
+        Strip the ?args or =value suffix from a manual API command string
+        """
+        if "?" in command:
+            return command.split("?")[0]
+        elif "=" in command:
+            return command.split("=")[0]
+        return command
+
     def get_manual_api(self, command_type):
         """
         Get the manual API command
@@ -1370,21 +1446,20 @@ class UserInterface:
         for value in values_list:
             if value == "off":
                 continue
-            for prev in time_overrides[:]:
-                if "=" in prev:
-                    prev_no_eq = prev.split("=")[0]
-                elif "?" in prev:
-                    prev_no_eq = prev.split("?")[0]
-                else:
-                    prev_no_eq = prev
-                if "=" in value:
-                    value_no_eq = value.split("=")[0]
-                elif "?" in value:
-                    value_no_eq = value.split("?")[0]
-                else:
-                    value_no_eq = value
-                if prev_no_eq == value_no_eq:
-                    time_overrides.remove(prev)
+            value_no_eq = self.strip_command_args(value)
+            has_index = "(" in value_no_eq
+            value_command = value_no_eq.split("(")[0] if has_index else value_no_eq
+
+            # No-index dict_list commands only dedupe against an exact repeat, not by name (#4405)
+            is_multi_instance = not has_index and self.is_multi_instance_override(value_command)
+
+            if is_multi_instance:
+                if value in time_overrides:
+                    time_overrides.remove(value)
+            else:
+                for prev in time_overrides[:]:
+                    if self.strip_command_args(prev) == value_no_eq:
+                        time_overrides.remove(prev)
             time_overrides.append(value)
 
         values = ",".join(time_overrides)
@@ -1406,15 +1481,35 @@ class UserInterface:
         self.expose_config(config_item, values, force=True)
         return time_overrides
 
-    def manual_rates(self, config_item, exclude=[], new_value=None, default_rate=0):
+    def manual_time_origin(self):
+        """
+        Midnight and minutes-now for decoding manual override selections
+
+        Derived from now_utc rather than read from self.midnight_utc / self.minutes_now, which
+        calculate_yesterday() rewrites for the duration of the savings calculation. Those writes
+        land on the shared instance, so a caller on another thread - the web server rendering the
+        plan, or a user clicking a slot on the plan card - could otherwise decode the stored
+        selection against a clock a day behind, and persist the result (#4900).
+        """
+        midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        minutes_now = int((self.now_utc - midnight_utc).total_seconds() / 60)
+        return midnight_utc, minutes_now
+
+    def manual_rates(self, config_item, exclude=None, new_value=None, default_rate=0, update=True):
         """
         Update manual rates sensor
+
+        Set update=False to decode the stored selection without writing it back - read-only
+        callers should use this. See the note in manual_times() for the shared time origin.
         """
+        if exclude is None:
+            exclude = []
         rate_overrides_minutes = {}
         rate_overrides = []
         plan_interval = self.get_arg("plan_interval_minutes", 30)
-        minutes_now = int(self.minutes_now / plan_interval) * plan_interval
-        manual_rate_max = 48 * 60
+        midnight_utc, minutes_now_real = self.manual_time_origin()
+        minutes_now = int(minutes_now_real / plan_interval) * plan_interval
+        manual_rate_max = MANUAL_RATE_MAX_MINUTES
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
@@ -1448,10 +1543,10 @@ class UserInterface:
 
             if override_time:
                 # Calculate minutes from midnight today
-                minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+                minutes = int((override_time - midnight_utc).total_seconds() / 60)
                 minutes_now_slot = int(minutes_now / plan_interval) * plan_interval
 
-                if (minutes - minutes_now_slot) >= 0 and (minutes - minutes_now) < manual_rate_max:
+                if (minutes - minutes_now_slot) >= 0 and (minutes - minutes_now_real) < manual_rate_max:
                     rate_overrides.append((minutes, rate_value))
                     for minute in range(minutes, minutes + plan_interval):
                         rate_overrides_minutes[minute] = rate_value
@@ -1459,7 +1554,7 @@ class UserInterface:
         # Reconstruct the list in order based on minutes
         values_list = []
         for minute, rate in rate_overrides:
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
+            minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
             minute_rate_str = minute_str + "=" + str(rate)
             if minute_rate_str not in exclude and minute_rate_str not in values_list:
                 values_list.append(minute_rate_str)
@@ -1468,33 +1563,46 @@ class UserInterface:
             values = "+" + values
 
         # Create the new dropdown
-        time_values = []
-        for minute in range(minutes_now, minutes_now + manual_rate_max, plan_interval):
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
-            if minute in rate_overrides_minutes:
-                rate_value = rate_overrides_minutes[minute]
-                minute_str = f"{minute_str}={rate_value}"
-                minute_str = "[" + minute_str + "]"
-            time_values.append(minute_str)
+        if update:
+            time_values = []
+            for minute in range(minutes_now, minutes_now + manual_rate_max, plan_interval):
+                minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
+                if minute in rate_overrides_minutes:
+                    rate_value = rate_overrides_minutes[minute]
+                    minute_str = f"{minute_str}={rate_value}"
+                    minute_str = "[" + minute_str + "]"
+                time_values.append(minute_str)
 
-        if values not in time_values:
-            time_values.append(values)
-        time_values.append("off")
-        item["options"] = time_values
-        if not values:
-            values = "off"
-        self.expose_config(config_item, values, force=True)
+            if values not in time_values:
+                time_values.append(values)
+            time_values.append("off")
+            item["options"] = time_values
+            if not values:
+                values = "off"
+            self.expose_config(config_item, values, force=True)
 
         return rate_overrides_minutes
 
-    def manual_times(self, config_item, exclude=[], new_value=None):
+    def manual_times(self, config_item, exclude=None, new_value=None, update=True):
         """
         Update manual times sensor
+
+        The stored selection is a list of "%a %H:%M" strings which this re-resolves to absolute
+        minutes and then writes back in its re-rendered form, so both halves of that round trip
+        share the single origin from manual_time_origin() - previously the parse used
+        self.midnight_utc and the render self.midnight, which moved every stored slot on by a day
+        whenever the two disagreed (#4900).
+
+        Set update=False to decode the stored selection without writing it back, which is what a
+        read-only caller wants.
         """
+        if exclude is None:
+            exclude = []
         time_overrides = []
         plan_interval = self.get_arg("plan_interval_minutes", 30)
-        minutes_now = int(self.minutes_now / plan_interval) * plan_interval
-        manual_time_max = 48 * 60
+        midnight_utc, minutes_now_real = self.manual_time_origin()
+        minutes_now = int(minutes_now_real / plan_interval) * plan_interval
+        manual_time_max = MANUAL_TIME_MAX_MINUTES
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
@@ -1518,7 +1626,7 @@ class UserInterface:
 
             if override_time:
                 # Calculate minutes from midnight today
-                minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+                minutes = int((override_time - midnight_utc).total_seconds() / 60)
                 minutes_now_slot = int(minutes_now / plan_interval) * plan_interval
 
                 if (minutes >= minutes_now_slot) and (minutes - minutes_now_slot) < manual_time_max:
@@ -1527,7 +1635,7 @@ class UserInterface:
         # Reconstruct the list in order based on minutes
         values_list = []
         for minute in time_overrides:
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
+            minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
             if minute_str not in exclude and minute_str not in values_list:
                 values_list.append(minute_str)
         values = ",".join(values_list)
@@ -1535,20 +1643,21 @@ class UserInterface:
             values = "+" + values
 
         # Create the new dropdown
-        time_values = []
-        for minute in range(minutes_now, minutes_now + manual_time_max, plan_interval):
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
-            if minute in time_overrides:
-                minute_str = "[" + minute_str + "]"
-            time_values.append(minute_str)
+        if update:
+            time_values = []
+            for minute in range(minutes_now, minutes_now + manual_time_max, plan_interval):
+                minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
+                if minute in time_overrides:
+                    minute_str = "[" + minute_str + "]"
+                time_values.append(minute_str)
 
-        if values not in time_values:
-            time_values.append(values)
-        time_values.append("off")
-        item["options"] = time_values
-        if not values:
-            values = "off"
-        self.expose_config(config_item, values, force=True)
+            if values not in time_values:
+                time_values.append(values)
+            time_values.append("off")
+            item["options"] = time_values
+            if not values:
+                values = "off"
+            self.expose_config(config_item, values, force=True)
 
         if time_overrides:
             time_txt = []

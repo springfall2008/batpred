@@ -11,11 +11,13 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Home Assistant History (ha_history)](#home-assistant-history-ha_history)
     - [Web Interface (web)](#web-interface-web)
     - [MCP Server (mcp)](#mcp-server-mcp)
+    - [AI Chat Agent (chat)](#ai-chat-agent-chat)
     - [GivEnergy Cloud Direct (gecloud)](#givenergy-cloud-direct-gecloud)
     - [GivEnergy Cloud Data (gecloud_data)](#givenergy-cloud-data-gecloud_data)
     - [Octopus Energy Direct (octopus)](#octopus-energy-direct-octopus)
     - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
     - [Ohme Charger (ohme)](#ohme-charger-ohme)
+    - [myenergi (myenergi)](#myenergi-myenergi)
     - [Fox ESS API (fox)](#fox-ess-api-fox)
     - [Tesla Powerwall Teslemetry API (teslemetry)](#tesla-powerwall-teslemetry-api-teslemetry)
     - [Enphase API (enphase)](#enphase-api-enphase)
@@ -24,6 +26,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Sigenergy Cloud API (Sigenergy)](#sigenergy-cloud-api-sigenergy)
     - [DEYE Cloud API (deye)](#deye-cloud-api-deye)
     - [Sunsynk Cloud API (sunsynk)](#sunsynk-cloud-api-sunsynk)
+    - [AlphaESS Cloud API (alphaess)](#alphaess-cloud-api-alphaess)
     - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
     - [Temperature API (temperature)](#temperature-api-temperature)
@@ -180,12 +183,306 @@ Example usage in VSCode
 
 #### Available commands (mcp)
 
-- Get current system status
-- View and update configuration settings
-- Browse all entities
-- Retrieve battery plan data
-- Override plan for specific time periods
-- Access apps.yaml configuration
+| Tool | What it returns or does |
+| ---- | ----------------------- |
+| `get_status` | Current system status - mode, SoC, live power figures |
+| `get_plan` | The current battery plan, with forecasts and costs. Returned as a markdown table with the same columns as the plan page, plus a legend describing each one |
+| `get_config` | Every Predbat setting, with its current value and its default |
+| `get_apps` | Your `apps.yaml` configuration, with credentials redacted |
+| `get_apps_config` | The current value of one `apps.yaml` key, with a credential-like value redacted |
+| `get_log` | Lines from `predbat.log`, filtered by level, search term, regular expression and time window |
+| `get_state` | Predbat's internal state variables - the same data a debug yaml carries |
+| `get_entities` | All Predbat entities and their states |
+| `search_entities` | Search *every* Home Assistant entity id with a regular expression, not just Predbat's own - requires `switch.predbat_ai_ha_state_enable` |
+| `get_entity_state` | The current state (and optionally attributes) of one Home Assistant entity - requires `switch.predbat_ai_ha_state_enable` |
+| `get_entity_history` | One Home Assistant entity's history over a time window, bucketed into fixed-width time slots - requires `switch.predbat_ai_ha_state_enable` |
+| `set_config` | Change a Predbat setting |
+| `set_plan_override` | Override the plan for one 30 minute period |
+
+#### Asking an AI assistant to review your setup (mcp)
+
+`get_config`, `get_apps` and `get_log` together give an assistant everything a bug report
+normally has to carry, so you can ask it to look over your setup without opening an issue -
+for example *"compare my Predbat settings against their defaults and tell me which changes
+look wrong"*, or *"find the warnings in the last 24 hours of my log and explain them"*.
+
+`get_log` takes optional arguments:
+
+| Argument | Description |
+| -------- | ----------- |
+| `filter` | `all`, `info`, `warnings` (the default) or `errors` |
+| `search` | Only return lines containing this text, case-insensitive |
+| `pattern` | Only return lines matching this Python regular expression, case-insensitive |
+| `hours` | Only return lines written in the last N hours |
+| `start` | Only return lines at or after this point in time |
+| `end` | Only return lines at or before this point in time |
+| `max_lines` | How many lines to return - the most recent matches are the ones kept, but they come back oldest-first (default 200, maximum 5000) |
+| `line_number` | Return this one line in full, ignoring every other filter |
+| `context` | With `line_number`, also return this many lines either side |
+
+All of these narrow the result together rather than replacing one another, so
+`filter: errors` with `pattern: "inverter [12]"` returns only the errors that also mention those
+inverters.
+
+`start` and `end` each accept a date, a time, or both:
+
+| Value | Means |
+| ----- | ----- |
+| `2026-08-28` | As `start`, the beginning of that day; as `end`, the end of it - so `end: 2026-08-28` includes everything that happened that day |
+| `17:00` or `17:00:30` | That time today |
+| `2026-08-28 17:00` | Exactly that moment |
+
+`hours` still works and can be combined with `start`, in which case the narrower of the two wins.
+A line with no timestamp of its own - the second and later lines of a traceback - belongs to the
+entry above it, so a multi-line entry is kept or dropped as a whole.
+
+#### Keeping the response small enough to be useful
+
+`max_lines` bounds how many lines come back, not how big they are, and some Predbat log lines are
+enormous - a single Octopus GraphQL response is one 20KB line. Left unchecked, a few hundred of
+those made a tool result of nearly a megabyte, which overflowed the model's context and cost the
+assistant the rest of the conversation.
+
+So the response has three guards. Beyond `max_lines`, any single line longer than about a thousand
+characters is cut and marked with how much was left off, and the response as a whole stops at a
+total size budget - `truncated_reason` says which of the two ended it. A cut line still tells you
+its number, and passing that back as `line_number` returns it in full:
+
+```text
+2026-08-30 09:58:11: OctopusAPI: Fetched saving sessions... [+19069 chars, get_log line_number=26793]
+```
+
+Line numbers count from the start of the previous (rotated) log through the current one, so they
+stay valid as the log grows but not across a rotation.
+
+`get_state` exposes the same internal state a `predbat_debug.yaml` carries, but a variable at a
+time rather than as a 5MB file. Called with no arguments it returns every variable small enough
+to be worth reading - a few hundred of them, together well under a page - and *describes* the
+handful of large ones (the per-minute series such as `load_minutes`, `rate_import` and
+`pv_today`) in an `omitted` section giving each one's type, length and value range. Ask for one
+of those by name with `keys`, narrow by name with `filter`, or raise the per-variable budget
+with `max_bytes`.
+
+| Argument | Description |
+| -------- | ----------- |
+| `keys` | Specific variable names to return (omit for every small variable) |
+| `filter` | Only return variables whose name matches this Python regex |
+| `max_bytes` | Per-variable size budget before a value is described instead of returned (default 2048, maximum 262144) |
+
+`get_state` and `get_apps` both redact credentials. `get_apps` replaces credential-like values
+with `xxx`, so your API keys are not sent to your AI provider; pass `masked: false` if you
+deliberately want the raw values. A value counts as a credential if its name contains `_key`,
+`password`, `secret` or `token`, **or** if the component registry flags it explicitly - which
+covers the credentials a name alone cannot reveal, such as your Octopus account number, a Kraken
+MPAN, a site or plant id, and login identifiers like `deye_username`, `kraken_email` and
+`myenergi_hub_serial` (the myenergi API's digest-auth username). Inverter serial numbers are
+deliberately *not* redacted: they identify hardware rather than authenticate it, and they are
+what makes an integration bug report diagnosable. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
+return anything a debug dump would not - credentials, the Home Assistant interface, loaded
+secrets and the URL caches are not reachable through it at all. `get_apps_config` uses the same
+credential check as `get_apps`, but with no `masked: false` escape hatch at all - there is no
+legitimate reason for an assistant to ever see one raw credential value, so it is simply never
+offered.
+
+`get_apps_config` and `set_apps_config` let an assistant read, and change, one `apps.yaml` setting
+at a time - either a top-level key or, using a dotted path such as `forecast_solar[0].azimuth`,
+one value inside a nested structure. Both halves accept the same paths, so the model can read back
+what it just wrote, and a path that does not exist is answered with the keys that do - see [`set_apps_config`](#available-tools-chat) below for the write side, which is
+chat-only.
+
+#### Reading Home Assistant state (mcp)
+
+Every other tool above reads *Predbat's own* entities and configuration. `search_entities`,
+`get_entity_state` and `get_entity_history` are different: they can read **any** entity in your
+Home Assistant install - presence sensors, device names, anything else in the state machine -
+not just the ones Predbat publishes itself. That is a materially larger disclosure to whichever
+third-party model is asking than everything else on this page, so all three are off by default
+and gated behind `switch.predbat_ai_ha_state_enable`. With the switch off, each tool still
+appears in the tool list but returns a clean failure naming the switch, rather than vanishing -
+so an assistant can tell you which switch to turn on instead of just failing silently. The
+switch is prefixed `ai_`, not `chat_`: it controls this for MCP as well as the Chat tab, since an
+MCP client is no less a third party than a chat model is.
+
+`search_entities` returns only `entity_id`, `state` and `last_changed` - never attributes, which
+can be bulky on a large install - capped at `limit` matches (default 50, maximum 200) with the
+true match count reported separately so a capped result is visibly capped.
+
+`get_entity_history` fetches one entity's history between `start` and `end` (ISO-8601
+timestamps, assumed UTC if no offset is given) and aggregates it into `bucket_minutes`-wide
+buckets (default 30). The lookback is capped at 30 days before `end`, and the bucket count is
+capped at 500 by pulling `end` in rather than widening the buckets - both are reported in the
+response (`lookback_clamped`, `range_truncated`) when they bite. Pass `attribute` to bucket a
+named attribute instead of the entity's state. Numeric data (including `on`/`off`/`true`/`false`,
+which map to 1/0) is bucketed as `min`/`max`/`mean`/`count`/`unavailable`; anything else is
+bucketed as `first`/`last`/`changes`, since a most-common value would hide a sensor that flipped
+once and stayed there. Which mode applies is decided once per request and reported as `mode`.
+
+---
+
+### AI Chat Agent (chat)
+
+**Can be restarted:** Yes
+
+#### What it does (chat)
+
+Adds a Chat tab to the web interface, backed by a large language model served through
+[OpenRouter](https://openrouter.ai). The model can call the same read-only tools the MCP server
+exposes, plus a handful of chat-only tools for searching Predbat's documentation and its own
+installed source code, and can propose the same two write actions MCP has - each one held for
+your approval before it runs when `switch.predbat_chat_confirm_writes` is on (the default). See
+[the Chat tab](web-interface.md#chat-view) for how to use it day to day.
+
+Each conversation's system prompt (your Predbat snapshot plus the agent's instructions) is
+captured once, when the conversation starts, and replayed byte-for-byte on every later turn rather
+than being rebuilt from live state each time. It is also sent with an explicit prompt-caching
+breakpoint. Together this means a provider that supports prompt caching only charges full price
+for that prompt on the first turn - later turns charge a fraction of it, since the cached portion
+is billed at a steep discount rather than as fresh input. The first turn itself costs slightly
+*more* than it otherwise would, because writing the prompt into the cache is itself a billed
+operation. A provider with no prompt-caching support simply ignores the breakpoint and is
+unaffected either way. Measured against `anthropic/claude-sonnet-5` on OpenRouter, with a roughly
+2,600-token system prompt: an uncached turn cost $0.005282, and a turn that hit the cache cost
+$0.000580 - about a ninth as much. Treat those figures as an illustration of the mechanism, not a
+guarantee - the actual saving depends on the model, the provider and the size of your own prompt.
+
+#### When to enable (chat)
+
+- You want a conversational way to ask about your Predbat setup, without running an MCP client
+- You are comfortable with log lines and configuration being sent to a third-party AI provider
+- You have (or are willing to create) an OpenRouter account and API key
+
+#### Security note (chat)
+
+***CAUTION*** The web UI has **no authentication** of its own. Anyone who can reach port 5052 can
+open the Chat tab, read every saved conversation, and spend your OpenRouter credit - the same
+caution about exposing the web/MCP port outside your home network applies here, more so.
+
+- Tool results - including log lines and configuration - are sent to OpenRouter, and on to
+  whichever provider serves the model you selected. `get_apps` always redacts credential-like
+  values before they leave; unlike MCP, chat cannot ask for the unmasked `masked: false` form.
+- Conversations are stored on disk and expire after `chat_expiry_days` of inactivity. Deleting a
+  conversation hides it immediately, but Predbat's storage layer has no delete operation -
+  deletion is a flag, not a removal - so **its stored copy remains readable to anyone with
+  filesystem access until it expires**.
+- The agent can read its own installed source (`search_source`, `read_source`), but the allowlist
+  is by file extension, not by directory: `apps.yaml`, `secrets.yaml`, `predbat.log` and cached
+  OAuth tokens can all sit in the same directory as the source being searched. `get_apps` and
+  `get_log` are the only routes to that content, and both redact and filter what they return.
+- `chat_web_search` costs roughly $0.001-0.015 per request. It is an OpenRouter-only plugin - if
+  the active provider is not OpenRouter it is not sent at all, and a warning is logged
+  once.
+- `fetch_url` can only reach a small allowlist of hosts (the Predbat docs site and GitHub). This
+  is deliberate, not a limitation to work around.
+- `search_entities`, `get_entity_state` and `get_entity_history` can read **any** Home Assistant
+  entity, not just Predbat's own - see [Reading Home Assistant state](#reading-home-assistant-state-mcp)
+  above. They sit behind `switch.predbat_ai_ha_state_enable`, which is on by default. That is a
+  materially larger disclosure than everything else on this page, so if you would rather the model
+  saw only Predbat's own data, this is the switch to turn off.
+
+#### Configuration Options (chat)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| Setting | Type | Default | Description |
+| ------- | ---- | ------- | ----------- |
+| `providers` | Dict | - | Named endpoints, each `{url, api_key, type, model}` - see [apps.yaml](apps-yaml.md#ai-chat-agent). Configuring one is what enables chat; there is no separate `chat_enable` setting. `model` sits on the provider rather than here, since a model id only means anything to the endpoint serving it |
+| `max_tokens` | Integer | 0 | Maximum tokens per completion; `0` leaves it to the model/provider's own default |
+| `max_tool_rounds` | Integer | 32 | Maximum model round trips (completions) within one turn before Predbat stops and asks you to continue. Every tool call the model makes inside one round trip still runs - this bounds round trips, not tool calls |
+| `max_history` | Integer | 0 | Maximum recent messages sent to the model each turn, trimmed at a user-message boundary so a tool call and its reply are never split apart. Bounds cost, not how much is stored. `0` means unlimited |
+| `max_conversations` | Integer | 20 | Conversations kept before the least recently updated are pruned |
+| `expiry_days` | Integer | 30 | Days of inactivity before a conversation's stored copy expires |
+| `turn_timeout` | Integer | 1800 | Seconds a whole turn may run, across every round trip |
+| `request_timeout` | Integer | 300 | Seconds one completion request may take |
+| `fetch_allowlist` | String list | docs site, `github.com`, `raw.githubusercontent.com` | Hosts `fetch_url` may reach |
+
+All of these live inside the single `chat:` block in `apps.yaml`, which is the component's only
+argument - the defaults above come from `CHAT_DEFAULTS` in `chat.py` rather than the component
+registry, so each sits beside the code that reads it.
+
+Three switches also control the chat agent. All three appear both under
+[Config](web-interface.md#config-view) and in the Chat tab's own footer, so you can change your
+mind about a permission without leaving the conversation:
+
+| Entity | Default | Description |
+| ------ | ------- | ----------- |
+| `switch.predbat_chat_confirm_writes` | On | Hold every `set_config`, `set_plan_override` and `set_apps_config` call for your Approve/Reject before it runs |
+| `switch.predbat_chat_web_search` | Off | Let the model search the wider web through OpenRouter's plugin - costs money per request, see above. The only one of the three that costs anything, and the only one off by default. Predbat's own `search_docs` does not go through it |
+| `switch.predbat_ai_ha_state_enable` | On | Let `search_entities`, `get_entity_state` and `get_entity_history` read Home Assistant state - see [Reading Home Assistant state](#reading-home-assistant-state-mcp) above. Unlike the other two, this is `ai_`-prefixed rather than `chat_`-prefixed: it also gates the MCP server, not just this tab |
+
+#### Available tools (chat)
+
+Thirteen tools are shared with the [MCP server](#mcp-server-mcp) - see
+[its tool table](#available-commands-mcp) above for what each one returns or does:
+
+`get_status`, `get_plan`, `get_config`, `get_apps`, `get_apps_config`, `get_log`, `get_state`,
+`get_entities`, `search_entities`, `get_entity_state`, `get_entity_history`, `set_config`,
+`set_plan_override`
+
+`search_entities`, `get_entity_state` and `get_entity_history` are the three that read arbitrary
+Home Assistant state rather than just Predbat's own, and are off by default behind
+`switch.predbat_ai_ha_state_enable` - see the Security note above and
+[Reading Home Assistant state](#reading-home-assistant-state-mcp) in the MCP section. The Chat
+tab's footer carries a live toggle for this switch, next to the model picker.
+
+`set_config` and `set_plan_override` are two of the tools that write. With
+`switch.predbat_chat_confirm_writes` on (the default), each one pauses in the transcript for your
+Approve or Reject before it runs, showing the tool name and the exact arguments the model wants to
+call it with. `set_apps_config`, below, is the third - and the only one of the three that is
+chat-only rather than shared with MCP.
+
+Six more tools only exist in chat:
+
+| Tool | What it returns or does |
+| ---- | ------------------------ |
+| `set_chat_title` | Sets the conversation's title - the agent calls this itself, early in a new conversation |
+| `search_docs` | Searches the published Predbat documentation, returning matching **sections** with an excerpt, a section id and its length (up to 10 results). Internal design documents under `superpowers/` are excluded |
+| `read_docs` | Reads one documentation section in full by its section id, paged at 8,000 characters. Served from the cached search index, so it needs no network call - and returns just that section rather than a whole page of navigation and unrelated content |
+| `search_source` | Searches Predbat's own installed source code - the exact version that is running - with a Python regular expression. Covers `.py`, `.cpp`, `.h`, `.hpp`, `.proto`, `.sh` and `.md` files only (up to 100 matches, five-second scan budget) |
+| `read_source` | Reads a numbered slice of one source file found by `search_source` (up to 400 lines at a time) |
+| `fetch_url` | Fetches a web page as text, restricted to the hosts in `fetch_allowlist` |
+| `set_apps_config` | Changes one `apps.yaml` key - see below |
+
+#### Changing apps.yaml from chat (chat)
+
+`set_apps_config` changes a single `apps.yaml` setting - the same file the
+[web apps.yaml editor](web-interface.md#apps-view) edits, through the same mechanism: it loads
+the file with `ruamel.yaml`, so your comments and formatting survive, and writes it back with only
+the one key changed.
+
+It is deliberately narrow:
+
+- **It can only change a key that already exists.** This is not a way to add new configuration -
+  ask a key that is not already in your `apps.yaml` and the tool refuses, the same way the web
+  editor does.
+- **It refuses any credential-like key outright** - anything matching the same `_key`, `password`,
+  `secret` or `token` heuristic `get_apps` masks. Neither the model nor an instruction hidden in
+  something it read (a fetched web page, a documentation search result) can use this tool to set
+  or swap an API key. The check runs on every part of a nested path, so
+  `forecast_solar[0].api_key` is refused just as `ha_key` is.
+- **It refuses the keys that decide where your credentials are sent** - `ha_url`,
+  `openrouter_base_url` and anything ending `_url`, `_host` or `_endpoint`. Guarding the
+  credential alone is not enough: repointing `ha_url` leaves `ha_key` untouched while sending it
+  to somewhere else entirely.
+- **It can change one value inside a nested structure**, using a path such as
+  `forecast_solar[0].azimuth` - the same dotted-path syntax the web editor uses. This is how you
+  change one roof's direction without rewriting the whole `forecast_solar` list. It matters for
+  more than convenience: credentials are masked when the model reads them, so if it wrote a whole
+  list back it would carry that mask into the file and overwrite the real key. Writing a
+  container whose credential has been replaced by the mask is refused for exactly that reason,
+  with an error pointing at the nested path instead.
+- **It checks the new value's type against `apps.yaml`'s schema** where the key has one, so a
+  value that would stop Predbat parsing its own configuration next start-up is refused before it
+  is written, not discovered after a restart.
+- **It backs up your `apps.yaml` to `apps.yaml.backup` first**, every time - the same safety net
+  the raw whole-file editor gives you, extended to this tool too.
+
+Because it is one of the three tools that write, `set_apps_config` is held for your Approve or
+Reject when `switch.predbat_chat_confirm_writes` is on (the default, see above) - and unlike the
+other two, the confirmation card shows the key's **current** value alongside the **proposed** one,
+so you can see the actual change rather than just the model's intent. It also warns you there,
+before you approve, that **saving restarts Predbat to apply the change**: the restart drops the
+chat's live connection and ends that turn abruptly, but your conversation is not lost - it is
+saved to Predbat's storage and is still there once Predbat has reconnected.
 
 ---
 
@@ -216,10 +513,112 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `ge_cloud_direct` | Boolean | Yes | - | `ge_cloud_direct` | Set to `true` to enable GivEnergy Cloud control |
 | `api_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key |
 | `automatic` | Boolean | No | false | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
+| `automatic_evc` | Boolean | No | false | `ge_cloud_automatic_evc` | Set to `true` to wire your GivEnergy EV chargers into `car_charging_energy`, `car_charging_planned` and `num_cars` — see [EV chargers](#ev-chargers-gecloud). Separate from `ge_cloud_automatic` because it registers a car |
+| `evc_control` | Boolean | No | false | `ge_cloud_evc_control` | Set to `true` to let Predbat start and stop your EV charger from its car charging plan — see [Charger control](#charger-control-gecloud). Needs `ge_cloud_automatic_evc` |
 | `load_today_ignore` | Boolean | No | false | `ge_cloud_load_today_ignore` | Set to `true` to ignore GE Cloud load_today data and use the `load_today` sensor from `apps.yaml` instead |
 | `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 | `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
+
+#### Site export limits (gecloud)
+
+Predbat reads your site's details from GivEnergy at startup, just after the device list,
+and publishes any enforced grid export limit it finds as
+`sensor.predbat_gecloud_<serial>_export_limit` alongside the other per-inverter sensors.
+The API key needs site read permission for this optional lookup; without it the sensor is
+simply not published and nothing else changes.
+
+Only an export limit GivEnergy reports as enabled is applied. A site describes its
+connection's declared capacity the same way it describes a curtailment, marked as
+disabled, and that is no restriction on what you may export. A site with no limit at all
+reports none rather than a zero, so an enforced zero is applied as a real zero-export
+connection.
+
+The site details are cached in Predbat's storage and re-read every 12 hours, so a restart
+normally costs no extra API call and a limit changed in the GivEnergy portal is picked up
+within half a day. A failed read retries after 30 minutes and keeps the cached value in
+the meantime.
+
+With `ge_cloud_automatic: true`, automatic configuration points `export_limit` at those
+sensors when a limit was read. The site limit is divided between Predbat's logical
+inverters so their total is the site limit, including the single logical controller a
+Gateway presents. An `export_limit` you set in `apps.yaml` takes precedence, including a
+zero limit, and a site with no limit leaves Predbat's unrestricted default in place.
+
+Automatic detection requires all contributing inverters to belong to one known site;
+otherwise configure `export_limit` explicitly.
+
+This is the site's grid export limit, not its solar inverter rating. For an AC-coupled
+solar inverter whose rating is not exposed by the API, configure `pv_ac_limit` separately
+in watts. Neither limit changes the detected battery inverter power rating.
+
+#### EV chargers (gecloud)
+
+Every GivEnergy EV charger on the account is polled alongside the inverters and publishes
+its meter readings as `sensor.predbat_gecloud_<serial>_evc_*` entities, plus two entities
+describing the charger itself:
+
+| Entity | Description |
+| ------ | ----------- |
+| `sensor.predbat_gecloud_<serial>_evc_status` | The charger's status as GivEnergy reports it, e.g. `charging`, `idle`, `offline` |
+| `binary_sensor.predbat_gecloud_<serial>_evc_car_connected` | `on` while a car is plugged in, from the status above |
+
+Those two entities are published whatever your settings say — they are new entities and
+change nothing that already exists.
+
+Setting `ge_cloud_automatic_evc` to `true` additionally wires the chargers into Predbat's
+car planning, in serial order so charger N is car N:
+
+- **car_charging_energy** — each charger's `_evc_energy_active_import_register`, so
+  `car_charging_hold` subtracts the car charging from house load precisely instead of
+  falling back to the `car_charging_threshold` heuristic
+- **car_charging_planned** — each charger's `_evc_car_connected`, so Predbat only plans
+  car charging when there is actually a car on the cable
+- **num_cars** — raised to the number of chargers if it is currently lower, never reduced,
+  since another component may have registered cars of its own
+
+This is deliberately a separate setting from `ge_cloud_automatic` rather than part of it:
+it registers a car and moves `num_cars`, which would change the plan for existing users
+who had only ever asked for their inverter to be configured. It runs whether or not a
+GivEnergy battery is present, so a GivEnergy charger alongside another manufacturer's
+battery is configured too. Everything else about the car —
+**car_charging_battery_size**, **car_charging_limit** and **car_charging_soc** — still
+comes from `apps.yaml` as usual.
+
+`car_charging_planned` is wired to a binary sensor rather than to the status sensor on
+purpose: it answers `on`, which the default **car_charging_planned_response** already
+matches, so this works without you having to add GivEnergy's status words to that list.
+If your charger reports a status Predbat does not recognise it is treated as no car
+connected and logged once, so please report the value from the log so it can be added.
+
+#### Charger control (gecloud)
+
+With `ge_cloud_evc_control` set to `true`, Predbat drives each charger from its own car's
+plan: `start-charge` inside a planned charging window, `stop-charge` outside one. Charger N
+follows car N, in the same serial order the automatic configuration uses, so the two cannot
+disagree about which charger is which car.
+
+`ge_cloud_automatic_evc` must also be on, since it is that configuration which establishes
+the charger to car mapping. Predbat says so in the log and leaves control off rather than
+guessing if you enable control without it.
+
+- A command is only sent when the wanted state actually changes, so a charger already
+  charging inside a window is left alone rather than commanded every minute
+- A charger with no car plugged in is never commanded — Predbat waits for
+  `_evc_car_connected` to go `on`
+- Nothing is commanded until Predbat has published a car plan, so a restart cannot stop a
+  charge that is already running
+
+A `switch.predbat_gecloud_evc_control` entity appears when control is enabled, on by
+default, so you can hand the charger back without editing `apps.yaml`. Turning it off — or
+putting Predbat into read only mode — **releases** rather than just going quiet: if Predbat
+had stopped the charger it sends `start-charge` once on the way out, so a car is never left
+stranded by a charger Predbat walked away from. The switch state is saved, so an off
+survives a restart.
+
+Unlike a Zappi, there is no previous mode to restore on release: `start-charge` and
+`stop-charge` are commands rather than modes, so your charger's own mode (Grid, Hybrid,
+Solar) still decides what happens once Predbat lets go.
 
 #### How to get your API key (gecloud)
 
@@ -281,7 +680,7 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `octopus_api_key` | Your Octopus Energy API key |
 | `account_id` | String | Yes | - | `octopus_api_account` | Your Octopus Energy account number (starts with A-) |
-| `automatic` | Boolean | No | true | `octopus_automatic` | Set to `true` to automatically configure Predbat to use this Component (no need to update apps.yaml) |
+| `automatic` | Boolean | No | true | `octopus_automatic` | Set to `true` to automatically configure Predbat to use this Component (no need to update `apps.yaml`) |
 
 #### How to get your API credentials (octopus)
 
@@ -340,7 +739,7 @@ Select control my battery for 'Events Only'.
 1. Log in to your Axle Energy VPP portal at <https://vpp.axle.energy>
 2. Navigate to the Home Assistant integration section
 3. Copy your API key
-4. Paste it into `axle_api_key` in apps.yaml
+4. Paste it into **axle_api_key** in `apps.yaml`
 
 #### Sensor Attributes (axle)
 
@@ -490,6 +889,8 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 - Requires your Ohme account credentials
 - Can automatically manage Intelligent Octopus charging slots
 - Monitors real-time charging status and energy consumption
+- Publishes `sensor.predbat_ohme_energy_today`, the energy delivered to the car today, and wires it to `car_charging_energy` when `ohme_automatic` is set.
+  See [Ohme charge energy](car-charging.md#ohme-charge-energy)
 
 #### Configuration Options (ohme)
 
@@ -497,7 +898,148 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `email` | String | Yes | - | `ohme_login` | Your Ohme account email address |
 | `password` | String | Yes | - | `ohme_password` | Your Ohme account password |
-| `ohme_automatic_octopus_intelligent` | Boolean | No | - | `ohme_automatic_octopus_intelligent` | Set to `true` to automatically sync with Intelligent Octopus |
+| `ohme_automatic` | Boolean | No | `False` | `ohme_automatic` | Set to `true` to register the Ohme charger with Predbat as a car |
+| `ohme_control` | Boolean | No | `False` | `ohme_control` | Set to `true` to let Predbat start and stop the charger from its own plan. Requires `ohme_automatic`; released by read only mode |
+| `ohme_automatic_octopus_intelligent` | Boolean | No | unset (auto-detect) | `ohme_automatic_octopus_intelligent` | Take the Intelligent car slots from Ohme. Omit the setting entirely to auto-detect it when `ohme_automatic` is on, or give it `true`/`false` to override. Do not write `auto` - any value other than `true`/`false` is read as true |
+
+---
+
+### myenergi (myenergi)
+
+**Can be restarted:** Yes
+
+#### What it does (myenergi)
+
+Monitors myenergi Zappi EV chargers and Eddi hot water diverters, publishing their status, power and session energy as Predbat entities, and provides send-boost and cancel-boost controls.
+
+Predbat supports both of myenergi's APIs:
+
+- **Direct** (default) — HTTP digest authentication against `director.myenergi.net`, using your hub serial number and an API key you generate yourself. This is the same API the `ha-myenergi` Home Assistant integration uses, and any myenergi owner can set it up today.
+- **Cloud OAuth** — the official 3rd party API at `api.s18.myenergi.net`. This needs credentials issued by myenergi through their partner registration process.
+
+#### When to enable (myenergi)
+
+- You have a Zappi or an Eddi and want Predbat to account for their energy use when planning
+- You want Predbat to publish sensors for their status, power and session energy
+- You want to trigger or cancel a boost from Home Assistant
+
+#### Important notes (myenergi)
+
+- With `myenergi_automatic` on (the default), Predbat sets three `apps.yaml` values for you:
+    - `car_charging_energy` — every Zappi's session energy, so charging is subtracted from your house load rather than being learnt as base load. Ensure `switch.predbat_car_charging_hold` is on (it is by default) for that subtraction to take effect
+    - `car_charging_planned` — every Zappi's plug status sensor, one entry per car, so Predbat knows when the car is plugged in and due to charge. The regex the `apps.yaml` templates ship for this key matches the third-party `ha-myenergi` integration's entity names, not the ones Predbat publishes, so without this Predbat would fall back to the `car_charging_threshold` heuristic
+    - `iboost_energy_today` — the first Eddi's session energy (first by serial number). This feeds the iboost model, and it is also subtracted from your historical house load whenever `switch.predbat_iboost_energy_subtract` is on (the default), which happens whether or not iboost itself is enabled
+- Auto-configuration runs once, after the first poll that returns devices. A Zappi or Eddi added later is published as entities but is not wired into those keys until Predbat restarts
+- If you set `car_charging_planned` yourself in `apps.yaml`, Predbat logs a note and auto-discovery still wins — remove your entry to silence it
+- Predbat's shipped `car_charging_planned_response` list covers the plug states a Zappi reports when the car is connected, including `ev ready to charge`. If you maintain your own list, add that value or Predbat will treat a car that is plugged in and waiting as not planned to charge
+- Boosting a Zappi is only accepted by myenergi while it is in Eco or Eco+ mode
+- Set `myenergi_enable_controls` to `false` for monitor-only operation — the boost switches are still published but stop responding
+
+#### Configuration Options (myenergi)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `auth_method` | String | No | `direct` | `myenergi_auth_method` | `direct` (local digest API) or `oauth` (official cloud API) |
+| `hub_serial` | String | No | - | `myenergi_hub_serial` | Hub serial number — required when `auth_method` is `direct`. It is the API login rather than a device filter, so it cannot default to all devices; one serial reads every device on the account. With no hub, use the serial the API key was generated against |
+| `api_key` | String | No | - | `myenergi_api_key` | API key generated at myaccount.myenergi.com — required when `auth_method` is `direct` |
+| `key` | String | No | - | `myenergi_key` | OAuth access token, cloud transport |
+| `token_hash` | String | No | - | `myenergi_token_hash` | OAuth refresh token hash, used to refresh `key` automatically. At least one of `key` or `token_hash` is required when `auth_method` is `oauth` |
+| `token_expires_at` | String | No | - | `myenergi_token_expires_at` | OAuth access token expiry, used to trigger a refresh |
+| `automatic` | Boolean | No | true | `myenergi_automatic` | Set to `false` to stop Predbat wiring the device sensors into `car_charging_energy`, `car_charging_planned` and `iboost_energy_today` automatically |
+| `enable_controls` | Boolean | No | true | `myenergi_enable_controls` | Set to `false` for monitor-only operation |
+| `poll_seconds` | Integer | No | 60 | `myenergi_poll_seconds` | Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (a longer gap would make Predbat's own health check report the component as failed) |
+| `zappi_control` | Boolean | No | false | `myenergi_zappi_control` | Set to `true` to let Predbat drive your Zappi from its car charging plan — see [Zappi charge control](#zappi-charge-control-myenergi) |
+
+The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash`
+is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging
+to the transport you did not select still starts the component — it then logs which setting is missing
+rather than failing silently.
+
+Example for the direct transport:
+
+```yaml
+myenergi_hub_serial: '12345678'
+myenergi_api_key: !secret myenergi_api_key
+```
+
+#### How to get your API key (myenergi)
+
+1. Sign in at <https://myaccount.myenergi.com>.
+2. Open **Advanced** then **API Key**.
+3. Generate a key for your hub and copy it.
+4. Your hub serial number is printed on the hub and shown in the myenergi app. If you have no hub, use the serial of the device
+   acting as one — the Zappi or Eddi you generated the key against. Either way a single serial is enough, because it is the
+   login for the account rather than a choice of which device to read: Predbat discovers every Zappi and Eddi behind it.
+
+#### Published entities (myenergi)
+
+Per Zappi (`{sn}` is the device serial number):
+
+- `sensor.predbat_myenergi_zappi_{sn}_status`, `_mode`, `_plug_status`, `_power`, `_session_energy`
+- `binary_sensor.predbat_myenergi_zappi_{sn}_charging`
+- `switch.predbat_myenergi_zappi_{sn}_boost`, `number.predbat_myenergi_zappi_{sn}_boost_energy`
+
+Per Eddi:
+
+- `sensor.predbat_myenergi_eddi_{sn}_status`, `_power`, `_session_energy`, `_temp_1`, `_temp_2`
+- `switch.predbat_myenergi_eddi_{sn}_boost`, `number.predbat_myenergi_eddi_{sn}_boost_minutes`
+
+The Eddi temperature sensors are only published when a probe is connected.
+
+#### Controls (myenergi)
+
+Turning a boost switch on sends a boost of the amount selected on the companion number entity — kWh for a Zappi, minutes for an Eddi. Turning it off cancels the boost. The switch state is read back from the device, so a boost started or stopped in the myenergi app is reflected here too.
+
+myenergi only accepts a Zappi boost while the charger is in Eco or Eco+ mode. Predbat checks that one condition before calling, and logs a warning instead. Every other reason a boost can be refused — an Eddi already at its maximum tank temperature, for instance — is only discovered from myenergi's reply, so Predbat issues the call and logs `myenergi: control failed` when it comes back refused. The switch reverts to the device's real state on the next poll either way.
+
+Not implemented in this release: priority, minimum green level, phase setting, and charging schedules. These exist on the transport interface as reserved methods, ready for a later release, and nothing in Predbat calls them — there is no entity or service that can reach them, so there is nothing for you to try. If a future release wires one up before it is implemented, it warns once per control rather than failing silently. Super schedules, managed mode and Libbi batteries are out of scope entirely for this release; the component only supports Zappi and Eddi devices and does not expose any control surface for them.
+
+#### Zappi charge control (myenergi)
+
+With `myenergi_zappi_control: true` Predbat drives your Zappi from the car charging plan it has already worked out, instead of you scheduling the charge on the Zappi itself.
+
+Inside a planned charging window Predbat puts the Zappi in **Fast**, and outside one it puts it in **Stopped**. Fast is used because the window was chosen for its electricity rate rather than for sunshine — Eco or Eco+ would only charge from surplus, and the car would not get what the plan assumed.
+
+Each Zappi follows its own car. Zappis are matched to cars in serial number order, the same order `car_charging_energy` and `car_charging_planned` are wired in, so your first Zappi follows car 0's plan, your second follows car 1's, and so on.
+
+Predbat re-checks the Zappi every minute. If the mode is changed in the myenergi app while Predbat is in control, it is put back — otherwise control would drift away silently.
+
+##### The control switch
+
+A `switch.predbat_myenergi_zappi_control` entity appears once `myenergi_zappi_control` is set. It starts **on**, and turning it off hands your Zappi back without editing `apps.yaml`. The setting is remembered across restarts, so a restart will not quietly take control back.
+
+##### When Predbat hands the Zappi back
+
+Predbat releases the Zappi when the control switch is turned off, or when Predbat itself is put in read only mode. Releasing restores the mode the Zappi was in before Predbat first changed it, falling back to **Eco+** when there is nothing saved — after a restart, for instance. It deliberately does not simply stop sending commands, because Predbat may have left the Zappi Stopped and walking away would leave the car unable to charge.
+
+##### Two things to expect
+
+Charge control needs `myenergi_automatic`, because it is automatic configuration that establishes which Zappi belongs to which car. It also needs `myenergi_enable_controls`. If either is off, Predbat logs which one and leaves the Zappi alone.
+
+While Predbat is in control the Zappi is in Fast or Stopped, and myenergi only accepts a boost in Eco or Eco+ — so the manual boost switch will refuse for as long as control is on. Turn the control switch off if you want to boost by hand.
+
+Outside a planned window the Zappi is Stopped, which means it will not divert surplus solar to the car either. If you would rather keep solar diversion, leave `myenergi_zappi_control` off and let the Zappi run its own modes.
+
+#### Known limitation (myenergi)
+
+The session energy sensors reset to zero when a charging or heating session ends. Predbat expects that: it treats these sensors as incrementing counters and rebases the series whenever it sees one reset, so both the per-minute load subtraction and the daily `iboost_today` total come out right across any number of sessions in a day.
+
+The one case it cannot see is a small session. A drop of less than 1 kWh is smoothed over as a dip in the data rather than treated as a reset, so a session that finishes below roughly 1 kWh — a short top-up, or a brief Eddi diversion — can be missed and its energy left out of the day's figures. A reading of zero between the sessions does not help, because the dip is smoothed away before the reset is looked for. That applies equally to `car_charging_energy` and to `iboost_today`. In practice it is a fraction of a kWh, and the planner mostly cares about the larger sessions, but the daily totals can read slightly low if your Zappi or Eddi does a lot of very short sessions.
+
+#### Testing your configuration (myenergi)
+
+You can test either transport independently of Predbat:
+
+```bash
+cd /config/appdaemon/apps/predbat
+python3 myenergi.py --hub-serial YOUR_HUB_SERIAL --api-key YOUR_API_KEY
+```
+
+Add `--boost zappi` or `--boost eddi` (with `--amount`) to send a test boost, or `--cancel-boost zappi`/`--cancel-boost eddi` to cancel one. Use `--token` in place of `--hub-serial`/`--api-key` to test the cloud OAuth transport instead.
+
+To try the charge control commands against a real Zappi without enabling the feature, `--start-charge` puts it in Fast exactly as a planned window does, `--stop-charge` puts it in Stopped as being outside one does, and `--release` puts it back in Eco+ as handing it back does. Run the command again with no action to see the mode that took effect.
+
+Note `--stop-charge` leaves the Zappi stopped, so remember to `--release` it afterwards or set the mode you want in the myenergi app.
 
 ---
 
@@ -524,7 +1066,7 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `fox_key` | Your Fox ESS API key |
-| `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required) |
+| `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual `apps.yaml` updates required) |
 | `automatic_ignore_pv` | Boolean | No | false | `fox_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Fox Cloud from overwriting `pv_power` and `pv_today` config. Useful for AC-coupled setups where PV is measured independently and Fox Cloud reports zero/absent PV data |
 
 ---
@@ -562,6 +1104,7 @@ Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST A
 | `site_id` | String or String List | No | First account site | `teslemetry_site_id` | Optional Tesla energy site id (or list of ids) to filter the sites discovered from the account; leave unset to use the first site on the account automatically |
 | `base_url` | String | No | `https://api.teslemetry.com` | `teslemetry_base_url` | REST base URL; for direct Fleet API set this to your regional Fleet endpoint (e.g. `https://fleet-api.prd.eu.vn.cloud.tesla.com`) |
 | `automatic` | Boolean | No | false | `teslemetry_automatic` | Set to `true` to automatically configure Predbat to use the Powerwall (no manual apps.yaml inverter settings required) |
+| `tbc_control` | Boolean | No | false | `teslemetry_tbc_control` | Trial setting - see [Teslemetry component (beta)](inverter-setup.md#teslemetry-component-beta) for what it does and its known limitation |
 | `auth_method` | String | No | `api_key` | `teslemetry_auth_method` | `api_key` (static Teslemetry token) or `oauth` (direct Tesla Fleet API). In `oauth` mode the OAuth flow and token refresh are handled for you by predbat.com - the same way the Fox integration works - so `oauth` requires connecting via predbat.com; self-hosted users use `api_key` |
 
 ---
@@ -667,6 +1210,7 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
     - Leave `soc_max` unset and allow Predbat to automatically detect battery size from historical charging data (requires several days of data)
 - Supports both V1 (older firmware) and V2 (newer firmware) time window formats
 - Automatic configuration available - sets up all required Predbat sensors automatically
+- **PV-only inverters**: an inverter Solis Cloud reports as having no battery is never managed as a battery inverter and is never written to, but its generation is still included in `pv_today` and `pv_power` so the array total covers the whole roof. Its load and grid readings are left out, as those registers can overlap with the battery inverter's on a shared-CT installation - set `pv_today`/`pv_power`/`load_today` manually with `solis_cloud_pv_load_ignore: true` if you need something different
 - **Inverter timezone must match Predbat's `timezone` setting**: charge/discharge slot times are written to the inverter as plain `HH:MM` values with no timezone attached. The inverter interprets these using its own configured timezone, not Predbat's. If your inverter's timezone is set to UTC (or anything other than Predbat's `timezone`, `Europe/London` by default), the resulting charge/discharge windows will be offset by the difference - for example, a full hour out whenever British Summer Time is in effect. Set the inverter's own timezone to match Predbat's `timezone` setting to avoid this.
 
 #### Configuration Options (solis)
@@ -676,7 +1220,7 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
 | `api_key` | String | Yes | - | `solis_api_key` | Your Solis Cloud API Key (KeyId) |
 | `api_secret` | String | Yes | - | `solis_api_secret` | Your Solis Cloud API Secret (KeySecret) |
 | `inverter_sn` | String/List | No | - | `solis_inverter_sn` | Inverter serial number(s) - Leave unset to see all. Single string or list of strings for multiple inverters |
-| `automatic` | Boolean | No | false | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual apps.yaml sensor updates required) |
+| `automatic` | Boolean | No | false | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual `apps.yaml` sensor updates required) |
 | `base_url` | String | No | Auto-detected | `solis_base_url` | Solis Cloud API base URL (automatically selects correct region) |
 | `control_enable` | Boolean | No | true | `solis_control_enable` | Enable/disable control commands (set to false for monitoring only) |
 | `nominal_voltage` | Float | No | - | `solis_nominal_voltage` | Your battery's nominal pack voltage (e.g. cell count x nominal cell voltage), used only for the battery capacity sensor. Not the same as the live measured battery voltage. Without it, the capacity sensor is still published but flagged unreliable - see [apps.yaml](apps-yaml.md#solis-cloud-api) |
@@ -848,6 +1392,55 @@ Integrates with Sunsynk (DEYE-family) hybrid inverters via the Sunsynk Connect c
 | `battery_nominal_voltage` | Float | No | - | `sunsynk_battery_nominal_voltage` | Override for the battery pack's nominal voltage, only needed if it cannot be inferred from the reported charge target |
 
 See [Sunsynk Cloud setup](inverter-setup.md#sunsynk-cloud) for the full walkthrough, including how to run the standalone diagnostics CLI.
+
+---
+
+### AlphaESS Cloud API (alphaess)
+
+**Can be restarted:** Yes
+
+#### What it does (alphaess)
+
+Integrates with AlphaESS SMILE/Storion hybrid inverters via the AlphaESS Open API, providing cloud-based monitoring and timed charge control - no local Modbus/RS485 access is required. It cannot control export, see the notes below. Predbat discovers every battery system bound to the developer AppID, publishes monitoring sensors and derived ratings (including EV charger power and energy where one is fitted), and writes schedule control entities that map directly onto the AlphaESS charge and discharge schedule fields.
+
+#### When to enable (alphaess)
+
+- You have an AlphaESS hybrid inverter with battery storage registered on the AlphaESS cloud
+- You want cloud-based monitoring, with optional battery control, and no local hardware access
+- You have registered a developer account at <https://open.alphaess.com/> and have an AppID and AppSecret
+
+#### Important notes (alphaess)
+
+- **EXPERIMENTAL:** nobody on the Predbat project has AlphaESS hardware, so behaviour is inferred from AlphaESS's published Open API documentation and the Home Assistant AlphaESS integration rather than confirmed against real inverters. Every request and response is traced to the log (`api_debug`, on by default) with credentials redacted, so a tester can capture evidence for an issue report. Run the [diagnostics CLI](inverter-setup.md#alphaess-cloud) against your own system before trusting Predbat with control
+- **Control is on by default**, the same as `sunsynk_control_enable`. Set `alphaess_control_enable: false` for monitoring only. `switch.predbat_set_read_only` additionally holds back Predbat's own automatic writes, including its periodic re-apply
+- **Both write endpoints are documented as writable once per 24 hours.** Predbat therefore only writes when the payload actually changes, gates charge and discharge independently so one does not consume the other's budget, and paces writes with `alphaess_min_write_interval`
+A schedule is committed in stages (window, then enable, then target SoC), so a small, capped number of corrections is allowed through within 60 seconds of a successful write - without it the inverter would run a schedule Predbat had already superseded until the interval expired
+- **Export cannot be controlled at all.** The Open API has no forced-export, working-mode or dispatch endpoint, and AlphaESS document the discharge window as a *permission* window - during it the system runs in self-consumption, outside it the battery may only charge - so Force Export exports nothing beyond genuine solar surplus. Freeze Export is equally undeliverable, because nothing in the API stops the battery charging from solar. Set `select.predbat_mode` to `Control charge` on these systems, and see [AlphaESS cannot be used to control export](apps-yaml.md#alphaess-cannot-be-used-to-control-export)
+- Predbat's controls map straight onto the schedule fields and the inverter does the timing. `batUseCap` carries the export target while an export window is programmed and the reserve otherwise, because the API has only one field for the discharge floor. A **zero** charge or discharge rate is how Predbat signals a freeze, since AlphaESS has no pause endpoint
+- Times sit on a **15-minute grid** (`00:00` to `23:45`). Off-grid values are accepted by the API and then silently ignored by the inverter, so Predbat snaps windows inward and disables any window that snapping collapses
+- Newer systems may be entitled to the periodic scheduling API (six windows a day, with a power setpoint per window). Predbat probes this once per system; a `6017` response means the account or hardware is not entitled and Predbat falls back to the universally available two-window endpoints. On that legacy path a non-zero charge rate is not honoured by the hardware
+- **The API does not report a grid export limit.** On a G98/G99-capped site you must set `export_limit` in `apps.yaml` yourself, or Predbat will plan exports the connection clips. `battery_rate_max` is likewise not reported and is estimated from the inverter's nominal power - correct it with `battery_rate_max_scaling` or `alphaess_battery_rate_max`
+- **An AlphaESS-connected EV charger is detected automatically.** `getLastPowerData` reports its per-charger power as `null` when no charger is fitted, which is the one documented signal that one physically exists. For a system that has one, Predbat publishes `ev_power` (W) and `ev_energy_today` (kWh) and, when `automatic` is enabled, points `car_charging_energy` at the charger energy of every system that has one. That mapping is inert on its own - Predbat only subtracts car energy from house load once `car_charging_hold` is enabled. Systems with no charger are left out, because their EV energy reads a permanent zero that is indistinguishable from a charger nobody uses. Controlling the charger is not supported
+- Systems reporting no battery capacity (plug-in solar, such as the VT1000 family) are skipped by design - there is nothing for Predbat to control
+- A system that does not serve live power data automatically falls back to five-minute history data and re-probes itself back to live if it recovers
+- Using the AlphaESS phone app while Predbat is running can overwrite Predbat's settings, and vice versa - the charge and discharge endpoints are whole-object replacements, so the last writer wins. Predbat logs when a field it owns has changed since its last write
+- A write reaching the cloud does not mean the inverter has applied it: it collects new settings on its next poll, typically one to five minutes later
+
+#### Configuration Options (alphaess)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `app_id` | String | Yes | - | `alphaess_app_id` | Your AlphaESS developer AppID from <https://open.alphaess.com/> |
+| `app_secret` | String | Yes | - | `alphaess_app_secret` | Your AlphaESS developer AppSecret |
+| `inverter_sn` | String/List | No | All found | `alphaess_inverter_sn` | Restrict Predbat to specific system serial number(s) - single string or list |
+| `automatic` | Boolean | No | false | `alphaess_automatic` | Set to `true` to automatically configure Predbat to use the discovered AlphaESS system(s) (no manual apps.yaml sensor updates required) |
+| `automatic_ignore_pv` | Boolean | No | false | `alphaess_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent AlphaESS Cloud from overwriting the `pv_power` config |
+| `control_enable` | Boolean | No | true | `alphaess_control_enable` | Allow Predbat to write charge/export schedules to the inverter. Set to `false` for monitoring only |
+| `battery_rate_max` | Float | No | - | `alphaess_battery_rate_max` | Override, in Watts, for the battery's maximum charge/discharge rate. The API does not report one, so Predbat otherwise estimates it from the inverter's nominal power |
+| `api_delay` | Float | No | 2 | `alphaess_api_delay` | Seconds to wait between API calls. AlphaESS advise a minimum 10-second polling interval |
+| `min_write_interval` | Integer | No | 300 | `alphaess_min_write_interval` | Minimum spacing, in seconds, between writes to the same inverter and direction |
+
+See [AlphaESS Cloud setup](inverter-setup.md#alphaess-cloud) for the full walkthrough, including how to run the standalone diagnostics CLI and how to bind or unbind a system.
 
 ---
 
@@ -1110,7 +1703,7 @@ For a detailed explanation of how the neural network works and comprehensive con
 | `load_ml_max_days_history` | Integer | No | 28 | `load_ml_max_days_history` | Maximum days of load history to fetch from HA on each poll (bounded by HA recorder retention) |
 | `load_ml_database_days` | Integer | No | 90 | `load_ml_database_days` | Days of history to accumulate in the on-disk database (`predbat_ml_history.npz`); set to 0 to disable the database |
 
-Note: `load_today`, `pv_today` and `car_charging_energy` apps.yaml configuration items are also used, but these should already be set in Predbat.
+Note: **load_today**, **pv_today** and **car_charging_energy** `apps.yaml` configuration items are also used, but these should already be set in Predbat.
 
 #### Configuration example (load_ml)
 

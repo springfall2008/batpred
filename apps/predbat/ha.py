@@ -422,10 +422,15 @@ class HAInterface(ComponentBase):
                 self.log("Info: Using SQL Lite database as primary data source, no HA interface available")
 
         if self.ha_key:
-            # Get the current addon info, but suppress warning message if the API call fails as non-HAOS installs won't have supervisor running
+            # Get the current app info, but suppress warning message if the API call fails as non-HAOS installs won't have supervisor running
+            #
+            # HA changed terminology from 'addons' to 'apps' in HA 2026.2 but retained the old service calls for transition
+            #
+            # At present have not changed Predbat API call in order to not break installations that are still using an older HA supervisor
+            # Propose in Feb 2027 that Predbat be changed to use the new service call
             res = self.api_call("/addons/self/info", core=False, silent=True)
             if res:
-                # get app slug name which is the actual directory name under /addon_configs that /config is mounted to
+                # get app slug name which is the actual directory name under /app_configs that /config is mounted to
                 self.slug = res["data"]["slug"]
                 self.log("Info: App slug is {}".format(self.slug))
 
@@ -631,7 +636,14 @@ class HAInterface(ComponentBase):
                                                     if result_id in self.ws_pending_requests:
                                                         request_info = self.ws_pending_requests.pop(result_id)
                                                         result_holder = request_info["result_holder"]
-                                                        result_holder["success"] = data.get("success", False)
+                                                        # #3460: .get()'s default only covers a *missing* key - some
+                                                        # services (observed for notify.notify) return a "result"
+                                                        # message with "success" explicitly present but null, which
+                                                        # .get("success", False) passes through as None rather than
+                                                        # False. That left success/error both None, indistinguishable
+                                                        # from a genuine 2-minute timeout to the caller and producing
+                                                        # a misleading "failed or timed out" warning immediately.
+                                                        result_holder["success"] = bool(data.get("success"))
                                                         result_holder["response"] = data.get("result", {}).get("response", None)
                                                         result_holder["error"] = None
                                                         # HA's own reported reason when success is False (e.g. {"code": "not_found", "message": "..."})
@@ -688,7 +700,22 @@ class HAInterface(ComponentBase):
                                     if domain == "fire_event":
                                         await websocket.send_json({"id": sid, "type": domain, "event_type": service, "event_data": {"service": service_data["event_service"], "domain": service_data["event_domain"]}})
                                     else:
-                                        await websocket.send_json({"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
+                                        # HA's call_service command expects 'target' (entity_id/device_id/area_id
+                                        # addressing) as a sibling of service_data, not nested inside it - a
+                                        # nested target is rejected with invalid_format: extra keys not allowed
+                                        # @ data['target'] (#4662). Callers commonly configure services with a
+                                        # target: entity_id: ... block (the standard HA action syntax), which
+                                        # lands as a "target" key inside service_data, so it must be pulled out
+                                        # here. Pop from a copy, not service_data itself - the original dict is
+                                        # the same object async_call_service_websocket_command() logs on failure
+                                        # ("Warn: Service call ... data ... failed"), so mutating it in place
+                                        # would silently drop target from that diagnostic.
+                                        outgoing_data = dict(service_data) if isinstance(service_data, dict) else service_data
+                                        target = outgoing_data.pop("target", None) if isinstance(outgoing_data, dict) else None
+                                        call_frame = {"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": outgoing_data, "return_response": return_response}
+                                        if target:
+                                            call_frame["target"] = target
+                                        await websocket.send_json(call_frame)
 
                                     # Track pending request (only if send succeeded)
                                     with self.ws_pending_lock:
@@ -734,7 +761,7 @@ class HAInterface(ComponentBase):
 
                 # Fail all pending requests on connection drop
                 with self.ws_pending_lock:
-                    for req_id, req_info in list(self.ws_pending_requests.items()):
+                    for _req_id, req_info in list(self.ws_pending_requests.items()):
                         req_info["result_holder"]["error"] = "connection_lost"
                         req_info["result_holder"]["success"] = False
                         req_info["event"].set()
@@ -949,10 +976,12 @@ class HAInterface(ComponentBase):
 
         return [history] if history else None
 
-    async def set_state_external(self, entity_id, state, attributes={}):
+    async def set_state_external(self, entity_id, state, attributes=None):
         """
         Used for external changes to Predbat state data
         """
+        if attributes is None:
+            attributes = {}
         new_value = state
         new_state = {"entity_id": entity_id, "state": state, "attributes": attributes}
         old_value = self.get_state(entity_id)
@@ -1035,10 +1064,12 @@ class HAInterface(ComponentBase):
         if (old_value is None) or (new_value != old_value):
             await self.base.trigger_watch_list(entity_id, attributes, old_state, new_state)
 
-    def set_state(self, entity_id, state, attributes={}):
+    def set_state(self, entity_id, state, attributes=None):
         """
         Set the state of an entity in Home Assistant.
         """
+        if attributes is None:
+            attributes = {}
         self.db_mirror_list[entity_id] = True
 
         if self.db_enable and (self.db_mirror_ha or self.db_primary):

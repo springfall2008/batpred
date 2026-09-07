@@ -145,6 +145,40 @@ def remove_file_quietly(filepath):
         print("Warn: Failed to remove {}: {}".format(filepath, e))
 
 
+def read_deploy_git_version(this_path):
+    """
+    Read the git_version.txt marker, if present, written by a dev deploy
+    (coverage/deploy) or a standalone launch (hass.py) from a git checkout, so the
+    running code can show which commit is actually installed instead of just the
+    release tag baked into THIS_VERSION.
+
+    Args:
+        this_path (str): Directory to look for git_version.txt in, alongside predbat.py.
+    Returns:
+        str or None: The marker contents, or None if the file is absent or unreadable.
+    """
+    filepath = os.path.join(this_path, "git_version.txt")
+    try:
+        if os.path.exists(filepath):
+            with open(filepath, "r") as f:
+                return f.read().strip() or None
+    except Exception as e:
+        print("Warn: Failed to read git_version.txt: {}".format(e))
+    return None
+
+
+def clear_deploy_git_version(this_path):
+    """
+    Remove the git_version.txt dev marker after a real update has installed official
+    release files, so a stale commit marker from an earlier dev deploy doesn't linger
+    and get shown as the running version once it's no longer accurate.
+
+    Args:
+        this_path (str): Directory the marker lives in, alongside predbat.py.
+    """
+    remove_file_quietly(os.path.join(this_path, "git_version.txt"))
+
+
 def remove_staged_files(this_path, files, tag):
     """
     Remove staged files, used to clean up after an aborted update.
@@ -550,6 +584,13 @@ def predbat_update_move(version, files):
 
     The staged files are re-verified against the staged manifest first, and nothing is
     moved unless every one of them matches, so a corrupted file is never installed.
+
+    The git_version.txt dev marker is cleared before the move runs, not after: a hot-reload
+    triggered by the move itself (predbat.py's mtime changing partway through the mv chain)
+    could otherwise start a new process that reads a now-stale marker before this function
+    gets a chance to clear it. The trade-off is that a failed move loses that diagnostic
+    marker too - acceptable since verify_staged_files() has already ruled out a bad
+    download by this point, so a failure here is a rarer, lower-stakes filesystem issue.
     """
     if not files:
         return False
@@ -566,8 +607,10 @@ def predbat_update_move(version, files):
         for file in files:
             cmd += "mv -f {} {} && ".format(os.path.join(this_path, file + "." + tag), os.path.join(this_path, file))
         cmd += "echo 'Update complete'"
-        os.system(cmd)
-        return True
+        clear_deploy_git_version(this_path)
+        result = os.system(cmd)
+
+        return result == 0
     return False
 
 

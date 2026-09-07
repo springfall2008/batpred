@@ -4,7 +4,7 @@ This document describes the Predbat configuration items in Home Assistant that y
 
 All of these settings are entities that can be configured directly in Home Assistant (unlike the '[apps.yaml](apps-yaml.md)' configuration items that have to be edited with a file editor).
 
-Note the default values of the settings inside Home Assistant are set inside Predbat, but the default can be overridden by setting its value in apps.yaml prior to starting Predbat for the first time.
+Note the default values of the settings inside Home Assistant are set inside Predbat, but the default can be overridden by setting its value in `apps.yaml` prior to starting Predbat for the first time.
 
 See [Displaying output data](output-data.md)
 for information on how to view and edit these entities within
@@ -70,6 +70,8 @@ This mode can be useful if you don't have an export rate, you have a 'no export'
 In **Control charge & discharge** mode Predbat will set both charge and force export (discharge) times and control charge and force export percentages.
 
 If you have set the **switch.predbat_set_export_freeze_only** set to On then forced export won't occur but Predbat can force the export of solar power to the grid when desired.
+
+Similarly, if you have **switch.predbat_set_charge_freeze_only** set to On then the battery won't be charged from the grid, but Predbat can still freeze charge to hold the current battery level.
 
 ## Expert mode
 
@@ -157,7 +159,11 @@ Figures of around 0p-2p are recommended, the default is 0p per kWh.
 **input_number.predbat_metric_battery_value_scaling** (_expert mode_) A percentage value that can be used to scale the value of the energy in the battery at the end of the plan.
 The battery value is accounted for in the optimisations at the lowest future import rate including charging and inverter losses.
 A value of 1.0 (the default) means no change to this, while lower than 1.0 means to value future battery levels less,
-greater than 1.0 will value it more (and hence hold more charge at the end of the plan).
+greater than 1.0 will value it more (and hence hold more charge at the end of the plan).<BR>
+_NB: Take care reducing this below 1.0 if your export rate is close to your cheapest import rate._ Predbat only holds charge rather than exporting it while
+the stored energy is worth more than exporting it would earn. That margin is narrow on a flat export tariff - for example a 10.54p cheapest import against a
+12p export leaves only about 1%, so any value below roughly 0.99 makes Predbat export the battery whenever it can, even though the round trip actually loses
+money. If you see exports you cannot explain, check this setting is at its default before looking elsewhere (see issue #4840).
 
 **input_number.predbat_metric_battery_value_export_scaling** (_expert mode_) Discounts that end-of-plan battery value when you would not be able to sell
 the surplus for what it cost to buy. Valuing the battery at the lowest future import rate assumes the energy can always be redeployed, which holds while
@@ -357,7 +363,7 @@ minimum force export level also (set to 0 if you want to skip some slots).
 If you set this to a non-zero value you will need to use the low rate threshold to control which slots you charge from or you may charge all the time.
 
 **input_number.predbat_best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
-A value of 0kWh (the default) disables this feature.
+A value of 0kWh (the default) disables this feature. Be careful setting this feature on as it will constrain charging in the Predbat plan and may result in charging or grid usage in expensive rate periods.
 
 **input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in pence) to combine charge or export slots into a single larger average rate slot.
 The default is 0p which disables this feature and all rate changes result in a new slot.
@@ -419,6 +425,10 @@ If you set this to a negative value then Predbat will assume unpublished export 
 **switch.predbat_calculate_inday_adjustment** Set to On by default. When turned on, will calculate the difference between today's actual load and today's predicated load and adjust the rest of the day's usage prediction accordingly.
 A scale factor can be set with **input_number.predbat_metric_inday_adjust_damping** (_expert mode_) (default 0.95) to either scale up or down the impact of the in-day adjustment (lower numbers scale down its impact).
 The in-day adjustment factor can be seen in **predbat.load_inday_adjustment** and charted with the [In-Day Adjustment chart](creating-charts.md).
+The adjustment is carried across midnight into the plan for tomorrow rather than being reset, decaying from its full value
+at midnight to no adjustment by the following midnight - the same curve Predbat itself applies when it seeds tomorrow's
+adjustment from today's final value. This keeps the overnight charge sized against the load Predbat will actually predict
+in the morning, which matters most when the divergence is systematic rather than a one-off (a holiday, for example).
 
 **input_number.predbat_carbon_metric** (_carbon enable_) When Carbon footprint tracking is turned On (**switch.predbat_carbon_enable**) (Off by default),
 you can specify a cost per kg of CO2 used to weight the selection of plans. Values of around 10-200 will give varying outcomes to trade off cost vs carbon footprint of your system.
@@ -460,6 +470,11 @@ this defaults to 10 but can be changed between 0 and 30.
 once it has been reached or to protect against discharging beyond the set limit.
 
 **switch.predbat_set_charge_freeze** (_expert mode_) When turned On will allow Predbat to hold the current battery level while drawing from the grid/solar as an alternative to charging. On by default.
+
+**switch.predbat_set_charge_freeze_only** (_expert mode_) When turned On charging the battery from the grid is prevented, but charge freeze can be used (if enabled) to hold the current battery
+level rather than discharging it. This is useful if you don't want to import to fill the battery at all, for example on a flat tariff or where you only want the battery charged by solar. Off by default.
+
+Note that if both this and **switch.predbat_set_charge_freeze** are turned Off, Predbat has no way to use a charge window at all and will leave the battery in demand mode throughout.
 
 **switch.predbat_set_export_freeze** When turned On (the default) will allow Predbat to export Solar to the grid rather than charging the battery.
 
@@ -526,8 +541,13 @@ When the Freeze Export override is active, [Predbat status](what-does-predbat-do
 
 ## Cloud coverage and load variance
 
-By default Predbat tries to model passing clouds by modulating the PV forecast data on a 5-minute interval up and down while retaining the same predicted total.
-The amount of modulation depends on the difference between the PV50% (default) and PV10% scenario produced by Solcast.
+By default Predbat tries to model passing clouds by modulating the PV forecast data on a 5-minute interval up and down while retaining the same predicted total over each half-hour.
+
+Each scenario is modulated toward the next forecast percentile above it: the PV10% scenario reaches up toward PV50%, PV50% reaches up toward PV90%, and PV90% - having no percentile above it - reaches toward a continuation of its own band, capped at your DC array size (see **pv_array_kwp** in [apps.yaml settings](apps-yaml.md)) plus 20% for cloud-edge enhancement.
+
+How many of each half-hour's six 5-minute steps are raised rather than lowered follows the shape of your own forecast band. Solcast's downside is typically about twice its upside, giving four steps raised and two lowered, which lets the peaks reach PV90% while the troughs still fall far enough to matter. The PV10% scenario takes the opposite pattern, so it dips exactly where PV50% peaks and both directions are covered within the same 5 minutes.
+
+If your forecast source publishes no PV90% data, Predbat falls back to the older model, which modulates by a single figure derived from the gap between the PV50% and PV10% forecasts.
 
 You can disable this feature (_expert mode only_) using **switch.predbat_metric_cloud_enable**.
 
@@ -671,10 +691,20 @@ Whilst the holiday days left are non-zero, Predbat's 'holiday mode' is active.
 
 When Predbat is in 'Demand' mode (i.e. not actively charging or discharging) and 'holiday mode' is active, Predbat's status will show as 'Demand (Holiday)'.
 
-With `days_previous_auto` enabled (the default), holiday mode is instead accounted for automatically by the
-weighted-bucket forecast, which down-weights historical days whose holiday mode state doesn't match today's.
+With `days_previous_auto` enabled (the default), holiday mode is accounted for automatically by the
+[weighted-bucket forecast](apps-yaml.md#days_previous_auto-weighted-historical-load-forecast), which predicts each
+day from historical days in the same holiday state - while you are away only your holiday days are used, and once
+you are home only your non-holiday days are. The holiday state is worked out for each day of the plan separately,
+so the day you travel home is already planned against your normal load.
 
-In this case just set holiday mode for the days you are away and Predbat does the rest.
+For the first 24 hours of a holiday there is no holiday history to learn from yet. Until there is, Predbat scales
+your normal predicted load by **input_number.predbat_holiday_load_scaling** (default 0.7, i.e. it assumes you will
+use 70% of normal while away). Lower it if your house draws very little while you are away, raise it towards 1.0 if
+your usage barely changes. The setting only applies while there is no matching holiday history for that time of day,
+so it retires itself automatically once the first holiday day has been recorded.
+
+Just set holiday mode for the days you are away and Predbat does the rest - **turn it off as soon as you are back**,
+so that the plan switches straight back to your normal load history.
 
 ### Holiday mode with days_previous_auto off
 
@@ -686,6 +716,10 @@ to take longer for the historical data to catch up, you could then enable holida
 
 - For short holidays set holiday_days_left to the number of full days you are away, including today but excluding the return day
 - For longer holidays set holiday_days_left to the number of days you are away plus another 7 days until the data catches back up
+
+Note that this last piece of advice applies only when `days_previous_auto` is off. With it on (the default), leaving
+holiday mode enabled after you get home would keep Predbat predicting from your holiday days and under-estimate your
+load, so turn it off on your return instead.
 
 ## Manual Control
 
@@ -792,7 +826,11 @@ This is described in detail in [Manual API](manual-api.md) and is mentioned here
 - Secondly Predbat will create a debug output file 'debug/predbat_debug_HH_MM_SS.yaml' in a subfolder of the Predbat installation directory.
 This file contains a full export of your current Predbat config and is extremely useful to enable recreating your setup to diagnose issues. Any sensitive information such as Solcast or GivEnergy Cloud API keys are automatically removed.
 
-The following automation might be useful to automatically turn off Predbat debug mode after turning it on to capture the debug logs:
+Predbat automatically turns this switch back Off after 2 hours if it's still on, to bound the raw disk writes it triggers if left on by accident - if you need a longer debug session than that, you'll need to turn it back On again.
+
+**Note:** The **Create**/**Download** links on the web interface's **Debug** panel (including `predbat_debug.yaml`, `predbat.log`, and the debug history archive) only work from a web browser. The HA Companion app's built-in browser does not save files when you tap them - it just displays the raw content on screen instead. If you're on the Companion app, browse to the `debug/` folder under your Predbat config directory directly (e.g. with the File editor or Samba add-on) and pick the file up from there instead.
+
+The following automation might be useful to automatically turn off Predbat debug mode sooner than that, after turning it on to capture the debug logs:
 
 ```yaml
 alias: "Predbat: Auto turn-off debug mode"
@@ -821,6 +859,19 @@ mode: single
 ```
 
 **switch.predbat_plan_debug** (_expert mode_) when turned On adds some extra debug to the Predbat HTML plan - see [Predbat Plan debug mode](predbat-plan-card.md#debug-mode-for-predbat-plan) for more details. Off by default.
+
+### Debug history
+
+Turning on `switch.predbat_debug_enable` only captures debug information from the moment you switch it on - not much help if you have already noticed a problem and want to see what Predbat was doing an hour or two ago. Predbat also keeps a small rolling history of debug snapshots automatically, independent of that switch, so there is always some recent history to look back at:
+
+- **switch.predbat_debug_history_enable** - turns the rolling history off entirely when off (default on). `debug_history_force_capture` still works even while this is off.
+- **input_number.predbat_debug_history_count** - how many snapshots to retain (default 15, minimum 1 - use the enable switch above to turn the feature off, not a count of 0).
+- **input_number.predbat_debug_history_interval** - how many hours between automatic snapshots (default 3). With the defaults, 15 snapshots at 3-hourly intervals covers just under 48 hours.
+- **switch.predbat_debug_history_force_capture** - turn this on to trigger an immediate snapshot rather than waiting for the next scheduled one, useful from an automation that has just spotted something worth investigating. Predbat resets the switch back off itself once the snapshot has been taken, and still takes the snapshot even if `debug_history_enable` is off.
+
+Retained snapshots can all be downloaded together as a single gzip tarball from a link on the web interface's dashboard **Debug** panel. It downloads as `predbat_debug_history.tgz.dmp` - open it with `tar xzf predbat_debug_history.tgz.dmp`; the contents are an ordinary gzip tarball, only the filename differs from a `.tgz`. The trailing `.dmp` is there because some browsers unpack downloads by extension, and a history that arrives unpacked is both too large for GitHub's 25MB attachment limit and a file type GitHub will not accept, where the archive itself is usually under 5MB. Individual snapshots can also be downloaded from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
+
+Each snapshot is written as a plain `predbat_debug_<timestamp>.yaml.txt` file into the same `debug/` folder as the `switch.predbat_debug_enable` output described above - useful in its own right (a full rolling history sitting on disk, not just what the switch happened to catch), and it's the way to get a snapshot to attach to a GitHub issue from the HA Companion app, where the archive/single-file download links above don't work (see the note above). The contents are ordinary YAML; the `.txt` on the end is there because GitHub refuses to accept a `.yaml` file as an issue attachment, so a snapshot picked up from `debug/` can be attached to a bug report as-is with no renaming. These files are pruned in step with the ring buffer itself, so there are never more of them on disk than `debug_history_count` snapshots. Snapshots written by a version before this naming change (`predbat_debug_<timestamp>.yaml`) still download and are still pruned normally, but they keep the old plain-`.yaml` name on disk until that happens, so they need renaming to `.yaml.txt` before GitHub will accept them as an attachment.
 
 ## Updating Predbat
 

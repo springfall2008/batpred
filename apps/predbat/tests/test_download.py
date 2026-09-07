@@ -80,6 +80,7 @@ def test_download(my_predbat):
         ("download_file_failure", _test_download_predbat_file_failure, "Download file failure"),
         ("download_file_no_filename", _test_download_predbat_file_no_filename, "Download file no filename"),
         ("update_move_success", _test_predbat_update_move_success, "Move files success"),
+        ("update_move_mv_failure", _test_predbat_update_move_mv_failure, "Move files propagates a failed mv chain as False"),
         ("update_move_empty", _test_predbat_update_move_empty_files, "Move files empty list"),
         ("update_move_none", _test_predbat_update_move_none_files, "Move files none list"),
         ("update_move_invalid_version", _test_predbat_update_move_invalid_version, "Move files invalid version"),
@@ -667,6 +668,7 @@ def _test_predbat_update_move_success(my_predbat):
         # Mock os.system and os.path.dirname
         with patch("download.os.path.dirname", return_value=temp_dir):
             with patch("download.os.system") as mock_system:
+                mock_system.return_value = 0
                 result = predbat_update_move(tag, test_files)
 
                 assert result is True
@@ -678,6 +680,43 @@ def _test_predbat_update_move_success(my_predbat):
                 assert "config.py" in call_args
                 assert "manifest.yaml" in call_args
                 assert "echo 'Update complete'" in call_args
+
+    finally:
+        shutil.rmtree(temp_dir)
+    return 0
+
+
+def _test_predbat_update_move_mv_failure(my_predbat):
+    """
+    Test predbat_update_move propagates a failed mv chain via its return value, rather than
+    always reporting success regardless of whether the files actually moved
+    """
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        test_files = ["predbat.py", "config.py"]
+        tag = "v8.30.8"
+
+        for filename in test_files:
+            tagged_file = os.path.join(temp_dir, filename + "." + tag)
+            with open(tagged_file, "w") as f:
+                f.write("content of {}\n".format(filename))
+
+        _write_staged_manifest(temp_dir, tag, test_files)
+
+        # The dev marker is cleared unconditionally before the mv chain runs (see
+        # predbat_update_move's docstring) - write one here to confirm that still happens
+        # even when the mv chain itself then fails.
+        with open(os.path.join(temp_dir, "git_version.txt"), "w") as f:
+            f.write("abc1234")
+
+        with patch("download.os.path.dirname", return_value=temp_dir):
+            with patch("download.os.system") as mock_system:
+                mock_system.return_value = 256  # non-zero: the mv chain failed
+                result = predbat_update_move(tag, test_files)
+
+                assert result is False
+                assert not os.path.exists(os.path.join(temp_dir, "git_version.txt"))
 
     finally:
         shutil.rmtree(temp_dir)
@@ -711,6 +750,7 @@ def _test_predbat_update_move_invalid_version(my_predbat):
         # Even with empty version, the function should still run (just with empty tag)
         with patch("download.os.path.dirname", return_value=temp_dir):
             with patch("download.os.system") as mock_system:
+                mock_system.return_value = 0
                 result = predbat_update_move("", ["test.py"])
                 # Should still return True and call os.system
                 assert result is True
@@ -1547,6 +1587,7 @@ def _test_update_move_verifies_staged_files(my_predbat):
 
         with patch("download.os.path.dirname", return_value=temp_dir):
             with patch("download.os.system") as mock_system:
+                mock_system.return_value = 0
                 assert predbat_update_move(tag, files + ["manifest.yaml"]) is True
                 assert mock_system.called
 
@@ -1629,6 +1670,7 @@ def _test_update_move_without_manifest_proceeds(my_predbat):
 
         with patch("download.os.path.dirname", return_value=temp_dir):
             with patch("download.os.system") as mock_system:
+                mock_system.return_value = 0
                 assert predbat_update_move(tag, ["predbat.py"]) is True
                 assert mock_system.called
 

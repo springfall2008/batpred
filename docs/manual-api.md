@@ -62,7 +62,14 @@ To disable this override again:
 [inverter_limit(0)=4000]
 ```
 
-If you omit the index then all entries in the list will be overridden.
+If you omit the index then all entries in the list will be overridden, except for list settings that hold several simultaneous time windows (**rates_export_override** and **rates_import_override**). For those, each no-index command you send is kept as a separate window rather than replacing the previous one, so you can stack multiple overrides at once, e.g:
+
+```text
+rates_export_override?start=17:00:00&end=19:00:00&rate=0
+rates_export_override?start=22:00:00&end=23:00:00&rate=5
+```
+
+Sending the exact same command again removes it (equivalent to putting it in square brackets), rather than adding a duplicate.
 
 To disable all overrides
 

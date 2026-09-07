@@ -21,6 +21,7 @@ from sigenergy import (
     SIGENERGY_ACTIVE_MODE_SELF,
     SIGENERGY_CODE_IN_OTHER_VPP,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
+    SIGENERGY_LOG_REDACT_KEYS,
     SIGENERGY_MODE_MSC,
     SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
@@ -649,8 +650,6 @@ def test_sigenergy_get_access_token_retry(my_predbat):
     success_session = _make_mock_session(success_response)
 
     call_log = []
-
-    original_class = __import__("sigenergy").aiohttp.ClientSession
 
     class SequencedSession:
         """Return failure sessions then success session."""
@@ -1285,6 +1284,7 @@ def test_sigenergy_apply_controls_export_mode(my_predbat):
     bat_cmds = [c for c in commands_sent if c[0] == "battery_cmd"]
     assert len(bat_cmds) >= 1, "send_battery_command called for export"
     assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_DISCHARGE, "discharge mode sent for export"
+    assert bat_cmds[0][4] == 3.0, "configured export rate (3000W) sent as charging_power_kw, got {}".format(bat_cmds[0][4])
 
     return failed
 
@@ -1340,6 +1340,113 @@ def test_sigenergy_publish_mqtt_success(my_predbat):
     decoded = json.loads(payload)
     assert decoded["activeMode"] == "charge", "Payload content correct"
     assert decoded["systemId"] == "SIG1", "systemId in payload"
+
+    return failed
+
+
+def test_sigenergy_redact(my_predbat):
+    """Test redact masks credential keys at any depth and leaves the rest alone."""
+    failed = False
+
+    redacted = SigenergyAPI.redact({"accessToken": "live-token", "systemId": "SIG1"})
+    assert redacted["accessToken"] == "<redacted>", "accessToken masked"
+    assert redacted["systemId"] == "SIG1", "Non-credential key untouched"
+
+    # Nested inside a list, as the battery command payload nests its commands
+    nested = SigenergyAPI.redact({"commands": [{"systemId": "SIG1", "password": "hunter2"}]})
+    assert nested["commands"][0]["password"] == "<redacted>", "Credential masked inside a nested list"
+    assert nested["commands"][0]["systemId"] == "SIG1", "Nested non-credential key untouched"
+
+    # Nested inside a dict, exercising the dict-value recursion branch
+    nested_dict = SigenergyAPI.redact({"outer": {"accessToken": "live-token", "systemId": "SIG1"}})
+    assert nested_dict["outer"]["accessToken"] == "<redacted>", "Credential masked inside a nested dict"
+    assert nested_dict["outer"]["systemId"] == "SIG1", "Nested-dict non-credential key untouched"
+
+    # Every documented credential key is covered — iterate the constant so keys added
+    # to SIGENERGY_LOG_REDACT_KEYS later are automatically tested too
+    for key in SIGENERGY_LOG_REDACT_KEYS:
+        assert SigenergyAPI.redact({key: "secret"})[key] == "<redacted>", "Key {} masked".format(key)
+
+    # json.dumps() serialises tuples as arrays, so redaction must cover them or a
+    # tuple-shaped payload would be published as JSON yet logged unmasked
+    nested_tuple = SigenergyAPI.redact({"commands": ({"password": "hunter2"},)})
+    assert nested_tuple["commands"][0]["password"] == "<redacted>", "Credential masked inside a nested tuple"
+
+    # Scalars and lists of scalars pass straight through
+    assert SigenergyAPI.redact("plain") == "plain", "String passthrough"
+    assert SigenergyAPI.redact([1, 2]) == [1, 2], "List passthrough"
+    assert SigenergyAPI.redact(None) is None, "None passthrough"
+
+    return failed
+
+
+def test_sigenergy_publish_mqtt_redacts_token(my_predbat):
+    """Test _publish_mqtt keeps the live token on the wire but masks it in the log (#4920)."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "tok123"
+    api.mqtt_host = "openapi-eu.sigencloud.com" # cspell:disable-line
+    api.mqtt_port = 8883
+
+    mock_client = _make_mock_aiomqtt_client()
+    # The nested command carries a credential too, mirroring the shape of the #4920 leak:
+    # a top-level-only redaction would mask accessToken but still leak the nested password
+    payload = {"accessToken": "live-secret-token", "commands": [{"systemId": "SIG1", "activeMode": "charge", "password": "nested-secret"}]}
+
+    with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+        with patch("sigenergy.aiomqtt.Client", return_value=mock_client):
+            ok = run_async(SigenergyAPI._publish_mqtt(api, "openapi/instruction/command", payload))
+
+    assert ok is True, "_publish_mqtt should return True on success"
+
+    # The broker still receives the real token — redaction is log-only
+    topic, wire_payload = mock_client.publishes[0]
+    import json
+
+    assert topic == "openapi/instruction/command", "Published to the command topic"
+    assert json.loads(wire_payload)["accessToken"] == "live-secret-token", "Real token still published to the broker"
+    assert json.loads(wire_payload)["commands"][0]["password"] == "nested-secret", "Nested credential still published to the broker"
+
+    published_logs = [m for m in api.log_messages if "MQTT published" in m]
+    assert len(published_logs) == 1, "Exactly one publish log line expected"
+    assert "live-secret-token" not in published_logs[0], "Token must not appear in the log"
+    assert "nested-secret" not in published_logs[0], "Nested credential must not appear in the log"
+    assert "<redacted>" in published_logs[0], "Token replaced with the redaction marker"
+    assert "SIG1" in published_logs[0], "Non-credential payload content still logged"
+
+    # The caller's payload dict is not mutated by redaction
+    assert payload["accessToken"] == "live-secret-token", "Caller payload left unmodified"
+
+    return failed
+
+
+def test_sigenergy_request_log_redacts_credentials(my_predbat):
+    """Test _request masks credential-bearing keys in its request and response log lines."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.get_access_token = AsyncMock(return_value="tok123")
+
+    fake_response = {"code": 0, "msg": "ok", "data": {"accessToken": "resp-token", "systemId": "SIG1"}}
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.SIGENERGY_MIN_REQUEST_INTERVAL", 0):
+        with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+            result = run_async(SigenergyAPI._request(api, "POST", "/openapi/test", params={"token": "query-secret"}, json_data={"password": "hunter2", "systemId": "SIG1"}))
+
+    assert result == {"accessToken": "resp-token", "systemId": "SIG1"}, "Response data returned unchanged"
+
+    request_logs = [m for m in api.log_messages if "Requesting" in m]
+    assert len(request_logs) == 1, "Exactly one request log line expected"
+    assert "query-secret" not in request_logs[0], "params credential must not appear in the request log"
+    assert "hunter2" not in request_logs[0], "json_data credential must not appear in the request log"
+    assert "SIG1" in request_logs[0], "Non-credential request content still logged"
+
+    response_logs = [m for m in api.log_messages if "Response from" in m]
+    assert len(response_logs) == 1, "Exactly one response log line expected"
+    assert "resp-token" not in response_logs[0], "Response credential must not appear in the response log"
+    assert "SIG1" in response_logs[0], "Non-credential response content still logged"
 
     return failed
 
@@ -1502,6 +1609,60 @@ def test_sigenergy_handle_mqtt_period_partial_update(my_predbat):
 
     status = api.system_status.get("SYS1", {})
     assert status["operationalMode"] == 6.0, "operationalMode retained from previous full message"
+
+    return failed
+
+
+def test_sigenergy_handle_mqtt_period_never_reported_field(my_predbat):
+    """Regression test for #4663: a field the broker has never sent must not zero the REST value.
+
+    The partial-update merge above only helps once a field has been seen at least once. A system
+    whose period messages carry just "PV power" leaves storageSOC% absent from the merged state
+    forever, and defaulting it to 0 overwrote the SoC the REST poll had already fetched.
+
+    Live effect: the reporter's battery read 30.84kWh/85% from REST, a period message arrived
+    carrying only PV, and Predbat immediately replanned against a 0% battery in the middle of an
+    export window.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+
+    # REST poll has populated a good, complete picture
+    api.energy_flow["SYS1"] = {
+        "batterySoc": 85.0,
+        "batteryPower": -4.127,
+        "pvPower": 4.42,
+        "gridPower": -0.27,
+        "loadPower": 3.857,
+        "evPower": 0.0,
+        "inverterPower": 2.5,
+    }
+
+    # The only period message this system ever sends carries PV power and nothing else
+    api._handle_mqtt_period("SYS1", {"PV power": "4420.0"})
+
+    flow = api.energy_flow.get("SYS1", {})
+    if abs(flow["batterySoc"] - 85.0) > 0.01:
+        print("ERROR: batterySoc should be retained from the REST poll, got {}".format(flow["batterySoc"]))
+        failed = True
+    if abs(flow["batteryPower"] - (-4.127)) > 0.001:
+        print("ERROR: batteryPower should be retained from the REST poll, got {}".format(flow["batteryPower"]))
+        failed = True
+    if abs(flow["gridPower"] - (-0.27)) > 0.001:
+        print("ERROR: gridPower should be retained from the REST poll, got {}".format(flow["gridPower"]))
+        failed = True
+    # The field the message did carry must still be applied
+    if abs(flow["pvPower"] - 4.42) > 0.001:
+        print("ERROR: pvPower should come from the period message, got {}".format(flow["pvPower"]))
+        failed = True
+
+    # With nothing previously known either, an absent field is still 0 rather than raising
+    api2 = MockSigenergyAPI()
+    api2._handle_mqtt_period("SYS2", {"PV power": "1000.0"})
+    flow2 = api2.energy_flow.get("SYS2", {})
+    if flow2["batterySoc"] != 0.0:
+        print("ERROR: batterySoc with no prior value should default to 0, got {}".format(flow2["batterySoc"]))
+        failed = True
 
     return failed
 
@@ -1809,6 +1970,54 @@ def test_sigenergy_fetch_inverter_realtime(my_predbat):
     # pvEnergyDaily should update daily_summary
     daily = api.daily_summary.get("SYS1", {})
     assert daily.get("dailyPowerGeneration") == 12.5, "daily PV yield updated from pvEnergyDaily"
+
+    return failed
+
+
+def test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback(my_predbat):
+    """Regression test for #4663: realtimeInfo spells PV power "pVPower" (capital V), not the
+    natural-looking "pvPower" read by the code before the fix - which silently defaulted PV to 0
+    forever. Covers the fallback chain pVPower -> pvTotalPower -> pvPower in priority order."""
+    failed = False
+
+    def _fetch_pv(realtime_info):
+        api = MockSigenergyAPI()
+        api.access_token = "fake_token"
+        api.token_expires_at = 9_999_999_999
+        api._last_request_time = 0
+        api.devices["SYS1"] = [{"deviceType": "Inverter", "serialNumber": "INV001"}]
+
+        fake_response = {
+            "code": 0,
+            "data": {
+                "systemId": "SYS1",
+                "serialNumber": "INV001",
+                "deviceType": "Inverter",
+                "realTimeInfo": realtime_info,
+            },
+        }
+        mock_response = _make_mock_response(status=200, json_data=fake_response)
+        mock_session = _make_mock_session(mock_response)
+        with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+            ok = run_async(api.fetch_inverter_realtime("SYS1"))
+        assert ok is True, "fetch_inverter_realtime should return True"
+        return api.energy_flow.get("SYS1", {}).get("pvPower")
+
+    # pVPower is primary - used even when the other two spellings are also present and disagree.
+    pv = _fetch_pv({"batSoc": 50.0, "pVPower": 4.66, "pvTotalPower": 4.38, "pvPower": 0.0})
+    assert pv == 4.66, "pVPower should be read as the primary PV key, got {}".format(pv)
+
+    # No pVPower - falls back to pvTotalPower.
+    pv = _fetch_pv({"batSoc": 50.0, "pvTotalPower": 4.38, "pvPower": 0.0})
+    assert pv == 4.38, "should fall back to pvTotalPower when pVPower is absent, got {}".format(pv)
+
+    # Neither pVPower nor pvTotalPower - falls back to pvPower.
+    pv = _fetch_pv({"batSoc": 50.0, "pvPower": 2.1})
+    assert pv == 2.1, "should fall back to pvPower when the other two are absent, got {}".format(pv)
+
+    # None of the three present - the #4663 regression case: silently stuck at 0, not an error.
+    pv = _fetch_pv({"batSoc": 50.0})
+    assert pv == 0.0, "should read 0.0, not error, when no PV key is present at all, got {}".format(pv)
 
     return failed
 
@@ -2946,16 +3155,21 @@ def run_sigenergy_tests(my_predbat):
         ("apply_controls_deduplication", test_sigenergy_apply_controls_deduplication),
         ("apply_controls_export_mode", test_sigenergy_apply_controls_export_mode),
         ("publish_mqtt_success", test_sigenergy_publish_mqtt_success),
+        ("redact", test_sigenergy_redact),
+        ("publish_mqtt_redacts_token", test_sigenergy_publish_mqtt_redacts_token),
+        ("request_log_redacts_credentials", test_sigenergy_request_log_redacts_credentials),
         ("publish_mqtt_failure", test_sigenergy_publish_mqtt_failure),
         ("send_battery_command_mqtt", test_sigenergy_send_battery_command_mqtt),
         ("send_battery_command_no_token", test_sigenergy_send_battery_command_no_token),
         ("handle_mqtt_period", test_sigenergy_handle_mqtt_period),
         ("handle_mqtt_period_partial_update", test_sigenergy_handle_mqtt_period_partial_update),
+        ("handle_mqtt_period_never_reported_field", test_sigenergy_handle_mqtt_period_never_reported_field),
         ("handle_mqtt_change", test_sigenergy_handle_mqtt_change),
         ("handle_mqtt_alarm", test_sigenergy_handle_mqtt_alarm),
         ("mqtt_listener_loop", test_sigenergy_mqtt_listener_loop),
         ("mqtt_listener_loop_ignores_other_systems", test_sigenergy_mqtt_listener_loop_ignores_other_systems),
         ("fetch_inverter_realtime", test_sigenergy_fetch_inverter_realtime),
+        ("fetch_inverter_realtime_pv_power_key_fallback", test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback),
         ("fetch_energy_flow", test_sigenergy_fetch_energy_flow),
         ("fetch_inverter_realtime_no_inverter", test_sigenergy_fetch_inverter_realtime_no_inverter),
         ("get_inverter_serial", test_sigenergy_get_inverter_serial),

@@ -54,6 +54,8 @@ def test_load_ml(my_predbat=None):
         ("cold_start", _test_cold_start, "Cold start with insufficient data"),
         ("fine_tune", _test_fine_tune, "Fine-tune on recent data"),
         ("curriculum_training", _test_curriculum_training, "Curriculum training with progressive window expansion"),
+        ("training_progress_callback", _test_training_progress_callback, "Training reports liveness through progress_callback"),
+        ("component_alive_during_training", _test_component_marks_itself_alive_during_training, "Component keeps its success timestamp fresh while training"),
         ("prediction", _test_prediction, "End-to-end prediction"),
         ("prediction_with_pv", _test_prediction_with_pv, "Prediction with PV forecast data"),
         ("prediction_with_temp", _test_prediction_with_temp, "Prediction with temperature forecast data"),
@@ -786,7 +788,7 @@ def _test_cold_start():
     load_data = _create_synthetic_load_data(n_days=1, now_utc=now_utc)
 
     # Training should fail or return None
-    val_mae = predictor.train(load_data, now_utc, pv_minutes=None, is_initial=True, epochs=5, time_decay_days=7)
+    predictor.train(load_data, now_utc, pv_minutes=None, is_initial=True, epochs=5, time_decay_days=7)
 
     # With only 1 day of data, we can't create a valid dataset for 48h prediction
     # The result depends on actual data coverage
@@ -803,9 +805,6 @@ def _test_fine_tune():
     np.random.seed(42)
     load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
     predictor.train(load_data, now_utc, pv_minutes=None, is_initial=True, epochs=5, time_decay_days=7)
-
-    # Store original weights
-    orig_weights = [w.copy() for w in predictor.weights]
 
     # Fine-tune with same data but as fine-tune mode
     # Note: Fine-tune uses is_finetune=True which only looks at last 24h
@@ -1543,7 +1542,7 @@ def _test_real_data_training():
                 plt.savefig(chart_path, dpi=150, bbox_inches="tight")
                 print(f"  Chart saved to {chart_path}")
                 break
-            except:
+            except Exception:
                 continue
 
         plt.close()
@@ -1805,7 +1804,7 @@ def _test_pretrained_model_prediction():
                 plt.savefig(chart_path, dpi=150, bbox_inches="tight")
                 print(f"  Chart saved to {chart_path}")
                 break
-            except:
+            except Exception:
                 continue
 
         plt.close()
@@ -3317,3 +3316,147 @@ def _test_curriculum_90day_intermediate_passes():
     assert val_mae is not None, "90-day curriculum training should succeed"
     assert not np.isnan(val_mae), "val_mae must not be NaN"
     assert predictor.model_initialized, "Model must be initialized after curriculum training"
+
+
+def _test_training_progress_callback():
+    """Test that a long training run can report liveness through progress_callback.
+
+    Without this the component only marks itself successful once the whole curriculum returns.
+    Real runs measured 63-90 minutes against a 60 minute liveness window in components.is_alive(),
+    so a perfectly healthy trainer was reported dead - and the dashboard showed "(unhealthy)" -
+    for the tail of every retrain.
+    """
+    from load_predictor import LoadPredictor
+
+    now_utc = datetime.now(timezone.utc)
+    np.random.seed(42)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+
+    # A plain train() pulses once per epoch
+    calls = []
+    predictor = LoadPredictor(learning_rate=0.01)
+    predictor.train(load_data, now_utc, epochs=3, patience=3, progress_callback=lambda: calls.append(1))
+    assert len(calls) == 3, f"expected one callback per epoch (3), got {len(calls)}"
+
+    # Omitting it must stay valid - every existing caller relies on that
+    predictor_none = LoadPredictor(learning_rate=0.01)
+    predictor_none.train(load_data, now_utc, epochs=2, patience=3)
+
+    # Curriculum threads it through every pass, so the pulse never stops for a whole pass
+    load_data_28 = _create_synthetic_load_data(n_days=28, now_utc=now_utc)
+    curriculum_calls = []
+    predictor_c = LoadPredictor(learning_rate=0.01)
+    val_mae = predictor_c.train_curriculum(
+        load_data_28,
+        now_utc,
+        epochs=3,
+        patience=3,
+        curriculum_window_days=7,
+        curriculum_step_days=7,
+        progress_callback=lambda: curriculum_calls.append(1),
+    )
+    assert val_mae is not None, "curriculum training should still succeed with a progress callback"
+    # 28 days at window 7 step 7 gives 3 intermediate passes plus the final one, 3 epochs each
+    assert len(curriculum_calls) >= 6, f"expected the callback to fire across multiple passes, got {len(curriculum_calls)}"
+
+    # A callback that raises must not abort an hour of training
+    raised = []
+
+    def bad_callback():
+        raised.append(1)
+        raise RuntimeError("callback blew up")
+
+    predictor_bad = LoadPredictor(learning_rate=0.01)
+    val_mae_bad = predictor_bad.train(load_data, now_utc, epochs=3, patience=3, progress_callback=bad_callback)
+    assert len(raised) == 3, f"a raising callback should still be called every epoch, got {len(raised)}"
+    assert val_mae_bad is not None, "training must survive a callback that raises"
+
+    return True
+
+
+def _test_component_marks_itself_alive_during_training():
+    """_do_training must hand the trainer the component's own timestamp updater.
+
+    Driven through the real _do_training rather than by calling train_curriculum directly - a test
+    that passes the callback itself proves only that the test passes it, and would keep passing if
+    load_ml_component stopped wiring it up. That regression is invisible until a training run
+    silently crosses the liveness window again hours later.
+    """
+    import asyncio
+
+    from load_ml_component import LoadMLComponent
+
+    now_utc = datetime.now(timezone.utc)
+    recorded = {}
+
+    class FakeBase:
+        """Minimal stand-in for the PredBat instance the component reads through."""
+
+        def __init__(self):
+            """Expose only what _do_training touches."""
+            self.now_utc = now_utc
+
+        def log(self, msg, **kwargs):
+            """Swallow component logging."""
+            return None
+
+    class FakePredictor:
+        """Captures the kwargs the component passes, and pulses the callback like a real run."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Record every call's progress callback and fire it once, as an epoch would.
+
+            Every call, not just the last: with is_initial the component runs the initial curriculum
+            and then a fine-tune pass, so keeping only the most recent kwargs would let an unwired
+            first call hide behind a correctly wired second one.
+            """
+            callback = kwargs.get("progress_callback")
+            recorded.setdefault("calls", []).append(callback)
+            if callback:
+                callback()
+            return 0.05
+
+    component = LoadMLComponent.__new__(LoadMLComponent)
+    component.base = FakeBase()
+    component.log = component.base.log
+    component.last_success_timestamp = None
+    component.predictor = FakePredictor()
+    component.data_lock = asyncio.Lock()
+    component.load_data = {1: 0.1}
+    component.load_data_age_days = 10
+    component.pv_data = None
+    component.temperature_data = None
+    component.import_rates_data = None
+    component.export_rates_data = None
+    component.ml_epochs_initial = 3
+    component.ml_epochs_update = 3
+    component.ml_time_decay_days = 30
+    component.ml_validation_holdout_hours = 48
+    component.ml_patience_initial = 3
+    component.ml_patience_update = 3
+    component.ml_curriculum_max_passes = 4
+    component.ml_curriculum_window_days = 7
+    component.ml_curriculum_step_days = 1
+    component.ml_validation_threshold = 2.0
+    component.model_filepath = None
+    component.model_valid = False
+    component.model_status = "not_initialized"
+    component.last_train_time = None
+    component.initial_training_done = False
+
+    # Both paths, because _do_training picks a different train_curriculum call site for each - the
+    # initial curriculum or the fine-tune - and wiring only one of them up leaves the other able to
+    # blow past the liveness window unnoticed
+    for is_initial in (False, True):
+        recorded.clear()
+        component.last_success_timestamp = None
+        asyncio.run(component._do_training(is_initial=is_initial))
+
+        calls = recorded.get("calls", [])
+        assert len(calls) == 1, f"is_initial={is_initial}: expected exactly 1 train_curriculum call, got {len(calls)}"
+        for n, callback in enumerate(calls):
+            assert callback is not None, f"_do_training(is_initial={is_initial}) call {n + 1} must pass a progress_callback to train_curriculum"
+            assert callback == component.update_success_timestamp, f"is_initial={is_initial} call {n + 1}: the callback must be the component's own update_success_timestamp, not some other hook"
+        assert component.last_success_timestamp is not None, f"is_initial={is_initial}: firing the callback must move last_success_timestamp so components.is_alive() sees a recent success"
+
+    return True

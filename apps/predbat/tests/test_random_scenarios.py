@@ -22,7 +22,7 @@ import traceback
 import yaml
 
 from tests.test_infra import reset_inverter
-from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
+from const import CLOUD_FACTOR_PV10, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -56,6 +56,11 @@ LOAD_SCALING_MAX = 2.0
 # or not. One contiguous run per enabled scenario is enough to exercise both ends of the skew: the
 # earliest slots (discounted) and the latest (penalised).
 IOG_SEED_SALT = 0x10641           # keeps the IOG draws off the main rng sequence
+# Feed-in First, again on its own rng stream. Without it every scenario runs with the capability
+# off, so the Freeze Export PV recapture branch (prediction.py, and its C++ kernel mirror) has no
+# plan-level coverage at all - only the inverters that genuinely do Feed-in First reach it.
+FEEDIN_FIRST_SEED_SALT = 0xFEED1  # keeps the Feed-in First draw off the main rng sequence
+FEEDIN_FIRST_PROBABILITY = 0.5    # fraction of scenarios modelling a Feed-in First inverter
 IOG_PROBABILITY = 0.5             # fraction of scenarios that get an IOG dispatch run
 IOG_RUN_SLOTS_MIN = 2             # shortest dispatch run: 1 hour
 IOG_RUN_SLOTS_MAX = 12            # longest dispatch run: 6 hours
@@ -371,6 +376,12 @@ def generate_random_scenario(scenario_id, seed):
         iog_run_slots = iog_rng.randint(IOG_RUN_SLOTS_MIN, IOG_RUN_SLOTS_MAX)
         iog_run_start_minute = iog_rng.randrange(0, MINUTES_PER_DAY, CLOCK_STEP_MINUTES)
 
+    # --- Feed-in First ---
+    # Own rng stream, see the car block above - regenerating an existing seed leaves every other field
+    # bit-identical and only adds this flag.
+    feedin_rng = random.Random(seed ^ FEEDIN_FIRST_SEED_SALT)
+    support_feedin_first = feedin_rng.random() < FEEDIN_FIRST_PROBABILITY
+
     # --- Load scaling ---
     # Own rng stream, see the car block above. Sorted so that load_scaling90 <= load_scaling <=
     # load_scaling10, which is the order the planner requires: PV90 is the sunny, light load future
@@ -435,6 +446,7 @@ def generate_random_scenario(scenario_id, seed):
                 "hybrid": hybrid,
                 "inverter_limit_kw": inverter_limit_kw,
                 "export_limit_kw": export_limit_kw,
+                "support_feedin_first": support_feedin_first,
             },
             "load": {
                 "daily_kwh": daily_kwh,
@@ -676,6 +688,9 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     my_predbat.inverter_hybrid = inv["hybrid"]
     my_predbat.inverter_limit = inv["inverter_limit_kw"] / 60.0
     my_predbat.export_limit = inv["export_limit_kw"] / 60.0
+    # Scenarios written before this existed carry no key; those keep the capability off, which is the
+    # INVERTER_DEF default and what reset_inverter leaves behind, so their baselines stay comparable.
+    my_predbat.inverter_support_feedin_first = inv.get("support_feedin_first", False)
 
     # --- Cars ---
     # Scenarios written before cars existed carry no "cars" entry; those run car-less exactly as before.
@@ -763,7 +778,7 @@ def apply_scenario_to_predbat(my_predbat, scenario):
         pv10,
         minutes_now,
         forward=True,
-        cloud_factor=min(my_predbat.metric_cloud_coverage + 0.2, 1.0) if my_predbat.metric_cloud_coverage else None,
+        cloud_factor=min(my_predbat.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if my_predbat.metric_cloud_coverage else None,
         flip=True,
     )
 

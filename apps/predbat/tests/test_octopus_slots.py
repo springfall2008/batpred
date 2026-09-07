@@ -14,6 +14,82 @@ from utils import dp2, in_car_slot
 import json
 
 
+class _MockOctopusComponent:
+    """Stand-in for the OctopusAPI component, reporting an import tariff code."""
+
+    def __init__(self, tariff_code=None):
+        """Initialize with the import tariff code to report."""
+        self.tariffs = {"import": {"tariffCode": tariff_code}} if tariff_code else {}
+
+
+class _MockComponents:
+    """Stand-in for the component registry."""
+
+    def __init__(self, octopus=None):
+        """Initialize with the given octopus component stand-in registered, if any."""
+        self._components = {"octopus": octopus} if octopus else {}
+
+    def get_component(self, name):
+        """Return the registered stand-in component, if any."""
+        return self._components.get(name)
+
+
+def run_octopus_slot_max_default_tests(my_predbat):
+    """
+    Test for get_octopus_slot_max — an explicit apps.yaml octopus_slot_max always wins;
+    otherwise IOG-SMB tariffs (which Octopus enforces a 6-hour daily cap on) default to
+    12 slots, and every other tariff (including the older INTELLI-VAR) stays uncapped at 48.
+    """
+    failed = False
+    print("**** Running Test: octopus_slot_max_default ****")
+
+    saved_args = my_predbat.args.pop("octopus_slot_max", "__unset__")
+    saved_components = getattr(my_predbat, "components", None)
+
+    try:
+        # Explicit apps.yaml value wins even for an IOG-SMB tariff
+        my_predbat.args["octopus_slot_max"] = 20
+        my_predbat.components = _MockComponents(_MockOctopusComponent("E-1R-IOG-SMB-TOU-25-12-12-H"))
+        result = my_predbat.get_octopus_slot_max()
+        if result != 20:
+            print("ERROR: Explicit octopus_slot_max should win over auto-detection, expected 20 got {}".format(result))
+            failed = True
+
+        # Unset + IOG-SMB tariff -> defaults to 12 (6 hours)
+        my_predbat.args.pop("octopus_slot_max", None)
+        my_predbat.components = _MockComponents(_MockOctopusComponent("E-1R-IOG-SMB-TOU-25-12-12-H"))
+        result = my_predbat.get_octopus_slot_max()
+        if result != 12:
+            print("ERROR: Unset octopus_slot_max on an IOG-SMB tariff should default to 12, got {}".format(result))
+            failed = True
+
+        # Unset + older INTELLI-VAR tariff -> stays uncapped at 48
+        my_predbat.components = _MockComponents(_MockOctopusComponent("E-1R-INTELLI-VAR-25-01-01-H"))
+        result = my_predbat.get_octopus_slot_max()
+        if result != 48:
+            print("ERROR: Unset octopus_slot_max on an INTELLI-VAR tariff should default to 48, got {}".format(result))
+            failed = True
+
+        # Unset + no octopus component registered -> stays uncapped at 48
+        my_predbat.components = None
+        result = my_predbat.get_octopus_slot_max()
+        if result != 48:
+            print("ERROR: Unset octopus_slot_max with no octopus component should default to 48, got {}".format(result))
+            failed = True
+    finally:
+        if saved_args == "__unset__":
+            my_predbat.args.pop("octopus_slot_max", None)
+        else:
+            my_predbat.args["octopus_slot_max"] = saved_args
+        my_predbat.components = saved_components
+
+    if failed:
+        print("**** ❌ octopus_slot_max_default tests FAILED ****")
+    else:
+        print("**** ✅ octopus_slot_max_default tests PASSED ****")
+    return failed
+
+
 def run_load_octopus_slot_test(testname, my_predbat, slots, expected_slots, consider_full, car_soc, car_limit, car_loss):
     """
     Run a test for load_octopus_slot
@@ -80,6 +156,10 @@ def run_load_octopus_slots_tests(my_predbat):
     my_predbat.rate_max_base = 10
     my_predbat.car_charging_rate = [5.0]
     my_predbat.args["octopus_slot_max"] = 12
+    # load_octopus_slots() short-circuits to [] when car_n >= self.num_cars - set this explicitly
+    # rather than relying on whatever a previous test in the same run left num_cars as (a shared
+    # my_predbat instance persists across tests within a run).
+    my_predbat.num_cars = 1
 
     # Created 8 slots in total in the next 16 hours
     soc = 2.0
@@ -89,7 +169,6 @@ def run_load_octopus_slots_tests(my_predbat):
         start_plus_15 = start + timedelta(minutes=15)
         start_minus_30 = start - timedelta(minutes=30)
         end = start + timedelta(minutes=60)
-        prev_soc = soc
         prev_soc2 = soc2
         soc += 5
         soc2 += 2.5
@@ -114,7 +193,19 @@ def run_load_octopus_slots_tests(my_predbat):
             expected_slots4.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0 if soc <= 20.0 else 0.0, "average": slot7_rate, "cost": (5.0 if soc <= 20.0 else 0.0) * slot7_rate, "soc": min(soc2, 10.0), "octopus": True})
         # Slots 4-8 (i >= 3) exceed the 12-block cap for slots6 (slot 0 is 90-min = 4 blocks, slots 1-2 = 3 blocks each = 10 total, slot 3 would be 13)
         slot5_rate = 4 if i < 3 else 10
-        if i >= 1:
+        if i == 3:
+            # This slot straddles the cap exactly (10 blocks already used of 12, this slot needs 3
+            # more) - split at the point the daily budget runs out rather than the whole slot
+            # flipping to the max rate (batpred#4624).
+            slot_block_start = (minutes_start // 30) * 30
+            split_minute = slot_block_start + 2 * 30  # 2 blocks (12 - 10) remain in the daily budget
+            # Full precision to match production - only cost is rounded (batpred#4644 review).
+            low_kwh = 5.0 * (split_minute - minutes_start) / 60
+            high_kwh = 5.0 - low_kwh
+            for target in (expected_slots5, expected_slots8):
+                target.append({"start": minutes_start, "end": split_minute, "kwh": low_kwh, "average": 4, "cost": dp2(4 * low_kwh), "soc": 10, "octopus": True})
+                target.append({"start": split_minute, "end": minutes_end, "kwh": high_kwh, "average": 10, "cost": dp2(10 * high_kwh), "soc": 10, "octopus": True})
+        elif i >= 1:
             expected_slots5.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": slot5_rate, "cost": slot5_rate * 5.0, "soc": 10, "octopus": True})
             expected_slots8.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": slot5_rate, "cost": slot5_rate * 5.0, "soc": 10, "octopus": True})
         else:
@@ -202,6 +293,12 @@ def run_load_octopus_slots_tests(my_predbat):
     # it around a fully-contained earlier slot.
     print("**** Checking containment overlap (completed dispatch inside planned dispatch) ****")
     saved_minutes_now = my_predbat.minutes_now
+    # This test is about overlap/containment handling specifically, not the daily low-rate block
+    # cap (batpred#4624's split logic) - the 540-960 remainder is 14 blocks, which would otherwise
+    # get split again by the still-active octopus_slot_max=12 from earlier in this test, coupling
+    # two independent behaviours together. Lift the cap for just this check.
+    saved_octopus_slot_max = my_predbat.args.get("octopus_slot_max")
+    my_predbat.args["octopus_slot_max"] = 999
     containment_now = midnight_utc + timedelta(hours=10, minutes=37)
     my_predbat.minutes_now = int((containment_now - midnight_utc).total_seconds() / 60)
 
@@ -238,6 +335,48 @@ def run_load_octopus_slots_tests(my_predbat):
         failed = True
 
     my_predbat.minutes_now = saved_minutes_now
+    if saved_octopus_slot_max is None:
+        my_predbat.args.pop("octopus_slot_max", None)
+    else:
+        my_predbat.args["octopus_slot_max"] = saved_octopus_slot_max
+
+    # --- completed non-home dispatch consumes the daily low-rate budget (#4946) ---
+    # rate_add_io_slots() prices a completed dispatch off-peak whatever location it ends up
+    # reported at, because Octopus bills it that way and the label is not stable. This function's
+    # cap counter shares that predicate (dispatch_billed_off_peak) so the two agree: a completed
+    # AWAY dispatch must spend its blocks here too, otherwise the planner's rate_import would show
+    # a later planned slot at the day rate while car_charging_slots priced it off-peak.
+    print("**** Checking completed AWAY dispatch consumes the low-rate cap ****")
+    saved_minutes_now = my_predbat.minutes_now
+    saved_octopus_slot_max = my_predbat.args.get("octopus_slot_max")
+    my_predbat.args["octopus_slot_max"] = 2
+
+    # Both slots are in the same midday-to-midday period (the cap is keyed on the slot start)
+    cap_slots = [
+        # completed_dispatches, merged first by fetch.py: 12:30-13:30 yesterday relative to a
+        # 14:05 "now", i.e. fully in the past and spending both of the period's two blocks
+        {"start": (midnight_utc + timedelta(hours=12, minutes=30)).strftime(TIME_FORMAT), "end": (midnight_utc + timedelta(hours=13, minutes=30)).strftime(TIME_FORMAT), "charge_in_kwh": 5.0, "source": "smart-charge", "location": "AWAY"},
+        # planned_dispatch still to come, at home - over the cap, so it must be priced at rate_max_base
+        {"start": (midnight_utc + timedelta(hours=15)).strftime(TIME_FORMAT), "end": (midnight_utc + timedelta(hours=15, minutes=30)).strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"},
+    ]
+
+    my_predbat.car_charging_soc[0] = 0.0
+    my_predbat.car_charging_limit[0] = 100.0
+    my_predbat.car_charging_loss = 1.0
+    result = my_predbat.load_octopus_slots(0, cap_slots, False)
+
+    if len(result) != 1 or result[0]["start"] != 900 or result[0]["end"] != 930:
+        print("ERROR: Only the future planned slot (900-930) should be emitted, got {}".format(result))
+        failed = True
+    elif result[0]["average"] != my_predbat.rate_max_base:
+        print("ERROR: Planned slot should be over the cap at {} (the completed AWAY dispatch spent both blocks), got {}".format(my_predbat.rate_max_base, result[0]["average"]))
+        failed = True
+
+    my_predbat.minutes_now = saved_minutes_now
+    if saved_octopus_slot_max is None:
+        my_predbat.args.pop("octopus_slot_max", None)
+    else:
+        my_predbat.args["octopus_slot_max"] = saved_octopus_slot_max
 
     if failed:
         return failed
