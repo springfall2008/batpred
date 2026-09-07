@@ -135,7 +135,12 @@ QUEUE_DIR = BASE_DIR / "journal-queue"
 QUEUE_SCOPE = f"//{QUEUE_DIR.relative_to('/')}/**"
 # The two files the daily flush may touch. Scoped to the exact paths rather than the clone,
 # because this is the only flow that can both edit and push.
-JOURNAL_RELPATH = ".claude/skills/issue-triage/references/debug-journal.md"
+# The journal must NOT live under .claude/: Claude Code refuses the Edit and Write tools
+# anywhere in that directory and no allowlist entry overrides it, so a journal kept beside
+# the skill that reads it verifies fine and then silently fails to be written. Reads are
+# unaffected, which is what made that failure so quiet. See test_triage_daemon.py's
+# test_the_journal_lives_outside_the_dot_claude_directory.
+JOURNAL_RELPATH = "tools/debug-journal.md"
 DICTIONARY_RELPATH = ".cspell/custom-dictionary-workspace.txt"
 JOURNAL_SCOPE = f"//{(CLONE_DIR / JOURNAL_RELPATH).relative_to('/')}"
 DICTIONARY_SCOPE = f"//{(CLONE_DIR / DICTIONARY_RELPATH).relative_to('/')}"
@@ -703,7 +708,30 @@ def archive_journal_queue(entries):
         entry.replace(archive_dir / entry.name)
 
 
-def flush_journal():
+def journal_pr_opened(today):
+    """True when a pull request exists for today's journal branch.
+
+    The flush is only allowed to consume the queue once its findings are safely on a
+    branch a maintainer can see. A `claude -p` run that is denied the permissions it needs
+    still exits 0 - it stops and explains rather than crashing - so the exit code alone
+    cannot distinguish "folded everything in" from "could not write a single byte". Asking
+    GitHub whether the PR exists is the only check that actually means the work landed.
+    """
+    branch = f"{JOURNAL_BRANCH_PREFIX}{today}"
+    result = subprocess.run(
+        ["gh", "pr", "list", "--repo", REPO, "--head", branch, "--state", "all", "--json", "number"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        # Treat an unreachable API as "no PR": leaving the queue intact costs a re-verify
+        # tomorrow, whereas archiving on a failed check silently loses the findings.
+        return False
+    return bool(json.loads(result.stdout or "[]"))
+
+
+def flush_journal(today):
     """Fold the queued findings into the debug journal and open a PR for a human to merge.
 
     Deliberately not a straight append. The skill re-checks each candidate against current
@@ -742,8 +770,17 @@ def flush_journal():
         log_handle.flush()
         result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== journal update exited {result.returncode} ====\n")
-    if result.returncode == 0:
+    # Archive only once the findings are on a branch a maintainer can review. Exit 0 from a
+    # blocked run would otherwise sweep verified candidates into processed/ having landed
+    # nothing, and journal_queue_entries()'s non-recursive glob means they are never
+    # offered again - the failure mode that lost GH#4965/#4967/#4973 on 2026-09-07.
+    if result.returncode == 0 and journal_pr_opened(today):
         archive_journal_queue(consumed)
+    else:
+        print(
+            f"[triage] journal: no PR for {JOURNAL_BRANCH_PREFIX}{today} - leaving {len(consumed)} finding(s) queued for the next flush",
+            flush=True,
+        )
     print(f"[triage] journal: exited {result.returncode}", flush=True)
 
 
@@ -1279,7 +1316,7 @@ def main():
                 state["last_journal_flush"] = today
                 save_state(state)
                 sync_repo()
-                flush_journal()
+                flush_journal(today)
         except subprocess.CalledProcessError as exc:
             print(f"[triage] error: {exc}", flush=True)
         time.sleep(POLL_SECONDS)
