@@ -113,6 +113,7 @@ class MinuteArray:
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
+    "charger_registry",
     "prediction",
     "logfile",
     "predheat",
