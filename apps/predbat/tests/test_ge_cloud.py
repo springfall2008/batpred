@@ -238,6 +238,7 @@ def test_ge_cloud(my_predbat=None):
         ("register_time_no_timezone", _test_register_time_no_timezone, "Time registers unchanged with no account timezone"),
         ("devices_ems", _test_async_get_devices_with_ems, "Get devices with EMS"),
         ("devices_gateway", _test_async_get_devices_with_gateway, "Get devices with Gateway"),
+        ("site_export_limit", _test_site_export_limit, "Site export limit discovery, aggregation and overrides"),
         ("devices_batteries", _test_async_get_devices_with_batteries, "Get devices with batteries"),
         ("devices_legacy_battery", _test_async_get_devices_legacy_battery, "Get devices with legacy battery (empty connections)"),
         ("devices_empty", _test_async_get_devices_empty, "Get empty devices"),
@@ -5986,3 +5987,79 @@ def _test_get_max_inverter_rate_from_model(my_predbat):
             print("OK {}: got {}".format(description, result))
 
     return 1 if failed else 0
+
+
+def _test_site_export_limit(my_predbat):
+    """Exercise site discovery through full auto-config, including malformed and optional data."""
+
+    async def check():
+        """Run synthetic site scenarios without contacting GivEnergy."""
+        enabled = {"limits": {"export": {"enabled": True, "power": {"watts": 8000}}}}
+        cases = [
+            ("single", 1, False, [42], enabled, None, [8000]),
+            ("multiple", 2, False, [42, 42], enabled, None, [4000, 4000]),
+            ("gateway", 2, True, [42, 42], enabled, None, [8000]),
+            ("zero", 1, False, [42], {"limits": {"export": {"enabled": True, "power": {"watts": 0}}}}, None, [0]),
+            ("explicit", 1, False, [42], enabled, 3000, 3000),
+            ("explicit_zero", 1, False, [42], enabled, 0, 0),
+            ("explicit_list", 2, False, [42, 42], enabled, [2000, 3000], [2000, 3000]),
+            ("unavailable", 1, False, [42], None, None, None),
+            ("missing", 1, False, [42], {}, None, None),
+            ("null_limits", 1, False, [42], {"limits": None}, None, None),
+            ("null_export", 1, False, [42], {"limits": {"export": None}}, None, None),
+            ("disabled", 1, False, [42], {"limits": {"export": {"enabled": False, "power": {"watts": 8000}}}}, None, None),
+            ("unknown_site", 1, False, [None], enabled, None, None),
+            ("partial_mapping", 2, False, [42, None], enabled, None, None),
+            ("different_sites", 2, False, [42, 43], enabled, None, None),
+        ]
+        for watts in [-1, True, "8000", None, float("inf"), float("nan")]:
+            cases.append(("invalid_power", 1, False, [42], {"limits": {"export": {"enabled": True, "power": {"watts": watts}}}}, None, None))
+        for limit in [[], 8000, {"enabled": "true", "power": {"watts": 8000}}, {"enabled": True, "power": None}]:
+            cases.append(("invalid_metadata", 1, False, [42], {"limits": {"export": limit}}, None, None))
+
+        for name, count, gateway, sites, response, override, expected in cases:
+            ge = MockGECloudDirect()
+            if override is not None:
+                ge.config_args["export_limit"] = override
+            devices = []
+            for index in range(count):
+                serial = "BAT{}".format(index)
+                inverter = {"serial": serial, "info": {"model": "All-In-One", "battery": {"nominal_capacity": 52}}, "connections": {"batteries": [{}]}}
+                devices.append({"site_id": sites[index], "inverter": inverter})
+                ge.info[serial.lower()] = inverter
+            if gateway:
+                devices.append({"site_id": 42, "inverter": {"serial": "GW", "info": {"model": "Gateway"}}})
+            ge.async_get_inverter_data_retry = AsyncMock(return_value=devices)
+            ge.async_get_inverter_data = AsyncMock(return_value=response)
+            discovered = await ge.async_get_devices()
+            assert discovered.get("site_ids", {}).get("bat0") == sites[0], name
+            await ge.async_automatic_config(discovered)
+            assert ge.config_args.get("export_limit") == expected, (name, ge.config_args.get("export_limit"))
+            if isinstance(expected, list) and override is None:
+                assert sum(expected) == response["limits"]["export"]["power"]["watts"], name
+                assert len(expected) == ge.config_args["num_inverters"], name
+            should_fetch = override is None and None not in sites and len(set(sites)) == 1
+            assert ge.async_get_inverter_data.await_count == int(should_fetch), name
+            if should_fetch:
+                ge.async_get_inverter_data.assert_awaited_once_with("site/{uuid}", uuid=42)
+            assert "pv_ac_limit" not in ge.config_args, name
+            assert "max_inverter_rate" in ge.config_args["inverter_limit"][0], name
+
+        # The optional endpoint must not turn a missing site-read scope into a core
+        # inverter authentication failure, or clear an existing core auth failure.
+        for original_auth in [False, True]:
+            ge = MockGECloudDirect()
+            ge.api_auth_failed = original_auth
+
+            async def denied(*args, **kwargs):
+                """Simulate the auth side effect of a site-read denial."""
+                ge.api_auth_failed = not original_auth
+                return None
+
+            ge.async_get_inverter_data = AsyncMock(side_effect=denied)
+            await ge.async_configure_site_export_limit({"battery": ["bat"], "site_ids": {"bat": 42}}, 1)
+            assert ge.api_auth_failed == original_auth
+            assert "export_limit" not in ge.config_args
+        return 0
+
+    return run_async(check())

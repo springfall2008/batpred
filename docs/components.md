@@ -520,6 +520,22 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 | `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
 
+#### Site export limits (gecloud)
+
+With `ge_cloud_automatic: true`, startup configuration reads the site's enabled export
+limit from GivEnergy. The API key needs the `api:site:read` scope for this optional lookup.
+An explicit `export_limit` in your configuration takes precedence, including a zero limit.
+The limit is shared across Predbat's logical inverters so it is counted once for the site.
+
+If site data is unavailable, invalid or disabled, the configured/default limit is retained.
+Automatic detection requires all contributing inverters to belong to one known site;
+otherwise configure `export_limit` explicitly. Restart Predbat after changing the site
+limit to repeat automatic detection.
+
+This is the site's grid export limit, not its solar inverter rating. For an AC-coupled
+solar inverter whose rating is not exposed by the API, configure `pv_ac_limit` separately
+in watts. Neither limit changes the detected battery inverter power rating.
+
 #### EV chargers (gecloud)
 
 Every GivEnergy EV charger on the account is polled alongside the inverters and publishes

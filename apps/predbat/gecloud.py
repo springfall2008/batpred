@@ -19,6 +19,7 @@ from datetime import timedelta, datetime, timezone
 from utils import str2time, dp1, dp2, dp4, parse_car_plan_windows, in_car_plan_window
 from predbat_metrics import record_api_call
 import asyncio
+import math
 import json
 import random
 from component_base import ComponentBase
@@ -36,6 +37,7 @@ GE_API_INVERTER_SETTINGS = "inverter/{inverter_serial_number}/settings"
 GE_API_INVERTER_READ_SETTING = "inverter/{inverter_serial_number}/settings/{setting_id}/read"
 GE_API_INVERTER_WRITE_SETTING = "inverter/{inverter_serial_number}/settings/{setting_id}/write"
 GE_API_DEVICES = "communication-device"
+GE_API_SITE = "site/{uuid}"
 GE_API_DEVICE_INFO = "communication-device"
 GE_API_SMART_DEVICES = "smart-device"
 GE_API_SMART_DEVICE = "smart-device/{uuid}"
@@ -1354,7 +1356,49 @@ class GECloudDirect(ComponentBase):
         self.log("GECloud: Detected inverter model {} indicates ac_coupled={}, setting {} to {}".format(model_name, ac_coupled, entity_id, "off" if ac_coupled else "on"))
         await self.set_state_external(entity_id, not ac_coupled)
 
+        await self.async_configure_site_export_limit(devices, num_inverters)
         self.log("GECloud: Automatic configuration complete")
+
+    async def async_configure_site_export_limit(self, devices, num_inverters):
+        """Apply one site's enabled export limit without replacing explicit configuration."""
+        if self.get_arg("export_limit", default=None, indirect=False) is not None:
+            return
+
+        # Only infer a shared limit when every contributing inverter belongs to the same
+        # known site. Combining unrelated sites would hide their individual constraints.
+        serials = devices.get("battery", []) + devices.get("pv", [])
+        site_ids = devices.get("site_ids", {})
+        sites = {site_ids.get(serial) for serial in serials}
+        if not serials or None in sites or len(sites) != 1 or num_inverters < 1:
+            self.log("GECloud: Site export limit not detected: inverter site mapping is missing or spans multiple sites; configure export_limit explicitly")
+            return
+
+        site_id = sites.pop()
+        # Site-read permission is optional. Do not let its denial overwrite the auth state
+        # of the inverter-data endpoint used for health reporting, or retry it repeatedly.
+        inverter_auth_failed = self.api_auth_failed
+        try:
+            site = await self.async_get_inverter_data(GE_API_SITE, uuid=site_id)
+        finally:
+            self.api_auth_failed = inverter_auth_failed
+        if not isinstance(site, dict) or not isinstance(site.get("limits"), dict):
+            self.log("GECloud: Site export limit unavailable for site {}; retaining configured/default limit".format(site_id))
+            return
+        limit = site["limits"].get("export")
+        if limit is None or (isinstance(limit, dict) and limit.get("enabled") is False):
+            return
+        if not isinstance(limit, dict) or limit.get("enabled") is not True or not isinstance(limit.get("power"), dict):
+            self.log("GECloud: Invalid export limit metadata for site {}; retaining configured/default limit".format(site_id))
+            return
+        watts = limit["power"].get("watts")
+        if isinstance(watts, bool) or not isinstance(watts, (int, float)) or not math.isfinite(watts) or watts < 0:
+            self.log("GECloud: Invalid export limit power for site {}; retaining configured/default limit".format(site_id))
+            return
+
+        # Predbat sums export_limit across its logical inverters. Split the site budget
+        # across those entries, including the single logical controller used by a Gateway.
+        self.set_arg("export_limit", [watts / num_inverters for _ in range(num_inverters)])
+        self.log("GECloud: Auto-configured site {} export limit {}W across {} logical inverter(s)".format(site_id, watts, num_inverters))
 
     def evc_control_enable(self):
         """Decide whether Predbat-led charger control should run, and say why when it will not.
@@ -2196,6 +2240,9 @@ class GECloudDirect(ComponentBase):
                             continue
                     except (ValueError, TypeError):
                         self.log("GECloud: Warn: Could not parse last_updated {} for device {}, skipping age check".format(last_updated, serial))
+                site_id = device.get("site_id")
+                if isinstance(site_id, int) and not isinstance(site_id, bool) and site_id > 0:
+                    result.setdefault("site_ids", {})[serial] = site_id
                 if "plant ems" in model:
                     result["ems"] = serial
                 elif "gateway" in model or "gw2" in model:
