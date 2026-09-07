@@ -7262,7 +7262,8 @@ def get_plan_renderer_js():
             overrides.manual_export_times,
             overrides.manual_freeze_charge_times,
             overrides.manual_freeze_export_times,
-            overrides.manual_demand_times
+            overrides.manual_demand_times,
+            overrides.manual_car_away_times || []
         );
 
         // Determine highlight color based on override type
@@ -7284,6 +7285,9 @@ def get_plan_renderer_js():
         } else if (overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
             bgColor = '#D8D8D8';  // Darker gray hint
             overrideClass = 'override-freeze-export';
+        } else if ((overrides.manual_car_away_times || []).includes(minutesFromMidnight)) {
+            bgColor = '#E0E0FF';  // Light blue hint
+            overrideClass = 'override-car-away';
         }
 
         let html = `<td bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell ${overrideClass}">`;
@@ -7306,6 +7310,9 @@ def get_plan_renderer_js():
         }
         if (!overrides.manual_freeze_charge_times.includes(minutesFromMidnight)) {
             html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Freeze Charge')">Manual Freeze Charge</a>`;
+        }
+        if (!(overrides.manual_car_away_times || []).includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Car Away')">Car Away</a>`;
         }
         if (!overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
             html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Freeze Export')">Manual Freeze Export</a>`;
@@ -7382,6 +7389,9 @@ def get_plan_renderer_js():
         } else if (overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
             bgColor = '#AAAAAA';
             overrideClass = 'override-freeze-export';
+        } else if ((overrides.manual_car_away_times || []).includes(minutesFromMidnight)) {
+            bgColor = '#B0B0FF';
+            overrideClass = 'override-car-away';
         }
 
         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';

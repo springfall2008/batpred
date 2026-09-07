@@ -3338,6 +3338,10 @@ class Fetch:
         self.manual_freeze_charge_times = self.manual_times("manual_freeze_charge")
         self.manual_freeze_export_times = self.manual_times("manual_freeze_export")
         self.manual_demand_times = self.manual_times("manual_demand")
+        # Deliberately not folded into manual_all_times below: that set forces charge and export
+        # windows into existence, and this does the opposite - a slot the car is away for should not
+        # have a window manufactured for it.
+        self.manual_car_away_times = self.manual_times("manual_car_away")
         self.manual_all_times = self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
         self.manual_api = self.api_select_update("manual_api")
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
