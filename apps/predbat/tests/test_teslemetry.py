@@ -667,6 +667,27 @@ def test_teslemetry_build_tariff_periods_partition_each_day():
             _assert_tou_periods_partition_day(day_periods)
 
 
+def test_teslemetry_build_tariff_export_window_ending_at_midnight_spares_tomorrow():
+    """An export window ending exactly at midnight must not price the whole of the next day at peak.
+
+    _boost_segments splits a midnight-wrapping window into a head on today and a tail on tomorrow. When
+    the window ends at 00:00 that tail is empty, and an empty [0, 0) segment renders as
+    fromHour/fromMinute/toHour/toMinute all zero - the same encoding _render_side uses for a period
+    running to the end of the day. Tomorrow would then carry a full-day ON_PEAK band, priced by
+    _boost_price at twice the highest real band, on top of its real bands."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    tariff = api.build_tariff((1380, 0), now_min=600)  # 23:00 -> 00:00, now 10:00
+    today_dow = api.base.now.weekday()
+    tomorrow_dow = (today_dow + 1) % 7
+    for tou_periods in (tariff["seasons"]["AllYear"]["tou_periods"], tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]):
+        boost_days = {day for day in range(7) for p in tou_periods.get("ON_PEAK", {"periods": []})["periods"] if p["fromDayOfWeek"] <= day <= p["toDayOfWeek"]}
+        assert boost_days == {today_dow}, "the boost belongs only to today's 23:00-24:00, not to tomorrow"
+        for day in range(7):
+            day_periods = {tier: {"periods": [p for p in block["periods"] if p["fromDayOfWeek"] <= day <= p["toDayOfWeek"]]} for tier, block in tou_periods.items()}
+            _assert_tou_periods_partition_day(day_periods)
+
+
 def test_teslemetry_build_tariff_consolidates_replicated_days():
     """Days sharing tomorrow's replicated pattern (issue #4346) collapse into ranged periods, not one
     per individual day - 6 near-identical days should render as at most 2 contiguous-day periods per
@@ -2283,6 +2304,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_build_tariff_fallback_flat_when_no_rates()
     test_teslemetry_build_tariff_boost_clamps_above_high_rates()
     test_teslemetry_build_tariff_periods_partition_each_day()
+    test_teslemetry_build_tariff_export_window_ending_at_midnight_spares_tomorrow()
     test_teslemetry_build_tariff_consolidates_replicated_days()
     test_teslemetry_saving_session_spike_keeps_daily_shape()
     test_teslemetry_quantise_in_range_excluded_price_no_keyerror()

@@ -1061,6 +1061,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         already finished today (end <= now) rolls to tomorrow; otherwise it stays today. A midnight-wrapped
         window splits across today and tomorrow, except when we are already inside its post-midnight tail
         (now < end), where only today's head [0, end) still needs the boost.
+
+        A window ending exactly at midnight has no tomorrow tail at all: [start, 1440) already is the
+        whole window. Emitting the empty [0, 0) tail anyway would carve a zero-length interval, which
+        _render_side encodes as fromHour/fromMinute/toHour/toMinute all zero - the same encoding it uses
+        for a period running to the end of the day - so tomorrow would be priced at the boost rate from
+        end to end.
         """
         start_min, end_min = window
         if start_min < end_min:
@@ -1068,6 +1074,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return [(offset, start_min, end_min)]
         if now_min < end_min:
             return [(0, 0, end_min)]
+        if end_min == 0:
+            return [(0, start_min, 1440)]
         return [(0, start_min, 1440), (1, 0, end_min)]
 
     @staticmethod
