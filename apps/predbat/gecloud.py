@@ -2273,7 +2273,7 @@ class GECloudDirect(ComponentBase):
         if watts is None:
             self.log("GECloud: Site {} export limit not applied: {} (raw limits {}); retaining the configured/default export limit".format(self.site_id, reason, limits))
         else:
-            self.log("GECloud: Site {} reports a {}W grid export limit".format(self.site_id, watts))
+            self.log("GECloud: Site {} reports a {}W grid export limit (raw limits {})".format(self.site_id, watts, limits))
 
     async def load_site_from_storage(self):
         """
