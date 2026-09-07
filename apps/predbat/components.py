@@ -954,13 +954,17 @@ class Components:
         if not self.components[name]:
             # Disabled components can be ignored
             return True
-        if not self.component_tasks[name] or not self.component_tasks[name].is_alive():
+        # .get rather than []: a component registered outside initialize() (tests register fakes
+        # directly) has no task entry, and that should read as "not yet started", not KeyError.
+        if not self.component_tasks.get(name, None) or not self.component_tasks[name].is_alive():
             return False
         if not self.components[name].is_alive():
             return False
         last_updated_time = self.last_updated_time(name)
         diff_time = datetime.now(timezone.utc) - last_updated_time if last_updated_time else None
-        if not diff_time or diff_time > timedelta(minutes=60):
+        # "is None" rather than falsy: a timedelta of exactly zero is falsy, so a component whose
+        # last success lands on the very microsecond of the check read as dead for that cycle.
+        if diff_time is None or diff_time > timedelta(minutes=60):
             return False
         return True
 
@@ -999,7 +1003,7 @@ class Components:
 
     def inverter_source_status(self):
         """
-        Every configured inverter component paired with whether it is currently in error.
+        Every configured inverter component paired with whether it is currently healthy.
 
         The name of an inverter type is not much help when nobody chose it: with inverter_type
         absent from apps.yaml the only thing Predbat can name is the assumed GE default, which on
@@ -1010,28 +1014,38 @@ class Components:
         Components that failed to construct are included even though they are inactive, and so
         absent from inverter_source_names(): a component that never loaded is precisely the one
         worth telling the user about.
+
+        Current health comes from is_alive() - the same test the dashboard's health reporting
+        already consumes - because count_errors is a lifetime counter that nothing resets (a
+        component that needed retries at boot and then polled cleanly for a week would otherwise
+        be reported "in error" forever), and api_started answers "did run() ever return truthy"
+        rather than "is this serving data now" - the gateway declares itself started on a
+        successful run() with no inverter args set, so it would read OK with no data ever
+        delivered. The lifetime counter is demoted to secondary detail, and only consulted when
+        the component is not currently alive: a retrying startup has counted errors and never
+        started, while api_started-but-stale reads as "not responding". getattr keeps the
+        api_started fallback working for components that predate the flag.
         """
         status = []
         for name, component_info in COMPONENT_LIST.items():
             if not component_info.get("inverter", False):
                 continue
-            load_error = self.component_errors.get(name, None)
+            load_error = self.load_error(name)
             component = self.components.get(name, None)
-            if load_error:
+            if load_error is not None:
                 state = "failed to start: {}".format(load_error)
             elif not component:
                 continue
+            elif self.is_alive(name):
+                state = "OK"
             else:
-                # Counted errors first: a component that is retrying its startup has never set
-                # api_started, so "still starting" would hide a comms failure that is already
-                # being reported. getattr keeps this working for components that predate the flag.
                 errors = self.get_error_count(name) or 0
                 if errors:
                     state = "in error, {} error{} so far".format(errors, "s" if errors != 1 else "")
                 elif not getattr(component, "api_started", True):
                     state = "still starting, no data yet"
                 else:
-                    state = "OK"
+                    state = "not responding"
             status.append("{} ({})".format(component_info["name"], state))
         return status
 

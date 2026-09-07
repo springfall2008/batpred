@@ -1760,19 +1760,6 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
     return failed
 
 
-class _FakeInverterComponent:
-    """Stand-in for a registered inverter component with a given error count and start state."""
-
-    def __init__(self, errors=0, api_started=True):
-        """Record the health this fake component should report back."""
-        self.count_errors = errors
-        self.api_started = api_started
-
-    def get_error_count(self):
-        """Errors recorded so far, as ComponentBase.get_error_count() reports them."""
-        return self.count_errors
-
-
 def test_window_warning_names_components_when_type_unset(test_name, my_predbat, dummy_items):
     """
     Issue #4990: a Solis Cloud comms failure must not be reported as a GivEnergy credential problem.
@@ -1788,60 +1775,98 @@ def test_window_warning_names_components_when_type_unset(test_name, my_predbat, 
     original credentials wording: there the type is the user's own statement about their hardware.
     """
     from components import Components
+    from tests.test_infra import FakeComponentTask, FakeInverterComponent
 
     failed = False
     print(f"**** Running Test: {test_name} ****")
 
     saved_args = {key: my_predbat.args.pop(key, None) for key in ("inverter_type", "charge_start_time", "charge_end_time", "discharge_start_time", "discharge_end_time")}
     original_components = my_predbat.components
+    original_charge_enable = dummy_items.get("switch.scheduled_charge_enable", None)
     dummy_items["switch.scheduled_charge_enable"] = "on"
 
     def restore():
         """Restore the config and registry this test mutated so later tests are unaffected."""
         my_predbat.components = original_components
+        if original_charge_enable is None:
+            dummy_items.pop("switch.scheduled_charge_enable", None)
+        else:
+            dummy_items["switch.scheduled_charge_enable"] = original_charge_enable
         for key, value in saved_args.items():
             if value is None:
                 my_predbat.args.pop(key, None)
             else:
                 my_predbat.args[key] = value
 
+    update_errors = []
+
     def run_update(component_name, component):
-        """Register one inverter component, run a full update with no window data, return the status."""
-        my_predbat.components = Components(my_predbat)
-        my_predbat.components.components[component_name] = component
-        inv = Inverter(my_predbat, 0)
-        inv.sleep = dummy_sleep
-        inv.inv_has_charge_enable_time = True
-        inv.rest_api = None
-        inv.rest_data = None
-        my_predbat.current_status = ""
-        inv.update_status(my_predbat.minutes_now)
-        return my_predbat.current_status or ""
+        """Register one inverter component, run a full update with no window data, return the statuses.
+
+        Returns both warnings update_status() records per cycle, in order: the charge window
+        first, then the export window. Each record_status overwrites current_status, so reading
+        current_status after the run would see only the export half.
+        """
+        statuses = []
+        original_record_status = my_predbat.record_status
+
+        def recording_record_status(message, **kwargs):
+            statuses.append(message)
+            return original_record_status(message, **kwargs)
+
+        my_predbat.record_status = recording_record_status
+        try:
+            my_predbat.components = Components(my_predbat)
+            my_predbat.components.components[component_name] = component
+            my_predbat.components.component_tasks[component_name] = FakeComponentTask()
+            inv = Inverter(my_predbat, 0)
+            inv.sleep = dummy_sleep
+            inv.inv_has_charge_enable_time = True
+            inv.rest_api = None
+            inv.rest_data = None
+            my_predbat.current_status = ""
+            try:
+                inv.update_status(my_predbat.minutes_now)
+            except ValueError as e:
+                # Caught here so one regression cannot abort the whole registry run - the same
+                # handling the neighbouring window tests give this call.
+                print(f"ERROR: {test_name} - update_status should not raise while a configured source just hasn't returned data, got ValueError({e})")
+                update_errors.append(str(e))
+        finally:
+            my_predbat.record_status = original_record_status
+        return statuses
 
     try:
         # Case 1: inverter_type absent, Solis component registered and erroring - the reported case.
-        status = run_update("solis", _FakeInverterComponent(errors=3, api_started=False))
-        if "GivEnergy credentials" in status:
-            print(f"ERROR: {test_name} - an assumed inverter type must not send a Solis owner to check GivEnergy credentials, got: {status}")
-            failed = True
-        if "no inverter_type is set" not in status:
-            print(f"ERROR: {test_name} - status should say inverter_type was never set, got: {status}")
-            failed = True
-        if "Solis Cloud API" not in status:
-            print(f"ERROR: {test_name} - status should list the configured inverter component, got: {status}")
-            failed = True
-        if "in error, 3 errors so far" not in status:
-            print(f"ERROR: {test_name} - status should say whether the listed component is in error, got: {status}")
-            failed = True
+        statuses = run_update("solis", FakeInverterComponent(errors=3, api_started=False, updated_recently=False))
+        charge_status, export_status = (statuses + ["", ""])[:2]
+        for status in (charge_status, export_status):
+            if "GivEnergy credentials" in status:
+                print(f"ERROR: {test_name} - an assumed inverter type must not send a Solis owner to check GivEnergy credentials, got: {status}")
+                failed = True
+            if "no inverter_type is set" not in status:
+                print(f"ERROR: {test_name} - status should say inverter_type was never set, got: {status}")
+                failed = True
+            if "Solis Cloud API" not in status:
+                print(f"ERROR: {test_name} - status should list the configured inverter component, got: {status}")
+                failed = True
+            if "in error, 3 errors so far" not in status:
+                print(f"ERROR: {test_name} - status should say whether the listed component is in error, got: {status}")
+                failed = True
 
         # Case 2: inverter_type explicitly configured - the credentials wording is still right.
         my_predbat.args["inverter_type"] = ["GE"]
-        status = run_update("gecloud", _FakeInverterComponent())
-        if "check the GivEnergy credentials" not in status:
-            print(f"ERROR: {test_name} - a configured GE type should still name its credentials, got: {status}")
-            failed = True
-        if "no inverter_type is set" in status:
-            print(f"ERROR: {test_name} - inverter_type was set, so the status must not claim otherwise, got: {status}")
+        statuses = run_update("gecloud", FakeInverterComponent(api_started=True, updated_recently=True))
+        charge_status, export_status = (statuses + ["", ""])[:2]
+        for status in (charge_status, export_status):
+            if "check the GivEnergy credentials" not in status:
+                print(f"ERROR: {test_name} - a configured GE type should still name its credentials, got: {status}")
+                failed = True
+            if "no inverter_type is set" in status:
+                print(f"ERROR: {test_name} - inverter_type was set, so the status must not claim otherwise, got: {status}")
+                failed = True
+
+        if update_errors:
             failed = True
     finally:
         restore()
