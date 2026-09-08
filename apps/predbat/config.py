@@ -890,6 +890,18 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
+        "name": "octopus_saving_auto_join_lead_hours",
+        "friendly_name": "Octopus Saving Session Auto Join Lead Time",
+        "type": "input_number",
+        "min": 0,
+        "max": 12,
+        "step": 1,
+        "unit": "hours",
+        "icon": "mdi:clock-end",
+        "enable": "octopus_saving_auto_join",
+        "default": 0,
+    },
+    {
         "name": "octopus_intelligent_ignore_unplugged",
         "friendly_name": "Ignore Intelligent slots when car is unplugged",
         "type": "switch",
