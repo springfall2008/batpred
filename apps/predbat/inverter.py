@@ -155,14 +155,13 @@ class Inverter:
         """
         Act on the measured inverter clock skew in minutes, warning (and restarting) on a large skew and warning periodically on a moderate one
         """
-        skew_message = "Inverter time is {}, Predbat computer time {}, this is {} minutes skewed".format(self.inverter_time, now_utc, tdiff)
-
         if abs(tdiff) >= INVERTER_CLOCK_SKEW_RESTART_MINUTES:
+            skew_message = "Inverter time is {}, Predbat computer time {}, this is {} minutes skewed".format(self.inverter_time, now_utc, tdiff)
             message = "Warn: {}, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(skew_message)
             self.base.log(message)
             self.base.record_status(message, had_errors=True)
             # Trigger restart
-            self.auto_restart("Clock skew >={} minutes".format(INVERTER_CLOCK_SKEW_RESTART_MINUTES))
+            self.auto_restart("Clock skew >= {} minutes".format(INVERTER_CLOCK_SKEW_RESTART_MINUTES))
             return
 
         # Below the restart threshold nothing is restarted, but a steady moderate skew still shifts every
@@ -172,8 +171,9 @@ class Inverter:
             last_warn = self.base.clock_skew_warn_time.get(self.id, None)
             if (last_warn is None) or ((now_utc - last_warn) >= timedelta(minutes=INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES)):
                 self.base.clock_skew_warn_time[self.id] = now_utc
+                skew_message = "Inverter time is {}, Predbat computer time {}, this is {} minutes skewed".format(self.inverter_time, now_utc, tdiff)
                 self.base.log(
-                    "Warn: Inverter {} {}. This is below the {} minute restart threshold but will still shift every charge and export slot Predbat writes - correct the inverter clock, or compensate for it with inverter_clock_skew_start/inverter_clock_skew_end and inverter_clock_skew_discharge_start/inverter_clock_skew_discharge_end in apps.yaml".format(
+                    "Warn: Inverter {}: {}. This is below the {} minute restart threshold but will still shift every charge and export slot Predbat writes - correct the inverter clock, or compensate for it with inverter_clock_skew_start/inverter_clock_skew_end and inverter_clock_skew_discharge_start/inverter_clock_skew_discharge_end in apps.yaml".format(
                         self.id, skew_message, INVERTER_CLOCK_SKEW_RESTART_MINUTES
                     )
                 )

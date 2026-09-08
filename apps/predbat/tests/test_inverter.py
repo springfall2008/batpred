@@ -2787,6 +2787,7 @@ def test_inverter_clock_skew_bands(my_predbat):
     saved_skew_times = my_predbat.clock_skew_warn_time
     saved_status = my_predbat.current_status
     saved_had_errors = my_predbat.had_errors
+    saved_restart_active = my_predbat.restart_active
     log_messages = []
     restart_reasons = []
 
@@ -2869,7 +2870,7 @@ def test_inverter_clock_skew_bands(my_predbat):
         my_predbat.clock_skew_warn_time = saved_skew_times
         my_predbat.current_status = saved_status
         my_predbat.had_errors = saved_had_errors
-        my_predbat.restart_active = False
+        my_predbat.restart_active = saved_restart_active
 
     if not failed:
         print("**** Test inverter_clock_skew_bands PASSED ****")
