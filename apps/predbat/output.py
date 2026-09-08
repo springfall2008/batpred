@@ -2656,7 +2656,7 @@ class Output:
         if had_errors:
             error_count += 1
 
-<<<<        if self.inverters:
+        if self.inverters:
             hysteresis_status = {str(inverter.id): getattr(inverter, "full_hysteresis_active", False) for inverter in self.inverters}
         else:
             # Inverters have not been fetched yet (e.g. an early startup error, before the first
@@ -2671,19 +2671,10 @@ class Output:
         # current_status, the log line and the notification, and attributes have no such cap.
         # Motivated by the window warnings listing every configured inverter component (#4990):
         # three or more of those push past 255, so the dashboard would keep a stale status on
-        # exactly the cycles the warning matters.<<< Temporary merge branch 1
-    if self.inverters:
-        hysteresis_status = {str(inverter.id): getattr(inverter, "full_hysteresis_active", False) for inverter in self.inverters}
-    else:
-        # Inverters have not been fetched yet ...
-        hysteresis_status = self.get_state_wrapper(self.prefix + ".status", attribute="battery_full_hysteresis_active", default={})
-
-=======
-        # Home Assistant rejects entity states over 255 characters ...
->>>>>>> [some branch label]
+        # exactly the cycles the warning matters.
         self.dashboard_item(
             self.prefix + ".status",
-            state=message,
+            state=message[:255],
             attributes={
                 "friendly_name": "Status",
                 "detail": extra,
