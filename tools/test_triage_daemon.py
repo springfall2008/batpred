@@ -895,6 +895,20 @@ class ProcessNewIssueTests(unittest.TestCase):
         self.patches["mark_triage_failed"].assert_called_once_with(5004, triage_daemon.TRIAGE_MAX_ATTEMPTS)
         self.assertNotIn("5004", state["triage_attempts"])
 
+    def test_a_failing_mark_does_not_abort_the_cycle(self):
+        """mark_triage_failed() shells out to gh with check=True. If that raised here it would
+        escape to the main loop and abort the rest of the poll cycle with the watermark still
+        behind - reintroducing the exact bug at the one point we have decided to move on."""
+        self._fail()
+        self.patches["mark_triage_failed"].side_effect = subprocess.CalledProcessError(1, ["gh"])
+        state = {"last_processed": 5003, "triage_attempts": {"5004": triage_daemon.TRIAGE_MAX_ATTEMPTS - 1}}
+        try:
+            result = triage_daemon.process_new_issue(self.issue, state)
+        except subprocess.CalledProcessError:
+            self.fail("a failed mark_triage_failed() must not escape process_new_issue")
+        self.assertTrue(result)
+        self.assertEqual(state["last_processed"], 5004, "the watermark must advance even when labelling failed")
+
     def test_a_success_after_earlier_failures_clears_the_counter(self):
         """Otherwise a later unrelated failure would inherit a nearly-spent budget."""
         state = {"last_processed": 5003, "triage_attempts": {"5004": 2}}
@@ -936,6 +950,17 @@ class MarkTriageFailedTests(unittest.TestCase):
             body = next(c for c in (call.args[0] for call in mock_run.call_args_list) if "comment" in c)[-1]
         self.assertIn("BOT_REVIEW", body)
         self.assertTrue(body.startswith("Automated "))
+
+    def test_the_comment_says_to_remove_bot_failed_first(self):
+        """Nothing in this file ever removes BOT_FAILED, and a successful follow-up clears only
+        BOT_REVIEW - so a maintainer who adds BOT_REVIEW while BOT_FAILED is still on ends up
+        with a triaged issue permanently labelled as failed. Every other marker here says to
+        remove it first; this one has to as well."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            triage_daemon.mark_triage_failed(5004, 3)
+            body = next(c for c in (call.args[0] for call in mock_run.call_args_list) if "comment" in c)[-1]
+        self.assertIn("Remove `BOT_FAILED`", body)
+        self.assertLess(body.index("BOT_FAILED"), body.index("BOT_REVIEW"), "the removal must be stated before the label to add")
 
 
 class EffectiveOllamaModelTests(unittest.TestCase):

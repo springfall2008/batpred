@@ -620,6 +620,10 @@ def mark_triage_failed(issue_number, attempts):
 
     The watermark advances past the issue afterwards, so nothing re-triages it by itself.
     BOT_REVIEW is the documented way back in - that is the label the follow-up flow watches.
+    Unlike the other markers there is no label to swap out: a new issue carries no trigger
+    label, so BOT_FAILED is added rather than exchanged. That makes saying "remove BOT_FAILED
+    first" load-bearing - remove_review_label() clears only BOT_REVIEW on success, and nothing
+    in this file ever removes BOT_FAILED, so it would otherwise outlive the failure it records.
     """
     subprocess.run(
         [
@@ -631,7 +635,8 @@ def mark_triage_failed(issue_number, attempts):
             REPO,
             "--body",
             f"Automated triage did not complete for this issue after {attempts} attempts - see the triage bot's logs for details. "
-            "It has been skipped so that it does not hold up triage of later issues. Add the `BOT_REVIEW` label to have the bot look at it again.",
+            "It has been skipped so that it does not hold up triage of later issues. Remove `BOT_FAILED` and add `BOT_REVIEW` "
+            "to have the bot look at it again - nothing removes `BOT_FAILED` on its own, so leaving it on would outlive a later successful run.",
         ],
         check=True,
     )
@@ -1416,7 +1421,13 @@ def process_new_issue(issue, state):
             save_state(state)
             return False
         print(f"[triage] issue #{number}: failed {count} times - marking it and moving on", flush=True)
-        mark_triage_failed(number, count)
+        try:
+            mark_triage_failed(number, count)
+        except subprocess.CalledProcessError as mark_exc:
+            # Advancing matters more than the label. Letting this escape would abort the rest
+            # of the poll cycle and leave the watermark behind - the precise failure this
+            # function exists to prevent, at the one point we have already decided to move on.
+            print(f"[triage] issue #{number}: could not label the failed triage ({mark_exc}) - moving on anyway", flush=True)
     attempts.pop(str(number), None)
     state["last_processed"] = number
     save_state(state)
