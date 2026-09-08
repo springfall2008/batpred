@@ -2680,6 +2680,7 @@ APPS_SCHEMA = {
     "myenergi_token_hash": {"type": "string", "empty": False},
     "myenergi_automatic": {"type": "boolean"},
     "myenergi_automatic_zappi": {"type": "boolean"},
+    "myenergi_automatic_eddi": {"type": "boolean"},
     "myenergi_enable_controls": {"type": "boolean"},
     "myenergi_poll_seconds": {"type": "integer", "zero": False},
     "myenergi_zappi_control": {"type": "boolean"},
