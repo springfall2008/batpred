@@ -269,6 +269,7 @@ COMPONENT_LIST = {
             "token_expires_at": {"required": False, "config": "myenergi_token_expires_at"},
             "token_hash": {"required": False, "secret": True, "config": "myenergi_token_hash"},
             "automatic": {"required": False, "config": "myenergi_automatic", "default": True},
+            "automatic_zappi": {"required": False, "config": "myenergi_automatic_zappi", "default": True},
             "enable_controls": {"required": False, "config": "myenergi_enable_controls", "default": True},
             "poll_seconds": {"required": False, "config": "myenergi_poll_seconds", "default": 60},
             "zappi_control": {"required": False, "config": "myenergi_zappi_control", "default": False},
