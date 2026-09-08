@@ -421,6 +421,20 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
     return results
 
 
+def is_entity_id(value):
+    """
+    Whether a resolved apps.yaml value names a Home Assistant entity rather than being a literal.
+
+    The same test resolve_arg() uses to decide whether to look a value up in HA: a string with a
+    domain separator in it. Anything else - a number, a boolean, None - is a hard-wired value the
+    user gave directly, which several shipped templates do for settings the inverter has no register
+    for (huawei.yaml and sofar.yaml both hard-wire reserve). Callers that fetched an argument with
+    indirect=False and are about to treat it as an entity id need this, or a literal reaches an
+    entity lookup and raises rather than simply having no entity to read (GH#5003).
+    """
+    return isinstance(value, str) and "." in value
+
+
 def is_data_numerical(history, attribute=None):
     """
     Check if history data is numerical (supports both state and attribute checking)

@@ -38,7 +38,7 @@ from const import (
     INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES,
 )
 from control_ledger import generation_from_state, OWNED, UNOWNED
-from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
+from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -1833,6 +1833,11 @@ class Inverter:
         model's known floor instead (GivTCP does this with GE's 4%), so a user who has configured
         battery_min_soc lower has that reflected in what is published.
 
+        reserve does not have to be an entity at all - the huawei and sofar templates ship a literal
+        percentage, because those inverters have no reserve register to point at. A literal carries
+        no attributes and there is nothing to read them from, so it means no bounds rather than a
+        state lookup on a number (GH#5003).
+
         The rounding is the caller's contract as much as this one's: reserve is written as a whole
         percent, so a floor takes the ceiling and a ceiling takes the floor and the value returned is
         always one the register accepts. Rounding to nearest instead would turn a published floor of
@@ -1842,7 +1847,7 @@ class Inverter:
         what the battery will hold.
         """
         reserve_entity = self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="%")
-        if not reserve_entity:
+        if not is_entity_id(reserve_entity):
             return None, None
 
         bounds = []

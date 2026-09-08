@@ -13,7 +13,7 @@ import copy
 import yaml
 import os
 from datetime import datetime, timedelta
-from utils import calc_percent_limit
+from utils import calc_percent_limit, is_entity_id
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
 from inverter import Inverter
@@ -375,6 +375,60 @@ def test_reserve_model_device_bounds(test_name, my_predbat, ha, set_reserve_min,
             failed = True
     finally:
         my_predbat.expose_config("set_reserve_min", saved_reserve_min)
+        my_predbat.set_reserve_enable = saved_reserve_enable
+        ha.dummy_items["number.reserve"] = saved_reserve_item
+
+    return failed
+
+
+def test_reserve_literal_value(test_name, my_predbat, ha, inverter_type, reserve_arg, expect_reserve_percent, expect_reserve_percent_current, set_reserve_enable=True):
+    """
+    Test
+       Inverter.__init__ accepts a hard-wired reserve percentage, not only an entity id.
+
+    templates/huawei.yaml and templates/sofar.yaml both ship a literal reserve, since those
+    inverters expose no reserve register to bind to. Reading the register bounds off that literal as
+    though it were an entity raised TypeError inside __init__ and failed inverter creation outright,
+    so no plan could be computed at all (GH#5003).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    # Inverter.__init__ replaces args with dummy entities for whatever the type has no register for,
+    # so the whole dict is snapshotted rather than the reserve entries alone - the shared fixture is
+    # reused by every later test in this module
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_reserve_enable = my_predbat.set_reserve_enable
+    saved_reserve_item = ha.dummy_items["number.reserve"]
+    try:
+        my_predbat.args["inverter_type"] = [inverter_type]
+        my_predbat.args["reserve"] = reserve_arg
+        my_predbat.set_reserve_enable = set_reserve_enable
+        # Pin the entity too, so the entity case is not left reading whatever an earlier test wrote
+        ha.dummy_items["number.reserve"] = {"state": 4.0, "min": None, "max": None}
+
+        inv = Inverter(my_predbat, 0)
+        if inv.reserve_percent != expect_reserve_percent:
+            print("ERROR: reserve_percent should be {} got {}".format(expect_reserve_percent, inv.reserve_percent))
+            failed = True
+        # The configured literal is what the inverter is taken to currently be set to
+        if inv.reserve_percent_current != expect_reserve_percent_current:
+            print("ERROR: reserve_percent_current should be {} got {}".format(expect_reserve_percent_current, inv.reserve_percent_current))
+            failed = True
+        # reserve is what the plan treats as the bottom of the battery
+        expect_reserve_kwh = round(inv.soc_max * expect_reserve_percent / 100.0, 3)
+        if inv.reserve != expect_reserve_kwh:
+            print("ERROR: reserve should be {}kWh got {}kWh".format(expect_reserve_kwh, inv.reserve))
+            failed = True
+        # A literal carries no min/max attributes, so there are no device bounds to honour. Types
+        # with no reserve register have had the arg replaced by a dummy entity during __init__, so
+        # only assert this where the literal survived.
+        if not is_entity_id(my_predbat.args["reserve"][0]) and inv.reserve_device_bounds() != (None, None):
+            print("ERROR: reserve_device_bounds should be (None, None) for a literal, got {}".format(inv.reserve_device_bounds()))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
         my_predbat.set_reserve_enable = saved_reserve_enable
         ha.dummy_items["number.reserve"] = saved_reserve_item
 
@@ -3386,6 +3440,19 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_reserve_model_device_bounds("reserve_model_no_bounds", my_predbat, ha, set_reserve_min=4, device_min=None, device_max=None, expect_reserve_percent=4)
     # The floor is the device's, not a policy, so it applies with set_reserve_enable off too
     failed |= test_reserve_model_device_bounds("reserve_model_device_min_no_set_reserve", my_predbat, ha, set_reserve_min=4, device_min=5, device_max=100, expect_reserve_percent=5, set_reserve_enable=False)
+    if failed:
+        return failed
+
+    # GH#5003: a hard-wired reserve percentage - what templates/huawei.yaml and templates/sofar.yaml
+    # ship, since those inverters have no reserve register - must not be read as an entity id, which
+    # raised inside __init__ and failed inverter creation outright
+    failed |= test_reserve_literal_value("reserve_literal_huawei", my_predbat, ha, "HU", [12], expect_reserve_percent=4, expect_reserve_percent_current=12)
+    failed |= test_reserve_literal_value("reserve_literal_below_battery_min", my_predbat, ha, "HU", [1], expect_reserve_percent=4, expect_reserve_percent_current=4)
+    # On a type that does have a reserve register the literal is kept as the current setting rather
+    # than being replaced by a dummy entity, so it is what gets modelled when set_reserve_enable is off
+    failed |= test_reserve_literal_value("reserve_literal_ge", my_predbat, ha, "GE", [12], expect_reserve_percent=12, expect_reserve_percent_current=12, set_reserve_enable=False)
+    # An entity id is still resolved as one, rather than everything being treated as a literal
+    failed |= test_reserve_literal_value("reserve_entity_still_read", my_predbat, ha, "GE", ["number.reserve"], expect_reserve_percent=4, expect_reserve_percent_current=4, set_reserve_enable=False)
     if failed:
         return failed
 
