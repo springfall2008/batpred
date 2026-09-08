@@ -365,3 +365,100 @@ def test_battery_full_hysteresis_kernel_parity(my_predbat):
         my_predbat.prediction_kernel_enable = True
 
     return failed
+
+
+def test_record_status_preserves_hysteresis_when_no_inverters(my_predbat):
+    """
+    record_status() can be called from several early-startup error paths (e.g. "Template
+    Configuration" or "components failed to start") before fetch_inverter_data() has ever run, when
+    self.inverters is still empty. Since dashboard_item() replaces the whole attributes dict each
+    call, naively computing the per-inverter hysteresis dict from an empty self.inverters would wipe
+    out whatever was persisted from a previous run. Confirms record_status() preserves the existing
+    persisted value in that situation, and still updates it normally once inverters are present.
+    """
+    failed = 0
+    status_entity = my_predbat.prefix + ".status"
+    original_status = my_predbat.ha_interface.dummy_items.get(status_entity)
+    original_inverters = my_predbat.inverters
+
+    try:
+        # Simulate a previous run having persisted real per-inverter state.
+        my_predbat.ha_interface.dummy_items[status_entity] = {"state": "Idle", "battery_full_hysteresis_active": {"0": True}}
+
+        # An early-startup error path: no inverters fetched yet.
+        my_predbat.inverters = []
+        my_predbat.record_status("Error: Some components failed to start (phase0)", had_errors=True)
+        preserved = my_predbat.ha_interface.dummy_items[status_entity].get("battery_full_hysteresis_active")
+        if preserved != {"0": True}:
+            print("**** ERROR: record_status() with no inverters should preserve the prior persisted dict, got {} ****".format(preserved))
+            failed = 1
+
+        # Once a real inverter exists, record_status() should reflect its actual current state, not
+        # the stale preserved value forever.
+        inv = Inverter(my_predbat, 0)
+        inv.full_hysteresis_active = False
+        my_predbat.inverters = [inv]
+        my_predbat.record_status("Idle")
+        updated = my_predbat.ha_interface.dummy_items[status_entity].get("battery_full_hysteresis_active")
+        if updated != {"0": False}:
+            print("**** ERROR: record_status() with a real inverter present should publish its current state, got {} ****".format(updated))
+            failed = 1
+    finally:
+        my_predbat.inverters = original_inverters
+        if original_status is None:
+            my_predbat.ha_interface.dummy_items.pop(status_entity, None)
+        else:
+            my_predbat.ha_interface.dummy_items[status_entity] = original_status
+
+    return failed
+
+
+def test_dashboard_display_reflects_hysteresis_band(my_predbat):
+    """
+    get_charge_rate_kw() (the dashboard's per-window planned-rate display) must:
+      - do nothing when the feature is disabled (default hysteresis=0), even if a window's soc
+        happens to sit at exactly soc_max
+      - show a suppressed (0) rate for a window whose soc, per the plan's own simulation, is
+        anywhere inside the hysteresis band below 100% - not only the exact 100% leading edge -
+        since a suppressed charge leaves soc stuck inside the band rather than pinned at soc_max
+    """
+    failed = 0
+    from tests.test_infra import reset_inverter
+
+    original_hysteresis = my_predbat.battery_soc_full_hysteresis
+    try:
+        reset_inverter(my_predbat)
+        my_predbat.soc_max = 10.0
+        my_predbat.battery_rate_max_charge = 2500 / MINUTE_WATT
+        my_predbat.charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30}]
+        my_predbat.charge_limit_best = [my_predbat.soc_max]
+        my_predbat.set_charge_low_power = False
+
+        # Disabled (default): a window sitting exactly at soc_max must still show a real (nonzero)
+        # planned rate - the feature must have zero effect on everyone who has not opted in.
+        my_predbat.battery_soc_full_hysteresis = 0
+        my_predbat.predict_soc_best = {0: my_predbat.soc_max}
+        rate_disabled = my_predbat.get_charge_rate_kw(0, my_predbat.minutes_now, 0, {})
+        if rate_disabled <= 0:
+            print("**** ERROR: with hysteresis disabled, dashboard rate at soc_max should be nonzero (unaffected), got {} ****".format(rate_disabled))
+            failed = 1
+
+        # Enabled, soc stuck at 98% (within a 3% band, not at exactly 100%) - the previous bug only
+        # caught soc==100% exactly, so this is the case it missed.
+        my_predbat.battery_soc_full_hysteresis = 3.0
+        my_predbat.predict_soc_best = {0: 9.8}
+        rate_within_band = my_predbat.get_charge_rate_kw(0, my_predbat.minutes_now, 0, {})
+        if rate_within_band != 0:
+            print("**** ERROR: with hysteresis enabled and soc at 98% (within a 3% band), dashboard rate should be 0, got {} ****".format(rate_within_band))
+            failed = 1
+
+        # Enabled, soc well outside the band (80%) - should show a normal nonzero rate.
+        my_predbat.predict_soc_best = {0: 8.0}
+        rate_outside_band = my_predbat.get_charge_rate_kw(0, my_predbat.minutes_now, 0, {})
+        if rate_outside_band <= 0:
+            print("**** ERROR: with hysteresis enabled and soc at 80% (outside the band), dashboard rate should be nonzero, got {} ****".format(rate_outside_band))
+            failed = 1
+    finally:
+        my_predbat.battery_soc_full_hysteresis = original_hysteresis
+
+    return failed

@@ -152,6 +152,8 @@ from tests.test_battery_full_hysteresis import (
     test_inverter_full_hysteresis_restores_after_restart,
     test_multi_inverter_full_hysteresis_independence,
     test_battery_full_hysteresis_kernel_parity,
+    test_record_status_preserves_hysteresis_when_no_inverters,
+    test_dashboard_display_reflects_hysteresis_band,
 )
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
@@ -552,6 +554,8 @@ def main():
         ("battery_full_hysteresis_restore", test_inverter_full_hysteresis_restores_after_restart, "Battery full hysteresis restores per-inverter state across a restart", False),
         ("battery_full_hysteresis_multi_inverter", test_multi_inverter_full_hysteresis_independence, "Battery full hysteresis: one inverter full does not affect another inverter's state", False),
         ("battery_full_hysteresis_kernel_parity", test_battery_full_hysteresis_kernel_parity, "Battery full hysteresis: C++ kernel vs Python engine parity", False),
+        ("battery_full_hysteresis_startup_persist", test_record_status_preserves_hysteresis_when_no_inverters, "Battery full hysteresis: record_status preserves state across early-startup errors", False),
+        ("battery_full_hysteresis_dashboard", test_dashboard_display_reflects_hysteresis_band, "Battery full hysteresis: dashboard display reflects the whole band, gated on the feature being enabled", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
         ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),
         ("energydataservice", run_energydataservice_tests, "Energy data service tests", False),
