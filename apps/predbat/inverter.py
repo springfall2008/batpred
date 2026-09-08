@@ -23,7 +23,20 @@ import time
 import pytz
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
-from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, EXPORT_LIMIT_IDLE, INVERTER_WRITE_POLL_INTERVAL, INVERTER_WRITE_POLL_MAX_INTERVAL
+from const import (
+    MINUTE_WATT,
+    TIME_FORMAT,
+    TIME_FORMAT_OCTOPUS,
+    INVERTER_TEST,
+    TIME_FORMAT_SECONDS,
+    INVERTER_MAX_RETRY,
+    EXPORT_LIMIT_IDLE,
+    INVERTER_WRITE_POLL_INTERVAL,
+    INVERTER_WRITE_POLL_MAX_INTERVAL,
+    INVERTER_CLOCK_SKEW_RESTART_MINUTES,
+    INVERTER_CLOCK_SKEW_WARN_MINUTES,
+    INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES,
+)
 from control_ledger import generation_from_state, OWNED, UNOWNED
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
 
@@ -99,13 +112,62 @@ class Inverter:
         component can be active at once, so naming whichever happened to be checked first sends
         the user to look at credentials for hardware they may not even own. Falls back to the
         active component names when the type has no display name.
+
+        An unset type is not a statement about the hardware. With inverter_type absent from
+        apps.yaml the type is "GE" only because nothing said otherwise, so naming GivEnergy told
+        the Solis owner in #4990 to go and check credentials for hardware they do not own. The
+        active components are the better answer there, and INVERTER_DEF is consulted only if there
+        are none - a defaulted type with no component is a bare apps.yaml setup, where "GivEnergy"
+        at least matches the behaviour Predbat is actually using.
+
+        Whether the type is unset is re-derived at message time rather than taken from a
+        constructor snapshot: a component's automatic_config() writes inverter_type into
+        base.args once discovery succeeds, and Inverter objects outlive that, so a startup-time
+        flag goes stale in both directions (#4990).
         """
+        components = getattr(self.base, "components", None)
+        names = components.inverter_source_names() if components else []
+        if self.inverter_type_is_assumed() and names:
+            return ", ".join(names)
         name = INVERTER_DEF.get(self.inverter_type, {}).get("name", None)
         if name:
             return name
-        components = getattr(self.base, "components", None)
-        names = components.inverter_source_names() if components else []
         return ", ".join(names) if names else self.inverter_type
+
+    def inverter_type_is_assumed(self):
+        """Whether inverter_type is currently unset, so GE is Predbat's assumption not a choice.
+
+        Deliberately re-derived from base.args every time rather than remembered from Inverter
+        construction: components write inverter_type into base.args after discovery (each one's
+        automatic_config()), while Inverter objects persist across cycles, so a snapshot taken at
+        construction would keep asserting "no inverter_type is set" long after Solis had been
+        discovered and configured (#4990).
+        """
+        return "inverter_type" not in self.base.args
+
+    def inverter_type_assumed_name(self):
+        """Display name of the assumed inverter type, for user-facing messages."""
+        return INVERTER_DEF.get(self.inverter_type, {}).get("name", None) or self.inverter_type
+
+    def inverter_source_hint(self):
+        """
+        What the user should go and check when a configured source returns no data.
+
+        Normally that is the named source's credentials. When inverter_type was never set there is
+        no credential Predbat can point at with any confidence, so it says so and lists the
+        inverter components that ARE configured together with whether each is in error - on #4990
+        a SolisCloud comms failure surfaced as "check the GivEnergy credentials", naming neither
+        the real component nor the real fault. The assumed type is named from INVERTER_DEF rather
+        than hardcoded, so the wording follows whatever the default actually is.
+        """
+        components = getattr(self.base, "components", None)
+        status = components.inverter_source_status() if components else []
+        if self.inverter_type_is_assumed() and status:
+            listed = "; ".join(status)
+            return "no inverter_type is set in apps.yaml so {} ({}) is assumed - configured inverter components: {} - set inverter_type to match your inverter, and check any component reported above as in error".format(
+                self.inverter_type_assumed_name(), self.inverter_type, listed
+            )
+        return "check the {} credentials and that the account still has this inverter attached".format(self.inverter_source_name())
 
     def _poll_after_write(self, entity_id, matched, refresh=True, required_unit=None):
         """
@@ -137,6 +199,36 @@ class Inverter:
             self.sleep(step)
             waited += step
             delay = min(delay * 2, INVERTER_WRITE_POLL_MAX_INTERVAL)
+
+    def check_clock_skew(self, tdiff, now_utc):
+        """
+        Act on the measured inverter clock skew in minutes, warning (and restarting) on a large skew and warning periodically on a moderate one
+        """
+        if abs(tdiff) >= INVERTER_CLOCK_SKEW_RESTART_MINUTES:
+            skew_message = "Inverter time is {}, Predbat computer time {}, this is {} minutes skewed".format(self.inverter_time, now_utc, tdiff)
+            message = "Warn: {}, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(skew_message)
+            self.base.log(message)
+            self.base.record_status(message, had_errors=True)
+            # Trigger restart
+            self.auto_restart("Clock skew >= {} minutes".format(INVERTER_CLOCK_SKEW_RESTART_MINUTES))
+            return
+
+        # Below the restart threshold nothing is restarted, but a steady moderate skew still shifts every
+        # charge and export slot Predbat writes, so say so periodically rather than every cycle (#4989)
+        self.base.restart_active = False
+        if abs(tdiff) >= INVERTER_CLOCK_SKEW_WARN_MINUTES:
+            last_warn = self.base.clock_skew_warn_time.get(self.id, None)
+            if (last_warn is None) or ((now_utc - last_warn) >= timedelta(minutes=INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES)):
+                self.base.clock_skew_warn_time[self.id] = now_utc
+                skew_message = "Inverter time is {}, Predbat computer time {}, this is {} minutes skewed".format(self.inverter_time, now_utc, tdiff)
+                self.base.log(
+                    "Warn: Inverter {}: {}. This is below the {} minute restart threshold but will still shift every charge and export slot Predbat writes - correct the inverter clock, or compensate for it with inverter_clock_skew_start/inverter_clock_skew_end and inverter_clock_skew_discharge_start/inverter_clock_skew_discharge_end in apps.yaml".format(
+                        self.id, skew_message, INVERTER_CLOCK_SKEW_RESTART_MINUTES
+                    )
+                )
+        else:
+            # Back within tolerance, forget the last warning so a recurrence is reported promptly
+            self.base.clock_skew_warn_time.pop(self.id, None)
 
     def auto_restart(self, reason):
         """
@@ -257,8 +349,13 @@ class Inverter:
         self.idle_end_minutes = 0
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
-        if "inverter_type" not in self.base.args:
-            self.log("Warn: Inverter {}: inverter_type is not set in apps.yaml, assuming GivEnergy (GE) - if this is not correct, set inverter_type to match your inverter, see the documentation".format(self.id))
+        # An assumed type is not a chosen one. The user-facing "source returned no data" warnings
+        # must not name it as though the user had picked it (#4990); those messages re-derive the
+        # fact at message time (inverter_type_is_assumed) because discovery can set the type later.
+        if self.inverter_type_is_assumed():
+            self.log(
+                "Warn: Inverter {}: inverter_type is not set in apps.yaml, assuming {} ({}) - if this is not correct, set inverter_type to match your inverter, see the documentation".format(self.id, self.inverter_type_assumed_name(), self.inverter_type)
+            )
 
         # Read user defined inverter type
         if "inverter" in self.base.args:
@@ -417,22 +514,7 @@ class Inverter:
             tdiff = dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
             if not quiet:
                 self.base.log("Inverter time {}, Predbat computer time {}, difference {} minutes".format(self.inverter_time, now_utc, tdiff))
-            if abs(tdiff) >= 30:
-                self.base.log(
-                    "Warn: Inverter time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
-                        self.inverter_time, now_utc, tdiff
-                    )
-                )
-                self.base.record_status(
-                    "Warn: Inverter time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
-                        self.inverter_time, now_utc, tdiff
-                    ),
-                    had_errors=True,
-                )
-                # Trigger restart
-                self.auto_restart("Clock skew >=10 minutes")
-            else:
-                self.base.restart_active = False
+            self.check_clock_skew(tdiff, now_utc)
 
         # Get the expected minimum reserve value for the current inverter
         reserve_min_postfix = "" if self.id == 0 else "_" + str(self.id)
@@ -1517,8 +1599,16 @@ class Inverter:
                 # real cause is upstream: a cloud account with no devices attached, revoked or
                 # rotated API credentials, or a lapsed entitlement, none of which Predbat can tell
                 # apart from here beyond naming where the data should have come from.
-                source = self.inverter_source_name()
-                hint = "check the {} credentials and that the account still has this inverter attached".format(source)
+                if "charge_start_time" in self.base.args:
+                    # A configured apps.yaml entity that has stopped reporting is the user's own
+                    # setup to fix, not a component outage - the same distinction the export
+                    # window makes, so the component listing does not point past a broken entity
+                    # at hardware that is fine.
+                    source = "charge_start_time"
+                    hint = "check the charge_start_time/charge_end_time entities in apps.yaml are reporting"
+                else:
+                    source = self.inverter_source_name()
+                    hint = self.inverter_source_hint()
                 self.log("Warn: Inverter {} unable to read charge window time - {} returned no data, {}, will retry next update".format(self.id, source, hint))
                 self.base.record_status("Warn: Inverter {} unable to read charge window time - {} returned no data, {}".format(self.id, source, hint), had_errors=True)
                 # Set safe defaults to allow graceful recovery on next update
@@ -1636,7 +1726,7 @@ class Inverter:
             if export_source == "discharge_start_time":
                 hint = "check the discharge_start_time/discharge_end_time entities in apps.yaml are reporting"
             else:
-                hint = "check the {} credentials and that the account still has this inverter attached".format(export_source)
+                hint = self.inverter_source_hint()
             self.log("Warn: Inverter {} unable to read Export window - {} returned no data, {}, will retry next update".format(self.id, export_source, hint))
             self.base.record_status("Warn: Inverter {} unable to read Export window - {} returned no data, {}".format(self.id, export_source, hint), had_errors=True)
             # Safe defaults must be INERT, not merely disabled. forecast_minutes parks the window

@@ -8,7 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from const import PREDBAT_MAX_CARS, MINUTE_WATT
 from prediction import Prediction
 import sys
@@ -139,6 +139,41 @@ def create_aiohttp_mock_session(mock_response=None, exception=None):
     mock_session.__aexit__ = session_aexit
 
     return mock_session
+
+
+class FakeComponentTask:
+    """Stand-in for the threading.Thread Components.start() creates, reporting itself alive."""
+
+    def is_alive(self):
+        """The fake task never dies, so Components.is_alive() is left to judge the component."""
+        return True
+
+
+class FakeInverterComponent:
+    """Stand-in for a registered inverter component reporting a given current health.
+
+    Lives here rather than in the individual test suites because both test_components.py and
+    test_inverter.py need one, and the health surface it mirrors (ComponentBase.get_error_count /
+    api_started / last_updated_time) changes shape rarely but across both suites when it does.
+    """
+
+    def __init__(self, errors=0, api_started=True, updated_recently=True):
+        """Record the health this fake component should report back."""
+        self.count_errors = errors
+        self.api_started = api_started
+        self.updated_recently = updated_recently
+
+    def get_error_count(self):
+        """Errors recorded so far, as ComponentBase.get_error_count() reports them."""
+        return self.count_errors
+
+    def is_alive(self):
+        """Current health, as ComponentBase.is_alive() reports it."""
+        return self.api_started and self.updated_recently
+
+    def last_updated_time(self):
+        """Time of the last successful operation, or None if never succeeded."""
+        return datetime.now(timezone.utc) if self.updated_recently else None
 
 
 class DummyInverter:

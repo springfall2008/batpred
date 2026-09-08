@@ -1760,6 +1760,120 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
     return failed
 
 
+def test_window_warning_names_components_when_type_unset(test_name, my_predbat, dummy_items):
+    """
+    Issue #4990: a Solis Cloud comms failure must not be reported as a GivEnergy credential problem.
+
+    inverter_type defaults to GE when apps.yaml does not set it, and on a Solis install it is
+    automatic_config() that sets it - which only runs once discovery has succeeded. So a SolisCloud
+    outage at startup leaves the type at the GE default, and the window-read warnings then tell a
+    Solis owner to "check the GivEnergy credentials", naming hardware they do not own and a
+    credential they cannot have got wrong.
+
+    With the type merely assumed the message must instead say so and list the inverter components
+    that ARE configured, with whether each is in error. An explicitly configured GE keeps the
+    original credentials wording: there the type is the user's own statement about their hardware.
+    """
+    from components import Components
+    from tests.test_infra import FakeComponentTask, FakeInverterComponent
+
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_args = {key: my_predbat.args.pop(key, None) for key in ("inverter_type", "charge_start_time", "charge_end_time", "discharge_start_time", "discharge_end_time")}
+    original_components = my_predbat.components
+    original_charge_enable = dummy_items.get("switch.scheduled_charge_enable", None)
+    dummy_items["switch.scheduled_charge_enable"] = "on"
+
+    def restore():
+        """Restore the config and registry this test mutated so later tests are unaffected."""
+        my_predbat.components = original_components
+        if original_charge_enable is None:
+            dummy_items.pop("switch.scheduled_charge_enable", None)
+        else:
+            dummy_items["switch.scheduled_charge_enable"] = original_charge_enable
+        for key, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+
+    update_errors = []
+
+    def run_update(component_name, component):
+        """Register one inverter component, run a full update with no window data, return the statuses.
+
+        Returns both warnings update_status() records per cycle, in order: the charge window
+        first, then the export window. Each record_status overwrites current_status, so reading
+        current_status after the run would see only the export half.
+        """
+        statuses = []
+        original_record_status = my_predbat.record_status
+
+        def recording_record_status(message, **kwargs):
+            statuses.append(message)
+            return original_record_status(message, **kwargs)
+
+        my_predbat.record_status = recording_record_status
+        try:
+            my_predbat.components = Components(my_predbat)
+            my_predbat.components.components[component_name] = component
+            my_predbat.components.component_tasks[component_name] = FakeComponentTask()
+            inv = Inverter(my_predbat, 0)
+            inv.sleep = dummy_sleep
+            inv.inv_has_charge_enable_time = True
+            inv.rest_api = None
+            inv.rest_data = None
+            my_predbat.current_status = ""
+            try:
+                inv.update_status(my_predbat.minutes_now)
+            except ValueError as e:
+                # Caught here so one regression cannot abort the whole registry run - the same
+                # handling the neighbouring window tests give this call.
+                print(f"ERROR: {test_name} - update_status should not raise while a configured source just hasn't returned data, got ValueError({e})")
+                update_errors.append(str(e))
+        finally:
+            my_predbat.record_status = original_record_status
+        return statuses
+
+    try:
+        # Case 1: inverter_type absent, Solis component registered and erroring - the reported case.
+        statuses = run_update("solis", FakeInverterComponent(errors=3, api_started=False, updated_recently=False))
+        charge_status, export_status = (statuses + ["", ""])[:2]
+        for status in (charge_status, export_status):
+            if "GivEnergy credentials" in status:
+                print(f"ERROR: {test_name} - an assumed inverter type must not send a Solis owner to check GivEnergy credentials, got: {status}")
+                failed = True
+            if "no inverter_type is set" not in status:
+                print(f"ERROR: {test_name} - status should say inverter_type was never set, got: {status}")
+                failed = True
+            if "Solis Cloud API" not in status:
+                print(f"ERROR: {test_name} - status should list the configured inverter component, got: {status}")
+                failed = True
+            if "in error, 3 errors so far" not in status:
+                print(f"ERROR: {test_name} - status should say whether the listed component is in error, got: {status}")
+                failed = True
+
+        # Case 2: inverter_type explicitly configured - the credentials wording is still right.
+        my_predbat.args["inverter_type"] = ["GE"]
+        statuses = run_update("gecloud", FakeInverterComponent(api_started=True, updated_recently=True))
+        charge_status, export_status = (statuses + ["", ""])[:2]
+        for status in (charge_status, export_status):
+            if "check the GivEnergy credentials" not in status:
+                print(f"ERROR: {test_name} - a configured GE type should still name its credentials, got: {status}")
+                failed = True
+            if "no inverter_type is set" in status:
+                print(f"ERROR: {test_name} - inverter_type was set, so the status must not claim otherwise, got: {status}")
+                failed = True
+
+        if update_errors:
+            failed = True
+    finally:
+        restore()
+
+    return failed
+
+
 def test_export_window_no_source_configured_raises(test_name, my_predbat, dummy_items):
     """With no source configured at all this is a real apps.yaml gap and must still raise.
 
@@ -2770,6 +2884,113 @@ def test_inverter_time_handling(my_predbat, dummy_items):
     return failed
 
 
+def test_inverter_clock_skew_bands(my_predbat):
+    """Verify the three clock-skew bands in Inverter.check_clock_skew (#4989).
+
+    Compensation via the inverter_clock_skew_* settings is manual only, so a steady skew below the
+    30 minute restart threshold used to shift every slot Predbat writes with nothing above info level
+    in the log. A skew of 5-29 minutes must now produce a Warn: naming those settings, rate-limited to
+    one per hour per inverter rather than one per 5-minute cycle, without triggering an auto-restart.
+    Below 5 minutes must stay silent, and the >=30 minute band must keep its warning, error status and
+    restart - with a reason string that matches the threshold it actually uses, not the old ">=10".
+    """
+    failed = False
+    print("**** Running Test: inverter_clock_skew_bands ****")
+
+    orig_log = my_predbat.log
+    saved_skew_times = my_predbat.clock_skew_warn_time
+    saved_status = my_predbat.current_status
+    saved_had_errors = my_predbat.had_errors
+    saved_restart_active = my_predbat.restart_active
+    log_messages = []
+    restart_reasons = []
+
+    def moderate_warnings():
+        """Warnings from the moderate band, identified by the apps.yaml setting they point the user at."""
+        return [msg for msg in log_messages if msg.startswith("Warn:") and "inverter_clock_skew_start" in msg]
+
+    try:
+        inv = Inverter(my_predbat, 0)
+        inv.auto_restart = lambda reason: restart_reasons.append(reason)
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        inv.log = my_predbat.log
+        my_predbat.clock_skew_warn_time = {}
+        now = my_predbat.now_utc
+
+        # A 25 minute skew (as reported in #4927) warns once, without restarting
+        inv.check_clock_skew(-25.22, now)
+        warnings = moderate_warnings()
+        if len(warnings) != 1:
+            print("ERROR: a 25 minute skew should log exactly one warning, got {}".format(warnings))
+            failed = True
+        elif "-25.22" not in warnings[0]:
+            print("ERROR: the moderate skew warning should name the measured skew, got {}".format(warnings[0]))
+            failed = True
+        if restart_reasons:
+            print("ERROR: a 25 minute skew must not trigger an auto-restart, got {}".format(restart_reasons))
+            failed = True
+        if my_predbat.restart_active:
+            print("ERROR: a 25 minute skew should clear restart_active")
+            failed = True
+
+        # The same skew on the next few cycles is rate limited, it must not warn every 5 minutes
+        log_messages.clear()
+        inv.check_clock_skew(-25.22, now + timedelta(minutes=5))
+        inv.check_clock_skew(-25.30, now + timedelta(minutes=10))
+        if moderate_warnings():
+            print("ERROR: the moderate skew warning should be rate limited, got {}".format(moderate_warnings()))
+            failed = True
+
+        # ...but it repeats once the rate limit period has passed, so it isn't lost after a restart of the log
+        log_messages.clear()
+        inv.check_clock_skew(-25.22, now + timedelta(minutes=61))
+        if len(moderate_warnings()) != 1:
+            print("ERROR: the moderate skew warning should repeat after an hour, got {}".format(moderate_warnings()))
+            failed = True
+
+        # A skew inside the tolerance band is silent, and clears the rate limit so a recurrence is reported promptly
+        log_messages.clear()
+        inv.check_clock_skew(2.5, now + timedelta(minutes=62))
+        if moderate_warnings():
+            print("ERROR: a 2.5 minute skew should not warn, got {}".format(moderate_warnings()))
+            failed = True
+        if 0 in my_predbat.clock_skew_warn_time:
+            print("ERROR: a skew back inside tolerance should clear the rate limit, got {}".format(my_predbat.clock_skew_warn_time))
+            failed = True
+        inv.check_clock_skew(-25.22, now + timedelta(minutes=63))
+        if len(moderate_warnings()) != 1:
+            print("ERROR: a recurrence after a quiet period should warn immediately, got {}".format(moderate_warnings()))
+            failed = True
+
+        # The large band still warns, records an error status and restarts, quoting the threshold it uses
+        log_messages.clear()
+        restart_reasons.clear()
+        my_predbat.current_status = ""
+        inv.check_clock_skew(-45.0, now + timedelta(minutes=64))
+        if "skew" not in (my_predbat.current_status or "").lower():
+            print("ERROR: a 45 minute skew should be recorded in the status, got {}".format(my_predbat.current_status))
+            failed = True
+        if not any(msg.startswith("Warn:") and "45.0 minutes skewed" in msg for msg in log_messages):
+            print("ERROR: a 45 minute skew should log a warning naming the skew, got {}".format(log_messages))
+            failed = True
+        if len(restart_reasons) != 1:
+            print("ERROR: a 45 minute skew should trigger exactly one auto-restart, got {}".format(restart_reasons))
+            failed = True
+        elif "30" not in restart_reasons[0]:
+            print("ERROR: the auto-restart reason should quote the 30 minute threshold it uses, got {}".format(restart_reasons[0]))
+            failed = True
+    finally:
+        my_predbat.log = orig_log
+        my_predbat.clock_skew_warn_time = saved_skew_times
+        my_predbat.current_status = saved_status
+        my_predbat.had_errors = saved_had_errors
+        my_predbat.restart_active = saved_restart_active
+
+    if not failed:
+        print("**** Test inverter_clock_skew_bands PASSED ****")
+    return failed
+
+
 def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
@@ -2836,6 +3057,7 @@ def run_inverter_tests(my_predbat_dummy):
         my_predbat.args[arg_name] = entity_id
 
     failed |= test_inverter_time_handling(my_predbat, dummy_items)
+    failed |= test_inverter_clock_skew_bands(my_predbat)
 
     failed |= test_inverter_update(
         "update1",
@@ -3556,6 +3778,7 @@ charge_start_service:
     failed |= test_charge_window_ge_cloud_configured_but_no_data_yet("charge_window_ge_cloud_configured_but_no_data_yet", my_predbat, dummy_items)
     failed |= test_export_window_ge_cloud_configured_but_no_data_yet("export_window_ge_cloud_configured_but_no_data_yet", my_predbat, dummy_items)
     failed |= test_export_window_no_source_configured_raises("export_window_no_source_configured_raises", my_predbat, dummy_items)
+    failed |= test_window_warning_names_components_when_type_unset("window_warning_names_components_when_type_unset", my_predbat, dummy_items)
     if failed:
         return failed
 
