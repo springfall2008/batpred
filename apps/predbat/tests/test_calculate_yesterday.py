@@ -513,13 +513,18 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
 
     No octopus_intelligent_slot is configured and car_charging_slots starts empty.
     The car_charging_energy sensor records 1.5 kWh in the 30-minute window
-    starting at minute 60 of yesterday.  yesterday_reconstruct_car_slots should
-    synthesise a slot for that window and subtract the corresponding kWh from the
-    load step data before handing it to the Prediction.
+    starting at minute 600 (10:00) of yesterday.  yesterday_reconstruct_car_slots
+    should synthesise a slot for that window and subtract the corresponding kWh
+    from the load step data before handing it to the Prediction.
 
-    Slot: start=60, end=90, kwh=1.5 → load rate = 1.5/0.5h = 3.0 kW
-    Subtraction per 5-min step: 3.0 * 5/60 = 0.25 kWh > FLAT_LOAD_KWH (0.1)
-    Expected inside-slot value: max(0.1 - 0.25, 0) = 0.0
+    This is also the regression for GH#5004: calculate_yesterday fakes
+    self.minutes_now to 0 before reconstructing the car slots, while
+    car_charging_energy and yesterday_load_step are both still indexed from the
+    real now.  Reading the car energy off the faked minutes_now attributed the
+    energy recorded at yesterday clock time T to plan-axis minute T - minutes_now,
+    so the real session stayed in the load band and a ghost car slot appeared
+    minutes_now earlier.  With minutes_now=360 the shifted position of this
+    session is axis minute 240, which must stay untouched.
 
     Also verifies that car_charging_slots and car_charging_soc are fully
     restored to their pre-call values after calculate_yesterday returns.
@@ -543,21 +548,52 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
     my_predbat.octopus_slots = [[], [], [], []]
     my_predbat.octopus_intelligent_consider_full = False
 
-    # Inside calculate_yesterday, minutes_now is set to 0 before calling
-    # yesterday_reconstruct_car_slots, so the lookup formula becomes:
-    #   minute_previous = 0 + 1440 - minute
-    # For start_minute=60 the inner scan covers minutes 60..89.
-    # At minute=60: minute_previous = 1380.
-    # get_from_incrementing(data, 1380) = max(data[1380] - data[1381], 0).
-    # Correct representation of an incrementing kWh sensor: the sensor reads
-    # 1.5 kWh at minute 60 (index 1380) and all more-recent times (lower indices),
-    # and 0 at earlier times (indices > 1380).  The telescoping sum over the
-    # 30-minute window yields data[1351] - data[1381] = 1.5 - 0 = 1.5 kWh.
-    my_predbat.car_charging_energy = {k: 1.5 for k in range(0, 1381)}
+    # Keep the load cap deterministic regardless of the order the sub-tests run in
+    my_predbat.car_energy_reported_load = True
+    my_predbat.car_charging_loss = 1.0
+
+    # car_charging_energy is indexed in minutes before the REAL now, so the session
+    # at yesterday 10:00 (plan-axis minute 600) lives at index
+    #   minutes_now + 1440 - 600 = 360 + 1440 - 600 = 1200.
+    # An incrementing kWh sensor is monotonically non-decreasing forward in time
+    # (= decreasing index), so reading 1.5 kWh at index 1200 and every more-recent
+    # index, and 0 at earlier times (indices > 1200), represents a 1.5 kWh jump at
+    # yesterday 10:00.  get_from_incrementing(data, 1200) = 1.5 - 0 = 1.5 kWh.
+    car_session_minute = 600
+    shifted_minute = car_session_minute - 360  # where the GH#5004 bug painted it: 240
+    my_predbat.car_charging_energy = {k: 1.5 for k in range(0, 1201)}
 
     captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
 
+    # Snapshot car_charging_slots as the (mocked) prediction sees them - calculate_yesterday
+    # restores the live slots before returning, so they can't be inspected afterwards
+    captured_slots = []
+    mocked_run_prediction = my_predbat.run_prediction
+
+    def _capture_car_slots(*args, **kwargs):
+        """Record the reconstructed car slots then defer to the standard run_prediction mock."""
+        captured_slots.append(copy.deepcopy(my_predbat.car_charging_slots))
+        return mocked_run_prediction(*args, **kwargs)
+
+    my_predbat.run_prediction = _capture_car_slots
+
     my_predbat.calculate_yesterday()
+
+    plan_iv = my_predbat.plan_interval_minutes  # 30 by default
+    slot_end = car_session_minute + plan_iv
+
+    # --- The synthesised slot must sit at the minute the energy was actually recorded ---
+    if not captured_slots:
+        print("ERROR: run_prediction was not called – cannot inspect car slots")
+        failed = True
+    else:
+        slots = captured_slots[0][0]
+        if len(slots) != 1:
+            print("ERROR: expected exactly 1 synthesised car slot, got {}".format(slots))
+            failed = True
+        elif slots[0].get("start") != car_session_minute or slots[0].get("end") != slot_end:
+            print("ERROR: car slot should span {}..{} (GH#5004 shifted it to {}), got {}".format(car_session_minute, slot_end, shifted_minute, slots[0]))
+            failed = True
 
     # --- Verify load subtraction via the captured load_minutes_step ---
     if len(captured_load) < 1:
@@ -565,18 +601,24 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
         failed = True
     else:
         load_step = captured_load[0]
-        plan_iv = my_predbat.plan_interval_minutes  # 30 by default
-        slot_end = 60 + plan_iv
 
-        # Inside-slot steps: max(0.1 - 3.0*5/60, 0) = max(0.1 - 0.25, 0) = 0.0
-        for inside_min in range(60, slot_end, PREDICT_STEP):
+        # Inside-slot steps: slot kwh is capped to load_reported (6 * 0.1 = 0.6 kWh),
+        # so the subtraction is 0.6/0.5h * 5/60 = 0.1 kWh/step → max(0.1 - 0.1, 0) = 0.0
+        for inside_min in range(car_session_minute, slot_end, PREDICT_STEP):
             val = load_step.get(inside_min, -1)
             if abs(val) > 1e-9:
                 print("ERROR: step {} (inside energy-sensor slot) should be 0.0 but got {}".format(inside_min, val))
                 failed = True
 
+        # The position the GH#5004 shift used to paint must be left alone entirely
+        for ghost_min in range(shifted_minute, shifted_minute + plan_iv, PREDICT_STEP):
+            val = load_step.get(ghost_min, -1)
+            if abs(val - FLAT_LOAD_KWH) > 1e-9:
+                print("ERROR: step {} is minutes_now before the real session and must be untouched at {}, got {}".format(ghost_min, FLAT_LOAD_KWH, val))
+                failed = True
+
         # Outside-slot steps should be unchanged at FLAT_LOAD_KWH.
-        for outside_min in [0, 5, 55, slot_end, slot_end + 5, 300]:
+        for outside_min in [0, 5, 55, car_session_minute - 5, slot_end, slot_end + 5, 300]:
             val = load_step.get(outside_min, -1)
             if abs(val - FLAT_LOAD_KWH) > 1e-9:
                 print("ERROR: step {} (outside energy-sensor slot) should be {} but got {}".format(outside_min, FLAT_LOAD_KWH, val))
@@ -676,7 +718,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     end_record = 24 * 60  # 1440 minutes
     yesterday_load_step = {m: FLAT_LOAD_KWH for m in range(0, end_record, PREDICT_STEP)}
 
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step, 0)
 
     # Exactly one slot should have been added
     slots = my_predbat.car_charging_slots[0]
@@ -734,7 +776,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_energy = {k: 1.2 for k in range(0, 1381)}  # same energy as 5a
 
     yesterday_load_step = {m: FLAT_LOAD_KWH for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step, 0)
 
     if len(my_predbat.car_charging_slots[0]) != 1:
         print("ERROR 5b: expected 1 slot (no duplicate), got {}".format(len(my_predbat.car_charging_slots[0])))
@@ -771,7 +813,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.load_octopus_slots = _mock_load_octopus_slots
 
     yesterday_load_step = {m: FLAT_LOAD_KWH for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step, 0)
 
     my_predbat.load_octopus_slots = original_load_octopus_slots
 
@@ -819,7 +861,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_slots = [[cancelled_slot], [], [], []]
 
     yesterday_load_step_5d = {m: TINY_LOAD for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5d)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5d, 0)
 
     # The slot kwh should have been zeroed out.
     if cancelled_slot.get("kwh") != 0:
@@ -857,7 +899,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_slots = [[adjusted_slot], [], [], []]
 
     yesterday_load_step_5e = {m: MEDIUM_LOAD for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5e)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5e, 0)
 
     expected_adj_kwh = (plan_iv // PREDICT_STEP) * MEDIUM_LOAD * my_predbat.car_charging_loss  # 6 * 0.2 * 1.0 = 1.2
     if abs(adjusted_slot.get("kwh", -1) - expected_adj_kwh) > 1e-9:
@@ -905,7 +947,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_slots = [[slot_car0], [slot_car1], [], []]
 
     yesterday_load_step_5f = {m: TWO_CAR_LOAD for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5f)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5f, 0)
 
     # Car 0 should be unchanged (load was sufficient).
     if abs(slot_car0.get("kwh", -1) - 0.6) > 1e-9:
@@ -930,6 +972,52 @@ def _test_reconstruct_car_slots(my_predbat, failed):
         val = yesterday_load_step_5f.get(m, -1)
         if abs(val - TWO_CAR_LOAD) > 1e-9:
             print("ERROR 5f: step {} outside slot should be {}, got {}".format(m, TWO_CAR_LOAD, val))
+            failed = True
+
+    # -----------------------------------------------------------------------
+    # 5g - the passed minutes_now indexes the energy sensor, not self.minutes_now (GH#5004)
+    # -----------------------------------------------------------------------
+    print("calculate_yesterday: Test 5g - car energy is indexed off the passed minutes_now, not the faked one (#5004)")
+
+    # self.minutes_now is 0 here exactly as calculate_yesterday fakes it, while the
+    # real plan is at 06:00 - so the energy sensor is still indexed from 06:00 today.
+    _setup_base(my_predbat, minutes_now=0)
+    real_minutes_now = 360
+    my_predbat.num_cars = 1
+    my_predbat.car_charging_slots = [[] for _ in range(4)]
+    my_predbat.car_energy_reported_load = True
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.octopus_intelligent_consider_full = False
+    my_predbat.octopus_slots = [[], [], [], []]
+    my_predbat.args["octopus_intelligent_slot"] = None
+
+    # 1.2 kWh recorded at yesterday 10:00 = plan-axis minute 600, which is
+    # real_minutes_now + 1440 - 600 = 1200 minutes before the real now.
+    session_minute_5g = 600
+    shifted_minute_5g = session_minute_5g - real_minutes_now  # 240, where the bug painted it
+    my_predbat.car_charging_energy = {k: 1.2 for k in range(0, real_minutes_now + 24 * 60 - session_minute_5g + 1)}
+
+    yesterday_load_step_5g = {m: FLAT_LOAD_KWH for m in range(0, end_record, PREDICT_STEP)}
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5g, real_minutes_now)
+
+    slots_5g = my_predbat.car_charging_slots[0]
+    if len(slots_5g) != 1:
+        print("ERROR 5g: expected 1 synthesised slot, got {}".format(slots_5g))
+        failed = True
+    elif slots_5g[0].get("start") != session_minute_5g:
+        print("ERROR 5g: slot start should be {} (the bug placed it at {}), got {}".format(session_minute_5g, shifted_minute_5g, slots_5g[0].get("start")))
+        failed = True
+
+    # Load is cancelled at the real session minutes and left alone at the shifted ones
+    for m in range(session_minute_5g, session_minute_5g + plan_iv, PREDICT_STEP):
+        val = yesterday_load_step_5g.get(m, -1)
+        if abs(val) > 1e-9:
+            print("ERROR 5g: step {} inside the real session should be 0.0, got {}".format(m, val))
+            failed = True
+    for m in range(shifted_minute_5g, shifted_minute_5g + plan_iv, PREDICT_STEP):
+        val = yesterday_load_step_5g.get(m, -1)
+        if abs(val - FLAT_LOAD_KWH) > 1e-9:
+            print("ERROR 5g: step {} is the shifted position and should be untouched at {}, got {}".format(m, FLAT_LOAD_KWH, val))
             failed = True
 
     # Restore
