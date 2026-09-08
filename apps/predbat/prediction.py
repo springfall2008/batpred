@@ -18,7 +18,7 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
-from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, CAR_SOLAR_EXPORT_ALWAYS
 
 from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple
 from prediction_batch import PredictionBatch, prediction_cache_key
@@ -113,6 +113,29 @@ class Prediction(PredictionBatch):
             # replayed debug dump from before this attribute existed - means use the real limits.
             self.car_charging_limit = base.car_charging_limit_model if base.car_charging_limit_model is not None else base.car_charging_limit
             self.car_charging_from_battery = base.car_charging_from_battery
+            self.car_charging_solar = base.car_charging_solar
+            self.car_charging_plugged = base.car_charging_plugged
+            self.car_charging_solar_max_power = base.car_charging_solar_max_power
+            self.car_charging_solar_min_power = base.car_charging_solar_min_power
+            self.car_charging_solar_power_step = base.car_charging_solar_power_step
+            self.car_charging_solar_limit = base.car_charging_solar_limit
+            self.car_charging_solar_min_soc = base.car_charging_solar_min_soc
+            self.car_charging_solar_export_threshold = base.car_charging_solar_export_threshold
+            # num_cars can be raised without get_car_charging_planned having re-sized the per-car solar lists
+            # (a debug replay or a restored plan does exactly that), so pad them to num_cars with their defaults
+            # rather than letting the per-car loops below - or the kernel context builder - index out of range
+            for name, default in (
+                ("car_charging_solar", False),
+                ("car_charging_plugged", False),
+                ("car_charging_solar_max_power", 7.4),
+                ("car_charging_solar_min_power", 0.0),
+                ("car_charging_solar_power_step", 0.0),
+                ("car_charging_solar_limit", 100.0),
+                ("car_charging_solar_export_threshold", CAR_SOLAR_EXPORT_ALWAYS),
+            ):
+                values = list(getattr(self, name))
+                if len(values) < self.num_cars:
+                    setattr(self, name, values + [default] * (self.num_cars - len(values)))
             self.iboost_enable = base.iboost_enable
             self.iboost_on_export = base.iboost_on_export
             self.iboost_prevent_discharge = base.iboost_prevent_discharge
@@ -522,6 +545,8 @@ class Prediction(PredictionBatch):
         self.predict_iboost_best = {}
         self.predict_carbon_best = {}
         self.predict_clipped_best = {}
+        self.predict_car_solar_best = {}
+        self.predict_car_solar_possible_best = {}
         self.iboost_running = False
         self.iboost_running_solar = False
         self.iboost_running_full = False
@@ -579,6 +604,9 @@ class Prediction(PredictionBatch):
         record_time = {}
         car_soc = self.car_charging_soc[:]
         final_car_soc = car_soc[:]
+        # Sun diverted into each car in the current step, so the planned grid top-up can be held to what the
+        # charger can still deliver on top of it - allocated once, zeroed per step, this is the hot loop
+        car_solar_step = [0.0] * self.num_cars
         charge_rate_now = self.charge_rate_now
         discharge_rate_now = self.discharge_rate_now
         battery_state = "-"
@@ -593,6 +621,7 @@ class Prediction(PredictionBatch):
         iboost_running_solar = self.iboost_running_solar
         iboost_running_full = self.iboost_running_full
         car_load_energy_bypass = 0
+        car_solar_today = 0
 
         # Remove intersecting windows and optimise the data format of the charge/discharge window
         charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
@@ -763,6 +792,7 @@ class Prediction(PredictionBatch):
                     self.predict_iboost_best[minute] = round(iboost_today_kwh, 2)
                     self.predict_carbon_best[minute] = round(carbon_g, 0)
                     self.predict_clipped_best[minute] = round(clipped_today, 2)
+                    self.predict_car_solar_best[minute] = round(car_solar_today, 2)
             else:
                 stamp = ""
 
@@ -794,12 +824,66 @@ class Prediction(PredictionBatch):
 
             # Simulate car charging
             if car_enable:
+                for car_n in range(self.num_cars):
+                    car_solar_step[car_n] = 0.0
+                # Opportunistic solar (sun-following) diversion model - applied BEFORE any planned grid charging so
+                # that free solar is used first and a planned grid top-up only covers the remainder (mirrors EVCC).
+                # The car takes the PV left after the house load is served (true surplus), once the home battery is
+                # above the configured priority SoC, capped at its own solar limit (independent of the grid plan
+                # target). Modelling only - Predbat does not control the car, it only reflects the diverted energy.
+                for car_n in range(self.num_cars):
+                    # Diverting is only worth it while selling the surplus pays less than the cheap charge it
+                    # displaces - see set_car_solar_export_threshold. The default threshold never blocks.
+                    if export_rate > self.car_charging_solar_export_threshold[car_n]:
+                        continue
+                    if self.car_charging_solar[car_n] and self.car_charging_plugged[car_n] and pv_now > 0 and car_soc[car_n] < self.car_charging_solar_limit[car_n]:
+                        # Home battery priority: only divert to the car once the home battery SoC is above the threshold
+                        if soc_max <= 0 or (soc * 100.0 / soc_max) >= self.car_charging_solar_min_soc:
+                            # Everything that gates the diversion is satisfied, so the charger is free to divert here
+                            # even if the surplus turns out to be too small to start it. Recorded separately from the
+                            # energy so the plan can distinguish "allowed, and nothing expected" from "not allowed"
+                            if enable_save_stats:
+                                self.predict_car_solar_possible_best[minute] = True
+                            # Only the PV left after the house load is served is available to the car
+                            surplus = max(pv_now - load_yesterday, 0)
+                            # Available charge power (kW), capped at the maximum diversion power
+                            avail_power = min(surplus * 60.0 / step, self.car_charging_solar_max_power[car_n])
+                            min_power = self.car_charging_solar_min_power[car_n]
+                            power_step = self.car_charging_solar_power_step[car_n]
+                            if avail_power < min_power:
+                                # Below the charger's minimum start power - nothing is diverted
+                                charge_power = 0
+                            elif power_step > 0:
+                                # Real chargers only switch in whole current steps (e.g. 1A), so they charge at the
+                                # largest discrete level at or below the surplus, leaving a small remainder to the battery/export
+                                charge_power = min_power + int((avail_power - min_power) / power_step) * power_step
+                            else:
+                                charge_power = avail_power
+                            car_solar_amount = charge_power * step / 60.0
+                            if car_solar_amount > 0:
+                                # Cap by remaining capacity to the SOLAR limit (battery-side kWh -> PV-side draw via the charging loss)
+                                room = max(self.car_charging_solar_limit[car_n] - car_soc[car_n], 0)
+                                if self.car_charging_loss > 0:
+                                    car_solar_amount = min(car_solar_amount, room / self.car_charging_loss)
+                                else:
+                                    car_solar_amount = min(car_solar_amount, room)
+                                if car_solar_amount > 0:
+                                    pv_now -= car_solar_amount
+                                    car_soc[car_n] += car_solar_amount * self.car_charging_loss
+                                    car_solar_today += car_solar_amount
+                                    car_solar_step[car_n] = car_solar_amount
+
+                # Planned (grid) car charging - tops up toward the plan target (car_charging_limit), after solar
                 car_load, car_rate_slot = in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)
 
                 # Car charging?
                 for car_n in range(self.num_cars):
                     if car_load[car_n] > 0.0:
                         car_load_scale = car_load[car_n] * step / 60.0
+                        if car_solar_step[car_n] > 0:
+                            # One charger, one maximum: whatever mix of sun and grid it runs, it cannot deliver
+                            # more than car_charging_solar_max_power, so the top-up only gets what the sun left
+                            car_load_scale = min(car_load_scale, max(self.car_charging_solar_max_power[car_n] * step / 60.0 - car_solar_step[car_n], 0))
                         car_load_scale = car_load_scale * self.car_charging_loss
                         car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n]), 0)
                         car_soc[car_n] = car_soc[car_n] + car_load_scale
@@ -809,6 +893,8 @@ class Prediction(PredictionBatch):
 
                         if self.car_energy_reported_load:
                             # Only add load if the car is reporting it as load, otherwise its outside the CT Clamp
+                            # car_amount_premium must accumulate either way - it is consumed by the IOG beyond-cap
+                            # premium below, and the grid import still contains the car when it comes from history.
                             car_amount_premium += car_load_scale / self.car_charging_loss
                             load_yesterday += car_amount_premium
                         else:

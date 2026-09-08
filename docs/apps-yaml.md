@@ -2018,6 +2018,19 @@ whether you are within an Octopus Energy "smart charge" slot
 - **car_charging_battery_size** - Car battery size in kWh
 - **car_charging_limit** - Percentage limit the car is set to charge to
 - **car_charging_soc** - Car's current charge level expressed as a percentage
+- **car_charging_solar** has moved to Home Assistant - it is **switch.predbat_car_charging_solar** (one per car, see [customisation](customisation.md)), not an apps.yaml key. The remaining `car_charging_solar_*` keys below describe the charger itself and stay here
+- **car_charging_plugged** - Optional per-car sensor indicating the car is plugged in over the forecast horizon (falls back to car_charging_now)
+- **car_charging_solar_max_power** - Maximum solar diversion power in kW (defaults to the configured car charging rate, uncapped for 3-phase chargers)
+- **car_charging_solar_min_power** - Minimum power in kW before the charger will start diverting solar (e.g. 3-phase 6A)
+- **car_charging_solar_power_step** - Optional discrete charge-power step in kW (default 0 = continuous); models chargers that only switch in whole current steps (1A ~ 0.69kW on 3-phase)
+- **car_charging_solar_limit** - SoC (%) the opportunistic solar charging fills the car to, independent of the grid plan target car_charging_limit (defaults to car_charging_limit). With EVCC this is the loadpoint limit SoC
+- **car_charging_ready_time** - Optional per-car sensor giving the departure time (HH:MM or HH:MM:SS), overriding **select.predbat_car_charging_plan_time** for that car only. `off` means no override. Intended for a charger integration such as [evcc](components.md#evcc-ev-charger-evcc) that knows the real departure plan
+- **evcc_host** - evcc base URL, e.g. `http://192.168.1.50:7070`. Setting it enables the [evcc component](components.md#evcc-ev-charger-evcc)
+- **evcc_api_key** - Optional evcc API key; omit on an unauthenticated LAN instance
+- **evcc_automatic** - Let the evcc component fill in the `car_charging_*` keys. Keys you set yourself are never overwritten
+- **evcc_control** - Initial setting of **switch.predbat_evcc_control**. Letting Predbat set the evcc charging mode is turned on and off per loadpoint with **switch.predbat_evcc_control**/**_1**/**_2**... in the Predbat config, indexed by the car **evcc_loadpoints** maps that loadpoint to (default off)
+- **evcc_loadpoints** - Per-car list of evcc loadpoint ids (1-based) or titles; `off` skips a car
+- **evcc_solar**, **evcc_use_minpv**, **evcc_poll_seconds**, **evcc_mode_refresh_minutes**, **evcc_override_minutes**, **evcc_phase_voltage**, **evcc_soc_max_age_hours**, **evcc_timeout** - see [the component documentation](components.md#evcc-ev-charger-evcc)
 - **ohme_login** - Ohme EV charger account login
 - **ohme_password** - Password for above Ohme account
 - **ohme_automatic_octopus_intelligent** - Controls whether Predbat talks directly to the above Ohme account

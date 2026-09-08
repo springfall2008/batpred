@@ -21,7 +21,7 @@ import copy
 from html import escape as escape_html
 from datetime import timedelta
 from predbat import THIS_VERSION_DISPLAY
-from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, MINUTE_WATT, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, MINUTE_WATT, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE, CAR_SOLAR_EXPORT_ALWAYS, CAR_MODE_NOW, CAR_MODE_SOLAR, CAR_MODE_OFF
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate
 from prediction import Prediction
 
@@ -125,6 +125,102 @@ class Output:
     charging schedules, and financial metric summaries.
     """
 
+    def publish_car_solar_slot(self, car_n, postfix):
+        """
+        Publish whether solar surplus should be diverted to this car right now, returning (on, reason).
+
+        On means the surplus is worth less exported than the charge it displaces, so an external charger
+        (e.g. EVCC) should run in its solar/PV mode. Off means sell the surplus instead and let the planned
+        grid slots - published as binary_sensor.<prefix>_car_charging_slot - cover the car.
+
+        The forecast only diverts to the car once the home battery is above car_charging_solar_min_soc - see
+        Prediction.run_prediction - so below it this must not tell the charger to follow the sun either, or
+        the charger does exactly what the plan has assumed it will not, out of a battery the house still
+        needs. Unlike export_better that needs no fallback plan behind it: below the priority level the
+        surplus belongs in the home battery, which is what the setting means, and the diversion resumes on
+        its own as soon as the battery climbs back above it.
+
+        Only where Predbat is what enforces the number, though. When it came from a charger that applies it
+        itself - evcc's prioritySoc, see EvccAPI.publish_priority_soc - the charger has already stopped
+        diverting, so repeating the decision here wins nothing and costs a needless loadpoint shutdown.
+
+        publish_car_plan runs from fetch_sensor_data, before fetch_inverter_data, so soc_kw is always the
+        previous cycle's - fine in the steady state, but zero on the first run after a restart, which would
+        read as an empty battery and turn a perfectly well charged one off.
+        """
+        if not self.car_charging_solar[car_n]:
+            return False, "solar_disabled"
+
+        threshold = self.car_charging_solar_export_threshold[car_n]
+        export_rate = self.rate_export.get(self.minutes_now, 0)
+        battery_percent = calc_percent_limit(self.soc_kw, self.soc_max)
+        battery_known = (self.soc_max > 0) and (self.soc_kw > 0)
+        battery_low = battery_known and not self.car_charging_solar_min_soc_external and (battery_percent < self.car_charging_solar_min_soc)
+        allowed = self.car_charging_plugged[car_n] and (export_rate <= threshold) and not battery_low
+
+        # Why it is off matters to the caller: "export_better" and "home_battery_low" are decisions to stop
+        # charging from the surplus, and an external charger should be left following the sun for the rest.
+        # export_better is reported whenever it alone would have turned the diversion off, so the battery
+        # reason only appears when the battery is what made the difference.
+        if allowed:
+            reason = "solar"
+        elif not self.car_charging_plugged[car_n]:
+            reason = "not_plugged"
+        elif export_rate > threshold:
+            reason = "export_better"
+        else:
+            reason = "home_battery_low"
+
+        self.dashboard_item(
+            "binary_sensor." + self.prefix + "_car_charging_solar_slot" + postfix,
+            state="on" if allowed else "off",
+            attributes={
+                "friendly_name": "Predbat divert solar to car" + postfix,
+                "reason": reason,
+                "export_rate": dp2(export_rate),
+                "threshold": None if threshold >= CAR_SOLAR_EXPORT_ALWAYS else dp2(threshold),
+                "plugged_in": self.car_charging_plugged[car_n],
+                "home_battery_percent": battery_percent,
+                "home_battery_priority": self.car_charging_solar_min_soc,
+                "icon": "mdi:solar-power-variant",
+            },
+        )
+        return allowed, reason
+
+    def publish_car_charging_mode(self, car_n, postfix, slot, solar_allowed, solar_reason):
+        """
+        Publish the single charging decision for this car: charge now, follow the sun, or do not charge.
+
+        This is the decision an external charger should act on, whatever drives it - the evcc component
+        maps it onto evcc's own modes, and a Home Assistant automation can read it directly. It is one
+        sensor rather than two so the three states cannot be combined into something Predbat never meant.
+
+        Solar is the resting state rather than off, so a charger left alone keeps following the sun and
+        still charges if Predbat stops publishing. Off is reserved for the cases where it is a decision -
+        the surplus is worth more exported, the home battery is below the priority the forecast assumes,
+        or this car does not do solar charging at all. A charger holding its own departure plan keeps it
+        either way: off stops it acting on the plan, it does not delete it.
+        """
+        if slot:
+            mode, reason = CAR_MODE_NOW, "grid_slot"
+        elif solar_allowed:
+            mode, reason = CAR_MODE_SOLAR, "solar"
+        elif solar_reason in ("export_better", "solar_disabled", "home_battery_low"):
+            mode, reason = CAR_MODE_OFF, solar_reason
+        else:
+            mode, reason = CAR_MODE_SOLAR, "idle"
+
+        self.dashboard_item(
+            "sensor." + self.prefix + "_car_charging_mode" + postfix,
+            state=mode,
+            attributes={
+                "friendly_name": "Predbat car charging mode" + postfix,
+                "reason": reason,
+                "icon": "mdi:ev-station",
+            },
+        )
+        return mode, reason
+
     def publish_car_plan(self):
         """
         Publish the car charging plan
@@ -134,6 +230,8 @@ class Output:
         for car_n in range(self.num_cars):
             if car_n > 0:
                 postfix = "_" + str(car_n)
+            solar_allowed, solar_reason = self.publish_car_solar_slot(car_n, postfix)
+            slot = False
             if not self.car_charging_slots[car_n]:
                 self.dashboard_item(
                     "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
@@ -157,8 +255,6 @@ class Output:
                 window = self.car_charging_slots[car_n][0]
                 if self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window["kwh"] > 0:
                     slot = True
-                else:
-                    slot = False
 
                 time_format_time = "%H:%M:%S"
                 car_startt = self.midnight_utc + timedelta(minutes=window["start"])
@@ -208,6 +304,8 @@ class Output:
                         "icon": "mdi:home-lightning-bolt-outline",
                     },
                 )
+
+            self.publish_car_charging_mode(car_n, postfix, slot, solar_allowed, solar_reason)
 
     def publish_rates_export(self):
         """
@@ -1572,13 +1670,26 @@ class Output:
 
             # Car charging?
             car_rate = None
+            car_solar_change = 0.0
             if self.num_cars > 0:
                 car_charging_kwh = self.car_charge_slot_kwh(minute_start, minute_end)
-                car_total += car_charging_kwh
+                # Opportunistic solar diversion modelled in the forecast (cumulative kWh, like iBoost)
+                car_solar_amount = self.predict_car_solar_best.get(minute_relative_start, 0)
+                car_solar_amount_end = self.predict_car_solar_best.get(minute_relative_slot_end, car_solar_amount)
+                car_solar_change = max(car_solar_amount_end - car_solar_amount, 0.0)
+                car_total += car_charging_kwh + car_solar_change
+                # True when the charger was free to divert somewhere in this slot - see prediction.py. A slot
+                # can be green with nothing in it: the surplus was there but too small to start the charger
+                car_solar_possible = any(self.predict_car_solar_possible_best.get(minute, False) for minute in range(minute_relative_start, minute_relative_slot_end, PREDICT_STEP))
                 if car_charging_kwh > 0.0:
-                    car_charging_str = str(car_charging_kwh)
-                    car_color = "FFFF00"
+                    # Planned (grid) charging - shown yellow, includes any solar diverted in the same slot
+                    car_charging_str = str(dp2(car_charging_kwh + car_solar_change))
+                    car_color = "#FFFF00"
                     car_rate = self.car_charge_slot_rate(minute_start, minute_end)
+                elif car_solar_change > 0.0 or car_solar_possible:
+                    # Opportunistic solar diversion, or the chance of it - shown green
+                    car_charging_str = str(dp2(car_solar_change))
+                    car_color = "#AEF8A0"
                 else:
                     car_charging_str = "&#9866;"
                     car_color = "#FFFFFF"
@@ -1779,7 +1890,10 @@ class Output:
                 json_row["extra_load_total"] = dp2(raw_extra_forecast_total)
                 json_row["extra_color"] = extra_color
             if self.num_cars > 0:
-                json_row["car_charging"] = car_charging_kwh
+                # Include the modelled opportunistic solar diversion so the JSON/web plan view matches the HTML cell
+                json_row["car_charging"] = dp2(car_charging_kwh + car_solar_change)
+                json_row["car_solar"] = dp2(car_solar_change)
+                json_row["car_solar_possible"] = car_solar_possible
                 json_row["car_color"] = car_color
                 json_row["car_rate"] = car_rate
                 json_row["car_rate_color"] = car_rate_color if rate_split else None

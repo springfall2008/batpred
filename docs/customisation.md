@@ -299,6 +299,11 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_) - used with Octopus Intelligent to prevent Predbat from assuming the car will be charging when the car is unplugged
 - **binary_sensor.predbat_car_charging_slot** - set to On by Predbat when the car should be charged (Predbat-led charging)
 - **select.predbat_car_charging_plan_time** - the time you want the car to be charged by
+- **switch.predbat_car_charging_solar** - model opportunistic (sun-following) charging for this car, done by a charger that follows the PV surplus itself (`_1`, `_2`, … for further cars). Modelling only - Predbat never commands the car
+- **input_number.predbat_car_charging_solar_min_soc** - home battery SoC threshold before opportunistic solar is diverted to the car
+- **switch.predbat_car_charging_solar_export_smart** - only divert solar to the car while the export rate is at or below the cheapest import before the car must be ready, otherwise sell the surplus and charge from the planned cheap slots
+- **binary_sensor.predbat_car_charging_solar_slot** - set to On by Predbat when solar surplus should be diverted to the car
+- **sensor.predbat_car_charging_mode** - the charging decision for an external charger: `now`, `solar` or `off`, with a `reason` attribute saying why
 - **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
 - **switch.predbat_car_charging_from_battery** - prevent the car from draining the home battery when charging
@@ -306,6 +311,8 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **switch.predbat_car_charging_manual_soc_1/2/3** - ignore the **car_charging_soc** car SoC sensor for cars 1/2/3
 - **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC in kWh (car 0, used if car SoC sensor is not available)
 - **input_number.predbat_car_charging_manual_soc_kwh_1/2/3** - manually maintained car SoC in kWh for cars 1/2/3
+- **switch.predbat_evcc_control** - let Predbat set the evcc charging mode on one evcc loadpoint - the one `evcc_loadpoints` maps car 0 to (**_1/2/3** for further cars). One switch per loadpoint, so a heat pump or immersion heater on another evcc loadpoint is left alone. Only relevant with the [evcc component](components.md#evcc-ev-charger-evcc) configured
+- **switch.predbat_evcc_guest_hold** - hold the home battery while evcc reports a car it could not identify charging, so the guest's charge is bought from the grid
 
 ## Calculation options
 

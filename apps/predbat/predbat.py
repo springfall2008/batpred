@@ -73,8 +73,10 @@ from const import (
     CONFIG_REFRESH_PERIOD,
     INVERTER_QUICK_UPDATE_SECONDS,
     DEBUG_ENABLE_MAX_HOURS,
+    CAR_SOLAR_EXPORT_ALWAYS,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
+from prediction_kernel import KERNEL_MAX_CARS
 import debug_history
 from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths, mask_secret_args, malloc_trim, limit_malloc_arenas, MALLOC_ARENA_LIMIT
 from predheat import PredHeat
@@ -359,6 +361,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.predict_soc = {}
         self.predict_soc_best = {}
         self.predict_iboost_best = {}
+        self.predict_car_solar_best = {}
+        self.predict_car_solar_possible_best = {}
         self.predict_metric_best = {}
         self.metric_min_improvement = 0.0
         self.metric_min_improvement_export = 0.1
@@ -473,6 +477,22 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_soc_next = [None]
         self.car_charging_rate = [7.4]
         self.car_charging_loss = 1.0
+        # Per-car lists are re-sized to num_cars by get_car_charging_planned every fetch cycle, but num_cars can
+        # be raised without one (debug replays, scenario runs), so start them at the kernel's maximum car count
+        self.car_charging_solar = [False] * KERNEL_MAX_CARS
+        self.car_charging_plugged = [False] * KERNEL_MAX_CARS
+        self.car_charging_solar_max_power = [7.4] * KERNEL_MAX_CARS
+        self.car_charging_solar_min_power = [0.0] * KERNEL_MAX_CARS
+        self.car_charging_solar_power_step = [0.0] * KERNEL_MAX_CARS
+        self.car_charging_solar_limit = [100.0] * KERNEL_MAX_CARS
+        self.car_charging_solar_min_soc = 0.0
+        # True once a charger that applies the home battery priority itself has supplied the number
+        self.car_charging_solar_min_soc_external = False
+        # Raised by the evcc component when an unidentified car is charging and its hold switch is on
+        self.evcc_guest_charging = False
+        self.car_charging_solar_export_smart = False
+        # Export rate at or below which solar may be diverted to the car; CAR_SOLAR_EXPORT_ALWAYS = no limit
+        self.car_charging_solar_export_threshold = [CAR_SOLAR_EXPORT_ALWAYS] * KERNEL_MAX_CARS
         self.export_window = []
         self.export_limits = []
         self.export_limits_best = []

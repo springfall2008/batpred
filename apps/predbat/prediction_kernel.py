@@ -31,8 +31,8 @@ from const import PREDICT_STEP, PREDBAT_MAX_CARS
 from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 5
-KERNEL_PARITY_REVISION = 10
+KERNEL_ABI_VERSION = 7
+KERNEL_PARITY_REVISION = 11
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -100,6 +100,12 @@ class PkContext(ctypes.Structure):
         ("car_charging_loss", ctypes.c_double),
         ("car_charging_limit", ctypes.c_double * KERNEL_MAX_CARS),
         ("car_charging_soc", ctypes.c_double * KERNEL_MAX_CARS),
+        ("car_charging_solar_max_power", ctypes.c_double * KERNEL_MAX_CARS),
+        ("car_charging_solar_min_power", ctypes.c_double * KERNEL_MAX_CARS),
+        ("car_charging_solar_power_step", ctypes.c_double * KERNEL_MAX_CARS),
+        ("car_charging_solar_limit", ctypes.c_double * KERNEL_MAX_CARS),
+        ("car_charging_solar_export_threshold", ctypes.c_double * KERNEL_MAX_CARS),
+        ("car_charging_solar_min_soc", ctypes.c_double),
         ("iboost_max_energy", ctypes.c_double),
         ("iboost_max_power", ctypes.c_double),
         ("iboost_min_power", ctypes.c_double),
@@ -124,6 +130,8 @@ class PkContext(ctypes.Structure):
         ("num_cars", ctypes.c_int32),
         ("car_energy_reported_load", ctypes.c_int32),
         ("car_charging_from_battery", ctypes.c_int32),
+        ("car_charging_solar", ctypes.c_int32 * KERNEL_MAX_CARS),
+        ("car_charging_plugged", ctypes.c_int32 * KERNEL_MAX_CARS),
         ("carbon_enable", ctypes.c_int32),
         ("iboost_enable", ctypes.c_int32),
         ("iboost_solar", ctypes.c_int32),
@@ -683,6 +691,14 @@ def create_kernel_context(pred, static_cache=None):
         for car_n in range(num_cars):
             ctx.car_charging_limit[car_n] = pred.car_charging_limit[car_n]
             ctx.car_charging_soc[car_n] = pred.car_charging_soc[car_n]
+            ctx.car_charging_solar[car_n] = 1 if pred.car_charging_solar[car_n] else 0
+            ctx.car_charging_plugged[car_n] = 1 if pred.car_charging_plugged[car_n] else 0
+            ctx.car_charging_solar_max_power[car_n] = pred.car_charging_solar_max_power[car_n]
+            ctx.car_charging_solar_min_power[car_n] = pred.car_charging_solar_min_power[car_n]
+            ctx.car_charging_solar_power_step[car_n] = pred.car_charging_solar_power_step[car_n]
+            ctx.car_charging_solar_limit[car_n] = pred.car_charging_solar_limit[car_n]
+            ctx.car_charging_solar_export_threshold[car_n] = pred.car_charging_solar_export_threshold[car_n]
+        ctx.car_charging_solar_min_soc = pred.car_charging_solar_min_soc
         ctx.iboost_max_energy = pred.iboost_max_energy
         ctx.iboost_max_power = pred.iboost_max_power
         ctx.iboost_min_power = pred.iboost_min_power
@@ -785,6 +801,8 @@ def reset_kernel_run_state(pred):
     pred.predict_iboost_best = {}
     pred.predict_carbon_best = {}
     pred.predict_clipped_best = {}
+    pred.predict_car_solar_best = {}
+    pred.predict_car_solar_possible_best = {}
     pred.iboost_running = False
     pred.iboost_running_solar = False
     pred.iboost_running_full = False

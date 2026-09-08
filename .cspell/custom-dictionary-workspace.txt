@@ -158,6 +158,7 @@ docstrings
 dstamp
 dstart
 dwindow
+Easee
 eauth
 echargingpile
 Eddi
@@ -196,6 +197,7 @@ etoday
 etok
 euids
 EVAC
+evcc
 EVDC
 evergen
 evilspringfall
@@ -334,6 +336,8 @@ linebreak
 linestyle
 loadml
 loadmlpower
+loadpoint
+loadpoints
 loadspower
 localfolder
 locationless
@@ -367,6 +371,7 @@ middlebox
 middleboxes
 minb
 minmax
+minpv
 minsoc
 minsocongrid
 minuteb
@@ -448,6 +453,7 @@ oversizing
 overvoltage
 ownerapi
 parseable
+Passat
 pbat
 pbgw
 pcharging
@@ -458,6 +464,7 @@ perc
 percnt
 peterhaban
 pgrid
+PHEV
 photovoltaics
 pitem
 pkwh

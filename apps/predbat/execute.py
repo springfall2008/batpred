@@ -601,6 +601,29 @@ class Execute:
                                         status_hold_car = ", Hold for car"
                             break
 
+            # An unidentified car charging? Predbat has planned nothing for it - see EvccAPI.guest_hold -
+            # so hold the battery and let somebody else's charge come off the grid. Deliberately not
+            # gated on car_charging_from_battery: that switch is about the user's own planned car.
+            if self.set_charge_window and self.evcc_guest_charging and not carHolding and not isExporting:
+                if inverter.inv_has_timed_pause:
+                    if resetPause:
+                        inverter.adjust_pause_mode(pause_discharge=True)
+                        resetPause = False
+                else:
+                    if resetDischarge:
+                        inverter.adjust_discharge_rate(0)
+                        resetDischarge = False
+                    if self.set_reserve_enable:
+                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                        resetReserve = False
+                carHolding = True
+                self.log("Disabling battery discharge whilst an unidentified car is charging")
+                if ("Hold for car" not in status) and (status_hold_car == ""):
+                    if status == "Demand":
+                        status = "Hold for car"
+                    else:
+                        status_hold_car = ", Hold for car"
+
             # iBoost running?
             boostHolding = False
             if self.set_charge_window and self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full:

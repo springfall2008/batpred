@@ -167,6 +167,7 @@ def run_execute_test(
     soc_max=10,
     car_charging_from_battery=False,
     car_energy_reported_load=True,
+    evcc_guest_charging=False,
     read_only=False,
     set_read_only_axle=False,
     set_soc_enable=True,
@@ -338,6 +339,7 @@ def run_execute_test(
     my_predbat.set_discharge_during_charge = set_discharge_during_charge
     my_predbat.car_charging_from_battery = car_charging_from_battery
     my_predbat.car_energy_reported_load = car_energy_reported_load
+    my_predbat.evcc_guest_charging = evcc_guest_charging
     my_predbat.car_charging_soc[0] = car_soc
 
     # Shift on plan?
@@ -2375,6 +2377,39 @@ def run_execute_tests(my_predbat):
 
     # Discharge-hold applies regardless of car_energy_reported_load; that switch controls whether EV
     # energy is included in the CT-clamp house-load model, not whether we enforce the discharge hold.
+    # A car evcc could not identify, drawing power with no slot of its own: the battery is held so
+    # somebody else's charge comes off the grid. car_charging_from_battery is left at its permissive
+    # setting to show the guest hold does not depend on it
+    failed |= run_execute_test(
+        my_predbat,
+        "no_discharge_guest_car",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=100,
+        car_charging_from_battery=True,
+        evcc_guest_charging=True,
+    )
+    if failed:
+        return failed
+
+    # The same setup with no guest charging must not hold anything - the pair isolates the flag
+    failed |= run_execute_test(
+        my_predbat,
+        "no_discharge_guest_car_absent",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Demand",
+        assert_pause_discharge=False,
+        car_charging_from_battery=True,
+        evcc_guest_charging=False,
+    )
+    if failed:
+        return failed
+
     failed |= run_execute_test(
         my_predbat,
         "no_discharge_car_demand1b",
