@@ -159,6 +159,11 @@ DICTIONARY_SCOPE = f"//{(CLONE_DIR / DICTIONARY_RELPATH).relative_to('/')}"
 JOURNAL_BRANCH_PREFIX = "bot/debug-journal-"
 # Branch prefixes the PR flow may create, matching issue-pr/SKILL.md.
 PR_BRANCH_PREFIXES = ("fix/", "feat/")
+# How many times one issue may fail triage before the daemon gives up and moves past it.
+# Retrying is worth doing - #4899 and #5003 each failed twice and succeeded on the third
+# attempt - but it has to be bounded: with no limit, #5004 burned a full 60-turn run every
+# ten minutes on 2026-09-08 and never advanced.
+TRIAGE_MAX_ATTEMPTS = 3
 # The clone's own refusal to update main, and the only layer that actually enforces it.
 # Permission rules are prefix globs over a command string: they cannot see what a ref
 # expression resolves to, so "git push origin HEAD:main" reads to them as an ordinary
@@ -610,6 +615,32 @@ def mark_pr_opened(issue_number):
         flag_pr_for_review(pr_number)
 
 
+def mark_triage_failed(issue_number, attempts):
+    """Note on an issue that triage never completed, label it, and let the queue move on.
+
+    The watermark advances past the issue afterwards, so nothing re-triages it by itself.
+    BOT_REVIEW is the documented way back in - that is the label the follow-up flow watches.
+    """
+    subprocess.run(
+        [
+            "gh",
+            "issue",
+            "comment",
+            str(issue_number),
+            "--repo",
+            REPO,
+            "--body",
+            f"Automated triage did not complete for this issue after {attempts} attempts - see the triage bot's logs for details. "
+            "It has been skipped so that it does not hold up triage of later issues. Add the `BOT_REVIEW` label to have the bot look at it again.",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--add-label", "BOT_FAILED"],
+        check=True,
+    )
+
+
 def mark_pr_failed(issue_number):
     """Swap BOT_PR for BOT_PR_FAILED so a failed run isn't retried every poll cycle."""
     subprocess.run(
@@ -882,8 +913,12 @@ def triage(issue_number):
             # directory in scope for Read/Grep as well as for the Bash rules above.
             "--add-dir",
             str(SCRATCH_DIR),
+            # Raised from 60 on 2026-09-08: triage had the smallest budget of any flow while
+            # doing the most open-ended work, and five separate issues have exhausted it
+            # (#4899, #4900, #4984, #5003, #5004). A long issue body plus a debug-file replay
+            # spends turns quickly.
             "--max-turns",
-            "60",
+            "100",
             # Client-side token-usage estimate, not a real spend cap under subscription
             # auth (see agent-sdk/cost-tracking) - just a circuit-breaker against a
             # runaway invocation, sized generously since one issue can need several
@@ -1352,6 +1387,42 @@ def cleanup_pr(pr_number):
     print(f"[cleanup-pr] PR #{pr_number}: exited {result.returncode}", flush=True)
 
 
+def process_new_issue(issue, state):
+    """Triage one new issue. Returns False when the caller should stop for this poll cycle.
+
+    Previously the triage call sat bare in the main loop, so a failure propagated out of the
+    whole `try` and took the rest of the cycle with it: the same issue was retried on every
+    poll forever, and the PR, review, cleanup and journal flows behind it never ran at all.
+    #5004 did exactly that on 2026-09-08 - ten consecutive 60-turn runs, watermark stuck.
+
+    Failures are counted instead. Below the limit we stop the issue loop and try again next
+    cycle, because retrying genuinely works (#4899 and #5003 both passed on their third go)
+    and because the watermark is a high-water mark - skipping ahead to a later issue would
+    strand this one permanently. Once the attempts are spent the issue is marked and the
+    watermark moves past it. Either way the rest of the poll cycle now runs.
+    """
+    number = issue["number"]
+    print(f'[triage] issue #{number}: "{issue["title"]}" - {issue_url(number)}', flush=True)
+    sync_repo()
+    reset_scratch()
+    attempts = state.setdefault("triage_attempts", {})
+    try:
+        triage(number)
+    except subprocess.CalledProcessError as exc:
+        count = attempts.get(str(number), 0) + 1
+        attempts[str(number)] = count
+        if count < TRIAGE_MAX_ATTEMPTS:
+            print(f"[triage] issue #{number}: failed ({exc}) - attempt {count} of {TRIAGE_MAX_ATTEMPTS}, retrying next cycle", flush=True)
+            save_state(state)
+            return False
+        print(f"[triage] issue #{number}: failed {count} times - marking it and moving on", flush=True)
+        mark_triage_failed(number, count)
+    attempts.pop(str(number), None)
+    state["last_processed"] = number
+    save_state(state)
+    return True
+
+
 def process_bot_cleanup_pr(pr):
     """Run the BOT_CLEANUP flow for one PR: address review feedback and CI failures,
     then remove the trigger label. A failed run swaps to BOT_FAILED instead, with an
@@ -1414,12 +1485,11 @@ def main():
     while True:
         try:
             for issue in fetch_new_issues(state["last_processed"]):
-                print(f'[triage] issue #{issue["number"]}: "{issue["title"]}" - {issue_url(issue["number"])}', flush=True)
-                sync_repo()
-                reset_scratch()
-                triage(issue["number"])
-                state["last_processed"] = issue["number"]
-                save_state(state)
+                if not process_new_issue(issue, state):
+                    # Retry pending on this issue. Stop the issue loop to keep the watermark
+                    # ordering intact, but fall through to the flows below rather than
+                    # abandoning the whole cycle.
+                    break
             for issue in fetch_bot_pr_issues():
                 process_bot_pr_issue(issue)
             for issue in fetch_bot_review_issues():

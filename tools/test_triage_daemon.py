@@ -841,6 +841,103 @@ class OllamaContextWindowTests(unittest.TestCase):
         self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1000000")
 
 
+class ProcessNewIssueTests(unittest.TestCase):
+    """The issue-triage orchestrator. Before it existed, triage() sat bare in the main loop
+    and a failure escaped the whole poll cycle - retrying the same issue forever while the
+    PR, review, cleanup and journal flows behind it never ran (#5004, 2026-09-08)."""
+
+    def setUp(self):
+        """Patch every collaborator process_new_issue() calls."""
+        self.patches = {}
+        for name in ["sync_repo", "reset_scratch", "triage", "mark_triage_failed", "save_state"]:
+            patcher = patch.object(triage_daemon, name)
+            self.patches[name] = patcher.start()
+            self.addCleanup(patcher.stop)
+        self.issue = {"number": 5004, "title": "Ghost EV load"}
+
+    def _fail(self):
+        self.patches["triage"].side_effect = subprocess.CalledProcessError(1, ["claude"])
+
+    def test_a_successful_triage_advances_the_watermark(self):
+        """The ordinary path has to keep working."""
+        state = {"last_processed": 5003}
+        self.assertTrue(triage_daemon.process_new_issue(self.issue, state))
+        self.assertEqual(state["last_processed"], 5004)
+        self.patches["mark_triage_failed"].assert_not_called()
+
+    def test_a_failure_does_not_escape_to_the_caller(self):
+        """The regression itself: the exception used to abandon the whole poll cycle, so the
+        cleanup, review and journal flows queued behind this issue never ran."""
+        self._fail()
+        state = {"last_processed": 5003}
+        try:
+            result = triage_daemon.process_new_issue(self.issue, state)
+        except subprocess.CalledProcessError:
+            self.fail("process_new_issue must not let a failed triage escape the poll cycle")
+        self.assertFalse(result)
+
+    def test_a_failure_below_the_limit_keeps_the_watermark_and_counts_the_attempt(self):
+        """Retrying is worth doing - #4899 and #5003 both passed on their third attempt - so
+        the issue stays at the head of the queue until its attempts are spent."""
+        self._fail()
+        state = {"last_processed": 5003}
+        self.assertFalse(triage_daemon.process_new_issue(self.issue, state))
+        self.assertEqual(state["last_processed"], 5003)
+        self.assertEqual(state["triage_attempts"]["5004"], 1)
+        self.patches["mark_triage_failed"].assert_not_called()
+
+    def test_the_last_attempt_marks_the_issue_and_moves_past_it(self):
+        """Unbounded retrying is what burned a full run every ten minutes."""
+        self._fail()
+        state = {"last_processed": 5003, "triage_attempts": {"5004": triage_daemon.TRIAGE_MAX_ATTEMPTS - 1}}
+        self.assertTrue(triage_daemon.process_new_issue(self.issue, state))
+        self.assertEqual(state["last_processed"], 5004)
+        self.patches["mark_triage_failed"].assert_called_once_with(5004, triage_daemon.TRIAGE_MAX_ATTEMPTS)
+        self.assertNotIn("5004", state["triage_attempts"])
+
+    def test_a_success_after_earlier_failures_clears_the_counter(self):
+        """Otherwise a later unrelated failure would inherit a nearly-spent budget."""
+        state = {"last_processed": 5003, "triage_attempts": {"5004": 2}}
+        self.assertTrue(triage_daemon.process_new_issue(self.issue, state))
+        self.assertNotIn("5004", state["triage_attempts"])
+        self.assertEqual(state["last_processed"], 5004)
+
+    def test_a_pending_retry_is_persisted(self):
+        """The count has to survive a daemon restart, or the limit never binds."""
+        self._fail()
+        state = {"last_processed": 5003}
+        triage_daemon.process_new_issue(self.issue, state)
+        self.patches["save_state"].assert_called_once_with(state)
+
+    def test_state_without_the_counter_still_works(self):
+        """Existing state.json files predate triage_attempts."""
+        self._fail()
+        state = {"last_processed": 5003}
+        triage_daemon.process_new_issue(self.issue, state)
+        self.assertEqual(state["triage_attempts"], {"5004": 1})
+
+
+class MarkTriageFailedTests(unittest.TestCase):
+    """What a maintainer sees when the bot gives up on an issue."""
+
+    def test_comments_and_labels_the_issue(self):
+        """Silently skipping would leave the issue looking untriaged with no explanation."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            triage_daemon.mark_triage_failed(5004, 3)
+            commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertTrue(any("comment" in c for c in commands))
+        label_cmd = next(c for c in commands if "edit" in c)
+        self.assertIn("BOT_FAILED", label_cmd)
+
+    def test_the_comment_says_how_to_retry(self):
+        """The watermark has moved past the issue, so nothing re-triages it on its own."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            triage_daemon.mark_triage_failed(5004, 3)
+            body = next(c for c in (call.args[0] for call in mock_run.call_args_list) if "comment" in c)[-1]
+        self.assertIn("BOT_REVIEW", body)
+        self.assertTrue(body.startswith("Automated "))
+
+
 class EffectiveOllamaModelTests(unittest.TestCase):
     """Tests for effective_ollama_model(), new - the priority logic behind --ollama
     (every claude invocation) vs --ollama_review (review-only invocations)."""
