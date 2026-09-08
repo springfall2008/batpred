@@ -1767,8 +1767,6 @@ class FoxAPI(ComponentBase, OAuthMixin):
         entity_name_sensor = f"sensor.{self.prefix}_fox"
         entity_name_number = f"number.{self.prefix}_fox"
         entity_name_select = f"select.{self.prefix}_fox"
-        entity_name_switch = f"switch.{self.prefix}_fox"
-        entity_name_binary_sensor = f"binary_sensor.{self.prefix}_fox"
         for device in self.device_list:
             sn = device.get("deviceSN", None)
             detail = self.device_detail.get(sn, {})

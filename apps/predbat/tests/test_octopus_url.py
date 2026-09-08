@@ -640,6 +640,41 @@ def _test_get_saving_session_data(my_predbat):
             else:
                 print("PASS: All event data fields correctly populated")
 
+    # Test 8: Region-restricted events filtered against the account's own region (issue #4612)
+    print("\n*** Test 8: Region-restricted events filtered against the account's own region ***")
+    api.saving_sessions = {
+        "account": {"hasJoinedCampaign": True, "joinedEvents": [], "signedUpMeterPoint": {"regionId": 10}},
+        "events": [
+            {"id": "in_region", "code": "IN_REGION", "startAt": "2024-06-16T17:00:00+00:00", "endAt": "2024-06-16T18:00:00+00:00", "rewardPerKwhInOctoPoints": 100, "targetRegion": [{"regionId": 10}]},
+            {"id": "out_of_region", "code": "OUT_OF_REGION", "startAt": "2024-06-16T17:00:00+00:00", "endAt": "2024-06-16T18:00:00+00:00", "rewardPerKwhInOctoPoints": 100, "targetRegion": [{"regionId": 3}, {"regionId": 7}]},
+            {"id": "nationwide", "code": "NATIONWIDE", "startAt": "2024-06-16T17:00:00+00:00", "endAt": "2024-06-16T18:00:00+00:00", "rewardPerKwhInOctoPoints": 100, "targetRegion": []},
+        ],
+    }
+
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        available, joined = api.get_saving_session_data()
+
+    available_codes = sorted(event["code"] for event in available)
+    if available_codes != ["IN_REGION", "NATIONWIDE"]:
+        print("ERROR: Expected only IN_REGION and NATIONWIDE events, got: {}".format(available_codes))
+        failed = True
+    else:
+        print("PASS: Out-of-region event excluded, in-region and nationwide events kept")
+
+    # An account with no signedUpMeterPoint (region unknown) can't confirm eligibility for any
+    # region-restricted event, so those are excluded (safer than risking a rejected join) - but
+    # nationwide events (no targetRegion at all) were never restricted, so they still show up.
+    print("\n*** Test 8b: No account region known - region-restricted events excluded, nationwide kept ***")
+    api.saving_sessions["account"]["signedUpMeterPoint"] = None
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        available, joined = api.get_saving_session_data()
+    available_codes = sorted(event["code"] for event in available)
+    if available_codes != ["NATIONWIDE"]:
+        print("ERROR: Expected only NATIONWIDE when account region is unknown, got: {}".format(available_codes))
+        failed = True
+    else:
+        print("PASS: Region-restricted events excluded, nationwide event kept, when account region is unknown")
+
     if not failed:
         print("\n**** All get_saving_session_data tests PASSED ****")
 

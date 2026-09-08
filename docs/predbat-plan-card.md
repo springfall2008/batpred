@@ -53,9 +53,9 @@ Rate symbols (import and export):
 
 - ? &#8518; - Rate that has been modified based on **input_number.predbat_metric_future_rate_offset_import** or **input_number.predbat_metric_future_rate_offset_export**
 - ? &#x2696; - Rate that has been estimated using future rate estimation data (e.g. Nordpool)
-- &#61; - Rate that has been overridden by the user's apps.yaml
-- &#177; - Rate that has been adjusted with a rate offset in the user's apps.yaml
-- &dollar; - Rate that has been adjusted for an Octopus Saving session
+- &#61; - Rate that has been overridden by the user's `apps.yaml`
+- &#177; - Rate that has been adjusted with a rate offset in the user's `apps.yaml`
+- &dollar; - Rate that has been adjusted for an Octopus Saving session or Axle event
 - ? - Rate that has not yet been defined and the previous day's data was used instead
 
 Battery SoC symbols:
@@ -159,6 +159,8 @@ then golden orange from 200 upwards; yellow from 120; green from 40 and light gr
 This column will only be shown if *switch.predbat_carbon_enable* is set to True.<BR>
 The carbon amount in kg will be coloured according to the direction of travel over the slot; if the carbon value rises by 10kg or more it will be orange with an upward arrow;
 if falling by 10kg or more it will be green with a downwards arrow, and in the middle, white with a horizontal arrow.
+
+- **Debug** - (Only shown on the plan's [History view](web-interface.md#plan-view)) A download link to the [debug history snapshot](customisation.md#debug-history) captured for that exact time slot, if one was retained, labelled with the time it was taken. Empty if no snapshot was captured for that slot.
 
 ## Debug mode for Predbat Plan
 

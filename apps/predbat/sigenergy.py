@@ -146,6 +146,11 @@ SIGENERGY_MQTT_TOPIC_ALARM = "openapi/alarm/{app_key}/{system_id}"      # alarm 
 SIGENERGY_MQTT_TOPIC_COMMAND = "openapi/instruction/command"            # battery command publish
 SIGENERGY_MQTT_TOPIC_MODE = "openapi/instruction/mode"                  # V1 operating mode switch (MQTT)
 
+# Payload keys masked before a payload is written to the log. The MQTT command payloads
+# carry the live accessToken (it doubles as the MQTT broker password), and Predbat logs are
+# routinely pasted into GitHub issues, so anything credential-bearing has to be masked first.
+SIGENERGY_LOG_REDACT_KEYS = ("accessToken", "refreshToken", "appKey", "appSecret", "password", "token", "key")
+
 # Operating mode enums (REST mode switch endpoint — MSC and FFG only; NBI is not used)
 SIGENERGY_MODE_MSC = 0   # Maximum Self-Consumption (eco)
 SIGENERGY_MODE_FFG = 5   # Fully Feed-in to Grid
@@ -466,7 +471,7 @@ class SigenergyAPI(ComponentBase):
             "Content-Type": "application/json",
         }
 
-        self.log("Requesting {} {} with params={} json={}".format(method, path, params, json_data))
+        self.log("Requesting {} {} with params={} json={}".format(method, path, self.redact(params), self.redact(json_data)))
 
         for attempt in range(retries):
             await self._enforce_rate_limit()
@@ -508,7 +513,7 @@ class SigenergyAPI(ComponentBase):
                             self.log("Warn: SigenergyAPI: Failed to decode response from {}: {}".format(path, e))
                             return None
 
-                        self.log("SigenergyAPI: Response from {} {}: {}".format(method, path, body))
+                        self.log("SigenergyAPI: Response from {} {}: {}".format(method, path, self.redact(body)))
 
                         code = body.get("code", -1)
                         if code != 0:
@@ -692,7 +697,20 @@ class SigenergyAPI(ComponentBase):
         bat_soc = _safe_float(rt.get("batSoc", 0))
         # batPower: realtimeInfo convention is positive=discharging, negative=charging.
         bat_power_kw = _safe_float(rt.get("batPower", 0))
-        pv_power_kw = _safe_float(rt.get("pvPower", 0))
+        # PV power is "pVPower" on this endpoint - capital V, unlike every other pv* field beside it
+        # (pvEnergyDaily, pvTotalPower) and unlike the MQTT period topic's "PV power". Reading the
+        # natural-looking "pvPower" silently yielded 0 forever, which is #4663: PV showed a flat 0W
+        # while the native app showed live generation, and the power-flow diagram displayed an
+        # impossible balance (battery charging hard with nothing coming in).
+        #
+        # pvTotalPower is present too but lags - across consecutive samples it held 4.38 while the
+        # string data (pV1/pV2 voltage x current) rose 4.26 -> 4.33 -> 4.67kW and pVPower tracked it
+        # at 4.40 -> 4.66 -> 5.00kW. Fall back through the other spellings only if pVPower is absent.
+        pv_power_kw = 0.0
+        for pv_key in ("pVPower", "pvTotalPower", "pvPower"):
+            if pv_key in rt:
+                pv_power_kw = _safe_float(rt[pv_key])
+                break
         # activePower: positive=export (net generation to grid), negative=import.
         # Maps directly to gridPower in the Predbat convention (positive=export).
         grid_power_kw = _safe_float(rt.get("activePower", 0))
@@ -1007,6 +1025,23 @@ class SigenergyAPI(ComponentBase):
         self._tls_context = tls_context
         return tls_context
 
+    @staticmethod
+    def redact(payload):
+        """Return payload with credential-bearing keys masked, for safe logging.
+
+        Recursive over dicts and common sequences. DeyeAPI/SunsynkAPI recurse over dicts + lists;
+        Sigenergy MQTT command payloads nest per-system commands one level down inside a list,
+        so a top-level-only rewrite would still leak anything a future payload carries there.
+        Tuples are included because json.dumps() serialises tuples as JSON arrays.
+        Sets/frozen sets are handled for log safety, even though json.dumps() does not
+        serialise them by default.
+        """
+        if isinstance(payload, dict):
+            return {key: ("<redacted>" if key in SIGENERGY_LOG_REDACT_KEYS else SigenergyAPI.redact(value)) for key, value in payload.items()}
+        if isinstance(payload, (list, tuple, set, frozenset)):
+            return [SigenergyAPI.redact(value) for value in payload]
+        return payload
+
     async def _publish_mqtt(self, topic, payload_dict):
         """Publish a JSON payload to the Sigenergy MQTT broker.
 
@@ -1034,7 +1069,7 @@ class SigenergyAPI(ComponentBase):
                 keepalive=30,
             ) as client:
                 await client.publish(topic, payload=json.dumps(payload_dict), qos=1)
-            self.log("SigenergyAPI: MQTT published to {} - {}".format(topic, payload_dict))
+            self.log("SigenergyAPI: MQTT published to {} - {}".format(topic, self.redact(payload_dict)))
             return True
         except Exception as e:
             self.log("Warn: SigenergyAPI: MQTT publish to {} failed: {}".format(topic, e))
@@ -1200,8 +1235,10 @@ class SigenergyAPI(ComponentBase):
         last known value of every raw field) rather than used on its own —
         otherwise any field that hasn't changed recently would read back as 0.
         Recomputes and overwrites ``self.energy_flow[system_id]`` from that merged
-        state. The ``period`` message is broadcast every ~5 s by the broker and
-        carries inverter and storage power/SOC values.
+        state, except for fields this system has never reported at all, which keep
+        whatever the REST poll last put there (see #4663). The ``period`` message is
+        broadcast every ~5 s by the broker and carries inverter and storage
+        power/SOC values.
 
         Field sign convention matches Predbat's own battery_power/grid_power convention:
           batteryPower — positive = discharging, negative = charging
@@ -1246,31 +1283,46 @@ class SigenergyAPI(ComponentBase):
         raw = self.mqtt_period_raw.setdefault(system_id, {})
         raw.update(value_dict)
 
+        # A field the broker has *never* sent is still absent from the merged state, and defaulting
+        # it to 0 here would overwrite a good value the REST poll already put in energy_flow with a
+        # fabricated zero. Seen live in #4663: period messages carrying only "PV power" reset SoC to
+        # 0%, which made Predbat replan against an empty battery mid-export. Keep the last known
+        # value for anything this system has not actually reported yet.
+        previous_flow = self.energy_flow.get(system_id, {})
+        previous_status = self.system_status.get(system_id, {})
+
+        def _field(raw_key, previous, flow_key, scale=1.0, negate=False):
+            """Scaled value of raw_key, or the value already held for flow_key if never reported."""
+            if raw_key not in raw:
+                return previous.get(flow_key, 0.0)
+            value = _safe_float(raw[raw_key]) * scale
+            return -value if negate else value
+
         # Note: storageChargeDischargePowerW is negative when discharging, convert to Predbat
-        bat_power_kw = -_safe_float(raw.get("storageChargeDischargePowerW", 0)) / 1000.0
-        pv_power_kw = _safe_float(raw.get("PV power", 0)) / 1000.0
+        bat_power_kw = _field("storageChargeDischargePowerW", previous_flow, "batteryPower", scale=1 / 1000.0, negate=True)
+        pv_power_kw = _field("PV power", previous_flow, "pvPower", scale=1 / 1000.0)
         # Convert grid power, from positive=import to positive=export (same as Predbat)
-        grid_power_kw = -_safe_float(raw.get("gridActivePowerW", 0)) / 1000.0
+        grid_power_kw = _field("gridActivePowerW", previous_flow, "gridPower", scale=1 / 1000.0, negate=True)
         # Energy balance in Predbat convention (bat: +discharge/-charge, grid: +export/-import):
         # load = pv + battery_discharge - grid_export
         load_power_kw = pv_power_kw + bat_power_kw - grid_power_kw
 
         flow = {
-            "batterySoc": _safe_float(raw.get("storageSOC%", 0)),
+            "batterySoc": _field("storageSOC%", previous_flow, "batterySoc"),
             "batteryPower": bat_power_kw,
             "pvPower": pv_power_kw,
             "gridPower": grid_power_kw,
             "loadPower": max(0.0, load_power_kw),
             "evPower": 0.0,
-            "inverterPower": _safe_float(raw.get("inverterActivePowerW", 0)) / 1000.0,
+            "inverterPower": _field("inverterActivePowerW", previous_flow, "inverterPower", scale=1 / 1000.0),
         }
         flow_status = {
-            "chargeCapacity": _safe_float(raw.get("storageChargeCapacityWh", 0)) / 1000.0,
-            "dischargeCapacity": _safe_float(raw.get("storageDischargeCapacityWh", 0)) / 1000.0,
-            "ratedChargePower": _safe_float(raw.get("batteryMaxChargePowerW", 0)) / 1000.0,
-            "ratedDischargePower": _safe_float(raw.get("batteryMaxDischargePowerW", 0)) / 1000.0,
-            "operationalMode": _safe_float(raw.get("operationalMode", 0)),
-            "systemStatus": _safe_float(raw.get("systemStatus", 0)),
+            "chargeCapacity": _field("storageChargeCapacityWh", previous_status, "chargeCapacity", scale=1 / 1000.0),
+            "dischargeCapacity": _field("storageDischargeCapacityWh", previous_status, "dischargeCapacity", scale=1 / 1000.0),
+            "ratedChargePower": _field("batteryMaxChargePowerW", previous_status, "ratedChargePower", scale=1 / 1000.0),
+            "ratedDischargePower": _field("batteryMaxDischargePowerW", previous_status, "ratedDischargePower", scale=1 / 1000.0),
+            "operationalMode": _field("operationalMode", previous_status, "operationalMode"),
+            "systemStatus": _field("systemStatus", previous_status, "systemStatus"),
         }
         self.energy_flow[system_id] = flow
         self.system_status[system_id] = flow_status
@@ -1444,6 +1496,9 @@ class SigenergyAPI(ComponentBase):
                         # Parse topic: openapi/{type}/{app_key}/{system_id}
                         topic_str = str(message.topic)
                         parts = topic_str.split("/")
+                        # The topic embeds app_key (the MQTT broker username), so mask it before
+                        # any log line prints the topic — same leak class as the publish payload.
+                        safe_topic = topic_str.replace(self.app_key, "<redacted>") if self.app_key else topic_str
                         # Expected: ['openapi', type, app_key, system_id]
                         if len(parts) < 4:
                             continue
@@ -1455,7 +1510,7 @@ class SigenergyAPI(ComponentBase):
                         try:
                             payload = json.loads(raw.decode("utf-8", errors="replace"))
                         except (json.JSONDecodeError, ValueError):
-                            self.log("Warn: SigenergyAPI: MQTT non-JSON payload on {}: {}".format(topic_str, raw[:120]))
+                            self.log("Warn: SigenergyAPI: MQTT non-JSON payload on {}: {}".format(safe_topic, raw[:120]))
                             continue
 
                         # Each message is a list of device-level entries; process each
@@ -1469,7 +1524,7 @@ class SigenergyAPI(ComponentBase):
                                 continue
                             self.last_mqtt_update[entry_sid] = time.time()
                             value_dict = entry.get("value", {})
-                            self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(topic_str, entry_sid, msg_type, value_dict))
+                            self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(safe_topic, entry_sid, msg_type, value_dict))
                             if msg_type == "period":
                                 self._handle_mqtt_period(entry_sid, value_dict)
                                 if self.api_started:
@@ -2148,6 +2203,7 @@ class SigenergyAPI(ComponentBase):
                 new_mode = "export"
                 active_mode = SIGENERGY_ACTIVE_MODE_DISCHARGE
                 discharge_priority_type = "PV"
+                charge_power_kw = export_rate_w / 1000.0
         elif charge_window and charge_start_dt and charge_end_dt:
             duration_min = max(1, int((charge_end_dt - now).total_seconds() / 60))
             effective_target = max(charge_target_soc, reserve_soc)

@@ -1645,7 +1645,7 @@ SERVICE_REGISTER_LIST:
 args:
   auto_restart:
   - shell: rm -rf /homeassistant/GivTCP/*.pkl
-  - entity_id: switch.givtcp_{geserial}_reboot_addon
+  - entity_id: switch.givtcp_{geserial}_reboot_addon.   # switch name remains 'reboot_addon' in GivTCP so not changed to new HA App naming convention
     service: switch/turn_on
   balance_inverters_seconds: 60
   battery_charge_power_curve: &id001
@@ -68386,7 +68386,7 @@ config_index:
   update: *id110
   version: *id111
 config_root: /config
-config_root_p: /addon_configs/6adb4f0d_predbat
+config_root_p: /app_configs/6adb4f0d_predbat
 cost_today_sofar: 172.64380255000106
 cost_total_car: 0.0
 cost_yesterday_car: 0.0

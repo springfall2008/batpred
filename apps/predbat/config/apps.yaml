@@ -45,6 +45,9 @@ pred_bat:
   #
   # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
   #
+  # Only needed if you are NOT using givtcp_rest below - with REST set Predbat publishes these four
+  # itself from GivTCP's own daily totals and points itself at them.
+  #
   load_today:
     - sensor.givtcp_{geserial}_load_energy_today_kwh
   import_today:
@@ -88,19 +91,25 @@ pred_bat:
     - 'http://homeassistant.local:6345'
     - 'http://homeassistant.local:6346'
 
+  # Set this to False to keep control of apps.yaml yourself - Predbat still publishes its GivTCP
+  # entities, but stops pointing the settings below at them, so you can name them by hand or point
+  # a setting somewhere else entirely. Defaults to True.
+  #givtcp_automatic: False
+
   # When enabled automatic restart will restart the app if communication fails
   # Example below is auto-restart for GivTCP app itself
   #auto_restart:
   #  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
-  #  - service: hassio/addon_restart
-  #    addon: 533ea71a_givtcp
+  #  - service: hassio/app_restart
+  #    app: 533ea71a_givtcp
   #
   #  Example on how to restart the inverter via GivTCP
   #  - service: button.press
   #    entity_id: button.givtcp_{geserial}_reboot_invertor
 
-  # If not using REST then instead set the Control here (one for each inverter)
-  # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
+  # Only needed if you are NOT using givtcp_rest above - with REST set, Predbat publishes and
+  # configures all of these itself and anything you put here is overridden.
+  # Set one entry for each inverter.
   charge_rate:
     - number.givtcp_{geserial}_battery_charge_rate
     - number.givtcp2_{geserial2}_battery_charge_rate
@@ -296,6 +305,14 @@ pred_bat:
   # Ohme EV charger cloud direct integration
   #ohme_login: !secret ohme_login
   #ohme_password: !secret ohme_password
+  # Register the Ohme charger with Predbat as a car (planned/SoC/energy sensors)
+  #ohme_automatic: True
+  # Let Predbat start and stop the charger according to its own car charging plan.
+  # Requires ohme_automatic, and is ignored when the Intelligent slots come from Ohme
+  #ohme_control: True
+  # Take the Octopus Intelligent car slots from Ohme rather than from Octopus directly.
+  # Leave unset to auto-detect an Intelligent tariff when ohme_automatic is on, or set
+  # it explicitly to True/False to override that decision
   #ohme_automatic_octopus_intelligent: True
 
   # car_charging_energy defines a daily incrementing sensor which measures the charge added to your car and resets to zero at midnight
@@ -427,6 +444,8 @@ pred_bat:
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
   octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_(saving_session_events?|power_down_events))'
   octopus_saving_session_octopoints_per_penny: 8
+  # Minimum octopoints_per_kwh an available saving session must offer for Predbat to auto-join it (default 0, joins any non-negative reward).
+  octopus_saving_session_min_octopoints_per_kwh: 0
 
   # Octopus free session points to the free session Sensor in the Octopus plugin
   # Note: You must enable this event sensor in the Octopus Integration in Home Assistant for it to work

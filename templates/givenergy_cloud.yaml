@@ -77,8 +77,10 @@ pred_bat:
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 0
   #
-  # If not using REST then instead set the Control here (one for each inverter)
-  # - you can delete this section if using REST
+  # Set the Control here, one entry for each inverter. REST is not involved in this setup - that is
+  # the GivTCP template (givenergy_givtcp.yaml), where Predbat configures itself from the local
+  # REST API instead of the cloud.
+  # With ge_cloud_automatic: True these are discovered for you and this section can be deleted.
   charge_rate:
     - number.ge_inverter_{geserial}_battery_charge_power
   #  - number.ge_inverter_{geserial2}_battery_charge_power
@@ -214,6 +216,12 @@ pred_bat:
   # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
   car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
 
+  # car_charging_power is the live charging power of your car charger, in Watts
+  # It is display only - it drives the car shown on the web interface power flow diagram
+  # and the predbat.car_charging_power sensor. The plan itself is unaffected by it.
+  # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
+  car_charging_power: 're:(sensor.myenergi_zappi_[0-9a-z]+_internal_load_ct1|sensor.wallbox_portal_charging_power)'
+
   # Defines the number of cars modelled by the system, set to 0 for no car
   num_cars: 1
 
@@ -231,6 +239,7 @@ pred_bat:
     - 'true'
     - 'connected'
     - 'ev connected'
+    - 'ev ready to charge'
     - 'charging'
     - 'paused'
     - 'waiting for car demand'
@@ -289,6 +298,8 @@ pred_bat:
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
   octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_(saving_session_events?|power_down_events))'
   octopus_saving_session_octopoints_per_penny: 8
+  # Minimum octopoints_per_kwh an available saving session must offer for Predbat to auto-join it (default 0, joins any non-negative reward).
+  octopus_saving_session_min_octopoints_per_kwh: 0
 
   # Octopus free session points to the free session Sensor in the Octopus plugin
   # Note: You must enable this event sensor in the Octopus Integration in Home Assistant for it to work

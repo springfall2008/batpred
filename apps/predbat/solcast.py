@@ -1396,11 +1396,19 @@ class SolarAPI(ComponentBase):
             # We want to divide the data into single minute slots
             divide_by = dp2(30 * factor)
 
-            # Valid factor values: 1.0 = kWh per slot (any interval), 2.0 = kW per 30-min slot, 4.0 = kW per 15-min slot
+            # Valid factor values: 1.0 = kWh per slot (any interval), 2.0 = kW per 30-min slot, 4.0 = kW per 15-min slot.
+            # Solcast's detailedForecast reports average kW per slot, not kWh, so summing it naively will not equal
+            # the sensor's own kWh total by design - factor 2.0/4.0 is the expected, already-compensated-for case,
+            # not a data problem (see #2544).
             if factor not in [1.0, 2.0, 4.0]:
-                self.log("Warn: SolarAPI: PV Forecast today adds up to {} kWh, but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
+                self.log(
+                    "Warn: SolarAPI: PV Forecast today adds up to {}, but total sensors add up to {} kWh - this doesn't match either kWh-per-slot or kW-average-per-slot data (factor {}), check your Solcast integration".format(
+                        pv_forecast_total_data, pv_forecast_total_sensor, factor
+                    )
+                )
             else:
-                self.log("SolarAPI: PV Forecast today adds up to {} kWh, and total sensors add up to {} kWh, factor is {}".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
+                units = "kWh per slot" if factor == 1.0 else "kW average per slot"
+                self.log("SolarAPI: PV Forecast today adds up to {} and total sensors add up to {} kWh - detected forecast data is in {} (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, units, factor))
 
         if pv_forecast_data:
             await self.log_source_change(configured_source)
@@ -1474,6 +1482,11 @@ class SolarAPI(ComponentBase):
                 )
             else:
                 pv_forecast_minute90 = dict(pv_forecast_minute)
+
+            # Settle the DC array size for the p90 cloud ceiling. max_kwh is already the summed
+            # array capacity of whichever provider actually served this fetch, so there is no risk
+            # of double-counting a site configured against two providers.
+            self.base.resolve_pv_array_kwp(max_kwh)
 
             # Run calibration on the data
             pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data = self.pv_calibration(

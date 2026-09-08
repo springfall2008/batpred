@@ -263,6 +263,30 @@ def test_reconcile_only_controlled_inverters():
     assert not failed, "test_reconcile_only_controlled_inverters"
 
 
+def test_reconcile_control_skips_while_read_only():
+    """_reconcile_control must not write to the inverter while switch.predbat_set_read_only is on."""
+    failed = False
+    d = MockDeye()
+    d.device_list = ["INV1"]
+    d.control_active = {"INV1"}
+    d.local_schedule = {"INV1": {"reserve": 10, "charge": {"enable": False}, "export": {"enable": False}}}
+    d.device_values = {"INV1": {"soc": 50}}
+    d.base.get_state_wrapper.return_value = "on"
+    calls = []
+
+    async def fake_apply(sn, schedule, current_soc, force=False):
+        """Record reconcile applies."""
+        calls.append((sn, force))
+        return False
+
+    with patch.object(d, "apply_dynamic_control", side_effect=fake_apply):
+        run_async_local(d._reconcile_control())
+    if calls:
+        print(f"ERROR: reconcile must not write while read-only is on: {calls}")
+        failed = True
+    assert not failed, "test_reconcile_control_skips_while_read_only"
+
+
 def test_poll_order_empty_response_stays_pending():
     """An empty/error response (network/auth) must NOT falsely confirm the order."""
     failed = False
@@ -1135,6 +1159,7 @@ def run_deye_control_tests(my_predbat):
         ("apply_write", test_apply_dynamic_control_writes_and_caches_on_change),
         ("active_workmode_time", test_active_workmode_follows_time),
         ("reconcile_controlled", test_reconcile_only_controlled_inverters),
+        ("reconcile_read_only", test_reconcile_control_skips_while_read_only),
         ("poll_order", test_poll_order_success),
         ("poll_order_empty_pending", test_poll_order_empty_response_stays_pending),
         ("run_forces_rewrite_after_max_polls", test_run_forces_rewrite_after_max_unconfirmed_polls),
