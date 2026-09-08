@@ -127,6 +127,38 @@ def test_github(my_predbat):
         print("  FAILED: cache should not be populated after JSON error")
         failed += 1
 
+    print("  Test 4b: non-2xx status (e.g. rate limited) with no prior cache returns [] and does not cache the failure")
+    _setup(my_predbat)
+    mock_resp = MagicMock()
+    mock_resp.ok = False
+    mock_resp.status_code = 403
+    with patch("requests.get", return_value=mock_resp):
+        result = my_predbat.download_predbat_releases_url(test_url)
+    if result != []:
+        print("  FAILED: non-2xx status with no prior cache should return [], got {}".format(result))
+        failed += 1
+    if test_url in my_predbat.github_url_cache:
+        print("  FAILED: cache should not be populated after a non-2xx response")
+        failed += 1
+
+    print("  Test 4c: non-2xx status falls back to stale cached data instead of blanking it out for the full cache window")
+    _setup(my_predbat)
+    stale_stamp2 = datetime.now() - timedelta(hours=3)
+    stale_data2 = [{"tag_name": "v0.9"}]
+    my_predbat.github_url_cache[test_url] = {"stamp": stale_stamp2, "data": stale_data2}
+    mock_resp = MagicMock()
+    mock_resp.ok = False
+    mock_resp.status_code = 403
+    with patch("requests.get", return_value=mock_resp):
+        result = my_predbat.download_predbat_releases_url(test_url)
+    if result != stale_data2:
+        print("  FAILED: non-2xx status should fall back to stale cached data, got {}".format(result))
+        failed += 1
+    # The failed fetch must not overwrite the stamp, so the next cycle retries rather than waiting out the full cache window
+    if my_predbat.github_url_cache.get(test_url, {}).get("stamp") != stale_stamp2:
+        print("  FAILED: a failed fetch should not refresh the cache stamp")
+        failed += 1
+
     print("  Test 5: cache miss fetches from GitHub and stores result")
     _setup(my_predbat)
     fetched_data = [{"tag_name": "v2.0"}]

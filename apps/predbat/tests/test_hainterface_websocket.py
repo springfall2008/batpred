@@ -793,6 +793,93 @@ def test_hainterface_socketloop_connection_drop_unblocks_queued_command(my_predb
     return failed
 
 
+def test_hainterface_socketloop_result_null_success(my_predbat=None):
+    """Regression test for #3460 (second bug): a "result" message with "success" explicitly
+    null (observed for notify.notify) must resolve to success=False, not None.
+
+    Before the fix, result_holder["success"] = data.get("success", False) passed a present-but-null
+    "success" straight through as None, since .get()'s default only covers a *missing* key. With
+    success and error both still None, the caller couldn't tell this apart from a genuine 2-minute
+    timeout and logged the misleading "failed or timed out" warning immediately.
+    """
+    print("\n=== Testing #3460: socketLoop result message with success=null ===")
+    failed = 0
+
+    import threading
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
+
+    mock_ws = MagicMock()
+    mock_ws.send_json = AsyncMock()
+
+    # Queue a notify.notify call before socketLoop gets a chance to send it, same injection
+    # technique as the connection-drop regression test above - it gets sent (assigned sid=1) as
+    # part of auth_ok's own iteration, so the next received message can reply to it by id.
+    queued_event = threading.Event()
+    queued_result = {"response": None, "success": None, "error": None}
+    queued_cmd = ("notify", "notify", {"message": "test"}, False, queued_event, queued_result)
+
+    call_count = [0]
+
+    async def mock_receive():
+        call_count[0] += 1
+        if call_count[0] == 1:
+            with ha_interface.ws_pending_lock:
+                ha_interface.ws_command_queue.append(queued_cmd)
+            return create_mock_websocket_message(WSMsgType.TEXT, {"type": "auth_ok"})
+        if call_count[0] == 2:
+            # Don't hardcode the id: socketLoop's startup sends subscribe_events (x2) and one
+            # fire_event per SERVICE_REGISTER_LIST entry before any queued command, so the
+            # notify/notify command's own sid depends on how many of those there are. Find it
+            # from what was actually sent instead.
+            sent_id = None
+            for call in mock_ws.send_json.call_args_list:
+                payload = call.args[0]
+                if payload.get("type") == "call_service" and payload.get("domain") == "notify":
+                    sent_id = payload.get("id")
+                    break
+            if sent_id is None:
+                raise AssertionError("notify/notify call_service was never sent by socketLoop - test setup is wrong")
+            # "success" present but null is the real-world shape that triggered #3460's second bug.
+            return create_mock_websocket_message(WSMsgType.TEXT, {"type": "result", "id": sent_id, "success": None, "result": {}})
+        ha_interface.api_stop = True
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
+
+    mock_ws.receive = mock_receive
+
+    async def mock_sleep(delay):
+        ha_interface.api_stop = True
+
+    with patch("ha.ClientSession") as mock_session_class:
+        mock_session = MagicMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock()
+        mock_session.ws_connect = MagicMock()
+        mock_session.ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_session.ws_connect.return_value.__aexit__ = AsyncMock()
+        mock_session_class.return_value = mock_session
+
+        with patch("ha.asyncio.sleep", new=mock_sleep):
+            run_async(ha_interface.socketLoop())
+
+    if not queued_event.is_set():
+        print("ERROR: threading.Event for the queued command was not set")
+        failed += 1
+    else:
+        print("✓ threading.Event set on receiving the result message")
+
+    # This is the actual regression: must be False, not None, so the caller can distinguish
+    # "got a definitive failure response" from "genuinely still waiting/timed out".
+    if queued_result.get("success") is not False:
+        print(f"ERROR: Expected success=False for a null-success result, got {queued_result.get('success')!r}")
+        failed += 1
+    else:
+        print("✓ result_holder success resolved to False, not None, for a null-success result")
+
+    return failed
+
+
 def test_hainterface_socketloop_service_register(my_predbat=None):
     """Test socketLoop() fires service_registered events"""
     print("\n=== Testing HAInterface socketLoop() service_registered ===")
@@ -853,6 +940,90 @@ def test_hainterface_socketloop_service_register(my_predbat=None):
     return failed
 
 
+def test_hainterface_socketloop_call_service_target_field(my_predbat=None):
+    """Regression test for #4662: a queued call_service command whose service_data carries a
+    'target' key (the apps.yaml 'target: entity_id: ...' config style used for input_boolean
+    bridges) must be sent with target as a sibling of service_data in the outgoing websocket
+    frame, not left nested inside service_data. HA rejects a nested target with
+    invalid_format: extra keys not allowed @ data['target'], which silently blocked every
+    charge/discharge input_boolean service call.
+    """
+    print("\n=== Testing #4662: call_service queued command with target field ===")
+    failed = 0
+
+    import threading
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
+
+    mock_ws = MagicMock()
+    mock_ws.send_json = AsyncMock()
+
+    queued_event = threading.Event()
+    queued_result = {"response": None, "success": None, "error": None}
+    queued_service_data = {"target": {"entity_id": "input_boolean.predbat_charge_start"}}
+    queued_cmd = ("input_boolean", "turn_on", queued_service_data, False, queued_event, queued_result)
+
+    call_count = [0]
+
+    async def mock_receive():
+        call_count[0] += 1
+        if call_count[0] == 1:
+            with ha_interface.ws_pending_lock:
+                ha_interface.ws_command_queue.append(queued_cmd)
+            return create_mock_websocket_message(WSMsgType.TEXT, {"type": "auth_ok"})
+        ha_interface.api_stop = True
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
+
+    mock_ws.receive = mock_receive
+
+    async def mock_sleep(delay):
+        ha_interface.api_stop = True
+
+    with patch("ha.ClientSession") as mock_session_class:
+        mock_session = MagicMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock()
+        mock_session.ws_connect = MagicMock()
+        mock_session.ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_session.ws_connect.return_value.__aexit__ = AsyncMock()
+        mock_session_class.return_value = mock_session
+
+        with patch("ha.asyncio.sleep", new=mock_sleep):
+            run_async(ha_interface.socketLoop())
+
+    sent_frame = None
+    for call in mock_ws.send_json.call_args_list:
+        payload = call.args[0]
+        if payload.get("type") == "call_service" and payload.get("domain") == "input_boolean":
+            sent_frame = payload
+            break
+
+    if sent_frame is None:
+        print("ERROR: input_boolean/turn_on call_service was never sent by socketLoop - test setup is wrong")
+        failed += 1
+    elif "target" in sent_frame.get("service_data", {}):
+        print(f"ERROR: target should not be nested inside service_data, got {sent_frame.get('service_data')}")
+        failed += 1
+    elif sent_frame.get("target") != {"entity_id": "input_boolean.predbat_charge_start"}:
+        print(f"ERROR: Expected top-level target with entity_id, got {sent_frame.get('target')}")
+        failed += 1
+    else:
+        print("✓ target sent as a top-level sibling field, not nested inside service_data")
+
+    # The queued service_data dict is the same object async_call_service_websocket_command() logs
+    # on failure (ha.py's "Warn: Service call ... data ... failed" line) - socketLoop() must not
+    # mutate it when building the outbound frame, or that failure log silently loses the target
+    # that was actually part of the service definition.
+    if "target" not in queued_service_data:
+        print(f"ERROR: socketLoop() mutated the original queued service_data (target missing): {queued_service_data}")
+        failed += 1
+    else:
+        print("✓ original queued service_data left unchanged (target still present)")
+
+    return failed
+
+
 def run_hainterface_websocket_tests(my_predbat):
     """Run all HAInterface websocket tests"""
     print("\n" + "=" * 80)
@@ -873,6 +1044,8 @@ def run_hainterface_websocket_tests(my_predbat):
     failed += test_hainterface_socketloop_update_pending(my_predbat)
     failed += test_hainterface_socketloop_service_register(my_predbat)
     failed += test_hainterface_socketloop_connection_drop_unblocks_queued_command(my_predbat)
+    failed += test_hainterface_socketloop_result_null_success(my_predbat)
+    failed += test_hainterface_socketloop_call_service_target_field(my_predbat)
 
     print("\n" + "=" * 80)
     if failed == 0:

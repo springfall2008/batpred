@@ -330,10 +330,12 @@ pred_bat:
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
   #octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
   octopus_saving_session_octopoints_per_penny: 8
+  # Minimum octopoints_per_kwh an available saving session must offer for Predbat to auto-join it (default 0, joins any non-negative reward).
+  octopus_saving_session_min_octopoints_per_kwh: 0
 
   # Octopus free session points to the free session Sensor in the Octopus plugin
   # Note: You must enable this event sensor in the Octopus Integration in Home Assistant for it to work
-  #octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
+  #octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_(free_electricity_session_events|power_up_events))'
   octopus_free_url: 'http://octopus.energy/free-electricity'
 
   # Energy rates
@@ -424,6 +426,10 @@ pred_bat:
   - 7
   - 14
   - 21
+
+  # Pinned to False so the wider test suite keeps exercising the fixed days_previous averaging path
+  # (test_load_forecast_history.py exercises days_previous_auto explicitly)
+  days_previous_auto: False
 
   # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
   # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd

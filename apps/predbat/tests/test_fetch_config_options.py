@@ -100,8 +100,8 @@ def test_fetch_config_options(my_predbat):
     my_predbat.fetch_config_options()
 
     # Verify basic configuration was loaded
-    assert my_predbat.debug_enable == True, "debug_enable should be True"
-    assert my_predbat.plan_debug == False, "plan_debug should be False"
+    assert my_predbat.debug_enable is True, "debug_enable should be True"
+    assert my_predbat.plan_debug is False, "plan_debug should be False"
     assert my_predbat.forecast_days == 2, "forecast_days should be 2 (48 hours / 24)"
     assert my_predbat.forecast_minutes == 48 * 60, "forecast_minutes should be 2880"
     assert my_predbat.num_cars == 2, "num_cars should be 2"
@@ -123,7 +123,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.battery_loss == 0.95, "battery_loss should be 0.95 (1 - 0.05)"
     assert my_predbat.battery_loss_discharge == 0.95, "battery_loss_discharge should be 0.95"
     assert my_predbat.inverter_loss == 0.95, "inverter_loss should be 0.95"
-    assert my_predbat.inverter_hybrid == False, "inverter_hybrid should be False"
+    assert my_predbat.inverter_hybrid is False, "inverter_hybrid should be False"
     assert my_predbat.base_load == 0.1, "base_load should be 0.1 (100 / 1000)"
 
     # Verify SOC configuration
@@ -132,23 +132,23 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.best_soc_step == 0.25, "best_soc_step should be 0.25"
 
     # Verify car configuration
-    assert my_predbat.car_charging_from_battery == False, "car_charging_from_battery should be False"
-    assert my_predbat.car_charging_hold == True, "car_charging_hold should be True"
+    assert my_predbat.car_charging_from_battery is False, "car_charging_from_battery should be False"
+    assert my_predbat.car_charging_hold is True, "car_charging_hold should be True"
     assert my_predbat.car_charging_threshold == 1.0, "car_charging_threshold should be 1.0 (60 / 60)"
 
     # Verify read-only mode (should be False since axle_control is False)
-    assert my_predbat.set_read_only == False, "set_read_only should be False"
-    assert my_predbat.set_read_only_axle == False, "set_read_only_axle should be False"
+    assert my_predbat.set_read_only is False, "set_read_only should be False"
+    assert my_predbat.set_read_only_axle is False, "set_read_only_axle should be False"
 
     # Verify mode configuration (Control charge & discharge)
-    assert my_predbat.calculate_best_charge == True, "calculate_best_charge should be True"
-    assert my_predbat.calculate_best_export == True, "calculate_best_export should be True"
-    assert my_predbat.set_charge_window == True, "set_charge_window should be True"
-    assert my_predbat.set_export_window == True, "set_export_window should be True"
-    assert my_predbat.set_soc_enable == True, "set_soc_enable should be True"
+    assert my_predbat.calculate_best_charge is True, "calculate_best_charge should be True"
+    assert my_predbat.calculate_best_export is True, "calculate_best_export should be True"
+    assert my_predbat.set_charge_window is True, "set_charge_window should be True"
+    assert my_predbat.set_export_window is True, "set_export_window should be True"
+    assert my_predbat.set_soc_enable is True, "set_soc_enable should be True"
 
     # Verify iBoost configuration
-    assert my_predbat.iboost_enable == False, "iboost_enable should be False"
+    assert my_predbat.iboost_enable is False, "iboost_enable should be False"
     assert my_predbat.iboost_gas == 4.0, "iboost_gas should be 4.0"
     assert my_predbat.iboost_max_power == 0.05, "iboost_max_power should be 0.05 (3000 / 60000)"
     assert abs(my_predbat.iboost_min_power - 0.00833) < 0.001, "iboost_min_power should be ~0.00833 (500 / 60000)"
@@ -167,8 +167,8 @@ def test_fetch_config_options(my_predbat):
     my_predbat.fetch_config_options()
 
     # Verify read-only mode was enabled by Axle
-    assert my_predbat.set_read_only == True, "set_read_only should be True when Axle event is active"
-    assert my_predbat.set_read_only_axle == True, "set_read_only_axle should be True when Axle event is active"
+    assert my_predbat.set_read_only is True, "set_read_only should be True when Axle event is active"
+    assert my_predbat.set_read_only_axle is True, "set_read_only_axle should be True when Axle event is active"
 
     print("✓ Axle control with active event test passed")
 
@@ -181,8 +181,8 @@ def test_fetch_config_options(my_predbat):
     my_predbat.fetch_config_options()
 
     # Verify read-only mode was NOT enabled
-    assert my_predbat.set_read_only == False, "set_read_only should be False when no Axle event is active"
-    assert my_predbat.set_read_only_axle == False, "set_read_only_axle should be False when no Axle event is active"
+    assert my_predbat.set_read_only is False, "set_read_only should be False when no Axle event is active"
+    assert my_predbat.set_read_only_axle is False, "set_read_only_axle should be False when no Axle event is active"
 
     print("✓ Axle control with no active event test passed")
 
@@ -197,8 +197,8 @@ def test_fetch_config_options(my_predbat):
     my_predbat.fetch_config_options()
 
     # Verify manual read-only takes precedence (Axle logic skipped)
-    assert my_predbat.set_read_only == True, "set_read_only should be True from manual setting"
-    assert my_predbat.set_read_only_axle == False, "set_read_only_axle should be False when manual read-only is set"
+    assert my_predbat.set_read_only is True, "set_read_only should be True from manual setting"
+    assert my_predbat.set_read_only_axle is False, "set_read_only_axle should be False when manual read-only is set"
 
     print("✓ Manual read-only mode test passed")
 
@@ -214,11 +214,11 @@ def test_fetch_config_options(my_predbat):
 
     # Verify Monitor mode settings
     assert my_predbat.predbat_mode == "Monitor", "predbat_mode should be Monitor"
-    assert my_predbat.calculate_best_charge == False, "calculate_best_charge should be False in Monitor mode"
-    assert my_predbat.calculate_best_export == False, "calculate_best_export should be False in Monitor mode"
-    assert my_predbat.set_charge_window == False, "set_charge_window should be False in Monitor mode"
-    assert my_predbat.set_export_window == False, "set_export_window should be False in Monitor mode"
-    assert my_predbat.set_soc_enable == False, "set_soc_enable should be False in Monitor mode"
+    assert my_predbat.calculate_best_charge is False, "calculate_best_charge should be False in Monitor mode"
+    assert my_predbat.calculate_best_export is False, "calculate_best_export should be False in Monitor mode"
+    assert my_predbat.set_charge_window is False, "set_charge_window should be False in Monitor mode"
+    assert my_predbat.set_export_window is False, "set_export_window should be False in Monitor mode"
+    assert my_predbat.set_soc_enable is False, "set_soc_enable should be False in Monitor mode"
 
     print("✓ Monitor mode configuration test passed")
 
@@ -230,11 +230,11 @@ def test_fetch_config_options(my_predbat):
     my_predbat.fetch_config_options()
 
     assert my_predbat.predbat_mode == "Control SOC only", "predbat_mode should be Control SOC only"
-    assert my_predbat.calculate_best_charge == True, "calculate_best_charge should be True"
-    assert my_predbat.calculate_best_export == False, "calculate_best_export should be False"
-    assert my_predbat.set_charge_window == False, "set_charge_window should be False"
-    assert my_predbat.set_export_window == False, "set_export_window should be False"
-    assert my_predbat.set_soc_enable == True, "set_soc_enable should be True"
+    assert my_predbat.calculate_best_charge is True, "calculate_best_charge should be True"
+    assert my_predbat.calculate_best_export is False, "calculate_best_export should be False"
+    assert my_predbat.set_charge_window is False, "set_charge_window should be False"
+    assert my_predbat.set_export_window is False, "set_export_window should be False"
+    assert my_predbat.set_soc_enable is True, "set_soc_enable should be True"
 
     print("✓ Control SOC only mode test passed")
 
@@ -246,11 +246,11 @@ def test_fetch_config_options(my_predbat):
     my_predbat.fetch_config_options()
 
     assert my_predbat.predbat_mode == "Control charge", "predbat_mode should be Control charge"
-    assert my_predbat.calculate_best_charge == True, "calculate_best_charge should be True"
-    assert my_predbat.calculate_best_export == False, "calculate_best_export should be False"
-    assert my_predbat.set_charge_window == True, "set_charge_window should be True"
-    assert my_predbat.set_export_window == False, "set_export_window should be False"
-    assert my_predbat.set_soc_enable == True, "set_soc_enable should be True"
+    assert my_predbat.calculate_best_charge is True, "calculate_best_charge should be True"
+    assert my_predbat.calculate_best_export is False, "calculate_best_export should be False"
+    assert my_predbat.set_charge_window is True, "set_charge_window should be True"
+    assert my_predbat.set_export_window is False, "set_export_window should be False"
+    assert my_predbat.set_soc_enable is True, "set_soc_enable should be True"
 
     print("✓ Control charge mode test passed")
 
@@ -262,11 +262,11 @@ def test_fetch_config_options(my_predbat):
     my_predbat.fetch_config_options()
 
     assert my_predbat.predbat_mode == "Control charge & discharge", "predbat_mode should be Control charge & discharge"
-    assert my_predbat.calculate_best_charge == True, "calculate_best_charge should be True"
-    assert my_predbat.calculate_best_export == True, "calculate_best_export should be True"
-    assert my_predbat.set_charge_window == True, "set_charge_window should be True"
-    assert my_predbat.set_export_window == True, "set_export_window should be True"
-    assert my_predbat.set_soc_enable == True, "set_soc_enable should be True"
+    assert my_predbat.calculate_best_charge is True, "calculate_best_charge should be True"
+    assert my_predbat.calculate_best_export is True, "calculate_best_export should be True"
+    assert my_predbat.set_charge_window is True, "set_charge_window should be True"
+    assert my_predbat.set_export_window is True, "set_export_window should be True"
+    assert my_predbat.set_soc_enable is True, "set_soc_enable should be True"
 
     print("✓ Control charge & discharge mode test passed")
 
@@ -278,8 +278,8 @@ def test_fetch_config_options(my_predbat):
     my_predbat.fetch_config_options()
 
     assert my_predbat.predbat_mode == "Monitor", "Invalid mode should default to Monitor"
-    assert my_predbat.calculate_best_charge == False, "calculate_best_charge should be False for invalid mode"
-    assert my_predbat.set_soc_enable == False, "set_soc_enable should be False for invalid mode"
+    assert my_predbat.calculate_best_charge is False, "calculate_best_charge should be False for invalid mode"
+    assert my_predbat.set_soc_enable is False, "set_soc_enable should be False for invalid mode"
 
     print("✓ Invalid mode defaults to Monitor test passed")
 
@@ -329,6 +329,51 @@ def test_fetch_config_options(my_predbat):
 
     print("✓ LoadML config-preservation test passed")
 
+    # Test 13: car_charging_planned/now response matching is case-insensitive
+    print("\n*** Test 13: car_charging_planned/now response case-insensitivity ***")
+
+    # Many EV charger integrations (e.g. myenergi Zappi) report state strings in Title Case
+    # (e.g. "EV Connected"), while apps.yaml examples/templates use lowercase response lists.
+    # Matching must be case-insensitive on both sides, not just the sensor value.
+    mock_config.config["car_charging_planned_response"] = ["Yes", "On", "True", "Connected", "EV Connected"]
+    mock_config.config["car_charging_now_response"] = ["Yes", "On", "True", "Charging"]
+    mock_config.config["car_charging_planned"] = "EV Connected"
+    mock_config.config["car_charging_now"] = "Charging"
+
+    my_predbat.fetch_config_options()
+
+    assert my_predbat.car_charging_planned[0] is True, "car_charging_planned should be True when sensor state matches response list case-insensitively"
+    assert my_predbat.car_charging_now[0] is True, "car_charging_now should be True when sensor state matches response list case-insensitively"
+
+    # A genuinely non-matching state should still be False
+    mock_config.config["car_charging_planned"] = "EV Disconnected"
+    mock_config.config["car_charging_now"] = "Idle"
+
+    my_predbat.fetch_config_options()
+
+    assert my_predbat.car_charging_planned[0] is False, "car_charging_planned should be False when sensor state does not match response list"
+    assert my_predbat.car_charging_now[0] is False, "car_charging_now should be False when sensor state does not match response list"
+
+    print("✓ Case-insensitivity test passed")
+
+    # Test 14: num_cars is clamped to the maximum Predbat/kernel supports
+    print("\n*** Test 14: num_cars is clamped to the supported maximum ***")
+
+    # An Octopus account with more registered devices than Predbat supports (or any other
+    # misconfiguration) must not be allowed through - car indices beyond the supported maximum
+    # have no HA config entity, which previously crashed get_car_charging_planned() with
+    # TypeError: float() argument must be a string or a real number, not 'NoneType'.
+    mock_config.config["num_cars"] = 12
+
+    my_predbat.fetch_config_options()
+
+    assert my_predbat.num_cars == 8, "num_cars should be clamped to 8 (the supported maximum), got {}".format(my_predbat.num_cars)
+
+    print("✓ num_cars clamp test passed")
+
+    # Restore num_cars for any tests appended after this one
+    mock_config.config["num_cars"] = 2
+
     # Restore original methods
     my_predbat.get_arg = original_get_arg
     my_predbat.manual_times = original_manual_times
@@ -338,6 +383,26 @@ def test_fetch_config_options(my_predbat):
     my_predbat.update_save_restore_list = original_update_save_restore_list
     my_predbat.expose_config = original_expose_config
     my_predbat.args = original_args
+
+    # Test 15: get_car_charging_planned resolves all 8 supported cars against the real
+    # CONFIG_ITEMS/config_index (not the MockConfigProvider above) - this is the exact code path
+    # that crashed with TypeError: float() argument must be a string or a real number, not
+    # 'NoneType' when num_cars exceeded the number of car_charging_rate_N entities defined.
+    print("\n*** Test 15: get_car_charging_planned resolves all 8 cars via real config_index ***")
+
+    original_num_cars = my_predbat.num_cars
+    my_predbat.num_cars = 8
+    my_predbat.get_car_charging_planned()
+
+    assert len(my_predbat.car_charging_rate) == 8, "car_charging_rate should have 8 entries, got {}".format(len(my_predbat.car_charging_rate))
+    for car_n, rate in enumerate(my_predbat.car_charging_rate):
+        assert rate == 7.4, "car {} charging rate should default to 7.4, got {}".format(car_n, rate)
+
+    # Restore real config state for any tests that run after this one
+    my_predbat.num_cars = original_num_cars
+    my_predbat.fetch_config_options()
+
+    print("✓ 8-car config resolution test passed")
 
     print("\n**** All fetch_config_options tests passed! ****")
     return False

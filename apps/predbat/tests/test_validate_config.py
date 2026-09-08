@@ -27,6 +27,9 @@ Types covered (see APPS_SCHEMA in config.py):
   sensor_list (with entries, modify, none|string sensor_type)
 """
 
+import os
+import tempfile
+
 
 def _run(my_predbat, extra_args, extra_states=None, expect_errors=(), expect_clean=()):
     """Inject args/states, run validate_config, assert per-field expectations.
@@ -362,5 +365,197 @@ def test_validate_config(my_predbat):
         expect_clean=["car_charging_now"],
     )
 
+    # ==========================================================================
+    # transient_ok  (car_charging_energy, car_charging_power)
+    #
+    # An EV charger routinely reports 'unavailable' or 'unknown' with nothing
+    # plugged into it. minute_data() already skips those samples (utils.py), and
+    # update_car_charging_power() reads them as zero, so the reading being absent
+    # right now is normal rather than a misconfiguration - but validate_config
+    # reads the same entity by its own path and required the state to parse as a
+    # float, leaving the whole run reporting errors for a car sitting on the
+    # driveway. transient_ok on those two schema entries allows the placeholder
+    # states without loosening anything else.
+    # ==========================================================================
+    for name in ("car_charging_energy", "car_charging_power"):
+        print(f"  [transient_ok] {name} reading 'unavailable' passes")
+        _run(my_predbat, {name: "sensor.test_charger_energy"}, extra_states={"sensor.test_charger_energy": "unavailable"}, expect_clean=[name])
+
+        print(f"  [transient_ok] {name} reading 'unknown' passes")
+        _run(my_predbat, {name: "sensor.test_charger_energy"}, extra_states={"sensor.test_charger_energy": "unknown"}, expect_clean=[name])
+
+        print(f"  [transient_ok] {name} reading a real number still passes")
+        _run(my_predbat, {name: "sensor.test_charger_energy"}, extra_states={"sensor.test_charger_energy": 4.2}, expect_clean=[name])
+
+        print(f"  [transient_ok] {name} reading a non-numeric value still fails")
+        _run(my_predbat, {name: "sensor.test_charger_energy"}, extra_states={"sensor.test_charger_energy": "banana"}, expect_errors=[name])
+
+        print(f"  [transient_ok] {name} pointing at an entity that does not exist still fails")
+        _run(my_predbat, {name: "sensor.test_charger_typo"}, expect_errors=[name])
+
     print("**** test_validate_config PASSED ****")
     return False
+
+
+def test_validate_config_secrets(my_predbat):
+    """
+    Tests check_apps_yaml_secrets() (#4787) - re-reads apps.yaml with the ruamel round-trip
+    loader and flags credential-like values that are stored in plain text rather than
+    referenced via the '!secret' mechanism.
+
+    Writes a real temp apps.yaml so the round-trip loader has something genuine to parse:
+    provenance (whether a value came from a '!secret' tag or was written inline) only
+    survives in the raw file, not in self.args, which is why the check has to re-read it
+    rather than working off the already-resolved config the rest of validate_config() uses.
+    check_apps_yaml_secrets() takes an explicit path so this is independent of
+    PREDBAT_APPS_FILE and the working directory the test suite happens to run from.
+    """
+    print("**** test_validate_config_secrets ****")
+
+    apps_yaml_content = """
+pred_bat:
+  module: predbat
+  class: PredBat
+  mcp_secret: !secret my_mcp_secret
+  ohme_password: plaintext_password
+  kraken_key: ""
+  forecast_solar:
+    api_key: plaintext_nested_key
+  gateway_mqtt_host: mqtt.example.com
+  rates_import:
+    - start: "00:00"
+      end: "05:00"
+      rate: 0.07
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        temp_path = f.name
+        f.write(apps_yaml_content)
+
+    try:
+        my_predbat.check_apps_yaml_secrets(apps_yaml_path=temp_path)
+        warnings = my_predbat.arg_warnings
+
+        print("  Inline credential value is flagged")
+        assert "ohme_password" in warnings, f"Expected inline ohme_password to be flagged, got {warnings}"
+
+        print("  Nested inline credential value is flagged")
+        assert "forecast_solar.api_key" in warnings, f"Expected nested forecast_solar.api_key to be flagged, got {warnings}"
+
+        print("  '!secret'-referenced value is not flagged")
+        assert "mcp_secret" not in warnings, f"'!secret'-referenced mcp_secret must not be flagged, got {warnings}"
+
+        print("  Empty credential-like value is not flagged")
+        assert "kraken_key" not in warnings, f"Empty string value must not be flagged, got {warnings}"
+
+        print("  Non-credential key is not flagged")
+        assert "gateway_mqtt_host" not in warnings, f"Non-credential key must not be flagged, got {warnings}"
+        assert not any(w.startswith("rates_import") for w in warnings), f"Non-credential nested list must not be flagged, got {warnings}"
+    finally:
+        os.remove(temp_path)
+
+    print("  A missing apps.yaml is handled without error")
+    my_predbat.check_apps_yaml_secrets(apps_yaml_path="/tmp/does_not_exist_predbat_test_4787.yaml")
+    assert my_predbat.arg_warnings == {}, f"Expected no warnings for a missing file, got {my_predbat.arg_warnings}"
+
+    print("**** test_validate_config_secrets PASSED ****")
+    return False
+
+
+def test_validate_config_retry(my_predbat):
+    """
+    Tests validate_config_schedule_retry()/validate_config_check_retry() - the retry mechanism
+    added for #4379 so a validation failure that self-heals on its own (e.g. a slow-starting
+    integration's sensor not populated yet) clears its own error status without needing a
+    manual restart, instead of sitting stale until the next restart/config change.
+
+    Stubs validate_config() itself with a controlled sequence of results rather than relying on
+    real apps.yaml validation reaching a clean state - the test fixture's own baseline args
+    already carry pre-existing validation warnings unrelated to this feature, so "clean" can't
+    be reached just by fixing one deliberately-broken field. This isolates the retry-scheduling
+    logic under test from that ambient noise.
+    """
+    from datetime import timedelta
+
+    print("**** test_validate_config_retry ****")
+
+    saved_args = my_predbat.args.copy()
+    saved_retries_remaining = my_predbat.validate_config_retries_remaining
+    saved_next_retry_time = my_predbat.validate_config_next_retry_time
+    saved_now_utc = my_predbat.now_utc
+    saved_validate_config = my_predbat.validate_config
+
+    def _should_not_be_called():
+        raise AssertionError("validate_config() should not have been called here")
+
+    try:
+        # A clean validation should never arm a retry sequence
+        my_predbat.validate_config_retries_remaining = 0
+        my_predbat.validate_config_next_retry_time = None
+        my_predbat.validate_config_schedule_retry(0)
+        assert my_predbat.validate_config_retries_remaining == 0, "Clean validation should not arm a retry"
+        assert my_predbat.validate_config_next_retry_time is None
+
+        # A failing validation arms the default (2 retries, 1 minute)
+        my_predbat.args.pop("validate_config_retries", None)
+        my_predbat.args.pop("validate_config_retry_minutes", None)
+        my_predbat.validate_config_schedule_retry(1)
+        assert my_predbat.validate_config_retries_remaining == 2, f"Expected 2 retries armed by default, got {my_predbat.validate_config_retries_remaining}"
+        assert my_predbat.validate_config_next_retry_time == my_predbat.now_utc + timedelta(minutes=1)
+
+        # check_retry() is a no-op before the retry time is due - must not even call validate_config()
+        my_predbat.validate_config = _should_not_be_called
+        my_predbat.validate_config_check_retry()
+        assert my_predbat.validate_config_retries_remaining == 2, "Should not have retried before the due time"
+
+        # Once due, a still-failing re-validation decrements the counter and reschedules
+        my_predbat.now_utc = saved_now_utc + timedelta(minutes=1)
+        my_predbat.validate_config = lambda: 1  # simulate validation still failing
+        my_predbat.validate_config_check_retry()
+        assert my_predbat.validate_config_retries_remaining == 1, f"Expected 1 retry remaining, got {my_predbat.validate_config_retries_remaining}"
+        assert my_predbat.validate_config_next_retry_time == my_predbat.now_utc + timedelta(minutes=1)
+
+        # Exhausting the final retry while still failing stops the sequence cleanly
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=1)
+        my_predbat.validate_config_check_retry()
+        assert my_predbat.validate_config_retries_remaining == 0, "Should give up after the last retry"
+        assert my_predbat.validate_config_next_retry_time is None
+
+        # No further retries happen once the sequence has stopped, however much time passes
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=10)
+        my_predbat.validate_config = _should_not_be_called
+        my_predbat.validate_config_check_retry()
+        assert my_predbat.validate_config_retries_remaining == 0
+
+        # A retry that succeeds clears the sequence immediately, not just decrements it
+        my_predbat.validate_config = lambda: 1
+        my_predbat.validate_config_schedule_retry(1)
+        assert my_predbat.validate_config_retries_remaining == 2
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=1)
+        my_predbat.validate_config = lambda: 0  # simulate the underlying issue having self-healed
+        my_predbat.validate_config_check_retry()
+        assert my_predbat.validate_config_retries_remaining == 0, "A successful retry should clear the sequence, not just decrement it"
+        assert my_predbat.validate_config_next_retry_time is None
+
+        # validate_config_retries: 0 disables the feature entirely (and cancels any armed retry sequence)
+        my_predbat.validate_config_retries_remaining = 2
+        my_predbat.validate_config_next_retry_time = my_predbat.now_utc + timedelta(minutes=1)
+        my_predbat.args["validate_config_retries"] = 0
+        my_predbat.validate_config_schedule_retry(1)
+        assert my_predbat.validate_config_retries_remaining == 0, "validate_config_retries=0 should disable retries"
+        assert my_predbat.validate_config_next_retry_time is None
+        # A custom retry count/interval is respected
+        my_predbat.args["validate_config_retries"] = 5
+        my_predbat.args["validate_config_retry_minutes"] = 3
+        my_predbat.validate_config_schedule_retry(1)
+        assert my_predbat.validate_config_retries_remaining == 5
+        assert my_predbat.validate_config_next_retry_time == my_predbat.now_utc + timedelta(minutes=3)
+
+        print("**** test_validate_config_retry PASSED ****")
+        return False
+    finally:
+        my_predbat.args = saved_args
+        my_predbat.validate_config = saved_validate_config
+        my_predbat.validate_config_retries_remaining = saved_retries_remaining
+        my_predbat.validate_config_next_retry_time = saved_next_retry_time
+        my_predbat.now_utc = saved_now_utc

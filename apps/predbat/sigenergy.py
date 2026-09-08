@@ -82,7 +82,9 @@ except ImportError:
     HAS_AIOMQTT = False
 
 from datetime import datetime, timedelta
+from axle import fetch_axle_active
 from component_base import ComponentBase
+from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 
 
@@ -131,6 +133,7 @@ SIGENERGY_CODE_DEVELOPER_NOT_APPROVED = 1604
 SIGENERGY_TOKEN_EXPIRY_BUFFER = 600   # refresh token 10 min before expiry
 SIGENERGY_MIN_REQUEST_INTERVAL = 6.0  # enforce ≥10 req/min API limit
 SIGENERGY_POLL_INTERVAL = 300         # realtime data poll every 5 minutes
+SIGENERGY_VPP_RECLAIM_INTERVAL = 60   # re-assert VPP ownership every minute (see _manage_vpp_registration)
 SIGENERGY_DEVICE_POLL_INTERVAL = 1800  # device list refresh every 30 minutes
 SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after code 1201
 SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8  # 8S LiFePO4 pack: 8 × 3.6V; used to convert ratedEnergy (Ah) → kWh
@@ -143,11 +146,21 @@ SIGENERGY_MQTT_TOPIC_ALARM = "openapi/alarm/{app_key}/{system_id}"      # alarm 
 SIGENERGY_MQTT_TOPIC_COMMAND = "openapi/instruction/command"            # battery command publish
 SIGENERGY_MQTT_TOPIC_MODE = "openapi/instruction/mode"                  # V1 operating mode switch (MQTT)
 
+# Payload keys masked before a payload is written to the log. The MQTT command payloads
+# carry the live accessToken (it doubles as the MQTT broker password), and Predbat logs are
+# routinely pasted into GitHub issues, so anything credential-bearing has to be masked first.
+SIGENERGY_LOG_REDACT_KEYS = ("accessToken", "refreshToken", "appKey", "appSecret", "password", "token", "key")
+
 # Operating mode enums (REST mode switch endpoint — MSC and FFG only; NBI is not used)
 SIGENERGY_MODE_MSC = 0   # Maximum Self-Consumption (eco)
 SIGENERGY_MODE_FFG = 5   # Fully Feed-in to Grid
 SIGENERGY_MODE_VPP = 6   # VPP mode
 SIGENERGY_MODE_NBI = 8   # NorthBound (defined for completeness; not switched to by this component)
+
+# Modes that mean a third party is driving the inverter rather than the owner's app.
+# A Sigenergy accepts one controller at a time, so finding the system in one of these
+# means Predbat's VPP registration has been displaced — see _manage_vpp_registration.
+SIGENERGY_THIRD_PARTY_MODES = (SIGENERGY_MODE_NBI,)
 
 # Human-readable names for operationalMode integer values
 SIGENERGY_MODE_NAMES = {
@@ -203,11 +216,17 @@ SIGENERGY_HISTORY_NODES = [
     ("FROM_GRID", "grid_import_lifetime", "Grid Import Lifetime"),
     ("TO_GRID", "grid_export_lifetime", "Grid Export Lifetime"),
     ("FROM_SOLAR", "pv_lifetime", "PV Lifetime"),
+    ("FROM_THIRD_PARTY_INV", "third_party_pv_lifetime", "Third-Party PV Lifetime"),
     ("TO_BATTERY", "battery_charge_lifetime", "Battery Charge Lifetime"),
     ("FROM_BATTERY", "battery_discharge_lifetime", "Battery Discharge Lifetime"),
     ("TO_EVDC", "ev_charge_lifetime", "EV Charge Lifetime"),
     ("FROM_EVDC", "ev_discharge_lifetime", "EV Discharge Lifetime"),
 ]
+
+# Storage cache keys for poll-interval system state persisted between restarts (see
+# load_cached_data()). System/device discovery is deliberately excluded — it is always
+# re-fetched fresh on startup.
+SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status"]
 
 # Sentinel returned by _request() when the API responds with code=0 but an empty/null data field.
 # Distinguishes "success with no payload" from None which always means "request failed".
@@ -302,7 +321,15 @@ class SigenergyAPI(ComponentBase):
         self.history_totals = {}  # systemId → {sankey node id: lifetime kWh total}
         self.mqtt_period_raw = {}  # systemId → merged raw 'period' fields (MQTT only sends fields that changed)
         self.current_mode = {}    # systemId → energyStorageOperationMode int
+        self.last_contended_by = {}  # systemId → mode name of the controller that last displaced Predbat
+        self._axle_standoff_logged = {}  # systemId → True while the Axle stand-down has been announced
+        self._offboard_vpp_exit_done = set()  # systemIds confirmed out of VPP ahead of an offboard
+        self._offboard_done = set()           # systemIds successfully offboarded this process
         self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
+
+        # Age (datetime of last update) of each SIGENERGY_CACHE_KEYS category, used to avoid an
+        # unnecessary API refresh on restart when the persisted cache is still fresh
+        self.data_age = {}
 
         # Control state keyed by systemId
         self.controls = {}        # systemId → {charge: {…}, export: {…}, reserve: …}
@@ -444,7 +471,7 @@ class SigenergyAPI(ComponentBase):
             "Content-Type": "application/json",
         }
 
-        self.log("Requesting {} {} with params={} json={}".format(method, path, params, json_data))
+        self.log("Requesting {} {} with params={} json={}".format(method, path, self.redact(params), self.redact(json_data)))
 
         for attempt in range(retries):
             await self._enforce_rate_limit()
@@ -486,7 +513,7 @@ class SigenergyAPI(ComponentBase):
                             self.log("Warn: SigenergyAPI: Failed to decode response from {}: {}".format(path, e))
                             return None
 
-                        self.log("SigenergyAPI: Response from {} {}: {}".format(method, path, body))
+                        self.log("SigenergyAPI: Response from {} {}: {}".format(method, path, self.redact(body)))
 
                         code = body.get("code", -1)
                         if code != 0:
@@ -670,7 +697,20 @@ class SigenergyAPI(ComponentBase):
         bat_soc = _safe_float(rt.get("batSoc", 0))
         # batPower: realtimeInfo convention is positive=discharging, negative=charging.
         bat_power_kw = _safe_float(rt.get("batPower", 0))
-        pv_power_kw = _safe_float(rt.get("pvPower", 0))
+        # PV power is "pVPower" on this endpoint - capital V, unlike every other pv* field beside it
+        # (pvEnergyDaily, pvTotalPower) and unlike the MQTT period topic's "PV power". Reading the
+        # natural-looking "pvPower" silently yielded 0 forever, which is #4663: PV showed a flat 0W
+        # while the native app showed live generation, and the power-flow diagram displayed an
+        # impossible balance (battery charging hard with nothing coming in).
+        #
+        # pvTotalPower is present too but lags - across consecutive samples it held 4.38 while the
+        # string data (pV1/pV2 voltage x current) rose 4.26 -> 4.33 -> 4.67kW and pVPower tracked it
+        # at 4.40 -> 4.66 -> 5.00kW. Fall back through the other spellings only if pVPower is absent.
+        pv_power_kw = 0.0
+        for pv_key in ("pVPower", "pvTotalPower", "pvPower"):
+            if pv_key in rt:
+                pv_power_kw = _safe_float(rt[pv_key])
+                break
         # activePower: positive=export (net generation to grid), negative=import.
         # Maps directly to gridPower in the Predbat convention (positive=export).
         grid_power_kw = _safe_float(rt.get("activePower", 0))
@@ -772,10 +812,22 @@ class SigenergyAPI(ComponentBase):
 
         The Sigenergy Cloud API has no native "today" load/import/export sensor,
         so this polls the history endpoint at level=Lifetime for the ever-growing
-        Sankey node totals (TO_LOAD, FROM_GRID, TO_GRID, FROM_SOLAR, TO_BATTERY,
-        FROM_BATTERY, TO_EVDC, FROM_EVDC). Predbat derives "today" energy from
-        these by diffing against midnight — the same pattern already used for
-        lifetime energy counters on other inverter brands.
+        Sankey node totals (TO_LOAD, FROM_GRID, TO_GRID, FROM_SOLAR,
+        FROM_THIRD_PARTY_INV, TO_BATTERY, FROM_BATTERY, TO_EVDC, FROM_EVDC).
+        Predbat derives "today" energy from these by diffing against midnight —
+        the same pattern already used for lifetime energy counters on other
+        inverter brands.
+
+        The 'date' query parameter has no effect on the returned totals at
+        level=Lifetime (confirmed by requesting yesterday/today/tomorrow and
+        getting identical values back) — the API always returns its current
+        live cumulative total. That server-side total has been observed to
+        dip by some kWh for roughly the first 30 minutes after local midnight
+        each night before correcting itself — presumably a day-rollover job on
+        Sigenergy's side recalculating the total. Since these are one-directional
+        cumulative energy counters that can only legitimately increase, any
+        dip is clamped to the last known value rather than published, so the
+        transient glitch never reaches HA's history for these sensors.
 
         Args:
             system_id: Sigenergy system unique identifier.
@@ -783,18 +835,25 @@ class SigenergyAPI(ComponentBase):
         Returns:
             True on success, False on failure.
         """
-        today = datetime.now(self.local_tz).strftime("%Y-%m-%d")
         data = await self._request(
             "GET",
             "/openapi/systems/{}/v1/history".format(system_id),
-            params={"systemId": system_id, "date": today, "level": "Lifetime"},
+            params={"systemId": system_id, "date": datetime.now(self.local_tz).strftime("%Y-%m-%d"), "level": "Lifetime"},
         )
         if data is None or not isinstance(data, dict):
             self.log("Warn: SigenergyAPI: Failed to fetch history totals for {}".format(system_id))
             return False
 
         nodes = data.get("sankeyData", {}).get("nodes", [])
-        self.history_totals[system_id] = {node.get("id"): _safe_float(node.get("value", 0)) for node in nodes if node.get("id")}
+        new_totals = {node.get("id"): _safe_float(node.get("value", 0)) for node in nodes if node.get("id")}
+        previous_totals = self.history_totals.get(system_id, {})
+        # Start from previous_totals so a node ID transiently missing from this response (rather
+        # than genuinely dipping) keeps its last known value instead of vanishing and defaulting
+        # to 0 when published (publish_system_entities() reads missing nodes as 0).
+        merged_totals = dict(previous_totals)
+        for node_id, value in new_totals.items():
+            merged_totals[node_id] = max(value, previous_totals.get(node_id, value))
+        self.history_totals[system_id] = merged_totals
         return True
 
     async def fetch_current_mode(self, system_id):
@@ -966,6 +1025,23 @@ class SigenergyAPI(ComponentBase):
         self._tls_context = tls_context
         return tls_context
 
+    @staticmethod
+    def redact(payload):
+        """Return payload with credential-bearing keys masked, for safe logging.
+
+        Recursive over dicts and common sequences. DeyeAPI/SunsynkAPI recurse over dicts + lists;
+        Sigenergy MQTT command payloads nest per-system commands one level down inside a list,
+        so a top-level-only rewrite would still leak anything a future payload carries there.
+        Tuples are included because json.dumps() serialises tuples as JSON arrays.
+        Sets/frozen sets are handled for log safety, even though json.dumps() does not
+        serialise them by default.
+        """
+        if isinstance(payload, dict):
+            return {key: ("<redacted>" if key in SIGENERGY_LOG_REDACT_KEYS else SigenergyAPI.redact(value)) for key, value in payload.items()}
+        if isinstance(payload, (list, tuple, set, frozenset)):
+            return [SigenergyAPI.redact(value) for value in payload]
+        return payload
+
     async def _publish_mqtt(self, topic, payload_dict):
         """Publish a JSON payload to the Sigenergy MQTT broker.
 
@@ -993,7 +1069,7 @@ class SigenergyAPI(ComponentBase):
                 keepalive=30,
             ) as client:
                 await client.publish(topic, payload=json.dumps(payload_dict), qos=1)
-            self.log("SigenergyAPI: MQTT published to {} - {}".format(topic, payload_dict))
+            self.log("SigenergyAPI: MQTT published to {} - {}".format(topic, self.redact(payload_dict)))
             return True
         except Exception as e:
             self.log("Warn: SigenergyAPI: MQTT publish to {} failed: {}".format(topic, e))
@@ -1159,8 +1235,10 @@ class SigenergyAPI(ComponentBase):
         last known value of every raw field) rather than used on its own —
         otherwise any field that hasn't changed recently would read back as 0.
         Recomputes and overwrites ``self.energy_flow[system_id]`` from that merged
-        state. The ``period`` message is broadcast every ~5 s by the broker and
-        carries inverter and storage power/SOC values.
+        state, except for fields this system has never reported at all, which keep
+        whatever the REST poll last put there (see #4663). The ``period`` message is
+        broadcast every ~5 s by the broker and carries inverter and storage
+        power/SOC values.
 
         Field sign convention matches Predbat's own battery_power/grid_power convention:
           batteryPower — positive = discharging, negative = charging
@@ -1205,31 +1283,46 @@ class SigenergyAPI(ComponentBase):
         raw = self.mqtt_period_raw.setdefault(system_id, {})
         raw.update(value_dict)
 
+        # A field the broker has *never* sent is still absent from the merged state, and defaulting
+        # it to 0 here would overwrite a good value the REST poll already put in energy_flow with a
+        # fabricated zero. Seen live in #4663: period messages carrying only "PV power" reset SoC to
+        # 0%, which made Predbat replan against an empty battery mid-export. Keep the last known
+        # value for anything this system has not actually reported yet.
+        previous_flow = self.energy_flow.get(system_id, {})
+        previous_status = self.system_status.get(system_id, {})
+
+        def _field(raw_key, previous, flow_key, scale=1.0, negate=False):
+            """Scaled value of raw_key, or the value already held for flow_key if never reported."""
+            if raw_key not in raw:
+                return previous.get(flow_key, 0.0)
+            value = _safe_float(raw[raw_key]) * scale
+            return -value if negate else value
+
         # Note: storageChargeDischargePowerW is negative when discharging, convert to Predbat
-        bat_power_kw = -_safe_float(raw.get("storageChargeDischargePowerW", 0)) / 1000.0
-        pv_power_kw = _safe_float(raw.get("PV power", 0)) / 1000.0
+        bat_power_kw = _field("storageChargeDischargePowerW", previous_flow, "batteryPower", scale=1 / 1000.0, negate=True)
+        pv_power_kw = _field("PV power", previous_flow, "pvPower", scale=1 / 1000.0)
         # Convert grid power, from positive=import to positive=export (same as Predbat)
-        grid_power_kw = -_safe_float(raw.get("gridActivePowerW", 0)) / 1000.0
+        grid_power_kw = _field("gridActivePowerW", previous_flow, "gridPower", scale=1 / 1000.0, negate=True)
         # Energy balance in Predbat convention (bat: +discharge/-charge, grid: +export/-import):
         # load = pv + battery_discharge - grid_export
         load_power_kw = pv_power_kw + bat_power_kw - grid_power_kw
 
         flow = {
-            "batterySoc": _safe_float(raw.get("storageSOC%", 0)),
+            "batterySoc": _field("storageSOC%", previous_flow, "batterySoc"),
             "batteryPower": bat_power_kw,
             "pvPower": pv_power_kw,
             "gridPower": grid_power_kw,
             "loadPower": max(0.0, load_power_kw),
             "evPower": 0.0,
-            "inverterPower": _safe_float(raw.get("inverterActivePowerW", 0)) / 1000.0,
+            "inverterPower": _field("inverterActivePowerW", previous_flow, "inverterPower", scale=1 / 1000.0),
         }
         flow_status = {
-            "chargeCapacity": _safe_float(raw.get("storageChargeCapacityWh", 0)) / 1000.0,
-            "dischargeCapacity": _safe_float(raw.get("storageDischargeCapacityWh", 0)) / 1000.0,
-            "ratedChargePower": _safe_float(raw.get("batteryMaxChargePowerW", 0)) / 1000.0,
-            "ratedDischargePower": _safe_float(raw.get("batteryMaxDischargePowerW", 0)) / 1000.0,
-            "operationalMode": _safe_float(raw.get("operationalMode", 0)),
-            "systemStatus": _safe_float(raw.get("systemStatus", 0)),
+            "chargeCapacity": _field("storageChargeCapacityWh", previous_status, "chargeCapacity", scale=1 / 1000.0),
+            "dischargeCapacity": _field("storageDischargeCapacityWh", previous_status, "dischargeCapacity", scale=1 / 1000.0),
+            "ratedChargePower": _field("batteryMaxChargePowerW", previous_status, "ratedChargePower", scale=1 / 1000.0),
+            "ratedDischargePower": _field("batteryMaxDischargePowerW", previous_status, "ratedDischargePower", scale=1 / 1000.0),
+            "operationalMode": _field("operationalMode", previous_status, "operationalMode"),
+            "systemStatus": _field("systemStatus", previous_status, "systemStatus"),
         }
         self.energy_flow[system_id] = flow
         self.system_status[system_id] = flow_status
@@ -1403,6 +1496,9 @@ class SigenergyAPI(ComponentBase):
                         # Parse topic: openapi/{type}/{app_key}/{system_id}
                         topic_str = str(message.topic)
                         parts = topic_str.split("/")
+                        # The topic embeds app_key (the MQTT broker username), so mask it before
+                        # any log line prints the topic — same leak class as the publish payload.
+                        safe_topic = topic_str.replace(self.app_key, "<redacted>") if self.app_key else topic_str
                         # Expected: ['openapi', type, app_key, system_id]
                         if len(parts) < 4:
                             continue
@@ -1414,7 +1510,7 @@ class SigenergyAPI(ComponentBase):
                         try:
                             payload = json.loads(raw.decode("utf-8", errors="replace"))
                         except (json.JSONDecodeError, ValueError):
-                            self.log("Warn: SigenergyAPI: MQTT non-JSON payload on {}: {}".format(topic_str, raw[:120]))
+                            self.log("Warn: SigenergyAPI: MQTT non-JSON payload on {}: {}".format(safe_topic, raw[:120]))
                             continue
 
                         # Each message is a list of device-level entries; process each
@@ -1428,7 +1524,7 @@ class SigenergyAPI(ComponentBase):
                                 continue
                             self.last_mqtt_update[entry_sid] = time.time()
                             value_dict = entry.get("value", {})
-                            self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(topic_str, entry_sid, msg_type, value_dict))
+                            self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(safe_topic, entry_sid, msg_type, value_dict))
                             if msg_type == "period":
                                 self._handle_mqtt_period(entry_sid, value_dict)
                                 if self.api_started:
@@ -1648,9 +1744,15 @@ class SigenergyAPI(ComponentBase):
         )
 
         # --- Operational mode (string) ---
-        op_mode_int = int(_safe_float(flow_status.get("operationalMode", -1)))
+        # flow_status (from MQTT) is preferred as it's the freshest, but fall back to the
+        # REST-sourced current_mode (fetch_current_mode) so this doesn't read "Unknown" before
+        # MQTT has delivered its first message — e.g. during startup or while MQTT is unavailable.
+        if "operationalMode" in flow_status:
+            op_mode_int = int(_safe_float(flow_status["operationalMode"], -1))
+        else:
+            op_mode_int = self.current_mode.get(system_id, -1)
         op_mode_str = SIGENERGY_MODE_NAMES.get(op_mode_int, "Unknown ({})".format(op_mode_int) if op_mode_int >= 0 else "Unknown")
-        sys_status_int = int(_safe_float(flow_status.get("systemStatus", -1)))
+        sys_status_int = int(_safe_float(flow_status.get("systemStatus", -1), -1))
         sys_status_str = SIGENERGY_SYSTEM_STATUS_NAMES.get(sys_status_int, "Unknown ({})".format(sys_status_int) if sys_status_int >= 0 else "Unknown")
         self.dashboard_item(
             "sensor.{}_sigenergy_{}_operational_mode".format(self.prefix, slug),
@@ -1736,7 +1838,13 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("pv_power", ["sensor.{}_sigenergy_{}_pv_power".format(self.prefix, s) for s in slugs])
         self.set_arg("grid_power", ["sensor.{}_sigenergy_{}_grid_power".format(self.prefix, s) for s in slugs])
         self.set_arg("load_power", ["sensor.{}_sigenergy_{}_load_power".format(self.prefix, s) for s in slugs])
-        self.set_arg("pv_today", ["sensor.{}_sigenergy_{}_pv_lifetime".format(self.prefix, s) for s in slugs])
+        # pv_today accepts a flat list of entities that get summed, so include both the native PV
+        # lifetime total and the third-party inverter's PV lifetime total (FROM_THIRD_PARTY_INV) —
+        # Sigenergy systems can have a co-located third-party inverter feeding into the same battery.
+        self.set_arg(
+            "pv_today",
+            ["sensor.{}_sigenergy_{}_pv_lifetime".format(self.prefix, s) for s in slugs] + ["sensor.{}_sigenergy_{}_third_party_pv_lifetime".format(self.prefix, s) for s in slugs],
+        )
         self.set_arg("load_today", ["sensor.{}_sigenergy_{}_load_lifetime".format(self.prefix, s) for s in slugs])
         self.set_arg("import_today", ["sensor.{}_sigenergy_{}_grid_import_lifetime".format(self.prefix, s) for s in slugs])
         self.set_arg("export_today", ["sensor.{}_sigenergy_{}_grid_export_lifetime".format(self.prefix, s) for s in slugs])
@@ -1952,9 +2060,18 @@ class SigenergyAPI(ComponentBase):
         self.log("SigenergyAPI: Control update system={} direction={} field={} value={}".format(system_id, direction, field, value))
         await self.publish_controls(system_id)
 
-        if field == "offboard" and value is True:
-            self.log("SigenergyAPI: Offboard toggle turned on for {} — offboarding".format(system_id))
-            await self.offboard_systems(system_id)
+        if field == "offboard":
+            if value is True:
+                self.log("SigenergyAPI: Offboard toggle turned on for {}".format(system_id))
+                if not await self._offboard_system_if_needed(system_id):
+                    self.log("SigenergyAPI: Offboard of {} incomplete — the periodic check will retry".format(system_id))
+            else:
+                # Re-onboarding — let a future offboard run both steps again.
+                self._offboard_vpp_exit_done.discard(system_id)
+                self._offboard_done.discard(system_id)
+                self.onboard_status[str(system_id)] = "not_onboarded"
+                await self._save_cache("onboard_status", self.onboard_status)
+                self._publish_onboard_status()
 
     def _parse_entity_system(self, entity_id):
         """Extract (system_id, direction, field) from a control entity ID.
@@ -2086,6 +2203,7 @@ class SigenergyAPI(ComponentBase):
                 new_mode = "export"
                 active_mode = SIGENERGY_ACTIVE_MODE_DISCHARGE
                 discharge_priority_type = "PV"
+                charge_power_kw = export_rate_w / 1000.0
         elif charge_window and charge_start_dt and charge_end_dt:
             duration_min = max(1, int((charge_end_dt - now).total_seconds() / 60))
             effective_target = max(charge_target_soc, reserve_soc)
@@ -2119,6 +2237,100 @@ class SigenergyAPI(ComponentBase):
     # VPP registration management
     # -----------------------------------------------------------------------
 
+    def _axle_has_control(self):
+        """Return True while an Axle VPP event owns the inverter under the axle_control option.
+
+        Predbat's ``axle_control`` option means "let Axle drive the battery during its
+        events". Fetch.fetch_config_options() expresses that as ``set_read_only_axle``, but
+        that flag is only refreshed on the 5-minute prediction loop and is still False from
+        reset() when this component makes its first run — which is exactly the case that
+        matters, a restart in the middle of a live event. So evaluate the same condition
+        live here instead of reading the cached flag: the component runs every minute, so
+        an event start or end is picked up promptly and correctly across a restart.
+
+        Fails safe: with no ``axle_control`` and no Axle session entity this returns False,
+        leaving Predbat as the owner exactly as before.
+
+        Returns:
+            True if an Axle event currently owns the inverter, False otherwise.
+        """
+        if not self.get_arg("axle_control", False):
+            return False
+        return fetch_axle_active(self)
+
+    async def _exit_vpp_for_offboard(self, system_id):
+        """Leave VPP mode so the owner's app regains control of an offboarded system.
+
+        Sigenergy's offboard endpoint is not documented to drop the system out of VPP,
+        so we do it explicitly rather than relying on it as a side-effect. Getting this
+        wrong strands the owner in the worst possible state: still in VPP, so their
+        mySigen app cannot control the battery, but with Predbat no longer driving it
+        either.
+
+        Only an owner-controlled mode observed in current_mode is latched. A successful MQTT publish only
+        confirms that the command was accepted by the broker; it does not confirm that
+        the inverter has changed mode. Offboarding must wait for MQTT/REST telemetry to
+        report MSC or another owner-controlled mode, otherwise the REST offboard can race
+        the mode command and revoke our authorisation while the owner's app is still blocked.
+
+        Args:
+            system_id: Sigenergy system unique identifier.
+
+        Returns:
+            True if telemetry confirms the owner's app has control, False while the
+            switch is unknown, failed, or still waiting for confirmation.
+        """
+        current_mode = self.current_mode.get(system_id)
+        if current_mode == SIGENERGY_MODE_VPP or current_mode in SIGENERGY_THIRD_PARTY_MODES:
+            # Live telemetry always wins over a stale latch: the system may have been
+            # moved back under platform control while an earlier offboard attempt was
+            # failing. NBI also blocks the owner's app, so an explicit offboard takes
+            # priority over the Axle stand-down and exits that mode too.
+            self._offboard_vpp_exit_done.discard(system_id)
+            self.log("SigenergyAPI: Offboarding system {} — switching {} to MSC so the owner's app regains control".format(system_id, SIGENERGY_MODE_NAMES.get(current_mode, "platform control")))
+            if not await self.set_operating_mode(system_id, SIGENERGY_MODE_MSC):
+                self.log("Warn: SigenergyAPI: Could not return {} to owner control — deferring offboard rather than locking the owner out".format(system_id))
+            else:
+                self.log("SigenergyAPI: Owner control requested for {} — waiting for operating-mode confirmation before offboarding".format(system_id))
+            return False
+        if current_mode not in (SIGENERGY_MODE_MSC, SIGENERGY_MODE_FFG):
+            self.log("Warn: SigenergyAPI: Operating mode unknown for {} — deferring offboard until owner control can be confirmed".format(system_id))
+            return False
+        if system_id not in self._offboard_vpp_exit_done:
+            self._offboard_vpp_exit_done.add(system_id)
+        return True
+
+    async def _offboard_system_if_needed(self, system_id):
+        """Take a system out of VPP and then off the platform, in that order.
+
+        Ordering matters: once offboarded we may no longer be authorised to set the
+        operating mode, so the VPP exit has to land first. Both steps are latched only
+        on success, so a transient failure of either is retried by the next poll
+        instead of being silently abandoned half-done.
+
+        Args:
+            system_id: Sigenergy system unique identifier.
+
+        Returns:
+            True once the system has been offboarded, False while steps remain.
+        """
+        if system_id in self._offboard_done:
+            return True
+        if not await self._exit_vpp_for_offboard(system_id):
+            return False
+        self.log("SigenergyAPI: Offboarding system {}".format(system_id))
+        result = await self.offboard_systems(system_id)
+        result_items = result if isinstance(result, list) else [result]
+        item_failed = any(isinstance(item, dict) and item.get("result") is False for item in result_items)
+        if result is None or item_failed:
+            self.log("Warn: SigenergyAPI: Offboard failed for {} — will retry on the next poll".format(system_id))
+            return False
+        self._offboard_done.add(system_id)
+        self.onboard_status[str(system_id)] = "offboarded"
+        await self._save_cache("onboard_status", self.onboard_status)
+        self._publish_onboard_status()
+        return True
+
     async def _manage_vpp_registration(self, system_id, is_readonly, is_offboard=False):
         """Align the operating mode with the read-only and offboard switch settings.
 
@@ -2127,12 +2339,23 @@ class SigenergyAPI(ComponentBase):
         block in run().
 
         Cases (offboard takes priority over readonly):
-          offboard=True  + VPP active   → switch to MSC so the user's app regains control
-          offboard=True  + VPP inactive → nothing to do (already out of VPP)
+          offboard=True  + VPP/NBI active → switch to MSC so the user's app regains control
+          offboard=True  + owner mode     → offboard the system
           readonly=True  + VPP active   → switch to MSC so the user's app regains control
           readonly=True  + VPP inactive → nothing to do
           readonly=False + VPP active   → nothing to do (ready for controls)
           readonly=False + VPP inactive → switch to VPP mode to enable controls
+
+        An explicit offboard takes priority over an active Axle event so it can return the
+        system from NBI to the owner's app before removing authorisation. For every other
+        case an active Axle event under the ``axle_control`` option makes Predbat stand down
+        and leave the operating mode untouched.
+
+        Otherwise Predbat is the owner. A Sigenergy accepts one controller at a time and
+        VPP mode and NBI are mutually exclusive, so finding the system in NBI means
+        reclaiming it — which overrides whatever the other controller had scheduled.
+        Predbat ingests Axle sessions as its own export windows (see load_axle_slot), so
+        the event still runs; it runs under Predbat's plan rather than Axle's dispatch.
 
         Args:
             system_id: Sigenergy system unique identifier.
@@ -2145,7 +2368,22 @@ class SigenergyAPI(ComponentBase):
         in_vpp = self.current_mode.get(system_id) == SIGENERGY_MODE_VPP
 
         if is_offboard:
+            # Retries here until both steps land, so a failed mode switch or a failed
+            # offboard is picked up on the next poll rather than left half-done.
+            await self._offboard_system_if_needed(system_id)
             return False
+
+        # Axle owns the inverter for the duration of its event. Leave the mode exactly as
+        # it is: if Axle has already moved the system to NBI it stays there, and if the
+        # event has started but Axle has not switched yet, do not pull it to MSC either —
+        # that would hand control to the owner's app rather than to Axle.
+        if self._axle_has_control():
+            if not self._axle_standoff_logged.get(system_id):
+                self.log("SigenergyAPI: Axle VPP event active — leaving system {} in {} and standing down until the event ends".format(system_id, SIGENERGY_MODE_NAMES.get(self.current_mode.get(system_id, -1), "Unknown")))
+                self._axle_standoff_logged[system_id] = True
+            return False
+        if self._axle_standoff_logged.pop(system_id, False):
+            self.log("SigenergyAPI: Axle VPP event ended — resuming control of system {}".format(system_id))
 
         if is_readonly and in_vpp:
             self.log("SigenergyAPI: Read-only mode active — switching system {} from VPP to MSC".format(system_id))
@@ -2153,7 +2391,19 @@ class SigenergyAPI(ComponentBase):
             return False
 
         if not is_readonly and not in_vpp:
-            self.log("SigenergyAPI: System {} is not in VPP mode — switching to VPP to enable controls".format(system_id))
+            current = self.current_mode.get(system_id, -1)
+            if current in SIGENERGY_THIRD_PARTY_MODES:
+                # Another controller — typically an Axle dispatch running without
+                # axle_control set — has taken the inverter. Predbat is the owner here, so
+                # reclaim, and say so plainly since this displaces the other schedule.
+                self.last_contended_by[system_id] = SIGENERGY_MODE_NAMES.get(current, "Unknown")
+                self.log(
+                    "Warn: SigenergyAPI: System {} was taken by another controller ({}) — reclaiming VPP mode, which overrides that controller's schedule".format(
+                        system_id, SIGENERGY_MODE_NAMES.get(current, "Unknown ({})".format(current))
+                    )
+                )
+            else:
+                self.log("SigenergyAPI: System {} is not in VPP mode ({}) — switching to VPP to enable controls".format(system_id, SIGENERGY_MODE_NAMES.get(current, "Unknown")))
             await self.set_operating_mode(system_id, SIGENERGY_MODE_VPP)
             return False  # current_mode will be updated by MQTT/REST on the next cycle
 
@@ -2175,9 +2425,102 @@ class SigenergyAPI(ComponentBase):
                     "friendly_name": "Sigenergy {} Onboarding Status".format(sid),
                     "system_id": sid,
                     "in_vpp": self.current_mode.get(sid) == SIGENERGY_MODE_VPP,
+                    # Records the last controller to displace Predbat's VPP registration.
+                    # Deliberately never cleared: contention often lasts less than one
+                    # publish cycle, so a marker that is reset on recovery would almost
+                    # never be seen. Support needs "has this happened", not "is it
+                    # happening right now" — which in_vpp already answers.
+                    "last_contended_by": self.last_contended_by.get(sid),
+                    "axle_has_control": self._axle_has_control(),
                 },
                 app="sigenergy",
             )
+
+    # -----------------------------------------------------------------------
+    # Storage cache
+    # -----------------------------------------------------------------------
+
+    def _data_age_minutes(self, key):
+        """Return the age in minutes of the in-memory data for a cache key, or None if unknown."""
+        timestamp = self.data_age.get(key, None)
+        if timestamp is None:
+            return None
+        return (datetime.now(self.local_tz) - timestamp).total_seconds() / 60.0
+
+    def _needs_refresh(self, key, max_age_minutes):
+        """Return True if the data for a cache key is missing or older than max_age_minutes."""
+        age = self._data_age_minutes(key)
+        return age is None or age >= max_age_minutes
+
+    async def _save_cache(self, key, data):
+        """Save poll-interval system state to storage so it survives a Predbat restart.
+
+        Mirrors the pattern used by FoxAPI._save_cache().
+
+        Args:
+            key: Cache key, one of SIGENERGY_CACHE_KEYS.
+            data: JSON-serialisable data to persist.
+        """
+        now = datetime.now(self.local_tz)
+        self.data_age[key] = now
+        if self.storage:
+            # Expire after a day so stale data doesn't linger in the cache forever
+            await self.storage.save("sigenergy", key, data, format="json", expiry=now + timedelta(days=1))
+
+    async def _load_cache(self, key):
+        """Load previously persisted poll-interval system state for a cache key.
+
+        Also records the data's age (from storage) so _needs_refresh() can tell, right after a
+        restart, whether the restored value is still fresh enough to skip an immediate re-fetch.
+
+        Args:
+            key: Cache key, one of SIGENERGY_CACHE_KEYS.
+
+        Returns:
+            The cached data, or None if storage is unavailable or nothing is cached.
+        """
+        if not self.storage:
+            return None
+        data = await self.storage.load("sigenergy", key)
+        if data is None:
+            return None
+        age = await self.storage.age("sigenergy", key)
+        if age is None:
+            return None
+        self.data_age[key] = datetime.now(self.local_tz) - timedelta(minutes=age)
+        return data
+
+    async def load_cached_data(self):
+        """Restore poll-interval system state from storage on startup.
+
+        System/device discovery (self.systems, self.devices) is always re-fetched fresh on
+        startup and is not restored here. What matters most is history_totals — restoring it
+        preserves the monotonic-clamp baseline in fetch_history_totals() across a restart, so a
+        reboot during the API's own nightly dip window can't let a lower reading through. The
+        rest (energy_flow, daily_summary, onboard_status) is restored too so entities publish
+        sensible values immediately rather than "unknown"/0 while the first poll is in flight.
+        """
+        if not self.storage:
+            return
+
+        energy_flow = await self._load_cache("energy_flow")
+        if energy_flow is not None:
+            self.energy_flow = energy_flow
+
+        daily_summary = await self._load_cache("daily_summary")
+        if daily_summary is not None:
+            self.daily_summary = daily_summary
+
+        history_totals = await self._load_cache("history_totals")
+        if history_totals is not None:
+            self.history_totals = history_totals
+
+        onboard_status = await self._load_cache("onboard_status")
+        if onboard_status is not None:
+            self.onboard_status = onboard_status
+
+
+        self.log("SigenergyAPI: Restored cached poll-interval state from storage")
 
     # -----------------------------------------------------------------------
     # Main run loop
@@ -2199,6 +2542,10 @@ class SigenergyAPI(ComponentBase):
         """
         if first:
             self.log("SigenergyAPI: First run — discovering systems")
+            # Restore poll-interval state (history_totals, energy_flow, daily_summary,
+            # onboard_status) before any fetch below runs, so fetch_history_totals()'s
+            # monotonic clamp has its last-known baseline from before the restart.
+            await self.load_cached_data()
             if not self.system_id_filter:
                 self.log("Warn: SigenergyAPI: No system_id configured — will use all authorised systems")
             token = await self.get_access_token()
@@ -2212,6 +2559,9 @@ class SigenergyAPI(ComponentBase):
             for sid in missing_ids:
                 self.onboard_status.setdefault(str(sid), "not_onboarded")
                 slug = self._system_slug(sid)
+                # The switch is the source of truth: it is a control entity, so its state
+                # is restored on startup like every other one. Onboarding a system the
+                # owner deliberately left would cost them a fresh approval email.
                 is_offboard_at_start = self.get_state_wrapper("switch.{}_sigenergy_{}_offboard".format(self.prefix, slug), default="off") == "on"
                 if is_offboard_at_start:
                     self.log("SigenergyAPI: System {} offboard toggle is on — skipping onboard attempt".format(sid))
@@ -2224,7 +2574,12 @@ class SigenergyAPI(ComponentBase):
                     return False
                 await self.fetch_system_list()
 
+
             if not self.systems:
+                # An intentionally offboarded system is absent from the authorised list.
+                # Publish the restored completion state before returning for retry so a
+                # restart does not replace a truthful "offboarded" sensor with silence.
+                self._publish_onboard_status()
                 self.log("Warn: SigenergyAPI: No systems available after discovery, will retry")
                 return False
 
@@ -2248,10 +2603,19 @@ class SigenergyAPI(ComponentBase):
             for sid in list(self.systems.keys()):
                 await self.fetch_device_list(sid)
 
-        # VPP registration management — runs at startup and every 5 minutes.
+        # VPP registration management — runs at startup and every minute.
+        #
+        # This used to run on the 5 minute poll interval, so when another controller took
+        # the system it could hold it for up to 5 minutes before Predbat noticed. The
+        # minute cadence also means an Axle event start or end is picked up promptly, which
+        # matters now that the stand-down is evaluated here rather than read from a flag
+        # the prediction loop refreshes. set_operating_mode is an MQTT publish and only
+        # fires when the mode is actually wrong, so this costs nothing against the REST
+        # rate limit.
+        #
         # Skips any system whose operating mode is not yet known (REST bootstrap
         # may have failed; MQTT will populate current_mode once it arrives).
-        if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
+        if first or seconds % SIGENERGY_VPP_RECLAIM_INTERVAL == 0:
             is_readonly_vpp = self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
             for sid in list(self.systems.keys()):
                 if sid not in self.current_mode:
@@ -2261,16 +2625,32 @@ class SigenergyAPI(ComponentBase):
                 is_offboard = self.get_state_wrapper("switch.{}_sigenergy_{}_offboard".format(self.prefix, slug), default="off") == "on"
                 await self._manage_vpp_registration(sid, is_readonly_vpp, is_offboard)
                 # Derive the user-facing onboarding status for the visible system.
-                if is_offboard:
+                # A system sitting in a third-party mode is fully onboarded — another
+                # controller has simply taken it. Reporting "pending_approval" there makes
+                # the SaaS UI show an amber "waiting for your approval in the Sigenergy
+                # app" banner for the length of every Axle event, telling the user to go
+                # and approve something that needs no approval.
+                if is_offboard and sid in self._offboard_done:
                     self.onboard_status[str(sid)] = "offboarded"
+                elif is_offboard:
+                    # The system is still authorised while the VPP exit or offboard call
+                    # is pending. It is not waiting for onboarding approval.
+                    self.onboard_status[str(sid)] = "active"
                 elif self.current_mode.get(sid) == SIGENERGY_MODE_VPP:
+                    self.onboard_status[str(sid)] = "active"
+                elif self.current_mode.get(sid) in SIGENERGY_THIRD_PARTY_MODES:
                     self.onboard_status[str(sid)] = "active"
                 else:
                     self.onboard_status[str(sid)] = "pending_approval"
 
-        # Publish onboarding status for the SaaS UI.
-        if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
+            # Publish on the same cadence as the check above, so a contention episode
+            # shorter than a poll interval still reaches the sensor.
             self._publish_onboard_status()
+
+        # Persist the derived status on the slower poll cadence — the check above runs
+        # every minute and the cache does not need rewriting that often.
+        if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
+            await self._save_cache("onboard_status", self.onboard_status)
 
         # Fetch controls from HA on first run only
         if first:
@@ -2281,18 +2661,46 @@ class SigenergyAPI(ComponentBase):
         # Realtime data refresh — skip live power/SOC fetch when MQTT is providing fresh data
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
             now_ts = time.time()
+            energy_updated = False
+            summary_updated = False
+            history_updated = False
+            # On a normal poll tick these are always True (the block itself only runs every
+            # SIGENERGY_POLL_INTERVAL), so this only matters right after a restart: it stops
+            # load_cached_data()'s restored energy_flow/daily_summary/history_totals being
+            # re-fetched immediately when the persisted cache is still fresh.
+            refresh_energy = self._needs_refresh("energy_flow", SIGENERGY_POLL_INTERVAL / 60.0)
+            refresh_summary = self._needs_refresh("daily_summary", SIGENERGY_POLL_INTERVAL / 60.0)
+            refresh_history = self._needs_refresh("history_totals", SIGENERGY_POLL_INTERVAL / 60.0)
             for sid in list(self.systems.keys()):
                 last_update = self.last_mqtt_update.get(sid, 0)
                 mqtt_age = now_ts - last_update
                 mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_POLL_INTERVAL
                 if mqtt_fresh:
+                    # MQTT is genuinely keeping energy_flow live — worth persisting/re-timestamping.
                     self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT data {:.0f}s old)".format(sid, mqtt_age))
+                    energy_updated = True
+                elif refresh_energy:
+                    if await self.fetch_inverter_realtime(sid) or await self.fetch_energy_flow(sid):
+                        energy_updated = True
                 else:
-                    if not await self.fetch_inverter_realtime(sid):
-                        await self.fetch_energy_flow(sid)
-                # Always poll daily summary and lifetime history totals — not provided by MQTT
-                await self.fetch_daily_summary(sid)
-                await self.fetch_history_totals(sid)
+                    # Neither MQTT nor a fresh REST fetch — leave data_age untouched so it keeps
+                    # ageing towards refresh_energy instead of being falsely renewed.
+                    self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT stale but cached data still fresh)".format(sid))
+                # Daily summary and lifetime history totals are not provided by MQTT, but are only
+                # refreshed when the cached copy has actually gone stale (see refresh_* above)
+                if refresh_summary and await self.fetch_daily_summary(sid):
+                    summary_updated = True
+                if refresh_history and await self.fetch_history_totals(sid):
+                    history_updated = True
+            # Each cache is only saved (and its freshness timestamp bumped) when the data was
+            # actually confirmed fresh this tick — an unconditional save would falsely renew
+            # data_age and defeat the refresh_* gates above.
+            if energy_updated:
+                await self._save_cache("energy_flow", self.energy_flow)
+            if summary_updated:
+                await self._save_cache("daily_summary", self.daily_summary)
+            if history_updated:
+                await self._save_cache("history_totals", self.history_totals)
 
         # Publish entities
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
@@ -2304,16 +2712,27 @@ class SigenergyAPI(ComponentBase):
             await self.automatic_config()
 
         # Apply controls
-        is_readonly = self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
+        # Treat an active Axle event as read-only: Axle is driving the battery, so Predbat
+        # must not also be issuing charge/discharge commands at the same inverter.
+        is_readonly = self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on" or self._axle_has_control()
         if self.enable_controls and not is_readonly:
             if first or seconds % 60 == 0:
                 for sid in list(self.systems.keys()):
                     if self.current_mode.get(sid) != SIGENERGY_MODE_VPP:
-                        self.log(
-                            "Warn: SigenergyAPI: System {} is not in VPP mode ({}) — controls skipped until onboard is approved".format(
-                                sid, SIGENERGY_MODE_NAMES.get(self.current_mode.get(sid, -1), "Unknown")
+                        current = self.current_mode.get(sid, -1)
+                        if current in SIGENERGY_THIRD_PARTY_MODES:
+                            # Nothing to approve — another controller holds the system.
+                            self.log(
+                                "Warn: SigenergyAPI: System {} is held by another controller ({}) — controls skipped until VPP mode is reclaimed".format(
+                                    sid, SIGENERGY_MODE_NAMES.get(current, "Unknown")
+                                )
                             )
-                        )
+                        else:
+                            self.log(
+                                "Warn: SigenergyAPI: System {} is not in VPP mode ({}) — controls skipped until onboard is approved".format(
+                                    sid, SIGENERGY_MODE_NAMES.get(current, "Unknown")
+                                )
+                            )
                         continue
                     await self.apply_controls(sid)
         else:
@@ -2338,52 +2757,13 @@ class SigenergyAPI(ComponentBase):
         self.log("SigenergyAPI: final() complete")
 
 
-class MockBase:  # pragma: no cover
-    """Mock base class for standalone testing."""
+class MockBase(SharedMockBase):  # pragma: no cover
+    """Mock base for the Sigenergy command-line harness, which can pre-seed read-only mode."""
 
     def __init__(self, readonly=False):
-        """Initialise mock base."""
-        self.prefix = "predbat"
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.args = {}
-        self.entities = {}
-        # Pre-populate the read-only switch so get_state_wrapper returns the right value
-        self.entities["switch.predbat_set_read_only"] = {"state": "on" if readonly else "off"}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        """Return entity state or default."""
-        if raw:
-            return self.entities.get(entity_id, {})
-        return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        """Store entity state."""
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        """Print log message with timestamp."""
-        print("[{}] {}".format(datetime.now().strftime("%H:%M:%S"), message))
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        """Print and store a dashboard entity."""
-        import json
-        print("ENTITY: {} = {}".format(entity_id, state))
-        if attributes:
-            display = {k: ("..." if k == "options" else v) for k, v in attributes.items()}
-            print("  Attributes: {}".format(json.dumps(display, indent=2, default=str)))
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, arg, default=None, indirect=False, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        """Return arg default (mock always returns default)."""
-        return default
-
-    def set_arg(self, key, value):
-        """Print auto-config arg assignment."""
-        state = str(value)
-        print("Set arg {} = {}".format(key, state))
-
-    def update_success_timestamp(self):
-        """No-op success timestamp update."""
+        """Initialise the shared mock, seeding the read-only switch so control writes are gated."""
+        super().__init__()
+        self.entities["switch.predbat_set_read_only"] = {"state": "on" if readonly else "off", "attributes": {}}
 
 
 async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode, action=None, mqtt_host=None, ca_cert=None, client_cert=None, client_key=None, readonly=False):  # pragma: no cover

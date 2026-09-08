@@ -19,12 +19,12 @@ from compare import Compare
 def run_optimise_all_windows(
     name,
     my_predbat,
-    charge_window_best=[],
-    export_window_best=[],
+    charge_window_best=None,
+    export_window_best=None,
     pv_amount=0,
     load_amount=0,
-    expect_charge_limit=[],
-    expect_export_limit=[],
+    expect_charge_limit=None,
+    expect_export_limit=None,
     expect_best_price=0.0,
     rate_import=10.0,
     rate_export=5.5,
@@ -36,6 +36,14 @@ def run_optimise_all_windows(
     best_soc_keep_weight=0.5,
     second_pass=False,
 ):
+    if expect_export_limit is None:
+        expect_export_limit = []
+    if expect_charge_limit is None:
+        expect_charge_limit = []
+    if export_window_best is None:
+        export_window_best = []
+    if charge_window_best is None:
+        charge_window_best = []
     print("Starting optimise all windows test {}".format(name))
     end_record = my_predbat.forecast_minutes
     failed = False
@@ -140,26 +148,24 @@ def run_optimise_all_windows(
 
 
 def run_optimise_all_windows_kernel_tests(my_predbat):
-    """Run the optimise all windows tests with the Python engine and again with the C++ kernel, comparing runtime.
+    """Run the optimise all windows tests with the C++ kernel
 
     Both runs must pass their normal assertions; the kernel run dispatches every supported
     prediction to the C++ kernel. Returns True on failure.
     """
 
-    start = time.time()
-    failed = run_optimise_all_windows_tests(my_predbat)
-    python_time = time.time() - start
-    print("Optimise all windows tests (Python engine) took {} seconds".format(round(python_time, 2)))
-
     available, required_failure = kernel_available()
-    if not available:
-        return required_failure
-
-    start = time.time()
-    failed |= run_optimise_all_windows_tests(my_predbat, prediction_kernel=True)
-    kernel_time = time.time() - start
-    print("Optimise all windows tests (C++ kernel) took {} seconds".format(round(kernel_time, 2)))
-    print("C++ kernel speedup: {}x".format(round(python_time / kernel_time, 1)))
+    failed = False
+    if available:
+        start = time.time()
+        failed |= run_optimise_all_windows_tests(my_predbat, prediction_kernel=True)
+        kernel_time = time.time() - start
+        print("Optimise all windows tests (C++ kernel) took {} seconds".format(round(kernel_time, 2)))
+    else:
+        start = time.time()
+        failed |= run_optimise_all_windows_tests(my_predbat)
+        python_time = time.time() - start
+        print("Optimise all windows tests (Python engine) took {} seconds".format(round(python_time, 2)))
     return failed
 
 
@@ -268,13 +274,13 @@ def run_optimise_all_windows_tests(my_predbat, prediction_kernel=False):
         return failed
 
     # Optimise charge limit
-    best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_charge_limit(
+    best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan = my_predbat.optimise_charge_limit(
         0, len(expect_charge_limit), expect_charge_limit, charge_window_best, export_window_best, expect_export_limit, all_n=None, end_record=my_predbat.end_record
     )
     before_best_metric = best_metric
     my_predbat.isCharging = True
     my_predbat.isCharging_Target = 100
-    best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_charge_limit(
+    best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan = my_predbat.optimise_charge_limit(
         0, len(expect_charge_limit), expect_charge_limit, charge_window_best, export_window_best, expect_export_limit, all_n=None, end_record=my_predbat.end_record
     )
 

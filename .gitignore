@@ -46,6 +46,7 @@ coverage/*.txt
 coverage/*.db
 coverage/*.html
 coverage/*.prof
+coverage/*.py
 coverage/cache/
 coverage/debug/
 coverage/predbat_standalone/
@@ -86,6 +87,8 @@ plan_*.html
 
 # Generated PNG files
 *.png
+!apps/predbat/bat_logo_light.png
+!apps/predbat/bat_logo_dark.png
 
 # Build artifacts
 a.out
@@ -106,5 +109,17 @@ apps.yaml.mark
 comparisons.yaml
 it
 
+# Written to the CLI's cwd by a headless PredBat instance before annual_cli.py's --work-dir
+# takes effect (create_headless_predbat() sets config_root only after load_user_config()/
+# fetch_config_options() have already run) - so running the documented annual_cli.py command
+# from the repo root leaves this behind.
+predbat_config.json
+
 # Runtime-generated manifest
 apps/predbat/manifest.yaml
+
+# Dev-deploy/standalone commit marker (see coverage/deploy, hass.py)
+apps/predbat/git_version.txt
+
+# Claude Code local worktrees
+.claude/worktrees/

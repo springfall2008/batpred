@@ -28,6 +28,8 @@ def test_octopus_download_rates(my_predbat):
     10. download_octopus_rates_func - HTTP error status
     11. download_octopus_rates_func - JSON decode error
     12. download_octopus_rates_func - missing 'results' key
+    13. No current/future rates (#2726) - falls back to stale cache when available
+    14. No current/future rates (#2726) - raises ValueError when no cache available
     """
     print("\n=== Test Octopus download_octopus_rates ===")
     failed = False
@@ -38,6 +40,11 @@ def test_octopus_download_rates(my_predbat):
     my_predbat.midnight_utc = datetime.strptime("2024-06-12T00:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z")
     my_predbat.debug_enable = False
     my_predbat.failures_total = 0
+    # All the mock rate data below starts at minute 0 and covers forward from there - pin "now"
+    # to 0 so the #2726 "has current rates" check (added below, tested explicitly in Test 13/14)
+    # passes for scenarios that aren't about that check, regardless of real wall-clock time or
+    # whatever a previous test left minutes_now as.
+    my_predbat.minutes_now = 0
 
     # Mock the download_octopus_rates_func to return rate data
     mock_rate_data = {
@@ -194,6 +201,50 @@ def test_octopus_download_rates(my_predbat):
         failed = True
     else:
         print("✓ Test 6 passed - Retry mechanism works correctly")
+
+    # Test 13: No current/future rates (#2726) - falls back to stale cache when available.
+    # A retired Octopus product's URL can still return a valid 200/JSON response with genuine
+    # historical results, so this can't be caught by any of the existing failure paths above -
+    # it needs its own check that the data actually reaches "now" onward.
+    print("\nTest 13: No current/future rates (#2726) - falls back to stale cache")
+    test_url = "https://api.octopus.energy/test-stale-product"
+    stale_cached_data = {0: 8.0, 60: 9.0}
+    my_predbat.octopus_url_cache = {
+        test_url: {
+            "stamp": datetime.now() - timedelta(minutes=50),  # expired, forces a fresh download
+            "midnight_utc": my_predbat.midnight_utc,
+            "data": stale_cached_data,
+        }
+    }
+    my_predbat.minutes_now = 120
+    # Every key is before "now" (120) - looks like a retired product still serving historical data.
+    historical_only_data = {0: 5.0, 60: 6.0}
+
+    with patch.object(my_predbat, 'download_octopus_rates_func', return_value=historical_only_data):
+        result = my_predbat.download_octopus_rates(test_url)
+
+    if result != stale_cached_data:
+        print(f"✗ Test 13 failed - Expected stale cached data {stale_cached_data}, got {result}")
+        failed = True
+    else:
+        print("✓ Test 13 passed - No current rates falls back to stale cache")
+
+    # Test 14: No current/future rates (#2726) - raises ValueError when no cache available
+    print("\nTest 14: No current/future rates (#2726) - raises ValueError when no cache")
+    test_url = "https://api.octopus.energy/test-stale-product-no-cache"
+    my_predbat.octopus_url_cache = {}
+    my_predbat.minutes_now = 120
+    historical_only_data = {0: 5.0, 60: 6.0}
+
+    with patch.object(my_predbat, 'download_octopus_rates_func', return_value=historical_only_data):
+        try:
+            result = my_predbat.download_octopus_rates(test_url)
+            print("✗ Test 14 failed - Expected ValueError to be raised")
+            failed = True
+        except ValueError:
+            print("✓ Test 14 passed - ValueError raised when no current rates and no cache")
+
+    my_predbat.minutes_now = 0  # restore for the remaining tests below
 
     # Test 7: download_octopus_rates_func - successful single page
     print("\nTest 7: download_octopus_rates_func - successful single page")

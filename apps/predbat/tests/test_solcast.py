@@ -11,6 +11,7 @@
 import os
 import json
 import hashlib
+import re
 import shutil
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -19,7 +20,9 @@ import pytz
 import aiohttp
 
 from solcast import SolarAPI
+from solar_model import convert_azimuth
 from storage import StorageLocalFiles
+from const import TIME_FORMAT
 from tests.test_infra import run_async, create_aiohttp_mock_response
 
 
@@ -79,6 +82,23 @@ class MockBase:
         """Track dashboard_item calls"""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes}
 
+    def resolve_pv_array_kwp(self, detected_kwp):
+        """Mirror Fetch.resolve_pv_array_kwp - fetch_pv_forecast publishes the detected array size through it.
+
+        The apps.yaml override has to win here exactly as it does in production, or a test that sets
+        pv_array_kwp in mock_config would silently exercise the detected value instead.
+        """
+        from const import PV_ARRAY_KWP_UNKNOWN
+
+        configured = self.get_arg("pv_array_kwp", 0.0)
+        if configured and configured > 0:
+            self.pv_array_kwp = float(configured)
+        elif detected_kwp and 0 < detected_kwp < PV_ARRAY_KWP_UNKNOWN:
+            self.pv_array_kwp = float(detected_kwp)
+        else:
+            self.pv_array_kwp = 0.0
+        return self.pv_array_kwp
+
     def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
         """Return empty history - no historical PV data in tests"""
         return {}
@@ -98,8 +118,10 @@ class MockBase:
             return result
         return default
 
-    def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
+    def set_state_wrapper(self, entity_id, state, attributes=None, required_unit=None):
         """Mock set_state_wrapper"""
+        if attributes is None:
+            attributes = {}
         self.mock_ha_states[entity_id] = {"state": state, "attributes": attributes}
 
     def get_history_wrapper(self, entity_id, days=30, required=False, tracked=True):
@@ -168,6 +190,7 @@ class TestSolarAPI:
             forecast_solar=None,
             forecast_solar_max_age=4,
             forecast_solar_open_meteo_backup=False,
+            forecast_solar_open_meteo_first=False,
             pv_forecast_today=None,
             pv_forecast_tomorrow=None,
             pv_forecast_d3=None,
@@ -284,9 +307,9 @@ def test_convert_azimuth(my_predbat):
         ]
 
         for solcast_az, expected in test_cases:
-            result = test_api.solar.convert_azimuth(solcast_az)
+            result = convert_azimuth(solcast_az)
             if result != expected:
-                print(f"ERROR: convert_azimuth({solcast_az}) = {result}, expected {expected}")
+                print("ERROR: convert_azimuth({}) = {}, expected {}".format(solcast_az, result, expected))
                 failed = True
     finally:
         test_api.cleanup()
@@ -524,7 +547,7 @@ def test_cache_get_url_metrics_forecast_solar(my_predbat):
             return test_api.mock_aiohttp_session()
 
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
-            result = run_async(test_api.solar.cache_get_url(url, params, max_age=60))
+            run_async(test_api.solar.cache_get_url(url, params, max_age=60))
 
         # Should increment forecast_solar metrics, not solcast
         if test_api.solar.forecast_solar_requests_total != 1:
@@ -1557,12 +1580,14 @@ def test_pack_and_store_forecast(my_predbat):
         # Create forecast data with some constant and some varying values
         pv_forecast_minute = {}
         pv_forecast_minute10 = {}
+        pv_forecast_minute90 = {}
         for minute in range(0, 4 * 24 * 60):
             # Varies every hour
             pv_forecast_minute[minute] = 1.0 if (minute // 60) % 2 == 0 else 2.0
             pv_forecast_minute10[minute] = 0.5 if (minute // 60) % 2 == 0 else 1.0
+            pv_forecast_minute90[minute] = 1.5 if (minute // 60) % 2 == 0 else 3.0
 
-        test_api.solar.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10)
+        test_api.solar.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90)
 
         # Verify entity was published
         forecast_entity = f"sensor.{test_api.mock_base.prefix}_pv_forecast_raw"
@@ -1577,11 +1602,15 @@ def test_pack_and_store_forecast(my_predbat):
             if "forecast10" not in attrs:
                 print(f"ERROR: Expected 'forecast10' in attributes")
                 failed = True
+            if "forecast90" not in attrs:
+                print(f"ERROR: Expected 'forecast90' in attributes")
+                failed = True
 
             # Packed forecast should have fewer entries than original (compression)
             # Format is {minute: value} dict with only changed values
             packed = attrs["forecast"]
             packed10 = attrs["forecast10"]
+            packed90 = attrs["forecast90"]
             original_count = len(pv_forecast_minute)
             packed_count = len(packed)
             if packed_count >= original_count:
@@ -1597,6 +1626,10 @@ def test_pack_and_store_forecast(my_predbat):
             # Check forecast10 has same structure (even=0.5, odd=1.0)
             failed |= check_packed_value(packed10, 0, 0.5, "packed10")
             failed |= check_packed_value(packed10, 60, 1.0, "packed10")
+
+            # Check forecast90 has same structure (even=1.5, odd=3.0)
+            failed |= check_packed_value(packed90, 0, 1.5, "packed90")
+            failed |= check_packed_value(packed90, 60, 3.0, "packed90")
 
     finally:
         test_api.cleanup()
@@ -1818,6 +1851,407 @@ def test_fetch_pv_forecast_forecast_solar_open_meteo_backup_not_used_on_success(
         forecast_calls = [r for r in test_api.request_log if "forecast.solar" in r["url"]]
         if len(forecast_calls) == 0:
             print("ERROR: Expected Forecast.Solar API call, got none")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_used_when_set(my_predbat):
+    """
+    When forecast_solar_open_meteo_first is True, Open-Meteo is used as the primary
+    source and forecast.solar is not called at all.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_used_when_set")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = True
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        # Both sources would succeed - Open-Meteo must win and forecast.solar must not be called
+        test_api.set_mock_response(
+            "api.open-meteo.com",
+            {
+                "hourly": {
+                    "time": ["2025-06-15T12:00", "2025-06-15T13:00", "2025-06-15T14:00"],
+                    "global_tilted_irradiance": [500.0, 600.0, 550.0],
+                    "temperature_2m": [25.0, 25.0, 25.0],
+                    "wind_speed_10m": [1.0, 1.0, 1.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            "ensemble-api.open-meteo.com",
+            {
+                "hourly": {
+                    "time": ["2025-06-15T12:00", "2025-06-15T13:00", "2025-06-15T14:00"],
+                    "global_tilted_irradiance_member01": [400.0, 480.0, 440.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            "forecast.solar",
+            {
+                "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+                "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+            },
+            200,
+        )
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        open_meteo_calls = [r for r in test_api.request_log if "open-meteo.com" in r["url"]]
+        if len(open_meteo_calls) == 0:
+            print("ERROR: Expected Open-Meteo API call when open_meteo_first is set, got none")
+            failed = True
+
+        forecast_calls = [r for r in test_api.request_log if "forecast.solar" in r["url"]]
+        if len(forecast_calls) != 0:
+            print(f"ERROR: Expected no forecast.solar calls when Open-Meteo succeeds, got {len(forecast_calls)}")
+            failed = True
+
+        if f"sensor.{test_api.mock_base.prefix}_pv_today" not in test_api.dashboard_items:
+            print("ERROR: Expected pv_today sensor to be published from Open-Meteo primary")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_falls_back_on_failure(my_predbat):
+    """
+    When forecast_solar_open_meteo_first is True and Open-Meteo returns no data,
+    fetch_pv_forecast falls back to forecast.solar.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_falls_back_on_failure")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = True
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        # Open-Meteo fails
+        test_api.set_mock_response("api.open-meteo.com", {"error": "server error"}, 500)
+        test_api.set_mock_response("ensemble-api.open-meteo.com", {"error": "server error"}, 500)
+        # forecast.solar succeeds
+        test_api.set_mock_response(
+            "forecast.solar",
+            {
+                "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+                "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+            },
+            200,
+        )
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        forecast_calls = [r for r in test_api.request_log if "forecast.solar" in r["url"]]
+        if len(forecast_calls) == 0:
+            print("ERROR: Expected forecast.solar fallback call when Open-Meteo fails, got none")
+            failed = True
+
+        if f"sensor.{test_api.mock_base.prefix}_pv_today" not in test_api.dashboard_items:
+            print("ERROR: Expected pv_today sensor to be published after forecast.solar fallback")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_ignored_when_unset(my_predbat):
+    """
+    When forecast_solar_open_meteo_first is False the existing ordering is unchanged:
+    forecast.solar is primary and Open-Meteo is not called.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_ignored_when_unset")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = False
+        test_api.set_mock_response(
+            "forecast.solar",
+            {
+                "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+                "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+            },
+            200,
+        )
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        forecast_calls = [r for r in test_api.request_log if "forecast.solar" in r["url"]]
+        if len(forecast_calls) == 0:
+            print("ERROR: Expected forecast.solar to remain primary when open_meteo_first is False")
+            failed = True
+
+        open_meteo_calls = [r for r in test_api.request_log if "open-meteo.com" in r["url"]]
+        if len(open_meteo_calls) != 0:
+            print(f"ERROR: Expected no Open-Meteo calls when open_meteo_first is False, got {len(open_meteo_calls)}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south(my_predbat):
+    """
+    A forecast_solar entry with azimuth_zero_south True must reach the Open-Meteo request
+    with the azimuth unconverted. A regression here would silently mis-orient every array.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 54.81306, "longitude": -1.38647, "declination": 32, "azimuth": 85, "azimuth_zero_south": True, "kwp": 6.44}]
+        test_api.solar.forecast_solar_open_meteo_first = True
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        test_api.set_mock_response(
+            "api.open-meteo.com",
+            {
+                "hourly": {
+                    "time": ["2025-06-15T12:00", "2025-06-15T13:00"],
+                    "global_tilted_irradiance": [500.0, 600.0],
+                    "temperature_2m": [25.0, 25.0],
+                    "wind_speed_10m": [1.0, 1.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            "ensemble-api.open-meteo.com",
+            {"hourly": {"time": ["2025-06-15T12:00", "2025-06-15T13:00"], "global_tilted_irradiance_member01": [400.0, 480.0]}},
+        )
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        forecast_urls = [r["url"] for r in test_api.request_log if "api.open-meteo.com" in r["url"]]
+        if not forecast_urls:
+            print("ERROR: Expected an Open-Meteo forecast request, got none")
+            failed = True
+        for url in forecast_urls:
+            if "azimuth=85" not in url:
+                print(f"ERROR: Expected azimuth=85 (unconverted) in Open-Meteo URL, got {url}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_logs_source_change(my_predbat):
+    """
+    Switching the active forecast source emits a warning so the 7-day PV calibration
+    settling period is visible in the log rather than silently skewing the scaling factor.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_logs_source_change")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        test_api.set_mock_response(
+            "api.open-meteo.com",
+            {
+                "hourly": {
+                    "time": ["2025-06-15T12:00", "2025-06-15T13:00"],
+                    "global_tilted_irradiance": [500.0, 600.0],
+                    "temperature_2m": [25.0, 25.0],
+                    "wind_speed_10m": [1.0, 1.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            "ensemble-api.open-meteo.com",
+            {"hourly": {"time": ["2025-06-15T12:00", "2025-06-15T13:00"], "global_tilted_irradiance_member01": [400.0, 480.0]}},
+        )
+        test_api.set_mock_response(
+            "forecast.solar",
+            {
+                "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+                "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+            },
+            200,
+        )
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        # MockBase.log only prints, so capture messages by replacing the copied log reference.
+        # ComponentBase copies base.log onto the component, so this override is local to the test.
+        captured = []
+
+        def capture_log(message, quiet=True):
+            """Capture a log message emitted by SolarAPI."""
+            captured.append(message)
+
+        test_api.solar.log = capture_log
+
+        # First run on forecast.solar establishes the stored source, no warning expected
+        test_api.solar.forecast_solar_open_meteo_first = False
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        changed_first_run = [m for m in captured if "forecast source changed" in m]
+        if changed_first_run:
+            print(f"ERROR: Did not expect a source change warning on the first run, got {changed_first_run}")
+            failed = True
+
+        # Second run flips to Open-Meteo - a warning is expected
+        captured.clear()
+        test_api.solar.forecast_solar_open_meteo_first = True
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        changed_second_run = [m for m in captured if "forecast source changed" in m]
+        if not changed_second_run:
+            print("ERROR: Expected a source change warning after switching to Open-Meteo, got none")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_source_change_warning_steady_state(my_predbat):
+    """
+    Two consecutive identical fetch cycles must not repeat the source-change warning.
+    fetch_pv_forecast runs every plan interval, so a warning that re-fires on every steady-state
+    cycle instead of only on a genuine configuration change would flood the log and the web UI's
+    Warnings tab.
+    """
+    print("  - test_fetch_pv_forecast_source_change_warning_steady_state")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = False
+        test_api.set_mock_response(
+            "forecast.solar",
+            {
+                "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+                "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+            },
+            200,
+        )
+
+        captured = []
+
+        def capture_log(message, quiet=True):
+            """Capture a log message emitted by SolarAPI."""
+            captured.append(message)
+
+        test_api.solar.log = capture_log
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+            captured.clear()
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        changed_second_run = [m for m in captured if "forecast source changed" in m]
+        if changed_second_run:
+            print(f"ERROR: Expected no source-change warning on a second identical cycle, got {changed_second_run}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_transient_fallback_no_warning(my_predbat):
+    """
+    A same-cycle fallback (Open-Meteo fails, Forecast.solar covers it) must not warn about a
+    source change: the configured/intended source is still Open-Meteo, only the data used this
+    cycle happened to come from Forecast.solar. Warning here would be a false alarm for every
+    transient Open-Meteo blip.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_transient_fallback_no_warning")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = True
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+
+        # Simulate a prior cycle having already settled on Open-Meteo as the configured source,
+        # so this run exercises the same-cycle-fallback path rather than the no-previous-source
+        # case, which would never warn regardless of the fix.
+        run_async(test_api.solar.storage.save("solcast", "active_forecast_source", {"source": "open_meteo"}, format="json", expiry=None))
+
+        # Open-Meteo fails this cycle only
+        test_api.set_mock_response("api.open-meteo.com", {"error": "server error"}, 500)
+        test_api.set_mock_response("ensemble-api.open-meteo.com", {"error": "server error"}, 500)
+        # Forecast.solar fallback succeeds
+        test_api.set_mock_response(
+            "forecast.solar",
+            {
+                "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+                "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+            },
+            200,
+        )
+
+        captured = []
+
+        def capture_log(message, quiet=True):
+            """Capture a log message emitted by SolarAPI."""
+            captured.append(message)
+
+        test_api.solar.log = capture_log
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        changed = [m for m in captured if "forecast source changed" in m]
+        if changed:
+            print(f"ERROR: A same-cycle fallback must not warn about a source change, got {changed}")
             failed = True
 
     finally:
@@ -2068,6 +2502,424 @@ def test_publish_pv_stats_15min_resolution(my_predbat):
 
 
 # ============================================================================
+# Slot-length scaling tests (divide_by must follow the detected period)
+# ============================================================================
+
+
+def capture_unit_factor(test_api):
+    """
+    Wrap publish_pv_stats so a test can see the unit factor (divide_by / period) and the
+    forecast entries fetch_pv_forecast passed to it, while still publishing as normal.
+
+    A unit factor of 1.0 means "pv_estimate is kWh per slot", which is what all three direct
+    API downloaders emit. Any other value means the per-minute data was scaled by that factor.
+    """
+    captured = {}
+    original = test_api.solar.publish_pv_stats
+
+    def wrapper(pv_forecast_data, unit_factor, period):
+        """Record the arguments then publish as normal."""
+        captured["unit_factor"] = unit_factor
+        captured["period"] = period
+        captured["data"] = pv_forecast_data
+        return original(pv_forecast_data, unit_factor, period)
+
+    test_api.solar.publish_pv_stats = wrapper
+    return captured
+
+
+def capture_log_messages(test_api):
+    """Wrap solar.log so a test can inspect every message logged during a fetch."""
+    captured = []
+    original = test_api.solar.log
+
+    def wrapper(message, *args, **kwargs):
+        """Record the message then log as normal."""
+        captured.append(message)
+        return original(message, *args, **kwargs)
+
+    test_api.solar.log = wrapper
+    return captured
+
+
+def day_zero_kwh(pv_forecast_data, midnight_utc):
+    """Sum pv_estimate over the forecast entries that fall on the first forecast day."""
+    total = 0
+    for entry in pv_forecast_data:
+        try:
+            stamp = datetime.strptime(entry["period_start"], TIME_FORMAT)
+        except (ValueError, TypeError, KeyError):
+            continue
+        if midnight_utc <= stamp < midnight_utc + timedelta(days=1):
+            total += entry.get("pv_estimate", 0)
+    return total
+
+
+def check_slot_scaling(test_api, captured, expected_period, expected_kwh, label):
+    """
+    Assert that a fetch scaled its kWh-per-slot forecast by the detected slot length.
+
+    Checks the detected period, that the unit factor is 1.0 (no spurious rescaling), and that
+    the published day-0 total matches both the downloader's own kWh sum and the expected value.
+    """
+    failed = False
+
+    if captured.get("period") != expected_period:
+        print(f"ERROR: {label}: expected a detected period of {expected_period} minutes, got {captured.get('period')}")
+        failed = True
+
+    unit_factor = captured.get("unit_factor")
+    if unit_factor is None or abs(unit_factor - 1.0) > 0.001:
+        print(f"ERROR: {label}: expected a unit factor of 1.0 for kWh-per-slot data, got {unit_factor} - the forecast is scaled by that factor")
+        failed = True
+
+    source_kwh = day_zero_kwh(captured.get("data", []), test_api.mock_base.midnight_utc)
+    if abs(source_kwh - expected_kwh) > 0.01:
+        print(f"ERROR: {label}: the downloader returned {source_kwh} kWh on day 0, expected {expected_kwh} kWh - the test fixture is wrong, not the scaling")
+        failed = True
+
+    today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
+    if today_entity not in test_api.dashboard_items:
+        print(f"ERROR: {label}: expected {today_entity} to be published")
+        failed = True
+    else:
+        total = test_api.dashboard_items[today_entity]["attributes"].get("total", 0)
+        if abs(total - expected_kwh) > 0.01:
+            out_by = round(total / expected_kwh, 3) if expected_kwh else 0
+            print(f"ERROR: {label}: published day-0 total {total} kWh, expected {expected_kwh} kWh (out by {out_by}x)")
+            failed = True
+        else:
+            print(f"  {label}: {expected_period}-min slots, unit factor {unit_factor}, day-0 total {total} kWh - correct!")
+
+    return failed
+
+
+def forecast_solar_two_hour_response():
+    """
+    A Forecast.Solar response holding a flat 1.2 kW from 11:00 to 13:00 UTC on 2025-06-15.
+
+    download_forecast_solar_data fills both slot edges, so minutes 660 to 780 inclusive carry
+    1.2 kW: 120 minutes of 1.2 kW is 2.4 kWh, plus the closing minute at 13:00 worth 0.02 kWh,
+    giving 2.42 kWh on day 0 whatever the plan interval slices it into.
+    """
+    return {
+        "result": {"watts": {"2025-06-15T12:00:00+0000": 1200, "2025-06-15T13:00:00+0000": 1200}},
+        "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+    }
+
+
+def test_fetch_pv_forecast_forecast_solar_15min_slots(my_predbat):
+    """
+    Forecast.Solar emits one kWh figure per plan_interval_minutes slot, so with a 15-minute
+    plan interval the published energy must still match the raw forecast. Before divide_by
+    followed the detected period this branch published half the real forecast.
+    """
+    print("  - test_fetch_pv_forecast_forecast_solar_15min_slots")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.mock_base.plan_interval_minutes = 15
+        test_api.solar.solcast_host = None
+        test_api.solar.solcast_api_key = None
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.set_mock_response("forecast.solar", forecast_solar_two_hour_response(), 200)
+
+        captured = capture_unit_factor(test_api)
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        failed |= check_slot_scaling(test_api, captured, 15, 2.42, "Forecast.Solar at a 15-minute plan interval")
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_forecast_solar_30min_slots(my_predbat):
+    """
+    Regression guard for the plan interval that happened to work before the fix: the same
+    Forecast.Solar forecast at a 30-minute plan interval must publish the same energy.
+    """
+    print("  - test_fetch_pv_forecast_forecast_solar_30min_slots")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.mock_base.plan_interval_minutes = 30
+        test_api.solar.solcast_host = None
+        test_api.solar.solcast_api_key = None
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.set_mock_response("forecast.solar", forecast_solar_two_hour_response(), 200)
+
+        captured = capture_unit_factor(test_api)
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        failed |= check_slot_scaling(test_api, captured, 30, 2.42, "Forecast.Solar at a 30-minute plan interval")
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_solcast_direct_15min_slots(my_predbat):
+    """
+    Solcast reports its own slot length in the period field. On PT15M data the published
+    energy must match the forecast; before the fix this branch published half of it.
+    """
+    print("  - test_fetch_pv_forecast_solcast_direct_15min_slots")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.solcast_host = "https://api.solcast.com.au"
+        test_api.solar.solcast_api_key = "test_key"
+        test_api.solar.solcast_sites = ["site123"]
+        test_api.solar.forecast_solar = None
+
+        # Solcast reports power, converted to kWh per slot as pv_estimate / 60 * 15.
+        # Four quarter-hour slots at 2.0 kW is 4 * 0.5 = 2.0 kWh on day 0.
+        noon = test_api.mock_base.midnight_utc + timedelta(hours=12)
+        forecasts = []
+        for index in range(4):
+            period_end = noon + timedelta(minutes=15 * (index + 1))
+            forecasts.append(
+                {
+                    "period_end": period_end.strftime("%Y-%m-%dT%H:%M:%S.0000000Z"),
+                    "period": "PT15M",
+                    "pv_estimate": 2.0,
+                    "pv_estimate10": 1.0,
+                    "pv_estimate90": 3.0,
+                }
+            )
+        test_api.set_mock_response("forecasts", {"forecasts": forecasts}, 200)
+
+        captured = capture_unit_factor(test_api)
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        failed |= check_slot_scaling(test_api, captured, 15, 2.0, "Solcast direct with PT15M data")
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_hourly_slots(my_predbat):
+    """
+    Open-Meteo emits kWh per hour. Used as the primary source with forecast_solar set, the
+    published energy must match those hourly figures; before the fix it was doubled.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_hourly_slots")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = True
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        test_api.set_mock_response(
+            "api.open-meteo.com",
+            {
+                "hourly": {
+                    "time": ["2025-06-15T12:00", "2025-06-15T13:00", "2025-06-15T14:00"],
+                    "global_tilted_irradiance": [500.0, 600.0, 550.0],
+                    "temperature_2m": [25.0, 25.0, 25.0],
+                    "wind_speed_10m": [1.0, 1.0, 1.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            "ensemble-api.open-meteo.com",
+            {
+                "hourly": {
+                    "time": ["2025-06-15T12:00", "2025-06-15T13:00", "2025-06-15T14:00"],
+                    "global_tilted_irradiance_member01": [400.0, 480.0, 440.0],
+                }
+            },
+        )
+
+        captured = capture_unit_factor(test_api)
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        # Two hourly periods are produced from three instant samples, trapezoidally integrated
+        # and temperature corrected by solar_model.gti_hourly_to_period_kwh.
+        expected_kwh = round(day_zero_kwh(captured.get("data", []), test_api.mock_base.midnight_utc), 2)
+        failed |= check_slot_scaling(test_api, captured, 60, expected_kwh, "Open-Meteo as the primary hourly source")
+
+        if expected_kwh <= 0:
+            print(f"ERROR: Open-Meteo fixture produced no day-0 energy ({expected_kwh} kWh), the test proves nothing")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_ha_sensors_unit_factor_unchanged(my_predbat):
+    """
+    The HA sensor path carries its own kW/kWh unit factor in divide_by. Making the period
+    recalculation unconditional must leave that path alone, so check all three valid factors
+    (1.0 kWh per slot, 2.0 kW on 30-minute slots, 4.0 kW on 15-minute slots). Also checks the
+    #2544 regression: a valid, expected factor must not log a "Warn:" message or imply the
+    data is misleading/unexpected - Solcast's detailedForecast reporting average kW per slot
+    (factor 2.0/4.0) rather than kWh is normal, already-compensated-for behaviour.
+    """
+    print("  - test_fetch_pv_forecast_ha_sensors_unit_factor_unchanged")
+    failed = False
+
+    # Two hours of steady output worth 2.0 kWh, expressed three different ways.
+    # (label, slot minutes, pv_estimate per slot, expected unit factor)
+    sensor_total = 2.0
+    cases = [
+        ("kWh per 30-minute slot", 30, 0.5, 1.0),
+        ("kW on 30-minute slots", 30, 1.0, 2.0),
+        ("kW on 15-minute slots", 15, 1.0, 4.0),
+    ]
+
+    for label, slot_minutes, estimate, expected_factor in cases:
+        test_api = create_test_solar_api()
+        try:
+            test_api.solar.solcast_host = None
+            test_api.solar.solcast_api_key = None
+            test_api.solar.forecast_solar = None
+            test_api.solar.pv_forecast_today = "sensor.pv_forecast_today"
+            test_api.solar.pv_forecast_tomorrow = None
+
+            slots = int(120 / slot_minutes)
+            detailed = []
+            for index in range(slots):
+                start = test_api.mock_base.midnight_utc + timedelta(minutes=10 * 60 + index * slot_minutes)
+                detailed.append({"period_start": start.strftime(TIME_FORMAT), "pv_estimate": estimate})
+            test_api.set_mock_ha_state("sensor.pv_forecast_today", {"state": str(sensor_total), "detailedForecast": detailed})
+
+            captured = capture_unit_factor(test_api)
+            logged = capture_log_messages(test_api)
+
+            def create_mock_session(*args, **kwargs):
+                """Create a mock aiohttp session."""
+                return test_api.mock_aiohttp_session()
+
+            with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+                run_async(test_api.solar.fetch_pv_forecast())
+
+            unit_factor = captured.get("unit_factor")
+            if unit_factor is None or abs(unit_factor - expected_factor) > 0.001:
+                print(f"ERROR: HA sensors, {label}: expected the unit factor to stay {expected_factor}, got {unit_factor}")
+                failed = True
+
+            factor_messages = [message for message in logged if "PV Forecast today adds up to" in message]
+            if not factor_messages:
+                print(f"ERROR: HA sensors, {label}: expected a PV Forecast factor log message, got none")
+                failed = True
+            else:
+                message = factor_messages[0]
+                if message.startswith("Warn:"):
+                    print(f"ERROR: HA sensors, {label}: valid, expected factor {expected_factor} logged a Warn: message ({message!r}) - #2544 regression")
+                    failed = True
+                # #2544: the raw forecast total isn't really "kWh" when the data is average-kW
+                # per slot (factor 2.0/4.0) - the message shouldn't label it that way, and should
+                # say what units were actually detected instead.
+                if expected_factor == 1.0:
+                    if "kW average per slot" in message:
+                        print(f"ERROR: HA sensors, {label}: kWh-per-slot data was reported as kW average ({message!r})")
+                        failed = True
+                else:
+                    if "kW average per slot" not in message:
+                        print(f"ERROR: HA sensors, {label}: expected message to say 'kW average per slot' for factor {expected_factor} ({message!r})")
+                        failed = True
+                    if re.search(r"adds up to [\d.]+ kWh", message):
+                        print(f"ERROR: HA sensors, {label}: message still labels the raw kW-average total as 'kWh' ({message!r})")
+                        failed = True
+
+            today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
+            total = test_api.dashboard_items.get(today_entity, {}).get("attributes", {}).get("total", 0)
+            if abs(total - sensor_total) > 0.01:
+                print(f"ERROR: HA sensors, {label}: published day-0 total {total} kWh, expected {sensor_total} kWh")
+                failed = True
+            else:
+                print(f"  HA sensors, {label}: unit factor {unit_factor}, day-0 total {total} kWh - unchanged!")
+
+        finally:
+            test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_ha_sensors_invalid_factor_still_warns(my_predbat):
+    """
+    A ratio that fits neither the kWh-per-slot nor kW-average-per-slot case (i.e. not 1.0, 2.0
+    or 4.0) is a genuine mismatch worth flagging - unlike the #2544 cases above, this one must
+    still log a "Warn:" message.
+    """
+    print("  - test_fetch_pv_forecast_ha_sensors_invalid_factor_still_warns")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.solcast_host = None
+        test_api.solar.solcast_api_key = None
+        test_api.solar.forecast_solar = None
+        test_api.solar.pv_forecast_today = "sensor.pv_forecast_today"
+        test_api.solar.pv_forecast_tomorrow = None
+
+        # Sensor reports 2.0 kWh total, but the detailed forecast sums to 3.0 - a 1.5 ratio,
+        # which is neither a plausible kWh-per-slot nor kW-average-per-slot reading.
+        sensor_total = 2.0
+        start = test_api.mock_base.midnight_utc + timedelta(minutes=10 * 60)
+        detailed = [{"period_start": start.strftime(TIME_FORMAT), "pv_estimate": 3.0}]
+        test_api.set_mock_ha_state("sensor.pv_forecast_today", {"state": str(sensor_total), "detailedForecast": detailed})
+
+        logged = capture_log_messages(test_api)
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        factor_messages = [message for message in logged if "PV Forecast today adds up to" in message]
+        if not factor_messages:
+            print("ERROR: expected a PV Forecast factor log message, got none")
+            failed = True
+        elif not factor_messages[0].startswith("Warn:"):
+            print(f"ERROR: expected a Warn: message for an invalid factor, got {factor_messages[0]!r}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+# ============================================================================
 # Run Function Tests
 # ============================================================================
 
@@ -2310,9 +3162,6 @@ def test_pv_calibration_power_conversion(my_predbat):
         solar = test_api.solar
         base = test_api.mock_base
 
-        plan_interval = base.plan_interval_minutes  # 5
-        minutes_now = base.minutes_now  # 720 (12:00)
-
         # Build synthetic cumulative pv_today history.
         # We represent 5 previous days.  Each day, the panel produces 2 kWh between
         # minute 600-660 (10:00–11:00 UTC).  The cumulative sensor counts from
@@ -2355,7 +3204,7 @@ def test_pv_calibration_power_conversion(my_predbat):
         pv_forecast_minute10 = {m: 0.04 for m in range(total_minutes)}
         pv_forecast_data = [{"period_start": base.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 0.05}]
 
-        adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+        adj_minute, adj_minute10, adj_minute90, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
         # Returned minute data must be non-negative
         if any(v < 0 for v in adj_minute.values()):
@@ -2409,7 +3258,7 @@ def test_pv_calibration_sparse_recent_history_no_crash(my_predbat):
         pv_forecast_data = [{"period_start": base.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 0.05}]
 
         try:
-            adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            adj_minute, adj_minute10, adj_minute90, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
         except TypeError as e:
             print("ERROR: pv_calibration raised TypeError with sparse recent history: {}".format(e))
             failed = True
@@ -2536,7 +3385,7 @@ def test_pv_calibration_partial_history(my_predbat):
                     pv_forecast_hist[m_ago] = 1.0
 
             with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
-                solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+                solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
             worst = solar.pv_calibration_worst_scaling
             best = solar.pv_calibration_best_scaling
@@ -2571,13 +3420,27 @@ def test_pv_calibration_partial_history(my_predbat):
 
 def test_pv_calibration_capped_data_clamp(my_predbat):
     """
-    Test that the capped_data clamp in pv_calibration correctly limits the
-    calibrated slot estimates when max historical power is lower than the forecast.
+    Test the per-slot cap in pv_calibration, and the array-ceiling clamp on the synthesised p90.
 
-    Setup: Historical power is 1 kW max; forecast is 3 kW max; max_kwh panel
-    limit is 2 kW.  After calibration the capped_data should be
-    min(max(1, 3), 2) * plan_interval / 60 per slot, and every pv_estimateCL
-    value written back into pv_forecast_data must be ≤ capped_data * divide_by.
+    Setup: observed peak is 1 kW and the raw forecast is 3 kW. The h0 forecast history is empty so
+    calibration is disabled, the adjusted values equal the raw forecast, and best_day_scaling takes
+    its fixed 1.3 default.
+
+    Scenario A - max_kwh (declared array capacity) is 2 kW, so the ceiling BINDS:
+
+        cap = min(ceiling, max(observed_slot, raw_slot))
+            = min(max(1.2 * 2.0, 1.0), max(1.0, 3.0))
+            = min(2.4, 3.0)
+            = 2.4 kW  ->  2.4 * plan_interval / 60 per slot
+
+    The 1.2 * max_kwh ceiling is what binds here. Note the cap is ABOVE the observed peak
+    of 1 kW: a dull week must not suppress a sunny day's forecast. The p90 must be held AT that
+    ceiling rather than 1.3x above it.
+
+    Scenario B - max_kwh is 20 kW, so the ceiling does NOT bind and the p90 must carry its full
+    1.3x upside. This is the scenario that distinguishes a clamp against the physical ceiling from
+    a clamp against capped_data, which silently erases the upside on any system whose forecast sits
+    inside its array limit - i.e. very nearly all of them.
     """
     print("  - test_pv_calibration_capped_data_clamp")
     failed = False
@@ -2611,28 +3474,47 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
         base.minute_data_import_export = mock_minute_data_import_export
         solar.get_history_wrapper = lambda entity_id, days, required=False: []
 
-        # Forecast: 3 kW constant (above historical and above max_kwh)
-        total_minutes = 4 * 24 * 60
-        pv_forecast_minute = {m: 3.0 / 60 for m in range(total_minutes)}  # kWh per minute
-        pv_forecast_minute10 = {m: 2.0 / 60 for m in range(total_minutes)}
-
         # Build forecast data entries — one per plan_interval over 1 day
         from datetime import timedelta
         import pytz
 
         midnight = base.midnight_utc.replace(tzinfo=pytz.utc)
-        pv_forecast_data = []
-        for slot in range(0, 24 * 60, plan_interval):
-            ts = midnight + timedelta(minutes=slot)
-            pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 3.0 * plan_interval / 60})
 
+        def _calibrate(max_kwh):
+            """Run pv_calibration against a 3 kW constant forecast for the given declared array capacity.
+
+            Every input is rebuilt per call: pv_calibration writes into the p10/p90 dicts it is handed
+            and annotates the forecast data entries in place, so reusing them across scenarios would
+            leak the first scenario's results into the second.
+            """
+            total_minutes = 4 * 24 * 60
+            pv_forecast_minute = {m: 3.0 / 60 for m in range(total_minutes)}  # kWh per minute
+            pv_forecast_minute10 = {m: 2.0 / 60 for m in range(total_minutes)}
+            pv_forecast_data = []
+            for slot in range(0, 24 * 60, plan_interval):
+                ts = midnight + timedelta(minutes=slot)
+                pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 3.0 * plan_interval / 60})
+            # create_pv10=True so the synthesised p10/p90 planner series are built too - they are the series
+            # every Open-Meteo and Forecast.solar user's planner actually consumes, and the p90 is scaled by
+            # best_day_scaling (1.3 here with calibration disabled, up to 2.0 with it on), so it is the one
+            # series that can be pushed above the array limit after the p50 has been capped.
+            return solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+
+        def _max_slot_total(series):
+            """Return the largest per-plan-interval total in a per-minute kWh series."""
+            if not series:
+                return 0.0
+            slot_totals = {}
+            for minute, value in series.items():
+                slot_start = int(minute / plan_interval) * plan_interval
+                slot_totals[slot_start] = slot_totals.get(slot_start, 0.0) + value
+            return max(slot_totals.values())
+
+        # ---- Scenario A: the array ceiling BINDS (max_kwh 2.0 against a 3 kW forecast) ----
         max_kwh = 2.0  # panel peak output cap in kW
-        adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+        adj_minute, adj_minute10, adj_minute90, adj_data = _calibrate(max_kwh)
 
-        # capped_data = min(max(max_pv_power_hist, max_pv_power_forecast), max_kwh) * plan_interval / 60
-        # max_pv_power_hist ≈ 1 kW (per minute), max_pv_power_forecast ≈ 3/60 kW per minute
-        # The cap applied per-slot is min(max_kwh, max_hist_or_forecast) / 60 * plan_interval
-        expected_cap = max_kwh / 60 * plan_interval  # max_kwh limits here
+        expected_cap = 1.2 * max_kwh / 60 * plan_interval  # the 1.2 * max_kwh ceiling binds here
 
         for entry in adj_data:
             cl = entry.get("pv_estimateCL", None)
@@ -2641,6 +3523,375 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
                 failed = True
                 break
 
+        # The raw forecast (3 kW) exceeds the observed peak (1 kW), so the new cap must
+        # land on the 1.2 * max_kwh ceiling (2.4 kW), not on the old, lower observed-peak
+        # cap of 1 kW - a test that only checks the upper bound would pass under both the
+        # old and new formulas and so would not pin this fix.
+        got_max = _max_slot_cl(adj_data)
+        if got_max < expected_cap * 0.99:
+            print("ERROR: pv_estimateCL {} is below the expected cap {} - the raw forecast floor is not being applied".format(got_max, expected_cap))
+            failed = True
+
+        # The synthesised p90 planner series must respect the array ceiling. best_day_scaling has no
+        # floor at 1.0, so an unclamped p90 lands at 1.3x the array's physical ceiling here and the
+        # planner prices a spill that cannot happen - and it disagrees with the published
+        # pv_estimate90 for the very same slot, which is clamped.
+        max_slot_p50 = _max_slot_total(adj_minute)
+        max_slot_p90 = _max_slot_total(adj_minute90)
+        if max_slot_p90 > expected_cap * 1.01:
+            print("ERROR: pv_forecast_minute90 peaks at {} kWh/slot, above the array ceiling of {} kWh/slot (p50 peak {}) - best_day_scaling has escaped the cap".format(round(max_slot_p90, 4), round(expected_cap, 4), round(max_slot_p50, 4)))
+            failed = True
+        if max_slot_p90 < max_slot_p50 * 0.99:
+            print("ERROR: pv_forecast_minute90 peaks at {} kWh/slot, below the p50 peak of {} kWh/slot - the clamp must hold the upside case AT the ceiling, not below it".format(round(max_slot_p90, 4), round(max_slot_p50, 4)))
+            failed = True
+
+        # ---- Scenario B: the array ceiling does NOT bind (max_kwh 20.0 against the same 3 kW forecast) ----
+        # Scenario A alone cannot pin the clamp: there every slot sits AT the ceiling, so a p90 that has
+        # been collapsed onto the p50 is indistinguishable from a correctly clamped one. Here the ceiling
+        # is 8x above the forecast and must not bite at all - the p90 has to carry the full
+        # best_day_scaling upside. Clamping against capped_data instead of the physical ceiling fails
+        # this: capped_data collapses to the raw forecast whenever the forecast is below the ceiling, so
+        # the ratio comes out at exactly 1.0 and the upside is erased on every normally-sized system.
+        max_kwh_open = 20.0
+        _, _, adj_minute90_open, _ = _calibrate(max_kwh_open)
+        ceiling_open = 1.2 * max_kwh_open / 60 * plan_interval
+        best_day_scaling = 1.3  # calibration is disabled (no h0 history), so this is the fixed default
+        max_slot_p90_open = _max_slot_total(adj_minute90_open)
+        expected_p90_open = 3.0 / 60 * plan_interval * best_day_scaling
+        if max_slot_p90_open < expected_p90_open * 0.99:
+            print(
+                "ERROR: with the array ceiling {} kWh/slot well above the forecast, pv_forecast_minute90 peaks at only {} kWh/slot - expected {} ({}x the {} kWh/slot forecast). The upside has been clamped away by something other than the array limit".format(
+                    round(ceiling_open, 4), round(max_slot_p90_open, 4), round(expected_p90_open, 4), best_day_scaling, round(3.0 / 60 * plan_interval, 4)
+                )
+            )
+            failed = True
+        if max_slot_p90_open > ceiling_open * 1.01:
+            print("ERROR: pv_forecast_minute90 peaks at {} kWh/slot, above the array ceiling of {} kWh/slot".format(round(max_slot_p90_open, 4), round(ceiling_open, 4)))
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def _cap_scenario(max_kwh, raw_kw, hist_kw, hist_forecast_kw=1.0, days_back=5, captured_log=None):
+    """Run pv_calibration with a controlled history.
+
+    Builds days_back past days that each generated hist_kw for one hour while the recorded
+    h0 forecast said hist_forecast_kw, then offers a raw forecast of raw_kw for today's
+    matching window. Today's raw forecast is deliberately allowed to differ from the
+    historical forecast level - that is what lets the adjusted value exceed the observed
+    peak and so exercise the cap.
+
+    If captured_log is given a list, solar.log is replaced with a function that appends every
+    message logged during pv_calibration to it, so callers can assert on warnings emitted
+    while the cap is applied. Defaults to None, which leaves solar.log untouched.
+
+    Returns (test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end). The caller
+    owns the returned test_api and must call cleanup() on it.
+    """
+    gen_start = 600
+    gen_end = 660
+    test_api = create_test_solar_api()
+    solar = test_api.solar
+    base = test_api.mock_base
+    plan_interval = base.plan_interval_minutes
+    minutes_now = base.minutes_now
+
+    # Cumulative pv_today kWh keyed by minutes-ago, hist_kw for one hour each past day
+    hist = {}
+    for day_idx in range(days_back):
+        day = day_idx + 1
+        midnight_ago = day * 1440 + minutes_now
+        for step in range(0, 24 * 60, 5):
+            minute_ago = midnight_ago - step
+            if minute_ago < 0:
+                continue
+            if step < gen_start:
+                cumulative = 0.0
+            elif step < gen_end:
+                cumulative = hist_kw * (step - gen_start) / 60.0
+            else:
+                cumulative = hist_kw
+            hist[minute_ago] = cumulative
+
+    # Recorded h0 forecast history for the same windows
+    pv_forecast_hist = {}
+    for day_num in range(1, days_back + 1):
+        for m_of_day in range(gen_start, gen_end):
+            pv_forecast_hist[day_num * 1440 + (minutes_now - m_of_day)] = float(hist_forecast_kw)
+
+    def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+        """Return the synthetic pv_today history."""
+        return dict(_hist) if key == "pv_today" else {}
+
+    base.minute_data_import_export = mock_minute_import_export
+    solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+    if captured_log is not None:
+
+        def capture_log(message, quiet=True):
+            """Capture a log message emitted by SolarAPI during pv_calibration."""
+            captured_log.append(message)
+
+        solar.log = capture_log
+
+    total_minutes = 4 * 24 * 60
+    pv_m = {m: (raw_kw / 60.0) if gen_start <= m < gen_end else 0.0 for m in range(total_minutes)}
+    pv_m10 = dict(pv_m)
+
+    midnight = datetime(2025, 6, 15, 0, 0, 0, tzinfo=pytz.utc)
+    pv_data = []
+    for slot in range(gen_start, gen_end, plan_interval):
+        ts = midnight + timedelta(minutes=slot)
+        pv_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": raw_kw * plan_interval / 60.0})
+
+    with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
+        adj_m, adj_m10, adj_m90, adj_data = solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+
+    return test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end
+
+
+def _max_slot_cl(adj_data):
+    """Return the largest pv_estimateCL written back into the forecast entries."""
+    values = [e.get("pv_estimateCL", 0) for e in adj_data if e.get("pv_estimateCL", None) is not None]
+    return max(values) if values else 0
+
+
+def test_pv_calibration_cap_allows_raw_forecast_above_observed(my_predbat):
+    """
+    The cap must never clip below a slot's own pre-scaling forecast.
+
+    Observed peak 2 kW, raw forecast 3 kW, max_kwh 4 kW.
+    ceiling = max(1.2 * 4.0, 2.0) = 4.8;  cap = min(4.8, max(2.0, 3.0)) = 3.0 kW.
+
+    The old formula gave min(4.0, 2.0) = 2.0 kW, clipping the raw forecast to two thirds
+    of what the forecast itself predicted - so a dull week suppressed the next sunny day.
+    """
+    print("  - test_pv_calibration_cap_allows_raw_forecast_above_observed")
+    failed = False
+
+    test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=4.0, raw_kw=3.0, hist_kw=2.0)
+    try:
+        expected_cap = 3.0 / 60 * plan_interval
+        got = _max_slot_cl(adj_data)
+        if got > expected_cap * 1.01:
+            print("ERROR: pv_estimateCL {} exceeds expected cap {}".format(got, expected_cap))
+            failed = True
+        # And it must not be clipped down to the old, lower observed-peak cap
+        old_cap = 2.0 / 60 * plan_interval
+        if got <= old_cap * 1.01:
+            print("ERROR: pv_estimateCL {} was clipped to the old observed-peak cap {} - the raw forecast floor is not being applied".format(got, old_cap))
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_cap_ceiling_binds_at_headroom(my_predbat):
+    """
+    When the raw forecast exceeds the array's physical ceiling, the 1.2 * max_kwh headroom binds.
+
+    Observed peak 2 kW, raw forecast 10 kW, max_kwh 4 kW.
+    ceiling = max(1.2 * 4.0, 2.0) = 4.8;  cap = min(4.8, max(2.0, 10.0)) = 4.8 kW.
+    """
+    print("  - test_pv_calibration_cap_ceiling_binds_at_headroom")
+    failed = False
+
+    test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=4.0, raw_kw=10.0, hist_kw=2.0)
+    try:
+        expected_cap = 1.2 * 4.0 / 60 * plan_interval
+        got = _max_slot_cl(adj_data)
+        if got > expected_cap * 1.01:
+            print("ERROR: pv_estimateCL {} exceeds the 1.2 * max_kwh ceiling {}".format(got, expected_cap))
+            failed = True
+        if got < expected_cap * 0.99:
+            print("ERROR: pv_estimateCL {} is below the ceiling {} - expected the ceiling to bind".format(got, expected_cap))
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_cap_never_clips_observed_generation(my_predbat):
+    """
+    An under-declared kwp must not cause the cap to clip below measured generation.
+
+    A user declares 2 kW but the array demonstrably produced 6 kW.
+    ceiling = max(1.2 * 2.0, 6.0) = 6.0;  cap = min(6.0, max(6.0, 1.0)) = 6.0 kW.
+
+    The old formula gave min(2.0, 6.0) = 2.0 kW - a third of what the meter recorded.
+    """
+    print("  - test_pv_calibration_cap_never_clips_observed_generation")
+    failed = False
+
+    test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=2.0, raw_kw=1.0, hist_kw=6.0)
+    try:
+        observed_slot = 6.0 / 60 * plan_interval
+        got = _max_slot_cl(adj_data)
+        # The calibrated value is scaled up towards the observed level and must not be
+        # clipped below it by the under-declared max_kwh.
+        old_cap = 2.0 / 60 * plan_interval
+        if got <= old_cap * 1.01:
+            print("ERROR: pv_estimateCL {} was clipped to the under-declared max_kwh cap {}".format(got, old_cap))
+            failed = True
+        if got > observed_slot * 1.01:
+            print("ERROR: pv_estimateCL {} exceeds the observed peak {}".format(got, observed_slot))
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_cap_applies_without_declared_capacity(my_predbat):
+    """
+    Solcast and HA-sensor users have max_kwh = 9999, so the ceiling term is inert and the
+    cap reduces to max(observed_slot, raw_slot). It must still limit scaling above that.
+
+    Observed peak 2 kW, raw forecast 3 kW, max_kwh 9999.
+    ceiling is effectively unbounded;  cap = max(2.0, 3.0) = 3.0 kW.
+    """
+    print("  - test_pv_calibration_cap_applies_without_declared_capacity")
+    failed = False
+
+    test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=9999, raw_kw=3.0, hist_kw=2.0)
+    try:
+        expected_cap = 3.0 / 60 * plan_interval
+        got = _max_slot_cl(adj_data)
+        if got > expected_cap * 1.01:
+            print("ERROR: pv_estimateCL {} exceeds expected cap {} with max_kwh 9999".format(got, expected_cap))
+            failed = True
+        if got < expected_cap * 0.99:
+            print("ERROR: pv_estimateCL {} is below the expected cap {} - the raw forecast floor is not being applied with max_kwh 9999".format(got, expected_cap))
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_cap_applied_to_planner_data(my_predbat):
+    """
+    The cap must reach the data the planner uses, not just the published sensor attributes.
+
+    pv_calibration returns pv_forecast_minute_adjusted, which the planner consumes. Summed
+    over a slot it must respect the same cap as pv_estimateCL, otherwise the optimiser plans
+    against PV output the array cannot produce.
+
+    Observed peak 2 kW, raw forecast 3 kW, max_kwh 4 kW -> cap = 3.0 kW per slot equivalent.
+    """
+    print("  - test_pv_calibration_cap_applied_to_planner_data")
+    failed = False
+
+    test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=4.0, raw_kw=3.0, hist_kw=2.0)
+    try:
+        expected_cap = 3.0 / 60 * plan_interval
+        worst_slot = 0
+        for slot in range(gen_start, gen_end, plan_interval):
+            slot_sum = sum(adj_m.get(slot + offset, 0) for offset in range(plan_interval))
+            worst_slot = max(worst_slot, slot_sum)
+        if worst_slot > expected_cap * 1.01:
+            print("ERROR: planner slot total {} exceeds the cap {} - the cap is not reaching pv_forecast_minute_adjusted".format(worst_slot, expected_cap))
+            failed = True
+        if worst_slot < expected_cap * 0.99:
+            print("ERROR: planner slot total {} is below the expected cap {} - scale_down was computed wrong (e.g. dividing by plan_interval again)".format(worst_slot, expected_cap))
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_cap_pv10_never_exceeds_cap_or_p50(my_predbat):
+    """
+    The planner's P10 series must never sit above its own per-slot cap or above P50.
+
+    Regression test: worst_day_scaling could previously exceed 1.0. average_day_scaling is
+    hard-clamped to 2.0, so when every day's actual/forecast ratio is above 2.0 (here hist
+    4 kW actual vs a recorded forecast of 0.5 kW, ratio 8.0, saturating the clamp), dividing
+    the raw worst-day ratio by the clamped average left worst_day_scaling > 1.0.
+    pv_forecast_minute10 is built by multiplying the already-capped P50 series by
+    worst_day_scaling (see the create_pv10 loop in pv_calibration), so a worst_day_scaling
+    above 1.0 pushed the "pessimistic" P10 scenario above both the array's physical ceiling
+    and the P50 series it is meant to be no better than.
+
+    hist_kw=4.0, hist_forecast_kw=0.5, max_kwh=4.0: observed_slot = 4.0/60*plan_interval,
+    ceiling_slot = max(1.2*4.0, 4.0)/60*plan_interval = 4.8/60*plan_interval, raw slot =
+    3.0/60*plan_interval, so the per-slot cap (capped_data) reduces to observed_slot.
+    """
+    print("  - test_pv_calibration_cap_pv10_never_exceeds_cap_or_p50")
+    failed = False
+
+    test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=4.0, raw_kw=3.0, hist_kw=4.0, hist_forecast_kw=0.5)
+    try:
+        expected_cap = 4.0 / 60 * plan_interval
+        worst_p10_slot = 0
+        for slot in range(gen_start, gen_end, plan_interval):
+            p10_sum = sum(adj_m10.get(slot + offset, 0) for offset in range(plan_interval))
+            p50_sum = sum(adj_m.get(slot + offset, 0) for offset in range(plan_interval))
+            worst_p10_slot = max(worst_p10_slot, p10_sum)
+            if p10_sum > p50_sum * 1.01:
+                print("ERROR: pv_forecast_minute10 slot total {} exceeds the P50 slot total {} at slot {} - the pessimistic P10 scenario must never exceed P50".format(p10_sum, p50_sum, slot))
+                failed = True
+        if worst_p10_slot > expected_cap * 1.01:
+            print("ERROR: pv_forecast_minute10 slot total {} exceeds the per-slot cap {}".format(worst_p10_slot, expected_cap))
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_cap_published_pv10_matches_planner(my_predbat):
+    """
+    The published pv_estimate10 sensor value must agree with the planner's own P10 series.
+
+    Regression test: pv_estimate10 was computed from the pre-cap P50 slot total (pv_value)
+    with its own min(..., capped_data) clamp, while the planner's pv_forecast_minute10 is
+    built later from the already-capped/scaled-down pv_forecast_minute_adjusted. In any slot
+    where the cap binds and worst_day_scaling is not exactly 1.0 the two diverge - worked
+    example from the fix: pv_value=10, capped_data=3, worst_day_scaling=0.7 gave a published
+    value of min(10*0.7, 3) = 3.0 vs a planner value of 3*0.7 = 2.1.
+
+    _cap_scenario gives every historical day identical hist_kw/hist_forecast_kw, so the
+    per-day actual/forecast ratio is the same for every day and worst_day_scaling always
+    collapses to exactly 1.0 (either directly, since worst == average, or via the final
+    min(..., 1.0) clamp when the ratio is high enough to saturate average_day_scaling at
+    2.0) - confirmed empirically, and at exactly 1.0 the bug is invisible because
+    min(pv_value, capped_data) * 1.0 == min(pv_value, capped_data). To get a worst_day_scaling
+    that actually differs from 1.0 with this fixture, use days_back=1: hist_days < 3 disables
+    calibration entirely (slot_adjustment and total_adjustment forced to 1.0, so pv_value
+    equals the raw forecast) and worst_day_scaling falls back to the fixed 0.7 used when
+    calibration is disabled. Pairing that with a raw forecast that exceeds the array ceiling
+    (raw_kw=10.0, max_kwh=4.0, as in test_pv_calibration_cap_ceiling_binds_at_headroom) still
+    makes the cap bind, so both conditions needed to expose the divergence are present.
+    """
+    print("  - test_pv_calibration_cap_published_pv10_matches_planner")
+    failed = False
+
+    test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=4.0, raw_kw=10.0, hist_kw=2.0, days_back=1)
+    try:
+        midnight = datetime(2025, 6, 15, 0, 0, 0, tzinfo=pytz.utc)
+        checked_any = False
+        for slot in range(gen_start, gen_end, plan_interval):
+            ts = midnight + timedelta(minutes=slot)
+            period_start = ts.strftime("%Y-%m-%dT%H:%M:%S+0000")
+            entry = next((e for e in adj_data if e.get("period_start") == period_start), None)
+            if entry is None or entry.get("pv_estimate10") is None:
+                continue
+            published_p10 = entry["pv_estimate10"]
+            planner_p10 = sum(adj_m10.get(slot + offset, 0) for offset in range(plan_interval))
+            checked_any = True
+            if abs(published_p10 - planner_p10) > 0.01:
+                print("ERROR: published pv_estimate10 {} at slot {} does not match planner pv_forecast_minute10 total {}".format(published_p10, slot, planner_p10))
+                failed = True
+        if not checked_any:
+            print("ERROR: no pv_estimate10 entries were found to compare - test scenario did not exercise the cap")
+            failed = True
     finally:
         test_api.cleanup()
 
@@ -2651,8 +3902,11 @@ def test_pv_calibration_no_history_not_zeroed(my_predbat):
     """
     Regression test: when there is no valid historical data (e.g. all days excluded as
     "down days") both max_pv_power_hist and max_pv_power_forecast are 0. The capped_data
-    clamp must NOT then zero out the calibrated/10/90 forecast - it should fall back to
-    the inverter rating (max_kwh) cap instead. Previously capped_data became 0 and every
+    clamp must NOT then zero out the calibrated/10/90 forecast. With no observed peak,
+    observed_slot is 0 and ceiling_slot reduces to 1.2 * max_kwh (the declared array
+    capacity, i.e. kwp * efficiency - not the inverter rating), so capped_data falls
+    through to the raw forecast value, which is comfortably below that ceiling here.
+    Previously capped_data became 0 and every
     pv_estimateCL / pv_estimate10 / pv_estimate90 was clamped to 0, so the published PV
     forecast sensors all reported 0 kWh despite a valid raw forecast.
     """
@@ -2687,8 +3941,8 @@ def test_pv_calibration_no_history_not_zeroed(my_predbat):
             ts = midnight + timedelta(minutes=slot)
             pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 1.0 * plan_interval / 60})
 
-        max_kwh = 3.0  # inverter rating - the cap should fall back to this
-        solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+        max_kwh = 3.0  # declared array capacity (kwp * efficiency) - well above the 1 kW raw forecast, so the ceiling never binds
+        solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
 
         # At least one calibrated value should be non-zero where the input forecast was non-zero.
         any_nonzero_cl = any(entry.get("pv_estimateCL", 0) > 0 for entry in pv_forecast_data)
@@ -2702,6 +3956,120 @@ def test_pv_calibration_no_history_not_zeroed(my_predbat):
             failed = True
         if not any_nonzero_90:
             print("ERROR: all pv_estimate90 values were zeroed despite a valid forecast and no history")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_no_history_ceiling_clips_raw(my_predbat):
+    """
+    With no usable history, max_pv_power_hist is 0, so observed_slot is 0 and the per-slot
+    cap reduces to exactly ceiling_slot = 1.2 * max_kwh - a raw forecast above that IS
+    clipped by design, not merely floored. This is deliberate: 1.2x the declared array
+    capacity is treated as a physical ceiling even without any measured evidence to raise it.
+
+    max_kwh=3.0, raw forecast 5 kW, no history: ceiling_slot = 1.2*3.0/60*plan_interval =
+    0.30 (at plan_interval=5), vs a raw slot value of 5.0/60*plan_interval = 0.4167 - a
+    ~28% suppression of the planner's own forecast input.
+    """
+    print("  - test_pv_calibration_no_history_ceiling_clips_raw")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        base = test_api.mock_base
+        plan_interval = base.plan_interval_minutes
+
+        def mock_minute_data_import_export(max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
+            """Return no historical data at all, so calibration has nothing to learn from."""
+            return {}
+
+        base.minute_data_import_export = mock_minute_data_import_export
+        solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+        # Future forecast: 5 kW constant - well above the 1.2 * max_kwh ceiling.
+        total_minutes = 4 * 24 * 60
+        pv_forecast_minute = {m: 5.0 / 60 for m in range(total_minutes)}
+        pv_forecast_minute10 = {m: 3.5 / 60 for m in range(total_minutes)}
+
+        midnight = base.midnight_utc.replace(tzinfo=pytz.utc)
+        pv_forecast_data = []
+        for slot in range(0, 24 * 60, plan_interval):
+            ts = midnight + timedelta(minutes=slot)
+            pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 5.0 * plan_interval / 60})
+
+        max_kwh = 3.0
+        adj_m, adj_m10, adj_m90, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+
+        expected_cap = 1.2 * max_kwh / 60 * plan_interval
+        worst_slot = 0
+        for slot in range(0, 24 * 60, plan_interval):
+            slot_sum = sum(adj_m.get(slot + offset, 0) for offset in range(plan_interval))
+            worst_slot = max(worst_slot, slot_sum)
+
+        if worst_slot > expected_cap * 1.01:
+            print("ERROR: planner slot total {} exceeds the 1.2 * max_kwh ceiling {} - the ceiling is not binding".format(worst_slot, expected_cap))
+            failed = True
+        if worst_slot < expected_cap * 0.99:
+            print("ERROR: planner slot total {} is below the ceiling {} - expected the ceiling to bind and clip the raw forecast".format(worst_slot, expected_cap))
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_raw_exceeds_ceiling_warns(my_predbat):
+    """
+    When the raw forecast alone (before calibration is even applied) exceeds the array
+    ceiling, a distinct config-facing warning must be emitted, separate from the general
+    capped-slots log, so users know to check kwp/pv_scaling rather than assume calibration
+    scaled too hard.
+
+    Same shape as test_pv_calibration_no_history_ceiling_clips_raw: no observed history,
+    max_kwh=3.0, raw forecast 5 kW -> ceiling_slot = 1.2 * 3.0 = 3.6 kW, well below the raw
+    forecast, so every generating slot trips the warning.
+    """
+    print("  - test_pv_calibration_raw_exceeds_ceiling_warns")
+    failed = False
+
+    captured = []
+    test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=3.0, raw_kw=5.0, hist_kw=0.0, captured_log=captured)
+    try:
+        raw_exceeds_warnings = [m for m in captured if "Raw forecast exceeds the array ceiling" in m and "kwp" in m and "pv_scaling" in m]
+        if not raw_exceeds_warnings:
+            print(f"ERROR: Expected a raw-forecast-exceeds-ceiling warning naming kwp and pv_scaling, got none. Captured: {captured}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_raw_within_ceiling_no_warning(my_predbat):
+    """
+    A normal scenario where the raw forecast stays within the array ceiling must NOT emit the
+    raw-exceeds-ceiling warning, otherwise the warning becomes noise on every install and users
+    stop reading the Warnings tab.
+
+    Observed peak 2 kW, raw forecast 3 kW, max_kwh 4 kW -> ceiling = max(1.2 * 4.0, 2.0) = 4.8
+    kW, comfortably above the 3 kW raw forecast.
+    """
+    print("  - test_pv_calibration_raw_within_ceiling_no_warning")
+    failed = False
+
+    captured = []
+    test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=4.0, raw_kw=3.0, hist_kw=2.0, captured_log=captured)
+    try:
+        raw_exceeds_warnings = [m for m in captured if "Raw forecast exceeds the array ceiling" in m and "kwp" in m and "pv_scaling" in m]
+        if raw_exceeds_warnings:
+            print(f"ERROR: Did not expect a raw-forecast-exceeds-ceiling warning, got {raw_exceeds_warnings}")
             failed = True
 
     finally:
@@ -2724,10 +4092,11 @@ def test_pv_calibration_synthetic_values(my_predbat):
 
     Sub-case B – variable performance (3 days: actual = 0.5, 1.0, 1.5 kWh each, forecast=1.0):
       - average_day_scaling ≈ 0.963  (weighted: (0.5×1.0 + 1.0×0.9 + 1.5×0.8) / 2.7 ≈ 0.963)
-      - total_adjustment ≈ 1.0
+      - total_adjustment ≈ 0.963  (slot averages are recency-weighted the same way, so with a
+        uniform per-day forecast this lands on the same weighted ratio as average_day_scaling)
       - worst_day_scaling ≈ 0.519  (min/weighted_avg = 0.5/0.963, above floor of 0.5)
       - best_day_scaling  ≈ 1.558  (max/weighted_avg = 1.5/0.963)
-      - point estimate (pv_estimateCL) ≈ unchanged input (aggregate ratio ≈ 1.0)
+      - point estimate (pv_estimateCL) ≈ 0.963 × input (aggregate weighted ratio)
       - pv_estimate10 ≈ 0.519 × pv_estimateCL
       - pv_estimate90 ≈ 1.558 × pv_estimateCL (may be capped to capped_data)
     """
@@ -2816,7 +4185,7 @@ def test_pv_calibration_synthetic_values(my_predbat):
         # synthetic pv_forecast dict without going through the real h0 pipeline
         # (which relies on now_utc_exact returning the mocked time).
         with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
-            adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            adj_m, adj_m10, adj_m90, adj_data = solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=True, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
         result = {
             "total_adj": solar.pv_calibration_total_adjustment,
             "avg_scaling": getattr(solar, "pv_calibration_average_scaling", None),
@@ -2839,15 +4208,16 @@ def test_pv_calibration_synthetic_values(my_predbat):
         print("ERROR [A]: average_day_scaling should be ~0.5, got {}".format(r["avg_scaling"]))
         failed = True
 
-    # Uniform underperformance: relative worst = min/avg = 0.5/0.5 = 1.0.
+    # Uniform underperformance, zero day-to-day variance: relative worst = min/avg = 0.5/0.5 = 1.0.
     if abs(r["worst"] - 1.0) > TOL:
         print("ERROR [A]: worst_day_scaling should be 1.0 (no day variance), got {}".format(r["worst"]))
         failed = True
 
-    # Uniform underperformance: initial best stays 1.0 (no day exceeded 1.0×), so
-    # relative best = 1.0/avg = 1.0/0.5 = 2.0 → clamped to PV_CALIBRATION_HIGHEST_BEST=1.7.
-    if abs(r["best"] - 1.7) > TOL:
-        print("ERROR [A]: best_day_scaling should be 1.7 (clamped from 1.0/avg=2.0), got {}".format(r["best"]))
+    # Uniform underperformance, zero day-to-day variance: relative best = max/avg = 0.5/0.5 = 1.0.
+    # (worst/best are seeded from the first observed day's ratio, not a hardcoded 1.0, so a run of
+    # days all on the same side of 1.0x does not spuriously widen the best/worst spread.)
+    if abs(r["best"] - 1.0) > TOL:
+        print("ERROR [A]: best_day_scaling should be 1.0 (no day variance), got {}".format(r["best"]))
         failed = True
 
     # Calibrated gen-slot minute should be approximately total_adj × raw (within 15%).
@@ -2865,7 +4235,7 @@ def test_pv_calibration_synthetic_values(my_predbat):
             failed = True
 
     # pv_estimate10 should use worst scaling (=1.0) → equal to pv_estimateCL.
-    # pv_estimate90 should use best scaling (=1.7) → 1.7× pv_estimateCL.
+    # pv_estimate90 should use best scaling (=1.0) → equal to pv_estimateCL too (no spread).
     for entry in r["adj_data"]:
         cl = entry.get("pv_estimateCL")
         e10 = entry.get("pv_estimate10")
@@ -2875,18 +4245,16 @@ def test_pv_calibration_synthetic_values(my_predbat):
                 print("ERROR [A]: pv_estimate10 ({}) should equal pv_estimateCL ({}) when worst=1.0".format(e10, cl))
                 failed = True
                 break
-            if e90 is not None and abs(e90 - cl * 1.7) > 0.05 * cl:
-                # e90 may be capped by capped_data; allow reduced value if capped
-                if e90 > cl * 1.7 * (1 + TOL):
-                    print("ERROR [A]: pv_estimate90 ({}) should be ≈ {:.5f} (cl × 1.7)".format(e90, cl * 1.7))
-                    failed = True
-                    break
+            if e90 is not None and abs(e90 - cl) > TOL * cl:
+                print("ERROR [A]: pv_estimate90 ({}) should equal pv_estimateCL ({}) when best=1.0".format(e90, cl))
+                failed = True
+                break
 
     # --- Sub-case B: 3 days at 0.5x, 1.0x, 1.5x → weighted avg=0.963, worst=0.519, best=1.558 ---
     r = run_scenario([0.5, 1.0, 1.5])
 
-    if abs(r["total_adj"] - 1.0) > TOL:
-        print("ERROR [B]: total_adjustment should be ~1.0 (avg ratio), got {}".format(r["total_adj"]))
+    if abs(r["total_adj"] - 0.963) > TOL:
+        print("ERROR [B]: total_adjustment should be ~0.963 (recency-weighted ratio), got {}".format(r["total_adj"]))
         failed = True
 
     if r["avg_scaling"] is not None and abs(r["avg_scaling"] - 0.963) > TOL:
@@ -2937,6 +4305,212 @@ def test_pv_calibration_synthetic_values(my_predbat):
                     print("ERROR [B]: pv_estimate90 ({}) should be ≤ 1.558 × pv_estimateCL ({})".format(e90, cl))
                     failed = True
                     break
+
+    return failed
+
+
+def test_pv_calibration_average_day_scaling_ratio_of_sums(my_predbat):
+    """
+    average_day_scaling must be a weighted ratio-of-sums (sum(actual*weight) / sum(forecast*weight)),
+    not a weighted average of per-day ratios (average(actual_i/forecast_i, weight_i)). The two methods
+    coincide when every day's forecast total is the same size, but diverge once forecast totals vary:
+    a day with a small forecast total produces a noisy/extreme ratio that the average-of-ratios method
+    weights identically (recency-only) to a day representing far more actual energy, biasing the result.
+
+    3 days (index0=day1=most recent, weight 1.0/0.9/0.8):
+      day1: forecast=10.0 kWh, actual=13.0 kWh -> ratio 1.3
+      day2: forecast=10.0 kWh, actual=13.0 kWh -> ratio 1.3
+      day3: forecast=0.5  kWh, actual=1.5  kWh -> ratio 3.0 (tiny forecast, noisy ratio)
+
+    Weighted average-of-ratios (old, biased method) would give:
+      (1.3*1.0 + 1.3*0.9 + 3.0*0.8) / (1.0+0.9+0.8) = 4.87/2.7 ~= 1.8037
+    Weighted ratio-of-sums (current method) gives:
+      (13*1.0 + 13*0.9 + 1.5*0.8) / (10*1.0 + 10*0.9 + 0.5*0.8) = 25.9/19.4 ~= 1.3351
+    """
+    print("  - test_pv_calibration_average_day_scaling_ratio_of_sums")
+    failed = False
+
+    GEN_START = 600  # 10:00 UTC in minutes since midnight
+    GEN_END = 660  # 11:00 UTC
+    TOL = 0.01
+
+    def build_pv_today_hist(actual_per_day, minutes_now):
+        hist = {}
+        for day_idx, actual_kwh in enumerate(actual_per_day):
+            day = day_idx + 1
+            midnight_ago = day * 1440 + minutes_now
+            for step in range(0, 24 * 60, 5):
+                minute_ago = midnight_ago - step
+                if minute_ago < 0:
+                    continue
+                actual_min = step
+                if actual_min < GEN_START:
+                    cumulative = 0.0
+                elif actual_min < GEN_END:
+                    cumulative = actual_kwh * (actual_min - GEN_START) / (GEN_END - GEN_START)
+                else:
+                    cumulative = actual_kwh
+                hist[minute_ago] = cumulative
+        return hist
+
+    def build_pv_forecast_hist(forecast_kwh_per_day, minutes_now):
+        forecast_hist = {}
+        for day_idx, forecast_kwh in enumerate(forecast_kwh_per_day):
+            day = day_idx + 1
+            for m_of_day in range(GEN_START, GEN_END):
+                minutes_ago = day * 1440 + (minutes_now - m_of_day)
+                forecast_hist[minutes_ago] = float(forecast_kwh)  # 1-hour window -> kW == kWh
+        return forecast_hist
+
+    forecast_per_day = [10.0, 10.0, 0.5]
+    actual_per_day = [13.0, 13.0, 1.5]
+    weights = [1.0, 0.9, 0.8]
+
+    old_biased_average = sum((a / f) * w for a, f, w in zip(actual_per_day, forecast_per_day, weights)) / sum(weights)
+    expected_average = sum(a * w for a, w in zip(actual_per_day, weights)) / sum(f * w for f, w in zip(forecast_per_day, weights))
+
+    test_api = create_test_solar_api()
+    average = None
+    try:
+        solar = test_api.solar
+        base = test_api.mock_base
+        days_back = len(actual_per_day)
+        minutes_now = base.minutes_now  # 720 (noon)
+
+        hist = build_pv_today_hist(actual_per_day, minutes_now)
+        forecast_hist = build_pv_forecast_hist(forecast_per_day, minutes_now)
+
+        def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+            return dict(_hist) if key == "pv_today" else {}
+
+        base.minute_data_import_export = mock_minute_import_export
+        solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+        total_minutes = 4 * 24 * 60
+        pv_m = {m: 0.0 for m in range(total_minutes)}
+        pv_m10 = {m: 0.0 for m in range(total_minutes)}
+        pv_data = []
+
+        with patch("solcast.history_attribute_to_minute_data", return_value=(forecast_hist, days_back)):
+            solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+
+        average = getattr(solar, "pv_calibration_average_scaling", None)
+    finally:
+        test_api.cleanup()
+
+    if average is None:
+        print("ERROR: pv_calibration_average_scaling was not set")
+        return True
+
+    if abs(average - expected_average) > TOL:
+        print("ERROR: average_day_scaling should be the weighted ratio-of-sums ~{:.4f}, got {}".format(expected_average, average))
+        failed = True
+
+    if abs(average - old_biased_average) < TOL:
+        print("ERROR: average_day_scaling ({}) matches the old biased average-of-ratios result ({:.4f}) - ratio-of-sums fix appears reverted".format(average, old_biased_average))
+        failed = True
+
+    return failed
+
+
+def test_pv_calibration_total_adjustment_recency_weighted(my_predbat):
+    """
+    total_adjustment (and slot_adjustment, which both drive the calibrated median forecast -
+    pv_estimateCL) must weight more recent days higher, using the same recency weight as
+    average_day_scaling/worst/best, rather than a flat unweighted average across the whole
+    history window. Otherwise a recent change in system performance (e.g. panel cleaning,
+    seasonal trend) is diluted by older, less-relevant days.
+
+    3 days (day1=most recent, weight 1.0/0.9/0.8), uniform forecast=1.0 kWh/day:
+      day1: actual=2.0 kWh (ratio 2.0)
+      day2: actual=1.0 kWh (ratio 1.0)
+      day3: actual=0.5 kWh (ratio 0.5)
+
+    Flat/unweighted ratio (what the old code produced): (2.0+1.0+0.5) / (1.0+1.0+1.0) = 3.5/3 ~= 1.1667
+    Recency-weighted ratio (current code): (2.0*1.0+1.0*0.9+0.5*0.8) / (1.0*1.0+1.0*0.9+1.0*0.8) = 3.3/2.7 ~= 1.2222
+    """
+    print("  - test_pv_calibration_total_adjustment_recency_weighted")
+    failed = False
+
+    GEN_START = 600  # 10:00 UTC in minutes since midnight
+    GEN_END = 660  # 11:00 UTC
+    TOL = 0.01
+
+    def build_pv_today_hist(actual_per_day, minutes_now):
+        hist = {}
+        for day_idx, actual_kwh in enumerate(actual_per_day):
+            day = day_idx + 1
+            midnight_ago = day * 1440 + minutes_now
+            for step in range(0, 24 * 60, 5):
+                minute_ago = midnight_ago - step
+                if minute_ago < 0:
+                    continue
+                actual_min = step
+                if actual_min < GEN_START:
+                    cumulative = 0.0
+                elif actual_min < GEN_END:
+                    cumulative = actual_kwh * (actual_min - GEN_START) / (GEN_END - GEN_START)
+                else:
+                    cumulative = actual_kwh
+                hist[minute_ago] = cumulative
+        return hist
+
+    def build_pv_forecast_hist(forecast_kwh_per_day, minutes_now):
+        forecast_hist = {}
+        for day_idx, forecast_kwh in enumerate(forecast_kwh_per_day):
+            day = day_idx + 1
+            for m_of_day in range(GEN_START, GEN_END):
+                minutes_ago = day * 1440 + (minutes_now - m_of_day)
+                forecast_hist[minutes_ago] = float(forecast_kwh)  # 1-hour window -> kW == kWh
+        return forecast_hist
+
+    actual_per_day = [2.0, 1.0, 0.5]
+    forecast_per_day = [1.0, 1.0, 1.0]
+    weights = [1.0, 0.9, 0.8]
+
+    flat_average = sum(actual_per_day) / sum(forecast_per_day)
+    expected_weighted = sum(a * w for a, w in zip(actual_per_day, weights)) / sum(f * w for f, w in zip(forecast_per_day, weights))
+
+    test_api = create_test_solar_api()
+    total_adjustment = None
+    try:
+        solar = test_api.solar
+        base = test_api.mock_base
+        days_back = len(actual_per_day)
+        minutes_now = base.minutes_now  # 720 (noon)
+
+        hist = build_pv_today_hist(actual_per_day, minutes_now)
+        forecast_hist = build_pv_forecast_hist(forecast_per_day, minutes_now)
+
+        def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+            return dict(_hist) if key == "pv_today" else {}
+
+        base.minute_data_import_export = mock_minute_import_export
+        solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+        total_minutes = 4 * 24 * 60
+        pv_m = {m: 0.0 for m in range(total_minutes)}
+        pv_m10 = {m: 0.0 for m in range(total_minutes)}
+        pv_data = []
+
+        with patch("solcast.history_attribute_to_minute_data", return_value=(forecast_hist, days_back)):
+            solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+
+        total_adjustment = solar.pv_calibration_total_adjustment
+    finally:
+        test_api.cleanup()
+
+    if total_adjustment is None:
+        print("ERROR: pv_calibration_total_adjustment was not set")
+        return True
+
+    if abs(total_adjustment - expected_weighted) > TOL:
+        print("ERROR: total_adjustment should be the recency-weighted ratio ~{:.4f}, got {}".format(expected_weighted, total_adjustment))
+        failed = True
+
+    if abs(total_adjustment - flat_average) < TOL:
+        print("ERROR: total_adjustment ({}) matches the old flat/unweighted average ({:.4f}) - recency weighting appears reverted".format(total_adjustment, flat_average))
+        failed = True
 
     return failed
 
@@ -3025,7 +4599,7 @@ def test_pv_calibration_60min_period(my_predbat):
             pv_forecast_hist[minutes_ago] = float(FORECAST_KW)
 
     with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days)):
-        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
+        adj_m, adj_m10, adj_m90, adj_data = solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
 
     # Each annotated entry should cover the full FORECAST_PERIOD minutes.
     # Expected calibrated kWh per entry ≈ FORECAST_KW * FORECAST_PERIOD / 60 = 2.0 kWh.
@@ -3148,7 +4722,7 @@ def test_pv_calibration_15min_period(my_predbat):
             pv_forecast_hist[minutes_ago] = float(FORECAST_KW)
 
     with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days)):
-        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
+        adj_m, adj_m10, adj_m90, adj_data = solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
 
     # Each 15-min entry should be annotated with the single 30-min plan slot that
     # starts at the entry timestamp.  slots_per_period=max(1,round(15/30))=1, so
@@ -3342,7 +4916,7 @@ def test_pv_calibration_skips_system_down_days(my_predbat):
 
     try:
         with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
-            solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
         avg = getattr(solar, "pv_calibration_average_scaling", None)
         total_adj = solar.pv_calibration_total_adjustment
@@ -3423,7 +4997,7 @@ def test_pv_calibration_all_days_down(my_predbat):
     try:
         with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
             # Must not raise ZeroDivisionError or any other exception
-            solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
         total_adj = solar.pv_calibration_total_adjustment
         if abs(total_adj - 1.0) > 0.01:
@@ -3501,6 +5075,13 @@ def run_solcast_tests(my_predbat):
     failed |= test_fetch_pv_forecast_forecast_solar(my_predbat)
     failed |= test_fetch_pv_forecast_forecast_solar_open_meteo_backup_on_failure(my_predbat)
     failed |= test_fetch_pv_forecast_forecast_solar_open_meteo_backup_not_used_on_success(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_used_when_set(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_falls_back_on_failure(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_ignored_when_unset(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_logs_source_change(my_predbat)
+    failed |= test_fetch_pv_forecast_source_change_warning_steady_state(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_transient_fallback_no_warning(my_predbat)
     failed |= test_fetch_pv_forecast_ha_sensors(my_predbat)
 
     # 15-minute resolution tests
@@ -3508,13 +5089,33 @@ def run_solcast_tests(my_predbat):
     failed |= test_fetch_pv_forecast_ha_sensors_15min_kw(my_predbat)
     failed |= test_publish_pv_stats_15min_resolution(my_predbat)
 
+    # Slot-length scaling tests (divide_by must follow the detected period)
+    failed |= test_fetch_pv_forecast_forecast_solar_15min_slots(my_predbat)
+    failed |= test_fetch_pv_forecast_forecast_solar_30min_slots(my_predbat)
+    failed |= test_fetch_pv_forecast_solcast_direct_15min_slots(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_hourly_slots(my_predbat)
+    failed |= test_fetch_pv_forecast_ha_sensors_unit_factor_unchanged(my_predbat)
+    failed |= test_fetch_pv_forecast_ha_sensors_invalid_factor_still_warns(my_predbat)
+
     # Calibration tests
     failed |= test_pv_calibration_power_conversion(my_predbat)
     failed |= test_pv_calibration_sparse_recent_history_no_crash(my_predbat)
     failed |= test_pv_calibration_capped_data_clamp(my_predbat)
+    failed |= test_pv_calibration_cap_allows_raw_forecast_above_observed(my_predbat)
+    failed |= test_pv_calibration_cap_ceiling_binds_at_headroom(my_predbat)
+    failed |= test_pv_calibration_cap_never_clips_observed_generation(my_predbat)
+    failed |= test_pv_calibration_cap_applies_without_declared_capacity(my_predbat)
+    failed |= test_pv_calibration_cap_applied_to_planner_data(my_predbat)
+    failed |= test_pv_calibration_cap_pv10_never_exceeds_cap_or_p50(my_predbat)
+    failed |= test_pv_calibration_cap_published_pv10_matches_planner(my_predbat)
     failed |= test_pv_calibration_no_history_not_zeroed(my_predbat)
+    failed |= test_pv_calibration_no_history_ceiling_clips_raw(my_predbat)
+    failed |= test_pv_calibration_raw_exceeds_ceiling_warns(my_predbat)
+    failed |= test_pv_calibration_raw_within_ceiling_no_warning(my_predbat)
     failed |= test_pv_calibration_partial_history(my_predbat)
     failed |= test_pv_calibration_synthetic_values(my_predbat)
+    failed |= test_pv_calibration_average_day_scaling_ratio_of_sums(my_predbat)
+    failed |= test_pv_calibration_total_adjustment_recency_weighted(my_predbat)
     failed |= test_pv_calibration_60min_period(my_predbat)
     failed |= test_pv_calibration_15min_period(my_predbat)
     failed |= test_pv_calibration_skips_system_down_days(my_predbat)

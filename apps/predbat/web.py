@@ -30,6 +30,7 @@ import shutil
 import html as html_module
 import urllib.parse
 import traceback
+import bisect
 import threading
 import io
 from io import StringIO
@@ -69,16 +70,236 @@ from web_helper import (
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today
-from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
-from predbat import THIS_VERSION
+from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, mask_secret_yaml_text, read_predbat_log, classify_log_line, log_line_included
+from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
+from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
+from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+import debug_history
+from web_annual import AnnualPage
+from web_chat import WebChat
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
 
-ROOT_YAML_KEY = "pred_bat"
+
+def state_as_of_slots(records, slots):
+    """
+    Resolve each slot to the state in effect at it - the most recent record at or before the slot.
+
+    records must be a list of (timestamp, value) ordered oldest first. Returns
+    {slot: (value, changed, prev_value)} where value is "-" for slots preceding the first record and
+    changed marks a slot whose value differs from the one shown at the previous slot.
+    """
+    filled = {}
+    last_value = None
+    previous = None
+    index = 0
+
+    for slot in sorted(slots):
+        while index < len(records) and records[index][0] <= slot:
+            last_value = records[index][1]
+            index += 1
+        value = last_value if last_value is not None else "-"
+        filled[slot] = (value, value != "-" and value != previous, previous)
+        previous = value
+
+    return filled
+
+
+def build_entity_history_table_data(entity_selections, entity_data_fetch):
+    """
+    Resolve the /entity history table's 30-minute rows and their 5-minute detail slots.
+
+    entity_selections: list of {"entity_id": ..., "attribute": ...} (attribute may be None for state)
+    entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now(), i.e. [[record, ...]]
+
+    Every slot reports the state as of its own timestamp. Summarising a window by the last sample
+    taken inside it instead let a momentary blip stand for the whole window - one stray "Lost"
+    record at 21:57 made the entire 21:30 row read "Lost" - and that value then carried forward
+    into every later slot that had no sample of its own, turning a blip into hours of downtime.
+
+    Returns (entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min):
+      entity_filled_30min / entity_filled_5min: one dict per selection, {slot: (value, changed, prev_value)}
+      sorted_timestamps_30min: the 30-min row timestamps, newest first
+      all_display_slots_5min: the 5-min slots covering each 30-min row's own window (offsets 0 to +25)
+    """
+    entity_records = []
+    all_timestamps_30min = set()
+
+    for selection in entity_selections:
+        entity_id = selection["entity_id"]
+        attribute = selection["attribute"]
+        history = entity_data_fetch[entity_id]
+        records = []
+
+        if history and len(history) >= 1:
+            history = history[0]
+            if history:
+                for item in history:
+                    if "last_updated" not in item:
+                        continue
+                    try:
+                        last_updated_stamp = str2time(item["last_updated"])
+                    except (ValueError, TypeError):
+                        continue
+
+                    # Get state or attribute value
+                    if attribute:
+                        state = item.get("attributes", {}).get(attribute, None)
+                    else:
+                        state = item.get("state", None)
+
+                    if state is None:
+                        state = "None"
+
+                    records.append((last_updated_stamp, state))
+
+                    # A record makes the window it landed in a row, so activity is always on screen
+                    minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
+                    rounded_minutes_30 = (minutes // 30) * 30
+                    all_timestamps_30min.add(last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0))
+
+        # str2time is only reliable for ordering once parsed - the raw strings mix UTC history with
+        # the local-time "now" record get_history_with_now() appends
+        records.sort(key=lambda record: record[0])
+        entity_records.append(records)
+
+    # Sort timestamps in reverse chronological order
+    sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
+
+    # Detail slots are the 5-min marks INSIDE each row's own half hour, so expanding a row explains
+    # that row rather than describing the preceding half hour
+    all_display_slots_5min = set()
+    for ts_30 in sorted_timestamps_30min:
+        for offset in range(0, 30, 5):
+            all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
+
+    entity_filled_30min = []
+    entity_filled_5min = []
+    for records in entity_records:
+        entity_filled_30min.append(state_as_of_slots(records, sorted_timestamps_30min))
+        entity_filled_5min.append(state_as_of_slots(records, all_display_slots_5min))
+
+    return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
+
+
+def split_entities_for_charting(entities, entity_data_fetch):
+    """
+    Fetch each entity's history and split a unit group into numeric vs non-numeric entries.
+
+    Deciding numeric-vs-timeline per entity (rather than once for the whole group, from
+    whichever entity happened to be processed last) means a numeric entity doesn't end up
+    silently rendered as a broken timeline chart just because another entity sharing the same
+    unit group is non-numerical.
+
+    entities: list of {"id": entity_id, "friendly_name": ..., "attribute": ...}
+    entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now()
+
+    Returns (numeric_entries, timeline_entries), each a list of
+    {"name": display_name, "friendly_name": ..., "entity_id": ..., "data": history_chart}.
+    """
+    numeric_entries = []
+    timeline_entries = []
+
+    for entity_info in entities:
+        entity_id = entity_info["id"]
+        friendly_name = entity_info["friendly_name"]
+        attribute = entity_info.get("attribute")
+
+        history = entity_data_fetch.get(entity_id)
+        is_numerical = is_data_numerical(history, attribute=attribute)
+
+        if attribute:
+            history_chart = history_attribute(history, state_key=attribute, attributes=True, is_numerical=is_numerical)
+            display_name = f"{friendly_name} ({attribute})"
+        else:
+            history_chart = history_attribute(history, is_numerical=is_numerical)
+            display_name = friendly_name
+
+        if not history_chart:
+            continue
+
+        entry = {"name": display_name, "friendly_name": friendly_name, "entity_id": entity_id, "data": history_chart}
+        (numeric_entries if is_numerical else timeline_entries).append(entry)
+
+    return numeric_entries, timeline_entries
+
+
+def resolve_group_unit_and_name(entity_id, dashboard_values, live_unit=None, live_friendly_name=None):
+    """
+    Resolve the unit_of_measurement/friendly_name to group and label an entity by for the
+    /entity charts.
+
+    Prefers Predbat's own dashboard_values cache, falling back to a caller-supplied live HA
+    lookup (mirroring html_get_entity_text's fallback) for entities Predbat doesn't track
+    itself - e.g. inverter control entities that are selectable on this page but were never
+    published via dashboard_item(), which otherwise silently grouped every such entity into
+    "(no unit)" regardless of their real HA unit.
+
+    live_unit/live_friendly_name should only be looked up by the caller when entity_id isn't
+    in dashboard_values, since that's the only case they're used.
+    """
+    attributes = dashboard_values.get(entity_id, {}).get("attributes", {})
+    if entity_id in dashboard_values:
+        unit = attributes.get("unit_of_measurement") or ""
+        friendly_name = attributes.get("friendly_name") or ""
+    else:
+        unit = live_unit or ""
+        friendly_name = live_friendly_name or ""
+    return unit or "(no unit)", friendly_name or entity_id
+
+
+def subtract_series(base, subtract, max_gap_seconds=300):
+    """Subtract one time series from another, matching on nearest time rather than on exact timestamp.
+
+    The two series come from different entities, which Home Assistant records independently - their
+    samples land a moment apart and prune_today() keys each result on its own source timestamp, so a
+    dict lookup by key misses essentially every time and silently subtracts nothing, leaving two
+    identical lines on the chart.
+
+    Nearest rather than most-recent-at-or-before: both are published in the same cycle, so the skew
+    between them is jitter rather than a real time difference, and it falls either way. Taking only
+    the earlier sample would pair a load reading with a car value from the previous cycle whenever the
+    jitter went the wrong way - visible the moment the car stops, where a stale reading would wipe out
+    the whole house figure for one point.
+
+    Clamped at zero: the two sensors run on their own cadences, so one can momentarily exceed the
+    other, and that has to read as nothing left rather than as negative power.
+
+    Matching is bounded by max_gap_seconds, one publish cycle. Beyond that the nearest sample is not
+    evidence of anything - a car sensor that stopped reporting hours ago would otherwise keep being
+    subtracted from every later point, wiping out the house figure for as long as it stayed away.
+
+    Args:
+    - base: {timestamp: value} to subtract from
+    - subtract: {timestamp: value} to subtract, may be empty
+    - max_gap_seconds: how far a sample may be from a base point and still count
+
+    Returns:
+    - dict: same keys as base, or empty when there is nothing to subtract
+    """
+    if not base or not subtract:
+        return {}
+    points = sorted((str2time(stamp), value) for stamp, value in subtract.items())
+    times = [point[0] for point in points]
+    result = {}
+    for stamp, value in base.items():
+        when = str2time(stamp)
+        index = bisect.bisect_left(times, when)
+        candidates = []
+        if index < len(points):
+            candidates.append(points[index])
+        if index > 0:
+            candidates.append(points[index - 1])
+        other = 0
+        if candidates:
+            nearest = min(candidates, key=lambda point: abs((point[0] - when).total_seconds()))
+            if abs((nearest[0] - when).total_seconds()) <= max_gap_seconds:
+                other = nearest[1]
+        result[stamp] = dp4(max(value - other, 0))
+    return result
 
 
 class WebInterface(ComponentBase):
@@ -96,6 +317,9 @@ class WebInterface(ComponentBase):
 
         # Plugin registration system
         self.registered_endpoints = []
+
+        self.annual_page = AnnualPage(self)
+        self.chat_page = WebChat(self)
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -199,6 +423,64 @@ class WebInterface(ComponentBase):
                 results[day_str] = dp2(total / count)
         return results
 
+    def _register_annual_routes(self, app):
+        """Register the Annual tab's routes on ``app``.
+
+        Split out from start() so a test can register these onto a bare aiohttp
+        Application and assert they exist, without booting a real TCP listener -
+        the constructor for that Application performs no network I/O of its own.
+        """
+        app.router.add_get("/annual", self.annual_page.html_annual)
+        app.router.add_post("/annual", self.annual_page.html_annual_post)
+        app.router.add_post("/annual_reset", self.annual_page.html_annual_reset)
+        app.router.add_post("/annual_array", self.annual_page.html_annual_array)
+        app.router.add_post("/annual_delete", self.annual_page.html_annual_delete)
+        app.router.add_get("/annual_cost_preview", self.annual_page.html_annual_cost_preview)
+        app.router.add_post("/annual_run", self.annual_page.html_annual_run)
+        app.router.add_get("/annual_status", self.annual_page.html_annual_status)
+        app.router.add_post("/annual_cancel", self.annual_page.html_annual_cancel)
+        app.router.add_get("/annual_download", self.annual_page.html_annual_download)
+        app.router.add_get("/annual_plan", self.annual_page.html_annual_plan)
+        app.router.add_get("/annual_view", self.annual_page.html_annual_view)
+        app.router.add_get("/annual_compare", self.annual_page.html_annual_compare)
+
+    def chat_enabled(self):
+        """Return whether the chat component is configured and running."""
+        components = getattr(self.base, "components", None)
+        return bool(components and components.get_component("chat"))
+
+    def _register_chat_routes(self, app):
+        """Register the Chat tab's routes on ``app``, unconditionally.
+
+        Split out of start() the same way the annual routes are, so a test can assert the routes
+        exist against a bare aiohttp Application without opening a socket.
+
+        These must be registered regardless of whether chat is configured yet: phase 0 (which
+        builds this Application and starts the site) runs before phase 1 (which initialises the
+        chat component), so gating on chat_enabled() here would freeze the router with the routes
+        permanently absent. Each handler already checks self.agent and returns 404 "Chat is not
+        configured" when the component is not up yet - that per-request check is what stands in
+        for a boot-time gate.
+        """
+        app.router.add_get("/chat", self.chat_page.html_chat)
+        app.router.add_get("/chat/conversations", self.chat_page.html_chat_conversations)
+        app.router.add_post("/chat/conversations", self.chat_page.html_chat_create)
+        app.router.add_post("/chat/rename", self.chat_page.html_chat_rename)
+        app.router.add_post("/chat/delete", self.chat_page.html_chat_delete)
+        app.router.add_get("/chat/history", self.chat_page.html_chat_history)
+        app.router.add_post("/chat/send", self.chat_page.html_chat_send)
+        app.router.add_get("/chat/stream", self.chat_page.html_chat_stream)
+        app.router.add_post("/chat/confirm", self.chat_page.html_chat_confirm)
+        app.router.add_post("/chat/cancel", self.chat_page.html_chat_cancel)
+        app.router.add_get("/chat/models", self.chat_page.html_chat_models)
+        app.router.add_post("/chat/model", self.chat_page.html_chat_model)
+        app.router.add_get("/chat/status", self.chat_page.html_chat_status)
+        app.router.add_post("/chat/status", self.chat_page.html_chat_status_post)
+        app.router.add_get("/chat/providers", self.chat_page.html_chat_providers)
+        app.router.add_post("/chat/providers", self.chat_page.html_chat_providers_post)
+        app.router.add_post("/chat/providers/models", self.chat_page.html_chat_provider_models)
+        app.router.add_post("/chat/provider", self.chat_page.html_chat_provider_select)
+
     async def start(self):
         # Start the web server
         app = web.Application()
@@ -223,9 +505,15 @@ class WebInterface(ComponentBase):
         app.router.add_get("/debug_yaml", self.html_debug_yaml)
         app.router.add_get("/debug_log", self.html_debug_log)
         app.router.add_get("/debug_apps", self.html_debug_apps)
+        app.router.add_get("/debug_apps_live", self.html_debug_apps_live)
         app.router.add_get("/debug_plan", self.html_debug_plan)
+        app.router.add_get("/debug_history_list", self.html_debug_history_list)
+        app.router.add_get("/debug_history_download", self.html_debug_history_download)
+        app.router.add_get("/debug_history_download_all", self.html_debug_history_download_all)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
+        self._register_annual_routes(app)
+        self._register_chat_routes(app)
         app.router.add_get("/apps_editor", self.html_apps_editor)
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_get("/apps_editor_checksum", self.html_apps_editor_checksum)
@@ -243,6 +531,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/api/login", self.html_api_login)
         app.router.add_get("/browse", self.html_browse)
         app.router.add_get("/download", self.html_download_file)
+        app.router.add_get("/images/{filename}", self.html_logo_image)
         app.router.add_get("/internals", self.html_internals)
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
@@ -277,6 +566,12 @@ class WebInterface(ComponentBase):
             if count % 60 == 0:
                 self.update_success_timestamp()
             count += 1
+
+        # Otherwise a restart mid-run leaves the annual engine's child process
+        # orphaned - burning a CPU core for up to several minutes with nothing left
+        # tracking it - while the fresh AnnualPage created on the next start() reports
+        # idle and would happily let a second run be started alongside it.
+        await self.annual_page.job.cancel()
         await runner.cleanup()
 
         self.api_started = False
@@ -320,6 +615,24 @@ class WebInterface(ComponentBase):
             icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
         return icon
 
+    def get_battery_icon(self, soc_percent, charging):
+        """
+        Pick the Material Design Icon showing how full the battery is and whether it is charging
+
+        The charging variants carry the same three levels plus a bolt, so the level survives in
+        both directions. battery-plus and battery-minus exist but have no level in them, so they
+        would trade the state of charge away for the sign.
+        """
+        if soc_percent < 30:
+            level = 0
+        elif soc_percent < 70:
+            level = 1
+        else:
+            level = 2
+        if charging:
+            return ["&#xF12A4;", "&#xF12A5;", "&#xF12A6;"][level]  # battery-charging low/medium/high
+        return ["&#xF12A1;", "&#xF12A2;", "&#xF12A3;"][level]  # battery low/medium/high
+
     def get_power_flow_diagram(self):
         """
         Generate a graphical power flow diagram showing energy movement between grid, battery, PV, and house load
@@ -339,14 +652,30 @@ class WebInterface(ComponentBase):
         pv_power = self.base.pv_power
         load_power = self.base.load_power
 
-        # Determine flow directions
-        grid_importing = grid_power <= -10  # Grid is importing power (negative value)
-        grid_exporting = grid_power >= 10  # Grid is exporting power (positive value)
+        # Car charging only appears when a car_charging_power sensor is configured (execute.py
+        # update_car_charging_power). Where the charger sits relative to the house CT clamp is what
+        # car_energy_reported_load records. With it on the charger is behind the clamp and its power
+        # is already inside load_power, so subtract it and the House circle reads as the rest of the
+        # house rather than counting the car twice. Clamped at zero because the two readings come
+        # from different meters and a slow-updating load sensor can briefly read below the car.
+        # With it off the charger is outside the clamp and was never in load_power, so subtracting
+        # would take the car off a figure that never held it and the clamp would then swallow the
+        # whole house load - leave the reading alone and feed the car from the Grid instead (#4788).
+        car_configured = self.base.car_charging_power_configured
+        car_power = self.base.car_charging_power
+        car_inside_clamp = self.base.car_energy_reported_load
+        house_power = max(0, load_power - car_power) if (car_configured and car_inside_clamp) else load_power
 
-        battery_charging = battery_power >= 10  # Battery is charging (positive value)
-        battery_discharging = battery_power <= -10  # Battery is discharging (negative value)
+        # Determine flow directions. battery_power is positive when the battery is DISCHARGING
+        # (gateway.py negates the firmware's sign for exactly this reason) and grid_power is
+        # negative when importing, so the reading and the arrow run opposite ways round.
+        grid_importing = grid_power <= -10  # Grid is importing power (negative value)
+
+        battery_to_house = battery_power >= 10  # Battery is discharging into the house
+        battery_charging = battery_power <= -10  # Power is flowing into the battery
 
         pv_generating = pv_power > 0  # PV is generating power
+        battery_icon = self.get_battery_icon(self.base.soc_percent, battery_charging)
         html = ""
 
         html += """
@@ -354,40 +683,106 @@ class WebInterface(ComponentBase):
             <svg width="600" height="400" viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
 
                 <!-- Grid Circle -->
-                <circle cx="450" cy="300" r="50" fill="#4CAF50" />
-                <text x="450" y="300" text-anchor="middle" dy=".3em" fill="#fff">Grid</text>
+                <circle cx="450" cy="300" r="50" fill="#757575"><title>Grid</title></circle>
+                <text x="450" y="300" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF0D3E;</text>
 
                 <!-- Battery Circle -->
-                <circle cx="150" cy="300" r="50" fill="#FF9800" />
-                <text x="150" y="300" text-anchor="middle" dy=".3em" fill="#fff">Battery</text>
+                <circle cx="150" cy="300" r="50" fill="#43A047"><title>Battery</title></circle>
+                <text x="150" y="300" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">{}</text>
 
                 <!-- PV Circle -->
-                <circle cx="150" cy="100" r="50" fill="#2196F3" />
-                <text x="150" y="100" text-anchor="middle" dy=".3em" fill="#fff">PV</text>
+                <circle cx="150" cy="100" r="50" fill="#FDD835"><title>PV</title></circle>
+                <text x="150" y="100" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF0D9B;</text>
 
                 <!-- House Circle -->
-                <circle cx="300" cy="200" r="50" fill="#9C27B0" />
-                <text x="300" y="190" text-anchor="middle" dy=".3em" fill="#fff">House</text>
+                <circle cx="300" cy="200" r="50" fill="#6D4C41"><title>House</title></circle>
+                <text x="300" y="186" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="34" fill="#fff">&#xF02DC;</text>
                 <text x="300" y="215" text-anchor="middle" dy=".3em" fill="#fff">{} W</text>
 
                 <!-- Define animation paths -->
                 <defs>
                     <!-- PV to House path -->
-                    <path id="pv-house-path" d="M200,100 L250,150" stroke="transparent" fill="none" />
+                    <path id="pv-house-path" d="M192,128 L241,161" stroke="transparent" fill="none" />
                     <!-- House to PV path -->
-                    <path id="house-pv-path" d="M250,150 L200,100" stroke="transparent" fill="none" />
+                    <path id="house-pv-path" d="M241,161 L192,128" stroke="transparent" fill="none" />
                     <!-- Battery to House path -->
-                    <path id="battery-house-path" d="M200,300 L250,250" stroke="transparent" fill="none" />
+                    <path id="battery-house-path" d="M192,272 L241,239" stroke="transparent" fill="none" />
                     <!-- House to Battery path -->
-                    <path id="house-battery-path" d="M265,235 L215,275" stroke="transparent" fill="none" />
+                    <path id="house-battery-path" d="M258,228 L209,261" stroke="transparent" fill="none" />
                     <!-- Grid to House path -->
-                    <path id="grid-house-path" d="M410,290 L355,240" stroke="transparent" fill="none" />
+                    <path id="grid-house-path" d="M408,272 L359,239" stroke="transparent" fill="none" />
                     <!-- House to Grid path -->
-                    <path id="house-grid-path" d="M340,230 L390,270" stroke="transparent" fill="none" />
+                    <path id="house-grid-path" d="M342,228 L391,261" stroke="transparent" fill="none" />
                 </defs>
         """.format(
-            dp0(load_power)
+            battery_icon, dp0(house_power)
         )
+
+        # Car charging arm - drawn top right, the corner left free by PV/battery/grid. It runs from
+        # whichever node is actually feeding the charger: the House when the charger is behind the
+        # CT clamp, otherwise the Grid, since the incoming supply is then the only thing left that
+        # can be feeding it. Both run circle edge to circle edge, stopping short of the Car by the
+        # length of the arrowhead the marker draws past the end of the line.
+        if car_configured:
+            car_charging = car_power >= 10
+            if car_inside_clamp:
+                car_source = "House"
+                car_line = 'x1="342" y1="172" x2="391" y2="139"'
+                car_path = "M342,172 L391,139"
+                car_label = 'x="356" y="122"'
+            else:
+                car_source = "Grid"
+                car_line = 'x1="450" y1="250" x2="450" y2="170"'
+                car_path = "M450,250 L450,170"
+                car_label = 'x="485" y="205"'
+
+            html += """
+                <!-- Car Circle -->
+                <circle cx="450" cy="100" r="50" fill="#E53935"><title>Car</title></circle>
+                <text x="450" y="100" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF010B;</text>
+
+                <defs>
+                    <!-- {source} to Car path -->
+                    <path id="{source_id}-car-path" d="{path}" stroke="transparent" fill="none" />
+                    <marker id="car-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#E53935"/>
+                    </marker>
+                </defs>
+            """.format(
+                source=car_source, source_id=car_source.lower(), path=car_path
+            )
+            if car_charging:
+                # Calculate animation speed based on power flow - faster for higher power
+                car_speed = max(0.5, min(3.0, 2.0 - (abs(car_power) / 3000)))
+
+                html += """
+                <!-- {source} to Car Arrow -->
+                <line {line} stroke="#E53935" stroke-width="2" marker-end="url(#car-arrow)" />
+                <text {label} text-anchor="middle" fill="#E53935">{power} W</text>
+
+                <!-- Moving dots for {source} to Car -->
+                <circle r="4" fill="#E53935" opacity="0.8">
+                    <animateMotion dur="{speed}s" repeatCount="indefinite" path="{path}" />
+                </circle>
+                <circle r="3" fill="#E53935" opacity="0.6">
+                    <animateMotion dur="{speed}s" repeatCount="indefinite" begin="0.5s" path="{path}" />
+                </circle>
+                <circle r="2" fill="#E53935" opacity="0.4">
+                    <animateMotion dur="{speed}s" repeatCount="indefinite" begin="1.0s" path="{path}" />
+                </circle>
+                """.format(
+                    source=car_source, line=car_line, label=car_label, power=dp0(car_power), speed=car_speed, path=car_path
+                )
+            else:
+                html += """
+                <!-- {source} to Car Arrow (dashed) -->
+                <line {line} stroke="#E53935" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
+                <text {label} text-anchor="middle" fill="#E53935">{power} W</text>
+                <!-- No moving dot when the car is not charging -->
+                """.format(
+                    source=car_source, line=car_line, label=car_label, power=dp0(car_power)
+                )
+
         # Draw arrows and labels
         if pv_generating:
             # Calculate animation speed based on power flow - faster for higher power
@@ -395,18 +790,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- PV to House Arrow -->
-                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" marker-end="url(#pv-arrow)" />
-                <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
+                <line x1="192" y1="128" x2="241" y2="161" stroke="#F9A825" stroke-width="2" marker-end="url(#pv-arrow)" />
+                <text x="244" y="122" text-anchor="middle" fill="#F9A825">{} W</text>
 
                 <!-- Moving dots for PV to House -->
-                <circle r="4" fill="#2196F3" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M200,100 L250,150" />
+                <circle r="4" fill="#F9A825" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M192,128 L241,161" />
                 </circle>
-                <circle r="3" fill="#2196F3" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M200,100 L250,150" />
+                <circle r="3" fill="#F9A825" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M192,128 L241,161" />
                 </circle>
-                <circle r="2" fill="#2196F3" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,100 L250,150" />
+                <circle r="2" fill="#F9A825" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M192,128 L241,161" />
                 </circle>
             """.format(
                 dp0(pv_power), pv_speed, pv_speed, pv_speed
@@ -415,30 +810,30 @@ class WebInterface(ComponentBase):
             # Make the PV to House line dashed if not generating
             html += """
                 <!-- PV to House Arrow (dashed) -->
-                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
-                <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
+                <line x1="192" y1="128" x2="241" y2="161" stroke="#F9A825" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
+                <text x="244" y="122" text-anchor="middle" fill="#F9A825">{} W</text>
                 <!-- No moving dot when PV is not generating -->
             """.format(
                 dp0(pv_power)
             )
-        if battery_charging:
+        if battery_to_house:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
 
             html += """
                 <!-- Battery to House Arrow -->
-                <line x1="200" y1="300" x2="250" y2="250" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
-                <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
+                <line x1="192" y1="272" x2="241" y2="239" stroke="#43A047" stroke-width="2" marker-end="url(#battery-arrow)" />
+                <text x="244" y="278" text-anchor="middle" fill="#43A047">{} W</text>
 
                 <!-- Moving dots for Battery to House -->
-                <circle r="4" fill="#FF9800" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M200,300 L250,250" />
+                <circle r="4" fill="#43A047" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M192,272 L241,239" />
                 </circle>
-                <circle r="3" fill="#FF9800" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M200,300 L250,250" />
+                <circle r="3" fill="#43A047" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M192,272 L241,239" />
                 </circle>
-                <circle r="2" fill="#FF9800" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,300 L250,250" />
+                <circle r="2" fill="#43A047" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M192,272 L241,239" />
                 </circle>
             """.format(
                 dp0(battery_power), battery_speed, battery_speed, battery_speed
@@ -449,18 +844,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- House to Battery Arrow -->
-                <line x1="265" y1="235" x2="215" y2="275" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
-                <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
+                <line x1="258" y1="228" x2="209" y2="261" stroke="#43A047" stroke-width="2" marker-end="url(#battery-arrow)" />
+                <text x="244" y="278" text-anchor="middle" fill="#43A047">{} W</text>
 
                 <!-- Moving dots for House to Battery -->
-                <circle r="4" fill="#FF9800" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M265,235 L215,275" />
+                <circle r="4" fill="#43A047" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M258,228 L209,261" />
                 </circle>
-                <circle r="3" fill="#FF9800" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M265,235 L215,275" />
+                <circle r="3" fill="#43A047" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M258,228 L209,261" />
                 </circle>
-                <circle r="2" fill="#FF9800" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M265,235 L215,275" />
+                <circle r="2" fill="#43A047" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M258,228 L209,261" />
                 </circle>
             """.format(
                 dp0(battery_power), battery_speed, battery_speed, battery_speed
@@ -472,18 +867,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- Grid to House Arrow -->
-                <line x1="410" y1="290" x2="355" y2="240" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
-                <text x="350" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                <line x1="408" y1="272" x2="359" y2="239" stroke="#757575" stroke-width="2" marker-end="url(#grid-arrow)" />
+                <text x="356" y="278" text-anchor="middle" fill="#757575">{} W</text>
 
                 <!-- Moving dots for Grid to House -->
-                <circle r="4" fill="#4CAF50" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M410,290 L355,240" />
+                <circle r="4" fill="#757575" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M408,272 L359,239" />
                 </circle>
-                <circle r="3" fill="#4CAF50" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M410,290 L355,240" />
+                <circle r="3" fill="#757575" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M408,272 L359,239" />
                 </circle>
-                <circle r="2" fill="#4CAF50" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M410,290 L355,240" />
+                <circle r="2" fill="#757575" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M408,272 L359,239" />
                 </circle>
             """.format(
                 dp0(grid_power), grid_speed, grid_speed, grid_speed
@@ -494,18 +889,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- House to Grid Arrow -->
-                <line x1="340" y1="230" x2="390" y2="270" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
-                <text x="340" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                <line x1="342" y1="228" x2="391" y2="261" stroke="#757575" stroke-width="2" marker-end="url(#grid-arrow)" />
+                <text x="356" y="278" text-anchor="middle" fill="#757575">{} W</text>
 
                 <!-- Moving dots for House to Grid -->
-                <circle r="4" fill="#4CAF50" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M340,230 L390,270" />
+                <circle r="4" fill="#757575" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,228 L391,261" />
                 </circle>
-                <circle r="3" fill="#4CAF50" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M340,230 L390,270" />
+                <circle r="3" fill="#757575" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,228 L391,261" />
                 </circle>
-                <circle r="2" fill="#4CAF50" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M340,230 L390,270" />
+                <circle r="2" fill="#757575" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,228 L391,261" />
                 </circle>
             """.format(
                 dp0(grid_power), grid_speed, grid_speed, grid_speed
@@ -514,13 +909,13 @@ class WebInterface(ComponentBase):
                 <!-- Arrowhead Marker -->
                 <defs>
                     <marker id="pv-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#2196F3"/>
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#F9A825"/>
                     </marker>
                     <marker id="battery-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#FF9800"/>
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#43A047"/>
                     </marker>
                     <marker id="grid-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#4CAF50"/>
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#757575"/>
                     </marker>
                 </defs>
             </svg>
@@ -568,6 +963,11 @@ class WebInterface(ComponentBase):
 
         status_entity = self.prefix + ".status"
         last_updated = self.get_state_wrapper(status_entity, attribute="last_updated", default=None)
+        if last_updated:
+            try:
+                last_updated = str2time(last_updated).replace(tzinfo=None, microsecond=0)
+            except (ValueError, TypeError) as e:
+                self.log("Warn: Failed to parse last_updated time {}: {}".format(last_updated, e))
         status = self.get_state_wrapper(status_entity, default="Unknown")
         detail = self.get_state_wrapper(status_entity, attribute="detail", default="")
         debug = self.get_state_wrapper(status_entity, attribute="debug", default="")
@@ -582,6 +982,11 @@ class WebInterface(ComponentBase):
             text += "<tr><td>Status</td><td{}>{}</td></tr>\n".format(debug_title, status_full)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
         last_started = self.get_state_wrapper(self.prefix + ".last_started", default=None)
+        if last_started:
+            try:
+                last_started = str2time(last_started).replace(tzinfo=None)
+            except (ValueError, TypeError) as e:
+                self.log("Warn: Failed to parse last_started time {}: {}".format(last_started, e))
         text += "<tr><td>Last Started</td><td>{}</td></tr>\n".format(last_started)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
 
@@ -629,11 +1034,21 @@ class WebInterface(ComponentBase):
         text += '<div style="flex: 1;">\n'
         text += "<h2>Debug</h2>\n"
         text += "<table>\n"
-        text += "<tr><td>Download</td><td><a href='./debug_apps'>apps.yaml</a></td></tr>\n"
+        text += "<tr><td>Download</td><td><a href='javascript:void(0)' onclick='downloadLiveApps()'>apps.yaml (live)</a> | <a href='javascript:void(0)' onclick='downloadFileApps()'>apps.yaml (file)</a></td></tr>\n"
         text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
+        text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
+        # The HA Companion app's embedded webview does not act on Content-Disposition: attachment,
+        # so it renders these downloads inline instead of saving them - a client limitation with no
+        # server-side fix (see #4720). Rather than try to detect the app (its webview sends no
+        # reliable identifying User-Agent - see #4720 discussion) and grey the links out, which risks
+        # false-positives against a genuine desktop browser, just say so for everyone.
+        text += "<tr><td colspan='2' style='font-size:0.85em; color:var(--text-secondary,#888); padding-top:6px;'>"
+        text += "'Create' and 'Download' above need a web browser - the HA Companion app cannot save files from them. "
+        text += "Companion app users can instead browse to <code>{}/debug/</code>, which also holds the rolling snapshot history as plain, readable files.".format(self.base.config_root_p)
+        text += "</td></tr>\n"
         text += "</table>\n"
         text += "</div>\n"
 
@@ -807,45 +1222,6 @@ class WebInterface(ComponentBase):
             self.base.log(f"Error in html_api_get_entities: {e}")
             return web.json_response({"error": str(e)}, status=500)
 
-    def is_data_numerical(self, history, attribute=None):
-        """
-        Check if history data is numerical (supports both state and attribute checking)
-        Returns True if at least 10% of values are numeric or boolean
-        """
-        count_nums = 0
-        count_total = 0
-
-        if history and len(history) >= 1:
-            for item in history[0]:
-                if attribute:
-                    # Check attribute value
-                    attr_value = item.get("attributes", {}).get(attribute, None)
-                    if attr_value is None:
-                        continue
-                    value = str(attr_value)
-                else:
-                    # Check state value
-                    value = item.get("state", None)
-                    if value is None:
-                        continue
-                    value = str(value)
-
-                if value.lower() in ["on", "off", "true", "false"]:
-                    count_nums += 1
-                else:
-                    try:
-                        float(value)
-                        count_nums += 1
-                    except (ValueError, TypeError):
-                        pass
-                count_total += 1
-
-        if count_total > 0 and (count_nums / count_total) >= 0.1:
-            return True
-        elif count_total == 0:
-            return True
-        return False
-
     async def get_history_with_now(self, entity_id, days, attribute=None):
         """
         Get history for an entity including the current state
@@ -937,51 +1313,16 @@ class WebInterface(ComponentBase):
         days = int(request.query.get("days", 7))  # Default to 7 days if not specified
 
         text = self.get_header("Predbat Entity", refresh=0)
-        text += """
-<script>
-(function() {
-    // Restore scroll position and expanded rows saved before last reload
-    window.addEventListener('load', function() {
-        var savedPos = sessionStorage.getItem('entityScrollPos');
-        if (savedPos) {
-            savedPos = JSON.parse(savedPos);
-            sessionStorage.removeItem('entityScrollPos');
-            window.scrollTo(savedPos.x, savedPos.y);
-        }
-        var savedExpanded = sessionStorage.getItem('entityExpandedRows');
-        if (savedExpanded) {
-            sessionStorage.removeItem('entityExpandedRows');
-            JSON.parse(savedExpanded).forEach(function(rowIndex) {
-                var mainRow = document.getElementById('row_' + rowIndex);
-                if (mainRow) {
-                    var detailRows = document.querySelectorAll('#detail_' + rowIndex);
-                    detailRows.forEach(function(row) { row.style.display = 'table-row'; });
-                    mainRow.classList.add('expanded');
-                    var timeCell = mainRow.cells[0];
-                    timeCell.innerHTML = timeCell.innerHTML.replace('\u25b6', '\u25bc');
-                }
-            });
-        }
-    });
-    // Schedule reload, saving scroll position and expanded rows first
-    setTimeout(function() {
-        var expandedRows = [];
-        document.querySelectorAll('tr.history-row.expanded').forEach(function(row) {
-            expandedRows.push(row.id.replace('row_', ''));
-        });
-        sessionStorage.setItem('entityExpandedRows', JSON.stringify(expandedRows));
-        sessionStorage.setItem('entityScrollPos', JSON.stringify({x: window.scrollX, y: window.scrollY}));
-        location.reload();
-    }, 60000);
-})();
-</script>
-"""
 
-        # Include a back button to return the previous page
+        # Include a back button to return the previous page, and a reload button in case the
+        # entities selected weren't available yet when the page was first loaded
         text += """<div style="margin-bottom: 15px;">
             <a href="{}" class="button" style="display: inline-block; padding: 8px 15px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
                 <span class="mdi mdi-arrow-left" style="margin-right: 5px;"></span>Back
             </a>
+            <button onclick="location.reload()" style="display: inline-block; margin-left: 10px; padding: 8px 15px; background-color: #2196F3; color: white; border: none; text-decoration: none; border-radius: 4px; font-weight: bold; cursor: pointer;">
+                <span class="mdi mdi-refresh" style="margin-right: 5px;"></span>Reload
+            </button>
         </div>""".format(
             self.default_page
         )
@@ -1075,13 +1416,16 @@ class WebInterface(ComponentBase):
                 entity_id = selection["entity_id"]
                 attribute = selection["attribute"]
 
-                attributes = self.base.dashboard_values.get(entity_id, {}).get("attributes", {})
-                unit = attributes.get("unit_of_measurement", "") or "(no unit)"
+                live_unit = live_friendly_name = None
+                if entity_id not in self.base.dashboard_values:
+                    live_unit = self.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement")
+                    live_friendly_name = self.get_state_wrapper(entity_id=entity_id, attribute="friendly_name")
+                unit, friendly_name = resolve_group_unit_and_name(entity_id, self.base.dashboard_values, live_unit, live_friendly_name)
 
                 if unit not in entity_groups:
                     entity_groups[unit] = []
 
-                entity_groups[unit].append({"id": entity_id, "friendly_name": attributes.get("friendly_name", entity_id), "unit": unit, "attribute": attribute, "available_attrs": entity_attributes_map.get(entity_id, [])})
+                entity_groups[unit].append({"id": entity_id, "friendly_name": friendly_name, "unit": unit, "attribute": attribute, "available_attrs": entity_attributes_map.get(entity_id, [])})
 
             # Display entity details table for first selected entity
             if len(entity_selections) == 1:
@@ -1114,46 +1458,28 @@ class WebInterface(ComponentBase):
             now_str = self.now_utc.strftime(TIME_FORMAT)
 
             for unit, entities in entity_groups.items():
+                # Numeric and non-numeric entities are split per-entity (not decided once for the
+                # whole group) so a numeric entity sharing a unit with a non-numerical one still
+                # gets a proper line chart instead of being dropped into a broken timeline chart.
+                numeric_entries, timeline_entries = split_entities_for_charting(entities, entity_data_fetch)
+                if not numeric_entries and not timeline_entries:
+                    continue
+
                 text += "<h2>History Chart - {}</h2>\n".format(unit if unit != "(no unit)" else "(no unit)")
-                chart_id = "chart_{}".format(unit.replace("/", "_").replace(" ", "_").replace("(", "").replace(")", ""))
-                text += '<div id="{}"></div>'.format(chart_id)
-                is_numerical = False
+                base_chart_id = "chart_{}".format(unit.replace("/", "_").replace(" ", "_").replace("(", "").replace(")", ""))
 
-                # First, collect all entity data
-                entity_data = []
-                for entity_info in entities:
-                    entity_id = entity_info["id"]
-                    friendly_name = entity_info["friendly_name"]
-                    attribute = entity_info.get("attribute")
-
-                    # Fetch history with attribute if specified
-                    history = entity_data_fetch[entity_id]
-
-                    # Check if data is numerical (supports both state and attribute)
-                    is_numerical = self.is_data_numerical(history, attribute=attribute)
-
-                    # Extract chart data using history_attribute
-                    if attribute:
-                        # Chart attribute data
-                        history_chart = history_attribute(history, state_key=attribute, attributes=True, is_numerical=is_numerical)
-                        display_name = f"{friendly_name} ({attribute})"
-                    else:
-                        # Chart state data (default)
-                        history_chart = history_attribute(history, is_numerical=is_numerical)
-                        display_name = friendly_name
-
-                    if history_chart:
-                        entity_data.append({"name": display_name, "entity_id": entity_id, "data": history_chart})
-
-                # Prepare data for the appropriate chart type
-                if is_numerical:
-                    series_data = [{"name": item["name"], "data": item["data"], "chart_type": "line", "stroke_width": "2", "stroke_curve": "stepline"} for item in entity_data]
+                if numeric_entries:
+                    chart_id = base_chart_id
+                    text += '<div id="{}"></div>'.format(chart_id)
+                    series_data = [{"name": item["name"], "data": item["data"], "chart_type": "line", "stroke_width": "2", "stroke_curve": "stepline"} for item in numeric_entries]
                     chart_unit = unit if unit != "(no unit)" else ""
-                    chart_title = "{} entities".format(len(entities)) if len(entities) > 1 else entities[0]["friendly_name"]
+                    chart_title = "{} entities".format(len(numeric_entries)) if len(numeric_entries) > 1 else numeric_entries[0]["friendly_name"]
                     text += self.render_chart(series_data, chart_unit, chart_title, now_str, tagname=chart_id)
-                else:
-                    # Render timeline chart for non-numerical data
-                    text += self.render_timeline_chart(entity_data, chart_id, days)
+
+                if timeline_entries:
+                    chart_id = base_chart_id + "_timeline" if numeric_entries else base_chart_id
+                    text += '<div id="{}"></div>'.format(chart_id)
+                    text += self.render_timeline_chart(timeline_entries, chart_id, days)
 
             # History table showing all selected entities
             if entity_selections:
@@ -1187,91 +1513,8 @@ class WebInterface(ComponentBase):
                     text += f"<th>{friendly_name}{attr_display}{unit_display}</th>"
                 text += "</tr>\n"
 
-                # Collect history data for all entities (both 30-min summary and 5-min detail)
-                entity_histories_30min = []
-                entity_histories_5min = []
-                all_timestamps_30min = set()
-
-                for selection in entity_selections:
-                    entity_id = selection["entity_id"]
-                    attribute = selection["attribute"]
-                    history = entity_data_fetch[entity_id]
-                    entity_data_30min = {}
-                    entity_data_5min = {}
-
-                    if history and len(history) >= 1:
-                        history = history[0]
-                        if history:
-                            history.reverse()
-                            for item in history:
-                                if "last_updated" not in item:
-                                    continue
-                                last_updated_time = item["last_updated"]
-                                last_updated_stamp = str2time(last_updated_time)
-
-                                # Get state or attribute value
-                                if attribute:
-                                    state = item.get("attributes", {}).get(attribute, None)
-                                else:
-                                    state = item.get("state", None)
-
-                                if state is None:
-                                    state = "None"
-
-                                # Store 5-minute interval data
-                                minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
-                                rounded_minutes_5 = (minutes // 5) * 5
-                                rounded_stamp_5 = last_updated_stamp.replace(minute=rounded_minutes_5 % 60, hour=rounded_minutes_5 // 60, second=0, microsecond=0)
-                                entity_data_5min[rounded_stamp_5] = state
-
-                                # Round to 30-minute intervals for summary
-                                rounded_minutes_30 = (minutes // 30) * 30
-                                rounded_stamp_30 = last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0)
-                                entity_data_30min[rounded_stamp_30] = state
-                                all_timestamps_30min.add(rounded_stamp_30)
-
-                    entity_histories_30min.append(entity_data_30min)
-                    entity_histories_5min.append(entity_data_5min)
-
-                # Sort timestamps in reverse chronological order
-                sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
-
-                # Collect all display slots so we can precompute carry-forward fill
-                # Detail rows go BACKWARDS from the 30-min parent timestamp (offsets -5 to -25)
-                all_display_slots_5min = set()
-                for ts_30 in sorted_timestamps_30min:
-                    for offset in range(-5, -30, -5):
-                        all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
-
-                # Precompute filled dicts: {slot: (value, is_changed, prev_value)} per entity using carry-forward
-                entity_filled_30min = []
-                entity_filled_5min = []
-                for data_30min, data_5min in zip(entity_histories_30min, entity_histories_5min):
-                    # --- 30-min fill ---
-                    sorted_known_30 = sorted(data_30min.keys())
-                    filled_30 = {}
-                    last_val = None
-                    ki = 0
-                    for slot in sorted(sorted_timestamps_30min):
-                        prev_val = last_val
-                        while ki < len(sorted_known_30) and sorted_known_30[ki] <= slot:
-                            last_val = data_30min[sorted_known_30[ki]]
-                            ki += 1
-                        filled_30[slot] = (last_val if last_val is not None else "-", slot in data_30min, prev_val)
-                    entity_filled_30min.append(filled_30)
-
-                    # --- 5-min fill ---
-                    sorted_known_5 = sorted(data_5min.keys())
-                    filled_5 = {}
-                    last_val = None
-                    ki = 0
-                    for slot in sorted(all_display_slots_5min):
-                        prev_val = last_val
-                        while ki < len(sorted_known_5) and sorted_known_5[ki] <= slot:
-                            last_val = data_5min[sorted_known_5[ki]]
-                            ki += 1
-                        filled_5[slot] = (last_val if last_val is not None else "-", slot in data_5min, prev_val)
-                    entity_filled_5min.append(filled_5)
+                # Collect and bucket history data for all entities (both 30-min summary and 5-min detail)
+                entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, _ = build_entity_history_table_data(entity_selections, entity_data_fetch)
 
                 # Pre-compute per-row cell classes so we can decide which rows to show
                 num_cols = len(entity_selections)
@@ -1282,18 +1525,16 @@ class WebInterface(ComponentBase):
                     for filled_30, filled_5 in zip(entity_filled_30min, entity_filled_5min):
                         value, is_changed, prev_value = filled_30.get(timestamp_30, ("-", False, None))
                         if is_changed:
-                            if prev_value is None or value != prev_value:
-                                cell_class = ' class="changed-cell"'
+                            cell_class = ' class="changed-cell"'
+                            has_highlight = True
+                        else:
+                            # Flag a row that held its value at both ends but moved somewhere inside its own half hour
+                            sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(5, 30, 5)]
+                            if any(v != value for v in sub_vals):
+                                cell_class = ' class="reverted-cell"'
                                 has_highlight = True
                             else:
-                                sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(-5, -26, -5)]
-                                if any(v != value for v in sub_vals):
-                                    cell_class = ' class="reverted-cell"'
-                                    has_highlight = True
-                                else:
-                                    cell_class = ""
-                        else:
-                            cell_class = ""
+                                cell_class = ""
                         cells.append((value, cell_class))
                     row_data.append((timestamp_30, cells, has_highlight))
 
@@ -1332,17 +1573,15 @@ class WebInterface(ComponentBase):
                         text += f"<td{cell_class}>{value}</td>"
                     text += "</tr>\n"
 
-                    # Detail rows: 5-minute slots leading UP TO the parent timestamp
-                    for offset in range(-5, -26, -5):
+                    # Detail rows: the remaining 5-minute slots inside this row's own half hour,
+                    # newest first to match the table's ordering (the row itself covers offset 0)
+                    for offset in range(25, 0, -5):
                         detail_time = timestamp_30 + timedelta(minutes=offset)
                         text += f'<tr class="detail-row" id="detail_{row_index}">'
                         text += f"<td>  {detail_time.strftime(TIME_FORMAT)}</td>"
                         for filled in entity_filled_5min:
                             value, is_changed, prev_value = filled.get(detail_time, ("-", False, None))
-                            if is_changed and (prev_value is None or value != prev_value):
-                                cell_class = ' class="changed-cell"'
-                            else:
-                                cell_class = ""
+                            cell_class = ' class="changed-cell"' if is_changed else ""
                             text += f"<td{cell_class}>{value}</td>"
                         text += "</tr>\n"
 
@@ -1426,7 +1665,7 @@ class WebInterface(ComponentBase):
                     pass
 
                 # Set the entity state
-                await self.base.ha_interface.set_state_external(entity_id, new_value, attributes=attributes)
+                await self.set_state_external(entity_id, new_value, attributes=attributes)
                 self.log(f"Entity {entity_id} updated to {new_value} via web interface")
 
         except Exception as e:
@@ -1538,7 +1777,7 @@ class WebInterface(ComponentBase):
         if self.base.update_pending:
             calculating = True
         self.update_success_timestamp()
-        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION, self.get_battery_status_icon(), refresh, codemirror=codemirror)
+        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror, chat_enabled=self.chat_enabled())
 
     def get_chart_series(self, name, results, chart_type, color):
         """
@@ -1610,6 +1849,10 @@ var width = window.innerWidth;
 var height = window.innerHeight;
 width = width / 3 * 2;
 height = height / 3 * 2;
+
+if (width < 600) {
+    width = 600
+}
 
 if (height * 1.68 > width) {
    height = width / 1.68;
@@ -1763,7 +2006,9 @@ var options = {
         text += "   ]\n"
         text += "  }\n"
         text += "}\n"
-        text += "var chart = new ApexCharts(document.querySelector('#{}'), options);\n".format(tagname)
+        # getElementById (not a '#id' CSS selector) - tagname can be unit-derived (e.g. "chart_%")
+        # and '%' is not a valid unescaped CSS identifier character, which would throw in querySelector
+        text += "var chart = new ApexCharts(document.getElementById('{}'), options);\n".format(tagname)
         text += "chart.render();\n"
         text += "</script>\n"
         return text
@@ -1798,6 +2043,11 @@ var options = {
             points_js = ", ".join("{{ x: '{}', y: {} }}".format(p["x"], "null" if p["y"] is None else p["y"]) for p in data_points)
             series_js += "    {{ name: '{}', data: [{}] }},\n".format(name, points_js)
 
+        # chart_id is only safe to interpolate as a *string* (DOM id, inside quotes) - it may
+        # contain characters (e.g. "%") that are invalid in a JS identifier, so a separate
+        # sanitised name is used anywhere it needs to appear as a variable name
+        js_id = re.sub(r"[^0-9A-Za-z_]", "_", chart_id)
+
         text = ""
         text += "<script>\n"
         text += "window.onresize = function(){ location.reload(); };\n"
@@ -1806,12 +2056,12 @@ var options = {
         text += "if (width < 400) { width = 400; }\n"
         text += "width = width - 50;\n"
         if fixed_height is not None:
-            text += "var height_{} = {};\n".format(chart_id, fixed_height)
+            text += "var height_{} = {};\n".format(js_id, fixed_height)
         else:
             num_rows = max(len(series_data), 1)
-            text += "var height_{} = {};\n".format(chart_id, num_rows * 80 + 80)
+            text += "var height_{} = {};\n".format(js_id, num_rows * 80 + 80)
         text += "var options = {\n"
-        text += "  chart: {{ type: 'heatmap', width: width, height: height_{}, animations: {{ enabled: false }} }},\n".format(chart_id)
+        text += "  chart: {{ type: 'heatmap', width: width, height: height_{}, animations: {{ enabled: false }} }},\n".format(js_id)
         text += "  plotOptions: {\n"
         text += "    heatmap: {\n"
         text += "      radius: 2,\n"
@@ -1831,8 +2081,10 @@ var options = {
         text += "  title: {{ text: '{}' }},\n".format(title)
         text += "  tooltip: { y: { formatter: function(val) { return val !== null ? val.toFixed(2) : 'N/A'; } } }\n"
         text += "};\n"
-        text += "var chart_{cid} = new ApexCharts(document.querySelector('#{cid}'), options);\n".format(cid=chart_id)
-        text += "chart_{}.render();\n".format(chart_id)
+        # getElementById, not a '#id' CSS selector - chart_id may contain characters (e.g. "%") that
+        # are invalid in an unescaped CSS identifier and would throw in querySelector
+        text += "var chart_{jid} = new ApexCharts(document.getElementById('{cid}'), options);\n".format(jid=js_id, cid=chart_id)
+        text += "chart_{}.render();\n".format(js_id)
         text += "</script>\n"
         return text
 
@@ -1893,47 +2145,44 @@ var options = {
         first_series = True
         all_states = set()
 
+        # A rangeBar data point's "x" is the y-axis category, so entities whose friendly names
+        # collide (every GivEnergy Cloud inverter publishes a "Status" sensor, for instance) would
+        # otherwise share a single unlabelled row with no way to tell which bar is which inverter.
+        name_counts = {}
+        for entity_timeline in timeline_data:
+            name_counts[entity_timeline["name"]] = name_counts.get(entity_timeline["name"], 0) + 1
+
         for entity_timeline in timeline_data:
             entity_name = entity_timeline["name"]
+            if name_counts.get(entity_name, 0) > 1:
+                entity_name = "{} ({})".format(entity_name, entity_timeline.get("entity_id", ""))
             history_chart = entity_timeline["data"]  # Dict with timestamp keys and state values
 
-            # Convert history data to timeline ranges
+            # Sort by the instant each record represents rather than by its raw timestamp text:
+            # HA/DB history is UTC while get_history_with_now() appends the current state stamped
+            # in local time, so a string sort can order records by their offset instead of by time.
+            sorted_items = []
+            for timestamp_str, state in history_chart.items():
+                try:
+                    sorted_items.append((int(str2time(timestamp_str).timestamp() * 1000), str(state)))
+                except (ValueError, TypeError):
+                    continue
+            sorted_items.sort(key=lambda item: item[0])
+
+            # Convert history data to timeline ranges. Every sample is folded into a range: unlike a
+            # numerical series, thinning a state series does not merely lower the resolution, it
+            # rewrites history. Sampling the records by array index used to alias a flapping state
+            # away entirely whenever the step kept landing on one phase of the flap, leaving the
+            # chart asserting a single multi-day run that the history table flatly contradicted.
+            # Only transitions produce a range, so an entity that rarely changes stays cheap.
             ranges = []
             current_state = None
             start_time = None
-
-            # Sort by timestamp - history_chart is a dict
-            sorted_items = sorted(history_chart.items(), key=lambda x: x[0])
-
-            # Downsample if needed - keep max 288 data points
-            max_points = 288
-            if len(sorted_items) > max_points:
-                # Calculate step size to keep approximately max_points
-                step = len(sorted_items) // max_points
-                if step < 1:
-                    step = 1
-                # Keep every Nth item, but always keep first and last
-                downsampled = [sorted_items[0]]  # Always keep first
-                # Add items at regular intervals
-                for i in range(step, len(sorted_items) - 1, step):
-                    downsampled.append(sorted_items[i])
-                # Always keep last if it's not already included
-                if len(sorted_items) > 1 and sorted_items[-1] not in downsampled:
-                    downsampled.append(sorted_items[-1])
-                sorted_items = downsampled
-
             last_timestamp_ms = None
-            for timestamp_str, state in sorted_items:
-                state = str(state)
-                all_states.add(state)
 
-                # Convert timestamp string to milliseconds for ApexCharts
-                try:
-                    timestamp_dt = str2time(timestamp_str)
-                    timestamp_ms = int(timestamp_dt.timestamp() * 1000)
-                    last_timestamp_ms = timestamp_ms  # Track the last valid timestamp
-                except (ValueError, TypeError):
-                    continue
+            for timestamp_ms, state in sorted_items:
+                all_states.add(state)
+                last_timestamp_ms = timestamp_ms
 
                 if current_state is None:
                     # First point
@@ -2025,7 +2274,7 @@ var options = {
   }
 };
 
-var chart = new ApexCharts(document.querySelector('#"""
+var chart = new ApexCharts(document.getElementById('"""
             + tagname
             + """'), options);
 chart.render();
@@ -2100,16 +2349,7 @@ chart.render();
             return "".join(result_parts)
 
         try:
-            logfile = "predbat.log"
-            logfile_1 = "predbat.1.log"
-            logdata = ""
-
-            if os.path.exists(logfile):
-                with open(logfile, "r") as f:
-                    logdata = f.read()
-            if os.path.exists(logfile_1):
-                with open(logfile_1, "r") as f:
-                    logdata = f.read() + "\n" + logdata
+            logdata = read_predbat_log()
 
             # Get query parameters
             args = request.query
@@ -2137,22 +2377,10 @@ chart.render();
                     lineno -= 1
                     continue
 
-                # Apply log level filtering first
-                include_line = False
-                line_type = "log"
-
-                if "error" in line_lower:  # any error log lines will appear on all, info, warning and error tabs
-                    line_type = "error"
-                    include_line = True
-                elif "warn" in line_lower:  # warning log lines appear on all and warning tabs
-                    line_type = "warning"
-                    include_line = filter_type in ["all", "warnings"]
-                elif "info" in line_lower:  # info log lines appear on all and info tabs
-                    line_type = "info"
-                    include_line = filter_type in ["all", "info"]
-                else:  # all other log lines appear on just the all tab
-                    line_type = "log"
-                    include_line = filter_type == "all"
+                # Apply log level filtering first - shared with the get_log MCP tool so the
+                # two views of the same log can't drift apart (#4768)
+                line_type = classify_log_line(line)
+                include_line = log_line_included(line_type, filter_type)
 
                 # Apply search filter if search term is provided
                 if include_line and search_term:
@@ -2310,15 +2538,17 @@ chart.render();
         baseline_timestamp = baseline_json.get("timestamp", None) if baseline_json else None
 
         # Get current manual overrides
-        manual_charge_times = self.base.manual_times("manual_charge")
-        manual_export_times = self.base.manual_times("manual_export")
-        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
-        manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
-        manual_demand_times = self.base.manual_times("manual_demand")
-        manual_import_rates = self.base.manual_rates("manual_import_rates")
-        manual_export_rates = self.base.manual_rates("manual_export_rates")
-        manual_load_adjust = self.base.manual_rates("manual_load_adjust")
-        manual_soc_keep = self.base.manual_rates("manual_soc")
+        # Read-only: these run on the web server's own thread, so writing the decoded
+        # selection back could persist times captured mid-recompute (#4900)
+        manual_charge_times = self.base.manual_times("manual_charge", update=False)
+        manual_export_times = self.base.manual_times("manual_export", update=False)
+        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge", update=False)
+        manual_freeze_export_times = self.base.manual_times("manual_freeze_export", update=False)
+        manual_demand_times = self.base.manual_times("manual_demand", update=False)
+        manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
+        manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
+        manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
+        manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
@@ -2404,15 +2634,17 @@ chart.render();
         baseline_json = self.get_state_wrapper(entity_id=self.prefix + ".savings_yesterday_predbat", attribute="json", default=None)
 
         # Fetch override data
-        manual_charge_times = self.base.manual_times("manual_charge")
-        manual_export_times = self.base.manual_times("manual_export")
-        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
-        manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
-        manual_demand_times = self.base.manual_times("manual_demand")
-        manual_import_rates = self.base.manual_rates("manual_import_rates")
-        manual_export_rates = self.base.manual_rates("manual_export_rates")
-        manual_load_adjust = self.base.manual_rates("manual_load_adjust")
-        manual_soc_keep = self.base.manual_rates("manual_soc")
+        # Read-only: these run on the web server's own thread, so writing the decoded
+        # selection back could persist times captured mid-recompute (#4900)
+        manual_charge_times = self.base.manual_times("manual_charge", update=False)
+        manual_export_times = self.base.manual_times("manual_export", update=False)
+        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge", update=False)
+        manual_freeze_export_times = self.base.manual_times("manual_freeze_export", update=False)
+        manual_demand_times = self.base.manual_times("manual_demand", update=False)
+        manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
+        manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
+        manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
+        manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
@@ -2574,9 +2806,26 @@ chart.render();
                 new_value = float(new_value)
 
             self.log("Web interface setting {} to {}".format(pitem, new_value))
-            await self.base.ha_interface.set_state_external(pitem, new_value)
+            await self.set_state_external(pitem, new_value)
 
         raise web.HTTPFound("./config")
+
+    def render_delete_button(self, nested_row_id):
+        """
+        Render the delete button shown against a nested list item or dictionary key
+        """
+        return f'<button class="delete-button" id="delete_button_{nested_row_id}" onclick="deleteNestedValue({nested_row_id})">Delete</button>'
+
+    def render_add_row(self, function, js_args, label, row_counter):
+        """
+        Render the trailing table row holding an add button, which doubles as the anchor new rows are inserted before
+        """
+        if row_counter is None:
+            return ""
+        row_counter[0] += 1
+        anchor_id = row_counter[0]
+        args = ", ".join(["'{}'".format(html_module.escape(str(item), quote=True)) for item in js_args] + [str(anchor_id)])
+        return f"<tr id='add_anchor_{anchor_id}'><td colspan='2'></td><td><button class=\"add-button\" onclick=\"{function}({args})\">{label}</button></td></tr>\n"
 
     def render_type(self, arg, value, parent_path="", row_counter=None):
         """
@@ -2595,67 +2844,81 @@ chart.render();
         """
         text = ""
         if isinstance(value, list):
+            list_path = parent_path if parent_path else arg
             text += "<table>"
             for idx, item in enumerate(value):
-                nested_path = f"{parent_path}[{idx}]" if parent_path else f"{arg}[{idx}]"
+                nested_path = f"{list_path}[{idx}]"
 
                 # Check if this list item is editable
                 can_edit = self.is_editable_value(item)
                 actions_cell = ""
+                nested_row_id = None
 
-                if can_edit and row_counter is not None:
+                if row_counter is not None:
                     row_counter[0] += 1
                     nested_row_id = row_counter[0]
 
-                    if isinstance(item, bool):
-                        toggle_class = "toggle-button active" if item else "toggle-button"
-                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
-                    else:
-                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                    if can_edit:
+                        if isinstance(item, bool):
+                            toggle_class = "toggle-button active" if item else "toggle-button"
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
+                        else:
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
 
-                    # Store the nested value info for later processing
-                    if not hasattr(self, "_nested_values"):
-                        self._nested_values = {}
-                    self._nested_values[nested_row_id] = {"path": nested_path, "value": item}
+                        # Store the nested value info for later processing
+                        if not hasattr(self, "_nested_values"):
+                            self._nested_values = {}
+                        self._nested_values[nested_row_id] = {"path": nested_path, "value": item}
+
+                    # Every list item can be removed, whether or not its value itself is editable
+                    actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(arg, item)
 
-                if actions_cell:
-                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                if nested_row_id is not None:
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{nested_row_id}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item, nested_path, row_counter))
+            text += self.render_add_row("addListItem", [list_path, arg], "Add item", row_counter)
             text += "</table>"
         elif isinstance(value, dict):
+            dict_path = parent_path if parent_path else arg
             text += "<table>"
             for key in value:
-                nested_path = f"{parent_path}.{key}" if parent_path else f"{arg}.{key}"
+                nested_path = f"{dict_path}.{key}"
                 nested_value = value[key]
 
                 # Check if this nested value is editable
                 can_edit = self.is_editable_value(nested_value)
                 actions_cell = ""
+                nested_row_id = None
 
-                if can_edit and row_counter is not None:
+                if row_counter is not None:
                     row_counter[0] += 1
                     nested_row_id = row_counter[0]
 
-                    if isinstance(nested_value, bool):
-                        toggle_class = "toggle-button active" if nested_value else "toggle-button"
-                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
-                    else:
-                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                    if can_edit:
+                        if isinstance(nested_value, bool):
+                            toggle_class = "toggle-button active" if nested_value else "toggle-button"
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
+                        else:
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
 
-                    # Store the nested value info for later processing
-                    if not hasattr(self, "_nested_values"):
-                        self._nested_values = {}
-                    self._nested_values[nested_row_id] = {"path": nested_path, "value": nested_value}
+                        # Store the nested value info for later processing
+                        if not hasattr(self, "_nested_values"):
+                            self._nested_values = {}
+                        self._nested_values[nested_row_id] = {"path": nested_path, "value": nested_value}
+
+                    # Every setting can be removed, whether or not its value itself is editable
+                    actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(key, nested_value)
 
-                if actions_cell:
-                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                if nested_row_id is not None:
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
+            text += self.render_add_row("addDictKey", [dict_path], "Add setting", row_counter)
             text += "</table>"
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z_]+\.\S+", value)
@@ -2703,6 +2966,71 @@ chart.render();
         yaml_debug = self.base.create_debug_yaml(write_file=False)
         return await self.html_file("predbat_debug.yaml.txt", yaml_debug)
 
+    def _storage(self):
+        """Return the Storage component, or None when it is unavailable."""
+        components = getattr(self.base, "components", None)
+        return components.get_component("storage") if components else None
+
+    async def html_debug_history_list(self, request):
+        """
+        Return the rolling debug-history snapshot index as JSON, newest-first with
+        steps_back annotated - consumed by the plan table's History/Yesterday view.
+        """
+        snapshots = await debug_history.list_snapshots(self._storage())
+        return web.json_response(debug_history.annotate_steps_back(snapshots))
+
+    async def html_debug_history_download(self, request):
+        """
+        Download one retained debug-history snapshot by id (?id=<snapshot_id>, or
+        ?id=latest / omitted for the newest one), for #4417.
+        """
+        storage = self._storage()
+        requested_id = request.query.get("id") or "latest"
+        # Resolve "latest" and load its data in one call - resolving it via load_snapshot()
+        # and then separately re-listing to find the id for the filename risks a capture
+        # landing in between, serving one snapshot's bytes under a different one's filename.
+        resolved_id, data = await debug_history.resolve_and_load_snapshot(storage, requested_id)
+        if data is None:
+            # requested_id is reflected back unescaped into an HTML response - a raw query
+            # param, so must be escaped rather than trusted.
+            return web.Response(content_type="text/html", text="Snapshot {} not found".format(html_module.escape(requested_id)), status=404)
+
+        filename = debug_history.snapshot_filename(resolved_id)
+        return await self.html_file(filename, data)
+
+    async def html_debug_history_download_all(self, request):
+        """
+        Download every retained debug-history snapshot as a single gzip tarball, so a
+        bug report can be gathered with one link instead of chasing a user through the
+        per-snapshot picker for the right moment, for #4417.
+        """
+        storage = self._storage()
+        named_snapshots = await debug_history.load_all_snapshots(storage)
+        if not named_snapshots:
+            return web.Response(content_type="text/html", text="No debug-history snapshots found", status=404)
+
+        archive_bytes = debug_history.build_archive(named_snapshots)
+        # The trailing .dmp is load-bearing, not decoration. Browsers that unarchive downloads
+        # whose extension they recognise - on by default in more than one - turn a .tgz into a
+        # bare .tar on the way down, and that is fatal here twice over: .tar is not a file type
+        # GitHub accepts as an attachment, and a real 15-snapshot history is ~32MB expanded
+        # against a 25MB attachment limit, where the archive itself is under 5MB. Compression is
+        # doing essential work, so the download has to reach the user still compressed.
+        #
+        # There is no server-side way to decline the unarchiving - it keys on the extension, not
+        # on the content type or Content-Disposition, both of which are set correctly below and
+        # were not enough on their own. So the file is named with an extension those browsers
+        # leave alone and GitHub still accepts. The body is an ordinary gzip tarball and
+        # "tar xzf" reads it whatever it is called, so nothing needs renaming to open it.
+        return web.Response(
+            content_type="application/octet-stream",
+            body=archive_bytes,
+            headers={
+                "Content-Disposition": 'attachment; filename="predbat_debug_history.tgz.dmp"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     async def html_file_load(self, filename, also_file=None, as_file=None):
         """
         Load a file and serve it up
@@ -2724,7 +3052,48 @@ chart.render();
         return await self.html_file_load("predbat.1.log", also_file="predbat.log", as_file="predbat.log")
 
     async def html_debug_apps(self, request):
-        return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")
+        """
+        Return the apps.yaml file as written, with credential values redacted by default.
+
+        Masks unless ?masked=0 is passed, matching /debug_apps_live: this link sits next to that
+        one and is the file a user grabs to attach to a bug report, so a bare request - or any
+        of the plain './debug_apps' links elsewhere in the UI - must not hand over credentials.
+        Redaction is applied to the file text rather than the parsed args, so the download still
+        reads like the user's own apps.yaml, comments and '!secret' references included.
+        """
+        masked = request.query.get("masked", "1") != "0"
+        if not masked:
+            return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")
+
+        data = None
+        if os.path.exists("apps.yaml"):
+            with open("apps.yaml", "r") as f:
+                data = f.read()
+        if data:
+            try:
+                data = mask_secret_yaml_text(data)
+            except Exception as e:
+                # Fail closed - serving the raw file because the parse failed is the leak this
+                # route exists to avoid. The unmasked download is still one click away.
+                self.log("Warn: Unable to redact apps.yaml for download: {}".format(e))
+                data = "# Predbat could not parse apps.yaml to redact it, so it has not been served.\n" "# Fix the YAML error, or use the unmasked download if you intend to share credentials.\n" "# Error: {}\n".format(e)
+        return await self.html_file("apps_masked.yaml.txt", data)
+
+    async def html_debug_apps_live(self, request):
+        """
+        Return an apps.yaml reconstructed from the live in-memory settings (self.args).
+
+        Defaults to masking credential-like keys (see mask_secret_args) so a direct or
+        copied request never leaks secrets without an explicit opt-in; pass ?masked=0
+        to download the full unmasked file.
+        """
+        masked = request.query.get("masked", "1") != "0"
+        args_copy = mask_secret_args(self.args) if masked else copy.deepcopy(self.args)
+        yaml = YAML()
+        buf = StringIO()
+        yaml.dump({ROOT_YAML_KEY: args_copy}, buf)
+        filename = "apps_live_masked.yaml.txt" if masked else "apps_live.yaml.txt"
+        return await self.html_file(filename, buf.getvalue())
 
     async def html_debug_plan(self, request):
         html_plan = self.get_state_wrapper(entity_id=self.prefix + ".plan_html", attribute="html", default="<p>No plan available</p>")
@@ -2736,7 +3105,7 @@ chart.render();
         """
         Return just the dashboard body content for AJAX refresh (preserves scroll position)
         """
-        text = self.get_status_html(THIS_VERSION)
+        text = self.get_status_html(THIS_VERSION_DISPLAY)
         return web.Response(content_type="text/html", text=text)
 
     async def html_dash(self, request):
@@ -2785,7 +3154,7 @@ chart.render();
 """
         text += "<body>\n"
         text += '<div id="dash-content-container">\n'
-        text += self.get_status_html(THIS_VERSION)
+        text += self.get_status_html(THIS_VERSION_DISPLAY)
         text += "</div>\n"
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -2803,12 +3172,12 @@ chart.render();
                 if key == "mode":
                     # Update mode - it's a select type
                     entity_id = f"select.{self.prefix}_{key}"
-                    await self.base.ha_interface.set_state_external(entity_id, value)
+                    await self.set_state_external(entity_id, value)
                 elif key in ["debug_enable", "set_read_only", "active"]:
                     # Update switches - convert to boolean
                     entity_id = f"switch.{self.prefix}_{key}"
                     bool_value = value == "on"
-                    await self.base.ha_interface.set_state_external(entity_id, bool_value)
+                    await self.set_state_external(entity_id, bool_value)
 
             # Log the update
             self.log(f"Dashboard status updated: {dict(data)}")
@@ -2834,6 +3203,11 @@ chart.render();
         soc_kw_h0[now_str] = self.base.soc_kw
         soc_kw = self.get_entity_results(self.prefix + ".soc_kw")
         soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
+        # What earlier plans predicted for now, shifted forward by the horizon they were made at, so
+        # each lands on the moment it was forecasting and can be read straight against Actual.
+        soc_best_history = self.get_history_with_now_attrs(self.prefix + ".soc_kw_best", 7)
+        soc_kw_best_h1 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60)
+        soc_kw_best_h8 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8)
         soc_kw_best10 = self.get_entity_results(self.prefix + ".soc_kw_best10")
         soc_kw_base10 = self.get_entity_results(self.prefix + ".soc_kw_base10")
         charge_limit_kw = self.get_entity_results(self.prefix + ".charge_limit_kw")
@@ -2867,6 +3241,8 @@ chart.render();
                 {"name": "Best", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "4", "stroke_curve": "smooth", "color": "#eb2323"},
                 {"name": "Best10", "data": soc_kw_best10, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#cd23eb"},
                 {"name": "Actual", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8"},
+                {"name": "Predicted (+1h)", "data": soc_kw_best_h1, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#f5a442"},
+                {"name": "Predicted (+8h)", "data": soc_kw_best_h8, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#9b59b6"},
                 {"name": "Charge Limit Base", "data": charge_limit_kw, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#15eb8b"},
                 {
                     "name": "Charge Limit Best",
@@ -2911,8 +3287,8 @@ chart.render();
                 {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
                 {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
                 {"name": "Gas", "data": rates_gas, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
-                {"name": "Hourly p/kWh", "data": cost_pkwh_hour, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
-                {"name": "Today p/kWh", "data": cost_pkwh_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
+                {"name": "Hourly {}/kWh".format(self.currency_symbols[1]), "data": cost_pkwh_hour, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
+                {"name": "Today {}/kWh".format(self.currency_symbols[1]), "data": cost_pkwh_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
             ]
             text += self.render_chart(series_data, self.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":
@@ -3006,6 +3382,18 @@ chart.render();
             load_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_power", 7, required=False))
             load_power = prune_today(load_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
 
+            # Car charging, and the house with it taken back out. load_power is whatever the inverter
+            # reports as house load, and on a charger inside the CT clamp that includes the car - while
+            # the ML forecast it is plotted against has the car subtracted out (car_charging_hold in
+            # load_ml_component). Comparing the two directly makes every charging session look like a
+            # forecast miss the model was never trying to make. Both series are shown rather than only
+            # the corrected one: the car draw is real and worth seeing, it just is not what the model
+            # is predicting. Absent when no charger is configured, in which case neither series is
+            # drawn and the chart is exactly as it was.
+            car_charging_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".car_charging_power", 7, required=False))
+            car_charging_power = prune_today(car_charging_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
+            load_power_no_car = subtract_series(load_power, car_charging_power)
+
             # Get ML predicted load energy (cumulative) and convert to power (kW)
             load_ml_forecast_energy = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
             load_ml_forecast_power = {}
@@ -3047,6 +3435,8 @@ chart.render();
 
             series_data = [
                 {"name": "Load Power (Actual)", "data": load_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kW"},
+                {"name": "Load Power (Actual, less car)", "data": load_power_no_car, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#2ca02c", "unit": "kW"},
+                {"name": "Car Charging Power", "data": car_charging_power, "opacity": "0.6", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e377c2", "unit": "kW"},
                 {"name": "Load Power (ML Predicted Future)", "data": load_ml_forecast_power, "opacity": "0.5", "stroke_width": "3", "chart_type": "area", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kW"},
                 {"name": "Load Power ML History", "data": power_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#eb2323"},
                 {"name": "Load Power ML History +1h", "data": power_today_h1, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#716d63"},
@@ -3373,6 +3763,8 @@ chart.render();
         if self.base.arg_errors:
             warning = "&#9888;"
         text += "{}<a href='./debug_apps'>apps.yaml</a> - has {} errors<br>\n".format(warning, len(self.base.arg_errors))
+        if self.base.arg_warnings:
+            text += "&#9888; apps.yaml has {} credential-like value(s) stored in plain text - consider using '!secret' to reference secrets.yaml: {}<br>\n".format(len(self.base.arg_warnings), html_module.escape(", ".join(sorted(self.base.arg_warnings))))
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><th>Actions</th></tr>\n"
 
@@ -3427,30 +3819,38 @@ chart.render();
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
-    def _update_nested_yaml_value(self, data, path, value):
+    def _split_yaml_path(self, path):
         """
-        Update a nested value in YAML data using a dot-notation path
+        Split a dot-notation path into keys, with each list index as its own '[n]' key
         """
-        pre_keys = path.split(".")
         keys = []
-        # Split out set of square brackets into a different key
-        for key in pre_keys:
-            if "[" in key and "]" in key:
-                # Handle keys with square brackets, e.g., "battery_charge_low[0]"
-                base_key, index = key.split("[")
-                index = index.rstrip("]")
-                keys.append(base_key)
-                keys.append(f"[{index}]")
-            else:
-                keys.append(key)
+        # Split out every set of square brackets into its own key, e.g. "battery_charge_low[0]"
+        # into "battery_charge_low", "[0]", and a directly nested list's "foo[0][1]" into
+        # "foo", "[0]", "[1]"
+        for component in path.split("."):
+            for token in re.split(r"(\[[^\[\]]*\])", component):
+                if token:
+                    keys.append(token)
+        return keys
 
+    def _yaml_path_index(self, key, path):
+        """
+        Return the integer index held by a '[n]' path key, raising KeyError if it is not one
+        """
+        index = key[1:-1]
+        if not index.isdigit():
+            raise KeyError(f"Invalid list index '{key}' in path '{path}'")
+        return int(index)
+
+    def _navigate_yaml_path(self, data, keys, path):
+        """
+        Walk YAML data along all but the last key and return the container holding the final key
+        """
         current = data
-
-        # Navigate to the parent of the target value
         for key in keys[:-1]:
             if key.startswith("[") and key.endswith("]"):
                 # Handle numerical index in square brackets
-                index = int(key[1:-1])
+                index = self._yaml_path_index(key, path)
                 if not isinstance(current, list) or index >= len(current):
                     raise KeyError(f"Index '{index}' out of range in path '{path}'")
                 current = current[index]
@@ -3458,12 +3858,83 @@ chart.render();
                 current = current[key]
             else:
                 raise KeyError(f"Key '{key}' not found in path '{path}'")
+        return current
+
+    def _yaml_path_sort_key(self, path):
+        """
+        Return a sort key for a path so that deeper paths and higher list indices sort last
+        """
+        sort_key = []
+        for key in self._split_yaml_path(path):
+            if key.startswith("[") and key.endswith("]") and key[1:-1].isdigit():
+                sort_key.append((0, int(key[1:-1]), ""))
+            else:
+                sort_key.append((1, 0, str(key)))
+        return sort_key
+
+    def _parse_yaml_fragment(self, text):
+        """
+        Parse a user supplied YAML fragment (a scalar, or a block of key: value lines) into a value
+        """
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        value = yaml.load(text)
+        if value is None:
+            raise ValueError("value is empty")
+        return value
+
+    def _delete_nested_yaml_value(self, data, path):
+        """
+        Delete a nested list item or dictionary key from YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
+
+        key = keys[-1]
+        if key.startswith("[") and key.endswith("]"):
+            # Handle numerical index in square brackets
+            index = self._yaml_path_index(key, path)
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(f"Index '{index}' out of range in path '{path}'")
+            del current[index]
+        elif isinstance(current, dict) and key in current:
+            del current[key]
+        else:
+            raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+    def _add_nested_yaml_value(self, data, path, value):
+        """
+        Add a new list item (path ending in '[]') or dictionary key to YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
+
+        key = keys[-1]
+        if key == "[]":
+            if not isinstance(current, list):
+                raise KeyError(f"Path '{path}' does not refer to a list")
+            current.append(value)
+        elif key.startswith("[") and key.endswith("]"):
+            raise KeyError(f"Cannot add at an existing list index, use [] to append in path '{path}'")
+        elif not isinstance(current, dict):
+            raise KeyError(f"Path '{path}' does not refer to a dictionary")
+        elif key in current:
+            raise KeyError(f"Key '{key}' already exists in path '{path}'")
+        else:
+            current[key] = value
+
+    def _update_nested_yaml_value(self, data, path, value):
+        """
+        Update a nested value in YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
 
         # Set the final value
         key = keys[-1]
         if key.startswith("[") and key.endswith("]"):
             # Handle numerical index in square brackets
-            index = int(key[1:-1])
+            index = self._yaml_path_index(key, path)
             if not isinstance(current, list) or index >= len(current):
                 raise KeyError(f"Index '{index}' out of range in path '{path}'")
             current[index] = value
@@ -3479,6 +3950,27 @@ chart.render();
                     current[key] = value
             else:
                 raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+    def _validate_compare_list(self, compare_list):
+        """
+        Check every compare_list profile still has the unique id and non-empty name that
+        compare.py indexes results by, raising ValueError if a batch has left one without
+        """
+        if not compare_list:
+            return
+
+        seen_ids = set()
+        for entry in compare_list:
+            if not isinstance(entry, dict):
+                raise ValueError("Each compare_list entry must be a dictionary with an id and a name")
+            entry_id = entry.get("id")
+            if not entry_id:
+                raise ValueError("Each compare_list entry requires a non-empty 'id'")
+            if entry_id in seen_ids:
+                raise ValueError(f"Duplicate compare_list id '{entry_id}'")
+            seen_ids.add(entry_id)
+            if not entry.get("name"):
+                raise ValueError(f"compare_list entry '{entry_id}' requires a non-empty 'name'")
 
     async def html_apps_post(self, request):
         """
@@ -3504,6 +3996,7 @@ chart.render();
             apps_yaml_path = "apps.yaml"
             yaml = YAML()
             yaml.preserve_quotes = True
+            yaml.width = YAML_DUMP_WIDTH
 
             try:
                 with open(apps_yaml_path, "r") as f:
@@ -3515,12 +4008,47 @@ chart.render();
             if ROOT_YAML_KEY not in data:
                 return web.json_response({"success": False, "message": "pred_bat section not found in apps.yaml"})
 
-            # Process each change
+            # Process each change - additions and updates are applied first, then deletions, as
+            # deleting a list item shifts the indices every other path was rendered against.
+            # Every mutation lands on live_args, a copy of self.args, rather than self.args
+            # itself - a batch that fails partway, or whose file write fails, must never leave
+            # self.args (which is the same object as self.base.args) reflecting only some of it
             updated_args = []
+            deleted_paths = []
+            live_args = copy.deepcopy(self.args)
             for path_or_arg, change_info in changes.items():
-                new_value = change_info["newValue"]
                 change_type = change_info.get("type", "numerical")
                 is_nested = change_info.get("isNested", False)
+                # Adds are keyed uniquely by the browser so several can target one list, so the
+                # path is taken from the change itself rather than from the key
+                path_or_arg = change_info.get("path", path_or_arg) if is_nested else path_or_arg
+
+                if change_type in ("add", "delete"):
+                    # Determine nesting from the parsed path itself, not the client-supplied
+                    # isNested flag, so a delete posted with isNested spoofed true still cannot
+                    # reach a bare top-level key
+                    if len(self._split_yaml_path(path_or_arg)) < 2:
+                        return web.json_response({"success": False, "message": f"Only nested values can be added or deleted, not {path_or_arg}"})
+
+                if change_type == "delete":
+                    deleted_paths.append(path_or_arg)
+                    continue
+
+                new_value = change_info["newValue"]
+
+                if change_type == "add":
+                    # Added values are entered as YAML so a whole new list entry can be created at once
+                    try:
+                        added_value = self._parse_yaml_fragment(new_value)
+                    except Exception as e:
+                        return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {str(e)}"})
+                    try:
+                        self._add_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, added_value)
+                        self._add_nested_yaml_value(live_args, path_or_arg, copy.deepcopy(added_value))
+                    except (KeyError, TypeError) as e:
+                        return web.json_response({"success": False, "message": f"Could not add {path_or_arg}: {str(e)}"})
+                    updated_args.append(f"added {path_or_arg}")
+                    continue
 
                 # Convert the new value to appropriate type
                 try:
@@ -3543,7 +4071,7 @@ chart.render();
                     # Handle nested paths like "battery_charge_low.normal"
                     try:
                         self._update_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, converted_value)
-                        self._update_nested_yaml_value(self.args, path_or_arg, converted_value)
+                        self._update_nested_yaml_value(live_args, path_or_arg, converted_value)
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     except (KeyError, TypeError) as e:
                         return web.json_response({"success": False, "message": f"Path {path_or_arg} not found or invalid: {str(e)}"})
@@ -3551,15 +4079,38 @@ chart.render();
                     # Handle top-level arguments
                     if path_or_arg in data[ROOT_YAML_KEY]:
                         data[ROOT_YAML_KEY][path_or_arg] = converted_value
-                        self.args[path_or_arg] = converted_value  # Update the base args as well
+                        live_args[path_or_arg] = converted_value
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     else:
                         return web.json_response({"success": False, "message": f"Argument {path_or_arg} not found in apps.yaml"})
+
+            # Deletions run last, deepest path and highest list index first, so that one deletion
+            # never shifts the index another one still refers to
+            for path in sorted(deleted_paths, key=self._yaml_path_sort_key, reverse=True):
+                try:
+                    self._delete_nested_yaml_value(data[ROOT_YAML_KEY], path)
+                    self._delete_nested_yaml_value(live_args, path)
+                except (KeyError, TypeError) as e:
+                    return web.json_response({"success": False, "message": f"Could not delete {path}: {str(e)}"})
+                updated_args.append(f"deleted {path}")
+
+            # Compare profiles are indexed by id elsewhere (e.g. compare.py), so a batch that
+            # leaves one without an id or name, or with a duplicate id, must be refused
+            try:
+                self._validate_compare_list(data[ROOT_YAML_KEY].get("compare_list"))
+            except ValueError as e:
+                return web.json_response({"success": False, "message": str(e)})
 
             # Write back to the file, preserving comments and formatting
             try:
                 with open(apps_yaml_path, "w") as f:
                     yaml.dump(data, f)
+
+                # Only now that the whole batch has validated and the file write has succeeded is
+                # the live config published - in place, so self.args (the same object as
+                # self.base.args) never reflects a partially applied batch
+                self.args.clear()
+                self.args.update(live_args)
 
                 change_count = len(updated_args)
                 self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")
@@ -3846,6 +4397,8 @@ chart.render();
 
         if compare_hist:
             text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
+        elif not compare_list:
+            text += '<br><h2>No tariffs configured yet - see <a href="https://springfall2008.github.io/batpred/compare/" target="_blank" rel="noopener noreferrer">Comparing Energy Tariffs</a> for how to add some to apps.yaml</h2><br>'
         else:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
@@ -3862,6 +4415,8 @@ chart.render();
                 series_7d.append({"name": name, "data": rolling, "chart_type": "line", "stroke_width": "2"})
         if series_7d:
             text += self.render_chart(series_7d, self.currency_symbols[0], "Tariff Comparison - 7 day rolling average", now_str, tagname="chart7d", daily_chart=False)
+        elif not compare_list:
+            pass  # Already explained by the "No tariffs configured" message above
         else:
             text += "<br><h2>7 day rolling average chart loading (please wait)...</h2><br>"
 
@@ -4172,8 +4727,9 @@ chart.render();
             override_time = get_override_time_from_string(now_utc, time_str, self.plan_interval_minutes)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 48 * 60:
-                return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
+            if minutes_from_now >= MANUAL_RATE_MAX_MINUTES:
+                max_hours = MANUAL_RATE_MAX_MINUTES // 60
+                return web.json_response({"success": False, "message": f"Override time must be within {max_hours} hours from now."}, status=400)
 
             # Calculate minutes from midnight for looking up existing rates
             minutes_from_midnight = int((override_time - self.midnight_utc).total_seconds() / 60)
@@ -4182,38 +4738,38 @@ chart.render();
 
             # For clear operations, we need to use the actual stored rate value, not the passed rate
             if action == "Clear Import":
-                manual_import_rates = self.base.manual_rates("manual_import_rates")
+                manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
                 actual_rate = manual_import_rates.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_import_rates", clear_option)
             elif action == "Set Import":
                 item = self.base.config_index.get("manual_import_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_import_rates", selection_option)
             elif action == "Clear Export":
-                manual_export_rates = self.base.manual_rates("manual_export_rates")
+                manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
                 actual_rate = manual_export_rates.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_export_rates", clear_option)
             elif action == "Set Export":
                 item = self.base.config_index.get("manual_export_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_export_rates", selection_option)
             elif action == "Set Load":
                 item = self.base.config_index.get("manual_load_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_load_adjust", selection_option)
             elif action == "Clear Load":
-                manual_load_adjust = self.base.manual_rates("manual_load_adjust")
+                manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
                 actual_rate = manual_load_adjust.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_load_adjust", clear_option)
             elif action == "Set SOC":
                 item = self.base.config_index.get("manual_soc_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_soc", selection_option)
             elif action == "Clear SOC":
-                manual_soc = self.base.manual_rates("manual_soc")
+                manual_soc = self.base.manual_rates("manual_soc", update=False)
                 actual_rate = manual_soc.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_soc", clear_option)
@@ -4256,8 +4812,9 @@ chart.render();
                 return web.json_response({"success": False, "message": "Invalid time format"}, status=400)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 48 * 60:
-                return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
+            if minutes_from_now >= MANUAL_TIME_MAX_MINUTES:
+                max_hours = MANUAL_TIME_MAX_MINUTES // 60
+                return web.json_response({"success": False, "message": f"Override time must be within {max_hours} hours from now."}, status=400)
 
             selection_option = "{}".format(override_time.strftime("%a %H:%M"))
             clear_option = "[{}]".format(override_time.strftime("%a %H:%M"))
@@ -4377,7 +4934,7 @@ chart.render();
             is_alive = self.base.components.is_alive(component_name)
             is_active = component_name in active_components
 
-            if is_active and not is_alive:
+            if (is_active and not is_alive) or self.base.components.load_error(component_name):
                 error_components.append(component_name)
             elif is_active and is_alive:
                 active_healthy_components.append(component_name)
@@ -4407,22 +4964,29 @@ chart.render();
             from components import COMPONENT_LIST
 
             component_info = COMPONENT_LIST.get(component_name, {})
-            component = self.base.components.get_component(component_name)
             is_alive = self.base.components.is_alive(component_name)
             can_restart = self.base.components.can_restart(component_name)
             is_active = component_name in active_components
+            # Configured but failed to import or construct: inactive, yet shown as an error
+            load_error = self.base.components.load_error(component_name)
 
             # Get last updated time
             last_updated_time = self.base.components.last_updated_time(component_name)
             time_ago_text = format_time_ago(last_updated_time)
 
             # Create component card
-            card_class = "active" if is_active else "inactive"
-            if is_active and not is_alive:
-                card_class += " error"
+            if load_error:
+                # Not "inactive" as well: that rule would paint over the error border
+                card_class = "error"
+            elif is_active and not is_alive:
+                card_class = "active error"
+            elif is_active:
+                card_class = "active"
+            else:
+                card_class = "inactive"
 
             # Add data-disabled attribute for filtering
-            disabled_attr = 'data-disabled="true"' if not is_active else 'data-disabled="false"'
+            disabled_attr = 'data-disabled="true"' if not (is_active or load_error) else 'data-disabled="false"'
 
             text += f'<div class="component-card {card_class}" {disabled_attr}>\n'
             text += f'<div class="component-header">\n'
@@ -4431,13 +4995,13 @@ chart.render();
             # Status indicator
             if is_active and is_alive:
                 text += '<span class="status-indicator status-healthy">●</span><span class="status-text">Active</span>\n'
-            elif is_active and not is_alive:
+            elif (is_active and not is_alive) or load_error:
                 text += '<span class="status-indicator status-error">●</span><span class="status-text">Error</span>\n'
             else:
                 text += '<span class="status-indicator status-inactive">●</span><span class="status-text">Disabled</span>\n'
 
-            # Add restart button for active components
-            if is_active and can_restart:
+            # Add restart button for active and failed components
+            if (is_active or load_error) and can_restart:
                 text += f'<button class="restart-button" onclick="restartComponent(\'{component_name}\')" title="Restart this component">Restart</button>\n'
 
             # Add edit button for all components
@@ -4450,6 +5014,10 @@ chart.render();
 
             # Add last updated time
             text += f'<p><strong>Last Updated:</strong> <span class="last-updated-time">{time_ago_text}</span></p>\n'
+
+            # Say why a component could not be initialised
+            if load_error:
+                text += f'<p><strong>Error:</strong> <span class="error-count-high">{html_module.escape(load_error)}</span></p>\n'
 
             # Add error count
             error_count = self.base.components.get_error_count(component_name)
@@ -4753,6 +5321,7 @@ document.addEventListener('DOMContentLoaded', function() {
             yaml = YAML()
             yaml.preserve_quotes = True
             yaml.default_flow_style = False
+            yaml.width = YAML_DUMP_WIDTH
 
             try:
                 with open(apps_yaml_path, "r") as f:
@@ -5113,6 +5682,34 @@ document.addEventListener('DOMContentLoaded', function() {
             self.log(f"Error downloading file: {str(e)}")
             return web.Response(text=f"Error downloading file: {str(e)}", status=500)
 
+    async def html_logo_image(self, request):
+        """
+        Serve the bundled Predbat logo images locally.
+
+        The logos used to be loaded from raw.githubusercontent.com, which left the
+        dashboard hanging for ~15s whenever GitHub was unreachable or rate-limiting
+        (issue #4562). They now ship alongside the other app files so the page never
+        depends on internet access to render.
+        """
+        content_types = {
+            "bat_logo.svg": "image/svg+xml",
+            "bat_logo_light.png": "image/png",
+            "bat_logo_dark.png": "image/png",
+        }
+        filename = request.match_info.get("filename")
+        content_type = content_types.get(filename)
+        if not content_type:
+            return web.Response(text="Not found", status=404)
+
+        file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+        try:
+            with open(file_path, "rb") as handle:
+                content = handle.read()
+        except OSError:
+            return web.Response(text="Not found", status=404)
+
+        return web.Response(body=content, content_type=content_type, headers={"Cache-Control": "public, max-age=604800"})
+
     async def html_metrics_dashboard(self, request):
         """
         Return the Metrics Dashboard page rendered inside the standard PredBat web shell.
@@ -5347,13 +5944,13 @@ document.addEventListener('DOMContentLoaded', function() {
                                     import linecache
 
                                     line_code = linecache.getline(code.co_filename, line_no).strip()
-                                except:
+                                except Exception:
                                     line_code = ""
 
                                 stack.append({"file": code.co_filename, "line": line_no, "name": code.co_name, "code": line_code})
 
                             task_info["stack"] = stack
-                except Exception as e:
+                except Exception:
                     # If we can't get the coroutine stack, just skip it
                     pass
 
@@ -5526,7 +6123,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 except Exception as e:
                     try:
                         yaml_key = str(key)
-                    except:
+                    except Exception:
                         yaml_key = f"<unprintable_key_{hash(key)}>"
                     result[yaml_key] = f"<error: {type(e).__name__}>"
             # Remove from visited after processing to allow same object in different branches
@@ -5557,7 +6154,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if len(str_value) > 200:
                 return str_value[:200] + "..."
             return str_value
-        except:
+        except Exception:
             return f"<{type(obj).__name__}>"
 
     def _get_object_members(self, obj, path):
@@ -5662,7 +6259,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     display_value = str_value[:100] + "..."
                 else:
                     display_value = str_value
-            except:
+            except Exception:
                 display_value = f"<{value_type}>"
 
         # Build the full path for this item using :: as separator

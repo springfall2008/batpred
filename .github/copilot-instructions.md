@@ -88,43 +88,36 @@ The core prediction/planning happens in `Plan` mixin (`apps/predbat/plan.py`) wh
 - `optimise_detailed_pass()` - Fine-tune charge/export windows
 - `run_prediction()` - Execute battery simulation via `Prediction` class
 
-### Thread Pool System
+### Batched Predictions
 
-**Multiprocessing for predictions** (in `apps/predbat/plan.py`):
+There is no process pool and no Python thread pool. Every optimiser fan-out in `plan.py` is
+launch-all-then-collect-all, so the launches queue instead of running and the whole fan-out is
+handed to the C++ kernel in one call, which spreads it across its own threads with the GIL
+released. Python itself is strictly serial.
 
-```python
-from multiprocessing import Pool, cpu_count
+**How it works** (`apps/predbat/prediction_batch.py`, mixed into `Prediction`):
 
-# Pool created on demand
-if not self.pool:
-    threads = self.get_arg("threads", "auto")
-    if threads == "auto":
-        self.pool = Pool(processes=cpu_count())
-    else:
-        self.pool = Pool(processes=int(threads))
-```
-
-**How it works**:
-
-- `self.pool` is a `multiprocessing.Pool` instance (NOT thread pool - uses processes)
-- Pool runs prediction scenarios in parallel using `pool.apply_async()`
-- Wrapped functions in `prediction.py`: `wrapped_run_prediction_single()`, `wrapped_run_prediction_charge()`, etc.
-- Global state shared via `PRED_GLOBAL` dict (copied to child processes)
-- Pool configured via `threads` config option: `"auto"` for CPU count or specific number
-- Returns `DummyThread` objects when pool disabled (for single-threaded testing)
+- `Plan.launch_run_prediction_*()` calls `Prediction.queue_run_prediction_*()`, which builds the
+  trial inputs, appends a `BatchJob` to `self.pending_batch` and returns a `BatchHandle`
+- Nothing has run at that point. The first `BatchHandle.get()` calls `flush_batch()`, which resolves
+  prediction-cache hits and intra-batch duplicates in Python and sends the remainder through one
+  `run_prediction_kernel_batch()` / `pk_run_batch` call; every handle in the fan-out is then resolved
+- A job the kernel will not take (no kernel, stale binary, debug run) falls back to
+  `Prediction.run_prediction()`, which is also the direct path `thread_run_prediction_*()` uses
+- `threads` config option sets `Prediction.batch_threads`, the kernel's thread count. `"auto"` uses
+  the CPU count. Results are identical at any thread count - it only trades CPU for planning time
 
 **Key pattern**:
 
 ```python
-# Async call to run prediction in pool
-if self.pool and self.pool._state == "RUN":
-    han = self.pool.apply_async(wrapped_run_prediction_charge, (args...))
-    return han
-else:
-    # Fallback to synchronous execution
-    result = wrapped_run_prediction_charge(args...)
-    return DummyThread(result)
+# Queue the whole fan-out, then read the handles - the first get() runs all of it
+handles = [self.launch_run_prediction_charge(soc, window_n, ...) for soc in try_socs]
+results = [handle.get() for handle in handles]
 ```
+
+**Invariant**: a caller must not mutate any list or window dict it has passed to
+`launch_run_prediction_*` until it has read the matching handle, because those inputs are not read
+until the batch is flushed.
 
 ### Component System (Critical Pattern)
 
@@ -281,8 +274,7 @@ self.log("Error: Failed with: {}".format(e))
 Core prediction happens in `apps/predbat/prediction.py`:
 
 - `Prediction` class runs battery simulation in 5-min steps
-- Multiprocessing via `wrapped_run_prediction_*` functions
-- Global state in `PRED_GLOBAL` dict for process sharing
+- Batched predictions via `launch_run_prediction_*()` queuing jobs and `BatchHandle.get()` flushing through the C++ kernel
 - Optimisation in `apps/predbat/plan.py` via `optimise_all_windows()`
 
 ### State Management

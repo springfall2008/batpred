@@ -131,6 +131,13 @@ def get_metrics_dashboard_body(data_json):
   <div id="mdApiTable"></div>
   <div style="margin-top:1rem;" class="md-card-grid" id="mdSolarCards"></div>
 </section>
+
+<!-- Section 6: Control Conflicts -->
+<section>
+  <h2>Control Conflicts</h2>
+  <div class="md-card-grid" id="mdConflictCards"></div>
+  <div style="margin-top:1rem;" id="mdConflictTable"></div>
+</section>
 </div>
 
 <script>
@@ -170,7 +177,7 @@ function mdRenderHealth(d) {
     {label:'Plan',        value: planOk ? 'Valid' : 'Stale',      cls: mdStatusClass(planOk),   sub: mdFmt(d.plan_age_minutes, 0) + ' min old'},
     {label:'Last Update', value: mdAgo(d.last_update_timestamp),  cls: '', sub: ''},
     {label:'Errors',      value: mdFmt(mdSumLabeled(d.errors_total), 0), cls: mdSumLabeled(d.errors_total) > 0 ? 'md-status-warn' : 'md-status-ok', sub: ''},
-    {label:'Data Age',    value: mdFmt(d.data_age_days, 1) + 'd', cls: d.data_age_days > 3 ? 'md-status-warn' : 'md-status-ok', sub: ''},
+    {label:'Data Age',    value: mdFmt(d.data_age_days, 1) + 'd', cls: d.data_age_days < d.data_age_required_days ? 'md-status-warn' : 'md-status-ok', sub: 'need ' + mdFmt(d.data_age_required_days, 0) + 'd'},
   ];
   var h = '';
   cards.forEach(function (c) {
@@ -209,16 +216,21 @@ function mdInitSOCChart(d) {
     options: { cutout: '72%', responsive: false, plugins: { legend: {display:false}, tooltip: {enabled:false} } },
     plugins: [{
       id: 'md-center-text',
+      // Read live values (chart's own current data, and the always-current MD_DATA global) rather
+      // than the pct/d closed over at chart creation time - mdUpdateSOCChart only mutates the
+      // chart's data array on refresh, it doesn't recreate the chart, so a closure over the
+      // original values here would freeze this text at whatever it was on first load.
       afterDraw: function (chart) {
         var w = chart.width, h = chart.height, c2 = chart.ctx;
+        var livePct = chart.data.datasets[0].data[0] || 0;
         c2.save();
         c2.fillStyle = mdVar('--md-text');
         c2.font = 'bold 2rem sans-serif';
         c2.textAlign = 'center'; c2.textBaseline = 'middle';
-        c2.fillText(mdFmt(pct, 0) + '%', w / 2, h / 2 - 10);
+        c2.fillText(mdFmt(livePct, 0) + '%', w / 2, h / 2 - 10);
         c2.font = '0.85rem sans-serif';
         c2.fillStyle = mdVar('--md-muted');
-        c2.fillText(mdFmt(d.battery_soc_kwh, 1) + ' / ' + mdFmt(d.battery_max_kwh, 1) + ' kWh', w / 2, h / 2 + 18);
+        c2.fillText(mdFmt(MD_DATA.battery_soc_kwh, 1) + ' / ' + mdFmt(MD_DATA.battery_max_kwh, 1) + ' kWh', w / 2, h / 2 + 18);
         c2.restore();
       }
     }]
@@ -316,6 +328,36 @@ function mdRenderSolar(d) {
   document.getElementById('mdSolarCards').innerHTML = h;
 }
 
+function mdRenderControlConflicts(d) {
+  var events = d.control_conflicts_events || [];
+  var sustained = d.control_conflicts_sustained_controls || [];
+  var count = d.control_conflicts_24h || 0;
+  var cards = [
+    {label:'Changes (24h)',      value: mdFmt(count, 0),              cls: count > 0 ? 'md-status-warn' : 'md-status-ok'},
+    {label:'Sustained Controls', value: mdFmt(d.control_conflicts_sustained_total || 0, 0), cls: sustained.length > 0 ? 'md-status-err' : 'md-status-ok', sub: sustained.length > 0 ? sustained.join(', ') : ''},
+  ];
+  var h = '';
+  cards.forEach(function (c) {
+    h += '<div class="md-card"><div class="md-label">' + c.label + '</div>'
+      + '<div class="md-value ' + c.cls + '">' + c.value + '</div>'
+      + (c.sub ? '<div class="md-sub">' + c.sub + '</div>' : '') + '</div>';
+  });
+  document.getElementById('mdConflictCards').innerHTML = h;
+
+  if (events.length === 0) {
+    document.getElementById('mdConflictTable').innerHTML = '<div class="md-card" style="text-align:center;">No settings changed outside Predbat in the last 24h</div>';
+    return;
+  }
+  var t = '<table><thead><tr><th>When</th><th>Control</th><th>Entity</th><th>Predbat Set</th><th>Now Reads</th></tr></thead><tbody>';
+  /* Newest first for reading, even though the source list is oldest-first for storage. */
+  events.slice().reverse().forEach(function (e) {
+    t += '<tr><td>' + mdAgo(e.at) + '</td><td>' + (e.control || '—') + '</td><td>' + (e.entity_id || '—') + '</td>'
+      + '<td>' + (e.we_set === undefined ? '—' : e.we_set) + '</td><td>' + (e.now_reads === undefined ? '—' : e.now_reads) + '</td></tr>';
+  });
+  t += '</tbody></table>';
+  document.getElementById('mdConflictTable').innerHTML = t;
+}
+
 function mdRebuildCharts(d) {
   if (mdSocChart)    { mdSocChart.destroy();    mdSocChart    = null; }
   if (mdPowerChart)  { mdPowerChart.destroy();  mdPowerChart  = null; }
@@ -328,6 +370,7 @@ function mdRenderAll(d) {
   mdRenderCost(d);
   mdRenderAPI(d);
   mdRenderSolar(d);
+  mdRenderControlConflicts(d);
   if (!mdSocChart) {
     mdInitSOCChart(d); mdInitPowerChart(d); mdInitEnergyChart(d);
   } else {

@@ -17,10 +17,15 @@ def run_clip_charge_slots_tests(my_predbat):
     failed = False
     failed |= test_disabled_window_ignored(my_predbat)
     failed |= test_passed_window_clipped(my_predbat)
-    failed |= test_clip_off_soc_above_limit(my_predbat)
+    failed |= test_clip_left_alone_soc_above_limit(my_predbat)
     failed |= test_clip_off_preserves_reserve(my_predbat)
     failed |= test_clip_up_soc_max_below_limit(my_predbat)
+    failed |= test_clip_up_soc_max_within_margin_of_limit(my_predbat)
+    failed |= test_clip_up_soc_max_beyond_margin_of_limit(my_predbat)
     failed |= test_clip_up_soc_max_equals_limit_and_dropping(my_predbat)
+    failed |= test_clip_up_dropping_within_margin(my_predbat)
+    failed |= test_clip_margin_scales_with_charge_rate(my_predbat)
+    failed |= test_clip_margin_scales_with_step(my_predbat)
     failed |= test_freeze_charge_to_charge_at_100_soc(my_predbat)
     failed |= test_freeze_charge_kept_below_100_soc(my_predbat)
     failed |= test_normal_window_unchanged(my_predbat)
@@ -50,6 +55,16 @@ def make_predict_soc_ramp(minutes_now, soc_start, soc_end, duration_minutes=60):
             predict_soc[minute] = soc_start + (soc_end - soc_start) * i / steps
         else:
             predict_soc[minute] = soc_start
+    return predict_soc
+
+
+def make_predict_soc_dip(soc_peak, soc_end, duration_minutes=30):
+    """Build a predict_soc dict that holds at soc_peak then dips to soc_end for the last two entries"""
+    predict_soc = {}
+    for minute in range(0, duration_minutes + 5, 5):
+        predict_soc[minute] = soc_peak
+    predict_soc[max(duration_minutes - 5, 0)] = soc_end
+    predict_soc[duration_minutes] = soc_end
     return predict_soc
 
 
@@ -107,25 +122,23 @@ def test_passed_window_clipped(my_predbat):
     return failed
 
 
-def test_clip_off_soc_above_limit(my_predbat):
-    """Charge window should be clipped off when soc_min is well above the charge limit"""
-    print("**** test_clip_charge_off_soc_above_limit ****")
+def test_clip_left_alone_soc_above_limit(my_predbat):
+    """Clipping no longer removes a charge window whose SoC is already above the limit - deciding a slot
+    achieves nothing is prune_dead_plan_slots' job, which asks the model instead of the SoC trace"""
+    print("**** test_clip_charge_left_alone_soc_above_limit ****")
     failed = False
     setup(my_predbat)
 
     minutes_now = 720
     windows = [make_window(720, 750)]
     limits = [3.0]  # Charge to 3 kWh (30% of 10)
-    # SoC at 8 kWh (80%) which is well above 30% + 1%
+    # SoC at 8 kWh (80%) which is well above the limit - nothing to charge
     predict_soc = make_predict_soc(minutes_now, 8.0, 60)
 
     result_windows, result_limits = my_predbat.clip_charge_slots(minutes_now, predict_soc, windows, limits, 1, 5)
 
-    if result_limits[0] != 0:
-        print("ERROR: Expected charge window clipped off (0) but got {}".format(result_limits[0]))
-        failed = True
-    if result_windows[0]["target"] != 0:
-        print("ERROR: Expected target 0 but got {}".format(result_windows[0]["target"]))
+    if result_limits[0] != 3.0:
+        print("ERROR: Charge limit was modified by clipping, expected 3.0 but got {}".format(result_limits[0]))
         failed = True
 
     if not failed:
@@ -183,6 +196,58 @@ def test_clip_up_soc_max_below_limit(my_predbat):
     return failed
 
 
+def test_clip_up_soc_max_within_margin_of_limit(my_predbat):
+    """When soc_max is under the limit by less than one charge step it's just charge loss, so don't clip up"""
+    print("**** test_clip_charge_up_soc_max_within_margin_of_limit ****")
+    failed = False
+    setup(my_predbat)
+
+    minutes_now = 720
+    windows = [make_window(720, 750)]
+    limits = [5.0]  # Want to charge to 5 kWh
+    # SoC lands at 4.95, only 0.05 short of the limit, less than one charge step (1kW * 5 minutes = 0.0833)
+    predict_soc = make_predict_soc(minutes_now, 4.95, 60)
+
+    result_windows, result_limits = my_predbat.clip_charge_slots(minutes_now, predict_soc, windows, limits, 1, 5)
+
+    if result_limits[0] != 5.0:
+        print("ERROR: Expected limit unchanged at 5.0 but got {}".format(result_limits[0]))
+        failed = True
+    if result_windows[0]["target"] != 5.0:
+        print("ERROR: Expected target unchanged at 5.0 but got {}".format(result_windows[0]["target"]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_clip_up_soc_max_beyond_margin_of_limit(my_predbat):
+    """When soc_max is under the limit by more than one charge step the limit had no effect, so clip up"""
+    print("**** test_clip_charge_up_soc_max_beyond_margin_of_limit ****")
+    failed = False
+    setup(my_predbat)
+
+    minutes_now = 720
+    windows = [make_window(720, 750)]
+    limits = [5.0]  # Want to charge to 5 kWh
+    # SoC lands at 4.5, 0.5 short of the limit, well over one charge step (1kW * 5 minutes = 0.0833)
+    predict_soc = make_predict_soc(minutes_now, 4.5, 60)
+
+    result_windows, result_limits = my_predbat.clip_charge_slots(minutes_now, predict_soc, windows, limits, 1, 5)
+
+    if result_limits[0] != my_predbat.soc_max:
+        print("ERROR: Expected limit clipped up to soc_max ({}) but got {}".format(my_predbat.soc_max, result_limits[0]))
+        failed = True
+    if result_windows[0]["target"] != 4.5:
+        print("ERROR: Expected target set to soc_max in window (4.5) but got {}".format(result_windows[0]["target"]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
 def test_clip_up_soc_max_equals_limit_and_dropping(my_predbat):
     """When soc_max == limit and soc_max > soc at end-1, clip up"""
     print("**** test_clip_charge_up_soc_max_equals_limit_dropping ****")
@@ -202,6 +267,96 @@ def test_clip_up_soc_max_equals_limit_and_dropping(my_predbat):
         failed = True
     if result_windows[0]["target"] != 6.0:
         print("ERROR: Expected target 6.0 but got {}".format(result_windows[0]["target"]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_clip_up_dropping_within_margin(my_predbat):
+    """When soc_max == limit but the dip at the end of the window is under one charge step, don't clip up"""
+    print("**** test_clip_charge_up_dropping_within_margin ****")
+    failed = False
+    setup(my_predbat)
+
+    minutes_now = 720
+    windows = [make_window(720, 750)]
+    limits = [6.0]  # Want to charge to 6 kWh
+    # SoC sits at the limit then dips by 0.05, less than one charge step (1kW * 5 minutes = 0.0833)
+    predict_soc = make_predict_soc_dip(6.0, 5.95, 30)
+
+    result_windows, result_limits = my_predbat.clip_charge_slots(minutes_now, predict_soc, windows, limits, 1, 5)
+
+    if result_limits[0] != 6.0:
+        print("ERROR: Expected limit unchanged at 6.0 but got {}".format(result_limits[0]))
+        failed = True
+    if result_windows[0]["target"] != 6.0:
+        print("ERROR: Expected target unchanged at 6.0 but got {}".format(result_windows[0]["target"]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_clip_margin_scales_with_charge_rate(my_predbat):
+    """The margin is one charge step, so a faster charge rate (and scaling) tolerates a bigger dip"""
+    print("**** test_clip_charge_margin_scales_with_charge_rate ****")
+    failed = False
+    setup(my_predbat)
+
+    minutes_now = 720
+    windows = [make_window(720, 750)]
+    limits = [6.0]
+    # Dip of 0.3, which is over one charge step at the default 1kW but under it at 2kW scaled by 2.5 (0.4166)
+    predict_soc = make_predict_soc_dip(6.0, 5.7, 30)
+
+    my_predbat.battery_rate_max_charge = 2 / 60.0
+    my_predbat.battery_rate_max_scaling = 2.5
+
+    result_windows, result_limits = my_predbat.clip_charge_slots(minutes_now, predict_soc, windows, limits, 1, 5)
+
+    if result_limits[0] != 6.0:
+        print("ERROR: Expected limit unchanged at 6.0 but got {}".format(result_limits[0]))
+        failed = True
+
+    # The same dip at the default charge rate is bigger than one charge step, so it does clip up
+    setup(my_predbat)
+    windows = [make_window(720, 750)]
+    limits = [6.0]
+    predict_soc = make_predict_soc_dip(6.0, 5.7, 30)
+
+    result_windows, result_limits = my_predbat.clip_charge_slots(minutes_now, predict_soc, windows, limits, 1, 5)
+
+    if result_limits[0] != my_predbat.soc_max:
+        print("ERROR: Expected limit clipped up to soc_max ({}) at the default charge rate but got {}".format(my_predbat.soc_max, result_limits[0]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_clip_margin_scales_with_step(my_predbat):
+    """The margin is one charge step, so a longer prediction step tolerates a bigger dip"""
+    print("**** test_clip_charge_margin_scales_with_step ****")
+    failed = False
+    setup(my_predbat)
+
+    minutes_now = 720
+    windows = [make_window(720, 750)]
+    limits = [6.0]
+    # Dip of 0.3, which is over one charge step at step 5 (0.0833) but under it at step 30 (0.5)
+    predict_soc = make_predict_soc_dip(6.0, 5.7, 30)
+
+    result_windows, result_limits = my_predbat.clip_charge_slots(minutes_now, predict_soc, windows, limits, 1, 30)
+
+    if result_limits[0] != 6.0:
+        print("ERROR: Expected limit unchanged at 6.0 but got {}".format(result_limits[0]))
+        failed = True
+    if result_windows[0]["target"] != 6.0:
+        print("ERROR: Expected target unchanged at 6.0 but got {}".format(result_windows[0]["target"]))
         failed = True
 
     if not failed:
@@ -300,14 +455,14 @@ def test_multiple_windows_mixed(my_predbat):
 
     minutes_now = 720
     windows = [
-        make_window(720, 750),  # Window 0: SoC well above limit -> clip off
+        make_window(720, 750),  # Window 0: SoC well above limit -> left alone (prune removes it)
         make_window(780, 810),  # Window 1: freeze charge at 100% SoC -> convert to full charge
         make_window(840, 870),  # Window 2: SoC below limit -> clip up
     ]
     limits = [3.0, my_predbat.reserve, 8.0]
 
     predict_soc = {}
-    # Window 0: relative minutes 0-30, SoC at 8.0, limit is 3.0 (30%) -> clip off
+    # Window 0: relative minutes 0-30, SoC at 8.0, limit is 3.0 (30%) -> left alone
     for minute in range(0, 35, 5):
         predict_soc[minute] = 8.0
     # Window 1: relative minutes 60-90, SoC at soc_max -> freeze charge to full charge
@@ -319,9 +474,9 @@ def test_multiple_windows_mixed(my_predbat):
 
     result_windows, result_limits = my_predbat.clip_charge_slots(minutes_now, predict_soc, windows, limits, 3, 5)
 
-    # Window 0: clipped off
-    if result_limits[0] != 0:
-        print("ERROR: Window 0 expected clipped off (0) but got {}".format(result_limits[0]))
+    # Window 0: SoC already above the limit - clipping leaves it alone now (removal is the prune's job)
+    if result_limits[0] != 3.0:
+        print("ERROR: Window 0 expected left alone at 3.0 but got {}".format(result_limits[0]))
         failed = True
 
     # Window 1: freeze charge at 100% -> converted to soc_max

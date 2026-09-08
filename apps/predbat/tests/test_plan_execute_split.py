@@ -142,10 +142,11 @@ def _scenario_fused_recompute(my_predbat):
 
 
 def _scenario_fused_aged_plan(my_predbat):
-    """Characterise: an aged valid plan executes first, then recomputes and executes again (and does NOT save - existing quirk)."""
+    """Characterise: an aged valid plan executes first, then recomputes and executes again (and persists a new plan version)."""
     failed = 0
     my_predbat.plan_valid = True
     my_predbat.plan_last_updated = my_predbat.now_utc - timedelta(minutes=9)
+    version_before = my_predbat.plan_version
     with ExitStack() as stack:
         mocks = _patch_pipeline(my_predbat, stack)
         my_predbat.update_pred(scheduled=True)
@@ -156,8 +157,8 @@ def _scenario_fused_aged_plan(my_predbat):
     failed = _check(failed, second_kwargs.get("recompute") is True, "aged plan: second calculate_plan with recompute=True")
     failed = _check(failed, mocks["execute_plan"].call_count == 2, "aged plan: execute_plan called twice")
     failed = _check(failed, mocks["fetch_inverter_data"].call_count == 2, "aged plan: inverter data fetched twice")
-    # Existing upstream quirk: the aged-plan recompute does not persist via save_plan. Preserve, do not fix.
-    failed = _check(failed, mocks["save_plan"].call_count == 0, "aged plan: save_plan not called (existing quirk preserved)")
+    failed = _check(failed, mocks["save_plan"].call_count == 1, "aged plan: new plan persisted")
+    failed = _check(failed, my_predbat.plan_version == version_before + 1, "aged plan: version advances once")
     return failed
 
 

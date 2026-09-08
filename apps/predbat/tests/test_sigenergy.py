@@ -21,8 +21,11 @@ from sigenergy import (
     SIGENERGY_ACTIVE_MODE_SELF,
     SIGENERGY_CODE_IN_OTHER_VPP,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
+    SIGENERGY_LOG_REDACT_KEYS,
     SIGENERGY_MODE_MSC,
+    SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
+    SIGENERGY_VPP_RECLAIM_INTERVAL,
     SIGENERGY_OPTIONS_TIME,
     _safe_float,
     _safe_int,
@@ -93,6 +96,27 @@ def _make_mock_session(mock_response):
     return mock_session
 
 
+class FakeStorage:
+    """In-memory fake of the Storage component, for _save_cache/_load_cache/load_cached_data tests."""
+
+    def __init__(self):
+        """Initialise an empty in-memory store keyed by (module, filename)."""
+        self.data = {}
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Store data under (module, filename), mirroring StorageBase.save's signature and return value."""
+        self.data[(module, filename)] = data
+        return True
+
+    async def load(self, module, filename):
+        """Return previously saved data for (module, filename), or None if absent."""
+        return self.data.get((module, filename))
+
+    async def age(self, module, filename):
+        """Return 0 (fresh) if data exists for (module, filename), else None."""
+        return 0 if (module, filename) in self.data else None
+
+
 # ---------------------------------------------------------------------------
 # Mock class
 # ---------------------------------------------------------------------------
@@ -123,6 +147,14 @@ class MockSigenergyAPI(SigenergyAPI):
         self.api_stop = False
         # Skip mode-switch → command delay in unit tests
         self._command_delay = 0
+        # ComponentBase.storage looks at self.base.components, which this mock doesn't set up —
+        # override it directly so tests can plug in a FakeStorage via self._mock_storage.
+        self._mock_storage = None
+
+    @property
+    def storage(self):
+        """Override ComponentBase.storage — tests set self._mock_storage directly."""
+        return self._mock_storage
 
     def log(self, message):
         """Capture log messages for assertion."""
@@ -142,8 +174,13 @@ class MockSigenergyAPI(SigenergyAPI):
         """Store state."""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes or {}}
 
-    def get_arg(self, key, default=None):
-        """Return stored arg or default."""
+    def get_arg(self, key, default=None, **kwargs):
+        """Return stored arg or default.
+
+        Accepts and ignores the wider ComponentBase.get_arg keyword arguments (indirect,
+        combine, attribute, index, domain, can_override, required_unit) so helpers that
+        pass them — such as fetch_axle_active — work against this mock.
+        """
         return self.args.get(key, default)
 
     def set_arg(self, key, value):
@@ -317,7 +354,7 @@ def test_sigenergy_publish_system_entities(my_predbat):
         "evPower": 0.0,
     }
     api.daily_summary[system_id] = {"dailyPowerGeneration": 12.3}
-    api.history_totals[system_id] = {"TO_LOAD": 987.6, "FROM_GRID": 500.5, "TO_GRID": 400.4}
+    api.history_totals[system_id] = {"TO_LOAD": 987.6, "FROM_GRID": 500.5, "TO_GRID": 400.4, "FROM_THIRD_PARTY_INV": 55.5}
 
     run_async(api.publish_system_entities(system_id))
 
@@ -328,6 +365,7 @@ def test_sigenergy_publish_system_entities(my_predbat):
     today_key = "sensor.predbat_sigenergy_{}_pv_today".format(slug)
     load_lifetime_key = "sensor.predbat_sigenergy_{}_load_lifetime".format(slug)
     grid_import_lifetime_key = "sensor.predbat_sigenergy_{}_grid_import_lifetime".format(slug)
+    third_party_pv_lifetime_key = "sensor.predbat_sigenergy_{}_third_party_pv_lifetime".format(slug)
 
     assert soc_key in api.dashboard_items, "Battery SOC entity published"
     soc_kwh = api.dashboard_items[soc_key]["state"]
@@ -350,6 +388,80 @@ def test_sigenergy_publish_system_entities(my_predbat):
     assert abs(api.dashboard_items[load_lifetime_key]["state"] - 987.6) < 0.01, "Load lifetime correct"
     assert grid_import_lifetime_key in api.dashboard_items, "Grid import lifetime entity published"
     assert abs(api.dashboard_items[grid_import_lifetime_key]["state"] - 500.5) < 0.01, "Grid import lifetime correct"
+    assert third_party_pv_lifetime_key in api.dashboard_items, "Third-party PV lifetime entity published"
+    assert abs(api.dashboard_items[third_party_pv_lifetime_key]["state"] - 55.5) < 0.01, "Third-party PV lifetime correct"
+
+    return failed
+
+
+def test_sigenergy_publish_system_entities_operational_mode_fallback(my_predbat):
+    """Test operational_mode falls back to the REST-sourced current_mode when MQTT hasn't reported yet.
+
+    self.system_status is only ever populated by _handle_mqtt_period (MQTT). Before the first MQTT
+    message arrives (e.g. at startup, or if MQTT can't connect), it stays empty and the operational
+    mode sensor must not simply read "Unknown" when fetch_current_mode has already obtained a real
+    value via REST.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+
+    system_id = "SIG12345"
+    slug = api._system_slug(system_id)
+    api.systems[system_id] = {"systemName": "My Site", "batteryCapacity": 10.0, "status": "online"}
+    api.devices[system_id] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 5.0}}]
+    api.energy_flow[system_id] = {"batterySoc": 60.0, "batteryPower": 2.0, "pvPower": 3.5, "gridPower": 1.0, "loadPower": 4.5, "evPower": 0.0}
+    api.daily_summary[system_id] = {"dailyPowerGeneration": 12.3}
+    api.history_totals[system_id] = {}
+    # No system_status entry — MQTT has not delivered a 'period' message yet.
+    api.current_mode[system_id] = SIGENERGY_MODE_VPP
+
+    run_async(api.publish_system_entities(system_id))
+
+    mode_key = "sensor.predbat_sigenergy_{}_operational_mode".format(slug)
+    assert mode_key in api.dashboard_items, "Operational mode entity published"
+    assert api.dashboard_items[mode_key]["state"] == "VPP", "Falls back to REST current_mode, got {}".format(api.dashboard_items[mode_key]["state"])
+    assert api.dashboard_items[mode_key]["attributes"]["mode_id"] == SIGENERGY_MODE_VPP, "mode_id reflects fallback current_mode"
+
+    # Once MQTT reports a value, it takes priority over the REST-sourced current_mode.
+    api.system_status[system_id] = {"operationalMode": SIGENERGY_MODE_MSC, "systemStatus": 1}
+    run_async(api.publish_system_entities(system_id))
+    assert api.dashboard_items[mode_key]["state"] == "Maximum Self-Consumption", "MQTT value takes priority once available, got {}".format(api.dashboard_items[mode_key]["state"])
+
+    return failed
+
+
+def test_sigenergy_publish_system_entities_operational_mode_invalid_value(my_predbat):
+    """Test operational_mode reads 'Unknown' rather than mode 0 when the MQTT value is unparsable.
+
+    _safe_float(value) with no explicit default falls back to 0.0 on a bad value, which maps to a
+    real mode (0 == Maximum Self-Consumption) instead of Unknown. Both operationalMode and
+    systemStatus must pass an explicit default of -1 so an invalid-but-present value still reads
+    as Unknown rather than silently reporting a specific (wrong) mode/status.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+
+    system_id = "SIG12345"
+    slug = api._system_slug(system_id)
+    api.systems[system_id] = {"systemName": "My Site", "batteryCapacity": 10.0, "status": "online"}
+    api.devices[system_id] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 5.0}}]
+    api.energy_flow[system_id] = {"batterySoc": 60.0, "batteryPower": 2.0, "pvPower": 3.5, "gridPower": 1.0, "loadPower": 4.5, "evPower": 0.0}
+    api.daily_summary[system_id] = {"dailyPowerGeneration": 12.3}
+    api.history_totals[system_id] = {}
+    # Present but unparsable — must not be treated as mode/status 0.
+    api.system_status[system_id] = {"operationalMode": "", "systemStatus": None}
+
+    run_async(api.publish_system_entities(system_id))
+
+    mode_key = "sensor.predbat_sigenergy_{}_operational_mode".format(slug)
+    assert api.dashboard_items[mode_key]["state"] == "Unknown", "Unparsable operationalMode must read Unknown, not mode 0, got {}".format(api.dashboard_items[mode_key]["state"])
+    assert api.dashboard_items[mode_key]["attributes"]["mode_id"] is None, "mode_id must be None, not 0, got {}".format(api.dashboard_items[mode_key]["attributes"]["mode_id"])
+    assert api.dashboard_items[mode_key]["attributes"]["system_status"] == "Unknown", "Unparsable systemStatus must read Unknown, not status 0, got {}".format(
+        api.dashboard_items[mode_key]["attributes"]["system_status"]
+    )
+    assert api.dashboard_items[mode_key]["attributes"]["system_status_id"] is None, "system_status_id must be None, not 0, got {}".format(
+        api.dashboard_items[mode_key]["attributes"]["system_status_id"]
+    )
 
     return failed
 
@@ -373,7 +485,12 @@ def test_sigenergy_automatic_config(my_predbat):
     assert "grid_power" in api.set_args, "grid_power wired"
     assert "inverter_time" in api.set_args, "inverter_time wired"
     assert len(api.set_args["inverter_time"]) == 2, "inverter_time has one entry per system"
-    assert api.set_args.get("pv_today") == ["sensor.predbat_sigenergy_sig001_pv_lifetime", "sensor.predbat_sigenergy_sig002_pv_lifetime"], "pv_today wired to lifetime totals"
+    assert api.set_args.get("pv_today") == [
+        "sensor.predbat_sigenergy_sig001_pv_lifetime",
+        "sensor.predbat_sigenergy_sig002_pv_lifetime",
+        "sensor.predbat_sigenergy_sig001_third_party_pv_lifetime",
+        "sensor.predbat_sigenergy_sig002_third_party_pv_lifetime",
+    ], "pv_today wired to native and third-party PV lifetime totals"
     assert api.set_args.get("load_today") == ["sensor.predbat_sigenergy_sig001_load_lifetime", "sensor.predbat_sigenergy_sig002_load_lifetime"], "load_today wired to lifetime totals"
     assert api.set_args.get("import_today") == ["sensor.predbat_sigenergy_sig001_grid_import_lifetime", "sensor.predbat_sigenergy_sig002_grid_import_lifetime"], "import_today wired to lifetime totals"
     assert api.set_args.get("export_today") == ["sensor.predbat_sigenergy_sig001_grid_export_lifetime", "sensor.predbat_sigenergy_sig002_grid_export_lifetime"], "export_today wired to lifetime totals"
@@ -533,8 +650,6 @@ def test_sigenergy_get_access_token_retry(my_predbat):
     success_session = _make_mock_session(success_response)
 
     call_log = []
-
-    original_class = __import__("sigenergy").aiohttp.ClientSession
 
     class SequencedSession:
         """Return failure sessions then success session."""
@@ -721,6 +836,300 @@ def test_sigenergy_fetch_history_totals_empty_data(my_predbat):
     return failed
 
 
+def test_sigenergy_fetch_history_totals_clamps_dip(my_predbat):
+    """Test fetch_history_totals ignores a transient dip in the API's cumulative totals.
+
+    The Sigenergy Cloud API has been observed to briefly report a lower "Lifetime"
+    total for roughly the first 30 minutes after local midnight each night before
+    correcting itself. These are one-directional cumulative energy counters that
+    can only legitimately increase, so a lower reading must be clamped to the last
+    known value rather than published (and overwrite it) — otherwise HA's history
+    for these sensors would show a false dip every night.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.history_totals["SIG001"] = {"TO_LOAD": 7028.33, "FROM_GRID": 500.5}
+
+    fake_response = {
+        "code": 0,
+        "data": {
+            "sankeyData": {
+                "nodes": [
+                    {"id": "TO_LOAD", "value": 7015.29},  # dip below the previous 7028.33
+                    {"id": "FROM_GRID", "value": 501.1},  # normal increase, should pass through
+                ],
+                "links": [],
+            },
+        },
+    }
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+        ok = run_async(api.fetch_history_totals("SIG001"))
+
+    assert ok is True, "fetch_history_totals should return True, got {}".format(ok)
+    totals = api.history_totals.get("SIG001", {})
+    assert totals.get("TO_LOAD") == 7028.33, "TO_LOAD dip should be clamped to the previous value, got {}".format(totals.get("TO_LOAD"))
+    assert totals.get("FROM_GRID") == 501.1, "FROM_GRID increase should pass through, got {}".format(totals.get("FROM_GRID"))
+
+    return failed
+
+
+def test_sigenergy_fetch_history_totals_keeps_missing_node(my_predbat):
+    """Test fetch_history_totals preserves a node ID that is transiently absent from the response.
+
+    Merging by only iterating new_totals.items() would drop any previously-seen node ID missing
+    from the latest response entirely. publish_system_entities() defaults a missing node to 0, so
+    that would publish a large false drop for it — exactly what the dip clamp is meant to prevent.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.history_totals["SIG001"] = {"TO_LOAD": 7028.33, "FROM_GRID": 500.5}
+
+    fake_response = {
+        "code": 0,
+        "data": {
+            "sankeyData": {
+                "nodes": [{"id": "TO_LOAD", "value": 7030.1}],  # FROM_GRID is absent from this response
+                "links": [],
+            },
+        },
+    }
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+        ok = run_async(api.fetch_history_totals("SIG001"))
+
+    assert ok is True, "fetch_history_totals should return True, got {}".format(ok)
+    totals = api.history_totals.get("SIG001", {})
+    assert totals.get("TO_LOAD") == 7030.1, "TO_LOAD present in the response should update normally, got {}".format(totals.get("TO_LOAD"))
+    assert totals.get("FROM_GRID") == 500.5, "FROM_GRID missing from the response should keep its last known value, got {}".format(totals.get("FROM_GRID"))
+
+    return failed
+
+
+def test_sigenergy_save_load_cache_no_storage(my_predbat):
+    """Test _save_cache/_load_cache no-op cleanly when no storage component is available."""
+    failed = False
+    api = MockSigenergyAPI()
+    assert api.storage is None, "No storage wired up by default"
+
+    run_async(api._save_cache("history_totals", {"TO_LOAD": 100.0}))  # must not raise
+    result = run_async(api._load_cache("history_totals"))
+    assert result is None, "_load_cache returns None when there is no storage, got {}".format(result)
+
+    return failed
+
+
+def test_sigenergy_save_load_cache_round_trip(my_predbat):
+    """Test _save_cache/_load_cache round-trip data through the storage component."""
+    failed = False
+    api = MockSigenergyAPI()
+    api._mock_storage = FakeStorage()
+
+    run_async(api._save_cache("history_totals", {"TO_LOAD": 987.6}))
+    result = run_async(api._load_cache("history_totals"))
+    assert result == {"TO_LOAD": 987.6}, "Round-tripped data should match what was saved, got {}".format(result)
+
+    missing = run_async(api._load_cache("daily_summary"))
+    assert missing is None, "Unsaved key should load as None, got {}".format(missing)
+
+    return failed
+
+
+def test_sigenergy_load_cached_data(my_predbat):
+    """Test load_cached_data restores energy_flow/daily_summary/history_totals/onboard_status."""
+    failed = False
+    api = MockSigenergyAPI()
+    api._mock_storage = FakeStorage()
+
+    run_async(api._save_cache("energy_flow", {"SIG001": {"batterySoc": 42.0}}))
+    run_async(api._save_cache("daily_summary", {"SIG001": {"dailyPowerGeneration": 5.5}}))
+    run_async(api._save_cache("history_totals", {"SIG001": {"TO_LOAD": 987.6}}))
+    run_async(api._save_cache("onboard_status", {"SIG001": "active"}))
+
+    run_async(api.load_cached_data())
+
+    assert api.energy_flow == {"SIG001": {"batterySoc": 42.0}}, "energy_flow restored, got {}".format(api.energy_flow)
+    assert api.daily_summary == {"SIG001": {"dailyPowerGeneration": 5.5}}, "daily_summary restored, got {}".format(api.daily_summary)
+    assert api.history_totals == {"SIG001": {"TO_LOAD": 987.6}}, "history_totals restored, got {}".format(api.history_totals)
+    assert api.onboard_status == {"SIG001": "active"}, "onboard_status restored, got {}".format(api.onboard_status)
+
+    return failed
+
+
+def test_sigenergy_load_cached_data_no_storage_leaves_defaults(my_predbat):
+    """Test load_cached_data is a no-op (keeps empty defaults) when there is no storage component."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    run_async(api.load_cached_data())
+
+    assert api.energy_flow == {}, "energy_flow left at its default when there is no storage"
+    assert api.history_totals == {}, "history_totals left at its default when there is no storage"
+
+    return failed
+
+
+def test_sigenergy_needs_refresh(my_predbat):
+    """Test _data_age_minutes/_needs_refresh against fabricated data_age timestamps."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    assert api._data_age_minutes("history_totals") is None, "No age recorded yet"
+    assert api._needs_refresh("history_totals", 5.0) is True, "Missing age always needs a refresh"
+
+    now = datetime.now(api.local_tz)
+    api.data_age["history_totals"] = now - timedelta(minutes=1)
+    assert api._needs_refresh("history_totals", 5.0) is False, "1 minute old data is within a 5 minute window"
+
+    api.data_age["history_totals"] = now - timedelta(minutes=10)
+    assert api._needs_refresh("history_totals", 5.0) is True, "10 minute old data has exceeded a 5 minute window"
+
+    return failed
+
+
+def test_sigenergy_run_skips_refresh_when_cache_fresh(my_predbat):
+    """run() skips REST energy/summary/history polling when the cached data is still fresh.
+
+    Mirrors FoxAPI's age-based refresh gating: right after a restart, if load_cached_data()
+    restored data that's still within SIGENERGY_POLL_INTERVAL, run() should not immediately
+    re-poll the Sigenergy API — and, since nothing was fetched, must not bump data_age either
+    (an unconditional save would falsely renew the freshness window and defeat the gate).
+    """
+    failed = False
+    sid = "SIG001"
+
+    def _make_api():
+        api = MockSigenergyAPI()
+        api.systems = {sid: {"deviceList": []}}
+        api.current_mode = {sid: SIGENERGY_MODE_VPP}
+        api.system_id_filter = {sid}
+        task = MagicMock()
+        task.done = MagicMock(return_value=False)
+        api._mqtt_task = task
+        api._manage_vpp_registration = AsyncMock(return_value=True)
+        api.fetch_inverter_realtime = AsyncMock(return_value=True)
+        api.fetch_energy_flow = AsyncMock(return_value=True)
+        api.fetch_daily_summary = AsyncMock(return_value=True)
+        api.fetch_history_totals = AsyncMock(return_value=True)
+        api.publish_system_entities = AsyncMock()
+        api.apply_controls = AsyncMock()
+        return api
+
+    # Fresh cache (as if just restored moments ago) — REST polling should be skipped entirely,
+    # and the pre-existing data_age timestamps must be left untouched.
+    api_fresh = _make_api()
+    stale_ts = datetime.now(api_fresh.local_tz) - timedelta(minutes=1)
+    api_fresh.data_age = {"energy_flow": stale_ts, "daily_summary": stale_ts, "history_totals": stale_ts}
+
+    run_async(api_fresh.run(seconds=300, first=False))
+
+    api_fresh.fetch_inverter_realtime.assert_not_called()
+    api_fresh.fetch_energy_flow.assert_not_called()
+    api_fresh.fetch_daily_summary.assert_not_called()
+    api_fresh.fetch_history_totals.assert_not_called()
+    assert api_fresh.data_age["energy_flow"] == stale_ts, "energy_flow age must not be bumped when nothing was fetched"
+    assert api_fresh.data_age["daily_summary"] == stale_ts, "daily_summary age must not be bumped when nothing was fetched"
+    assert api_fresh.data_age["history_totals"] == stale_ts, "history_totals age must not be bumped when nothing was fetched"
+
+    # No cached age at all (cold start) — everything should be fetched, and data_age advanced.
+    api_cold = _make_api()
+
+    run_async(api_cold.run(seconds=300, first=False))
+
+    api_cold.fetch_inverter_realtime.assert_called_once_with(sid)
+    api_cold.fetch_daily_summary.assert_called_once_with(sid)
+    api_cold.fetch_history_totals.assert_called_once_with(sid)
+    assert "energy_flow" in api_cold.data_age, "energy_flow age recorded after a real fetch"
+    assert "daily_summary" in api_cold.data_age, "daily_summary age recorded after a real fetch"
+    assert "history_totals" in api_cold.data_age, "history_totals age recorded after a real fetch"
+
+    return failed
+
+
+def test_sigenergy_run_energy_flow_not_bumped_on_fetch_failure(my_predbat):
+    """run() must not bump energy_flow's data_age when both realtime fetches fail.
+
+    If fetch_inverter_realtime and its fetch_energy_flow fallback both fail, self.energy_flow is
+    unchanged — treating that as "updated" would falsely renew the refresh_energy freshness
+    window and could mask a persistently broken realtime poll.
+    """
+    failed = False
+    sid = "SIG001"
+
+    api = MockSigenergyAPI()
+    api.systems = {sid: {"deviceList": []}}
+    api.current_mode = {sid: SIGENERGY_MODE_VPP}
+    api.system_id_filter = {sid}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api._manage_vpp_registration = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=False)
+    api.fetch_energy_flow = AsyncMock(return_value=False)
+    api.fetch_daily_summary = AsyncMock(return_value=True)
+    api.fetch_history_totals = AsyncMock(return_value=True)
+    api.publish_system_entities = AsyncMock()
+    api.apply_controls = AsyncMock()
+
+    run_async(api.run(seconds=300, first=False))
+
+    api.fetch_inverter_realtime.assert_called_once_with(sid)
+    api.fetch_energy_flow.assert_called_once_with(sid)
+    assert "energy_flow" not in api.data_age, "energy_flow age must not be recorded when both fetches fail"
+
+    return failed
+
+
+def test_sigenergy_history_totals_clamp_survives_restart(my_predbat):
+    """Test the monotonic dip-clamp in fetch_history_totals uses the persisted baseline after a restart.
+
+    Simulates a Predbat restart landing inside the API's nightly dip window (see
+    fetch_history_totals): a fresh SigenergyAPI instance with an empty in-memory
+    history_totals would otherwise accept the dip as if it were the first-ever reading.
+    load_cached_data() must restore the pre-restart baseline before that first fetch runs.
+    """
+    failed = False
+
+    # "Before restart": persist a known-good baseline to a storage backend that survives the restart.
+    shared_storage = FakeStorage()
+    run_async(shared_storage.save("sigenergy", "history_totals", {"SIG001": {"TO_LOAD": 7028.33}}))
+
+    # "After restart": a brand new instance, wired to the same persisted storage.
+    api = MockSigenergyAPI()
+    api._mock_storage = shared_storage
+    run_async(api.load_cached_data())
+    assert api.history_totals.get("SIG001", {}).get("TO_LOAD") == 7028.33, "Baseline restored before any fetch"
+
+    fake_response = {
+        "code": 0,
+        "data": {"sankeyData": {"nodes": [{"id": "TO_LOAD", "value": 7015.29}], "links": []}},  # the nightly dip
+    }
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+
+    with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+        run_async(api.fetch_history_totals("SIG001"))
+
+    assert api.history_totals["SIG001"]["TO_LOAD"] == 7028.33, "Dip clamped to the restored pre-restart baseline, got {}".format(api.history_totals["SIG001"]["TO_LOAD"])
+
+    return failed
+
+
 def test_sigenergy_apply_controls_charge_mode(my_predbat):
     """Test apply_controls selects charge command during active charge window."""
     failed = False
@@ -875,6 +1284,7 @@ def test_sigenergy_apply_controls_export_mode(my_predbat):
     bat_cmds = [c for c in commands_sent if c[0] == "battery_cmd"]
     assert len(bat_cmds) >= 1, "send_battery_command called for export"
     assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_DISCHARGE, "discharge mode sent for export"
+    assert bat_cmds[0][4] == 3.0, "configured export rate (3000W) sent as charging_power_kw, got {}".format(bat_cmds[0][4])
 
     return failed
 
@@ -930,6 +1340,113 @@ def test_sigenergy_publish_mqtt_success(my_predbat):
     decoded = json.loads(payload)
     assert decoded["activeMode"] == "charge", "Payload content correct"
     assert decoded["systemId"] == "SIG1", "systemId in payload"
+
+    return failed
+
+
+def test_sigenergy_redact(my_predbat):
+    """Test redact masks credential keys at any depth and leaves the rest alone."""
+    failed = False
+
+    redacted = SigenergyAPI.redact({"accessToken": "live-token", "systemId": "SIG1"})
+    assert redacted["accessToken"] == "<redacted>", "accessToken masked"
+    assert redacted["systemId"] == "SIG1", "Non-credential key untouched"
+
+    # Nested inside a list, as the battery command payload nests its commands
+    nested = SigenergyAPI.redact({"commands": [{"systemId": "SIG1", "password": "hunter2"}]})
+    assert nested["commands"][0]["password"] == "<redacted>", "Credential masked inside a nested list"
+    assert nested["commands"][0]["systemId"] == "SIG1", "Nested non-credential key untouched"
+
+    # Nested inside a dict, exercising the dict-value recursion branch
+    nested_dict = SigenergyAPI.redact({"outer": {"accessToken": "live-token", "systemId": "SIG1"}})
+    assert nested_dict["outer"]["accessToken"] == "<redacted>", "Credential masked inside a nested dict"
+    assert nested_dict["outer"]["systemId"] == "SIG1", "Nested-dict non-credential key untouched"
+
+    # Every documented credential key is covered — iterate the constant so keys added
+    # to SIGENERGY_LOG_REDACT_KEYS later are automatically tested too
+    for key in SIGENERGY_LOG_REDACT_KEYS:
+        assert SigenergyAPI.redact({key: "secret"})[key] == "<redacted>", "Key {} masked".format(key)
+
+    # json.dumps() serialises tuples as arrays, so redaction must cover them or a
+    # tuple-shaped payload would be published as JSON yet logged unmasked
+    nested_tuple = SigenergyAPI.redact({"commands": ({"password": "hunter2"},)})
+    assert nested_tuple["commands"][0]["password"] == "<redacted>", "Credential masked inside a nested tuple"
+
+    # Scalars and lists of scalars pass straight through
+    assert SigenergyAPI.redact("plain") == "plain", "String passthrough"
+    assert SigenergyAPI.redact([1, 2]) == [1, 2], "List passthrough"
+    assert SigenergyAPI.redact(None) is None, "None passthrough"
+
+    return failed
+
+
+def test_sigenergy_publish_mqtt_redacts_token(my_predbat):
+    """Test _publish_mqtt keeps the live token on the wire but masks it in the log (#4920)."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "tok123"
+    api.mqtt_host = "openapi-eu.sigencloud.com" # cspell:disable-line
+    api.mqtt_port = 8883
+
+    mock_client = _make_mock_aiomqtt_client()
+    # The nested command carries a credential too, mirroring the shape of the #4920 leak:
+    # a top-level-only redaction would mask accessToken but still leak the nested password
+    payload = {"accessToken": "live-secret-token", "commands": [{"systemId": "SIG1", "activeMode": "charge", "password": "nested-secret"}]}
+
+    with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+        with patch("sigenergy.aiomqtt.Client", return_value=mock_client):
+            ok = run_async(SigenergyAPI._publish_mqtt(api, "openapi/instruction/command", payload))
+
+    assert ok is True, "_publish_mqtt should return True on success"
+
+    # The broker still receives the real token — redaction is log-only
+    topic, wire_payload = mock_client.publishes[0]
+    import json
+
+    assert topic == "openapi/instruction/command", "Published to the command topic"
+    assert json.loads(wire_payload)["accessToken"] == "live-secret-token", "Real token still published to the broker"
+    assert json.loads(wire_payload)["commands"][0]["password"] == "nested-secret", "Nested credential still published to the broker"
+
+    published_logs = [m for m in api.log_messages if "MQTT published" in m]
+    assert len(published_logs) == 1, "Exactly one publish log line expected"
+    assert "live-secret-token" not in published_logs[0], "Token must not appear in the log"
+    assert "nested-secret" not in published_logs[0], "Nested credential must not appear in the log"
+    assert "<redacted>" in published_logs[0], "Token replaced with the redaction marker"
+    assert "SIG1" in published_logs[0], "Non-credential payload content still logged"
+
+    # The caller's payload dict is not mutated by redaction
+    assert payload["accessToken"] == "live-secret-token", "Caller payload left unmodified"
+
+    return failed
+
+
+def test_sigenergy_request_log_redacts_credentials(my_predbat):
+    """Test _request masks credential-bearing keys in its request and response log lines."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.get_access_token = AsyncMock(return_value="tok123")
+
+    fake_response = {"code": 0, "msg": "ok", "data": {"accessToken": "resp-token", "systemId": "SIG1"}}
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.SIGENERGY_MIN_REQUEST_INTERVAL", 0):
+        with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+            result = run_async(SigenergyAPI._request(api, "POST", "/openapi/test", params={"token": "query-secret"}, json_data={"password": "hunter2", "systemId": "SIG1"}))
+
+    assert result == {"accessToken": "resp-token", "systemId": "SIG1"}, "Response data returned unchanged"
+
+    request_logs = [m for m in api.log_messages if "Requesting" in m]
+    assert len(request_logs) == 1, "Exactly one request log line expected"
+    assert "query-secret" not in request_logs[0], "params credential must not appear in the request log"
+    assert "hunter2" not in request_logs[0], "json_data credential must not appear in the request log"
+    assert "SIG1" in request_logs[0], "Non-credential request content still logged"
+
+    response_logs = [m for m in api.log_messages if "Response from" in m]
+    assert len(response_logs) == 1, "Exactly one response log line expected"
+    assert "resp-token" not in response_logs[0], "Response credential must not appear in the response log"
+    assert "SIG1" in response_logs[0], "Non-credential response content still logged"
 
     return failed
 
@@ -1092,6 +1609,60 @@ def test_sigenergy_handle_mqtt_period_partial_update(my_predbat):
 
     status = api.system_status.get("SYS1", {})
     assert status["operationalMode"] == 6.0, "operationalMode retained from previous full message"
+
+    return failed
+
+
+def test_sigenergy_handle_mqtt_period_never_reported_field(my_predbat):
+    """Regression test for #4663: a field the broker has never sent must not zero the REST value.
+
+    The partial-update merge above only helps once a field has been seen at least once. A system
+    whose period messages carry just "PV power" leaves storageSOC% absent from the merged state
+    forever, and defaulting it to 0 overwrote the SoC the REST poll had already fetched.
+
+    Live effect: the reporter's battery read 30.84kWh/85% from REST, a period message arrived
+    carrying only PV, and Predbat immediately replanned against a 0% battery in the middle of an
+    export window.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+
+    # REST poll has populated a good, complete picture
+    api.energy_flow["SYS1"] = {
+        "batterySoc": 85.0,
+        "batteryPower": -4.127,
+        "pvPower": 4.42,
+        "gridPower": -0.27,
+        "loadPower": 3.857,
+        "evPower": 0.0,
+        "inverterPower": 2.5,
+    }
+
+    # The only period message this system ever sends carries PV power and nothing else
+    api._handle_mqtt_period("SYS1", {"PV power": "4420.0"})
+
+    flow = api.energy_flow.get("SYS1", {})
+    if abs(flow["batterySoc"] - 85.0) > 0.01:
+        print("ERROR: batterySoc should be retained from the REST poll, got {}".format(flow["batterySoc"]))
+        failed = True
+    if abs(flow["batteryPower"] - (-4.127)) > 0.001:
+        print("ERROR: batteryPower should be retained from the REST poll, got {}".format(flow["batteryPower"]))
+        failed = True
+    if abs(flow["gridPower"] - (-0.27)) > 0.001:
+        print("ERROR: gridPower should be retained from the REST poll, got {}".format(flow["gridPower"]))
+        failed = True
+    # The field the message did carry must still be applied
+    if abs(flow["pvPower"] - 4.42) > 0.001:
+        print("ERROR: pvPower should come from the period message, got {}".format(flow["pvPower"]))
+        failed = True
+
+    # With nothing previously known either, an absent field is still 0 rather than raising
+    api2 = MockSigenergyAPI()
+    api2._handle_mqtt_period("SYS2", {"PV power": "1000.0"})
+    flow2 = api2.energy_flow.get("SYS2", {})
+    if flow2["batterySoc"] != 0.0:
+        print("ERROR: batterySoc with no prior value should default to 0, got {}".format(flow2["batterySoc"]))
+        failed = True
 
     return failed
 
@@ -1399,6 +1970,54 @@ def test_sigenergy_fetch_inverter_realtime(my_predbat):
     # pvEnergyDaily should update daily_summary
     daily = api.daily_summary.get("SYS1", {})
     assert daily.get("dailyPowerGeneration") == 12.5, "daily PV yield updated from pvEnergyDaily"
+
+    return failed
+
+
+def test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback(my_predbat):
+    """Regression test for #4663: realtimeInfo spells PV power "pVPower" (capital V), not the
+    natural-looking "pvPower" read by the code before the fix - which silently defaulted PV to 0
+    forever. Covers the fallback chain pVPower -> pvTotalPower -> pvPower in priority order."""
+    failed = False
+
+    def _fetch_pv(realtime_info):
+        api = MockSigenergyAPI()
+        api.access_token = "fake_token"
+        api.token_expires_at = 9_999_999_999
+        api._last_request_time = 0
+        api.devices["SYS1"] = [{"deviceType": "Inverter", "serialNumber": "INV001"}]
+
+        fake_response = {
+            "code": 0,
+            "data": {
+                "systemId": "SYS1",
+                "serialNumber": "INV001",
+                "deviceType": "Inverter",
+                "realTimeInfo": realtime_info,
+            },
+        }
+        mock_response = _make_mock_response(status=200, json_data=fake_response)
+        mock_session = _make_mock_session(mock_response)
+        with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+            ok = run_async(api.fetch_inverter_realtime("SYS1"))
+        assert ok is True, "fetch_inverter_realtime should return True"
+        return api.energy_flow.get("SYS1", {}).get("pvPower")
+
+    # pVPower is primary - used even when the other two spellings are also present and disagree.
+    pv = _fetch_pv({"batSoc": 50.0, "pVPower": 4.66, "pvTotalPower": 4.38, "pvPower": 0.0})
+    assert pv == 4.66, "pVPower should be read as the primary PV key, got {}".format(pv)
+
+    # No pVPower - falls back to pvTotalPower.
+    pv = _fetch_pv({"batSoc": 50.0, "pvTotalPower": 4.38, "pvPower": 0.0})
+    assert pv == 4.38, "should fall back to pvTotalPower when pVPower is absent, got {}".format(pv)
+
+    # Neither pVPower nor pvTotalPower - falls back to pvPower.
+    pv = _fetch_pv({"batSoc": 50.0, "pvPower": 2.1})
+    assert pv == 2.1, "should fall back to pvPower when the other two are absent, got {}".format(pv)
+
+    # None of the three present - the #4663 regression case: silently stuck at 0, not an error.
+    pv = _fetch_pv({"batSoc": 50.0})
+    assert pv == 0.0, "should read 0.0, not error, when no PV key is present at all, got {}".format(pv)
 
     return failed
 
@@ -1841,7 +2460,7 @@ def test_sigenergy_update_control_time_validation(my_predbat):
 
 
 def test_sigenergy_offboard_toggle_in_vpp(my_predbat):
-    """offboard=True → return False immediately regardless of VPP state (no mode switch)."""
+    """offboard=True + VPP active waits for observed MSC before offboarding."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -1854,10 +2473,20 @@ def test_sigenergy_offboard_toggle_in_vpp(my_predbat):
         return True
 
     api.set_operating_mode = mock_set_mode
+    api.offboard_systems = AsyncMock(return_value=[])
 
     result = run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
     assert result is False, "offboard=True should return False"
-    assert not modes_set, "Should not call set_operating_mode — offboard API already changes mode"
+    assert modes_set == [SIGENERGY_MODE_MSC], "Should leave VPP explicitly rather than assume offboard does it"
+    api.offboard_systems.assert_not_awaited()
+
+    # MQTT publish success is not mode confirmation. Only observed telemetry allows the
+    # REST offboard to follow, preventing a race between the two transports.
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+    result = run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert result is False, "offboard=True should still return False"
+    assert modes_set == [SIGENERGY_MODE_MSC], "A confirmed VPP exit should not be repeated"
+    api.offboard_systems.assert_awaited_once_with(sid)
 
     return failed
 
@@ -1876,30 +2505,209 @@ def test_sigenergy_offboard_toggle_not_in_vpp(my_predbat):
         return True
 
     api.set_operating_mode = mock_set_mode
+    api.offboard_systems = AsyncMock(return_value=[])
 
     result = run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
     assert result is False, "offboard=True should return False"
     assert not modes_set, "No mode switch needed"
+    api.offboard_systems.assert_awaited_once_with(sid)
 
     return failed
 
 
-def test_sigenergy_offboard_toggle_switch_event(my_predbat):
-    """Turning on the offboard switch triggers offboard_systems (no mode switch)."""
+def test_sigenergy_offboard_overrides_axle_control(my_predbat):
+    """An explicit offboard exits Axle's NBI mode before removing authorisation."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = SIGENERGY_MODE_NBI
+    api.args["axle_control"] = True
+    api.args["axle_session"] = "binary_sensor.predbat_axle_event"
+    api.dashboard_items["binary_sensor.predbat_axle_event"] = {"state": "on"}
+    api.set_operating_mode = AsyncMock(return_value=True)
+    api.offboard_systems = AsyncMock(return_value=[])
+
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+
+    assert api.set_operating_mode.await_count == 2, "MSC is retried while telemetry still reports NBI"
+    api.set_operating_mode.assert_awaited_with(sid, SIGENERGY_MODE_MSC)
+    api.offboard_systems.assert_not_awaited()
+
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    api.offboard_systems.assert_awaited_once_with(sid)
+
+    return failed
+
+
+def test_sigenergy_offboard_defers_when_the_mode_switch_fails(my_predbat):
+    """A failed VPP exit must NOT offboard — that is the lockout this guards against."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
     api.controls[sid] = {"offboard": False}
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
 
     offboarded = []
-    modes_set = []
+    mode_attempts = []
+
+    async def mock_set_mode(system_id, mode_int):
+        mode_attempts.append(mode_int)
+        return False  # broker down / token expired
 
     async def mock_offboard(system_ids):
         offboarded.append(system_ids)
         return True
 
+    async def mock_publish_controls(system_id=None):
+        pass
+
+    api.set_operating_mode = mock_set_mode
+    api.offboard_systems = mock_offboard
+    api.publish_controls = mock_publish_controls
+
+    run_async(api._update_control("switch.predbat_sigenergy_sig001_offboard", "turn_on", None, "offboard", sid))
+    assert not offboarded, "Must not revoke authorisation while the system is still in VPP"
+
+    # Retried by the periodic check. A successful MQTT publish still is not enough.
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert len(mode_attempts) == 2, "A failed VPP exit must be retried, not latched"
+    assert not offboarded, "Still no offboard while the exit keeps failing"
+
+    api.set_operating_mode = _make_ok_set_mode(mode_attempts)
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert not offboarded, "MQTT acceptance alone must not allow offboarding"
+
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert offboarded, "Offboard proceeds once telemetry confirms the system is out of VPP"
+
+    return failed
+
+
+def _make_ok_set_mode(recorder):
+    """Return a set_operating_mode stub that records and succeeds."""
+
+    async def _ok(system_id, mode_int):
+        recorder.append(mode_int)
+        return True
+
+    return _ok
+
+
+def test_sigenergy_offboard_retries_when_the_api_call_fails(my_predbat):
+    """A failed offboard is retried rather than reported as done."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = SIGENERGY_MODE_MSC  # already out of VPP
+
+    attempts = []
+
+    async def mock_offboard(system_ids):
+        attempts.append(system_ids)
+        return None if len(attempts) == 1 else []
+
+    api.offboard_systems = mock_offboard
+
+    done = run_async(api._offboard_system_if_needed(sid))
+    assert done is False, "A failed offboard must not be latched as complete"
+
+    done = run_async(api._offboard_system_if_needed(sid))
+    assert done is True, "The retry succeeds"
+    assert len(attempts) == 2, "Offboard retried exactly once after the failure"
+
+    run_async(api._offboard_system_if_needed(sid))
+    assert len(attempts) == 2, "A completed offboard is not repeated"
+
+    return failed
+
+
+def test_sigenergy_offboard_retries_per_item_failure(my_predbat):
+    """A per-system failure payload must not be latched as a successful offboard."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+    api.offboard_systems = AsyncMock(side_effect=[[{"systemId": sid, "result": False, "codeList": [1200]}], []])
+
+    assert run_async(api._offboard_system_if_needed(sid)) is False
+    assert sid not in api._offboard_done, "Per-item failure must leave the completion latch clear"
+    assert run_async(api._offboard_system_if_needed(sid)) is True
+    assert api.offboard_systems.await_count == 2, "Per-item failure is retried"
+
+    return failed
+
+
+def test_sigenergy_offboard_unknown_mode_defers(my_predbat):
+    """An absent or unrecognised mode is not proof that the owner's app has control."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.offboard_systems = AsyncMock(return_value=[])
+
+    assert run_async(api._offboard_system_if_needed(sid)) is False
+    api.offboard_systems.assert_not_awaited()
+    assert sid not in api._offboard_vpp_exit_done, "Unknown mode must not latch the VPP exit"
+
+    api.current_mode[sid] = 42
+    assert run_async(api._offboard_system_if_needed(sid)) is False
+    api.offboard_systems.assert_not_awaited()
+    assert sid not in api._offboard_vpp_exit_done, "Unrecognised mode must not latch the VPP exit"
+
+    return failed
+
+
+def test_sigenergy_offboard_switch_survives_restart(my_predbat):
+    """A restart must not re-onboard a system the owner deliberately left.
+
+    The offboard switch is a control entity, so its state is restored on startup like
+    every other one — no separate durable latch is needed, and re-onboarding would cost
+    the owner a fresh approval email.
+    """
+    failed = False
+    sid = "SIG001"
+    api = MockSigenergyAPI()
+    api.system_id_filter = {sid}
+    api.systems = {}
+    slug = api._system_slug(sid)
+    api.dashboard_items["switch.predbat_sigenergy_{}_offboard".format(slug)] = {"state": "on"}
+
+    onboarded = []
+
+    async def mock_onboard(system_ids):
+        onboarded.append(system_ids)
+        return True
+
+    api.onboard_systems = mock_onboard
+
+    run_async(api.run(seconds=0, first=True))
+    assert not onboarded, "A restart must not re-onboard a system whose offboard switch is on"
+
+    return failed
+
+
+def test_sigenergy_offboard_toggle_switch_event(my_predbat):
+    """Turning on offboard leaves VPP, then waits for telemetry before offboarding."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.controls[sid] = {"offboard": False}
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+
+    offboarded = []
+    modes_set = []
+    order = []
+
+    async def mock_offboard(system_ids):
+        offboarded.append(system_ids)
+        order.append("offboard")
+        return True
+
     async def mock_set_mode(system_id, mode_int):
         modes_set.append((system_id, mode_int))
+        order.append("mode")
         return True
 
     async def mock_publish_controls(system_id=None):
@@ -1912,8 +2720,22 @@ def test_sigenergy_offboard_toggle_switch_event(my_predbat):
     run_async(api._update_control("switch.predbat_sigenergy_sig001_offboard", "turn_on", None, "offboard", sid))
 
     assert api.controls[sid]["offboard"] is True, "offboard control should be True after turn_on"
-    assert offboarded, "offboard_systems should be called"
-    assert not modes_set, "set_operating_mode should NOT be called — offboard API changes the mode"
+    assert not offboarded, "offboard_systems must wait for telemetry confirmation"
+    assert modes_set == [(sid, SIGENERGY_MODE_MSC)], "Should hand control back to the owner's app explicitly"
+    assert order == ["mode"], "Only the mode request is sent while telemetry still says VPP"
+
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert offboarded, "offboard_systems follows once MSC is observed"
+    assert order == ["mode", "offboard"], "Must confirm the VPP exit before offboarding"
+
+    # Toggling back off clears the latch so a later offboard exits VPP again.
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+    run_async(api._update_control("switch.predbat_sigenergy_sig001_offboard", "turn_off", None, "offboard", sid))
+    assert api.controls[sid]["offboard"] is False, "offboard control should be False after turn_off"
+    run_async(api._update_control("switch.predbat_sigenergy_sig001_offboard", "turn_on", None, "offboard", sid))
+    assert modes_set == [(sid, SIGENERGY_MODE_MSC), (sid, SIGENERGY_MODE_MSC)], "Re-onboard then offboard should exit VPP again"
+    assert order == ["mode", "offboard", "mode"], "Second offboard also waits for live confirmation"
 
     return failed
 
@@ -2032,11 +2854,19 @@ def test_sigenergy_run_derives_onboard_status(my_predbat):
     assert api_pending.onboard_status[sid] == "pending_approval", "pending_approval derived from MSC mode"
     assert api_pending.dashboard_items[sensor_key]["state"] == "pending_approval"
 
-    # Offboard toggle on → offboarded regardless of mode
+    # Offboard COMPLETED → offboarded regardless of mode.
     api_offboard = _make_api(SIGENERGY_MODE_VPP, offboard_on=True)
+    api_offboard._offboard_done.add(sid)
     run_async(api_offboard.run(seconds=300, first=False))
-    assert api_offboard.onboard_status[sid] == "offboarded", "offboarded when toggle is on"
+    assert api_offboard.onboard_status[sid] == "offboarded", "offboarded once the offboard has landed"
     assert api_offboard.dashboard_items[sensor_key]["state"] == "offboarded"
+
+    # Toggle on but the offboard has NOT landed yet (mode switch or API call still
+    # failing): the status must not claim offboarded, or support reads a lie while
+    # the system is still live on the platform.
+    api_inflight = _make_api(SIGENERGY_MODE_MSC, offboard_on=True)
+    run_async(api_inflight.run(seconds=300, first=False))
+    assert api_inflight.onboard_status[sid] == "active", "pending offboard stays active rather than falsely requesting onboarding approval"
 
     return failed
 
@@ -2063,6 +2893,224 @@ def test_sigenergy_run_pending_publishes_before_early_exit(my_predbat):
     return failed
 
 
+def _make_contended_api(sid, mode, axle_control=False, axle_event="off"):
+    """Build a MockSigenergyAPI whose system sits in the given operating mode.
+
+    Args:
+        sid: System ID to register.
+        mode: Operating mode integer to report as the system's current mode.
+        axle_control: Value of the axle_control option.
+        axle_event: State of the Axle event binary sensor ("on" or "off").
+
+    Returns:
+        A MockSigenergyAPI with run()'s async helpers stubbed out.
+    """
+    api = MockSigenergyAPI()
+    api.systems = {sid: {"deviceList": []}}
+    api.current_mode = {sid: mode}
+    api.system_id_filter = {sid}
+    api.args["axle_control"] = axle_control
+    api.args["axle_session"] = "binary_sensor.predbat_axle_event"
+    api.dashboard_items["binary_sensor.predbat_axle_event"] = {"state": axle_event}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api.set_operating_mode = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock()
+    api.fetch_history_totals = AsyncMock()
+    api.publish_system_entities = AsyncMock()
+    api.apply_controls = AsyncMock()
+    return api
+
+
+def test_sigenergy_reclaims_vpp_from_third_party_controller(my_predbat):
+    """Without axle_control, a system taken into NBI is reclaimed into VPP, and says so."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+
+    api.set_operating_mode.assert_awaited_once_with(sid, SIGENERGY_MODE_VPP)
+    assert api.last_contended_by[sid] == "Northbound Integration", "records which controller displaced Predbat"
+
+    reclaim_logs = [m for m in api.log_messages if "reclaiming VPP mode" in m]
+    assert len(reclaim_logs) == 1, "reclaim is logged once, got {}".format(api.log_messages)
+    assert "Northbound Integration" in reclaim_logs[0], "log names the displacing controller"
+    assert "onboard" not in reclaim_logs[0].lower(), "reclaim log must not blame onboarding"
+
+    return failed
+
+
+def test_sigenergy_contention_does_not_report_pending_approval(my_predbat):
+    """Contention must not surface as pending_approval — that shows a false 'approve in app' banner."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=300, first=False))
+    assert api.onboard_status[sid] == "active", "contended system stays active, not pending_approval"
+
+    api_msc = _make_contended_api(sid, SIGENERGY_MODE_MSC)
+    api_msc._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api_msc.run(seconds=300, first=False))
+    assert api_msc.onboard_status[sid] == "pending_approval", "MSC still means pending approval"
+
+    return failed
+
+
+def test_sigenergy_contention_marker_published_before_recovery(my_predbat):
+    """A contention episode shorter than a poll interval must still reach the sensor.
+
+    Regression test: the marker used to be cleared on recovery while the sensor only
+    published every 5 minutes, so brief contention was never visible to support.
+    """
+    failed = False
+    sid = "SIG001"
+    sensor_key = "sensor.predbat_sigenergy_sig001_onboard_status"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    # Minute tick during contention — the real _manage_vpp_registration records the marker.
+    run_async(api.run(seconds=60, first=False))
+    assert api.dashboard_items[sensor_key]["attributes"]["last_contended_by"] == "Northbound Integration", "contention published on the minute tick"
+
+    # Mode recovers. The marker must survive so the episode remains visible.
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+    run_async(api.run(seconds=120, first=False))
+    assert api.dashboard_items[sensor_key]["attributes"]["in_vpp"] is True, "in_vpp reports the live state"
+    assert api.dashboard_items[sensor_key]["attributes"]["last_contended_by"] == "Northbound Integration", "marker is not cleared on recovery"
+
+    return failed
+
+
+def test_sigenergy_reclaim_runs_on_the_minute(my_predbat):
+    """The reclaim check runs every minute, so a displaced system is not left for a full poll."""
+    failed = False
+    sid = "SIG001"
+
+    assert SIGENERGY_VPP_RECLAIM_INTERVAL == 60, "reclaim cadence is one minute"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=60, first=False))
+    api._manage_vpp_registration.assert_awaited_once()
+
+    return failed
+
+
+def test_sigenergy_controls_skipped_message_distinguishes_contention(my_predbat):
+    """Skipping controls because another controller holds the system must not blame onboarding."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=60, first=False))
+
+    skip_logs = [m for m in api.log_messages if "controls skipped" in m]
+    assert skip_logs, "controls-skipped message is logged"
+    assert any("held by another controller" in m for m in skip_logs), "message names contention, got {}".format(skip_logs)
+    assert not any("onboard is approved" in m for m in skip_logs), "must not tell the user to approve onboarding"
+    api.apply_controls.assert_not_awaited()
+
+    return failed
+
+
+def test_sigenergy_axle_control_off_reclaims_as_before(my_predbat):
+    """With axle_control unset, an active Axle event does not change behaviour."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI, axle_control=False, axle_event="on")
+    assert api._axle_has_control() is False, "axle_control off means Predbat keeps ownership"
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_awaited_once_with(sid, SIGENERGY_MODE_VPP)
+
+    return failed
+
+
+def test_sigenergy_axle_event_leaves_mode_alone(my_predbat):
+    """With axle_control on, Predbat must not touch the mode in either direction."""
+    failed = False
+    sid = "SIG001"
+
+    # Axle has already taken the system into NBI — leave it there.
+    api_nbi = _make_contended_api(sid, SIGENERGY_MODE_NBI, axle_control=True, axle_event="on")
+    result = run_async(api_nbi._manage_vpp_registration(sid, is_readonly=False))
+    assert result is False, "controls do not proceed while Axle owns the inverter"
+    api_nbi.set_operating_mode.assert_not_awaited()
+    assert any("standing down" in m for m in api_nbi.log_messages), "stand-down is logged, got {}".format(api_nbi.log_messages)
+
+    # Event started but Axle has not switched yet — do NOT drop to MSC, which would hand
+    # control to the owner's app rather than to Axle.
+    api_vpp = _make_contended_api(sid, SIGENERGY_MODE_VPP, axle_control=True, axle_event="on")
+    run_async(api_vpp._manage_vpp_registration(sid, is_readonly=False))
+    api_vpp.set_operating_mode.assert_not_awaited()
+
+    return failed
+
+
+def test_sigenergy_axle_event_skips_controls(my_predbat):
+    """Predbat must not issue battery commands while Axle is dispatching."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_VPP, axle_control=True, axle_event="on")
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=60, first=False))
+    api.apply_controls.assert_not_awaited()
+
+    api_off = _make_contended_api(sid, SIGENERGY_MODE_VPP, axle_control=True, axle_event="off")
+    api_off._manage_vpp_registration = AsyncMock(return_value=True)
+    run_async(api_off.run(seconds=60, first=False))
+    api_off.apply_controls.assert_awaited_once_with(sid)
+
+    return failed
+
+
+def test_sigenergy_axle_event_end_resumes_control(my_predbat):
+    """When the event ends Predbat reclaims VPP and says it has resumed."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI, axle_control=True, axle_event="on")
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_not_awaited()
+
+    # Event ends — the live sensor flips, no prediction cycle required.
+    api.dashboard_items["binary_sensor.predbat_axle_event"] = {"state": "off"}
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_awaited_once_with(sid, SIGENERGY_MODE_VPP)
+    assert any("resuming control" in m for m in api.log_messages), "resume is logged, got {}".format(api.log_messages)
+
+    return failed
+
+
+def test_sigenergy_axle_standoff_survives_restart(my_predbat):
+    """A restart mid-event must not reclaim VPP.
+
+    Regression test: reading the cached set_read_only_axle flag failed here, because
+    reset() leaves it False and the component starts before the first update_pred().
+    Evaluating axle_control and the event sensor live is what makes first=True safe.
+    """
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI, axle_control=True, axle_event="on")
+    # Simulate the parent having the stale post-reset value the prediction loop has not
+    # yet refreshed — the component must not depend on it.
+    api.base = MagicMock()
+    api.base.set_read_only_axle = False
+
+    assert api._axle_has_control() is True, "live evaluation sees the event despite the stale flag"
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_not_awaited()
+
+    return failed
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -2077,6 +3125,8 @@ def run_sigenergy_tests(my_predbat):
         ("system_slug", test_sigenergy_system_slug),
         ("battery_capacity", test_sigenergy_battery_capacity),
         ("publish_system_entities", test_sigenergy_publish_system_entities),
+        ("publish_system_entities_operational_mode_fallback", test_sigenergy_publish_system_entities_operational_mode_fallback),
+        ("publish_system_entities_operational_mode_invalid_value", test_sigenergy_publish_system_entities_operational_mode_invalid_value),
         ("automatic_config", test_sigenergy_automatic_config),
         ("fetch_controls", test_sigenergy_fetch_controls),
         ("publish_controls", test_sigenergy_publish_controls),
@@ -2090,21 +3140,36 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_system_list_with_filter", test_sigenergy_fetch_system_list_with_filter),
         ("fetch_history_totals", test_sigenergy_fetch_history_totals),
         ("fetch_history_totals_empty_data", test_sigenergy_fetch_history_totals_empty_data),
+        ("fetch_history_totals_clamps_dip", test_sigenergy_fetch_history_totals_clamps_dip),
+        ("fetch_history_totals_keeps_missing_node", test_sigenergy_fetch_history_totals_keeps_missing_node),
+        ("save_load_cache_no_storage", test_sigenergy_save_load_cache_no_storage),
+        ("save_load_cache_round_trip", test_sigenergy_save_load_cache_round_trip),
+        ("load_cached_data", test_sigenergy_load_cached_data),
+        ("load_cached_data_no_storage_leaves_defaults", test_sigenergy_load_cached_data_no_storage_leaves_defaults),
+        ("history_totals_clamp_survives_restart", test_sigenergy_history_totals_clamp_survives_restart),
+        ("needs_refresh", test_sigenergy_needs_refresh),
+        ("run_skips_refresh_when_cache_fresh", test_sigenergy_run_skips_refresh_when_cache_fresh),
+        ("run_energy_flow_not_bumped_on_fetch_failure", test_sigenergy_run_energy_flow_not_bumped_on_fetch_failure),
         ("apply_controls_charge_mode", test_sigenergy_apply_controls_charge_mode),
         ("apply_controls_eco_mode", test_sigenergy_apply_controls_eco_mode),
         ("apply_controls_deduplication", test_sigenergy_apply_controls_deduplication),
         ("apply_controls_export_mode", test_sigenergy_apply_controls_export_mode),
         ("publish_mqtt_success", test_sigenergy_publish_mqtt_success),
+        ("redact", test_sigenergy_redact),
+        ("publish_mqtt_redacts_token", test_sigenergy_publish_mqtt_redacts_token),
+        ("request_log_redacts_credentials", test_sigenergy_request_log_redacts_credentials),
         ("publish_mqtt_failure", test_sigenergy_publish_mqtt_failure),
         ("send_battery_command_mqtt", test_sigenergy_send_battery_command_mqtt),
         ("send_battery_command_no_token", test_sigenergy_send_battery_command_no_token),
         ("handle_mqtt_period", test_sigenergy_handle_mqtt_period),
         ("handle_mqtt_period_partial_update", test_sigenergy_handle_mqtt_period_partial_update),
+        ("handle_mqtt_period_never_reported_field", test_sigenergy_handle_mqtt_period_never_reported_field),
         ("handle_mqtt_change", test_sigenergy_handle_mqtt_change),
         ("handle_mqtt_alarm", test_sigenergy_handle_mqtt_alarm),
         ("mqtt_listener_loop", test_sigenergy_mqtt_listener_loop),
         ("mqtt_listener_loop_ignores_other_systems", test_sigenergy_mqtt_listener_loop_ignores_other_systems),
         ("fetch_inverter_realtime", test_sigenergy_fetch_inverter_realtime),
+        ("fetch_inverter_realtime_pv_power_key_fallback", test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback),
         ("fetch_energy_flow", test_sigenergy_fetch_energy_flow),
         ("fetch_inverter_realtime_no_inverter", test_sigenergy_fetch_inverter_realtime_no_inverter),
         ("get_inverter_serial", test_sigenergy_get_inverter_serial),
@@ -2123,10 +3188,26 @@ def run_sigenergy_tests(my_predbat):
         ("apply_controls_skipped_when_not_vpp", test_sigenergy_apply_controls_skipped_when_not_vpp),
         ("offboard_toggle_in_vpp", test_sigenergy_offboard_toggle_in_vpp),
         ("offboard_toggle_not_in_vpp", test_sigenergy_offboard_toggle_not_in_vpp),
+        ("offboard_overrides_axle_control", test_sigenergy_offboard_overrides_axle_control),
         ("offboard_toggle_switch_event", test_sigenergy_offboard_toggle_switch_event),
+        ("offboard_defers_when_mode_switch_fails", test_sigenergy_offboard_defers_when_the_mode_switch_fails),
+        ("offboard_retries_when_api_call_fails", test_sigenergy_offboard_retries_when_the_api_call_fails),
+        ("offboard_retries_per_item_failure", test_sigenergy_offboard_retries_per_item_failure),
+        ("offboard_unknown_mode_defers", test_sigenergy_offboard_unknown_mode_defers),
+        ("offboard_switch_survives_restart", test_sigenergy_offboard_switch_survives_restart),
         ("publish_onboard_status_sensors", test_sigenergy_publish_onboard_status_sensors),
         ("run_derives_onboard_status", test_sigenergy_run_derives_onboard_status),
         ("run_pending_publishes_before_early_exit", test_sigenergy_run_pending_publishes_before_early_exit),
+        ("reclaims_vpp_from_third_party_controller", test_sigenergy_reclaims_vpp_from_third_party_controller),
+        ("contention_does_not_report_pending_approval", test_sigenergy_contention_does_not_report_pending_approval),
+        ("contention_marker_published_before_recovery", test_sigenergy_contention_marker_published_before_recovery),
+        ("reclaim_runs_on_the_minute", test_sigenergy_reclaim_runs_on_the_minute),
+        ("controls_skipped_message_distinguishes_contention", test_sigenergy_controls_skipped_message_distinguishes_contention),
+        ("axle_control_off_reclaims_as_before", test_sigenergy_axle_control_off_reclaims_as_before),
+        ("axle_event_leaves_mode_alone", test_sigenergy_axle_event_leaves_mode_alone),
+        ("axle_event_skips_controls", test_sigenergy_axle_event_skips_controls),
+        ("axle_event_end_resumes_control", test_sigenergy_axle_event_end_resumes_control),
+        ("axle_standoff_survives_restart", test_sigenergy_axle_standoff_survives_restart),
     ]
 
     for name, fn in tests:

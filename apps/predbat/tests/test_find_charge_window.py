@@ -34,6 +34,7 @@ def test_find_charge_window(my_predbat):
       Path D - manual_all_times slot split at plan_interval_minutes
       Path E - alt_rates alternate_rate_boundary terminates export window;
                also 24-hour export cap
+      Path J - pv_light_dark boundary splits a charge window (#4557)
       Path F - window start (rate_low_start set for first time)
       Path G - window continuation and correct average calculation
       Path H - rate outside threshold while window in progress → closes window
@@ -212,6 +213,42 @@ def test_find_charge_window(my_predbat):
     failed |= _assert_window("path E alt rate boundary", s, e, _, 0, 30)
 
     # -----------------------------------------------------------------------
+    # Test: Path J — pv_light_dark boundary splits a charge window at the light/dark
+    # transition (regression test for #4557: a single long cheap-rate period
+    # spanning sunrise was built as one charge window, which made low power
+    # charging get abandoned for the whole thing - including the still-dark
+    # hours - just because the tail overlapped PV later on).
+    # find_high=False; pv_light_dark goes dark (0) -> light (1) at minute 30;
+    # cheap import rate throughout; combine_charge_slots left True so only
+    # the pv_light_dark boundary - not charge_slot_split - is under test.
+    # -----------------------------------------------------------------------
+    print("Test find_charge_window: pv_light_dark boundary splits charge window (Path J)")
+    my_predbat.plan_interval_minutes = 30
+    my_predbat.combine_charge_slots = True
+    pv_light_dark_j = {}
+    for m in range(0, 30, 5):
+        pv_light_dark_j[m] = 0  # dark
+    for m in range(30, scan_end, 5):
+        pv_light_dark_j[m] = 1  # light
+
+    rates_j = {m: low_rate for m in range(0, scan_end, 5)}  # cheap throughout
+
+    s, e, _ = my_predbat.find_charge_window(rates_j, 0, thresh_lo, find_high=False, pv_light_dark=pv_light_dark_j)
+    failed |= _assert_window("path J pv boundary (dark window)", s, e, _, 0, 30)
+
+    # Scanning onward from the split should then pick up the light portion as its own window
+    s2, e2, _ = my_predbat.find_charge_window(rates_j, 30, thresh_lo, find_high=False, pv_light_dark=pv_light_dark_j)
+    if s2 != 30:
+        print("ERROR: path J pv boundary (light window): expected start=30, got start={}".format(s2))
+        failed = 1
+
+    # No pv_light_dark supplied at all → behaves exactly as before, one uninterrupted window
+    s3, e3, _ = my_predbat.find_charge_window(rates_j, 0, thresh_lo, find_high=False)
+    if e3 != scan_end:
+        print("ERROR: path J no pv_light_dark: expected window to run uninterrupted to {}, got end={}".format(scan_end, e3))
+        failed = 1
+
+    # -----------------------------------------------------------------------
     # Test: 24-hour export cap (Path E first condition)
     # find_high=True with high rates spanning >24h; window must cap at 24*60
     # -----------------------------------------------------------------------
@@ -315,4 +352,209 @@ def test_find_charge_window(my_predbat):
     my_predbat.charge_slot_split = old_charge_slot_split
     my_predbat.export_slot_split = old_export_slot_split
     my_predbat.plan_interval_minutes = old_plan_interval
+
+    failed |= test_calc_dawn(my_predbat)
+    failed |= test_calc_pv_light_dark(my_predbat)
+    return failed
+
+
+def test_calc_dawn(my_predbat):
+    """
+    Tests for calc_dawn (#4557): classifies pv_forecast_minute into light/dark buckets of
+    plan_interval_minutes, used to split a charge window at the light/dark boundary. Dawn is the first
+    bucket that crosses LOW_POWER_PV_LIGHT_FRACTION of the peak PV forecast anywhere in the dict.
+
+      - no PV forecast at all -> empty dict
+      - no PV output at all (every value zero) -> all dark, no divide-by-zero on a zero peak
+      - noise straddling the threshold within a single bucket does not flip that bucket's
+        classification (regression: a raw per-minute threshold would chop the window into several
+        small pieces on a noisy forecast)
+      - a clean dawn confirms immediately on the first bucket that crosses the threshold
+      - once confirmed, a later cloud dip (dark again) does not revert the latch - a dawn detector,
+        not a rise/fall tracker
+      - the latch resets at each calendar day boundary so the next day's dawn is found independently
+      - the same absolute PV value classifies differently depending on the peak elsewhere in the
+        forecast - the threshold is a fraction of that peak, not an absolute figure
+    """
+    failed = 0
+    old_pv_forecast_minute = my_predbat.pv_forecast_minute
+    old_plan_interval = my_predbat.plan_interval_minutes
+    old_low_power = my_predbat.set_charge_low_power
+    my_predbat.plan_interval_minutes = 30
+    my_predbat.set_charge_low_power = True
+
+    def set_buckets(bucket_values):
+        """Fill pv_forecast_minute with one value per plan_interval_minutes bucket, from minute 0."""
+        interval = my_predbat.plan_interval_minutes
+        my_predbat.pv_forecast_minute = {}
+        for bucket_index, value in enumerate(bucket_values):
+            for m in range(bucket_index * interval, bucket_index * interval + interval, 5):
+                my_predbat.pv_forecast_minute[m] = value
+
+    peak = 1.0  # an arbitrary "midday" peak somewhere in the forecast - threshold is 10% of this
+    light = peak * 0.15  # above the 10% threshold
+    dark = peak * 0.05  # below it
+    dawn_bucket_index = 2  # bucket where dawn happens in most scenarios below; peak sits after it
+
+    print("Test calc_dawn: no PV forecast")
+    my_predbat.pv_forecast_minute = {}
+    result = my_predbat.calc_dawn()
+    if result != {}:
+        print("ERROR: calc_dawn: expected empty dict for no PV forecast, got {}".format(result))
+        failed = 1
+
+    print("Test calc_dawn: no PV output at all classifies everything dark, no divide-by-zero")
+    set_buckets([0.0, 0.0, 0.0])
+    result = my_predbat.calc_dawn()
+    if any(v != 0 for v in result.values()):
+        print("ERROR: calc_dawn: an all-zero forecast should classify everything dark, got {}".format(result))
+        failed = 1
+
+    print("Test calc_dawn: noise straddling the threshold within one bucket stays stable")
+    my_predbat.pv_forecast_minute = {}
+    # Average across the bucket is just below threshold, but individual minutes swing both sides of
+    # it - a raw per-minute comparison would flip-flop within this single bucket. A late peak bucket
+    # establishes what "threshold" means without affecting the noisy bucket's own average.
+    noisy_values = [dark * 1.3, dark * 0.6, dark * 1.2, dark * 0.5, dark * 0.9, dark * 0.7]
+    for i, m in enumerate(range(0, 30, 5)):
+        my_predbat.pv_forecast_minute[m] = noisy_values[i]
+    my_predbat.pv_forecast_minute[30] = peak
+    result = my_predbat.calc_dawn()
+    classifications = {result[m] for m in range(0, 30, 5)}
+    if len(classifications) != 1:
+        print("ERROR: calc_dawn: noisy bucket should have a single stable classification, got {}".format({m: result[m] for m in range(0, 30, 5)}))
+        failed = 1
+
+    print("Test calc_dawn: clean dawn confirms immediately on the first crossed bucket")
+    set_buckets([dark, dark, light, peak])
+    result = my_predbat.calc_dawn()
+    if result.get(0) != 0 or result.get(30) != 0:
+        print("ERROR: calc_dawn: dark buckets before dawn should classify 0, got {}".format({m: result.get(m) for m in (0, 30)}))
+        failed = 1
+    if result.get(dawn_bucket_index * 30) != 1:
+        print("ERROR: calc_dawn: first crossed bucket should confirm dawn immediately, got {}".format(result.get(dawn_bucket_index * 30)))
+        failed = 1
+
+    print("Test calc_dawn: a later cloud dip after confirmed dawn stays latched light")
+    set_buckets([dark, dark, light, dark, light, peak])
+    result = my_predbat.calc_dawn()
+    if result.get(60) != 1:
+        print("ERROR: calc_dawn: dawn should be confirmed at minute 60, got {}".format(result.get(60)))
+        failed = 1
+    if result.get(90) != 1:
+        print("ERROR: calc_dawn: bucket after a cloud dip should stay latched at 1, got {}".format(result.get(90)))
+        failed = 1
+    if result.get(120) != 1:
+        print("ERROR: calc_dawn: bucket after the dip should classify 1, got {}".format(result.get(120)))
+        failed = 1
+
+    print("Test calc_dawn: latch resets at the next calendar day boundary")
+    my_predbat.pv_forecast_minute = {}
+    day_minutes = 24 * 60
+    # Day 1: dawn at minute 60, light for the rest of the day.
+    for m in range(0, day_minutes, 5):
+        my_predbat.pv_forecast_minute[m] = light if m >= 60 else dark
+    my_predbat.pv_forecast_minute[day_minutes - 30] = peak
+    # Day 2: dark again until its own dawn at minute 90 into the day.
+    for m in range(day_minutes, day_minutes + 150, 5):
+        my_predbat.pv_forecast_minute[m] = light if (m - day_minutes) >= 90 else dark
+    result = my_predbat.calc_dawn()
+    if result.get(day_minutes - 5) != 1:
+        print("ERROR: calc_dawn: end of day 1 should still be latched light, got {}".format(result.get(day_minutes - 5)))
+        failed = 1
+    if result.get(day_minutes) != 0:
+        print("ERROR: calc_dawn: start of day 2 should reset to dark, got {}".format(result.get(day_minutes)))
+        failed = 1
+    if result.get(day_minutes + 60) != 0:
+        print("ERROR: calc_dawn: day 2 should stay dark before its own dawn, got {}".format(result.get(day_minutes + 60)))
+        failed = 1
+    if result.get(day_minutes + 90) != 1:
+        print("ERROR: calc_dawn: day 2 should reach its own dawn at minute 90, got {}".format(result.get(day_minutes + 90)))
+        failed = 1
+
+    print("Test calc_dawn: threshold scales with the forecast's own peak, not an absolute figure")
+    fixed_pv_value = 0.5
+    # Against a high peak, fixed_pv_value is well under 10% and should stay dark.
+    set_buckets([fixed_pv_value, 10.0])
+    result = my_predbat.calc_dawn()
+    if result.get(0) != 0:
+        print("ERROR: calc_dawn: {}kWh/min should be dark against a peak of 10.0, got {}".format(fixed_pv_value, result.get(0)))
+        failed = 1
+    # Against a low peak, the same fixed_pv_value comfortably exceeds 10% and should be light.
+    set_buckets([fixed_pv_value, 1.0])
+    result = my_predbat.calc_dawn()
+    if result.get(0) != 1:
+        print("ERROR: calc_dawn: {}kWh/min should be light against a peak of 1.0, got {}".format(fixed_pv_value, result.get(0)))
+        failed = 1
+
+    my_predbat.pv_forecast_minute = old_pv_forecast_minute
+    my_predbat.plan_interval_minutes = old_plan_interval
+    my_predbat.set_charge_low_power = old_low_power
+    return failed
+
+
+def test_calc_pv_light_dark(my_predbat):
+    """
+    Tests for calc_pv_light_dark: decides whether calc_dawn is worth computing at all.
+
+    Only combine_charge_slots can merge a charge window across dawn, so that's what gates the split -
+    not set_charge_low_power. With combine_charge_slots off, find_charge_window already forces a break
+    every charge_slot_split (=plan_interval_minutes) minutes regardless, so the dawn boundary could
+    never be reached and computing it would be a no-op:
+
+      - combine_charge_slots=True, set_charge_low_power=False -> dawn split still runs (the new case -
+        the optimizer can pick the dark portion of a combined window on its own merits)
+      - combine_charge_slots=True, set_charge_low_power=True -> dawn split runs (unchanged behaviour)
+      - combine_charge_slots=False, regardless of set_charge_low_power -> {} (moot, skipped)
+    """
+    failed = 0
+    old_pv_forecast_minute = my_predbat.pv_forecast_minute
+    old_plan_interval = my_predbat.plan_interval_minutes
+    old_combine_charge = my_predbat.combine_charge_slots
+    old_low_power = my_predbat.set_charge_low_power
+
+    my_predbat.plan_interval_minutes = 30
+    my_predbat.pv_forecast_minute = {}
+    for m in range(0, 30, 5):
+        my_predbat.pv_forecast_minute[m] = 0.0  # dark
+    for m in range(30, 60, 5):
+        my_predbat.pv_forecast_minute[m] = 1.0  # light, crosses the threshold
+
+    print("Test calc_pv_light_dark: combine_charge_slots=True, set_charge_low_power=False -> dawn split still runs")
+    my_predbat.combine_charge_slots = True
+    my_predbat.set_charge_low_power = False
+    result = my_predbat.calc_pv_light_dark()
+    if result != my_predbat.calc_dawn():
+        print("ERROR: calc_pv_light_dark: expected calc_dawn's result when combine_charge_slots is True, got {}".format(result))
+        failed = 1
+    if result.get(0) != 0 or result.get(30) != 1:
+        print("ERROR: calc_pv_light_dark: expected a dark->light split at minute 30, got {}".format({m: result.get(m) for m in (0, 30)}))
+        failed = 1
+
+    print("Test calc_pv_light_dark: combine_charge_slots=True, set_charge_low_power=True -> dawn split runs")
+    my_predbat.set_charge_low_power = True
+    result = my_predbat.calc_pv_light_dark()
+    if result != my_predbat.calc_dawn():
+        print("ERROR: calc_pv_light_dark: expected calc_dawn's result when combine_charge_slots is True, got {}".format(result))
+        failed = 1
+
+    print("Test calc_pv_light_dark: combine_charge_slots=False, set_charge_low_power=True -> {} (moot, skipped)")
+    my_predbat.combine_charge_slots = False
+    my_predbat.set_charge_low_power = True
+    result = my_predbat.calc_pv_light_dark()
+    if result != {}:
+        print("ERROR: calc_pv_light_dark: expected {{}} when combine_charge_slots is False, got {}".format(result))
+        failed = 1
+
+    print("Test calc_pv_light_dark: combine_charge_slots=False, set_charge_low_power=False -> {}")
+    my_predbat.set_charge_low_power = False
+    result = my_predbat.calc_pv_light_dark()
+    if result != {}:
+        print("ERROR: calc_pv_light_dark: expected {{}} when combine_charge_slots is False, got {}".format(result))
+        failed = 1
+
+    my_predbat.pv_forecast_minute = old_pv_forecast_minute
+    my_predbat.plan_interval_minutes = old_plan_interval
+    my_predbat.combine_charge_slots = old_combine_charge
+    my_predbat.set_charge_low_power = old_low_power
     return failed

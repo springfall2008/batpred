@@ -56,7 +56,7 @@ def test_minute_data_import_export(my_predbat):
     # Store original get_history_wrapper for restoration
     original_get_history = my_predbat.get_history_wrapper
 
-    def mock_get_history_wrapper(entity_id, days):
+    def mock_get_history_wrapper(entity_id, days, required=True, tracked=True):
         """Mock get_history_wrapper that returns data from mock_history_store"""
         return mock_history_store.get(entity_id, None)
 
@@ -164,6 +164,62 @@ def test_minute_data_import_export(my_predbat):
     if len(result) == 0:
         print("ERROR: Test 7 failed - no data returned for single string entity")
         failed = True
+
+    # Test 8: Optional fetch of an entity Home Assistant has no recorded history for.
+    # The ML load model asks for the history of predbat.rates/predbat.rates_export purely to
+    # add rate features; when the recorder isn't storing those entities that is not an error
+    # and must not be logged as one, nor flag the run as having errors (issue #4583).
+    print("Test 8: Optional fetch of an entity with no recorded history")
+
+    captured_logs = []
+    status_calls = []
+    original_log = my_predbat.log
+    original_record_status = my_predbat.record_status
+    my_predbat.log = lambda message, **kwargs: captured_logs.append(message)
+    my_predbat.record_status = lambda message, **kwargs: status_calls.append(message)
+
+    def mock_history_no_data(entity_id, days=30, required=True, tracked=True):
+        """Mimic Home Assistant returning no recorded history for the entity."""
+        if required:
+            raise ValueError
+        return None
+
+    my_predbat.get_history_wrapper = mock_history_no_data
+
+    result = my_predbat.minute_data_import_export(max_days_previous=2, now_utc=now, key="predbat.rates", scale=1.0, increment=False, smoothing=False, pad=False, required=False)
+
+    if result:
+        print("ERROR: Test 8 failed - expected no data for an entity with no history, got {}".format(result))
+        failed = True
+    shouty = [message for message in captured_logs if message.startswith("Error") or "Failure to fetch history" in message]
+    if shouty:
+        print("ERROR: Test 8 failed - optional history fetch should not be logged as a failure, got {}".format(shouty))
+        failed = True
+    if status_calls:
+        print("ERROR: Test 8 failed - optional history fetch should not record an error status, got {}".format(status_calls))
+        failed = True
+    if len(captured_logs) != 1:
+        print("ERROR: Test 8 failed - expected a single explanatory log line, got {}".format(captured_logs))
+        failed = True
+    if captured_logs and "predbat.rates" not in captured_logs[0]:
+        print("ERROR: Test 8 failed - the log line should name the entity, got {}".format(captured_logs[0]))
+        failed = True
+
+    # Test 9: A required fetch (the default) still reports the missing history, so a genuinely
+    # misconfigured import/export sensor is still surfaced to the user.
+    print("Test 9: Required fetch of an entity with no recorded history still warns")
+
+    captured_logs.clear()
+    status_calls.clear()
+
+    result = my_predbat.minute_data_import_export(max_days_previous=2, now_utc=now, key="sensor.import_missing", scale=1.0, required_unit="kWh")
+
+    if not any("Unable to fetch history" in message for message in captured_logs):
+        print("ERROR: Test 9 failed - a required entity with no history should still be reported, got {}".format(captured_logs))
+        failed = True
+
+    my_predbat.log = original_log
+    my_predbat.record_status = original_record_status
 
     # Restore original get_history_wrapper
     my_predbat.get_history_wrapper = original_get_history

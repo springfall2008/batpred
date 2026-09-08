@@ -98,7 +98,7 @@ class PredbatMetrics:
         self.charge_rate_kw = _gauge("predbat_charge_rate_kw", "Current max charge rate in kW")
         self.discharge_rate_kw = _gauge("predbat_discharge_rate_kw", "Current max discharge rate in kW")
         self.inverter_register_writes_total = _counter("predbat_inverter_register_writes_total", "Total inverter register writes")
-        self.grid_power = _gauge("predbat_grid_power", "Current grid power in kW (positive for import, negative for export)")
+        self.grid_power = _gauge("predbat_grid_power", "Current grid power in kW (negative for import, positive for export)")
         self.load_power = _gauge("predbat_load_power", "Current load power in kW")
         self.pv_power = _gauge("predbat_pv_power", "Current PV power in kW")
         self.battery_power = _gauge("predbat_battery_power", "Current battery power in kW (positive for discharge, negative for charge)")
@@ -108,7 +108,8 @@ class PredbatMetrics:
         self.import_today_kwh = _gauge("predbat_import_today_kwh", "Import energy today in kWh")
         self.export_today_kwh = _gauge("predbat_export_today_kwh", "Export energy today in kWh")
         self.pv_today_kwh = _gauge("predbat_pv_today_kwh", "PV energy today in kWh")
-        self.data_age_days = _gauge("predbat_data_age_days", "Age of load data in days")
+        self.data_age_days = _gauge("predbat_data_age_days", "Days of load history successfully retrieved (depth, not staleness)")
+        self.data_age_required_days = _gauge("predbat_data_age_required_days", "Days of load history required by the configured days_previous")
 
         # -- Cost & savings ----------------------------------------------------
         self.cost_today = _gauge("predbat_cost_today", "Cost today in currency units")
@@ -131,6 +132,14 @@ class PredbatMetrics:
         self.pv_scaling_worst = _gauge("predbat_pv_scaling_worst", "PV calibration worst-day scaling factor")
         self.pv_scaling_best = _gauge("predbat_pv_scaling_best", "PV calibration best-day scaling factor")
         self.pv_scaling_total = _gauge("predbat_pv_scaling_total", "PV calibration total adjustment factor")
+
+        # -- Control ownership ledger -------------------------------------------
+        self.control_conflicts_24h = _gauge("predbat_control_conflicts_24h", "Control values changed outside Predbat in the last 24h")
+        self.control_conflicts_sustained_total = _gauge("predbat_control_conflicts_sustained_total", "Number of controls with repeated (sustained) external interference")
+        # Plain data, not a Prometheus metric - the dashboard needs the actual events and control
+        # names, not just a count, and Prometheus gauges cannot carry that shape.
+        self.control_conflicts_events = []
+        self.control_conflicts_sustained_controls = []
 
 
     def to_dict(self):
@@ -212,6 +221,7 @@ class PredbatMetrics:
             "export_today_kwh": _val(self.export_today_kwh),
             "pv_today_kwh": _val(self.pv_today_kwh),
             "data_age_days": _val(self.data_age_days),
+            "data_age_required_days": _val(self.data_age_required_days),
             # Currency symbol
             "currency_symbol": self.currency_symbol,
             # Cost
@@ -228,6 +238,11 @@ class PredbatMetrics:
             "pv_scaling_worst": _val(self.pv_scaling_worst),
             "pv_scaling_best": _val(self.pv_scaling_best),
             "pv_scaling_total": _val(self.pv_scaling_total),
+            # Control ownership ledger
+            "control_conflicts_24h": _val(self.control_conflicts_24h),
+            "control_conflicts_sustained_total": _val(self.control_conflicts_sustained_total),
+            "control_conflicts_events": self.control_conflicts_events,
+            "control_conflicts_sustained_controls": self.control_conflicts_sustained_controls,
         }
 
 
