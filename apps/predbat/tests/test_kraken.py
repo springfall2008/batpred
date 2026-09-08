@@ -1716,6 +1716,140 @@ def test_publish_dispatch_sensors_active_state_and_wiring():
     assert captured["num_cars"] == 1
 
 
+def _kraken_ready_to_run(api):
+    """Stub out the tariff/rate work so run() reaches the dispatch section and nothing else."""
+    from datetime import datetime
+
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()  # fresh → no tariff work / device re-discovery
+    api.rates_fetched_at = datetime.now()  # fresh → no rate work
+    api.async_find_tariffs = AsyncMock(return_value=None)
+    api.async_discover_smart_devices = AsyncMock()
+    api.async_fetch_dispatches = AsyncMock()
+    api.dashboard_item = MagicMock()
+    api.update_success_timestamp = MagicMock()
+    api.save_kraken_cache = AsyncMock()
+    return api
+
+
+def test_run_releases_the_num_cars_claim_when_the_devices_go():
+    """The release must be driven from run(), because that is what gates the publish method.
+
+    run() only calls _publish_dispatch_sensors while the device map is non-empty, so a release
+    living solely inside that method could never fire on the transition it exists for: the car is
+    unenrolled, the device map empties, and the num_cars floor claimed while it was enrolled holds
+    a phantom car up for the rest of the run.
+    """
+    api = _kraken_ready_to_run(make_kraken_api())
+    args = {}
+    api.set_arg = MagicMock(side_effect=lambda k, v: args.pop(k, None) if v is None else args.__setitem__(k, v))
+    api.get_arg = MagicMock(side_effect=lambda k, default=None, **kwargs: args.get(k, default))
+    registry = MagicMock()
+    api.base.charger_registry = registry
+
+    # Cycle one: one enrolled device, wired and claimed.
+    api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": []}}
+    api.dispatch_fetched_at = None  # dispatch due
+    assert asyncio.run(api.run(120, False)) is True
+
+    slot_entity = api.get_entity_name("binary_sensor", "intelligent_dispatch_1")
+    assert args["octopus_intelligent_slot"] == [slot_entity]
+    registry.set_external_num_cars.assert_called_with("kraken", 1)
+
+    # Cycle two: the car has unenrolled, so the device map is empty.
+    registry.set_external_num_cars.reset_mock()
+    api.intelligent_devices = {}
+
+    assert asyncio.run(api.run(120, False)) is True
+
+    registry.set_external_num_cars.assert_called_once_with("kraken", 0)
+    assert "octopus_intelligent_slot" not in args, "the wiring pointed at a device that no longer exists"
+
+    # Cycle three: still no devices. The release is a transition, not something to redo forever.
+    registry.set_external_num_cars.reset_mock()
+
+    assert asyncio.run(api.run(120, False)) is True
+
+    registry.set_external_num_cars.assert_not_called()
+
+
+def test_run_with_no_devices_never_wired_releases_nothing():
+    """The common no-EV account must not touch the registry or the args at all.
+
+    Most Kraken accounts have never had a SmartFlex device, so this path runs every cycle for
+    them. Releasing a claim that was never made would write num_cars where the component had no
+    business writing one.
+    """
+    api = _kraken_ready_to_run(make_kraken_api())
+    api.intelligent_devices = {}
+    api.set_arg = MagicMock()
+    api.get_arg = MagicMock(return_value=0)
+    registry = MagicMock()
+    api.base.charger_registry = registry
+
+    assert asyncio.run(api.run(120, False)) is True
+
+    registry.set_external_num_cars.assert_not_called()
+    assert not any(call.args[0] == "octopus_intelligent_slot" for call in api.set_arg.call_args_list)
+
+
+def test_release_leaves_the_slot_wiring_alone_when_something_else_owns_it():
+    """Octopus wires the same key for its own Intelligent devices - do not blank its wiring.
+
+    The num_cars claim is still released either way: that one is keyed by source name, so
+    dropping ours cannot disturb anyone else's.
+    """
+    api = _kraken_ready_to_run(make_kraken_api())
+    args = {}
+    api.set_arg = MagicMock(side_effect=lambda k, v: args.pop(k, None) if v is None else args.__setitem__(k, v))
+    api.get_arg = MagicMock(side_effect=lambda k, default=None, **kwargs: args.get(k, default))
+    registry = MagicMock()
+    api.base.charger_registry = registry
+
+    api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": []}}
+    api.dispatch_fetched_at = None
+    asyncio.run(api.run(120, False))
+
+    # Something else takes the key over before the devices go away.
+    octopus_wiring = ["binary_sensor.octopus_energy_abc_intelligent_dispatching"]
+    args["octopus_intelligent_slot"] = octopus_wiring
+    registry.set_external_num_cars.reset_mock()
+    api.intelligent_devices = {}
+
+    asyncio.run(api.run(120, False))
+
+    assert args["octopus_intelligent_slot"] == octopus_wiring
+    registry.set_external_num_cars.assert_called_once_with("kraken", 0)
+
+
+def test_publish_dispatch_sensors_releases_the_num_cars_claim_when_called_directly():
+    """The publish method's own empty-device guard still releases, for a direct caller.
+
+    run() is the real gate (see test_run_releases_the_num_cars_claim_when_the_devices_go); this
+    covers the method not leaving a stale claim standing if it is ever called on its own.
+    """
+    api = make_kraken_api()
+    api.dashboard_item = MagicMock()
+    args = {}
+    api.set_arg = MagicMock(side_effect=lambda k, v: args.pop(k, None) if v is None else args.__setitem__(k, v))
+    api.get_arg = MagicMock(side_effect=lambda k, default=None, **kwargs: args.get(k, default))
+    registry = MagicMock()
+    api.base.charger_registry = registry
+
+    api.intelligent_devices = {"aaa-bbb-12345": {"device_id": "aaa-bbb-12345", "planned_dispatches": [], "completed_dispatches": []}}
+    api._publish_dispatch_sensors()
+    assert args["octopus_intelligent_slot"] == [api.get_entity_name("binary_sensor", "intelligent_dispatch_12345")]
+
+    registry.set_external_num_cars.reset_mock()
+    api.intelligent_devices = {}
+
+    api._publish_dispatch_sensors()
+
+    registry.set_external_num_cars.assert_called_once_with("kraken", 0)
+    assert "octopus_intelligent_slot" not in args
+
+
 def test_run_fetches_and_wires_dispatches():
     """On a dispatch-due cycle, run() fetches dispatches and wires octopus_intelligent_slot."""
     from datetime import datetime
