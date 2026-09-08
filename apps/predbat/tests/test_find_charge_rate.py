@@ -74,6 +74,10 @@ def test_find_charge_rate_pv_overlap(my_predbat):
 
     Throttling the charge rate while the sun is shining stops PV going into the battery, the surplus
     is exported cheaply and the target is then made up with grid import, which increases the plan cost.
+
+    set_charge_low_power_solar_full_rate turns that bypass off for a window where the trade does not
+    hold - a free or very cheap import period, where the spilled PV costs nothing to buy back and the
+    throttled rate is wanted anyway (#4975).
     """
     failed = 0
 
@@ -125,6 +129,23 @@ def test_find_charge_rate_pv_overlap(my_predbat):
     print("With PV - Best_rate {} Best_rate_real {}".format(sun_rate * MINUTE_WATT, sun_rate_real * MINUTE_WATT))
     if sun_rate * MINUTE_WATT != max_rate:
         print("**** ERROR: PV production in the window should force the max rate {}W, got {}W ****".format(max_rate, sun_rate * MINUTE_WATT))
+        failed = 1
+
+    # With the full rate in solar switch off, the same PV must not force the max rate any more - the
+    # window is throttled on its own charge_left / minutes_left just as a dark one would be (#4975)
+    kwargs_no_full_rate = dict(kwargs)
+    kwargs_no_full_rate["solar_full_rate"] = False
+    opt_out_rate, opt_out_rate_real = find_charge_rate(*args, pv_window_kwh=2.0, **kwargs_no_full_rate)
+    print("With PV, full rate in solar off - Best_rate {} Best_rate_real {}".format(opt_out_rate * MINUTE_WATT, opt_out_rate_real * MINUTE_WATT))
+    if opt_out_rate != dark_rate:
+        print("**** ERROR: with solar_full_rate off the PV should not change the rate, expected {}W got {}W ****".format(dark_rate * MINUTE_WATT, opt_out_rate * MINUTE_WATT))
+        failed = 1
+
+    # The switch only has meaning when there is PV to abandon low power for - with no PV in the window
+    # it must make no difference either way
+    no_pv_opt_out_rate, _ = find_charge_rate(*args, **kwargs_no_full_rate)
+    if no_pv_opt_out_rate != dark_rate:
+        print("**** ERROR: with no PV solar_full_rate should not change the rate, expected {}W got {}W ****".format(dark_rate * MINUTE_WATT, no_pv_opt_out_rate * MINUTE_WATT))
         failed = 1
 
     return failed
