@@ -124,6 +124,18 @@ POLL_SECONDS = 300
 OLLAMA_MODEL = None
 OLLAMA_REVIEW_MODEL = None
 OLLAMA_BASE_URL = "http://localhost:11434"
+# Real context window per Ollama model, in tokens. Claude Code does not recognise these
+# model names, so it assumes 200k and auto-compacts to fit - and every compaction costs
+# turns, which is a plausible route to the "Reached max turns (150)" that failed the #4992
+# cleanup on 2026-09-07. Telling it the real window stops the premature compaction.
+#
+# Keyed by model rather than set as one constant on purpose: overstating a window is worse
+# than understating it. Too low only compacts early; too high lets a request run past what
+# the model will accept and fail outright. A model absent from this map keeps Claude Code's
+# 200k assumption, which is wrong but safe - add an entry when you know the real number.
+OLLAMA_CONTEXT_TOKENS = {
+    "glm-5.3-flash:cloud": "1000000",
+}
 
 EDIT_SCOPE = f"//{CLONE_DIR.relative_to(CLONE_DIR.anchor).as_posix()}/**"
 SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to(SCRATCH_DIR.anchor).as_posix()}/**"
@@ -693,7 +705,7 @@ def claude_env(review_only=False):
     the daemon's own environment unchanged) unless this invocation is using an
     Ollama model, in which case add the Anthropic-compatible overrides Ollama's
     Claude Code integration documents, so the CLI talks to the local Ollama server
-    instead of Anthropic's API.
+    instead of Anthropic's API, plus the model's real context window where we know it.
     """
     model = effective_ollama_model(review_only)
     if not model:
@@ -702,6 +714,11 @@ def claude_env(review_only=False):
     env["ANTHROPIC_BASE_URL"] = OLLAMA_BASE_URL
     env["ANTHROPIC_AUTH_TOKEN"] = "ollama"
     env["ANTHROPIC_API_KEY"] = ""
+    context_tokens = OLLAMA_CONTEXT_TOKENS.get(model)
+    if context_tokens:
+        # setdefault, not assignment: an operator who has exported their own value for a
+        # one-off run keeps it rather than having it silently overridden here.
+        env.setdefault("CLAUDE_CODE_MAX_CONTEXT_TOKENS", context_tokens)
     return env
 
 
