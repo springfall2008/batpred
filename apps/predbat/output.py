@@ -2650,9 +2650,15 @@ class Output:
         if had_errors:
             error_count += 1
 
+        # Home Assistant rejects entity states over 255 characters, and this message is the state
+        # of the status sensor. Clamp what is written as the state - the full text survives in
+        # current_status, the log line and the notification, and attributes have no such cap.
+        # Motivated by the window warnings listing every configured inverter component (#4990):
+        # three or more of those push past 255, so the dashboard would keep a stale status on
+        # exactly the cycles the warning matters.
         self.dashboard_item(
             self.prefix + ".status",
-            state=message,
+            state=message[:255],
             attributes={
                 "friendly_name": "Status",
                 "detail": extra,
