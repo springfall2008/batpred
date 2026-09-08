@@ -792,6 +792,57 @@ class SyncRepoTests(unittest.TestCase):
         self.assertLess(calls.index(checkout_call), calls.index(reset_call))
 
 
+class OllamaContextWindowTests(unittest.TestCase):
+    """Claude Code does not recognise the Ollama model names and assumes a 200k window,
+    auto-compacting to fit. Each compaction costs turns, which is a plausible route to the
+    "Reached max turns (150)" that failed the #4992 cleanup."""
+
+    def setUp(self):
+        """Start from no Ollama model, regardless of test order, and a clean environment."""
+        for name in ("OLLAMA_MODEL", "OLLAMA_REVIEW_MODEL"):
+            patcher = patch.object(triage_daemon, name, None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch.dict(triage_daemon.os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        triage_daemon.os.environ.pop("CLAUDE_CODE_MAX_CONTEXT_TOKENS", None)
+
+    def test_a_known_model_gets_its_real_window(self):
+        """The whole point: stop compacting a 1M-token model as though it held 200k."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"):
+            env = triage_daemon.claude_env()
+        self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1000000")
+
+    def test_an_unknown_model_is_left_alone(self):
+        """Overstating a window is worse than understating it: too low only compacts early,
+        too high lets a request run past what the model accepts and fail outright. An
+        unlisted model keeps Claude Code's own assumption rather than inheriting 1M."""
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "some-small-model:7b"):
+            env = triage_daemon.claude_env()
+        self.assertNotIn("CLAUDE_CODE_MAX_CONTEXT_TOKENS", env)
+
+    def test_an_operator_override_wins(self):
+        """A value exported for a one-off run must not be silently replaced."""
+        triage_daemon.os.environ["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = "250000"
+        self.addCleanup(triage_daemon.os.environ.pop, "CLAUDE_CODE_MAX_CONTEXT_TOKENS", None)
+        with patch.object(triage_daemon, "OLLAMA_MODEL", "glm-5.3-flash:cloud"):
+            env = triage_daemon.claude_env()
+        self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "250000")
+
+    def test_no_window_is_set_without_an_ollama_model(self):
+        """The default Claude route inherits the daemon's environment untouched - claude_env()
+        returns None there, so there is nothing to set a window on."""
+        self.assertIsNone(triage_daemon.claude_env())
+
+    def test_the_review_only_route_gets_it_too(self):
+        """--ollama_review is how the daemon is actually run, so the window has to follow that
+        path as well as --ollama."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            env = triage_daemon.claude_env(review_only=True)
+        self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1000000")
+
+
 class EffectiveOllamaModelTests(unittest.TestCase):
     """Tests for effective_ollama_model(), new - the priority logic behind --ollama
     (every claude invocation) vs --ollama_review (review-only invocations)."""
