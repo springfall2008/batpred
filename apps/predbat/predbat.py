@@ -312,6 +312,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         self.watch_list = []
         self.restart_active = False
+        self.clock_skew_warn_time = {}  # Per-inverter time the moderate clock-skew warning was last logged, so it repeats hourly rather than every cycle
         self.control_ledger = ControlLedger()
         self.control_ledger_restored = False
         self.inverter_needs_reset = False
