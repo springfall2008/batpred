@@ -72,6 +72,7 @@ cdn
 Cerbo
 cexxxx
 ceyyyy
+CGNAT
 Chae
 Chaf
 chargedischarge
@@ -127,6 +128,7 @@ dateutil
 dayname
 daynumber
 daysymbol
+deadband
 deadbeefdeadbeef
 dedup
 dedupe
@@ -150,6 +152,7 @@ Dise
 Disf
 diverter
 dlimit
+dlopen
 dnoregion
 docstrings
 dstamp
@@ -192,6 +195,7 @@ ESSAPI
 etoday
 etok
 euids
+EVAC
 EVDC
 evergen
 evilspringfall
@@ -233,6 +237,7 @@ geserial
 geseriale
 getaffinity
 getall
+getattr
 getrusage
 Ginlong
 gitnexus
@@ -324,6 +329,7 @@ ladybugdb
 larr
 libbi
 libc
+libyaml
 LIFEPO
 linebreak
 linestyle
@@ -339,6 +345,8 @@ lookback
 lpignore
 lstrip
 luxpower
+malloc
+mallopt
 markdownlint
 matplotlib
 maximise
@@ -426,6 +434,7 @@ ollama
 onblur
 onchange
 oncharge
+oneline
 onfocus
 oninput
 onmouseout
@@ -433,6 +442,7 @@ onmouseover
 openapi
 openrouter
 openweathermap
+Opticaster
 overclaim
 overfitting
 oversizing

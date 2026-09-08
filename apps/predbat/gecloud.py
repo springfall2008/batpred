@@ -19,6 +19,7 @@ from datetime import timedelta, datetime, timezone
 from utils import str2time, dp1, dp2, dp4, parse_car_plan_windows, in_car_plan_window
 from predbat_metrics import record_api_call
 import asyncio
+import math
 import json
 import random
 from component_base import ComponentBase
@@ -36,6 +37,7 @@ GE_API_INVERTER_SETTINGS = "inverter/{inverter_serial_number}/settings"
 GE_API_INVERTER_READ_SETTING = "inverter/{inverter_serial_number}/settings/{setting_id}/read"
 GE_API_INVERTER_WRITE_SETTING = "inverter/{inverter_serial_number}/settings/{setting_id}/write"
 GE_API_DEVICES = "communication-device"
+GE_API_SITE = "site/{uuid}"
 GE_API_DEVICE_INFO = "communication-device"
 GE_API_SMART_DEVICES = "smart-device"
 GE_API_SMART_DEVICE = "smart-device/{uuid}"
@@ -54,6 +56,11 @@ GE_REGISTER_BATTERY_CUTOFF_LIMIT = 75
 ACCOUNT_MAX_AGE_MINUTES = 24 * 60
 # How long to wait before retrying a failed account fetch
 ACCOUNT_RETRY_MINUTES = 30
+
+# How long the cached site details (including its export limit) stay valid for before they are fetched again
+SITE_MAX_AGE_MINUTES = 12 * 60
+# How long to wait before retrying a failed site fetch
+SITE_RETRY_MINUTES = 30
 
 # 0	Current.Export	Instantaneous current flow from EV
 # 1	Current.Import	Instantaneous current flow to EV
@@ -306,6 +313,7 @@ attribute_table = {
     "grid_export_total": {"friendly_name": "Grid Export Total", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
     "max_charge_rate": {"friendly_name": "Max Charge Rate", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power"},
     "max_inverter_rate": {"friendly_name": "Max Inverter Rate", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power"},
+    "export_limit": {"friendly_name": "Export Limit", "icon": "mdi:transmission-tower-export", "unit_of_measurement": "W", "device_class": "power"},
     "battery_size": {"friendly_name": "Battery Size", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
     "battery_dod": {"friendly_name": "Battery Depth of Discharge", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
     "battery_soh": {"friendly_name": "Battery State of Health", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
@@ -326,6 +334,70 @@ def regname_to_ha(name):
     """
     name = name.lower().replace(" ", "_").replace("%", "percent").replace("-", "_")
     return name
+
+
+def coerce_watts(value):
+    """Return a non-negative power in watts taken from an API value, or None when it is not one."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            value = float(value.strip())
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        return None
+    return float(value)
+
+
+def parse_site_export_limit(limits):
+    """
+    Read a site's enforced grid export power limit, in watts, from the GivEnergy site metadata.
+
+    The published API schema says a site carries import/export limits but not how one is
+    encoded, so every shape GivEnergy plausibly returns is accepted - a bare number, a numeric
+    string, or a nested object - and anything else is reported as not understood rather than
+    guessed at, leaving the configured/default limit in place.
+
+    The object's "enabled" flag separates an enforced curtailment from a merely declared
+    connection capacity, and only an enforced one is applied - confirmed across a fleet survey.
+    A site reports its supply rating the same way it reports a limit, so
+    {"import": {"enabled": False, "power": {"watts": 46000, "amps": 200}},
+     "export": {"enabled": True, "power": {"watts": 4500, "amps": 19.6}}} is a 200A supply whose
+    export really is curtailed to 4.5kW, while a disabled export at 6kW is the connection's
+    declared capacity and no restriction on Predbat. A site with no limit at all reports a null
+    import/export, which is what the published examples show.
+
+    An enforced zero is a real zero-export connection and is applied as one.
+
+    Returns:
+        A (watts, reason) tuple. watts is a float when an enforced limit was found and None
+        otherwise, with reason saying why for the log.
+    """
+    if not isinstance(limits, dict):
+        return None, "the site data carries no limits"
+
+    export = limits.get("export", None)
+    if export is None:
+        return None, "the site has no export limit"
+
+    if isinstance(export, dict):
+        enabled = export.get("enabled", True)
+        if isinstance(enabled, str):
+            enabled = enabled.strip().lower() not in ("false", "0", "no", "off", "")
+        if not enabled:
+            return None, "the site export limit is not enforced, so it states the connection capacity rather than a curtailment"
+        power = export.get("power", None)
+        candidates = [power.get("watts", None), power.get("value", None)] if isinstance(power, dict) else [power]
+        candidates += [export.get("watts", None), export.get("value", None), export.get("limit", None)]
+    else:
+        candidates = [export]
+
+    for candidate in candidates:
+        watts = coerce_watts(candidate)
+        if watts is not None:
+            return watts, ""
+    return None, "the site export limit {} was not understood".format(export)
 
 
 def merge_non_null(fresh, previous):
@@ -409,6 +481,14 @@ class GECloudDirect(ComponentBase):
         self.account_timezone_name = None
         self.account_stamp = None
         self.account_fetch_stamp = None
+
+        # Site details, including the grid export limit, cached in storage between restarts
+        self.site = {}
+        self.site_id = None
+        self.site_export_limit = None
+        self.site_inverters = []
+        self.site_stamp = None
+        self.site_fetch_stamp = None
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -723,6 +803,21 @@ class GECloudDirect(ComponentBase):
             self.dashboard_item(entity_name + "_model", model, attributes=model_attr, app="gecloud")
             self.dashboard_item(entity_name + "_max_inverter_rate", max_inverter_rate, attributes=attribute_table.get("max_inverter_rate", {}), app="gecloud")
             self.dashboard_item(entity_name + "_last_updated", last_updated, attributes=attribute_table.get("time", {}), app="gecloud")
+
+    async def publish_site_export_limit(self, device):
+        """
+        Publish this inverter's share of the site grid export limit.
+
+        Predbat sums export_limit across its logical inverters, so the site budget is divided between
+        them - including the single logical controller a Gateway presents. Nothing is published until
+        the site has actually reported an enabled limit, so the sensor never invents one.
+        """
+        if self.site_export_limit is None or device not in self.site_inverters:
+            return
+
+        share = self.site_export_limit / len(self.site_inverters)
+        entity_name = "sensor.{}_gecloud_{}_export_limit".format(self.prefix, device).lower()
+        self.dashboard_item(entity_name, dp2(share), attributes=attribute_table.get("export_limit", {}), app="gecloud")
 
     def evc_car_connected(self, status):
         """Is a car plugged into the charger, judged from its status string.
@@ -1140,15 +1235,10 @@ class GECloudDirect(ComponentBase):
             self.log("GECloud: Warn: No battery devices found, cannot auto-configure")
             return
 
-        batteries = devices["battery"]
         batteries_real = devices["battery"]
-        num_inverters = len(batteries)
         pvs = devices.get("pv", [])
-
-        if not devices["ems"] and devices["gateway"] and len(batteries) > 1:
-            # Only use gateway as main control if we have multiple batteries
-            num_inverters = 1
-            batteries = [devices["gateway"]]
+        # Only use the gateway as main control if we have multiple batteries
+        batteries, num_inverters = self.logical_inverters(devices)
 
         # Do we have a charge/discharge power percentage setting?
         has_charge_rate = False
@@ -1238,6 +1328,15 @@ class GECloudDirect(ComponentBase):
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_gecloud_{device}_battery_temperature" for device in batteries])
         self.set_arg("battery_scaling", [f"sensor.{self.prefix}_gecloud_{device}_battery_dod_soh" for device in batteries])
         self.set_arg("inverter_limit", [f"sensor.{self.prefix}_gecloud_{device}_max_inverter_rate" for device in batteries])
+
+        # The site's grid export limit, published per inverter as its share of the site total. An
+        # export_limit the user wrote in apps.yaml wins, including a zero one, which set_arg_auto
+        # reports for us, and a site with no enabled limit leaves Predbat's own default in place.
+        if self.site_export_limit is not None:
+            self.set_arg_auto("export_limit", [f"sensor.{self.prefix}_gecloud_{device}_export_limit" for device in batteries], overwrite=False)
+            self.log("GECloud: Auto-configured export_limit from site {}: {}W shared across {} logical inverter(s)".format(self.site_id, self.site_export_limit, num_inverters))
+        elif self.get_arg("export_limit", default=None, indirect=False) is None:
+            self.log("GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating")
 
         pv_devices = batteries + pvs if self.get_arg("ge_cloud_automatic_split_pv", default=False) else batteries
         self.set_arg("pv_today", [f"sensor.{self.prefix}_gecloud_{device}_solar_total" for device in pv_devices])
@@ -1623,6 +1722,9 @@ class GECloudDirect(ComponentBase):
                 else:
                     self.log("GECloud: No valid settings found in storage cache, will poll")
 
+        # The site details change rarely, so they are cached in storage and only re-fetched every 12 hours
+        await self.update_site(first)
+
         if first or (seconds % 120 == 0):
             inverter_auth_denied = False
             for device in self.device_list:
@@ -1636,6 +1738,7 @@ class GECloudDirect(ComponentBase):
                 await self.publish_meter(device, self.meter[device])
                 self.info[device] = await self.async_get_device_info(device, self.info.get(device, {}))
                 await self.publish_info(device, self.info[device])
+                await self.publish_site_export_limit(device)
 
             # Surface a clear, correct status when the GivEnergy cloud API denied access to the core
             # inverter data, rather than letting stale data be misdiagnosed downstream (e.g. as
@@ -1808,10 +1911,12 @@ class GECloudDirect(ComponentBase):
             self.log("GECloud: Warn: Failed to write setting id {}, value {}".format(setting_id, value))
         return data
 
-    async def async_get_inverter_settings(self, serial, first=False, previous={}):
+    async def async_get_inverter_settings(self, serial, first=False, previous=None):
         """
         Get settings for account
         """
+        if previous is None:
+            previous = {}
         if serial not in self.register_list:
             self.register_list[serial] = await self.async_get_inverter_data_retry(GE_API_INVERTER_SETTINGS, serial)
 
@@ -1900,10 +2005,12 @@ class GECloudDirect(ComponentBase):
             return point
         return {}
 
-    async def async_get_evc_sessions(self, uuid, previous=[]):
+    async def async_get_evc_sessions(self, uuid, previous=None):
         """
         Get list of EVC sessions
         """
+        if previous is None:
+            previous = []
         now = self.now_utc_exact.astimezone(timezone.utc)
         start = now - timedelta(hours=24)
         start_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1914,10 +2021,12 @@ class GECloudDirect(ComponentBase):
             return data
         return previous
 
-    async def async_get_evc_device_data(self, uuid, previous={}):
+    async def async_get_evc_device_data(self, uuid, previous=None):
         """
         Get smart device data points
         """
+        if previous is None:
+            previous = {}
         now = self.now_utc_exact.astimezone(timezone.utc)
         start = now - timedelta(minutes=10)
         start_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1990,10 +2099,12 @@ class GECloudDirect(ComponentBase):
 
         return command_info
 
-    async def async_get_evc_device(self, uuid, previous={}):
+    async def async_get_evc_device(self, uuid, previous=None):
         """
         Get EVC device
         """
+        if previous is None:
+            previous = {}
         device = await self.async_get_inverter_data_retry(GE_API_EVC_DEVICE, uuid=uuid)
         self.log("GECloud: Device {}".format(device))
         if device:
@@ -2007,10 +2118,12 @@ class GECloudDirect(ComponentBase):
             return {"uuid": uuid, "alias": alias, "serial_number": serial_number, "status": status, "online": online, "type": type, "went_offline_at": went_offline_at}
         return previous
 
-    async def async_get_smart_devices(self, previous=[]):
+    async def async_get_smart_devices(self, previous=None):
         """
         Get list of smart devices
         """
+        if previous is None:
+            previous = []
         device_list = await self.async_get_inverter_data_retry(GE_API_SMART_DEVICES)
         devices = previous
         if device_list is not None:
@@ -2023,10 +2136,12 @@ class GECloudDirect(ComponentBase):
                 devices.append({"uuid": uuid, "alias": alias, "local_key": local_key})
         return devices
 
-    async def async_get_evc_devices(self, previous=[]):
+    async def async_get_evc_devices(self, previous=None):
         """
         Get list of smart devices
         """
+        if previous is None:
+            previous = []
         device_list = await self.async_get_inverter_data_retry(GE_API_EVC_DEVICES)
         devices = previous
         if device_list is not None:
@@ -2038,10 +2153,12 @@ class GECloudDirect(ComponentBase):
                 devices.append({"uuid": uuid, "alias": alias})
         return devices
 
-    async def async_get_device_info(self, serial, previous={}):
+    async def async_get_device_info(self, serial, previous=None):
         """
         Get the device info
         """
+        if previous is None:
+            previous = {}
         device_list = await self.async_get_inverter_data_retry(GE_API_DEVICE_INFO)
         if device_list is not None:
             for device in device_list:
@@ -2126,6 +2243,134 @@ class GECloudDirect(ComponentBase):
         self.set_account_timezone(account)
         return account
 
+    def logical_inverters(self, devices):
+        """
+        Work out which serials Predbat drives as inverters, and how many logical inverters they form.
+
+        A Gateway in front of more than one battery is a single logical inverter, which is what the
+        automatic configuration wires up and what any whole-site limit has to be divided between.
+        """
+        batteries = devices.get("battery", []) or []
+        if not devices.get("ems", None) and devices.get("gateway", None) and len(batteries) > 1:
+            return [devices["gateway"]], 1
+        return batteries, len(batteries)
+
+    def site_id_from_devices(self, devices):
+        """
+        Return the one site all the contributing inverters belong to, or None when that is not clear.
+
+        Combining unrelated sites would hide their individual limits, so a mapping that is missing or
+        that spans more than one site is treated as unknown rather than picking one of them.
+        """
+        serials = (devices.get("battery", []) or []) + (devices.get("pv", []) or [])
+        site_ids = devices.get("site_ids", {}) or {}
+        sites = {site_ids.get(serial, None) for serial in serials}
+        if not serials or None in sites or len(sites) != 1:
+            return None
+        return sites.pop()
+
+    async def async_get_site(self, site_id):
+        """
+        Get one site's details from GE Cloud, including its import and export limits.
+
+        Reading a site is an optional extra permission on the API key, so a denial must not overwrite
+        the authentication state of the inverter endpoints that drive optimisation and health reporting.
+        """
+        inverter_auth_failed = self.api_auth_failed
+        try:
+            site = await self.async_get_inverter_data_retry(GE_API_SITE, uuid=site_id)
+        finally:
+            self.api_auth_failed = inverter_auth_failed
+        if not isinstance(site, dict) or not site:
+            self.log("GECloud: Site details unavailable for site {}; the API key may not have site read permission".format(site_id))
+            return None
+        return site
+
+    def apply_site(self, site):
+        """Record a site payload and the grid export limit read from it."""
+        self.site = site
+        limits = site.get("limits", None)
+        watts, reason = parse_site_export_limit(limits)
+        self.site_export_limit = watts
+        if watts is None:
+            self.log("GECloud: Site {} export limit not applied: {} (raw limits {}); retaining the configured/default export limit".format(self.site_id, reason, limits))
+        else:
+            self.log("GECloud: Site {} reports a {}W grid export limit (raw limits {})".format(self.site_id, watts, limits))
+
+    async def load_site_from_storage(self):
+        """
+        Restore the site details cached by a previous run so a restart does not have to fetch them again.
+        """
+        if not self.storage:
+            return
+
+        cached_site = await self.storage.load("gecloud", "site")
+        if not isinstance(cached_site, dict) or not cached_site:
+            self.log("GECloud: No valid site details found in storage cache, will fetch")
+            return
+
+        cached_id = cached_site.get("id", None)
+        if cached_id is not None and self.site_id is not None and cached_id != self.site_id:
+            self.log("GECloud: Storage cache holds site {} but the inverters are on site {}, will fetch".format(cached_id, self.site_id))
+            return
+
+        site_age = await self.storage.age("gecloud", "site")
+
+        # Keep the cached details even when stale so that a failed fetch still leaves something usable
+        self.apply_site(cached_site)
+
+        if site_age is not None and site_age < SITE_MAX_AGE_MINUTES:
+            self.site_stamp = self.now_utc_exact - timedelta(minutes=site_age)
+            self.log("GECloud: Restored site details from storage cache (age {:.1f} minutes)".format(site_age))
+        else:
+            self.log("GECloud: Storage cache for the site details is stale (age {}), will re-fetch".format("{:.1f} minutes".format(site_age) if site_age is not None else "unknown"))
+
+    async def update_site(self, first):
+        """
+        Keep the site details, and the grid export limit taken from them, up to date.
+
+        On startup they are restored from storage and they are only re-fetched from the API every
+        SITE_MAX_AGE_MINUTES, so a restart normally costs no extra API call.
+        """
+        self.site_inverters, _ = self.logical_inverters(self.devices_dict)
+
+        site_id = self.site_id_from_devices(self.devices_dict)
+        if site_id is None:
+            if first:
+                self.log("GECloud: Site details not read: the inverter site mapping is missing or spans multiple sites; set export_limit explicitly if your grid connection is capped")
+            return
+
+        if site_id != self.site_id:
+            # A different site invalidates whatever we were holding for the previous one
+            self.site_id = site_id
+            self.site_stamp = None
+            self.site_fetch_stamp = None
+
+        if first:
+            await self.load_site_from_storage()
+
+        now_utc = self.now_utc_exact
+
+        # Nothing to do while the details we hold are still within their lifetime
+        if self.site_stamp is not None and (now_utc - self.site_stamp) < timedelta(minutes=SITE_MAX_AGE_MINUTES):
+            return
+
+        # A failed fetch retries after a short delay rather than a full retention period, but not on
+        # every run() tick, so a sustained API outage does not turn into a poll loop
+        if self.site_fetch_stamp is not None and (now_utc - self.site_fetch_stamp) < timedelta(minutes=SITE_RETRY_MINUTES):
+            return
+
+        self.site_fetch_stamp = now_utc
+        site = await self.async_get_site(site_id)
+        if not site:
+            return
+
+        # Only treat the details as fresh once we actually have them
+        self.site_stamp = now_utc
+        self.apply_site(site)
+        if self.storage:
+            await self.storage.save("gecloud", "site", site, format="json", expiry=None)
+
     async def async_get_devices(self):
         """
         Get list of inverters from GE Cloud.
@@ -2170,7 +2415,7 @@ class GECloudDirect(ComponentBase):
         """
 
         device_list = await self.async_get_inverter_data_retry(GE_API_DEVICES)
-        result = {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": []}
+        result = {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": [], "site_ids": {}}
         if device_list is None:
             return result
 
@@ -2196,6 +2441,12 @@ class GECloudDirect(ComponentBase):
                             continue
                     except (ValueError, TypeError):
                         self.log("GECloud: Warn: Could not parse last_updated {} for device {}, skipping age check".format(last_updated, serial))
+                site_id = device.get("site_id", None)
+                if site_id is None:
+                    site_id = (inverter.get("connections", {}) or {}).get("datalog", {}) or {}
+                    site_id = site_id.get("site_id", None)
+                if isinstance(site_id, int) and not isinstance(site_id, bool) and site_id > 0:
+                    result["site_ids"][serial] = site_id
                 if "plant ems" in model:
                     result["ems"] = serial
                 elif "gateway" in model or "gw2" in model:
@@ -2209,19 +2460,23 @@ class GECloudDirect(ComponentBase):
                 self.log("GECloud: Warn: Device without serial found: {}".format(device))
         return result
 
-    async def async_get_inverter_status(self, serial, previous={}):
+    async def async_get_inverter_status(self, serial, previous=None):
         """
         Get basis status for inverter
         """
+        if previous is None:
+            previous = {}
         result = await self.async_get_inverter_data_retry(GE_API_INVERTER_STATUS, serial)
         if result is None:
             return previous
         return merge_non_null(result, previous)
 
-    async def async_get_inverter_meter(self, serial, previous={}):
+    async def async_get_inverter_meter(self, serial, previous=None):
         """
         Get meter data for inverter
         """
+        if previous is None:
+            previous = {}
         meter = await self.async_get_inverter_data_retry(GE_API_INVERTER_METER, serial)
         if meter is None:
             return previous

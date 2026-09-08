@@ -81,6 +81,8 @@ git commit -m "<one-line summary of the fixes>"
 git push
 ```
 
+`git push` with no arguments, and nothing else. The branch already has an upstream from `gh pr checkout`, so naming a remote or a ref is never necessary — and if a bare push fails, that is information, not something to route around. **Do not retry with a different target.** A push that fails because the PR's head branch lives in a fork cannot be made to work: the credential can only write to `springfall2008/batpred`, and retrying against `origin` means pushing to *this* repo, whose default branch is `main`. That is exactly how an unreviewed commit reached upstream `main` on 2026-09-06. Stop at step 7 and report the failure instead; the daemon now filters fork-head PRs out before they reach you, so hitting this at all means something is wrong.
+
 Skip the commit if step 5 had nothing to implement — step 2's merge commit (if any) is already complete and just needs pushing.
 Reply to each review thread you addressed, in the thread itself, not as a new top-level comment. Open every reply with a short line disclosing it is an automated reply from the triage bot, then state what changed:
 

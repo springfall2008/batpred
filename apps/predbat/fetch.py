@@ -31,6 +31,7 @@ from const import (
     PREDBAT_MODE_MONITOR,
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
+    CAR_CHARGING_LIMIT_UNCAPPED,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -215,19 +216,25 @@ class Fetch:
         scale_today=1.0,
         scale_fixed=1.0,
         type_load=False,
-        load_forecast={},
+        load_forecast=None,
         cloud_factor=None,
         cloud_ceiling=None,
         cloud_duty=None,
         load_scaling_dynamic=None,
         base_offset=None,
         flip=False,
-        load_adjust={},
-        load_baseline={},
+        load_adjust=None,
+        load_baseline=None,
     ):
         """
         Create cached step data for historical array
         """
+        if load_baseline is None:
+            load_baseline = {}
+        if load_adjust is None:
+            load_adjust = {}
+        if load_forecast is None:
+            load_forecast = {}
         values = {}
         cloud_diff = 0
 
@@ -1419,6 +1426,10 @@ class Fetch:
         else:
             entity_id_list = []
 
+        # Cars whose charging plan came from Octopus Intelligent dispatch slots this cycle - used
+        # below to decide which cars get a model-facing charge limit override (#4967)
+        iog_slot_cars = []
+
         if entity_id_list:
             # Process each car's intelligent slot configuration
             for car_n in range(min(len(entity_id_list), self.num_cars)):
@@ -1428,6 +1439,7 @@ class Fetch:
 
                 completed = []
                 planned = []
+                started = []
 
                 if entity_id and "octopus_intelligent_slot_action_config" in self.args:
                     config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
@@ -1441,9 +1453,21 @@ class Fetch:
                     try:
                         completed = self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches")
                         planned = self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches")
+                        # Not merged into octopus_slots or used for any rate/plan decision yet - read
+                        # only for the #4516 Stage 1 diagnostic timeline log below, to observe whether
+                        # this is a trustworthy earlier-than-completed confirmation signal before
+                        # building any gating logic on it (Stage 2, deferred).
+                        started = self.get_state_wrapper(entity_id=entity_id, attribute="started_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="startedDispatches")
                     except (ValueError, TypeError):
                         self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_slot may not be set correctly in apps.yaml".format(entity_id, car_n))
                         self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
+
+                # #4516 Stage 1: diagnostic dispatch-timeline log. Purely observational - see
+                # build_dispatch_timeline()'s and dispatch_timeline_should_log()'s docstrings.
+                timeline = self.build_dispatch_timeline(car_n, completed, started, planned)
+                should_log, marker = self.dispatch_timeline_should_log(car_n, timeline)
+                if should_log:
+                    self.log("Octopus: Dispatch timeline car {} @ {} [-4h..+24h]: {}{}".format(car_n, self.time_abs_str(self.minutes_now), timeline, marker))
 
                 # Completed and planned slots - merge from all cars
                 if completed:
@@ -1507,6 +1531,7 @@ class Fetch:
                     if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
                         self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
                         if self.car_charging_slots[car_n]:
+                            iog_slot_cars.append(car_n)
                             self.log(
                                 "Car {} using Octopus Intelligent, charging planned - charging limit {}, ready time {} - battery size {}".format(
                                     car_n, self.car_charging_limit[car_n], self.car_charging_plan_time[car_n], self.car_charging_battery_size[car_n]
@@ -1522,6 +1547,19 @@ class Fetch:
         else:
             # Disable octopus charging if we don't have the slot sensor
             self.octopus_intelligent_charging = False
+
+        # Model-facing car charge limit (#4967). With octopus_intelligent_consider_full off (the
+        # default) the prediction must trust the Octopus dispatch plan rather than modelling the car
+        # filling up, so cars carrying IOG slots get an uncapped limit for predict()'s fill clamp
+        # (which also releases the battery discharge hold once the modelled car "fills"). The real
+        # car_charging_limit is left untouched - execute.py's "car is full" decision, the
+        # plan_car_charging path and load_octopus_slots all still need it. None means no override.
+        if iog_slot_cars and not self.octopus_intelligent_consider_full:
+            self.car_charging_limit_model = self.car_charging_limit[:]
+            for car_n in iog_slot_cars:
+                self.car_charging_limit_model[car_n] = CAR_CHARGING_LIMIT_UNCAPPED
+        else:
+            self.car_charging_limit_model = None
 
         # Log final car SoC (initialised before the IOG loop, updated per-car after Octopus battery_size is read)
         if self.num_cars:
@@ -1700,10 +1738,12 @@ class Fetch:
         self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
 
-    def rate_replicate(self, rates, rate_io={}, is_import=True, is_gas=False):
+    def rate_replicate(self, rates, rate_io=None, is_import=True, is_gas=False):
         """
         We don't get enough hours of data for Octopus, so lets assume it repeats until told others
         """
+        if rate_io is None:
+            rate_io = {}
         minute = -24 * 60
         rate_last = 0
         rate_last_valid = False  # Track if we've seen any real rates yet
@@ -1768,6 +1808,42 @@ class Fetch:
             minute += 1
 
         return rates, replicated_rates
+
+    def carbon_replicate(self, carbon_data):
+        """
+        Extend the carbon intensity forecast forward to cover the whole plan horizon.
+
+        The Carbon Intensity API only publishes about 48 hours ahead, and publishes a good deal
+        less than that whenever the upstream forecast is late, so the tail of the plan can easily
+        have no data at all. A missing minute is scored as zero gCO2/kWh by prediction.py, which
+        makes the uncovered part of the plan look carbon free and biases the optimiser towards it,
+        so fill the gaps the same way rate_replicate does for missing rates - repeat the same time
+        of day 24 hours earlier, falling back to the last known value where there is no such point
+        yet. Carbon intensity has a strong daily cycle (the solar dip and the evening peak), so the
+        previous day is a far better estimate than either zero or a flat average.
+
+        Nothing is invented before the first real value, so an empty forecast stays empty rather
+        than becoming a plan full of fabricated zeroes.
+
+        :param carbon_data: carbon intensity in gCO2/kWh by minute relative to now
+        :return: the extended data and a dict of which minutes were replicated
+        """
+        replicated_carbon = {}
+        carbon_last = None
+        minute = 0
+
+        while minute < self.forecast_minutes:
+            if minute in carbon_data:
+                carbon_last = carbon_data[minute]
+            elif carbon_last is not None:
+                # Take the same time of day yesterday, which may itself have been replicated
+                # so that the daily cycle keeps repeating across the whole horizon
+                previous_day = minute - 24 * 60
+                carbon_data[minute] = carbon_data[previous_day] if previous_day in carbon_data else carbon_last
+                replicated_carbon[minute] = True
+            minute += 1
+
+        return carbon_data, replicated_carbon
 
     def calc_pv_light_dark(self):
         """
@@ -2809,6 +2885,9 @@ class Fetch:
             data_all = self.get_state_wrapper(entity_id=entity_id, attribute="forecast")
             if data_all:
                 carbon_data, _ = minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
+                carbon_data, carbon_replicated = self.carbon_replicate(carbon_data)
+                if carbon_replicated:
+                    self.log("Warn: Carbon intensity forecast only covers {} hours of the {} hour plan, replicating it forward to cover the rest".format(dp1(min(carbon_replicated) / 60), dp1(self.forecast_minutes / 60)))
 
         entity_id = self.prefix + ".carbon_now"
         state = self.get_state_wrapper(entity_id=entity_id)

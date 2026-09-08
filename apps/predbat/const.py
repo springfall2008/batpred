@@ -53,10 +53,17 @@ TIME_FORMAT_DAILY = "%Y-%m-%d"
 TIMEOUT = 60 * 5
 CONFIG_REFRESH_PERIOD = 60 * 8
 INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
+# How Inverter spends one write_and_poll_sleep interval while waiting for a written value to appear
+# on an entity Predbat publishes itself. The interval is a timeout, not a known duration, so it is
+# polled with a backoff rather than slept through in one go - see Inverter._poll_after_write. Reads
+# come from the local websocket state cache, so a poll is close to free.
+INVERTER_WRITE_POLL_INTERVAL = 0.25  # Seconds before the second look, doubling after each miss
+INVERTER_WRITE_POLL_MAX_INTERVAL = 2.0  # Ceiling for that backoff
 INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST commands
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
 PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
+CAR_CHARGING_LIMIT_UNCAPPED = 9999.0  # Model-facing car charge limit (kWh) that makes predict()'s fill clamp inert - larger than any real car battery (#4967)
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
 # How far ahead a manual override may be placed. The two horizons differ on purpose: a manual
 # charge/export/freeze/demand slot is bounded by the plan, since Predbat can only act on a slot the

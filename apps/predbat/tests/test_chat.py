@@ -14,6 +14,7 @@ loop, the tool dispatch and the confirmation gate are all exercised without a ne
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -39,6 +40,7 @@ from chat import (
     max_attempts_for,
     MODEL_CACHE_MINUTES,
     MODEL_CACHE_VERSION,
+    NO_PROVIDER_MESSAGE,
     ollama_native_url,
     ollama_tags_to_catalogue,
     model_cache_name,
@@ -1709,6 +1711,25 @@ def _write_call_response(entity_id="input_number.predbat_best_soc_keep", value="
     return _tool_call_response("set_config", {"entity_id": entity_id, "value": value}, call_id="call_write")
 
 
+@contextlib.contextmanager
+def _fast_confirm_poll():
+    """Shorten await_confirmation's poll interval for tests whose answer arrives at once.
+
+    await_confirmation re-checks the pending confirmation every CONFIRM_POLL_SECONDS (0.2s). That
+    is the right cadence against a person at a browser, but a test whose background thread answers
+    in microseconds still sits out a whole tick, and these tests assert that the answer is
+    honoured - not how often the waiter looks for it. Shortened rather than removed so the polling
+    loop is still genuinely exercised. Same trick test_write_confirmation_timeout uses on
+    CONFIRM_TIMEOUT_SECONDS.
+    """
+    original = chat.CONFIRM_POLL_SECONDS
+    chat.CONFIRM_POLL_SECONDS = 0.002
+    try:
+        yield
+    finally:
+        chat.CONFIRM_POLL_SECONDS = original
+
+
 def _confirm_soon(agent, approved):
     """Answer the next pending confirmation from a background thread, as a browser would."""
 
@@ -1737,7 +1758,8 @@ def test_write_confirmation_approved(my_predbat):
     cid = asyncio.run(agent.store.create())
 
     _confirm_soon(agent, True)
-    asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+    with _fast_confirm_poll():
+        asyncio.run(agent.run_turn(cid, "raise best soc keep"))
 
     kinds = [event["type"] for event in agent.events_since(0, cid)[0]]
     for required in ("confirm", "confirm_result", "tool_start", "tool_end"):
@@ -1762,7 +1784,8 @@ def test_write_confirmation_rejected(my_predbat):
     cid = asyncio.run(agent.store.create())
 
     _confirm_soon(agent, False)
-    asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+    with _fast_confirm_poll():
+        asyncio.run(agent.run_turn(cid, "raise best soc keep"))
 
     results = [message for message in asyncio.run(agent.store.get_messages(cid)) if message["role"] == "tool"]
     if not results or "declined" not in str(results[0].get("content")).lower():
@@ -1852,7 +1875,8 @@ def test_set_apps_config_confirmation_gate_and_card(my_predbat):
         cid = asyncio.run(agent.store.create())
 
         _confirm_soon(agent, False)
-        asyncio.run(agent.run_turn(cid, "change the HA url"))
+        with _fast_confirm_poll():
+            asyncio.run(agent.run_turn(cid, "change the HA url"))
 
         events, _, _ = agent.events_since(0, cid)
         kinds = [event["type"] for event in events]
@@ -1912,7 +1936,8 @@ def test_set_apps_config_approved_writes_apps_yaml(my_predbat):
         cid = asyncio.run(agent.store.create())
 
         _confirm_soon(agent, True)
-        asyncio.run(agent.run_turn(cid, "change num_inverters"))
+        with _fast_confirm_poll():
+            asyncio.run(agent.run_turn(cid, "change num_inverters"))
 
         with open(os.path.join(temp_dir, "apps.yaml"), "r", encoding="utf-8") as handle:
             written = handle.read()
@@ -3137,7 +3162,8 @@ def test_stop_reaches_a_turn_parked_on_a_confirmation(my_predbat):
         approved = await agent.await_confirmation("call_x")
         return approved, time.monotonic() - started
 
-    approved, elapsed = asyncio.run(drive())
+    with _fast_confirm_poll():
+        approved, elapsed = asyncio.run(drive())
 
     if approved:
         print("ERROR: a stopped confirmation was treated as approved")
@@ -3779,6 +3805,133 @@ def test_a_working_catalogue_clears_the_previous_failure(my_predbat):
     return failed
 
 
+def _list_models_without_a_wire(my_predbat, providers):
+    """Run list_models() against a recording storage and a fetch that must not be called.
+
+    Returns (models, dialled, cache_names, catalogue_error). Both recorders matter and neither
+    substitutes for the other: dialled proves whether the endpoint was contacted, cache_names
+    proves whether the answer was written to storage - the two halves of what an unconfigured
+    install was doing every day.
+    """
+    dialled = []
+
+    async def fetch_should_not_run():
+        """Record the call and return a healthy catalogue, so a fetch that runs is not also empty."""
+        dialled.append(True)
+        return {"data": [{"id": "vendor/hosted", "supported_parameters": ["tools"]}]}
+
+    class RecordingStorage:
+        """Storage stand-in that records every fetch_cached name and otherwise behaves normally."""
+
+        def __init__(self):
+            """Start with nothing recorded."""
+            self.names = []
+
+        async def fetch_cached(self, module, filename, fetch_fn, fresh_minutes=30, stale_minutes=35, format="yaml"):
+            """Record the name asked for, then fetch as the real helper does on a cold cache."""
+            self.names.append(filename)
+            return await fetch_fn()
+
+    class StubComponents:
+        """Serves the recording storage to ComponentBase's read-only storage property."""
+
+        def __init__(self, storage):
+            """Hold the storage stand-in this registry should hand out."""
+            self.storage = storage
+
+        def get_component(self, name):
+            """Return the storage stand-in, and nothing else."""
+            return self.storage if name == "storage" else None
+
+    agent = _make_agent(my_predbat, providers=providers)
+    agent._fetch_model_catalogue = fetch_should_not_run
+    recorder = RecordingStorage()
+    # agent.storage is a read-only property reading base.components, so the registry is what has
+    # to be swapped - and put back, since my_predbat is shared with every other test.
+    previous_components = getattr(my_predbat, "components", None)
+    my_predbat.components = StubComponents(recorder)
+    try:
+        models = asyncio.run(agent.list_models())
+    finally:
+        my_predbat.components = previous_components
+    return models, dialled, recorder.names, agent.catalogue_error
+
+
+def test_the_catalogue_is_not_fetched_with_no_provider_configured(my_predbat):
+    """An install with nothing configured neither dials OpenRouter nor caches its catalogue.
+
+    The chat component is always started, even with nothing set up, because the Chat tab is what
+    configures it. With no provider, select_provider() falls back to OpenRouter's default URL with
+    no key - and OpenRouter serves /models unauthenticated, so the fetch came back 200 with the
+    whole several-hundred-model catalogue rather than the 401 that would have stopped it. Every
+    page view of the setup page therefore made an outbound request no user asked for, and cached
+    roughly 760KB of it for a day, for a catalogue that cannot be used until a provider exists.
+
+    The turn path already refuses here (see test_turn_refuses_with_no_provider_configured); this
+    is the same guard on the other path that reaches the wire.
+
+    Mutation check: dropping the provider_ready() guard from list_models() dials the endpoint and
+    writes the catalogue to storage.
+    """
+    failed = False
+    print("**** Testing that no provider configured means no catalogue fetch ****")
+
+    models, dialled, names, error = _list_models_without_a_wire(my_predbat, {})
+
+    if dialled:
+        print("ERROR: the catalogue endpoint was dialled with no provider configured")
+        failed = True
+    if names:
+        print("ERROR: the catalogue was written to storage with no provider configured: {}".format(names))
+        failed = True
+    if models:
+        print("ERROR: models were offered with no provider configured: {}".format(models))
+        failed = True
+    if error != NO_PROVIDER_MESSAGE:
+        print("ERROR: the picker was not told why there is no catalogue: {!r}".format(error))
+        failed = True
+    return failed
+
+
+def test_the_catalogue_is_not_fetched_for_a_provider_missing_its_key(my_predbat):
+    """A hosted provider written down without its key is not ready, so its catalogue is not fetched.
+
+    Half-configured is the commoner shape of the same bug: an entry exists, so select_provider()
+    makes it active and active_provider is not None, but it has no key and cannot answer a turn.
+    Guarding on "nothing is selected" would let this one straight through to the same
+    unauthenticated fetch, which is why the guard is provider_ready() - the predicate the turn
+    path already uses.
+
+    The picker still offers the model the entry names, because that is what it names; the guard is
+    about not reaching the wire, not about hiding what apps.yaml says.
+
+    Mutation check: guarding on active_provider is None instead of provider_ready() dials the
+    endpoint for this install.
+    """
+    failed = False
+    print("**** Testing that a provider missing its key does not fetch a catalogue ****")
+
+    providers = {"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1"}}
+    models, dialled, names, error = _list_models_without_a_wire(my_predbat, providers)
+
+    if dialled:
+        print("ERROR: the catalogue endpoint was dialled for a provider with no key")
+        failed = True
+    if names:
+        print("ERROR: the catalogue was written to storage for a provider with no key: {}".format(names))
+        failed = True
+    # The model the entry names is still offered - _catalogue_to_models() always includes the
+    # configured one, which is what makes a custom endpoint serving no /models at all usable. What
+    # must not appear is anything that could only have come off the wire.
+    if "vendor/hosted" in [entry["id"] for entry in models]:
+        print("ERROR: a fetched catalogue was served for a provider with no key: {}".format(models))
+        failed = True
+    if error != NO_PROVIDER_MESSAGE:
+        print("ERROR: the picker was not told why there is no catalogue: {!r}".format(error))
+        failed = True
+    return failed
+
+
 def test_model_catalogue_is_cached_per_endpoint(my_predbat):
     """Each endpoint's model list is cached under its own name, not one shared "models".
 
@@ -4163,6 +4316,8 @@ def run_chat_tests(my_predbat):
     failed |= test_ollama_context_length_survives_a_server_that_cannot_answer(my_predbat)
     failed |= test_ollama_zero_context_length_is_treated_as_absent(my_predbat)
     failed |= test_a_working_catalogue_clears_the_previous_failure(my_predbat)
+    failed |= test_the_catalogue_is_not_fetched_with_no_provider_configured(my_predbat)
+    failed |= test_the_catalogue_is_not_fetched_for_a_provider_missing_its_key(my_predbat)
     failed |= test_local_models_are_free_however_little_pricing_they_publish(my_predbat)
     failed |= test_stop_reaches_a_turn_that_is_still_streaming(my_predbat)
     failed |= test_ollama_cloud_models_are_listed_but_not_free(my_predbat)

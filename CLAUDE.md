@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Predbat is a Home Assistant addon (app) that predicts and optimizes home battery charging/discharging based on electricity rates, solar forecasts, and historical load data. It supports inverters from GivEnergy, Solis, Huawei, SolarEdge, and Sofar, and integrates with energy providers like Octopus Energy, Kraken (EDF/E.ON), and Axle Energy VPP.
+Predbat is a Home Assistant App (addon) that predicts and optimizes home battery charging/discharging based on electricity rates, solar forecasts, and historical load data. It supports inverters from GivEnergy, Solis, Huawei, SolarEdge, and Sofar, and integrates with energy providers like Octopus Energy, Kraken (EDF/E.ON), and Axle Energy VPP.
 
 It also supports Predbat.com which is a cloud based product that does not use Home Assistant and can run in a Docker environment.
 
@@ -58,7 +58,7 @@ It lists every config item that differs from its default, recalculates the plan,
 
 ### Debugging notes
 
-`.claude/skills/issue-triage/references/debug-journal.md` records what past investigations found: per-integration API quirks, symptom-to-module pointers, and traps such as stale kernel binaries and test-order pollution. Read it before debugging an integration or a "the plan is wrong" report, and add to it when you learn something a future session would want.
+`tools/debug-journal.md` records what past investigations found: per-integration API quirks, symptom-to-module pointers, and traps such as stale kernel binaries and test-order pollution. Read it before debugging an integration or a "the plan is wrong" report, and add to it when you learn something a future session would want.
 
 ## Code Quality
 
@@ -113,6 +113,7 @@ The main loop (`update_pred()`) runs every 5 minutes: fetch data → run optimiz
 - Can be independently enabled/disabled
 - Has health monitoring with exponential backoff
 - Routes HA events via entity prefix filtering
+- Is registered in `COMPONENT_LIST` by its `"module.ClassName"` path and imported only when enabled (`load_component_class()`), so startup no longer compiles every component - the `components` test in the quick suite imports them all instead
 
 ### Key Data Flow
 

@@ -2452,7 +2452,7 @@ class Output:
                 },
             )
 
-    def publish_charge_limit(self, charge_limit, charge_window, best=False, soc={}):
+    def publish_charge_limit(self, charge_limit, charge_window, best=False, soc=None):
         """
         Create entity to chart charge limit
 
@@ -2465,6 +2465,8 @@ class Output:
 
         """
         # Calculate charge_limit_percent from charge_limit
+        if soc is None:
+            soc = {}
         charge_limit_percent = calc_percent_limit(charge_limit, self.soc_max)
 
         charge_limit_time = {}
@@ -2637,7 +2639,7 @@ class Output:
                 # Already in error state, do not notify second error in a single run (spam)
                 pass
             else:
-                self.call_notify("Predbat status change to: " + message + extra)
+                self.call_notify(f"{self.prefix.capitalize()} status change to: {message}{extra}")
                 self.previous_status = message
 
         error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)

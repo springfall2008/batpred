@@ -1,7 +1,7 @@
 # Configuration guide
 
 First, get the basics set up, ensure you have the [inverter controls configured](install.md#inverter-control-install),
-you have [configured apps.yaml](apps-yaml.md) to your setup, and the [solar forecast](install.md#solcast-install) is in place.
+you have [configured apps.yaml](apps-yaml.md) to your setup, and the [solar forecast](install.md#solar-forecast-install) is in place.
 Make sure your [energy rates](energy-rates.md) are configured correctly for import and export.
 
 If you have an EV try to set up the [car charging sensor](car-charging.md#filtering-car-charging-energy-from-house-load) correctly so Predbat can tell what part of your historical load is EV charging.
