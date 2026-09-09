@@ -43,23 +43,21 @@ Both of these must pass before you continue to step 5. `run_pre_commit` must run
 cd coverage
 ./run_pre_commit
 cd ..
-tools/triage_test.sh <name> <scratch>/test.log
-```
-
-Use the test module named in the triage comment, or the one `TEST_REGISTRY` maps to the area you changed. If there's no clean single-module mapping, run `./run_all --quick` instead (from `coverage/`, same as above) rather than guessing at a module name.
-
-If either fails, stop here — do not commit, push, or open a PR. Go to step 7 and report what failed.
-
-### Prove your test can fail
-
-A test that passes with and without your change is not coverage, it is decoration — and it is easy to write one by accident. Before the gate counts as passed, check the new test actually fails without the fix:
-
-```bash
-git stash push -- <the source files you changed, NOT the test file>
+git stash push -u -- <the source files you changed, NOT the test file>
 tools/triage_test.sh <name> <scratch>/test-red.log     # expect FAILURE
 git stash pop
 tools/triage_test.sh <name> <scratch>/test.log         # expect PASS
 ```
+
+Use the test module named in the triage comment, or the one `TEST_REGISTRY` maps to the area you changed. If there's no clean single-module mapping, run `./run_all --quick` instead (from `coverage/`, same as above) rather than guessing at a module name.
+
+If `run_pre_commit` fails, or the second run does not pass, stop here — do not commit, push, or open a PR. Go to step 7 and report what failed.
+
+### Why the module runs twice
+
+A test that passes with and without your change is not coverage, it is decoration — and it is easy to write one by accident. The first run is the proof that the test can fail; the second is the gate. **A red run that passes is a failure of the check**, not a pass: stop and work out why before going further.
+
+`-u` is not optional. Without it, `git stash push` **fails outright** on a fix that adds a new source file — it refuses with "Did you forget to 'git add'?" and stashes *nothing*, so the red run contains your entire fix, passes, and tells you the opposite of the truth. Check the stash actually happened before trusting a red run: the source file should be back to its committed content, and any new file gone.
 
 Stash only the source change. If you stash the test too, both runs pass and you have proved nothing.
 
