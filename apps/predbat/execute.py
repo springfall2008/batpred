@@ -274,6 +274,7 @@ class Execute:
                             current_charge_rate=current_charge_rate / MINUTE_WATT,
                             pv_window_kwh=pv_window_kwh,
                             low_power_pv_threshold_w=self.low_power_pv_threshold_w,
+                            solar_full_rate=self.set_charge_low_power_solar_full_rate,
                         )
                         new_charge_rate = int(new_charge_rate * MINUTE_WATT)
 

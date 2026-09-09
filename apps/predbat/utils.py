@@ -1697,6 +1697,7 @@ def find_charge_rate(
     current_charge_rate=None,
     pv_window_kwh=0.0,
     low_power_pv_threshold_w=0.0,
+    solar_full_rate=True,
 ):
     """
     Find the lowest charge rate that fits the charge slow
@@ -1708,6 +1709,12 @@ def find_charge_rate(
     pv_window_kwh directly against a fixed energy figure keeps the decision independent of how long the
     remaining window happens to be - a long window at a low constant trickle should not accumulate its
     way past a threshold sized for "is this bright enough to matter" (#4699 follow-up).
+
+    solar_full_rate turns that abandon off (#4975). Whether spilling PV to hold a throttled rate is
+    worth it depends on what import costs in this particular window, which is not something the PV
+    forecast can answer - a user charging in a free or very cheap daytime window loses nothing by
+    throttling, while on a normal tariff the exported surplus has to be bought back later. Defaults to
+    True, the behaviour of #4373.
     """
     if battery_temperature_curve is None:
         battery_temperature_curve = {}
@@ -1731,9 +1738,11 @@ def find_charge_rate(
 
         # If the charge window's own average PV power over its remainder is above the threshold, charge
         # at max rate instead - a throttled rate would cap the PV going into the battery, exporting the
-        # surplus and importing to make the target up later
+        # surplus and importing to make the target up later. Turned off by
+        # set_charge_low_power_solar_full_rate for a window where that trade does not apply, e.g. a
+        # free import period, where the throttled rate is wanted even though PV will spill (#4975)
         low_power_pv_threshold_kwh = (low_power_pv_threshold_w / MINUTE_WATT) * max(abs_minutes_left, 0)
-        if pv_window_kwh > 0 and pv_window_kwh >= low_power_pv_threshold_kwh:
+        if solar_full_rate and pv_window_kwh > 0 and pv_window_kwh >= low_power_pv_threshold_kwh:
             if log_to:
                 log_to("Low power mode: PV forecast in window {}kWh > {}kWh ({}W over {} minutes), default to max rate".format(dp2(pv_window_kwh), dp2(low_power_pv_threshold_kwh), low_power_pv_threshold_w, abs_minutes_left))
             return max_rate, max_rate_real

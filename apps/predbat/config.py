@@ -1087,6 +1087,14 @@ CONFIG_ITEMS = [
         "default": 150,
     },
     {
+        "name": "set_charge_low_power_solar_full_rate",
+        "friendly_name": "Low power mode full rate in solar",
+        "type": "switch",
+        "icon": "mdi:solar-power",
+        "enable": "set_charge_low_power",
+        "default": True,
+    },
+    {
         "name": "set_reserve_enable",
         "friendly_name": "Set Reserve Enable",
         "type": "switch",

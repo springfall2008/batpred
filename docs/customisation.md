@@ -460,6 +460,7 @@ Low-power charging is skipped for any charge window whose forecast solar product
 the full charge rate is used instead. Throttling the charge rate while the sun is shining would cap how much solar reaches the battery, the surplus
 would be exported at the export rate and the charge target then made up from grid import later, which costs more than the full rate charge Predbat
 planned for. A long charge window is also split at dawn so its dark, PV-free portion stays on low power even if the window continues on into daylight.
+This skipping can be turned off with **switch.predbat_set_charge_low_power_solar_full_rate** if it does not suit your tariff.
 
 The YouTube video [low power charging and charging curve](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
 explains how the low-power charging works and shows how Predbat automatically creates it.
@@ -472,6 +473,12 @@ above which a charge window (or the daylight portion of one split at dawn) is co
 figure rather than a percentage of your system's forecast peak, since a heavily overcast day's own peak is much lower than a clear day's - a percentage would
 make the threshold effectively different day to day. Defaults to 150W; increase it if low-power charging is being abandoned on days with only a trickle of solar,
 decrease it if a genuinely sunny window is still being throttled.
+
+**switch.predbat_set_charge_low_power_solar_full_rate** (requires **switch.predbat_set_charge_low_power** to be turned On) When turned On (the default) a charge
+window with solar forecast above the threshold above charges at the full rate rather than a throttled one, so the solar goes into the battery instead of being
+exported and bought back later. Turn it Off if you want low-power charging to apply during daylight anyway - worthwhile when the import in that window is free or
+very cheap, since the solar the throttled rate spills then costs nothing to replace. Be aware that on a sunny day this can export or clip a significant amount of
+solar, so leave it On unless you specifically want the slow charge.
 
 **switch.predbat_set_reserve_enable** (_expert_mode_) When turned On (the default) the battery reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit.

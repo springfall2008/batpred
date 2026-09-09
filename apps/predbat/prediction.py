@@ -106,6 +106,7 @@ class Prediction(PredictionBatch):
             self.calculate_export_on_pv = base.calculate_export_on_pv
             self.charge_low_power_margin = base.charge_low_power_margin
             self.low_power_pv_threshold_w = base.low_power_pv_threshold_w
+            self.set_charge_low_power_solar_full_rate = base.set_charge_low_power_solar_full_rate
             self.car_charging_slots = base.car_charging_slots
             # Model-facing car charge limit (#4967): fetch raises this above the real limit for cars
             # following an Octopus Intelligent dispatch plan with consider_full off, making the fill
@@ -1045,6 +1046,7 @@ class Prediction(PredictionBatch):
                     self.battery_temperature_charge_curve,
                     pv_window_kwh=pv_window_kwh,
                     low_power_pv_threshold_w=self.low_power_pv_threshold_w,
+                    solar_full_rate=self.set_charge_low_power_solar_full_rate,
                 )
                 charge_rate_now_curve_step = charge_rate_now_curve * step
 
