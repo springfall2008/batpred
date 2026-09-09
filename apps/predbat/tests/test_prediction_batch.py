@@ -34,6 +34,14 @@ from prediction_kernel import create_kernel_context
 from tests.test_kernel_parity import apply_random_scenario, kernel_available, make_step_data, make_windows, restore_scenario_state, snapshot_scenario_state
 
 
+# create_predbat() takes minutes_now from the wall clock, and only part of the day leaves the seed-5
+# routing scenario's ten trial costs distinct - an evening run collapses the three highest onto one
+# value and trips that test's precondition. Run after another module the value is whatever residue
+# that module left (reset_inverter's noon), so standalone runs failed while the full suite passed;
+# the module pins the same noon for itself rather than inheriting either (#5026).
+BATCH_TEST_MINUTES_NOW = 12 * 60
+
+
 def make_export_windows(minutes_now):
     """Build a small deterministic export window layout for the trial-input tests"""
     return [
@@ -605,20 +613,57 @@ def test_batch_thread_count_resolution():
     return failed
 
 
+def test_minutes_now_is_pinned_and_restored(my_predbat):
+    """The module must run on its own pinned clock and hand the caller's back, returns True on failure.
+
+    These tests used to inherit whatever minutes_now the fixture arrived with, which is the wall clock
+    standalone and reset_inverter's noon after another module has run. The routing test's precondition
+    - ten trial SoCs with ten distinct costs - only holds for part of the day, so the module failed
+    when run on its own in the evening and passed in the full suite purely on leftover state (#5026).
+
+    Pinning is only half of it: the pin must not follow the module out, or it would hand the next test
+    a clock the caller never set. That is what the scenario snapshot is for, so this checks the round
+    trip carries minutes_now rather than trusting the attribute list by eye.
+    """
+    print("**** Running pinned clock tests ****")
+    failed = False
+
+    if my_predbat.minutes_now != BATCH_TEST_MINUTES_NOW:
+        print("ERROR: the batch tests are running at minutes_now {}, expected the pinned {}".format(my_predbat.minutes_now, BATCH_TEST_MINUTES_NOW))
+        failed = True
+
+    # A value no fixture would set by chance, so a restore that misses it cannot pass by luck
+    state = snapshot_scenario_state(my_predbat)
+    my_predbat.minutes_now = BATCH_TEST_MINUTES_NOW + 137
+    restore_scenario_state(my_predbat, state)
+    if my_predbat.minutes_now != BATCH_TEST_MINUTES_NOW:
+        print("ERROR: the scenario snapshot does not restore minutes_now, left {} not {}".format(my_predbat.minutes_now, BATCH_TEST_MINUTES_NOW))
+        my_predbat.minutes_now = BATCH_TEST_MINUTES_NOW
+        failed = True
+
+    if not failed:
+        print("Pinned clock tests passed")
+    return failed
+
+
 def run_prediction_batch_tests(my_predbat):
     """Run every batched prediction test, returns True on failure"""
-    failed = test_export_trial_does_not_mutate_caller_window(my_predbat)
-    failed |= test_batch_thread_count_resolution()
-    failed |= test_available_cpu_count_respects_a_cgroup_quota()
-    failed |= test_batch_state_exists_without_a_base(my_predbat)
-
-    available, required_failure = kernel_available()
-    if not available:
-        print("WARNING: kernel not available - batch tests that need it are SKIPPED")
-        return failed or required_failure
-
+    # Snapshotted before anything is pinned so the caller's clock and scenario both go back untouched
     state = snapshot_scenario_state(my_predbat)
     try:
+        my_predbat.minutes_now = BATCH_TEST_MINUTES_NOW
+
+        failed = test_minutes_now_is_pinned_and_restored(my_predbat)
+        failed |= test_export_trial_does_not_mutate_caller_window(my_predbat)
+        failed |= test_batch_thread_count_resolution()
+        failed |= test_available_cpu_count_respects_a_cgroup_quota()
+        failed |= test_batch_state_exists_without_a_base(my_predbat)
+
+        available, required_failure = kernel_available()
+        if not available:
+            print("WARNING: kernel not available - batch tests that need it are SKIPPED")
+            return failed or required_failure
+
         failed |= test_queued_matches_direct(my_predbat)
         failed |= test_queued_range_window_in_the_past(my_predbat)
         failed |= test_batch_is_lazy(my_predbat)

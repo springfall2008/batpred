@@ -57,9 +57,11 @@ RESULT_NAMES = [
     "final_carbon_g",
 ]
 
-# Attributes mutated by the parity scenarios that reset_inverter/reset_rates do not restore;
-# snapshotted before the tests and restored afterwards so later tests see a clean predbat
+# Attributes mutated by the parity scenarios, or by a module pinning the clock before them, that
+# reset_inverter/reset_rates do not restore; snapshotted before the tests and restored afterwards
+# so later tests see a clean predbat
 SCENARIO_STATE_ATTRS = [
+    "minutes_now",
     "soc_max",
     "soc_kw",
     "reserve",
