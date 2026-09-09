@@ -46,6 +46,12 @@ class DaemonPathsTestCase(unittest.TestCase):
         self._patch("CLONE_DIR", base / "batpred")
         self._patch("SCRATCH_DIR", base / "scratch")
         self._patch("QUEUE_DIR", base / "journal-queue")
+        # Derived from a patched directory at import time, so patching the directory alone
+        # leaves these pointing at the operator's live bot directory. Any new
+        # PATH = <patched dir> / ... constant needs adding here too.
+        self._patch("GITNEXUS_RUNNER", base / "batpred" / ".gitnexus" / "run.cjs")
+        self._patch("GITNEXUS_HEAD_FILE", base / "gitnexus-head")
+        self._patch("MCP_CONFIG_FILE", base / "mcp-gitnexus.json")
 
     def _patch(self, name, value):
         """Patch a module-level constant on triage_daemon for the duration of the test."""
@@ -399,7 +405,6 @@ class PermissionModelTests(unittest.TestCase):
             "Bash(gh auth*)",
             "Bash(gh secret*)",
             "Bash(gh api*)",
-            "mcp__*",
         ]
         pr_denied = triage_daemon.DISALLOWED_TOOLS_PR.split(",")
         for entry in still_denied:
@@ -492,7 +497,6 @@ class PermissionModelTests(unittest.TestCase):
             "Bash(gh workflow*)",
             "Bash(gh auth*)",
             "Bash(gh secret*)",
-            "mcp__*",
         ]
         review_denied = triage_daemon.DISALLOWED_TOOLS_REVIEW.split(",")
         for entry in still_denied:
@@ -538,6 +542,8 @@ class PermissionModelTests(unittest.TestCase):
                 "Bash(gh pr diff*)",
                 "Bash(gh pr list*)",
                 "Bash(gh pr comment*)",
+                "Bash(gh pr edit*)",
+                "Bash(gh issue comment*)",
                 "Bash(gh issue view*)",
                 "Bash(gh issue list*)",
                 "Bash(gh search*)",
@@ -597,7 +603,6 @@ class PermissionModelTests(unittest.TestCase):
             "Bash(gh workflow*)",
             "Bash(gh auth*)",
             "Bash(gh secret*)",
-            "mcp__*",
         ]
         cleanup_denied = triage_daemon.DISALLOWED_TOOLS_CLEANUP.split(",")
         for entry in still_denied:
@@ -641,6 +646,8 @@ class PermissionModelTests(unittest.TestCase):
                 "Bash(gh pr diff*)",
                 "Bash(gh pr list*)",
                 "Bash(gh pr comment*)",
+                "Bash(gh pr edit*)",
+                "Bash(gh issue comment*)",
                 "Bash(gh issue view*)",
                 "Bash(gh issue list*)",
                 "Bash(gh search*)",
@@ -961,6 +968,186 @@ class MarkTriageFailedTests(unittest.TestCase):
             body = next(c for c in (call.args[0] for call in mock_run.call_args_list) if "comment" in c)[-1]
         self.assertIn("Remove `BOT_FAILED`", body)
         self.assertLess(body.index("BOT_FAILED"), body.index("BOT_REVIEW"), "the removal must be stated before the label to add")
+
+
+class GitnexusIndexTests(DaemonPathsTestCase):
+    """CLAUDE.md requires an impact() call before editing any symbol. Until the MCP denial was
+    lifted no flow could make one, and runs said so - they grepped for callers instead."""
+
+    def _install_runner(self):
+        runner = triage_daemon.GITNEXUS_RUNNER
+        runner.parent.mkdir(parents=True, exist_ok=True)
+        runner.write_text("// stub")
+
+    def test_nothing_runs_without_the_runner(self):
+        """A clone with no .gitnexus/ must degrade quietly, not fail the flow."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            triage_daemon.refresh_gitnexus_index()
+        mock_run.assert_not_called()
+
+    def test_analyze_runs_when_head_has_moved(self):
+        """The index has to describe the tree the flow is about to read."""
+        self._install_runner()
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [MagicMock(returncode=0, stdout="abc1234\n"), MagicMock(returncode=0, stdout="")]
+            triage_daemon.refresh_gitnexus_index()
+            commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn("analyze", commands[-1])
+        self.assertEqual(triage_daemon.GITNEXUS_HEAD_FILE.read_text(), "abc1234")
+
+    def test_analyze_is_skipped_when_head_is_unchanged(self):
+        """analyze takes ~37s and sync_repo() runs before every flow, so an unguarded call
+        would spend minutes an hour rebuilding an index for a tree that had not moved."""
+        self._install_runner()
+        triage_daemon.GITNEXUS_HEAD_FILE.write_text("abc1234")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="abc1234\n")
+            triage_daemon.refresh_gitnexus_index()
+            commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any("analyze" in c for c in commands))
+
+    def test_a_failed_analyze_does_not_stop_the_flow(self):
+        """A stale index degrades an answer; a raised exception would stop the daemon."""
+        self._install_runner()
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [MagicMock(returncode=0, stdout="abc1234\n"), MagicMock(returncode=1, stdout="")]
+            triage_daemon.refresh_gitnexus_index()
+        self.assertFalse(triage_daemon.GITNEXUS_HEAD_FILE.exists(), "a failed analyze must not record the head as indexed")
+
+    def test_an_unreadable_head_leaves_the_index_alone(self):
+        """Without a HEAD there is no way to tell whether the index is stale, and an empty
+        marker would never match - re-analyzing on every sync from then on."""
+        self._install_runner()
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=128, stdout="")
+            triage_daemon.refresh_gitnexus_index()
+            commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any("analyze" in c for c in commands))
+        self.assertFalse(triage_daemon.GITNEXUS_HEAD_FILE.exists(), "an empty head must never be recorded")
+
+    @patch("builtins.print")
+    def test_a_missing_runner_is_reported_once_not_every_sync(self, mock_print):
+        """sync_repo() runs before every flow, so an unconditional warning would print the same
+        line every few minutes forever."""
+        with patch.object(triage_daemon, "_GITNEXUS_RUNNER_WARNED", False):
+            triage_daemon.refresh_gitnexus_index()
+            triage_daemon.refresh_gitnexus_index()
+            triage_daemon.refresh_gitnexus_index()
+            printed = [str(call.args[0]) for call in mock_print.call_args_list if "no runner" in str(call.args[0])]
+        self.assertEqual(len(printed), 1)
+
+    def test_sync_repo_refreshes_the_index(self):
+        """The point of the change: every flow starts against an index of the tree it will read."""
+        with patch("triage_daemon.subprocess.run"), patch("triage_daemon.install_push_guard"), patch("triage_daemon.refresh_gitnexus_index") as mock_refresh:
+            triage_daemon.sync_repo()
+        mock_refresh.assert_called_once()
+
+
+class McpScopeTests(DaemonPathsTestCase):
+    """gitnexus, and nothing else. The operator's own configuration carries other servers and
+    a bot session has no business reaching those."""
+
+    def test_the_config_names_only_gitnexus(self):
+        """--strict-mcp-config pins the subprocess to whatever is in this file."""
+        with patch("triage_daemon.shutil.which", return_value="/usr/local/bin/gitnexus"):
+            self.assertTrue(triage_daemon.write_mcp_config())
+        config = json.loads(triage_daemon.MCP_CONFIG_FILE.read_text())
+        self.assertEqual(list(config["mcpServers"]), ["gitnexus"])
+
+    def test_a_missing_binary_degrades_rather_than_breaking(self):
+        """No gitnexus on PATH means no flags and flows that run as they did before."""
+        with patch("triage_daemon.shutil.which", return_value=None):
+            self.assertFalse(triage_daemon.write_mcp_config())
+        self.assertFalse(triage_daemon.MCP_CONFIG_FILE.exists())
+        self.assertEqual(triage_daemon.claude_mcp_args(), [])
+
+    def test_a_stale_config_is_removed_when_the_binary_goes_away(self):
+        """claude_mcp_args() keys off the file existing, so a config written while gitnexus was
+        installed would keep being passed with --strict-mcp-config, pointing every flow at a
+        command that is gone."""
+        with patch("triage_daemon.shutil.which", return_value="/usr/local/bin/gitnexus"):
+            triage_daemon.write_mcp_config()
+        self.assertTrue(triage_daemon.MCP_CONFIG_FILE.exists())
+        with patch("triage_daemon.shutil.which", return_value=None):
+            triage_daemon.write_mcp_config()
+        self.assertFalse(triage_daemon.MCP_CONFIG_FILE.exists())
+        self.assertEqual(triage_daemon.claude_mcp_args(), [])
+
+    def test_the_pin_is_strict(self):
+        """Without --strict-mcp-config the subprocess inherits every server the operator has."""
+        triage_daemon.MCP_CONFIG_FILE.write_text("{}")
+        args = triage_daemon.claude_mcp_args()
+        self.assertIn("--strict-mcp-config", args)
+        self.assertEqual(args[args.index("--mcp-config") + 1], str(triage_daemon.MCP_CONFIG_FILE))
+
+
+class McpPermissionTests(unittest.TestCase):
+    """The second, independent layer: even if another server were loaded, its tools are not
+    permitted. Under dontAsk anything not named in the allowlist is denied."""
+
+    FLOWS = ("ALLOWED_TOOLS", "ALLOWED_TOOLS_PR", "ALLOWED_TOOLS_REVIEW", "ALLOWED_TOOLS_CLEANUP", "ALLOWED_TOOLS_JOURNAL")
+
+    def test_every_flow_may_use_gitnexus(self):
+        """CLAUDE.md asks for impact() before any symbol edit - every flow needs the tools."""
+        for name in self.FLOWS:
+            with self.subTest(flow=name):
+                self.assertIn("mcp__gitnexus__*", getattr(triage_daemon, name).split(","))
+
+    def test_no_flow_gets_a_blanket_mcp_grant(self):
+        """A blanket grant would reach the operator's Slack and Drive servers."""
+        for name in self.FLOWS:
+            with self.subTest(flow=name):
+                self.assertNotIn("mcp__*", getattr(triage_daemon, name).split(","))
+
+
+class WriteGrantTests(unittest.TestCase):
+    """Shell redirection (`cmd > file`) is refused with a Bash grant alone and permitted once
+    Write is present - checked both ways against claude 2.1.251. That restriction is what made
+    runs invent workarounds, and for most flows it was protecting nothing."""
+
+    WRITE_FLOWS = ("ALLOWED_TOOLS", "ALLOWED_TOOLS_PR", "ALLOWED_TOOLS_REVIEW", "ALLOWED_TOOLS_CLEANUP")
+
+    def test_the_flows_that_already_edit_the_clone_get_write(self):
+        """Not new reach: each of these already holds clone-wide Edit, so Write only removes
+        the need to work around a restriction that never bounded them."""
+        for name in self.WRITE_FLOWS:
+            with self.subTest(flow=name):
+                allowed = getattr(triage_daemon, name).split(",")
+                self.assertIn("Write", allowed)
+                self.assertIn(f"Edit({triage_daemon.EDIT_SCOPE})", allowed, "Write is only defensible where clone-wide Edit already is")
+
+    def test_the_journal_flush_does_not_get_write(self):
+        """The one flow whose edit scope is two exact files rather than the clone, precisely
+        because it is also the one that can push. Write would let it author anything in the
+        clone and commit it, which is what the narrow scope exists to prevent."""
+        self.assertNotIn("Write", triage_daemon.ALLOWED_TOOLS_JOURNAL.split(","))
+
+    def test_the_journal_flush_still_has_its_narrow_edit_scope(self):
+        """Guards the pairing: dropping Write is only safe while the edit scope stays narrow."""
+        allowed = triage_daemon.ALLOWED_TOOLS_JOURNAL.split(",")
+        self.assertNotIn(f"Edit({triage_daemon.EDIT_SCOPE})", allowed)
+
+
+class CleanupModelTests(unittest.TestCase):
+    """cleanup_pr edits a maintainer's branch and pushes it."""
+
+    def test_cleanup_runs_on_claude_not_the_review_model(self):
+        """The worst outputs of 2026-09 came from this flow on the review model: overriding a
+        contributor's deliberate spelling on circular evidence (#4846), and improvising a push
+        to main after a fork branch refused one."""
+        source = Path(triage_daemon.__file__).read_text()
+        start = source.index("def cleanup_pr(pr_number):")
+        block = source[start : source.index("\ndef ", start + 10)]
+        self.assertNotIn("review_only=True", block)
+
+    def test_the_read_only_flows_stay_on_the_review_model(self):
+        """Triage and review do not write to the repo; the cost case for Claude is weaker."""
+        source = Path(triage_daemon.__file__).read_text()
+        for flow in ("def triage(issue_number):", "def review_pr(pr_number"):
+            with self.subTest(flow=flow):
+                start = source.index(flow)
+                block = source[start : source.index("\ndef ", start + 10)]
+                self.assertIn("review_only=True", block)
 
 
 class EffectiveOllamaModelTests(unittest.TestCase):
@@ -1858,16 +2045,15 @@ class CleanupPrTests(DaemonPathsTestCase):
         self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
 
     @patch("triage_daemon.subprocess.run")
-    def test_ollama_review_model_also_applies_to_cleanup(self, mock_run):
-        """--ollama_review covers PR cleanup too - it's one of the review-only flows."""
+    def test_ollama_review_model_does_not_apply_to_cleanup(self, mock_run):
+        """--ollama_review no longer covers PR cleanup. That flow edits a maintainer's branch
+        and pushes it, so it runs on Claude however the review model is set."""
         self._patch("OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud")
         mock_run.return_value = MagicMock(returncode=0)
         triage_daemon.cleanup_pr(4742)
         cmd = mock_run.call_args[0][0]
-        self.assertIn("--model", cmd)
-        self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
-        env = mock_run.call_args.kwargs["env"]
-        self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+        self.assertNotIn("glm-5.3-flash:cloud", cmd)
+        self.assertIsNone(mock_run.call_args.kwargs["env"], "cleanup must inherit the daemon environment, not the Ollama overrides")
 
 
 class PushGuardHookTests(DaemonPathsTestCase):
