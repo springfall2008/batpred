@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_inverter
+from const import EXPORT_LIMIT_IDLE
 
 
 def run_clip_export_slots_tests(my_predbat):
@@ -21,6 +22,7 @@ def run_clip_export_slots_tests(my_predbat):
     failed |= test_normal_export_clipped_up_when_soc_above_limit(my_predbat)
     failed |= test_normal_export_clipped_up_when_soc_above_reserve_with_zero_limit(my_predbat)
     failed |= test_normal_export_clipped_up_when_soc_flat_above_limit(my_predbat)
+    failed |= test_clip_up_never_lands_in_the_reserved_range(my_predbat)
     failed |= test_disabled_window_ignored(my_predbat)
     failed |= test_passed_window_clipped(my_predbat)
     failed |= test_multiple_windows_mixed(my_predbat)
@@ -197,6 +199,53 @@ def test_normal_export_clipped_up_when_soc_flat_above_limit(my_predbat):
         failed = True
     if result_limits[0] <= 50.0:
         print("ERROR: Expected the limit to be clipped up from 50.0, got {}".format(result_limits[0]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_clip_up_never_lands_in_the_reserved_range(my_predbat):
+    """A clip up towards a nearly-full battery must not produce a limit in [99.0, 100.0).
+
+    The limit packs the target SoC in the integer part and the export power in the fraction, so a
+    target of 99 with a low-power rung packs to 99.3/99.5/99.7 - which reads as neither a freeze
+    (not == 99.0) nor a forced export (not < 99.0), and the window silently does nothing (GH#4914).
+    Reaching it needs no unusual config here: limit_soc is wherever the simulation says the battery
+    actually got to, so any barely-discharging window with low power export on can land on 99.
+    """
+    print("**** test_clip_up_never_lands_in_the_reserved_range ****")
+    failed = False
+    setup(my_predbat)
+
+    minutes_now = 720
+    windows = [make_window(720, 750)]
+    # A 20% target at 70% export power - the fraction is what makes the packed value ambiguous
+    limits = [20.3]
+    # A modest discharge rate (600W) keeps the 10 minute clip margin small, so a nearly-full
+    # battery clips up to 99% rather than being pulled well clear of the reserved range
+    my_predbat.battery_rate_max_discharge = 0.01
+    my_predbat.battery_rate_max_scaling_discharge = 1.0
+    # The battery barely moves and stays essentially full, so the clip up aims at ~99%
+    predict_soc = make_predict_soc_falling(minutes_now, 9.99, 9.98, 60)
+
+    result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
+
+    limit = result_limits[0]
+    if 99.0 < limit < 100.0:
+        print("ERROR: clip up produced {} which is in the reserved range - the window would do nothing (GH#4914)".format(limit))
+        failed = True
+
+    # The fraction is added after calc_percent_limit has already capped the integer part at 100, so
+    # an unclamped clip up can also overshoot the idle sentinel and silently disable the window
+    if limit > EXPORT_LIMIT_IDLE:
+        print("ERROR: clip up produced {} which is above the idle sentinel - the window is disabled (GH#4914)".format(limit))
+        failed = True
+
+    # The power fraction must survive the clamp, otherwise a low power export silently becomes full rate
+    if limit not in (100.0, 99.0) and abs((limit - int(limit)) - 0.3) > 0.001:
+        print("ERROR: clip up lost the export power fraction, expected .3 in {}".format(limit))
         failed = True
 
     if not failed:
