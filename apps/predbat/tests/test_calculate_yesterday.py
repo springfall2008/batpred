@@ -543,17 +543,18 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
     my_predbat.octopus_slots = [[], [], [], []]
     my_predbat.octopus_intelligent_consider_full = False
 
-    # Inside calculate_yesterday, minutes_now is set to 0 before calling
-    # yesterday_reconstruct_car_slots, so the lookup formula becomes:
-    #   minute_previous = 0 + 1440 - minute
-    # For start_minute=60 the inner scan covers minutes 60..89.
-    # At minute=60: minute_previous = 1380.
-    # get_from_incrementing(data, 1380) = max(data[1380] - data[1381], 0).
-    # Correct representation of an incrementing kWh sensor: the sensor reads
-    # 1.5 kWh at minute 60 (index 1380) and all more-recent times (lower indices),
-    # and 0 at earlier times (indices > 1380).  The telescoping sum over the
-    # 30-minute window yields data[1351] - data[1381] = 1.5 - 0 = 1.5 kWh.
-    my_predbat.car_charging_energy = {k: 1.5 for k in range(0, 1381)}
+    # calculate_yesterday fakes self.minutes_now to 0, but car_charging_energy is
+    # indexed in minutes before the REAL now, so the lookup is
+    #   minute_previous = real_minutes_now + 1440 - minute      (#5004)
+    # Record the session at plan-axis minute 60 (yesterday 01:00) and derive its
+    # sensor index from that, rather than hardcoding the faked-axis value.
+    real_minutes_now = my_predbat.minutes_now  # 360
+    car_session_minute = 60
+    session_index = real_minutes_now + 24 * 60 - car_session_minute
+    # An incrementing kWh sensor reads 1.5 at the session minute and at every
+    # more-recent time (lower index), 0 before it.  The telescoping sum over the
+    # 30-minute window is data[session_index - 29] - data[session_index + 1] = 1.5.
+    my_predbat.car_charging_energy = {k: 1.5 for k in range(0, session_index + 1)}
 
     captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
 
@@ -573,6 +574,17 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
             val = load_step.get(inside_min, -1)
             if abs(val) > 1e-9:
                 print("ERROR: step {} (inside energy-sensor slot) should be 0.0 but got {}".format(inside_min, val))
+                failed = True
+
+        # The bug (#5004) read the faked minutes_now, shifting the lookup by
+        # real_minutes_now and painting a ghost slot minutes_now earlier on the
+        # plan axis.  60 - 360 wraps below 0, so the ghost landed via the +1440
+        # wrap in get_from_incrementing; assert the band it corrupted is clean.
+        ghost_minute = (car_session_minute - real_minutes_now) % (24 * 60)
+        for ghost_step in range(ghost_minute, ghost_minute + plan_iv, PREDICT_STEP):
+            val = load_step.get(ghost_step, None)
+            if val is not None and abs(val - FLAT_LOAD_KWH) > 1e-9:
+                print("ERROR: step {} is outside the real session but was altered: {} (#5004 ghost band)".format(ghost_step, val))
                 failed = True
 
         # Outside-slot steps should be unchanged at FLAT_LOAD_KWH.
@@ -676,7 +688,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     end_record = 24 * 60  # 1440 minutes
     yesterday_load_step = {m: FLAT_LOAD_KWH for m in range(0, end_record, PREDICT_STEP)}
 
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step, 0)
 
     # Exactly one slot should have been added
     slots = my_predbat.car_charging_slots[0]
@@ -734,7 +746,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_energy = {k: 1.2 for k in range(0, 1381)}  # same energy as 5a
 
     yesterday_load_step = {m: FLAT_LOAD_KWH for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step, 0)
 
     if len(my_predbat.car_charging_slots[0]) != 1:
         print("ERROR 5b: expected 1 slot (no duplicate), got {}".format(len(my_predbat.car_charging_slots[0])))
@@ -771,7 +783,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.load_octopus_slots = _mock_load_octopus_slots
 
     yesterday_load_step = {m: FLAT_LOAD_KWH for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step, 0)
 
     my_predbat.load_octopus_slots = original_load_octopus_slots
 
@@ -819,7 +831,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_slots = [[cancelled_slot], [], [], []]
 
     yesterday_load_step_5d = {m: TINY_LOAD for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5d)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5d, 0)
 
     # The slot kwh should have been zeroed out.
     if cancelled_slot.get("kwh") != 0:
@@ -857,7 +869,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_slots = [[adjusted_slot], [], [], []]
 
     yesterday_load_step_5e = {m: MEDIUM_LOAD for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5e)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5e, 0)
 
     expected_adj_kwh = (plan_iv // PREDICT_STEP) * MEDIUM_LOAD * my_predbat.car_charging_loss  # 6 * 0.2 * 1.0 = 1.2
     if abs(adjusted_slot.get("kwh", -1) - expected_adj_kwh) > 1e-9:
@@ -905,7 +917,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_slots = [[slot_car0], [slot_car1], [], []]
 
     yesterday_load_step_5f = {m: TWO_CAR_LOAD for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5f)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5f, 0)
 
     # Car 0 should be unchanged (load was sufficient).
     if abs(slot_car0.get("kwh", -1) - 0.6) > 1e-9:
@@ -933,6 +945,82 @@ def _test_reconstruct_car_slots(my_predbat, failed):
             failed = True
 
     # Restore
+    my_predbat.num_cars = 0
+    my_predbat.car_charging_slots = [[] for _ in range(4)]
+    my_predbat.car_charging_energy = {}
+
+    # -----------------------------------------------------------------------
+    print("calculate_yesterday: Test 5g - reconstruction follows the passed minutes_now, not the faked one (#5004)")
+
+    _setup_base(my_predbat, minutes_now=0)
+    saved_reported_load = my_predbat.car_energy_reported_load
+    saved_loss = my_predbat.car_charging_loss
+    saved_octopus_arg = my_predbat.args.get("octopus_intelligent_slot", None)
+
+    my_predbat.num_cars = 1
+    my_predbat.car_energy_reported_load = True
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.octopus_intelligent_consider_full = False
+    my_predbat.octopus_slots = [[], [], [], []]
+    my_predbat.args["octopus_intelligent_slot"] = None
+    my_predbat.car_charging_slots = [[], [], [], []]
+
+    # self.minutes_now is 0 (as calculate_yesterday leaves it), but the caller
+    # passes the real value - the session must be found on the real axis.
+    real_minutes_now = 360
+    session_start = 600
+    session_index = real_minutes_now + 24 * 60 - session_start
+    my_predbat.car_charging_energy = {k: 1.5 for k in range(0, session_index + 1)}
+
+    yesterday_load_step_5g = {m: 0.2 for m in range(0, end_record, PREDICT_STEP)}
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5g, real_minutes_now)
+
+    slots_5g = my_predbat.car_charging_slots[0]
+    if len(slots_5g) != 1:
+        print("ERROR 5g: expected exactly 1 reconstructed slot, got {}: {}".format(len(slots_5g), slots_5g))
+        failed = True
+    elif slots_5g[0]["start"] != session_start:
+        print("ERROR 5g: slot should start at {} (the real axis), got {} - reconstruction read the faked minutes_now".format(session_start, slots_5g[0]["start"]))
+        failed = True
+
+    # -----------------------------------------------------------------------
+    print("calculate_yesterday: Test 5h - car_energy_reported_load False takes no subtraction")
+
+    _setup_base(my_predbat, minutes_now=0)
+    my_predbat.num_cars = 1
+    # The charger is outside the CT clamp, so its energy was never in the load
+    # figures and must NOT be subtracted from them (config.py car_energy_reported_load).
+    my_predbat.car_energy_reported_load = False
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.octopus_intelligent_consider_full = False
+    my_predbat.octopus_slots = [[], [], [], []]
+    my_predbat.args["octopus_intelligent_slot"] = None
+    my_predbat.car_charging_energy = {}
+
+    UNREPORTED_LOAD = 0.2
+    slot_5h = {"start": 60, "end": 60 + plan_iv, "kwh": 0.6, "octopus": True}
+    my_predbat.car_charging_slots = [[slot_5h], [], [], []]
+
+    yesterday_load_step_5h = {m: UNREPORTED_LOAD for m in range(0, end_record, PREDICT_STEP)}
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5h, 0)
+
+    # The slot keeps its full energy - no capping against the load.
+    if abs(slot_5h.get("kwh", -1) - 0.6) > 1e-9:
+        print("ERROR 5h: slot kwh should be untouched at 0.6, got {}".format(slot_5h.get("kwh")))
+        failed = True
+
+    # Every load step, inside the slot included, is left alone.
+    for m in range(0, 60 + 2 * plan_iv, PREDICT_STEP):
+        val = yesterday_load_step_5h.get(m, -1)
+        if abs(val - UNREPORTED_LOAD) > 1e-9:
+            print("ERROR 5h: step {} should be unchanged at {}, got {} - subtraction ran with car_energy_reported_load False".format(m, UNREPORTED_LOAD, val))
+            failed = True
+
+    # Restore everything 5g/5h changed, including the flags the earlier
+    # sub-cases leave set on the shared instance.
+    my_predbat.car_energy_reported_load = saved_reported_load
+    my_predbat.car_charging_loss = saved_loss
+    my_predbat.args["octopus_intelligent_slot"] = saved_octopus_arg
     my_predbat.num_cars = 0
     my_predbat.car_charging_slots = [[] for _ in range(4)]
     my_predbat.car_charging_energy = {}
