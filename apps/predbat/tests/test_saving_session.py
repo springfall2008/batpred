@@ -41,7 +41,9 @@ next_joined_event_end: null
 next_joined_event_duration_in_minutes: null
 icon: mdi:leaf
 friendly_name: Octoplus Saving Session (A-4DD6C5EE)
-""".format(date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday, tz_offset=tz_offset)
+""".format(
+        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday, tz_offset=tz_offset
+    )
 
     session_sensor = f"""
 state: '2025-01-23T12:10:11.108+{tz_offset}:00'
@@ -82,7 +84,9 @@ joined_events:
       rewarded_octopoints: null
       octopoints_per_kwh: 448
 friendly_name: Octoplus Saving Session Events (A-12345678)
-""".format(date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, tz_offset=tz_offset)
+""".format(
+        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, tz_offset=tz_offset
+    )
     ha.dummy_items["binary_sensor.octopus_energy_a_12345678_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
     ha.dummy_items["event.octopus_energy_a_12345678_octoplus_saving_session_event"] = yaml.safe_load(session_sensor)
     ha.dummy_items["sensor.octopus_free_session"] = {}
