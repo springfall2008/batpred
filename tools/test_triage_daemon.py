@@ -1014,6 +1014,28 @@ class GitnexusIndexTests(DaemonPathsTestCase):
             triage_daemon.refresh_gitnexus_index()
         self.assertFalse(triage_daemon.GITNEXUS_HEAD_FILE.exists(), "a failed analyze must not record the head as indexed")
 
+    def test_an_unreadable_head_leaves_the_index_alone(self):
+        """Without a HEAD there is no way to tell whether the index is stale, and an empty
+        marker would never match - re-analyzing on every sync from then on."""
+        self._install_runner()
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=128, stdout="")
+            triage_daemon.refresh_gitnexus_index()
+            commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any("analyze" in c for c in commands))
+        self.assertFalse(triage_daemon.GITNEXUS_HEAD_FILE.exists(), "an empty head must never be recorded")
+
+    @patch("builtins.print")
+    def test_a_missing_runner_is_reported_once_not_every_sync(self, mock_print):
+        """sync_repo() runs before every flow, so an unconditional warning would print the same
+        line every few minutes forever."""
+        with patch.object(triage_daemon, "_GITNEXUS_RUNNER_WARNED", False):
+            triage_daemon.refresh_gitnexus_index()
+            triage_daemon.refresh_gitnexus_index()
+            triage_daemon.refresh_gitnexus_index()
+            printed = [str(call.args[0]) for call in mock_print.call_args_list if "no runner" in str(call.args[0])]
+        self.assertEqual(len(printed), 1)
+
     def test_sync_repo_refreshes_the_index(self):
         """The point of the change: every flow starts against an index of the tree it will read."""
         with patch("triage_daemon.subprocess.run"), patch("triage_daemon.install_push_guard"), patch("triage_daemon.refresh_gitnexus_index") as mock_refresh:
@@ -1036,6 +1058,18 @@ class McpScopeTests(DaemonPathsTestCase):
         """No gitnexus on PATH means no flags and flows that run as they did before."""
         with patch("triage_daemon.shutil.which", return_value=None):
             self.assertFalse(triage_daemon.write_mcp_config())
+        self.assertFalse(triage_daemon.MCP_CONFIG_FILE.exists())
+        self.assertEqual(triage_daemon.claude_mcp_args(), [])
+
+    def test_a_stale_config_is_removed_when_the_binary_goes_away(self):
+        """claude_mcp_args() keys off the file existing, so a config written while gitnexus was
+        installed would keep being passed with --strict-mcp-config, pointing every flow at a
+        command that is gone."""
+        with patch("triage_daemon.shutil.which", return_value="/usr/local/bin/gitnexus"):
+            triage_daemon.write_mcp_config()
+        self.assertTrue(triage_daemon.MCP_CONFIG_FILE.exists())
+        with patch("triage_daemon.shutil.which", return_value=None):
+            triage_daemon.write_mcp_config()
         self.assertFalse(triage_daemon.MCP_CONFIG_FILE.exists())
         self.assertEqual(triage_daemon.claude_mcp_args(), [])
 

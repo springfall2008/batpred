@@ -125,6 +125,9 @@ GITNEXUS_RUNNER = CLONE_DIR / ".gitnexus" / "run.cjs"
 # runs before every flow, so re-analyzing unconditionally would spend minutes an hour
 # rebuilding an index for a tree that had not moved. HEAD is the only input that changes it.
 GITNEXUS_HEAD_FILE = BASE_DIR / "gitnexus-head"
+# Set once refresh_gitnexus_index() has reported a missing runner, so it says so per process
+# rather than on every sync.
+_GITNEXUS_RUNNER_WARNED = False
 # A dedicated MCP config, passed with --strict-mcp-config. The operator's own configuration
 # carries unrelated servers and a bot session has no business reaching those; scoping the
 # subprocess to this one server is what makes lifting the blanket mcp__* denial safe.
@@ -313,7 +316,9 @@ _DISALLOWED_TOOLS_BASE = [
 DISALLOWED_TOOLS = ",".join(_DISALLOWED_TOOLS_BASE)
 # The PR flow needs to push its branch and open the PR - carve those three back out of
 # the base denial list. Everything else (merge, close, repo/release/workflow/auth/secret/
-# api admin, all mcp__*) stays denied.
+# api admin) stays denied. MCP is no longer denied wholesale: the allowlist names
+# mcp__gitnexus__* specifically, so every other server's tools are denied by omission under
+# dontAsk, and --strict-mcp-config stops them being loaded in the first place.
 _PR_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr create*)"}
 # Even though the PR flow can push, force-push variants stay denied - defense in depth
 # against a prompt-injected instruction attempting to rewrite history. Prefix-glob
@@ -727,6 +732,10 @@ def write_mcp_config():
     """
     executable = shutil.which("gitnexus")
     if not executable:
+        # Delete rather than merely decline to write: claude_mcp_args() keys off the file
+        # existing, so a config left over from when gitnexus was installed would keep being
+        # passed with --strict-mcp-config, pointing every flow at a command that is gone.
+        MCP_CONFIG_FILE.unlink(missing_ok=True)
         print("[triage] gitnexus not on PATH - flows will run without the MCP tools CLAUDE.md expects", flush=True)
         return False
     BASE_DIR.mkdir(parents=True, exist_ok=True)
@@ -754,10 +763,23 @@ def refresh_gitnexus_index():
     ignored - a stale index degrades a flow's answers, a raised exception would stop the
     daemon, and check=False keeps this from becoming the latter.
     """
+    global _GITNEXUS_RUNNER_WARNED
     if not GITNEXUS_RUNNER.exists():
+        # Once per process, not once per sync: this runs before every flow, and a clone that
+        # has never been analyzed would otherwise print the same line every few minutes.
+        if not _GITNEXUS_RUNNER_WARNED:
+            print(f"[triage] gitnexus: no runner at {GITNEXUS_RUNNER} - flows will run without an index", flush=True)
+            _GITNEXUS_RUNNER_WARNED = True
         return
     head = subprocess.run(["git", "-C", str(CLONE_DIR), "rev-parse", "HEAD"], capture_output=True, text=True, check=False).stdout.strip()
-    if head and GITNEXUS_HEAD_FILE.exists() and GITNEXUS_HEAD_FILE.read_text().strip() == head:
+    if not head:
+        # Without a HEAD there is no way to tell whether the index is stale, and no marker
+        # worth writing afterwards - an empty one would never match and would re-analyze on
+        # every sync from then on. sync_repo()'s own git calls use check=True, so reaching
+        # here at all means git is unwell; leave the existing index alone.
+        print("[triage] gitnexus: could not read HEAD - leaving the existing index alone", flush=True)
+        return
+    if GITNEXUS_HEAD_FILE.exists() and GITNEXUS_HEAD_FILE.read_text().strip() == head:
         return
     print(f"[triage] gitnexus: re-analyzing at {head[:8] or 'unknown'}", flush=True)
     result = subprocess.run(["node", str(GITNEXUS_RUNNER), "analyze"], cwd=str(CLONE_DIR), capture_output=True, text=True, check=False)
