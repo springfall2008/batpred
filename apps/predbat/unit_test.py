@@ -394,8 +394,10 @@ def create_predbat():
     # standalone run inherited the wall clock, and a time-of-day-dependent test could pass one way
     # and fail the other (#5026). Pin the fixture clock here instead, now_utc from midnight_utc so
     # the two stay consistent, the same way the scenario loader pins a scenario's own clock
-    # (test_random_scenarios.py apply_random_scenario). Modules that want more still pin and hand
-    # their clock back themselves, but nothing inherits the wall clock any more.
+    # (test_random_scenarios.py apply_random_scenario). Only minutes_now and now_utc are pinned
+    # here - update_time() has already taken midnight_utc and now_utc_real from the host clock
+    # and they are left alone. Modules that want more still pin and hand their clock back
+    # themselves, but no module inherits the wall clock into those two fields any more.
     my_predbat.minutes_now = FIXTURE_MINUTES_NOW
     my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=FIXTURE_MINUTES_NOW)
     my_predbat.ha_interface = TestHAInterface()
