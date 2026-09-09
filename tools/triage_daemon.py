@@ -263,6 +263,11 @@ _ALLOWED_TOOLS_NON_GH = [
     # operator's other MCP servers out of a bot session: --strict-mcp-config stops them being
     # loaded at all, and under dontAsk anything not named here is denied even if one were.
     "mcp__gitnexus__*",
+    # Write is what makes shell redirection work: `printf ... > file` is refused with a Bash
+    # grant alone and permitted once Write is present (checked both ways). Every flow holding
+    # this already has clone-wide Edit, so it is not new reach - it is the same reach without
+    # the workarounds runs kept having to invent. The journal flush drops it below.
+    "Write",
     "WebFetch",
     "Read",
     "Grep",
@@ -440,7 +445,11 @@ _ALLOWED_TOOLS_JOURNAL_EXTRA = [
     "Bash(./run_pre_commit*)",
     "Bash(./run_pre_commit)",
 ]
-_JOURNAL_DROPPED_EDITS = {f"Edit({EDIT_SCOPE})", f"Edit({SCRATCH_SCOPE})", f"Edit({QUEUE_SCOPE})"}
+# Write goes too: this is the one flow whose edit scope is deliberately two exact files
+# rather than the clone, precisely because it is also the one that can push. A bare Write
+# would let it author anything in the clone and then commit it, which is the whole thing
+# the narrow scope exists to prevent. It does not need redirection anyway.
+_JOURNAL_DROPPED_EDITS = {"Write", f"Edit({EDIT_SCOPE})", f"Edit({SCRATCH_SCOPE})", f"Edit({QUEUE_SCOPE})"}
 ALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _ALLOWED_TOOLS_NON_GH if rule not in _JOURNAL_DROPPED_EDITS] + [f"Edit({JOURNAL_SCOPE})", f"Edit({DICTIONARY_SCOPE})"] + _ALLOWED_TOOLS_JOURNAL_EXTRA)
 # gh pr merge/close stay denied from the base list - the bot never merges its own journal PR.
 _JOURNAL_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr create*)"}

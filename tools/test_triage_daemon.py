@@ -1066,6 +1066,34 @@ class McpPermissionTests(unittest.TestCase):
                 self.assertNotIn("mcp__*", getattr(triage_daemon, name).split(","))
 
 
+class WriteGrantTests(unittest.TestCase):
+    """Shell redirection (`cmd > file`) is refused with a Bash grant alone and permitted once
+    Write is present - checked both ways against claude 2.1.251. That restriction is what made
+    runs invent workarounds, and for most flows it was protecting nothing."""
+
+    WRITE_FLOWS = ("ALLOWED_TOOLS", "ALLOWED_TOOLS_PR", "ALLOWED_TOOLS_REVIEW", "ALLOWED_TOOLS_CLEANUP")
+
+    def test_the_flows_that_already_edit_the_clone_get_write(self):
+        """Not new reach: each of these already holds clone-wide Edit, so Write only removes
+        the need to work around a restriction that never bounded them."""
+        for name in self.WRITE_FLOWS:
+            with self.subTest(flow=name):
+                allowed = getattr(triage_daemon, name).split(",")
+                self.assertIn("Write", allowed)
+                self.assertIn(f"Edit({triage_daemon.EDIT_SCOPE})", allowed, "Write is only defensible where clone-wide Edit already is")
+
+    def test_the_journal_flush_does_not_get_write(self):
+        """The one flow whose edit scope is two exact files rather than the clone, precisely
+        because it is also the one that can push. Write would let it author anything in the
+        clone and commit it, which is what the narrow scope exists to prevent."""
+        self.assertNotIn("Write", triage_daemon.ALLOWED_TOOLS_JOURNAL.split(","))
+
+    def test_the_journal_flush_still_has_its_narrow_edit_scope(self):
+        """Guards the pairing: dropping Write is only safe while the edit scope stays narrow."""
+        allowed = triage_daemon.ALLOWED_TOOLS_JOURNAL.split(",")
+        self.assertNotIn(f"Edit({triage_daemon.EDIT_SCOPE})", allowed)
+
+
 class CleanupModelTests(unittest.TestCase):
     """cleanup_pr edits a maintainer's branch and pushes it."""
 
