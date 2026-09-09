@@ -31,15 +31,8 @@ from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10
 from plan import resolve_batch_threads
 from prediction import Prediction
 from prediction_kernel import create_kernel_context
+from tests.test_infra import FIXTURE_MINUTES_NOW
 from tests.test_kernel_parity import apply_random_scenario, kernel_available, make_step_data, make_windows, restore_scenario_state, snapshot_scenario_state
-
-
-# create_predbat() takes minutes_now from the wall clock, and only part of the day leaves the seed-5
-# routing scenario's ten trial costs distinct - an evening run collapses the three highest onto one
-# value and trips that test's precondition. Run after another module the value is whatever residue
-# that module left (reset_inverter's noon), so standalone runs failed while the full suite passed;
-# the module pins the same noon for itself rather than inheriting either (#5026).
-BATCH_TEST_MINUTES_NOW = 12 * 60
 
 
 def make_export_windows(minutes_now):
@@ -613,47 +606,21 @@ def test_batch_thread_count_resolution():
     return failed
 
 
-def test_minutes_now_is_pinned_and_restored(my_predbat):
-    """The module must run on its own pinned clock and hand the caller's back, returns True on failure.
-
-    These tests used to inherit whatever minutes_now the fixture arrived with, which is the wall clock
-    standalone and reset_inverter's noon after another module has run. The routing test's precondition
-    - ten trial SoCs with ten distinct costs - only holds for part of the day, so the module failed
-    when run on its own in the evening and passed in the full suite purely on leftover state (#5026).
-
-    Pinning is only half of it: the pin must not follow the module out, or it would hand the next test
-    a clock the caller never set. That is what the scenario snapshot is for, so this checks the round
-    trip carries minutes_now rather than trusting the attribute list by eye.
-    """
-    print("**** Running pinned clock tests ****")
-    failed = False
-
-    if my_predbat.minutes_now != BATCH_TEST_MINUTES_NOW:
-        print("ERROR: the batch tests are running at minutes_now {}, expected the pinned {}".format(my_predbat.minutes_now, BATCH_TEST_MINUTES_NOW))
-        failed = True
-
-    # A value no fixture would set by chance, so a restore that misses it cannot pass by luck
-    state = snapshot_scenario_state(my_predbat)
-    my_predbat.minutes_now = BATCH_TEST_MINUTES_NOW + 137
-    restore_scenario_state(my_predbat, state)
-    if my_predbat.minutes_now != BATCH_TEST_MINUTES_NOW:
-        print("ERROR: the scenario snapshot does not restore minutes_now, left {} not {}".format(my_predbat.minutes_now, BATCH_TEST_MINUTES_NOW))
-        my_predbat.minutes_now = BATCH_TEST_MINUTES_NOW
-        failed = True
-
-    if not failed:
-        print("Pinned clock tests passed")
-    return failed
-
-
 def run_prediction_batch_tests(my_predbat):
     """Run every batched prediction test, returns True on failure"""
-    # Snapshotted before anything is pinned so the caller's clock and scenario both go back untouched
+    # The module pins the fixture clock (create_predbat already does, so this is belt and braces
+    # against the fixture ever drifting) and hands the caller's clock and scenario back through the
+    # snapshot. entry_minutes_now records the clock as the caller left it so the finally can prove
+    # the hand-back rather than trusting that the attribute list still carries minutes_now (#5026
+    # review): a dropped list entry or a snapshot taken after the pin leaves the pin's value behind
+    # and fails here.
+    entry_minutes_now = my_predbat.minutes_now
     state = snapshot_scenario_state(my_predbat)
+    clock_handed_back = False
+    failed = False
     try:
-        my_predbat.minutes_now = BATCH_TEST_MINUTES_NOW
+        my_predbat.minutes_now = FIXTURE_MINUTES_NOW
 
-        failed = test_minutes_now_is_pinned_and_restored(my_predbat)
         failed |= test_export_trial_does_not_mutate_caller_window(my_predbat)
         failed |= test_batch_thread_count_resolution()
         failed |= test_available_cpu_count_respects_a_cgroup_quota()
@@ -662,18 +629,27 @@ def run_prediction_batch_tests(my_predbat):
         available, required_failure = kernel_available()
         if not available:
             print("WARNING: kernel not available - batch tests that need it are SKIPPED")
-            return failed or required_failure
-
-        failed |= test_queued_matches_direct(my_predbat)
-        failed |= test_queued_range_window_in_the_past(my_predbat)
-        failed |= test_batch_is_lazy(my_predbat)
-        failed |= test_batch_cache_and_dedup(my_predbat)
-        failed |= test_batch_fallbacks(my_predbat)
-        failed |= test_save_run_drains_pending_batch(my_predbat)
-        failed |= test_batch_results_match_their_own_job(my_predbat)
+            failed |= required_failure
+        else:
+            # Reset the kernel flag only when the kernel tests actually ran - the skip path must not
+            # touch shared fixture state the caller never saw change before (#5026 review)
+            try:
+                failed |= test_queued_matches_direct(my_predbat)
+                failed |= test_queued_range_window_in_the_past(my_predbat)
+                failed |= test_batch_is_lazy(my_predbat)
+                failed |= test_batch_cache_and_dedup(my_predbat)
+                failed |= test_batch_fallbacks(my_predbat)
+                failed |= test_save_run_drains_pending_batch(my_predbat)
+                failed |= test_batch_results_match_their_own_job(my_predbat)
+            finally:
+                my_predbat.prediction_kernel_enable = False
     finally:
         restore_scenario_state(my_predbat, state)
-        my_predbat.prediction_kernel_enable = False
+        clock_handed_back = my_predbat.minutes_now == entry_minutes_now
+
+    if not clock_handed_back:
+        print("ERROR: the batch tests handed back minutes_now {} instead of the caller's {}".format(my_predbat.minutes_now, entry_minutes_now))
+        failed = True
 
     if failed:
         print("**** Prediction batch tests FAILED ****")

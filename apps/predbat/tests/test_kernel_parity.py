@@ -57,9 +57,12 @@ RESULT_NAMES = [
     "final_carbon_g",
 ]
 
-# Attributes mutated by the parity scenarios, or by a module pinning the clock before them, that
-# reset_inverter/reset_rates do not restore; snapshotted before the tests and restored afterwards
-# so later tests see a clean predbat
+# Attributes mutated by the parity scenarios that reset_inverter/reset_rates do not restore;
+# snapshotted before the tests and restored afterwards so later tests see a clean predbat.
+# One exception: the parity scenarios only ever read minutes_now - its entry exists for
+# run_prediction_batch_tests, which pins the fixture clock while it runs and hands the caller's
+# back through the snapshot mechanism this list drives (#5026). Dropping the entry would leave
+# that module passing and only its own hand-back check failing, so it is documented here.
 SCENARIO_STATE_ATTRS = [
     "minutes_now",
     "soc_max",
