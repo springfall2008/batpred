@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 import yaml
 import json
-from datetime import timedelta
+from datetime import timedelta, datetime
 from ha import run_async
 
 
@@ -41,9 +41,7 @@ next_joined_event_end: null
 next_joined_event_duration_in_minutes: null
 icon: mdi:leaf
 friendly_name: Octoplus Saving Session (A-4DD6C5EE)
-""".format(
-        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday, tz_offset=tz_offset
-    )
+""".format(date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday, tz_offset=tz_offset)
 
     session_sensor = f"""
 state: '2025-01-23T12:10:11.108+{tz_offset}:00'
@@ -84,9 +82,7 @@ joined_events:
       rewarded_octopoints: null
       octopoints_per_kwh: 448
 friendly_name: Octoplus Saving Session Events (A-12345678)
-""".format(
-        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, tz_offset=tz_offset
-    )
+""".format(date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, tz_offset=tz_offset)
     ha.dummy_items["binary_sensor.octopus_energy_a_12345678_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
     ha.dummy_items["event.octopus_energy_a_12345678_octoplus_saving_session_event"] = yaml.safe_load(session_sensor)
     ha.dummy_items["sensor.octopus_free_session"] = {}
@@ -1035,6 +1031,10 @@ def test_saving_session_auto_join_toggle(my_predbat):
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
+    # Use a fixed time reference before event to allow testing of pre-event lead hours.
+    now = datetime.fromisoformat(f"{date_today}T15:45:00+{tz_offset}:00")
+    my_predbat.now_utc = now
+
     session_binary = f"""
 state: off
 current_joined_event_start: null
@@ -1094,7 +1094,7 @@ friendly_name: Octoplus Saving Session Events
     else:
         print("  PASS: Join skipped when octopus_saving_auto_join is False")
 
-    # Test 2: auto-join enabled -> join proceeds
+    # Test 2: auto-join enabled, lead-hours unset default -> join proceeds
     print("  Test 2: octopus_saving_auto_join=True allows the join")
     setup_items()
     my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
@@ -1111,11 +1111,63 @@ friendly_name: Octoplus Saving Session Events
     else:
         print("  PASS: Join proceeds when octopus_saving_auto_join is True")
 
-    if not failed:
-        print("PASS: All auto-join toggle tests passed")
+    # Test 3: auto-join enabled, lead hours set to 0 (immediate) -> join proceeds
+    print("  Test 3: octopus_saving_auto_join=True with octopus_saving_auto_join_lead_hours=0 allows the join")
+    setup_items()
+    my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
+    my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 0, quiet=True)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if len(join_calls) != 1:
+        print(f"ERROR: Expected 1 join when immediate auto-join enabled, got {len(join_calls)}: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Join proceeds when octopus_saving_auto_join is True")
+
+    # Test 4: auto-join enabled, event outside configured lead hours -> no join
+    print("  Test 4: octopus_saving_auto_join=True with time before event > octopus_saving_auto_join_lead_hours skips the join")
+    setup_items()
+    my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
+    my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 2, quiet=True)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if join_calls:
+        print(f"ERROR: Expected no join when auto-join enabled time before event > octopus_saving_auto_join_lead_hours, got {join_calls}")
+        failed = True
+    else:
+        print("  PASS: Join skipped when octopus_saving_auto_join is True and time before event > octopus_saving_auto_join_lead_hours")
+
+    # Test 5: auto-join enabled, lead hours set to 0 (immediate) -> join proceeds
+    print("  Test 5: octopus_saving_auto_join=True with time before event < octopus_saving_auto_join_lead_hours allows the join")
+    setup_items()
+    my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
+    my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 3, quiet=True)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if len(join_calls) != 1:
+        print(f"ERROR: Expected 1 join when immediate auto-join enabled and time before event < octopus_saving_auto_join_lead_hours, got {len(join_calls)}: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Join proceeds when octopus_saving_auto_join is True and time before event < octopus_saving_auto_join_lead_hours")
 
     # Restore default state so we do not leak it to other tests
     my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
+    my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 0, quiet=True)
     my_predbat.octopus_last_joined_try = None
 
     return failed
