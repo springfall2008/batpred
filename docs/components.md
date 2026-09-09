@@ -1138,7 +1138,7 @@ Per car, with `_1`, `_2` … postfixes for later cars:
 | `sensor.predbat_evcc_charge_power` | Present charging power in W |
 | `sensor.predbat_evcc_mode` | evcc's current charging mode, with the vehicle's own default in `vehicle_default_mode` |
 | `sensor.predbat_evcc_target_mode` | The mode in effect on the loadpoint: evcc's own while Predbat is not intervening, the borrowed one while it is. `reason` says what Predbat did about it, `predbat_mode` and `decision` what it wanted and why, `write_target` what was actually sent |
-| `sensor.predbat_evcc_restore_mode` | The mode owed back to evcc during a takeover, or `none` |
+| `sensor.predbat_evcc_restore_mode` | The mode owed back to evcc during a takeover, or `none`. `written` is the mode Predbat left on the loadpoint, which is what a borrow is checked against before it is resumed after a restart |
 | `binary_sensor.predbat_evcc_override` | On when somebody changed the mode in evcc and Predbat has backed off |
 | `binary_sensor.predbat_evcc_guest_hold` | On while the home battery is actually being held for an unidentified car |
 | `sensor.predbat_evcc_priority_soc` | The site's home battery priority SoC. With `evcc_automatic` it also sets **input_number.predbat_car_charging_solar_min_soc**, but only when the value in evcc changes, so your own adjustments are not undone every poll |
@@ -1167,8 +1167,18 @@ sending to a charger that is already doing the rest.
 and `now` are settings you made deliberately, so Predbat leaves them exactly as they are, even for a planned
 grid slot (`sensor.predbat_evcc_target_mode` says `not_resting`). When the slot or the export window ends,
 the mode Predbat found is written back, and `sensor.predbat_evcc_restore_mode` shows what is owed in the
-meantime - it is published, so a Predbat restart mid-slot still hands the loadpoint back rather than
-leaving it in `now`.
+meantime.
+
+That rule is also why a borrow is never allowed to go missing. Predbat writes `off` for an export window,
+and `off` is a mode it will not borrow from - so a loadpoint left in it with no record of where it came from
+is stranded: every later grid slot is refused as `not_resting` and the car never charges. Three things
+prevent that. Predbat **hands every borrowed loadpoint back before it stops**, so a planned restart - an
+upgrade, a config reload - costs nothing. The borrow is also **saved to disk** as it happens, so a stop that
+never gets that far (a crash, a power cut) is recovered on the next start. And `sensor.predbat_evcc_restore_mode`
+is read back as a third route, its `written` attribute recording the mode Predbat left; a borrow is only
+resumed while that mode is still the one in place, because anything else means somebody has moved the
+loadpoint on since. If a borrow is ever lost anyway, Predbat logs that it has found a loadpoint in `off` or
+`now` with nothing owed back, rather than sitting there silently.
 
 Nothing at all is written while no car is connected. That is where evcc's own defaults live: the
 loadpoint's `mode` is what evcc resets to when the car is unplugged, and the vehicle's `mode` is what evcc

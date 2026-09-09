@@ -51,6 +51,14 @@ EVCC_RESTING_MODES = [EVCC_MODE_PV, EVCC_MODE_MINPV]
 # Everything else - the resting state, the home battery priority, an unplugged car - evcc does itself.
 EVCC_TAKEOVER_REASONS = {"grid_slot": EVCC_MODE_NOW, "export_better": EVCC_MODE_OFF}
 
+# The only modes Predbat itself ever writes, and so the only ones it can find a loadpoint parked in
+# after a restart. Neither is a resting mode, which is what makes a forgotten borrow unrecoverable.
+EVCC_TAKEOVER_MODES = sorted(set(EVCC_TAKEOVER_REASONS.values()))
+
+# Where the borrows in progress are recorded, so a restart can still hand a loadpoint back
+STORAGE_MODULE = "evcc"
+STORAGE_TAKEOVER = "takeover"
+
 # Published when no mode is being held on Predbat's behalf, matching the "off" spelling used elsewhere
 NO_RESTORE = "none"
 
@@ -418,11 +426,17 @@ class EvccAPI(ComponentBase):
         self.override_until = {}
         self.last_connected = {}
         self.guest_charging = {}
+        # Borrows recorded before the last shutdown, read once on the first cycle. None until then,
+        # so the read is not mistaken for "nothing was owed"
+        self.saved_takeovers = None
+        self.takeover_dirty = False
         # Last seen state of the Predbat config switches, so read_switches() can spot a change.
+        # Both start as None rather than a value, so the first read is reported too: a switch that
+        # comes up off after an upgrade is otherwise silent, and silence reads as "nothing to say".
         # Guest hold is off by default: evcc loses identification of a car from time to time (its
         # API goes down), and holding the battery on that alone would force expensive import
         self.control_enabled = {}
-        self.guest_hold_enabled = False
+        self.guest_hold_enabled = None
 
         # Snapshot apps.yaml before any set_arg, so auto-config can tell a user's own value from
         # one it wrote itself on an earlier cycle
@@ -930,19 +944,97 @@ class EvccAPI(ComponentBase):
             return False, "state_stale"
         return True, reason
 
-    def restore_saved_mode(self, car_n):
+    async def save_takeovers(self):
         """
-        Seed the borrowed mode from our own published sensor, so a restart mid-episode still hands back.
+        Record the borrows in progress, so a restart knows which loadpoints are still on loan.
 
-        Without this a Predbat restart during a grid slot would leave the loadpoint in now with nothing
-        left that knows to undo it - the same reason restore_sticky reads its own sensor back.
+        Written whenever one starts or ends rather than only at shutdown, because the case this has
+        to survive is the shutdown that never runs final() - a killed container, a crash, a power cut.
+        """
+        storage = self.storage
+        if not storage:
+            return
+        record = {str(car_n): {"restore": mode, "written": self.written_mode.get(car_n)} for car_n, mode in self.restore_mode.items()}
+        try:
+            await storage.save(STORAGE_MODULE, STORAGE_TAKEOVER, record, format="json")
+        except Exception as error:
+            # A lost record costs a hand-back, not correctness - it must never stop the poll
+            self.log("Warn: EvccAPI: could not save the takeover state: {}".format(error))
+
+    async def load_takeovers(self):
+        """
+        Read the borrows recorded before the last shutdown, once, on the first cycle.
+        """
+        if self.saved_takeovers is not None:
+            return
+        self.saved_takeovers = {}
+        storage = self.storage
+        if not storage:
+            return
+        try:
+            saved = await storage.load(STORAGE_MODULE, STORAGE_TAKEOVER)
+        except Exception as error:
+            self.log("Warn: EvccAPI: could not read the saved takeover state: {}".format(error))
+            return
+        if not isinstance(saved, dict):
+            return
+        for key, record in saved.items():
+            try:
+                self.saved_takeovers[int(key)] = record
+            except (TypeError, ValueError):
+                # A key that is not a car index is not ours to interpret - skip it rather than fail
+                continue
+
+    def restore_saved_mode(self, car_n, observed):
+        """
+        Recover a borrow left unfinished by a restart, so the loadpoint is still handed back.
+
+        This is not merely about politeness in returning the mode. Predbat writes off for
+        export_better, and off is not a mode it will borrow from - so a borrow forgotten here strands
+        the loadpoint outright: every later grid slot is refused as not_resting and the car never
+        charges again, silently, until somebody notices. That is why this runs before any gate.
+
+        Two records are consulted because they fail in different ways. A Home Assistant restart drops
+        every entity Predbat pushed over the REST API - they live in the state machine and nothing
+        restores them - so the sensor is simply gone on the first cycle back, which is exactly how a
+        borrow was lost in the field. The saved state is a local file and does not care. The sensor is
+        still read as well, because it survives the cache being cleared where the file does not.
+
+        Either is only trusted while the mode Predbat wrote is still in place - anything else means
+        somebody has moved the loadpoint on since, and what it was borrowed from no longer describes
+        where to put it back.
         """
         if car_n in self.restore_mode:
             return
-        state = self.get_state_wrapper(entity_id=self.entity("sensor", "restore_mode", car_n))
-        if state in EVCC_RESTING_MODES:
-            self.restore_mode[car_n] = state
-            self.log("EvccAPI: car {} resuming an unfinished takeover, {} is still owed back".format(car_n, state))
+
+        record = self.saved_takeovers.pop(car_n, None) if self.saved_takeovers else None
+        saved = record.get("restore") if isinstance(record, dict) else None
+        written = record.get("written") if isinstance(record, dict) else None
+        source = "saved state"
+
+        if saved not in EVCC_RESTING_MODES:
+            entity_id = self.entity("sensor", "restore_mode", car_n)
+            saved = self.get_state_wrapper(entity_id=entity_id)
+            written = self.get_state_wrapper(entity_id=entity_id, attribute="written")
+            source = "published sensor"
+
+        if saved not in EVCC_RESTING_MODES:
+            if observed in EVCC_TAKEOVER_MODES:
+                # Only Predbat writes these two, so one with nothing owed back is either a borrow that
+                # was lost or a deliberate setting of the user's. It cannot tell which, and it leaves
+                # the loadpoint alone either way - but left unsaid the car just quietly never charges
+                self.log("Warn: EvccAPI: car {} loadpoint is in '{}' with no record of what it was borrowed from - leaving it to evcc, which will refuse to take it over".format(car_n, observed))
+            return
+
+        if written and observed and observed != written:
+            self.log("EvccAPI: car {} was borrowed but the mode has moved to '{}' since (Predbat left '{}') - not resuming".format(car_n, observed, written))
+            return
+
+        self.restore_mode[car_n] = saved
+        # Seed what was written too, so the first cycle back does not read its own mode as an override
+        self.written_mode[car_n] = written or observed
+        self.takeover_dirty = True
+        self.log("EvccAPI: car {} resuming an unfinished takeover from the {}, {} is still owed back".format(car_n, source, saved))
 
     def write_target(self, car_n, reason, observed):
         """
@@ -975,6 +1067,7 @@ class EvccAPI(ComponentBase):
     def drop_takeover(self, car_n, why):
         """Forget the borrowed mode without handing it back, logging why when there was one."""
         if self.restore_mode.pop(car_n, None):
+            self.takeover_dirty = True
             self.log("EvccAPI: car {} takeover ended ({})".format(car_n, why))
 
     def detect_override(self, car_n, observed):
@@ -1000,6 +1093,8 @@ class EvccAPI(ComponentBase):
 
     async def apply_modes(self):
         """Compute, publish and where allowed write the evcc charge mode for every mapped car."""
+        await self.load_takeovers()
+
         for car_n, lp_index in sorted(self.loadpoint_map.items()):
             loadpoints = self.state.get("loadpoints") or []
             if lp_index >= len(loadpoints):
@@ -1009,7 +1104,7 @@ class EvccAPI(ComponentBase):
 
             # Seeded before any gate: plan_valid is False on the first cycle after a restart, which is
             # exactly the cycle where an unfinished takeover has to be recovered rather than published away
-            self.restore_saved_mode(car_n)
+            self.restore_saved_mode(car_n, observed)
 
             # A new session clears any standing override
             connected = bool(loadpoint.get("connected"))
@@ -1051,6 +1146,7 @@ class EvccAPI(ComponentBase):
                             self.drop_takeover(car_n, "handed back")
                         elif not self.restore_mode.get(car_n):
                             self.restore_mode[car_n] = observed
+                            self.takeover_dirty = True
                             self.log("EvccAPI: car {} borrowing loadpoint {} from {} ({})".format(car_n, lp_index + 1, observed, reason))
                         self.log("EvccAPI: loadpoint {} mode -> {} ({})".format(lp_index + 1, target, reason))
                     else:
@@ -1079,7 +1175,9 @@ class EvccAPI(ComponentBase):
             self.dashboard_item(
                 self.entity("sensor", "restore_mode", car_n),
                 state=self.restore_mode.get(car_n) or NO_RESTORE,
-                attributes={"friendly_name": "Predbat evcc mode to restore", "icon": "mdi:backup-restore", "borrowed": bool(self.restore_mode.get(car_n))},
+                # written is what restore_saved_mode checks the loadpoint against on the way back, so
+                # a borrow is only resumed while the mode Predbat left is still the one in place
+                attributes={"friendly_name": "Predbat evcc mode to restore", "icon": "mdi:backup-restore", "borrowed": bool(self.restore_mode.get(car_n)), "written": self.written_mode.get(car_n)},
                 app="evcc",
             )
             self.dashboard_item(
@@ -1088,6 +1186,48 @@ class EvccAPI(ComponentBase):
                 attributes={"friendly_name": "Predbat evcc override", "icon": "mdi:hand-back-left", "until": self.override_until[car_n].isoformat() if self.override_until.get(car_n) else None, "observed_mode": observed},
                 app="evcc",
             )
+
+        # Once per cycle rather than per car, so a two-car change is one write
+        if self.takeover_dirty:
+            self.takeover_dirty = False
+            await self.save_takeovers()
+
+    async def final(self):
+        """
+        Hand every borrowed loadpoint back before the component stops.
+
+        A restart is otherwise indistinguishable from Predbat going quiet: the loadpoint keeps the
+        mode Predbat wrote, and off is one Predbat will not take over again. Handing back here makes a
+        planned stop - an upgrade, a config reload - cost nothing at all, and leaves the saved record
+        to cover only the stop that never reaches this point.
+        """
+        if self.get_arg("set_read_only", False):
+            return
+
+        for car_n in sorted(self.restore_mode):
+            lp_index = self.loadpoint_map.get(car_n)
+            if lp_index is None:
+                continue
+            mode = self.restore_mode[car_n]
+            if await self.client.set_mode(lp_index + 1, mode):
+                self.log("EvccAPI: car {} handing loadpoint {} back to {} before stopping".format(car_n, lp_index + 1, mode))
+                self.restore_mode.pop(car_n, None)
+                self.takeover_dirty = True
+                # Cleared here as well as in the store, so the next start does not read a hand-back
+                # that has already happened back off a sensor nothing else will update now
+                self.dashboard_item(
+                    self.entity("sensor", "restore_mode", car_n),
+                    state=NO_RESTORE,
+                    attributes={"friendly_name": "Predbat evcc mode to restore", "icon": "mdi:backup-restore", "borrowed": False, "written": None},
+                    app="evcc",
+                )
+            else:
+                # Left in the record so the next start can try again
+                self.log("Warn: EvccAPI: car {} could not hand loadpoint {} back to {} before stopping".format(car_n, lp_index + 1, mode))
+
+        if self.takeover_dirty:
+            self.takeover_dirty = False
+            await self.save_takeovers()
 
     def read_switches(self):
         """
@@ -1100,14 +1240,20 @@ class EvccAPI(ComponentBase):
         """
         for car_n in sorted(self.loadpoint_map):
             enabled = self.car_controlled(car_n)
-            if enabled != self.control_enabled.get(car_n, enabled):
+            if car_n not in self.control_enabled:
+                # Reported on the first read as well as on a change: with control off nothing else in
+                # this component ever logs, so "why is it not doing anything" has no answer otherwise
+                self.log("EvccAPI: charge mode control on car {}'s loadpoint is {}".format(car_n, "on" if enabled else "off"))
+            elif enabled != self.control_enabled[car_n]:
                 self.log("EvccAPI: charge mode control on car {}'s loadpoint switched {}".format(car_n, "on" if enabled else "off"))
                 # car_charging_now follows the switch, so the auto-configuration has to be redone
                 self.config_signature = None
             self.control_enabled[car_n] = enabled
 
         guest_hold = bool(self.get_arg("evcc_guest_hold", False))
-        if guest_hold != self.guest_hold_enabled:
+        if self.guest_hold_enabled is None:
+            self.log("EvccAPI: guest car battery hold is {}".format("on" if guest_hold else "off"))
+        elif guest_hold != self.guest_hold_enabled:
             self.log("EvccAPI: guest car battery hold switched {}".format("on" if guest_hold else "off"))
         self.guest_hold_enabled = guest_hold
 
@@ -1120,7 +1266,8 @@ class EvccAPI(ComponentBase):
         switch itself lives in the config (see read_switches); what is published here is what the
         component did with it, so "why is the battery held" is answerable from one entity.
         """
-        holding = self.guest_hold_enabled and any(self.guest_charging.get(car_n, False) for car_n in self.loadpoint_map)
+        # bool() because the switch reads None until read_switches has seen it for the first time
+        holding = bool(self.guest_hold_enabled) and any(self.guest_charging.get(car_n, False) for car_n in self.loadpoint_map)
         if holding != bool(getattr(self.base, "evcc_guest_charging", False)):
             self.log("EvccAPI: home battery hold for an unidentified car {}".format("on" if holding else "off"))
         self.base.evcc_guest_charging = holding
@@ -1128,7 +1275,7 @@ class EvccAPI(ComponentBase):
         self.dashboard_item(
             self.entity("binary_sensor", "guest_hold", 0),
             state="on" if holding else "off",
-            attributes={"friendly_name": "Predbat evcc holding battery for a guest car", "icon": "mdi:home-battery-outline", "enabled": self.guest_hold_enabled},
+            attributes={"friendly_name": "Predbat evcc holding battery for a guest car", "icon": "mdi:home-battery-outline", "enabled": bool(self.guest_hold_enabled)},
             app="evcc",
         )
         return holding

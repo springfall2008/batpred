@@ -687,6 +687,82 @@ def test_only_borrows_a_resting_loadpoint():
     run_async(restarted.apply_modes())
     check("restart_hands_back", writes, [(1, EVCC_MODE_PV)], failures)
 
+    # The incident this all exists for: Predbat wrote off for export_better, restarted, and lost the
+    # borrow. off is not a resting mode, so every later grid slot was refused and the car never
+    # charged - all night, with nothing written and nothing logged.
+    stranded = MockEvccAPI(host="http://evcc", control=True)
+    stranded.state = {"loadpoints": [dict(SAMPLE_STATE["loadpoints"][0], mode=EVCC_MODE_OFF, connected=True)]}
+    stranded.state_time = stranded.now_utc
+    stranded.loadpoint_map = {0: 0}
+    stranded.entities["sensor.predbat_car_charging_mode"] = {"state": "now", "attributes": {"reason": "grid_slot"}}
+    del writes[:]
+    stranded.client.set_mode = fake_set_mode
+    run_async(stranded.apply_modes())
+    check("stranded_writes_nothing", writes, [], failures)
+    # It cannot recover on its own, but it must say so rather than sit there silently
+    check("stranded_warns", any("no record of what it was borrowed from" in message for message in stranded.log_messages), True, failures)
+
+    # With the borrow recovered from the saved state, the same slot is taken over as it should be
+    recovered = MockEvccAPI(host="http://evcc", control=True)
+    recovered.state = {"loadpoints": [dict(SAMPLE_STATE["loadpoints"][0], mode=EVCC_MODE_OFF, connected=True)]}
+    recovered.state_time = recovered.now_utc
+    recovered.loadpoint_map = {0: 0}
+    recovered.saved_takeovers = {0: {"restore": EVCC_MODE_PV, "written": EVCC_MODE_OFF}}
+    recovered.entities["sensor.predbat_car_charging_mode"] = {"state": "now", "attributes": {"reason": "grid_slot"}}
+    del writes[:]
+    recovered.client.set_mode = fake_set_mode
+    run_async(recovered.apply_modes())
+    check("recovered_takes_over", writes, [(1, EVCC_MODE_NOW)], failures)
+    check("recovered_still_owes", recovered.restore_mode.get(0), EVCC_MODE_PV, failures)
+
+    # A borrow is only resumed while the mode Predbat left is still in place - somebody who has moved
+    # the loadpoint on since has said what they want, and where it came from no longer applies
+    moved = MockEvccAPI(host="http://evcc", control=True)
+    moved.state = {"loadpoints": [dict(SAMPLE_STATE["loadpoints"][0], mode=EVCC_MODE_NOW, connected=True)]}
+    moved.state_time = moved.now_utc
+    moved.loadpoint_map = {0: 0}
+    moved.saved_takeovers = {0: {"restore": EVCC_MODE_PV, "written": EVCC_MODE_OFF}}
+    moved.entities["sensor.predbat_car_charging_mode"] = {"state": "solar", "attributes": {"reason": "idle"}}
+    del writes[:]
+    moved.client.set_mode = fake_set_mode
+    run_async(moved.apply_modes())
+    check("moved_not_resumed", writes, [], failures)
+    check("moved_owes_nothing", moved.restore_mode.get(0), None, failures)
+
+    # A planned stop hands the loadpoint back, so a restart mid-borrow costs nothing at all
+    stopping = MockEvccAPI(host="http://evcc", control=True)
+    stopping.loadpoint_map = {0: 0}
+    stopping.restore_mode = {0: EVCC_MODE_PV}
+    del writes[:]
+    stopping.client.set_mode = fake_set_mode
+    run_async(stopping.final())
+    check("final_hands_back", writes, [(1, EVCC_MODE_PV)], failures)
+    check("final_owes_nothing", stopping.restore_mode.get(0), None, failures)
+    # The sensor is cleared too, so the next start does not resume a hand-back that already happened
+    check("final_clears_sensor", stopping.entities["sensor.predbat_evcc_restore_mode"]["state"], "none", failures)
+
+    # A write that fails keeps the record, so the next start can try again
+    failing = MockEvccAPI(host="http://evcc", control=True)
+    failing.loadpoint_map = {0: 0}
+    failing.restore_mode = {0: EVCC_MODE_PV}
+
+    async def refuse_set_mode(loadpoint_id, mode):
+        """Reject the hand-back, as an evcc that is already gone would."""
+        return False
+
+    failing.client.set_mode = refuse_set_mode
+    run_async(failing.final())
+    check("final_keeps_unsent", failing.restore_mode.get(0), EVCC_MODE_PV, failures)
+
+    # Read-only mode writes nothing, not even the hand-back
+    readonly = MockEvccAPI(host="http://evcc", control=True, args={"set_read_only": True})
+    readonly.loadpoint_map = {0: 0}
+    readonly.restore_mode = {0: EVCC_MODE_PV}
+    del writes[:]
+    readonly.client.set_mode = fake_set_mode
+    run_async(readonly.final())
+    check("final_read_only", writes, [], failures)
+
     # The vehicle's own default mode is published, so a mode Predbat never wrote is not blamed on it
     api = MockEvccAPI(host="http://evcc")
     state = copy.deepcopy(SAMPLE_STATE)
@@ -1082,6 +1158,18 @@ def test_guest_car_battery_hold():
     unset.read_switches()
     check("control_default_kept", unset.car_controlled(0), True, failures)
     check("hold_default_off", unset.guest_hold_enabled, False, failures)
+
+    # The first read is reported as well as a change. With control off nothing else in the component
+    # ever logs, so a switch that comes up off after an upgrade would otherwise be completely silent
+    quiet = MockEvccAPI(host="http://evcc", control=False)
+    quiet.loadpoint_map = {0: 0}
+    quiet.read_switches()
+    check("first_read_logs_control", any("control on car 0's loadpoint is off" in message for message in quiet.log_messages), True, failures)
+    check("first_read_logs_hold", any("guest car battery hold is off" in message for message in quiet.log_messages), True, failures)
+    # ...and it is not repeated every cycle once it is known
+    del quiet.log_messages[:]
+    quiet.read_switches()
+    check("first_read_not_repeated", quiet.log_messages, [], failures)
     return failures
 
 
