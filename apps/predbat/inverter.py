@@ -26,6 +26,7 @@ from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
 from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, EXPORT_LIMIT_IDLE, INVERTER_WRITE_POLL_INTERVAL, INVERTER_WRITE_POLL_MAX_INTERVAL
 from control_ledger import generation_from_state, OWNED, UNOWNED
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
+from dispatch import InverterDispatch, dispatch_power_for_rate
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -314,6 +315,10 @@ class Inverter:
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
         self.inv_has_fox_inverter_mode = INVERTER_DEF[self.inverter_type].get("has_fox_inverter_mode", False)
+
+        # Real-time dispatch support (see dispatch.py): optional, arg-driven. The
+        # InverterDispatch helper is inert unless the apps.yaml entity args exist.
+        self.dispatch = InverterDispatch(self)
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -1927,6 +1932,11 @@ class Inverter:
         if self.inv_output_charge_control == "current":
             self.set_current_from_power("discharge", new_rate)
 
+        # Real-time dispatch: remember the rate the export branch wants. adjust_force_export()
+        # reads this stash when it applies the dispatch command, so the power applied to the
+        # dispatch block is the same rate Predbat just set for the window.
+        self.dispatch_rate_w = new_rate
+
     def adjust_battery_target(self, soc, isCharging=False, isExporting=False):
         """
         Adjust the battery charging target SoC % in GivTCP
@@ -2479,7 +2489,7 @@ class Inverter:
         ================
 
             Config arg                         Type          Units
-            ----------                         ----          -----
+            ----------                         ----          ------
             discharge_start_time               string
             discharge_end_time                 string
             *discharge_start_hour              int
@@ -2487,8 +2497,44 @@ class Inverter:
             *discharge_end_hour                int
             *discharge_end_minute              int
             *charge_discharge_update_button    button
+            *dispatch_* (real-time dispatch, see dispatch.py)
 
         """
+
+        # Real-time dispatch path (optional, arg-driven): when the inverter is driven by
+        # a real-time dispatch API, Predbat owns the window cycle-by-cycle instead of
+        # arming a persistent scheduled slot - the inverter's dispatch failsafe reverts
+        # to demand mode if Predbat stops re-applying, which is the RAM-only equivalent
+        # of disabling a timed slot. Applying happens here rather than in
+        # adjust_discharge_rate() because force-export is the export-defining signal
+        # (the rate setters also run in calibration and reset paths, where arming
+        # dispatch would be wrong). The in-window test matters because execute() also
+        # calls this with force_export=True to pre-arm an upcoming window - dispatch
+        # must not start until the window time is actually reached.
+        if self.dispatch.enabled():
+            in_window = False
+            if force_export and new_start_time is not None and new_end_time is not None:
+                in_window = self.base.now_utc <= new_end_time and self.base.now_utc >= new_start_time
+            if in_window:
+                rate_w = getattr(self, "dispatch_rate_w", None)
+                if rate_w:
+                    soc_min = int(max(self.reserve_percent, self.reserve_min))
+                    self.dispatch.apply_dispatch(
+                        power_w=dispatch_power_for_rate(rate_w),
+                        soc_min=soc_min,
+                        soc_max=100,
+                        mode="Battery Charge",
+                    )
+                else:
+                    self.log("Warn: Inverter {} dispatch: no discharge rate staged, dispatch not applied".format(self.id))
+            else:
+                # Outside the window (or pre-arming a future one): make sure dispatch
+                # is off. Pre-arms fall through here harmlessly and are re-tried each
+                # cycle until the window opens.
+                self.dispatch.disable_dispatch()
+            # The scheduled-slot writes below are skipped entirely for dispatch-driven
+            # inverters: both paths active at once would double-drive the export power.
+            return
 
         if "discharge_start_time" in self.base.args:
             old_start = self.base.get_arg("discharge_start_time", index=self.id)
