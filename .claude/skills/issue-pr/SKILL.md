@@ -37,7 +37,7 @@ Fetch it with `gh issue view <number> --json title,body,labels,comments`. The bo
 
 ## 4. Quality gate
 
-Both of these must pass before you continue to step 6. `run_pre_commit` must run with `coverage/` as the working directory (it sources `coverage/setup.csh` internally); `tools/triage_test.sh` must run from the repo root. Change directory explicitly for each rather than assuming where you're left afterwards:
+Both of these must pass before you continue to step 5. `run_pre_commit` must run with `coverage/` as the working directory (it sources `coverage/setup.csh` internally); `tools/triage_test.sh` must run from the repo root. Change directory explicitly for each rather than assuming where you're left afterwards:
 
 ```bash
 cd coverage
