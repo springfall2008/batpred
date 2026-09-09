@@ -2176,8 +2176,12 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
-        # See FoxESS's entry above - same hardware, correctly modelled rather than disabled (#4207).
-        "support_feedin_first": True,
+        # Unlike FoxESS above, the Cloud path never actually selects Feed-in First (#5015). It drives
+        # the inverter through the API scheduler, which only ever emits ForceCharge/ForceDischarge
+        # groups, and adjust_inverter_mode pins the work mode to SelfUse - so a freeze export slot
+        # leaves the inverter in Self Use and PV charges the battery instead of being exported.
+        # Modelling recapture here made the planner pick freeze export slots that do nothing.
+        "support_feedin_first": False,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,

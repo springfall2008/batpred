@@ -24,11 +24,13 @@ from const import MINUTE_WATT
 
 def test_foxess_support_discharge_freeze_matches_foxcloud():
     """
-    FoxESS (modbus) and FoxCloud are the same hardware via two different connection methods - "feed-in
-    first"/freeze export does not hold SoC flat on either, PV above the export limit still charges the
-    battery instead of being clipped (#4207). Both are now True: that spillover-charges-the-battery
-    behaviour is correctly modelled (prediction.py's freeze branch, gated on support_feedin_first)
-    rather than being a reason to disable freeze outright for this hardware - see
+    FoxESS (modbus) and FoxCloud are the same hardware via two different connection methods, so both
+    support freeze export rather than having it disabled outright for this hardware (#4207) - this
+    pins support_discharge_freeze only.
+
+    support_feedin_first deliberately does NOT match across the two: whether the freeze is a real
+    Feed-in First mode depends on the control path rather than the silicon, and only the modbus side
+    selects that mode (#5015). See test_support_feedin_first_is_opt_in, and
     test_freeze_export_recapture_beyond_limit in test_optimise_solar.py for the modelling itself.
     """
     failed = False
@@ -45,14 +47,19 @@ def test_support_feedin_first_is_opt_in():
     """
     support_feedin_first says the inverter's Freeze Export really is a "Feed-in First" mode (load,
     then export, then battery), so PV past the export limit charges the battery instead of being
-    clipped. Only types whose component actually selects such a mode may opt in - the Fox hardware,
-    plus the four clouds that switch work mode for the freeze: SolisCloud ("Feed-in priority",
-    solis.py), SolaxCloud ("feedin", solax.py), SunsynkCloud and DeyeCloud (Selling First,
-    sunsynk.py/deye.py). Every other type must default off, because modelling recapture on an
-    inverter that merely disables charging invents energy that never reaches the battery.
+    clipped. Only types whose component actually selects such a mode may opt in - FoxESS (modbus, via
+    the discharge_freeze_service in templates/fox.yaml), plus the four clouds that switch work mode
+    for the freeze: SolisCloud ("Feed-in priority", solis.py), SolaxCloud ("feedin", solax.py),
+    SunsynkCloud and DeyeCloud (Selling First, sunsynk.py/deye.py). Every other type must default
+    off, because modelling recapture on an inverter that merely disables charging invents energy
+    that never reaches the battery.
+
+    FoxCloud is deliberately excluded despite being the same hardware as FoxESS: its control path is
+    the API scheduler, which never emits a Feedin group, and adjust_inverter_mode pins the work mode
+    to SelfUse (#5015). Same silicon, different control surface - so the capability differs.
     """
     failed = False
-    expect_feedin_first = {"FoxESS", "FoxCloud", "SolisCloud", "SolaxCloud", "SunsynkCloud", "DeyeCloud"}
+    expect_feedin_first = {"FoxESS", "SolisCloud", "SolaxCloud", "SunsynkCloud", "DeyeCloud"}
 
     for inverter_type in expect_feedin_first:
         if INVERTER_DEF[inverter_type].get("support_feedin_first", False) is not True:
