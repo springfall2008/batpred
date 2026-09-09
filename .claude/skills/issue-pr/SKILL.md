@@ -50,6 +50,25 @@ Use the test module named in the triage comment, or the one `TEST_REGISTRY` maps
 
 If either fails, stop here — do not commit, push, or open a PR. Go to step 7 and report what failed.
 
+### Prove your test can fail
+
+A test that passes with and without your change is not coverage, it is decoration — and it is easy to write one by accident. Before the gate counts as passed, check the new test actually fails without the fix:
+
+```bash
+git stash push -- <the source files you changed, NOT the test file>
+tools/triage_test.sh <name> <scratch>/test-red.log     # expect FAILURE
+git stash pop
+tools/triage_test.sh <name> <scratch>/test.log         # expect PASS
+```
+
+Stash only the source change. If you stash the test too, both runs pass and you have proved nothing.
+
+Report both outcomes in the PR body's Testing section — "fails without the fix, passes with it" is the sentence a reviewer is looking for.
+
+If `git stash pop` reports a conflict, **stop and go to step 7**. Do not improvise another way to restore the change; say the fix is stashed and needs recovering by hand.
+
+Some fixes genuinely cannot be made to fail on this harness, and that is a real finding rather than an excuse. The GH#4965 guard is the worked example: deleting the attribute it protects does not reproduce the crash, because the mock inverter never reaches the read. When that happens, say which and why in the PR body, and make the test assert the guard is present rather than dressing up a reproduction that would pass either way.
+
 ## 5. Branch, commit, push
 
 Branch name: `fix/<slug>-<issue-number>` for a `bug` classification, `feat/<slug>-<issue-number>` for `enhancement` — matching this repo's existing convention (e.g. `fix/solis-tou-bit-refused-4707`). `<slug>` is a short kebab-case description of the change.
@@ -81,7 +100,7 @@ Fixes #<issue-number>
 
 ## Testing
 
-<what you ran in step 4 and its result>
+<what you ran in step 4 and its result, including whether the new test fails without the fix>
 
 ## Notes
 
