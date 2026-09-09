@@ -69,7 +69,7 @@ git push -u origin bot/debug-journal-<YYYY-MM-DD>
 
 **You do not open the pull request — the daemon opens it as soon as it sees the branch.** You write its body, by editing `journal-pr-body.md` in the scratch directory your prompt puts in scope, replacing the placeholder line with the whole body.
 
-Use the Edit tool for that, not a shell command. A body runs to many lines, and a multi-line command matches no permission rule, so there is no way to pass one on a command line — which is exactly how an earlier flush shipped a one-line body promising a per-candidate list that never arrived (PR #5011).
+Use the Edit tool for that, not a shell command. Tool parameters carry newlines and quoting without any escaping to get wrong, whereas a body assembled in the shell has to survive both the permission matcher and your own quoting — which is how an earlier flush ended up shipping a one-line body promising a per-candidate list that never arrived (PR #5011). Writing the file also means the daemon can open the PR even if this step is skipped.
 
 The body must open with a line disclosing it is automated, then list, per candidate, what you folded in, rewrote or dropped **and why** — that list is what makes the PR reviewable in a couple of minutes instead of requiring a full re-read of the diff. Name every existing entry you corrected separately, with the merge that invalidated it.
 

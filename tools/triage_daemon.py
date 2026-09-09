@@ -174,11 +174,13 @@ JOURNAL_SCOPE = f"//{(CLONE_DIR / JOURNAL_RELPATH).relative_to('/')}"
 DICTIONARY_SCOPE = f"//{(CLONE_DIR / DICTIONARY_RELPATH).relative_to('/')}"
 JOURNAL_BRANCH_PREFIX = "bot/debug-journal-"
 # Where the flush writes its pull request body, and what it finds there to replace.
-# The flush cannot pass a body on the command line: permission rules match a command
-# string and a multi-line command matches nothing, so `gh pr create --body "<a long
-# markdown body>"` is refused however the grant is written. That is why PR #5011 shipped
-# with a one-line body promising a per-candidate list that never arrived. The flush edits
-# this file instead - tool parameters carry newlines fine - and the daemon opens the PR.
+# A body is many lines of markdown. Assembling one in the shell means getting both the
+# permission matcher and the quoting right - `--body-file` needs a file the flush has no
+# grant to create, and a `--body "$(cat <<EOF ...)"` heredoc does work but puts the whole
+# body through shell quoting. PR #5011 shipped a one-line body promising a per-candidate
+# list that never arrived. Editing a file avoids the question: tool parameters carry
+# newlines and quoting untouched, and having the daemon open the PR means a flush that
+# skips this step still produces a reviewable pull request rather than none.
 # Pre-created with a placeholder because Edit needs an existing file to work on, and a
 # Write grant is not an option: Write() rules do not match a path, and bare Write would
 # hand the one flow that can push the ability to write anywhere in the clone.
