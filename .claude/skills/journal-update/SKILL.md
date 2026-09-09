@@ -58,17 +58,22 @@ New vendor and firmware terms will fail the cspell hook. Add genuine terms to `.
 
 Docs-only changes still have to pass cspell and markdownlint. Do not skip it.
 
-## 6. Commit and open the PR
+## 6. Commit, push, and write the PR body
 
 ```bash
 git checkout -b bot/debug-journal-<YYYY-MM-DD>
 git add tools/debug-journal.md .cspell/custom-dictionary-workspace.txt
 git commit -m "docs(debug-journal): <what changed>"
 git push -u origin bot/debug-journal-<YYYY-MM-DD>
-gh pr create --draft --title "..." --body-file <path>
 ```
 
-The PR body must open with a line disclosing it is automated, then list, per candidate, what you folded in, rewrote or dropped **and why** — that list is what makes the PR reviewable in a couple of minutes instead of requiring a full re-read of the diff. Name every existing entry you corrected separately, with the merge that invalidated it.
+**You do not open the pull request — the daemon opens it as soon as it sees the branch.** You write its body, by editing `journal-pr-body.md` in the scratch directory your prompt puts in scope, replacing the placeholder line with the whole body.
+
+Use the Edit tool for that, not a shell command. A body runs to many lines, and a multi-line command matches no permission rule, so there is no way to pass one on a command line — which is exactly how an earlier flush shipped a one-line body promising a per-candidate list that never arrived (PR #5011).
+
+The body must open with a line disclosing it is automated, then list, per candidate, what you folded in, rewrote or dropped **and why** — that list is what makes the PR reviewable in a couple of minutes instead of requiring a full re-read of the diff. Name every existing entry you corrected separately, with the merge that invalidated it.
+
+If you leave the placeholder alone the PR still opens, with a stub body pointing at the run log, so the work is never lost — but the review is far harder. Write the body.
 
 Do not merge it. A human merge is the review gate on this file.
 
