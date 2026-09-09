@@ -173,6 +173,20 @@ DICTIONARY_RELPATH = ".cspell/custom-dictionary-workspace.txt"
 JOURNAL_SCOPE = f"//{(CLONE_DIR / JOURNAL_RELPATH).relative_to('/')}"
 DICTIONARY_SCOPE = f"//{(CLONE_DIR / DICTIONARY_RELPATH).relative_to('/')}"
 JOURNAL_BRANCH_PREFIX = "bot/debug-journal-"
+# Where the flush writes its pull request body, and what it finds there to replace.
+# A body is many lines of markdown. Assembling one in the shell means getting both the
+# permission matcher and the quoting right - `--body-file` needs a file the flush has no
+# grant to create, and a `--body "$(cat <<EOF ...)"` heredoc does work but puts the whole
+# body through shell quoting. PR #5011 shipped a one-line body promising a per-candidate
+# list that never arrived. Editing a file avoids the question: tool parameters carry
+# newlines and quoting untouched, and having the daemon open the PR means a flush that
+# skips this step still produces a reviewable pull request rather than none.
+# Pre-created with a placeholder because Edit needs an existing file to work on, and a
+# Write grant is not an option: Write() rules do not match a path, and bare Write would
+# hand the one flow that can push the ability to write anywhere in the clone.
+JOURNAL_BODY_FILE = SCRATCH_DIR / "journal-pr-body.md"
+JOURNAL_BODY_SCOPE = f"//{JOURNAL_BODY_FILE.relative_to('/')}"
+JOURNAL_BODY_PLACEHOLDER = "<!-- Replace this line with the pull request body. -->\n"
 # Branch prefixes the PR flow may create, matching issue-pr/SKILL.md.
 PR_BRANCH_PREFIXES = ("fix/", "feat/")
 # How many times one issue may fail triage before the daemon gives up and moves past it.
@@ -441,23 +455,29 @@ DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if 
 # lives. A human merging the PR is the review gate on journal content, and the journal being
 # wrong is worse than it being stale: an entry asserting a fixed credential leak would have a
 # later triage run tell a reporter to rotate keys that never leaked.
+# No "gh pr create" here any more: open_journal_pr() does it, so the flow that can push
+# no longer also opens pull requests, and the body no longer depends on what fits on a
+# command line.
 _ALLOWED_TOOLS_JOURNAL_EXTRA = [
     "Bash(git add*)",
     "Bash(git commit*)",
     f"Bash(git push origin {JOURNAL_BRANCH_PREFIX}*)",
     f"Bash(git push -u origin {JOURNAL_BRANCH_PREFIX}*)",
-    "Bash(gh pr create*)",
     "Bash(./run_pre_commit*)",
     "Bash(./run_pre_commit)",
 ]
-# Write goes too: this is the one flow whose edit scope is deliberately two exact files
+# Write goes too: this is the one flow whose edit scope is deliberately a few exact files
 # rather than the clone, precisely because it is also the one that can push. A bare Write
 # would let it author anything in the clone and then commit it, which is the whole thing
-# the narrow scope exists to prevent. It does not need redirection anyway.
+# the narrow scope exists to prevent. It does not need redirection anyway - the PR body
+# below is written with the Edit tool.
 _JOURNAL_DROPPED_EDITS = {"Write", f"Edit({EDIT_SCOPE})", f"Edit({SCRATCH_SCOPE})", f"Edit({QUEUE_SCOPE})"}
-ALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _ALLOWED_TOOLS_NON_GH if rule not in _JOURNAL_DROPPED_EDITS] + [f"Edit({JOURNAL_SCOPE})", f"Edit({DICTIONARY_SCOPE})"] + _ALLOWED_TOOLS_JOURNAL_EXTRA)
+ALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _ALLOWED_TOOLS_NON_GH if rule not in _JOURNAL_DROPPED_EDITS] + [f"Edit({JOURNAL_SCOPE})", f"Edit({DICTIONARY_SCOPE})", f"Edit({JOURNAL_BODY_SCOPE})"] + _ALLOWED_TOOLS_JOURNAL_EXTRA)
 # gh pr merge/close stay denied from the base list - the bot never merges its own journal PR.
-_JOURNAL_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr create*)"}
+# "Bash(gh pr create*)" deliberately stays denied: open_journal_pr() does that job now, so
+# the flow needs no grant for it, and the denial is what stops a future broad gh allow rule
+# quietly handing it back.
+_JOURNAL_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)"}
 DISALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _DISALLOWED_TOOLS_BASE if rule not in _JOURNAL_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS + _PUSH_TO_MAIN_DENIALS)
 
 # Appended to every flow's system prompt. Until this existed no skill asked for a journal
@@ -945,6 +965,89 @@ def journal_pr_opened(today):
     return bool(json.loads(result.stdout or "[]"))
 
 
+def prepare_journal_body():
+    """Put the placeholder body file in place for the flush to edit."""
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    JOURNAL_BODY_FILE.write_text(JOURNAL_BODY_PLACEHOLDER)
+
+
+def journal_pr_body():
+    """Return the body the flush wrote, or a fallback if it left the placeholder alone."""
+    try:
+        body = JOURNAL_BODY_FILE.read_text().strip()
+    except OSError:
+        body = ""
+    if not body or body == JOURNAL_BODY_PLACEHOLDER.strip():
+        return "Automated debug-journal update. The flush did not write a summary this run - see the triage bot's journal-update log for what changed and why."
+    return body
+
+
+def open_journal_pr(today):
+    """Open the draft PR for a journal branch the flush pushed, if it did not already exist.
+
+    Done here rather than inside the flush because a pull request body does not fit on a
+    command line: permission rules match a command string, a multi-line command matches
+    nothing, and a real per-candidate list is many lines. Opening it from the daemon also
+    means the one flow that can push no longer needs a `gh pr create` grant at all.
+
+    A flush that deliberately landed nothing pushes no branch, so there is nothing to open.
+    """
+    branch = f"{JOURNAL_BRANCH_PREFIX}{today}"
+    exists = subprocess.run(
+        ["git", "-C", str(CLONE_DIR), "ls-remote", "--exit-code", "--heads", "origin", branch],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if exists.returncode != 0:
+        print(f"[triage] journal: no {branch} pushed - nothing to open", flush=True)
+        return
+    if journal_pr_opened(today):
+        return
+    # The local branch, not origin/<branch>: both are present after either granted push form
+    # (checked), but the local ref is the one the flush definitely created, so reading it needs
+    # no assumption about what a push does to remote-tracking refs.
+    title = subprocess.run(
+        ["git", "-C", str(CLONE_DIR), "log", "-1", "--format=%s", branch],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    # Re-use the one body path rather than a second file, and re-create the directory: the
+    # resolved body has to land somewhere for --body-file, and an OSError here is not a
+    # CalledProcessError, so it would escape the daemon's poll loop and kill the process
+    # rather than merely failing to open the PR.
+    body_path = JOURNAL_BODY_FILE
+    body = journal_pr_body()
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    body_path.write_text(f"{body}\n")
+    result = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--repo",
+            REPO,
+            "--draft",
+            "--base",
+            "main",
+            "--head",
+            branch,
+            "--title",
+            title or f"docs(debug-journal): update {today}",
+            "--body-file",
+            str(body_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        print(f"[triage] journal: opened {result.stdout.strip()}", flush=True)
+    else:
+        print(f"[triage] journal: could not open the PR for {branch}: {result.stderr.strip()}", flush=True)
+
+
 def flush_journal(today):
     """Fold the queued findings into the debug journal and open a PR for a human to merge.
 
@@ -969,6 +1072,10 @@ def flush_journal(today):
             # as well as covered by the Edit rule.
             "--add-dir",
             str(QUEUE_DIR),
+            # The body file lives in the scratch directory, outside the clone, so that has to
+            # be in scope for the Edit grant above to be usable.
+            "--add-dir",
+            str(SCRATCH_DIR),
             "--max-turns",
             "80",
         ]
@@ -977,6 +1084,7 @@ def flush_journal(today):
         + claude_mcp_args()
     )
     consumed = journal_queue_entries()
+    prepare_journal_body()
     log_path = LOG_DIR / "journal-update.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[triage] journal: folding {len(consumed)} finding(s) in, logging to {log_path}", flush=True)
@@ -985,6 +1093,8 @@ def flush_journal(today):
         log_handle.flush()
         result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== journal update exited {result.returncode} ====\n")
+    if result.returncode == 0:
+        open_journal_pr(today)
     # Archive only once the findings are on a branch a maintainer can review. Exit 0 from a
     # blocked run would otherwise sweep verified candidates into processed/ having landed
     # nothing, and journal_queue_entries()'s non-recursive glob means they are never

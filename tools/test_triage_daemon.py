@@ -46,12 +46,15 @@ class DaemonPathsTestCase(unittest.TestCase):
         self._patch("CLONE_DIR", base / "batpred")
         self._patch("SCRATCH_DIR", base / "scratch")
         self._patch("QUEUE_DIR", base / "journal-queue")
-        # Derived from a patched directory at import time, so patching the directory alone
-        # leaves these pointing at the operator's live bot directory. Any new
-        # PATH = <patched dir> / ... constant needs adding here too.
+        # Derived at import time from a patched directory, so patching the directory alone
+        # leaves these pointing at the operator's live bot directory - which is where these
+        # tests were writing until JOURNAL_BODY_FILE was added here, and why a
+        # missing-directory test could never fail. Any new PATH = <patched dir> / ...
+        # constant needs adding here too.
         self._patch("GITNEXUS_RUNNER", base / "batpred" / ".gitnexus" / "run.cjs")
         self._patch("GITNEXUS_HEAD_FILE", base / "gitnexus-head")
         self._patch("MCP_CONFIG_FILE", base / "mcp-gitnexus.json")
+        self._patch("JOURNAL_BODY_FILE", base / "scratch" / "journal-pr-body.md")
 
     def _patch(self, name, value):
         """Patch a module-level constant on triage_daemon for the duration of the test."""
@@ -1148,6 +1151,133 @@ class CleanupModelTests(unittest.TestCase):
                 start = source.index(flow)
                 block = source[start : source.index("\ndef ", start + 10)]
                 self.assertIn("review_only=True", block)
+class JournalPrBodyTests(DaemonPathsTestCase):
+    """The flush cannot pass a PR body on a command line - permission rules match a command
+    string and a multi-line command matches nothing - so it edits a file and the daemon opens
+    the PR. PR #5011 shipped a one-line body promising a list that never arrived."""
+
+    def test_the_placeholder_is_written_before_the_run(self):
+        """Edit needs an existing file, and a Write grant is not an option here."""
+        triage_daemon.prepare_journal_body()
+        self.assertEqual(triage_daemon.JOURNAL_BODY_FILE.read_text(), triage_daemon.JOURNAL_BODY_PLACEHOLDER)
+
+    def test_a_written_body_is_used(self):
+        """The whole point: whatever the flush wrote becomes the PR body."""
+        triage_daemon.prepare_journal_body()
+        triage_daemon.JOURNAL_BODY_FILE.write_text("Automated update.\n\n- folded #1\n- dropped #2\n")
+        self.assertIn("folded #1", triage_daemon.journal_pr_body())
+
+    def test_an_untouched_placeholder_falls_back(self):
+        """A flush that forgot must still produce a reviewable PR pointing at the log."""
+        triage_daemon.prepare_journal_body()
+        body = triage_daemon.journal_pr_body()
+        self.assertNotIn("Replace this line", body)
+        self.assertTrue(body.startswith("Automated "))
+
+    def test_a_missing_body_file_falls_back(self):
+        """The scratch directory is wiped between runs; a missing file must not crash."""
+        if triage_daemon.JOURNAL_BODY_FILE.exists():
+            triage_daemon.JOURNAL_BODY_FILE.unlink()
+        self.assertTrue(triage_daemon.journal_pr_body().startswith("Automated "))
+
+
+class OpenJournalPrTests(DaemonPathsTestCase):
+    """The daemon opens the journal PR, so the flow that can push does not also need to."""
+
+    def test_nothing_is_opened_when_no_branch_was_pushed(self):
+        """Step 7 of the skill: a flush that deliberately lands nothing pushes no branch."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=2, stdout="", stderr="")
+            triage_daemon.open_journal_pr("2026-09-09")
+            commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any("pr" in c and "create" in c for c in commands))
+
+    def test_the_pr_is_created_from_the_body_file(self):
+        """--body-file rather than --body: the body is many lines and cannot go on the command line."""
+        triage_daemon.prepare_journal_body()
+        triage_daemon.JOURNAL_BODY_FILE.write_text("Automated update.\n\n- folded #1\n")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="", stderr=""),  # ls-remote: branch exists
+                MagicMock(returncode=0, stdout="[]", stderr=""),  # no PR yet
+                MagicMock(returncode=0, stdout="docs(debug-journal): x", stderr=""),  # title
+                MagicMock(returncode=0, stdout="https://example/pr/1", stderr=""),  # create
+            ]
+            triage_daemon.open_journal_pr("2026-09-09")
+            create = mock_run.call_args_list[-1].args[0]
+        self.assertIn("--body-file", create)
+        self.assertNotIn("--body", [a for a in create if a == "--body"])
+        self.assertIn("--draft", create)
+        self.assertEqual(create[create.index("--head") + 1], "bot/debug-journal-2026-09-09")
+        self.assertIn("folded #1", Path(create[create.index("--body-file") + 1]).read_text())
+
+    def test_the_title_comes_from_the_local_branch(self):
+        """Not origin/<branch>: both refs resolve after either granted push form, but the local
+        one is what the flush definitely created, so this needs no assumption about what a push
+        does to remote-tracking refs."""
+        triage_daemon.prepare_journal_body()
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="", stderr=""),
+                MagicMock(returncode=0, stdout="[]", stderr=""),
+                MagicMock(returncode=0, stdout="docs(debug-journal): x", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            triage_daemon.open_journal_pr("2026-09-09")
+            title_cmd = mock_run.call_args_list[2].args[0]
+        self.assertIn("bot/debug-journal-2026-09-09", title_cmd)
+        self.assertNotIn("origin/bot/debug-journal-2026-09-09", title_cmd)
+
+    def test_a_missing_scratch_directory_does_not_kill_the_daemon(self):
+        """An OSError here is not a CalledProcessError, so it would escape the poll loop and take
+        the whole daemon down rather than merely failing to open one PR."""
+        import shutil
+
+        triage_daemon.prepare_journal_body()
+        shutil.rmtree(triage_daemon.SCRATCH_DIR)
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="", stderr=""),
+                MagicMock(returncode=0, stdout="[]", stderr=""),
+                MagicMock(returncode=0, stdout="docs(debug-journal): x", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            triage_daemon.open_journal_pr("2026-09-09")
+            create = mock_run.call_args_list[-1].args[0]
+        self.assertTrue(Path(create[create.index("--body-file") + 1]).exists())
+
+    def test_an_existing_pr_is_not_duplicated(self):
+        """flush_journal() may run again the same day after a restart."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="", stderr=""),  # branch exists
+                MagicMock(returncode=0, stdout='[{"number": 5011}]', stderr=""),  # PR already open
+            ]
+            triage_daemon.open_journal_pr("2026-09-09")
+            commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any("create" in c for c in commands))
+
+
+class JournalCreateGrantTests(unittest.TestCase):
+    """The journal flow gave up `gh pr create` when the daemon took the job over."""
+
+    def test_the_journal_flow_no_longer_opens_pull_requests(self):
+        """It is the only flow that can push, so every grant it does not need is worth losing."""
+        self.assertNotIn("Bash(gh pr create*)", triage_daemon.ALLOWED_TOOLS_JOURNAL.split(","))
+
+    def test_the_pr_flow_keeps_it(self):
+        """That flow does still open its own PRs - this must not have been taken from it."""
+        self.assertIn("Bash(gh pr create*)", triage_daemon.ALLOWED_TOOLS_PR.split(","))
+
+    def test_the_journal_flow_is_still_denied_pr_creation(self):
+        """Losing the grant is not the same as being denied. The denial is what stops a future
+        broad `gh` allow rule quietly handing the job back to the one flow that can push."""
+        denied = triage_daemon.DISALLOWED_TOOLS_JOURNAL.split(",")
+        self.assertTrue(any(bash_rule_matches(rule, "gh pr create --draft") for rule in denied if rule.startswith("Bash(")))
+
+    def test_the_journal_flow_can_write_its_body_file(self):
+        """Without this grant the flush has no way to author a multi-line body at all."""
+        self.assertIn(f"Edit({triage_daemon.JOURNAL_BODY_SCOPE})", triage_daemon.ALLOWED_TOOLS_JOURNAL.split(","))
 
 
 class EffectiveOllamaModelTests(unittest.TestCase):
@@ -2434,11 +2564,21 @@ class JournalPermissionTests(unittest.TestCase):
         flow that can push, so a prompt-injected edit to apps/predbat would land on a branch."""
         self.assertNotIn(f"Edit({triage_daemon.EDIT_SCOPE})", self._allowed())
 
-    def test_grants_exactly_the_journal_and_the_dictionary(self):
-        """cspell is a pre-commit hook and a journal entry naming a new vendor term fails it,
-        so the dictionary has to be writable too - and nothing else does."""
+    def test_grants_exactly_the_journal_the_dictionary_and_the_pr_body(self):
+        """cspell is a pre-commit hook and a journal entry naming a new vendor term fails it, so
+        the dictionary has to be writable too. The third is the PR body file, which lives outside
+        the clone and is the only way to author a multi-line body - nothing else is writable."""
         edits = sorted(rule for rule in self._allowed() if rule.startswith("Edit("))
-        self.assertEqual(edits, sorted([f"Edit({triage_daemon.JOURNAL_SCOPE})", f"Edit({triage_daemon.DICTIONARY_SCOPE})"]))
+        self.assertEqual(
+            edits,
+            sorted(
+                [
+                    f"Edit({triage_daemon.JOURNAL_SCOPE})",
+                    f"Edit({triage_daemon.DICTIONARY_SCOPE})",
+                    f"Edit({triage_daemon.JOURNAL_BODY_SCOPE})",
+                ]
+            ),
+        )
 
     def test_the_journal_lives_outside_the_dot_claude_directory(self):
         """Claude Code refuses the Edit and Write tools anywhere under `.claude/`, and no
@@ -2455,9 +2595,9 @@ class JournalPermissionTests(unittest.TestCase):
         from --add-dir, not from an Edit grant."""
         self.assertNotIn(f"Edit({triage_daemon.QUEUE_SCOPE})", self._allowed())
 
-    def test_can_commit_push_and_open_a_pr(self):
-        """The whole point of the flow: land the entries as a PR for a human to merge."""
-        for command in ("git add -A", "git commit -m x", "git push origin bot/debug-journal-2026-09-05", "gh pr create --draft"):
+    def test_can_commit_and_push_its_branch(self):
+        """It still lands the entries on a branch; open_journal_pr() turns that into a PR."""
+        for command in ("git add -A", "git commit -m x", "git push origin bot/debug-journal-2026-09-05"):
             with self.subTest(command=command):
                 self.assertTrue(any(bash_rule_matches(rule, command) for rule in self._allowed() if rule.startswith("Bash(")))
 
@@ -2510,6 +2650,14 @@ class JournalFlushInvocationTests(DaemonPathsTestCase):
 
 class JournalQueueArchiveTests(DaemonPathsTestCase):
     """Consumed candidates are moved aside, not deleted."""
+
+    def setUp(self):
+        """Isolate these from open_journal_pr(), which flush_journal() also calls - these tests
+        are about what happens to the queue, not about opening the pull request."""
+        super().setUp()
+        patcher = patch.object(triage_daemon, "open_journal_pr")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _queue(self, *names):
         triage_daemon.QUEUE_DIR.mkdir(parents=True, exist_ok=True)
