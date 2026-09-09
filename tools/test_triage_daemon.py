@@ -46,9 +46,11 @@ class DaemonPathsTestCase(unittest.TestCase):
         self._patch("CLONE_DIR", base / "batpred")
         self._patch("SCRATCH_DIR", base / "scratch")
         self._patch("QUEUE_DIR", base / "journal-queue")
-        # Derived from a patched directory at import time, so patching the directory alone
-        # leaves these pointing at the operator's live bot directory. Any new
-        # PATH = <patched dir> / ... constant needs adding here too.
+        # Derived at import time from a patched directory, so patching the directory alone
+        # leaves these pointing at the operator's live bot directory - which is where these
+        # tests were writing until JOURNAL_BODY_FILE was added here, and why a
+        # missing-directory test could never fail. Any new PATH = <patched dir> / ...
+        # constant needs adding here too.
         self._patch("GITNEXUS_RUNNER", base / "batpred" / ".gitnexus" / "run.cjs")
         self._patch("GITNEXUS_HEAD_FILE", base / "gitnexus-head")
         self._patch("MCP_CONFIG_FILE", base / "mcp-gitnexus.json")
@@ -1209,6 +1211,41 @@ class OpenJournalPrTests(DaemonPathsTestCase):
         self.assertEqual(create[create.index("--head") + 1], "bot/debug-journal-2026-09-09")
         self.assertIn("folded #1", Path(create[create.index("--body-file") + 1]).read_text())
 
+    def test_the_title_comes_from_the_local_branch(self):
+        """Not origin/<branch>: both refs resolve after either granted push form, but the local
+        one is what the flush definitely created, so this needs no assumption about what a push
+        does to remote-tracking refs."""
+        triage_daemon.prepare_journal_body()
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="", stderr=""),
+                MagicMock(returncode=0, stdout="[]", stderr=""),
+                MagicMock(returncode=0, stdout="docs(debug-journal): x", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            triage_daemon.open_journal_pr("2026-09-09")
+            title_cmd = mock_run.call_args_list[2].args[0]
+        self.assertIn("bot/debug-journal-2026-09-09", title_cmd)
+        self.assertNotIn("origin/bot/debug-journal-2026-09-09", title_cmd)
+
+    def test_a_missing_scratch_directory_does_not_kill_the_daemon(self):
+        """An OSError here is not a CalledProcessError, so it would escape the poll loop and take
+        the whole daemon down rather than merely failing to open one PR."""
+        import shutil
+
+        triage_daemon.prepare_journal_body()
+        shutil.rmtree(triage_daemon.SCRATCH_DIR)
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="", stderr=""),
+                MagicMock(returncode=0, stdout="[]", stderr=""),
+                MagicMock(returncode=0, stdout="docs(debug-journal): x", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            triage_daemon.open_journal_pr("2026-09-09")
+            create = mock_run.call_args_list[-1].args[0]
+        self.assertTrue(Path(create[create.index("--body-file") + 1]).exists())
+
     def test_an_existing_pr_is_not_duplicated(self):
         """flush_journal() may run again the same day after a restart."""
         with patch("triage_daemon.subprocess.run") as mock_run:
@@ -1231,6 +1268,12 @@ class JournalCreateGrantTests(unittest.TestCase):
     def test_the_pr_flow_keeps_it(self):
         """That flow does still open its own PRs - this must not have been taken from it."""
         self.assertIn("Bash(gh pr create*)", triage_daemon.ALLOWED_TOOLS_PR.split(","))
+
+    def test_the_journal_flow_is_still_denied_pr_creation(self):
+        """Losing the grant is not the same as being denied. The denial is what stops a future
+        broad `gh` allow rule quietly handing the job back to the one flow that can push."""
+        denied = triage_daemon.DISALLOWED_TOOLS_JOURNAL.split(",")
+        self.assertTrue(any(bash_rule_matches(rule, "gh pr create --draft") for rule in denied if rule.startswith("Bash(")))
 
     def test_the_journal_flow_can_write_its_body_file(self):
         """Without this grant the flush has no way to author a multi-line body at all."""

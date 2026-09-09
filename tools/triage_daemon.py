@@ -472,7 +472,10 @@ _ALLOWED_TOOLS_JOURNAL_EXTRA = [
 _JOURNAL_DROPPED_EDITS = {"Write", f"Edit({EDIT_SCOPE})", f"Edit({SCRATCH_SCOPE})", f"Edit({QUEUE_SCOPE})"}
 ALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _ALLOWED_TOOLS_NON_GH if rule not in _JOURNAL_DROPPED_EDITS] + [f"Edit({JOURNAL_SCOPE})", f"Edit({DICTIONARY_SCOPE})", f"Edit({JOURNAL_BODY_SCOPE})"] + _ALLOWED_TOOLS_JOURNAL_EXTRA)
 # gh pr merge/close stay denied from the base list - the bot never merges its own journal PR.
-_JOURNAL_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr create*)"}
+# "Bash(gh pr create*)" deliberately stays denied: open_journal_pr() does that job now, so
+# the flow needs no grant for it, and the denial is what stops a future broad gh allow rule
+# quietly handing it back.
+_JOURNAL_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)"}
 DISALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _DISALLOWED_TOOLS_BASE if rule not in _JOURNAL_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS + _PUSH_TO_MAIN_DENIALS)
 
 # Appended to every flow's system prompt. Until this existed no skill asked for a journal
@@ -999,14 +1002,23 @@ def open_journal_pr(today):
         return
     if journal_pr_opened(today):
         return
+    # The local branch, not origin/<branch>: both are present after either granted push form
+    # (checked), but the local ref is the one the flush definitely created, so reading it needs
+    # no assumption about what a push does to remote-tracking refs.
     title = subprocess.run(
-        ["git", "-C", str(CLONE_DIR), "log", "-1", "--format=%s", f"origin/{branch}"],
+        ["git", "-C", str(CLONE_DIR), "log", "-1", "--format=%s", branch],
         capture_output=True,
         text=True,
         check=False,
     ).stdout.strip()
-    body_path = SCRATCH_DIR / "journal-pr-body-final.md"
-    body_path.write_text(f"{journal_pr_body()}\n")
+    # Re-use the one body path rather than a second file, and re-create the directory: the
+    # resolved body has to land somewhere for --body-file, and an OSError here is not a
+    # CalledProcessError, so it would escape the daemon's poll loop and kill the process
+    # rather than merely failing to open the PR.
+    body_path = JOURNAL_BODY_FILE
+    body = journal_pr_body()
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    body_path.write_text(f"{body}\n")
     result = subprocess.run(
         [
             "gh",
