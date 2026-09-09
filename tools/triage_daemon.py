@@ -116,6 +116,19 @@ SCRATCH_DIR = BASE_DIR / "scratch"
 LOG_DIR = BASE_DIR / "logs"
 STATE_FILE = BASE_DIR / "state.json"
 POLL_SECONDS = 300
+# CLAUDE.md requires an impact() call before editing any symbol, and no flow could make one:
+# mcp__* was denied outright, so the tools it names were never available and runs fell back
+# to grepping for callers by hand and saying so in their reports. The index lives under
+# .gitnexus/, which the clone's .git/info/exclude lists, so `git clean -fd` leaves it alone.
+GITNEXUS_RUNNER = CLONE_DIR / ".gitnexus" / "run.cjs"
+# The commit the index was last built from. analyze takes ~37s on this repo and sync_repo()
+# runs before every flow, so re-analyzing unconditionally would spend minutes an hour
+# rebuilding an index for a tree that had not moved. HEAD is the only input that changes it.
+GITNEXUS_HEAD_FILE = BASE_DIR / "gitnexus-head"
+# A dedicated MCP config, passed with --strict-mcp-config. The operator's own configuration
+# carries unrelated servers and a bot session has no business reaching those; scoping the
+# subprocess to this one server is what makes lifting the blanket mcp__* denial safe.
+MCP_CONFIG_FILE = BASE_DIR / "mcp-gitnexus.json"
 # Set from --ollama/--ollama_review by main() - see effective_ollama_model() for how the
 # two interact. OLLAMA_BASE_URL is Ollama's own Claude Code compatible endpoint
 # (https://docs.ollama.com/integrations/claude-code); a :cloud-suffixed model is still
@@ -246,6 +259,10 @@ _ALLOWED_TOOLS_NON_GH = [
     # Every flow may leave a journal finding behind. In the shared base list rather than
     # added per flow, so a new flow inherits it instead of silently losing its findings.
     f"Edit({QUEUE_SCOPE})",
+    # Only this server's tools, never a blanket mcp__*. Two independent layers keep the
+    # operator's other MCP servers out of a bot session: --strict-mcp-config stops them being
+    # loaded at all, and under dontAsk anything not named here is denied even if one were.
+    "mcp__gitnexus__*",
     "WebFetch",
     "Read",
     "Grep",
@@ -274,7 +291,6 @@ ALLOWED_TOOLS_PR = ",".join(_ALLOWED_TOOLS_BASE + _ALLOWED_TOOLS_PR_EXTRA)
 # Deny wins over allow, so these carve the publishing commands back out of
 # the broad "Bash(gh *)" / "Bash(git ...)" entries above.
 _DISALLOWED_TOOLS_BASE = [
-    "mcp__*",
     "Bash(git push*)",
     "Bash(git commit*)",
     "Bash(git remote add*)",
@@ -331,6 +347,10 @@ _ALLOWED_GH_PR_READ = [
     "Bash(gh pr diff*)",
     "Bash(gh pr list*)",
     "Bash(gh pr comment*)",
+    # Enough to correct a PR body or answer a thread. Deliberately not "gh issue edit": the
+    # daemon owns the BOT_* labels, and a flow relabelling itself would race its own driver.
+    "Bash(gh pr edit*)",
+    "Bash(gh issue comment*)",
     "Bash(gh issue view*)",
     "Bash(gh issue list*)",
     "Bash(gh search*)",
@@ -689,6 +709,56 @@ def install_push_guard():
     hook_path.chmod(0o755)
 
 
+def write_mcp_config():
+    """Write the one-server MCP config every flow is pinned to.
+
+    Generated rather than checked in: the gitnexus executable is wherever this machine put
+    it. A missing binary leaves the file absent, the flags unset, and the flows running
+    exactly as they did before - degraded, not broken.
+    """
+    executable = shutil.which("gitnexus")
+    if not executable:
+        print("[triage] gitnexus not on PATH - flows will run without the MCP tools CLAUDE.md expects", flush=True)
+        return False
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    MCP_CONFIG_FILE.write_text(json.dumps({"mcpServers": {"gitnexus": {"command": executable, "args": ["mcp"]}}}, indent=2))
+    return True
+
+
+def claude_mcp_args():
+    """Pin a claude invocation to the gitnexus server and nothing else.
+
+    --strict-mcp-config is the load-bearing half: without it the subprocess inherits every
+    server in the operator's own configuration, which for a bot session is far too much.
+    """
+    if not MCP_CONFIG_FILE.exists():
+        return []
+    return ["--mcp-config", str(MCP_CONFIG_FILE), "--strict-mcp-config"]
+
+
+def refresh_gitnexus_index():
+    """Re-analyze the clone when HEAD has moved since the last index build.
+
+    Guarded on HEAD rather than run unconditionally: analyze takes about 37 seconds on this
+    repo and sync_repo() runs before every flow, so an unguarded call would spend minutes an
+    hour rebuilding an index for a tree that had not changed. Failures are reported and
+    ignored - a stale index degrades a flow's answers, a raised exception would stop the
+    daemon, and check=False keeps this from becoming the latter.
+    """
+    if not GITNEXUS_RUNNER.exists():
+        return
+    head = subprocess.run(["git", "-C", str(CLONE_DIR), "rev-parse", "HEAD"], capture_output=True, text=True, check=False).stdout.strip()
+    if head and GITNEXUS_HEAD_FILE.exists() and GITNEXUS_HEAD_FILE.read_text().strip() == head:
+        return
+    print(f"[triage] gitnexus: re-analyzing at {head[:8] or 'unknown'}", flush=True)
+    result = subprocess.run(["node", str(GITNEXUS_RUNNER), "analyze"], cwd=str(CLONE_DIR), capture_output=True, text=True, check=False)
+    if result.returncode == 0:
+        BASE_DIR.mkdir(parents=True, exist_ok=True)
+        GITNEXUS_HEAD_FILE.write_text(head)
+    else:
+        print(f"[triage] gitnexus: analyze failed ({result.returncode}) - flows will use the previous index", flush=True)
+
+
 def sync_repo():
     """Sync the clone to origin/main, always returning to main first.
 
@@ -703,6 +773,7 @@ def sync_repo():
     # coverage/venv/ is gitignored and expensive to rebuild every issue.
     subprocess.run(["git", "-C", str(CLONE_DIR), "clean", "-fd"], check=True)
     install_push_guard()
+    refresh_gitnexus_index()
 
 
 def reset_scratch():
@@ -872,6 +943,7 @@ def flush_journal(today):
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("10.00", review_only=True)
+        + claude_mcp_args()
     )
     consumed = journal_queue_entries()
     log_path = LOG_DIR / "journal-update.log"
@@ -931,6 +1003,7 @@ def triage(issue_number):
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("10.00", review_only=True)
+        + claude_mcp_args()
     )
     log_path = LOG_DIR / f"issue-{issue_number}.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -974,6 +1047,7 @@ def triage_followup(issue_number):
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("10.00", review_only=True)
+        + claude_mcp_args()
     )
     log_path = LOG_DIR / f"issue-{issue_number}-followup.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1018,6 +1092,7 @@ def create_pr(issue_number):
         ]
         + claude_model_args()
         + claude_budget_args("25.00")
+        + claude_mcp_args()
     )
     log_path = LOG_DIR / f"issue-{issue_number}-pr.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1282,6 +1357,7 @@ def review_pr(pr_number):
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("20.00", review_only=True)
+        + claude_mcp_args()
     )
     log_path = LOG_DIR / f"pr-{pr_number}-review.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1355,6 +1431,11 @@ def process_bot_review_pr(pr):
 def cleanup_pr(pr_number):
     """Run the /pr-cleanup skill against a PR: address review feedback and CI
     failures, then commit and push - under the write-capable cleanup permission set.
+
+    Deliberately not review_only: this is the flow that edits a maintainer's branch and
+    pushes it, so it runs on the full Claude model rather than the review model. The worst
+    outputs of 2026-09 came from here - overriding a contributor's deliberate spelling on
+    circular evidence, and improvising a push to main after a fork branch refused one.
     """
     cmd = (
         [
@@ -1376,8 +1457,9 @@ def cleanup_pr(pr_number):
             "--max-turns",
             "150",
         ]
-        + claude_model_args(review_only=True)
-        + claude_budget_args("25.00", review_only=True)
+        + claude_model_args()
+        + claude_budget_args("25.00")
+        + claude_mcp_args()
     )
     log_path = LOG_DIR / f"pr-{pr_number}-cleanup.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1385,7 +1467,7 @@ def cleanup_pr(pr_number):
     with log_path.open("a") as log_handle:
         log_handle.write(f"\n==== PR #{pr_number} cleanup started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
         log_handle.flush()
-        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env())
         log_handle.write(f"==== PR #{pr_number} cleanup exited {result.returncode} ====\n")
     if result.returncode != 0:
         raise subprocess.CalledProcessError(result.returncode, cmd)
@@ -1492,6 +1574,7 @@ def main():
     elif OLLAMA_REVIEW_MODEL:
         print(f"[triage] using Ollama model {OLLAMA_REVIEW_MODEL!r} via {OLLAMA_BASE_URL} for review flows only (PR creation still uses Claude)", flush=True)
 
+    write_mcp_config()
     state = load_state()
     while True:
         try:
