@@ -46,9 +46,12 @@ def test_alert_feed(my_predbat):
     """
     failed = 0
     ha = my_predbat.ha_interface
-    today = datetime.now().strftime("%Y-%m-%d")
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    # Dates come from the clock the code under test uses, not the machine's. The harness runs on the
+    # timezone set in apps.yaml, so on a machine in another zone datetime.now() can be a whole day
+    # out and the alert window lands outside the forecast entirely.
+    today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
+    yesterday = (my_predbat.midnight_utc - timedelta(days=1)).strftime("%Y-%m-%d")
+    tomorrow = (my_predbat.midnight_utc + timedelta(days=1)).strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 

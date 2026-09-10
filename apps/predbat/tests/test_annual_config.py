@@ -11,7 +11,7 @@
 
 from datetime import date
 
-from annual import DEFAULT_SAMPLES_PER_MONTH, AnnualConfigError, scrub_secrets, validate_config
+from annual import DEFAULT_SAMPLES_PER_MONTH, AnnualConfigError, config_warnings, scrub_secrets, validate_config
 
 
 def base_config():
@@ -363,6 +363,132 @@ def test_annual_config(my_predbat):
     config = base_config()
     config["annual"]["solar"] = [{"kwp": 0}]
     failed = expect_error("zero kwp", config, "kwp", failed)
+
+    print("Test: NaN and infinity are rejected as numbers, not silently swept past the bounds")
+    # NaN fails every comparison, so the exclusive-minimum check (NaN <= 0 is False)
+    # used to let it through to the model, which renders every derived figure as nan.
+    for bad in [float("nan"), float("inf"), float("-inf")]:
+        config = base_config()
+        config["annual"]["solar"] = [{"kwp": bad}]
+        try:
+            validate_config(config)
+            print("  ERROR: a {} kwp should be rejected".format(bad))
+            failed = True
+        except AnnualConfigError as error:
+            if "finite" not in str(error):
+                print("  ERROR: expected a 'finite number' message for kwp {}, got {}".format(bad, error))
+                failed = True
+
+    print("Test: a kWp figure that looks like Watts warns without being rejected")
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": 6000}]
+    validated = validate_config(config, today=date(2026, 7, 25))
+    if abs(validated["solar"][0]["kwp"] - 6000) > 1e-9:
+        print("  ERROR: an oversized array must be accepted as typed, got {}".format(validated["solar"][0]["kwp"]))
+        failed = True
+    warnings = config_warnings(config)
+    if len(warnings) != 1:
+        print("  ERROR: expected one warning for a 6000 kWp array, got {}".format(warnings))
+        failed = True
+    elif "6 kWp" not in warnings[0] or "annual.solar[0]" not in warnings[0]:
+        print("  ERROR: the warning should name the array and suggest the kWp conversion, got {}".format(warnings[0]))
+        failed = True
+
+    print("Test: a normal kWp figure raises no warning")
+    if config_warnings(base_config()):
+        print("  ERROR: a 5.6 kWp array should not warn, got {}".format(config_warnings(base_config())))
+        failed = True
+
+    print("Test: the soft limit itself warns, anything below it does not")
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": 101}]
+    if len(config_warnings(config)) != 1:
+        print("  ERROR: 101 kWp is above the limit and should warn, got {}".format(config_warnings(config)))
+        failed = True
+    config["annual"]["solar"] = [{"kwp": 100}]
+    if config_warnings(config):
+        print("  ERROR: 100 kWp is at the limit, not above it, and should not warn")
+        failed = True
+
+    print("Test: multiple oversized arrays each get their own warning, indexed correctly")
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": 6000}, {"kwp": 5.6}, {"kwp": 200}]
+    warnings = config_warnings(config)
+    if len(warnings) != 2 or "annual.solar[0]" not in warnings[0] or "annual.solar[2]" not in warnings[1]:
+        print("  ERROR: expected warnings for arrays 0 and 2 only, got {}".format(warnings))
+        failed = True
+
+    print("Test: a panels-based array does not warn (a per-panel wattage cannot be a mistyped Wp figure)")
+    config = base_config()
+    config["annual"]["solar"] = [{"panels": 6000}]
+    if config_warnings(config):
+        print("  ERROR: a panel count should not trigger the kWp warning")
+        failed = True
+
+    print("Test: warnings tolerate junk validation would reject, without raising")
+    for junk in [None, [], "hello", {}, {"annual": {"solar": [5]}}, {"annual": {"solar": [{"kwp": "not-a-number"}]}}, {"annual": {"solar": [{"kwp": True}]}}]:
+        try:
+            if config_warnings(junk):
+                print("  ERROR: junk config {!r} should produce no warnings, got {}".format(junk, config_warnings(junk)))
+                failed = True
+        except Exception as error:
+            print("  ERROR: config_warnings raised {} on junk config {!r}".format(error, junk))
+            failed = True
+
+    print("Test: a quoted numeric kWp figure warns too (a hand-edited YAML round-trips as a string)")
+    # validate_config accepts "6000" as a string and models 6000.0 kWp; the warning
+    # pass must coerce the same way or the exact mistyped-Watts case stays silent.
+    warnings = config_warnings({"annual": {"solar": [{"kwp": "6000"}]}})
+    if len(warnings) != 1 or "6 kWp" not in warnings[0]:
+        print("  ERROR: a quoted '6000' kWp should warn with the kWp conversion, got {}".format(warnings))
+        failed = True
+
+    print("Test: the bare unwrapped config form warns (the web layer passes exactly that shape)")
+    warnings = config_warnings({"solar": [{"kwp": 6000}]})
+    if len(warnings) != 1 or "annual.solar[0]" not in warnings[0]:
+        print("  ERROR: an unwrapped config should warn against annual.solar[0], got {}".format(warnings))
+        failed = True
+
+    print("Test: dict-form solar (a single saved mapping) is normalised and warns")
+    warnings = config_warnings({"annual": {"solar": {"kwp": 6000}}})
+    if len(warnings) != 1 or "annual.solar[0]" not in warnings[0]:
+        print("  ERROR: a dict-form solar entry should warn like a list entry, got {}".format(warnings))
+        failed = True
+
+    print("Test: an absurd integer kWp overflows neither the warnings nor validation")
+    # A 400-digit paste clears the float ceiling at conversion: config_warnings skips
+    # it (unconvertible), and validate_config must reject it with an AnnualConfigError
+    # rather than letting a bare OverflowError escape into the CLI/web error handling.
+    try:
+        warnings = config_warnings({"annual": {"solar": [{"kwp": 10**400}]}})
+    except OverflowError:
+        print("  ERROR: a 400-digit kWp figure must not overflow the warning pass")
+        failed = True
+    else:
+        if warnings:
+            print("  ERROR: an unconvertible kWp figure should be left to validation, got {}".format(warnings))
+            failed = True
+    try:
+        config = base_config()
+        config["annual"]["solar"] = [{"kwp": 10**400}]
+        validate_config(config)
+        print("  ERROR: a 400-digit kWp figure should be rejected")
+        failed = True
+    except AnnualConfigError as error:
+        if "must be a number" not in str(error):
+            print("  ERROR: expected an actionable 'must be a number' message, got {}".format(error))
+            failed = True
+    except OverflowError:
+        print("  ERROR: a 400-digit kWp figure must not escape validation as a bare OverflowError")
+        failed = True
+
+    print("Test: the warning names the form's 1-based array label alongside the config index")
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": 5.6}, {"kwp": 5.6}, {"kwp": 6000}]
+    warnings = config_warnings(config)
+    if len(warnings) != 1 or "(Array 3 in the form)" not in warnings[0] or "annual.solar[2]" not in warnings[0]:
+        print("  ERROR: the third array's warning should name both solar[2] and 'Array 3 in the form', got {}".format(warnings))
+        failed = True
 
     print("Test: an efficiency above 1 is rejected")
     config = base_config()

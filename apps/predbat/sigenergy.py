@@ -146,6 +146,11 @@ SIGENERGY_MQTT_TOPIC_ALARM = "openapi/alarm/{app_key}/{system_id}"      # alarm 
 SIGENERGY_MQTT_TOPIC_COMMAND = "openapi/instruction/command"            # battery command publish
 SIGENERGY_MQTT_TOPIC_MODE = "openapi/instruction/mode"                  # V1 operating mode switch (MQTT)
 
+# Payload keys masked before a payload is written to the log. The MQTT command payloads
+# carry the live accessToken (it doubles as the MQTT broker password), and Predbat logs are
+# routinely pasted into GitHub issues, so anything credential-bearing has to be masked first.
+SIGENERGY_LOG_REDACT_KEYS = ("accessToken", "refreshToken", "appKey", "appSecret", "password", "token", "key")
+
 # Operating mode enums (REST mode switch endpoint — MSC and FFG only; NBI is not used)
 SIGENERGY_MODE_MSC = 0   # Maximum Self-Consumption (eco)
 SIGENERGY_MODE_FFG = 5   # Fully Feed-in to Grid
@@ -466,7 +471,7 @@ class SigenergyAPI(ComponentBase):
             "Content-Type": "application/json",
         }
 
-        self.log("Requesting {} {} with params={} json={}".format(method, path, params, json_data))
+        self.log("Requesting {} {} with params={} json={}".format(method, path, self.redact(params), self.redact(json_data)))
 
         for attempt in range(retries):
             await self._enforce_rate_limit()
@@ -508,7 +513,7 @@ class SigenergyAPI(ComponentBase):
                             self.log("Warn: SigenergyAPI: Failed to decode response from {}: {}".format(path, e))
                             return None
 
-                        self.log("SigenergyAPI: Response from {} {}: {}".format(method, path, body))
+                        self.log("SigenergyAPI: Response from {} {}: {}".format(method, path, self.redact(body)))
 
                         code = body.get("code", -1)
                         if code != 0:
@@ -1020,6 +1025,23 @@ class SigenergyAPI(ComponentBase):
         self._tls_context = tls_context
         return tls_context
 
+    @staticmethod
+    def redact(payload):
+        """Return payload with credential-bearing keys masked, for safe logging.
+
+        Recursive over dicts and common sequences. DeyeAPI/SunsynkAPI recurse over dicts + lists;
+        Sigenergy MQTT command payloads nest per-system commands one level down inside a list,
+        so a top-level-only rewrite would still leak anything a future payload carries there.
+        Tuples are included because json.dumps() serialises tuples as JSON arrays.
+        Sets/frozen sets are handled for log safety, even though json.dumps() does not
+        serialise them by default.
+        """
+        if isinstance(payload, dict):
+            return {key: ("<redacted>" if key in SIGENERGY_LOG_REDACT_KEYS else SigenergyAPI.redact(value)) for key, value in payload.items()}
+        if isinstance(payload, (list, tuple, set, frozenset)):
+            return [SigenergyAPI.redact(value) for value in payload]
+        return payload
+
     async def _publish_mqtt(self, topic, payload_dict):
         """Publish a JSON payload to the Sigenergy MQTT broker.
 
@@ -1047,7 +1069,7 @@ class SigenergyAPI(ComponentBase):
                 keepalive=30,
             ) as client:
                 await client.publish(topic, payload=json.dumps(payload_dict), qos=1)
-            self.log("SigenergyAPI: MQTT published to {} - {}".format(topic, payload_dict))
+            self.log("SigenergyAPI: MQTT published to {} - {}".format(topic, self.redact(payload_dict)))
             return True
         except Exception as e:
             self.log("Warn: SigenergyAPI: MQTT publish to {} failed: {}".format(topic, e))
@@ -1474,6 +1496,9 @@ class SigenergyAPI(ComponentBase):
                         # Parse topic: openapi/{type}/{app_key}/{system_id}
                         topic_str = str(message.topic)
                         parts = topic_str.split("/")
+                        # The topic embeds app_key (the MQTT broker username), so mask it before
+                        # any log line prints the topic — same leak class as the publish payload.
+                        safe_topic = topic_str.replace(self.app_key, "<redacted>") if self.app_key else topic_str
                         # Expected: ['openapi', type, app_key, system_id]
                         if len(parts) < 4:
                             continue
@@ -1485,7 +1510,7 @@ class SigenergyAPI(ComponentBase):
                         try:
                             payload = json.loads(raw.decode("utf-8", errors="replace"))
                         except (json.JSONDecodeError, ValueError):
-                            self.log("Warn: SigenergyAPI: MQTT non-JSON payload on {}: {}".format(topic_str, raw[:120]))
+                            self.log("Warn: SigenergyAPI: MQTT non-JSON payload on {}: {}".format(safe_topic, raw[:120]))
                             continue
 
                         # Each message is a list of device-level entries; process each
@@ -1499,7 +1524,7 @@ class SigenergyAPI(ComponentBase):
                                 continue
                             self.last_mqtt_update[entry_sid] = time.time()
                             value_dict = entry.get("value", {})
-                            self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(topic_str, entry_sid, msg_type, value_dict))
+                            self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(safe_topic, entry_sid, msg_type, value_dict))
                             if msg_type == "period":
                                 self._handle_mqtt_period(entry_sid, value_dict)
                                 if self.api_started:

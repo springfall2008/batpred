@@ -24,7 +24,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from annual import INCLUDED_STATUSES, SCENARIO_KEYS, AnnualConfigError, AnnualPredictor  # noqa: E402
+from annual import INCLUDED_STATUSES, SCENARIO_KEYS, AnnualConfigError, AnnualPredictor, config_warnings  # noqa: E402
 from storage import StorageLocalFiles  # noqa: E402
 from tariff_catalogue import export_compare_tariffs  # noqa: E402
 
@@ -409,6 +409,14 @@ def main(argv=None, storage_factory=StorageLocalFiles):
     # stdout ahead of the final json.dump() would corrupt the one-JSON-object contract a parent
     # process depends on. The default (non-machine) path keeps log=print unchanged.
     log = _stderr_log if args.machine else print
+
+    # The same sanity warnings the web form surfaces (e.g. a kWp figure that looks like
+    # Watts were entered, GH#4858): a headless run must not be the one place a config
+    # mistake is invisible. Through log rather than a stdout write, so --machine's
+    # one-JSON-object stdout contract holds; machine mode already carries plain text on
+    # stderr alongside the JSON progress lines.
+    for warning in config_warnings(config):
+        log("Warn: Annual: {}".format(warning))
 
     storage = storage_factory(args.work_dir, log)
 

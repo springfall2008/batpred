@@ -1,4 +1,5 @@
 # Custom Dictionary Words
+3hy
 aaaabbbbccccdddd
 activepower
 adata
@@ -14,8 +15,10 @@ aios
 Alertfeed
 allclose
 alphaess
+am2
 annualform
 Anson
+antiphase
 apexcharts
 apikey
 appdaemon
@@ -71,6 +74,7 @@ cdn
 Cerbo
 cexxxx
 ceyyyy
+CGNAT
 Chae
 Chaf
 chargedischarge
@@ -126,6 +130,7 @@ dateutil
 dayname
 daynumber
 daysymbol
+deadband
 deadbeefdeadbeef
 dedup
 dedupe
@@ -149,6 +154,7 @@ Dise
 Disf
 diverter
 dlimit
+dlopen
 dnoregion
 docstrings
 dstamp
@@ -191,6 +197,7 @@ ESSAPI
 etoday
 etok
 euids
+EVAC
 EVDC
 evergen
 evilspringfall
@@ -211,6 +218,7 @@ fline
 FLOMASTA
 fontsize
 fontweight
+footgun
 Forestfire
 formaction
 formmethod
@@ -231,9 +239,11 @@ geserial
 geseriale
 getaffinity
 getall
+getattr
 getrusage
 Ginlong
 gitnexus
+giv
 GivEnergy
 givtcp
 gnueabihf
@@ -322,6 +332,7 @@ ladybugdb
 larr
 libbi
 libc
+libyaml
 LIFEPO
 linebreak
 linestyle
@@ -337,6 +348,8 @@ lookback
 lpignore
 lstrip
 luxpower
+malloc
+mallopt
 markdownlint
 matplotlib
 maximise
@@ -390,6 +403,7 @@ mypy
 nanmean
 nanstd
 nattribute
+nbytes
 ncalls
 nearr
 nemotron
@@ -423,6 +437,7 @@ ollama
 onblur
 onchange
 oncharge
+oneline
 onfocus
 oninput
 onmouseout
@@ -430,8 +445,10 @@ onmouseover
 openapi
 openrouter
 openweathermap
+Opticaster
 overclaim
 overfitting
+oversizing
 overvoltage
 ownerapi
 parseable
@@ -538,6 +555,7 @@ sess
 setattr
 setdefault
 SFMB
+sg05lp1
 SIGALRM
 sigcloud
 sigen
