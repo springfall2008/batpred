@@ -4769,6 +4769,16 @@ def _test_force_charge_control(my_predbat):
             print("ERROR: Expected the detected-features log to report force charge: True")
             return 1
 
+        # The detected-features flag is a substring match, so a suffixed spelling still reports it.
+        ge.config_args = {}
+        ge.log_messages = []
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_AC_Charge"}, "reg2": {"name": "Enable_Force_Charge_2"}}}
+        await ge.async_automatic_config({"ems": None, "gateway": None, "battery": ["battery001"]})
+
+        if not any("force charge: True" in message for message in ge.log_messages):
+            print("ERROR: A suffixed force charge register should still report force charge: True")
+            return 1
+
         # A standard device with only enable_ac_charge is unchanged by the new precedence.
         ge.config_args = {}
         ge.settings = {"battery002": {"reg1": {"name": "Enable_AC_Charge"}}}
@@ -4868,16 +4878,35 @@ def _test_force_charge_control(my_predbat):
             print("ERROR: Enable_AC_Charge should be untouched on a standard device, got {}".format(registers[200]["value"]))
             return 1
 
-        # The match is exact: the charge-limit enable register must not be mistaken for it.
+        # The AC charge upper limit switch shares the enable_ac_charge prefix and is a different
+        # control, so none of its known spellings may be force-enabled. Enable_AC_Charge_Upper_Limit
+        # is the one the pre-existing "enable_" guard above does not catch, so it pins the exclusion.
+        for limit_name in ("Enable_AC_Charge_Upper_Percent_Limit", "Enable_AC_Charge_1_Upper_SOC_Percent_Limit", "Enable_AC_Charge_Upper_Limit"):
+            write_calls.clear()
+            registers = {
+                202: {"name": limit_name, "value": False, "validation_rules": []},
+                201: {"name": "Enable_Force_Charge", "value": False, "validation_rules": []},
+            }
+            result = await ge_cloud.enable_default_options("test123", registers)
+
+            if write_calls:
+                print("ERROR: {} should not be force-enabled, got {}".format(limit_name, write_calls))
+                return 1
+            if registers[202]["value"] is not False:
+                print("ERROR: {} should be left untouched, got {}".format(limit_name, registers[202]["value"]))
+                return 1
+
+        # A firmware that names the switch with a suffix is still matched, as the register family is
+        # spelled inconsistently across GE devices.
         write_calls.clear()
         registers = {
-            202: {"name": "Enable_AC_Charge_Upper_Percent_Limit", "value": False, "validation_rules": []},
+            203: {"name": "Enable_AC_Charge_2", "value": False, "validation_rules": []},
             201: {"name": "Enable_Force_Charge", "value": False, "validation_rules": []},
         }
         result = await ge_cloud.enable_default_options("test123", registers)
 
-        if write_calls:
-            print("ERROR: Enable_AC_Charge_Upper_Percent_Limit should not be force-enabled, got {}".format(write_calls))
+        if len(write_calls) != 1 or write_calls[0]["key"] != 203 or write_calls[0]["value"] is not True:
+            print("ERROR: A suffixed Enable_AC_Charge register should still be enabled, got {}".format(write_calls))
             return 1
 
         # A rejected write is reported and does not count as a change.

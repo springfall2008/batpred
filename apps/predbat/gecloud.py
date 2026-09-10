@@ -1118,7 +1118,11 @@ class GECloudDirect(ComponentBase):
                             changed = True
                         else:
                             self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
-            if ha_name == "enable_ac_charge" and has_force_charge:
+            # Matched by substring as GE spells this family inconsistently across firmware, but the
+            # AC charge *upper limit* switch shares the prefix under at least three names
+            # (enable_ac_charge_upper_percent_limit, enable_ac_charge_1_upper_soc_percent_limit and
+            # enable_ac_charge_upper_limit) and is a different control, so limit registers are excluded.
+            if ("enable_ac_charge" in ha_name) and ("limit" not in ha_name) and has_force_charge:
                 if value:
                     changed = True
                     continue
@@ -1285,7 +1289,7 @@ class GECloudDirect(ComponentBase):
                     has_discharge_target_soc = True
                 if "pause_battery" in ha_name:
                     has_pause_battery = True
-                if ha_name == "enable_force_charge":
+                if "enable_force_charge" in ha_name:
                     has_force_charge = True
 
         def register_names(device):
