@@ -74,6 +74,34 @@ One dict per component. All sections optional.
 }
 ```
 
+### Record containers
+
+Every record is built from a small fixed set of **typed containers**. A container declares
+what kind of value it holds and what happens to those values when the catalogue is shared —
+so a component adding a new fact chooses a container, not a schema entry, and needs no
+change here. The container's type constraint is what makes that safe: a container that
+accepts only numbers cannot leak a name, an email or a credential however it is extended.
+
+| Container | Accepts | On share | Extend freely |
+|---|---|---|---|
+| `hardware_ids` | Strings ≤64 chars identifying a device: serial, model number | clear | yes |
+| `account_ids` | Any scalar identifying a person, supply point or account | pseudonymised | yes |
+| `info` | Vendor-supplied descriptive strings ≤64 chars: model, firmware, API version | clear | yes |
+| `ratings` | Numbers and booleans only — physical quantities | clear | yes |
+| `coverage` | Numbers, booleans, vocabulary tokens | clear | yes |
+| `functions`, `capabilities`, `flags`, `effects` | Lists of vocabulary tokens matching `^[a-z0-9_]{1,32}$` | clear | yes |
+| `entities` | Entity descriptors, keyed by Predbat standard name | clear | yes |
+| Top level | `source`, `device_id`, `kind`, `direction`, and the cross-links | structural | needs a schema change |
+
+The split between `hardware_ids` and `account_ids` is the one classification a developer has
+to get right, and it follows the line the codebase already draws: a serial addresses
+hardware, so it stays readable and is what makes a bug report diagnosable, while an MPAN or
+account number identifies a person and does not. Putting a new identifier in `account_ids`
+is always the safe choice — it is pseudonymised whatever it is called.
+
+Only the top-level structural fields are enumerated by this spec, and there are few of them.
+Everything descriptive lives in a container and extends without touching the schema.
+
 ### The entity descriptor
 
 Every record's `entities` is a dict keyed by **Predbat's standard name** for that sensor or
@@ -118,80 +146,60 @@ that one careless call to the generic masker silently destroys the whole documen
 
 **`inverters`** — a device that generates, stores or both.
 
-| Field | Redaction | Notes |
+| Field | Container | Notes |
 |---|---|---|
-| `device_id`, `serial` | clear | Serials are deliberately not secret — they address hardware rather than authenticate it, and they are what makes an integration bug diagnosable |
-| `functions` | clear | `["solar"]`, `["battery"]` or both. A PV-only inverter is how the extra-PV-sensor case is expressed |
-| `inverter_type` | clear | `INVERTER_DEF` key, where the component has one |
-| `control` | clear | Whether Predbat is permitted to drive it (`control_enable`, monitor-only modes) |
-| `composition` | clear | `direct`, `gateway` (fronting `serials`), or `ems` |
-| `measures_meter` | pseudonym | Links a CT clamp to a supply point, so double counting is detectable |
-| `info` | clear | `model`, `firmware`, vendor API version. Fixed keys only |
-| `ratings` | clear | `battery_kwh`, `max_charge_w`, `max_discharge_w`, `modules`, `dod_percent`, `nominal_voltage` |
-| `capabilities` | clear | Free list, recorded not acted on: `schedule`, `pause_mode`, `pause_slots`, `target_soc`, `discharge_target`, `charge_rate_power`, `charge_rate_percent`, `soh` |
-| `entities` | clear | Descriptors, keyed by Predbat standard name |
+| `serial` | `hardware_ids` | |
+| `functions` | vocabulary | `["solar"]`, `["battery"]` or both. A PV-only inverter is how the extra-PV-sensor case is expressed |
+| `inverter_type` | top level | `INVERTER_DEF` key, where the component has one |
+| `control` | top level | Whether Predbat is permitted to drive it (`control_enable`, monitor-only modes) |
+| `composition` | top level | `direct`, `gateway` (fronting `serials`), or `ems` |
+| `measures_meter` | cross-link | A meter `device_id`, so double counting is detectable |
+| `model`, `firmware` | `info` | |
+| `battery_kwh`, `max_charge_w`, `modules`, `dod_percent`, `nominal_voltage` | `ratings` | |
+| `capabilities` | vocabulary | Recorded not acted on: `schedule`, `pause_mode`, `pause_slots`, `target_soc`, `discharge_target`, `charge_rate_power`, `charge_rate_percent`, `soh` |
+| `entities` | `entities` | Keyed by Predbat standard name |
 
-**`chargers`** — an EVSE.
-
-| Field | Redaction | Notes |
-|---|---|---|
-| `device_id`, `serial` | clear | |
-| `info` | clear | `vendor`, `model` |
-| `ratings` | clear | `max_power_kw`, `phases` |
-| `serves_cars` | clear | `device_id` values from `cars` |
-| `entities` | clear | `car_charging_planned`, `car_charging_energy`, `car_charging_power`, `car_charging_now` — charger facts |
+**`chargers`** — an EVSE. `serial` in `hardware_ids`; `vendor` and `model` in `info`;
+`max_power_kw` and `phases` in `ratings`; `serves_cars` cross-links to `cars`. Its
+`entities` carry the charger facts: `car_charging_planned`, `car_charging_energy`,
+`car_charging_power`, `car_charging_now`.
 
 **`cars`** — a vehicle. Predbat indexes cars, not chargers, so a charger integration that
-knows nothing about the vehicle still emits a stub car record with
-`info.stub: true`. Ohme can do better: it holds a vehicle list today that is discarded.
-
-| Field | Redaction | Notes |
-|---|---|---|
-| `device_id` | clear | Vendor's own vehicle handle |
-| `info` | clear | `make`, `model`, `stub`. **No registration** — see never-included below |
-| `ratings` | clear | `battery_kwh`, `max_charge_kw` |
-| `charged_by` | clear | `device_id` values from `chargers` |
-| `entities` | clear | `car_charging_soc`, `car_charging_limit`, `octopus_intelligent_slot`, `octopus_ready_time`, `octopus_charge_limit` |
+knows nothing about the vehicle still emits a stub car record with `info.stub`. Ohme can do
+better: it holds a vehicle list today that is discarded. `make` and `model` in `info`;
+`battery_kwh` and `max_charge_kw` in `ratings`; `charged_by` cross-links to `chargers`. Its
+`entities` carry the car facts: `car_charging_soc`, `car_charging_limit`,
+`octopus_intelligent_slot`, `octopus_ready_time`, `octopus_charge_limit`.
 
 `car_charging_rate` is the one genuinely negotiated value: the charger reports its limit and
 the car reports its own, rather than either pre-flattening the minimum as today.
 
 **`meters`** — a supply point, which may carry a tariff.
 
-| Field | Redaction | Notes |
+| Field | Container | Notes |
 |---|---|---|
-| `device_id` | pseudonym | Derived from the MPAN/MPRN |
-| `direction` | clear | `import`, `export` or `gas`. One or more of each is legal |
-| `mpan`, `account`, `meter_serial` | pseudonym | Registry-flagged identity |
-| `tariff.tariff_code`, `tariff.product_code` | clear | Public product identifiers and highly diagnostic |
-| `tariff.flags` | clear | `intelligent_go`, `agile`, `six_hour_cap`, `tracker`, `fixed` |
-| `tariff.standing_charge_p` | clear | |
-| `entities` | clear | `metric_octopus_import`, `metric_octopus_export`, `metric_standing_charge` |
+| `device_id` | derived from `account_ids` | Pseudonymised, since it is built from the MPAN |
+| `direction` | top level | `import`, `export` or `gas`. One or more of each is legal |
+| `mpan`, `account`, `meter_serial` | `account_ids` | |
+| `tariff.tariff_code`, `tariff.product_code` | `info` | Public product identifiers and highly diagnostic |
+| `tariff.flags` | vocabulary | `intelligent_go`, `agile`, `six_hour_cap`, `tracker`, `fixed` |
+| `tariff.standing_charge_p` | `ratings` | |
+| `entities` | `entities` | `metric_octopus_import`, `metric_octopus_export`, `metric_standing_charge` |
 
 Modelling tariffs as a property of a meter rather than as a single site-wide record is what
 makes Kraken's separate import and export accounts representable, makes gas a direction
 rather than a special case, and gives the Octopus-versus-Kraken contention over
 `metric_octopus_import` a place to be observed per meter.
 
-**`forecasts`** — a service producing a time series. No slot, no index.
-
-| Field | Redaction | Notes |
-|---|---|---|
-| `provider_id` | pseudonym | Solcast site ids, plant ids and similar are registry-flagged |
-| `kind` | clear | `solar`, `carbon`, `temperature`, `load` |
-| `info` | clear | `vendor`, `capacity_kw`. **No user-authored site name** |
-| `coverage` | clear | `horizon_hours`, `resolution_minutes`, `variants` (e.g. `pv10`/`pv50`/`pv90`) |
-| `entities` | clear | `pv_forecast_today`, `pv_forecast_tomorrow`, … |
+**`forecasts`** — a service producing a time series. No slot, no index. `provider_id` from
+`account_ids` (Solcast site ids and plant ids are registry-flagged); `kind` at top level
+(`solar`, `carbon`, `temperature`, `load`); `vendor` in `info`; `capacity_kw` in `ratings`;
+`horizon_hours`, `resolution_minutes` and `variants` (`pv10`/`pv50`/`pv90`) in `coverage`.
 
 **`programmes`** — a flexibility enrolment that emits events and may constrain Predbat.
-
-| Field | Redaction | Notes |
-|---|---|---|
-| `programme_id` | pseudonym | Site ids are registry-flagged |
-| `kind` | clear | `vpp`, `saving_session`, `free_electricity` |
-| `meter` | pseudonym | The enrolled supply point's `device_id` |
-| `effects` | clear | `rate_override`, `forces_read_only` |
-| `entities` | clear | e.g. `axle_session` |
+`programme_id` from `account_ids`; `kind` at top level (`vpp`, `saving_session`,
+`free_electricity`); `meter` cross-linking to the enrolled supply point; `effects` as
+vocabulary (`rate_override`, `forces_read_only`).
 
 A seventh section, `loads` (myenergi Eddi, iBoost, Predheat), is named here as the intended
 home for controllable loads. Nothing reports it in v1.
@@ -215,50 +223,59 @@ directions here.
 Credentials of every kind (API keys, tokens, passwords, secrets, OAuth material); any
 user-authored free text (Solcast site names, charger nicknames, account labels), which can
 contain anything including names and addresses; precise location (latitude, longitude, full
-postcode, address); and vehicle registration.
+postcode, address); and vehicle registration. No container accepts these, which is what
+makes the rule enforceable rather than advisory.
 
-**Pseudonymised.** Identity that must stay correlatable inside a dump but must not be
-published: MPAN and MPRN, account identifiers, site, plant and system identifiers, hub
-serials (myenergi's is the digest-auth username), and login identifiers such as the Ohme
-email. Each is replaced by `"{prefix}:#{token}"` where the token is a short digest of the
-value with a per-installation random salt — so `meters[0].device_id` still matches
-`programmes[0].meter` within a dump and across successive dumps from the same installation,
-while the same MPAN from two different users does not collide and the original cannot be
-recovered. A plain unsalted digest would be pointless for a 13-digit MPAN, which is
-brute-forceable in seconds. The salt is generated once, stored via the Storage component,
-and is itself excluded from every dump.
+**Pseudonymised.** Everything in `account_ids`, and any value cross-linking to one: MPAN and
+MPRN, account identifiers, site, plant and system identifiers, hub serials (myenergi's is
+the digest-auth username), and login identifiers such as the Ohme email. Each is replaced by
+`"{prefix}:#{token}"` where the token is a short digest of the value with a per-installation
+random salt — so `meters[0].device_id` still matches `programmes[0].meter` within a dump and
+across successive dumps from the same installation, while the same MPAN from two different
+users does not collide and the original cannot be recovered. A plain unsalted digest would
+be pointless for a 13-digit MPAN, which is brute-forceable in seconds. The salt is generated
+once, stored via the Storage component, and is itself excluded from every dump.
+
+Pseudonymising a value also rewrites it wherever else it appears, entity ids included.
+Vendors embed identifiers in entity names, so `sensor.predbat_x_{site_id}_forecast` would
+otherwise republish in the clear exactly what the `site_id` field just hid.
 
 **Coarsened.** Location that retains diagnostic value in reduced form: a postcode is
 truncated to its outward code (`SW1A`), latitude and longitude are dropped rather than
 rounded.
 
-**Clear.** Hardware and product identity plus everything describing capability: device
-serials, model, firmware, `inverter_type`, `functions`, `capabilities`, ratings, tariff and
-product codes, entity ids, units, bounds, options, counts, statuses and timestamps. This
-follows the line the codebase already draws — `secret_config_names()` deliberately does not
-flag device serials, because they address hardware rather than authenticate it and they are
-what makes a bug report diagnosable.
+**Clear.** Everything in `hardware_ids`, `info`, `ratings`, `coverage`, the vocabulary lists
+and `entities`: device serials, model, firmware, `inverter_type`, `functions`,
+`capabilities`, ratings, tariff and product codes, entity ids, units, bounds, options,
+counts, statuses and timestamps. This follows the line the codebase already draws —
+`secret_config_names()` deliberately does not flag device serials, because they address
+hardware rather than authenticate it and they are what makes a bug report diagnosable.
 
 ### Enforcement
 
-Redaction is an allow-list, not a deny-list. Only fields named in this spec appear in the
-catalogue; anything else a component reports is dropped from the assembled document. This
-reverses the earlier decision to let arbitrary vendor extras ride along verbatim, and the
-reversal is deliberate: when the primary consumer is a public bug report, "we did not think
-of that field" must fail closed. Adding a new fact to the catalogue is a one-line schema
-change carrying an explicit redaction class with it.
+Safety comes from the containers being typed, not from enumerating every field. A component
+adds facts freely; what it cannot do is put a value somewhere its type does not fit. Values
+failing a container's constraint are dropped and logged rather than emitted, so the failure
+mode of misfiling is missing data, never a leak.
 
-Three further guards:
+Three guards sit on top, in order of how much work they do:
 
-1. `report()` rejects any field whose name trips `is_secret_key()`'s substrings (`_key`,
-   `password`, `secret`, `token`) and logs the component that tried, so a credential
-   reported by mistake never reaches the catalogue.
-2. Because entity ids are emitted verbatim and vendors embed identifiers in them, any value
-   that was pseudonymised is also substituted inside `entity_id` strings. Otherwise
-   `sensor.predbat_x_{site_id}_forecast` republishes in the clear exactly what the `site_id`
-   field just hid.
-3. A test asserts that every field named in this spec has a declared redaction class, so a
-   field added without a decision fails the suite rather than shipping.
+1. **Type constraints per container**, as tabled above. This is the primary mechanism: a
+   numbers-only `ratings`, a `^[a-z0-9_]{1,32}$` vocabulary and a length-capped `info` that
+   rejects `@` between them exclude names, emails, addresses, JWTs and free text
+   structurally, no matter how the catalogue grows.
+2. **A field-name credential guard.** Any field whose name trips `is_secret_key()`'s
+   substrings (`_key`, `password`, `secret`, `token`), in any container, is rejected and the
+   reporting component logged. A credential reported by mistake never reaches the catalogue.
+3. **Value-shape guards** for the one gap the type system cannot close: an MPAN is a
+   number, so it satisfies `ratings`. Any clear-container value that looks like an
+   identifier rather than a measurement — a long digit run, something containing `@`, a
+   coordinate-shaped float pair — is pseudonymised defensively and logged loudly as
+   misfiled. This is a safety net for a mistake, not the classification mechanism.
+
+A test asserts every container has a declared class and constraint, and a corpus test walks
+a synthetic catalogue seeded with credential-, MPAN-, email- and postcode-shaped values and
+asserts none survives into the redacted form.
 
 ## Assembled catalogue
 
@@ -319,15 +336,15 @@ existing first-run path. No other line of those components changes.
 
 ## Testing
 
-Coordinator unit tests: report validation and field dropping, the credential guard, assembly
-and merging across components, status derivation for reported, silent, failed and
-unconfigured components, conflict detection, and JSON/YAML round-tripping of the assembled
-catalogue. Redaction tests: each of the four classes, pseudonym stability within a document
-and instability across salts, substitution of pseudonymised values inside entity ids, and a
-scan asserting no unredacted MPAN, account, site id, postcode or credential-shaped value
-survives into the redacted catalogue. Per-component tests: each reporter's
-`build_discovery()` against that module's existing fixtures. Plus a regression assertion
-that enabling discovery changes no `self.args` key.
+Coordinator unit tests: container type constraints and value dropping, the credential guard,
+the value-shape guards, assembly and merging across components, status derivation for
+reported, silent, failed and unconfigured components, conflict detection, and JSON/YAML
+round-tripping of the assembled catalogue. Redaction tests: each of the four classes,
+pseudonym stability within a document and instability across salts, substitution of
+pseudonymised values inside entity ids, and the seeded-corpus scan asserting no credential,
+MPAN, account id, email or postcode survives into the redacted catalogue. Per-component
+tests: each reporter's `build_discovery()` against that module's existing fixtures. Plus a
+regression assertion that enabling discovery changes no `self.args` key.
 
 ## Deferred
 
