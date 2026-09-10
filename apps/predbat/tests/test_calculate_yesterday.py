@@ -27,7 +27,8 @@ from datetime import datetime, timedelta
 
 import pytz
 
-from const import PREDICT_STEP, EXPORT_LIMIT_FREEZE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from const import PREDICT_STEP, EXPORT_MODE_FREEZE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from utils import export_mode_of
 from output import yesterday_slot_is_exporting, more_active_slot_status
 from tests.test_infra import reset_rates, reset_inverter
 
@@ -1420,7 +1421,7 @@ def _test_mixed_slot_keeps_most_active_state(my_predbat, failed):
     The history here freezes for exactly the first half of every slot and force exports for exactly
     the second - a dead-even split, so neither state dominates on minutes alone and the choice falls
     to the most-active tie-break, which favours the real export over the freeze. Every rebuilt window
-    must come back as a real export target rather than EXPORT_LIMIT_FREEZE, and must be marked as
+    must come back as a real export target rather than a freeze, and must be marked as
     having held more than one state.
     """
     print("calculate_yesterday: Test - a slot holding two equally-sized states keeps the more active one (#4843)")
@@ -1469,7 +1470,7 @@ def _test_mixed_slot_keeps_most_active_state(my_predbat, failed):
         print("ERROR: an Exporting history should rebuild export windows, got none")
         failed = True
     else:
-        frozen = [limit for limit in captured["export_limits_best"] if limit == EXPORT_LIMIT_FREEZE]
+        frozen = [limit for limit in captured["export_limits_best"] if export_mode_of(limit) == EXPORT_MODE_FREEZE]
         if frozen:
             print("ERROR: {} of {} rebuilt export slots came back as freeze - on a dead-even split the tie-break should favour the real export".format(len(frozen), len(captured["export_limits_best"])))
             failed = True
@@ -1558,7 +1559,7 @@ def _test_short_export_inside_a_freeze_slot(my_predbat, failed):
         print("ERROR: expected exactly one rebuilt export window for the slot, got {}: {}".format(len(windows), windows))
         failed = True
     else:
-        if limits[0] != EXPORT_LIMIT_FREEZE:
+        if export_mode_of(limits[0]) != EXPORT_MODE_FREEZE:
             print("ERROR: freeze held 18 of the slot's 30 minutes against 12 for export and should be the dominant headline state, got a real export target instead")
             failed = True
         if sorted(windows[0].get("mixed", [])) != ["exporting", "freeze exporting"]:
@@ -1629,7 +1630,7 @@ def _test_full_edge_state_counts_toward_the_dominant_tally(my_predbat, failed):
     if not windows:
         print("ERROR: an export that fully occupies the slot's first 5 minutes should still rebuild an export window, got none")
         failed = True
-    elif limits[0] != EXPORT_LIMIT_FREEZE:
+    elif export_mode_of(limits[0]) != EXPORT_MODE_FREEZE:
         print("ERROR: freeze held 25 of the slot's 30 minutes and should be the dominant headline state")
         failed = True
     elif sorted(windows[0].get("mixed", [])) != ["exporting", "freeze exporting"]:

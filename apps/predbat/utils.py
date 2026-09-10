@@ -23,7 +23,22 @@ import os
 from datetime import datetime, timedelta, timezone, time
 from io import StringIO
 from functools import lru_cache
-from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
+from const import (
+    LOW_POWER_PV_THRESHOLD,
+    MINUTE_WATT,
+    PREDICT_STEP,
+    TIME_FORMAT,
+    TIME_FORMAT_SECONDS,
+    TIME_FORMAT_OCTOPUS,
+    MAX_INCREMENT,
+    TIME_FORMAT_DAILY,
+    EXPORT_LIMIT_FREEZE,
+    EXPORT_LIMIT_IDLE,
+    EXPORT_MODE_TARGET,
+    EXPORT_MODE_FREEZE,
+    EXPORT_MODE_IDLE,
+    FULL_EXPORT_POWER,
+)
 import copy
 import json
 
@@ -1531,6 +1546,115 @@ def calc_percent_limit(charge_limit, soc_max):
             return 0
         else:
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
+
+
+# ---------------------------------------------------------------------------
+# Export limit encoding
+#
+# An export window's instruction is currently a single double in export_limits_best carrying three
+# orthogonal signals: the target SoC percentage in the integer part, the export power level in the
+# fraction (stored as 1 - power, so 47.3 means a 70% rate), and the mode as two reserved whole
+# values (EXPORT_LIMIT_FREEZE = 99.0, EXPORT_LIMIT_IDLE = 100.0). One value answering three
+# questions meant every consumer re-derived intent by comparing against the sentinels, and did it
+# inconsistently - some test == 99, some < 99, some >= 99.
+#
+# The accessors below are the vocabulary callers should use instead. They still decode the packed
+# double here; a later commit swaps the representation underneath them without touching a call site.
+# pack_export_limit() is the single place the encoding is written down, replacing the by-hand
+# arithmetic scattered through plan.py's export ladder and the clip passes.
+# ---------------------------------------------------------------------------
+
+
+def export_mode_of(export_limit):
+    """Which of the three export modes a packed export limit represents.
+
+    Callers should ask this rather than comparing against EXPORT_LIMIT_FREEZE / EXPORT_LIMIT_IDLE
+    themselves: several modules currently do that inconsistently (some test `== 99`, some `< 99`,
+    some `>= 99`), which is how a low-power export to a 99% target became inexpressible.
+
+    The freeze sentinel is matched exactly, not by range. That matters for the [99.0, 100.0)
+    interval, which the packed encoding cannot produce but which the codebase disagrees about:
+    most sites test `== EXPORT_LIMIT_FREEZE` (99.5 would be a normal export) rather than `< 99`.
+    Exact matching preserves the more common reading and keeps this function inert; the
+    disagreement is only truly fixable once the fields are split, since it exists because one
+    number is answering two questions.
+
+    Returns EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE or EXPORT_MODE_IDLE.
+    """
+    if export_limit >= EXPORT_LIMIT_IDLE:
+        return EXPORT_MODE_IDLE
+    if export_limit == EXPORT_LIMIT_FREEZE:
+        return EXPORT_MODE_FREEZE
+    return EXPORT_MODE_TARGET
+
+
+def export_target_of(export_limit):
+    """The target SoC percentage a packed export limit exports down to.
+
+    Only meaningful for EXPORT_MODE_TARGET; the reserved mode values do not carry a target and
+    return None so a caller cannot silently use 99 or 100 as if it were one.
+    """
+    if export_mode_of(export_limit) != EXPORT_MODE_TARGET:
+        return None
+    return int(export_limit)
+
+
+def export_power_of(export_limit):
+    """The export power fraction of a packed export limit, 1.0 being full rate.
+
+    Mirrors the decode in Prediction.run_prediction and prediction_kernel.cpp: the stored fraction
+    counts down from full power, so 47.3 means 70% rate. The mode values carry no power level and
+    return full rate, matching what the callers already assume.
+    """
+    if export_mode_of(export_limit) != EXPORT_MODE_TARGET:
+        return FULL_EXPORT_POWER
+    return 1 - (export_limit - int(export_limit))
+
+
+def export_limit_exports_no_battery(export_limit):
+    """Whether this export limit discharges no battery - it is idle, or a freeze.
+
+    Wraps what plan.py's trim pass expresses as `limit >= EXPORT_LIMIT_FREEZE`, which works only
+    because both reserved values sort above every real target. That ordering is a property of the
+    packed encoding rather than of the question being asked, so it is named here; once mode is a
+    field of its own this becomes a membership test over modes.
+    """
+    return export_limit >= EXPORT_LIMIT_FREEZE
+
+
+def export_limit_is_full_discharge(export_limit):
+    """Whether this instruction exports the battery all the way down, at full power.
+
+    Wraps what the planner's passes express as `limit == 0`, which only works while a limit is a
+    bare number whose zero value means "target 0% at full rate".
+    """
+    return export_mode_of(export_limit) == EXPORT_MODE_TARGET and export_target_of(export_limit) == 0 and export_power_of(export_limit) == FULL_EXPORT_POWER
+
+
+def export_limit_sort_key(export_limit):
+    """The packed value an export limit represents, for ordering and for the display paths.
+
+    The planner's passes compare limits to decide whether one is a shallower discharge than
+    another (see the trim pass in optimise_plan_pass), and the modes must sort above every real
+    target as the reserved values did. Anything comparing two limits by depth, or formatting one
+    as a number for a chart, goes through this rather than reading the raw value - so that when the
+    representation stops being a bare number the call sites do not have to change again.
+    """
+    return export_limit
+
+
+def pack_export_limit(mode, target=None, power=FULL_EXPORT_POWER):
+    """Build a packed export limit from the three signals it encodes.
+
+    The inverse of export_mode_of / export_target_of / export_power_of, kept beside them so the
+    encoding is written down in exactly one place instead of being re-derived at each call site
+    (see plan.py's ladder, which builds the same values by hand).
+    """
+    if mode == EXPORT_MODE_IDLE:
+        return EXPORT_LIMIT_IDLE
+    if mode == EXPORT_MODE_FREEZE:
+        return EXPORT_LIMIT_FREEZE
+    return int(target or 0) + (FULL_EXPORT_POWER - power)
 
 
 def clone_windows(windows):

@@ -113,6 +113,25 @@ INVERTER_TEST = False  # Run inverter control self test
 EXPORT_LIMIT_FREEZE = 99.0  # Hold SoC, export only genuine PV surplus - no forced discharge
 EXPORT_LIMIT_IDLE = 100.0  # Export window disabled entirely
 
+# Export modes - the three states an export window can be in. These name what the packed value
+# above already encodes; they are the vocabulary the rest of the code should ask in, rather than
+# each caller re-deriving intent by comparing against the two sentinels (which several modules
+# currently do, inconsistently). See export_mode_of()/export_target_of()/export_power_of() in
+# utils.py for the accessors that read them.
+EXPORT_MODE_TARGET = 0  # Force export down to a target SoC percentage, optionally at reduced power
+EXPORT_MODE_FREEZE = 1  # Hold SoC, export only genuine PV surplus
+EXPORT_MODE_IDLE = 2  # Window disabled entirely
+
+# Full export power - the power level a target window exports at unless the planner has chosen a
+# reduced rate. 1.0 = the inverter's configured maximum export rate.
+FULL_EXPORT_POWER = 1.0
+
+# Export power levels the planner tries for a low-power target export, as a fraction of full rate.
+# These are the powers themselves, not the packed fractions they used to be written as: the
+# encoding stores 1 - power, so the old ladder's 0.3/0.5/0.7 meant 70%/50%/30% rate and read
+# backwards at the call site.
+LOW_EXPORT_POWER_LEVELS = [0.7, 0.5, 0.3]
+
 # Create an array of times in the day in 5-minute intervals
 BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M:%S")) for minute in range(0, 24 * 60, 5)]

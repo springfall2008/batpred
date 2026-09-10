@@ -14,6 +14,8 @@ simulation reports for every candidate plan shape, keeping the tests about the p
 (criterion, baseline update, guards) rather than the simulator.
 """
 from tests.test_infra import reset_inverter
+from const import EXPORT_MODE_IDLE
+from utils import export_mode_of, export_target_of
 
 
 def run_prune_dead_slots_tests(my_predbat):
@@ -158,7 +160,7 @@ def test_prune_drops_neutral_slot(my_predbat):
     finally:
         restore_metric(my_predbat)
 
-    if my_predbat.export_limits_best[0] != 100.0:
+    if export_mode_of(my_predbat.export_limits_best[0]) != EXPORT_MODE_IDLE:
         print("ERROR: Neutral export slot not pruned, limit is {}".format(my_predbat.export_limits_best[0]))
         failed = True
 
@@ -186,7 +188,7 @@ def test_prune_keeps_slot_when_removal_worsens(my_predbat):
     finally:
         restore_metric(my_predbat)
 
-    if my_predbat.export_limits_best[0] != 0.0:
+    if export_target_of(my_predbat.export_limits_best[0]) != 0:
         print("ERROR: Genuine export slot was pruned, limit is {}".format(my_predbat.export_limits_best[0]))
         failed = True
 
@@ -217,10 +219,10 @@ def test_prune_allows_improvement_and_updates_baseline(my_predbat):
     finally:
         restore_metric(my_predbat)
 
-    if my_predbat.export_limits_best[0] != 100.0:
+    if export_mode_of(my_predbat.export_limits_best[0]) != EXPORT_MODE_IDLE:
         print("ERROR: Improving removal was rejected, slot 0 limit is {}".format(my_predbat.export_limits_best[0]))
         failed = True
-    if my_predbat.export_limits_best[1] != 0.0:
+    if export_target_of(my_predbat.export_limits_best[1]) != 0:
         print("ERROR: Slot 1 was pruned against a stale baseline, limit is {}".format(my_predbat.export_limits_best[1]))
         failed = True
 
@@ -247,7 +249,7 @@ def test_prune_drops_dead_in_progress_window(my_predbat):
     finally:
         restore_metric(my_predbat)
 
-    if my_predbat.export_limits_best[0] != 100.0:
+    if export_mode_of(my_predbat.export_limits_best[0]) != EXPORT_MODE_IDLE:
         print("ERROR: Dead in-progress export slot was not pruned, limit is {}".format(my_predbat.export_limits_best[0]))
         failed = True
 
@@ -276,7 +278,7 @@ def test_prune_keeps_valuable_in_progress_window(my_predbat):
     finally:
         restore_metric(my_predbat)
 
-    if my_predbat.export_limits_best[0] != 0.0:
+    if export_target_of(my_predbat.export_limits_best[0]) != 0:
         print("ERROR: Valuable in-progress export was cancelled mid-flight, limit is {}".format(my_predbat.export_limits_best[0]))
         failed = True
 
@@ -301,7 +303,7 @@ def test_prune_skips_manual_window(my_predbat):
     finally:
         restore_metric(my_predbat)
 
-    if my_predbat.export_limits_best[0] != 0.0:
+    if export_target_of(my_predbat.export_limits_best[0]) != 0:
         print("ERROR: Manual export slot was pruned, limit is {}".format(my_predbat.export_limits_best[0]))
         failed = True
 
@@ -350,7 +352,7 @@ def test_prune_ignores_windows_outside_record(my_predbat):
     finally:
         restore_metric(my_predbat)
 
-    if my_predbat.export_limits_best[0] != 0.0:
+    if export_target_of(my_predbat.export_limits_best[0]) != 0:
         print("ERROR: Out-of-record export slot was modified, limit is {}".format(my_predbat.export_limits_best[0]))
         failed = True
     if len(calls) > 1:
@@ -378,7 +380,7 @@ def test_prune_drops_neutral_export_freeze(my_predbat):
     finally:
         restore_metric(my_predbat)
 
-    if my_predbat.export_limits_best[0] != 100.0:
+    if export_mode_of(my_predbat.export_limits_best[0]) != EXPORT_MODE_IDLE:
         print("ERROR: Neutral export freeze not pruned, limit is {}".format(my_predbat.export_limits_best[0]))
         failed = True
 

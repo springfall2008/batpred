@@ -22,6 +22,17 @@ repos:
     language: python
     entry: python .cspell/sort_dictionary.py
     files: ^\.cspell\/custom-dictionary-workspace\.txt$
+  - id: export-limit-encoding
+    name: export limit encoding
+    language: python
+    entry: python tools/check_export_limit_encoding.py
+    files: ^apps/predbat/.*\.(py|cpp)$
+  - id: export-limit-encoding-tests
+    name: export limit encoding checker tests
+    language: python
+    entry: python tools/test_check_export_limit_encoding.py
+    files: ^tools/(check_export_limit_encoding\.py|test_check_export_limit_encoding\.py)$
+    pass_filenames: false
   - id: triage-daemon-tests
     name: triage daemon unit tests
     language: python
