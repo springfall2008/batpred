@@ -42,15 +42,15 @@
 // unconditionally, so loading one against this Python segfaults on the first prediction rather than
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
-// ABI 6: export limits travel as three parallel arrays (mode, target, power) rather than one packed
-// double per window. The packed form put the target in the integer part, the export power in the
+// ABI 6: export limits moved from one packed double per window to three parallel arrays
+// (mode/target/power). The packed form put the target in the integer part, the export power in the
 // fraction and the mode in two reserved whole values, so the kernel had to unpack it by arithmetic -
 // and reconstructing the power as 1 - frac round-tripped through binary floating point on the hot
-// path. Fields carry the same three signals with no arithmetic and no reserved range, which also
-// removes the (99.0, 100.0) interval that read as neither a freeze nor a target (GH#4914).
-#define PK_ABI_VERSION 6
-// Parity 12: the three field arrays replace the packed double throughout the hot loop (see the ABI
-// 6 note); the floor a target exports to now reads the target field, matching prediction.py.
+// path.
+// ABI 7: export limits are packed as PkExportLimit structs (array-of-structs) rather than those
+// three arrays. Same three fields, but one buffer and one stride, with the (99.0, 100.0) gap gone
+// because mode is explicit (GH#4914).
+#define PK_ABI_VERSION 7
 #define PK_PARITY_REVISION 12
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
@@ -63,6 +63,15 @@ namespace {
 // The three questions the simulation asks of an export limit. They read the mode field directly now
 // rather than inferring it from a packed double, mirroring export_mode_of/export_target_of/
 // export_power_of in utils.py.
+// One export instruction per window. An array of these rather than three parallel arrays: the
+// simulation reads all three fields of the same window on the same step, so they want to be on the
+// same cache line, and it makes the Python side one buffer to fill instead of three.
+struct PkExportLimit {
+    int32_t mode;   // const.py EXPORT_MODE_TARGET / _FREEZE / _IDLE
+    int32_t target; // SoC percent, meaningful only for EXPORT_MODE_TARGET
+    double power;   // fraction of full export rate, 1.0 = full
+};
+
 inline bool pk_export_is_idle(int32_t mode) { return mode == PK_EXPORT_MODE_IDLE; }
 inline bool pk_export_is_freeze(int32_t mode) { return mode == PK_EXPORT_MODE_FREEZE; }
 
@@ -252,12 +261,7 @@ struct PkScenario {
     const double *charge_limit;   // kWh target per charge window
     const int32_t *charge_start;  // absolute minutes
     const int32_t *charge_end;
-    // One export instruction per window, as three parallel arrays rather than one packed double.
-    // Parallel arrays match how the window times are already passed and keep the hot loop reading
-    // only the field it needs; target and power are unused for the two modes that carry neither.
-    const int32_t *export_modes;   // const.py EXPORT_MODE_TARGET / _FREEZE / _IDLE
-    const int32_t *export_targets; // SoC percent, meaningful only for EXPORT_MODE_TARGET
-    const double *export_powers;   // fraction of full export rate, 1.0 = full
+    const PkExportLimit *export_limits; // one instruction per export window
     const int32_t *export_start;
     const int32_t *export_end;
     double *soc_out;              // caller-allocated, n_steps entries, filled with round(soc, 3)
@@ -306,9 +310,7 @@ struct PkBatchJob {
     const double *charge_limit;
     const int32_t *charge_start;
     const int32_t *charge_end;
-    const int32_t *export_modes;
-    const int32_t *export_targets;
-    const double *export_powers;
+    const PkExportLimit *export_limits;
     const int32_t *export_start;
     const int32_t *export_end;
     double *soc_out; // optional, null to skip
@@ -449,13 +451,13 @@ inline double rate_curve(double soc_key, double rate_setting, double rate_max, d
 //
 // PARITY: any change here must be mirrored in utils.remove_intersecting_windows and vice versa.
 static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, std::vector<int32_t> &out_end, std::vector<double> &out_limit, int32_t n_charge, const int32_t *charge_start, const int32_t *charge_end, const double *charge_limit, int32_t n_export, const int32_t *export_start,
-                                             const int32_t *export_end, const int32_t *export_modes)
+                                             const int32_t *export_end, const PkExportLimit *export_limits)
 {
     // Enabled export windows only - the sole candidates for clipping anything - in start order
     std::vector<std::pair<int32_t, int32_t>> export_active;
     export_active.reserve(n_export);
     for (int32_t n = 0; n < n_export; n++) {
-        if (!pk_export_is_idle(export_modes[n])) {
+        if (!pk_export_is_idle(export_limits[n].mode)) {
             export_active.emplace_back(export_start[n], export_end[n]);
         }
     }
@@ -528,11 +530,11 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
 
 // Shared with the charge side, which has a bare kWh limit and no mode - hence both arrays, with
 // only the one matching is_export ever read.
-void build_window_membership(std::vector<int32_t> &member, int32_t n_windows, const int32_t *starts, const int32_t *ends, const double *limits, const int32_t *modes, bool is_export, int32_t minutes_now, int32_t n_steps)
+void build_window_membership(std::vector<int32_t> &member, int32_t n_windows, const int32_t *starts, const int32_t *ends, const double *limits, const PkExportLimit *export_limits, bool is_export, int32_t minutes_now, int32_t n_steps)
 {
     member.assign(n_steps, -1);
     for (int32_t window_n = 0; window_n < n_windows; window_n++) {
-        if (is_export ? pk_export_is_idle(modes[window_n]) : !(limits[window_n] > 0.0)) {
+        if (is_export ? pk_export_is_idle(export_limits[window_n].mode) : !(limits[window_n] > 0.0)) {
             continue;
         }
         for (int32_t m = starts[window_n]; m < ends[window_n]; m += 5) {
@@ -681,11 +683,11 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     std::vector<int32_t> &clipped_start = scratch.clipped_start;
     std::vector<int32_t> &clipped_end = scratch.clipped_end;
     std::vector<double> &clipped_limit = scratch.clipped_limit;
-    clip_intersecting_charge_windows(clipped_start, clipped_end, clipped_limit, s->n_charge, s->charge_start, s->charge_end, s->charge_limit, s->n_export, s->export_start, s->export_end, s->export_modes);
+    clip_intersecting_charge_windows(clipped_start, clipped_end, clipped_limit, s->n_charge, s->charge_start, s->charge_end, s->charge_limit, s->n_export, s->export_start, s->export_end, s->export_limits);
     const int32_t n_charge_clipped = static_cast<int32_t>(clipped_start.size());
 
     build_window_membership(charge_window_optimised, n_charge_clipped, clipped_start.data(), clipped_end.data(), clipped_limit.data(), nullptr, false, c->minutes_now, n_steps);
-    build_window_membership(export_window_optimised, s->n_export, s->export_start, s->export_end, nullptr, s->export_modes, true, c->minutes_now, n_steps);
+    build_window_membership(export_window_optimised, s->n_export, s->export_start, s->export_end, nullptr, s->export_limits, true, c->minutes_now, n_steps);
 
     // Initial state - prediction.py:435-490
     double soc = c->soc_kw;
@@ -783,9 +785,10 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         const bool export_window_active = export_window_n >= 0;
         // Read the fields once per step rather than per use; target and power are only meaningful
         // for EXPORT_MODE_TARGET and are ignored by the branches that handle the other two modes.
-        const int32_t export_mode_now = export_window_active ? s->export_modes[export_window_n] : PK_EXPORT_MODE_IDLE;
-        const int32_t export_target_now = export_window_active ? s->export_targets[export_window_n] : 0;
-        const double export_power_now = export_window_active ? s->export_powers[export_window_n] : 1.0;
+        const PkExportLimit export_now = export_window_active ? s->export_limits[export_window_n] : PkExportLimit{PK_EXPORT_MODE_IDLE, 0, 1.0};
+        const int32_t export_mode_now = export_now.mode;
+        const int32_t export_target_now = export_now.target;
+        const double export_power_now = export_now.power;
 
         // Find charge limit - prediction.py:609-620
         double charge_limit_n = 0;
@@ -1427,9 +1430,7 @@ static void run_batch_job(const ContextStore *c, const PkBatchJob &job, PkBatchR
     scenario.charge_limit = job.charge_limit;
     scenario.charge_start = job.charge_start;
     scenario.charge_end = job.charge_end;
-    scenario.export_modes = job.export_modes;
-    scenario.export_targets = job.export_targets;
-    scenario.export_powers = job.export_powers;
+    scenario.export_limits = job.export_limits;
     scenario.export_start = job.export_start;
     scenario.export_end = job.export_end;
     scenario.soc_out = job.soc_out;
