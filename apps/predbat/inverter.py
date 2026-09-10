@@ -423,7 +423,6 @@ class Inverter:
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
-        self.inv_has_fox_inverter_mode = INVERTER_DEF[self.inverter_type].get("has_fox_inverter_mode", False)
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -621,7 +620,7 @@ class Inverter:
             self.base.args["charge_rate"][id] = self.create_entity("charge_rate", max_charge, uom="W", device_class="power")
             self.base.args["discharge_rate"][id] = self.create_entity("discharge_rate", max_discharge, uom="W", device_class="power")
 
-        if not self.inv_has_ge_inverter_mode and not self.inv_has_fox_inverter_mode and not self.inv_has_ge_eco_toggle:
+        if not self.inv_has_ge_inverter_mode and not self.inv_has_ge_eco_toggle:
             self.create_missing_arg("inverter_mode", "Eco")
             self.base.args["inverter_mode"][id] = self.create_entity("inverter_mode", "Eco")
 
@@ -2467,20 +2466,17 @@ class Inverter:
         inverter_mode_configured = "inverter_mode" in self.base.args
         old_inverter_mode = self.base.get_arg("inverter_mode", index=self.id)
 
-        if not self.inv_has_fox_inverter_mode and not self.inv_has_ge_eco_toggle:
-            # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
-            if old_inverter_mode == "Eco (Paused)":
-                old_inverter_mode = "Eco"
-
-        if self.inv_has_fox_inverter_mode:
-            # For fox we only use selfuse as the rest is done by schedule
-            new_inverter_mode = "SelfUse"
-        elif self.inv_has_ge_eco_toggle:
+        if self.inv_has_ge_eco_toggle:
+            # GE has an eco toggle rather than a mode, so exporting means eco off
             if force_export:
                 new_inverter_mode = "off"
             else:
                 new_inverter_mode = "on"
         else:
+            # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
+            if old_inverter_mode == "Eco (Paused)":
+                old_inverter_mode = "Eco"
+
             # Force export or Eco mode?
             if force_export:
                 new_inverter_mode = "Timed Export"
