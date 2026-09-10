@@ -1389,6 +1389,10 @@ If not set or set to 0, Predbat will attempt to automatically determine the batt
 This requires at least several days of historical data with charging periods of 15% or more SoC change. If automatic detection fails, you must manually set this value.
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
+Can also be set to a fixed percentage rather than an entity name for inverters that have no reserve register to point at -
+the supplied Huawei and Sofar templates do this. A fixed value tells Predbat what the inverter is set to so it can be modelled,
+but Predbat cannot then change the reserve, so `switch.predbat_set_reserve_enable` has nothing to write to and Predbat logs a
+warning if something tries. This is true of any setting given a fixed value in place of an entity name.
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set).
 - **givtcp_battery_dod** - Optional depth of discharge for a GivTCP (REST) battery, one per inverter, default 1.0.
 GivTCP does not report DoD, so set this if your battery cannot use its full nameplate capacity (e.g. 0.8 for an 80% DoD
@@ -1586,6 +1590,11 @@ With **givtcp_rest** set, Predbat reads the GivTCP REST API itself and publishes
 entities (`sensor.predbat_givtcp_0_*` and friends), then points its own settings at them - including
 **inverter_type**, **num_inverters**, the control entities, and the daily energy totals **load_today**,
 **import_today**, **export_today** and **pv_today**. You do not need to configure any of those by hand.
+
+If part of your fleet is not on GivTCP - another vendor's inverter, or one you configure by hand -
+keep **num_inverters** in `apps.yaml` set to the size of the whole fleet. Auto-configuration only ever
+raises it, never lowers it: the inverters that answered on GivTCP take the first slots, and whatever you
+configured for the inverters after them is left as you wrote it.
 
 The four daily energy totals are the one exception to auto-configuration winning: if you name a sensor
 of your own for **load_today**, **import_today**, **export_today** or **pv_today** in `apps.yaml`,

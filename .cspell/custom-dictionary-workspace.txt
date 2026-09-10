@@ -1,4 +1,5 @@
 # Custom Dictionary Words
+3hy
 aaaabbbbccccdddd
 activepower
 adata
@@ -14,6 +15,7 @@ aios
 Alertfeed
 allclose
 alphaess
+am2
 annualform
 Anson
 antiphase
@@ -240,6 +242,7 @@ getall
 getrusage
 Ginlong
 gitnexus
+giv
 GivEnergy
 givtcp
 gnueabihf
@@ -551,6 +554,7 @@ sess
 setattr
 setdefault
 SFMB
+sg05lp1
 SIGALRM
 sigcloud
 sigen
