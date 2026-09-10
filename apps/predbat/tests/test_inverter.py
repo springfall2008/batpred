@@ -435,6 +435,118 @@ def test_reserve_literal_value(test_name, my_predbat, ha, inverter_type, reserve
     return failed
 
 
+def test_write_and_poll_non_entity(test_name, my_predbat, inv):
+    """
+    Test
+       write_and_poll_switch/value/option refuse a control that is not an entity id, with a warning.
+
+    apps.yaml settings may hold a fixed value rather than an entity id - the huawei and sofar
+    templates ship one for reserve - and every write path split it as though it were an entity id,
+    raising out of the middle of plan execution. A fixed value means Predbat cannot set that
+    control, which is a warning about a control it does not own, not a crash (GH#5003).
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    log_messages = []
+    orig_log = my_predbat.log
+    orig_status = my_predbat.current_status
+    orig_had_errors = my_predbat.had_errors
+    writes = (
+        ("write_and_poll_switch", lambda entity_id: inv.write_and_poll_switch("reserve", entity_id, True)),
+        ("write_and_poll_value", lambda entity_id: inv.write_and_poll_value("reserve", entity_id, 12)),
+        ("write_and_poll_option", lambda entity_id: inv.write_and_poll_option("reserve", entity_id, "Eco")),
+    )
+    try:
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        # A literal percentage, a float, a bool, and the missing/empty cases that already warned
+        for entity_id in (12, 12.5, True, None, ""):
+            for caller, write in writes:
+                del log_messages[:]
+                try:
+                    result = write(entity_id)
+                except Exception as error:
+                    print("ERROR: {} raised {} for non-entity {}".format(caller, error, repr(entity_id)))
+                    failed = True
+                    continue
+                if result is not False:
+                    print("ERROR: {} should refuse non-entity {}, returned {}".format(caller, repr(entity_id), result))
+                    failed = True
+                if not any(("Warn" in message) and (caller in message) for message in log_messages):
+                    print("ERROR: {} did not warn for non-entity {}, logged {}".format(caller, repr(entity_id), log_messages))
+                    failed = True
+    finally:
+        my_predbat.log = orig_log
+        my_predbat.current_status = orig_status
+        my_predbat.had_errors = orig_had_errors
+
+    return failed
+
+
+def test_state_wrapper_non_entity(test_name, my_predbat):
+    """
+    Test
+       get_state_wrapper/set_state_wrapper warn on a fixed value instead of indexing into it.
+
+    This is the read half of the same problem: reserve_device_bounds() fetches reserve with
+    indirect=False and looks up its min/max attributes, so a template's hard-wired percentage
+    reached "$" in 12 and raised TypeError out of Inverter.__init__, leaving Predbat unable to
+    create the inverter or compute any plan at all (GH#5003).
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    log_messages = []
+    orig_log = my_predbat.log
+    try:
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        for entity_id in (12, 12.5, True):
+            del log_messages[:]
+            try:
+                state = my_predbat.get_state_wrapper(entity_id, default=99)
+            except Exception as error:
+                print("ERROR: get_state_wrapper raised {} for non-entity {}".format(error, repr(entity_id)))
+                failed = True
+                continue
+            if state != 99:
+                print("ERROR: get_state_wrapper should return the default for non-entity {}, got {}".format(repr(entity_id), state))
+                failed = True
+            if not any(("Warn" in message) and ("get_state_wrapper" in message) for message in log_messages):
+                print("ERROR: get_state_wrapper did not warn for non-entity {}, logged {}".format(repr(entity_id), log_messages))
+                failed = True
+
+            del log_messages[:]
+            try:
+                written = my_predbat.set_state_wrapper(entity_id, 12)
+            except Exception as error:
+                print("ERROR: set_state_wrapper raised {} for non-entity {}".format(error, repr(entity_id)))
+                failed = True
+                continue
+            if written is not False:
+                print("ERROR: set_state_wrapper should refuse non-entity {}, returned {}".format(repr(entity_id), written))
+                failed = True
+            if not any(("Warn" in message) and ("set_state_wrapper" in message) for message in log_messages):
+                print("ERROR: set_state_wrapper did not warn for non-entity {}, logged {}".format(repr(entity_id), log_messages))
+                failed = True
+
+        # An entity id is still read as one, and no entity id at all is still the "every state" call
+        del log_messages[:]
+        my_predbat.set_state_wrapper("number.non_entity_probe", 7)
+        if my_predbat.get_state_wrapper("number.non_entity_probe", default=99) != 7:
+            print("ERROR: an entity id should still be read and written, got {}".format(my_predbat.get_state_wrapper("number.non_entity_probe", default=99)))
+            failed = True
+        if my_predbat.get_state_wrapper() is None:
+            print("ERROR: get_state_wrapper() with no entity should still return every state")
+            failed = True
+        if any("Warn" in message for message in log_messages):
+            print("ERROR: unexpected warning for a real entity id, logged {}".format(log_messages))
+            failed = True
+    finally:
+        my_predbat.log = orig_log
+
+    return failed
+
+
 def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_end, prev_force_export, prev_discharge_target, new_start, new_end, new_force_export, has_inv_time_button_press=False, expect_inv_time_button_press=False):
     """
     Test
@@ -3453,6 +3565,13 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_reserve_literal_value("reserve_literal_ge", my_predbat, ha, "GE", [12], expect_reserve_percent=12, expect_reserve_percent_current=12, set_reserve_enable=False)
     # An entity id is still resolved as one, rather than everything being treated as a literal
     failed |= test_reserve_literal_value("reserve_entity_still_read", my_predbat, ha, "GE", ["number.reserve"], expect_reserve_percent=4, expect_reserve_percent_current=4, set_reserve_enable=False)
+    if failed:
+        return failed
+
+    # GH#5003: the same fixed value must be a warning rather than a crash wherever it reaches a read
+    # or a write, not only on the reserve path that reported it
+    failed |= test_state_wrapper_non_entity("state_wrapper_non_entity", my_predbat)
+    failed |= test_write_and_poll_non_entity("write_and_poll_non_entity", my_predbat, inv)
     if failed:
         return failed
 

@@ -428,9 +428,13 @@ def is_entity_id(value):
     The same test resolve_arg() uses to decide whether to look a value up in HA: a string with a
     domain separator in it. Anything else - a number, a boolean, None - is a hard-wired value the
     user gave directly, which several shipped templates do for settings the inverter has no register
-    for (huawei.yaml and sofar.yaml both hard-wire reserve). Callers that fetched an argument with
-    indirect=False and are about to treat it as an entity id need this, or a literal reaches an
-    entity lookup and raises rather than simply having no entity to read (GH#5003).
+    for (huawei.yaml and sofar.yaml both hard-wire reserve).
+
+    Anything fetched with indirect=False can therefore be a literal, and the state wrappers and the
+    write_and_poll helpers all used to index straight into it - "$" in 12, or 12.split("."). That
+    raised out of Inverter.__init__ and failed inverter creation outright, so no plan could be
+    computed at all (GH#5003). They gate on this instead, so a literal is a warning about a control
+    Predbat cannot read or write rather than a crash.
     """
     return isinstance(value, str) and "." in value
 
