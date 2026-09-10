@@ -8,7 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from const import PREDBAT_MAX_CARS, MINUTE_WATT
 from prediction import Prediction
 import sys
@@ -139,6 +139,41 @@ def create_aiohttp_mock_session(mock_response=None, exception=None):
     mock_session.__aexit__ = session_aexit
 
     return mock_session
+
+
+class FakeComponentTask:
+    """Stand-in for the threading.Thread Components.start() creates, reporting itself alive."""
+
+    def is_alive(self):
+        """The fake task never dies, so Components.is_alive() is left to judge the component."""
+        return True
+
+
+class FakeInverterComponent:
+    """Stand-in for a registered inverter component reporting a given current health.
+
+    Lives here rather than in the individual test suites because both test_components.py and
+    test_inverter.py need one, and the health surface it mirrors (ComponentBase.get_error_count /
+    api_started / last_updated_time) changes shape rarely but across both suites when it does.
+    """
+
+    def __init__(self, errors=0, api_started=True, updated_recently=True):
+        """Record the health this fake component should report back."""
+        self.count_errors = errors
+        self.api_started = api_started
+        self.updated_recently = updated_recently
+
+    def get_error_count(self):
+        """Errors recorded so far, as ComponentBase.get_error_count() reports them."""
+        return self.count_errors
+
+    def is_alive(self):
+        """Current health, as ComponentBase.is_alive() reports it."""
+        return self.api_started and self.updated_recently
+
+    def last_updated_time(self):
+        """Time of the last successful operation, or None if never succeeded."""
+        return datetime.now(timezone.utc) if self.updated_recently else None
 
 
 class DummyInverter:
@@ -574,6 +609,13 @@ def update_rates_export(my_predbat, export_window_best):
     my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
 
+# The fixture's clock: noon. create_predbat() pins minutes_now/now_utc from it so a standalone run
+# behaves like the suite, reset_inverter re-asserts the same value after its scenarios, and modules
+# that want to check their own clock import it rather than restating the literal - so the three can
+# never silently diverge (#5026).
+FIXTURE_MINUTES_NOW = 12 * 60
+
+
 def reset_inverter(my_predbat):
     my_predbat.inverter_limit = 1 / 60.0
     my_predbat.num_inverters = 1
@@ -621,7 +663,7 @@ def reset_inverter(my_predbat):
     my_predbat.iboost_smart = False
     my_predbat.iboost_on_export = False
     my_predbat.iboost_prevent_discharge = False
-    my_predbat.minutes_now = 12 * 60
+    my_predbat.minutes_now = FIXTURE_MINUTES_NOW
     my_predbat.best_soc_keep = 0.0
     my_predbat.carbon_enable = 0
     my_predbat.inverter_soc_reset = True

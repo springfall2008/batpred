@@ -16,6 +16,30 @@ from prediction import Prediction
 from tests.test_infra import reset_rates
 
 
+def pin_test_clock(my_predbat):
+    """
+    Pin the clock to noon UTC today, returning the previous (now_utc, midnight_utc, minutes_now).
+
+    midnight_utc has to be pinned alongside now_utc: update_time() derives it from
+    datetime.now(Europe/London), so between 23:00 and 00:00 UTC under BST it lands on the
+    following UTC date. Slot times built from the pinned now_utc are then before it, so
+    decode_octopus_slot() clamps them to 0 and drops them - failing these tests for the one
+    hour a day CI happens to run in that window. minutes_now=0 keeps slots out of the past.
+    """
+    saved = (my_predbat.now_utc, my_predbat.midnight_utc, my_predbat.minutes_now)
+    my_predbat.now_utc = datetime.now(tz=timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0)
+    my_predbat.minutes_now = 0
+    return saved
+
+
+def restore_test_clock(my_predbat, saved):
+    """
+    Restore the clock attributes saved by pin_test_clock() so they don't leak into later tests
+    """
+    my_predbat.now_utc, my_predbat.midnight_utc, my_predbat.minutes_now = saved
+
+
 def process_octopus_intelligent_slots(my_predbat):
     """
     Helper function to simulate the octopus intelligent slot processing from fetch_sensor_data
@@ -198,12 +222,9 @@ def run_multi_car_iog_load_slots_test(testname, my_predbat):
     my_predbat.octopus_intelligent_consider_full = False
     # octopus_slots must be pre-initialised per production code in fetch_sensor_data
     my_predbat.octopus_slots = [[] for _ in range(my_predbat.num_cars)]
-    # Pin now_utc to noon today so slot times (now+1h..now+3h) don't cross
-    # midnight regardless of when the test runs. Also set minutes_now=0 so
-    # slots are not filtered as past events (dynamic_load_car default is 720).
-    now = datetime.now(tz=timezone.utc)
-    my_predbat.now_utc = now.replace(hour=12, minute=0, second=0, microsecond=0)
-    my_predbat.minutes_now = 0
+    # Pin the clock so slot times (now+1h..now+3h) sit at a fixed offset from midnight
+    # regardless of when the test runs
+    saved_clock = pin_test_clock(my_predbat)
 
     # apps.yaml config args needed by fetch_sensor_data_cars
     my_predbat.args["car_charging_loss"] = 0.0  # loss = 1 - 0.0 = 1.0
@@ -263,6 +284,8 @@ def run_multi_car_iog_load_slots_test(testname, my_predbat):
         if len(my_predbat.car_charging_soc) != 2:
             print("ERROR: Expected car_charging_soc to have 2 entries, got {}".format(len(my_predbat.car_charging_soc)))
             failed = True
+
+    restore_test_clock(my_predbat, saved_clock)
 
     if failed:
         print("Test: {} FAILED".format(testname))
@@ -460,9 +483,7 @@ def run_multi_car_iog_adhoc_dispatch_test(testname, my_predbat):
     my_predbat.octopus_intelligent_consider_full = False
     my_predbat.octopus_slots = [[]]
 
-    now = datetime.now(tz=timezone.utc)
-    my_predbat.now_utc = now.replace(hour=12, minute=0, second=0, microsecond=0)
-    my_predbat.minutes_now = 0
+    saved_clock = pin_test_clock(my_predbat)
 
     my_predbat.args["car_charging_loss"] = 0.0
     my_predbat.args["car_charging_soc"] = [50.0]
@@ -490,6 +511,8 @@ def run_multi_car_iog_adhoc_dispatch_test(testname, my_predbat):
         failed = True
     else:
         print("OK: car_charging_slots[0] populated from car_charging_now alone: {}".format(my_predbat.car_charging_slots[0]))
+
+    restore_test_clock(my_predbat, saved_clock)
 
     if failed:
         print("Test: {} FAILED".format(testname))
@@ -535,6 +558,7 @@ def run_iog_model_limit_fetch_test(testname, my_predbat):
         "octopus_intelligent_consider_full",
         "octopus_slots",
         "now_utc",
+        "midnight_utc",
         "minutes_now",
     ]
     saved = {attr: copy.deepcopy(getattr(my_predbat, attr)) for attr in snapshot_attrs if hasattr(my_predbat, attr)}
@@ -558,9 +582,7 @@ def run_iog_model_limit_fetch_test(testname, my_predbat):
     my_predbat.octopus_intelligent_consider_full = False
     my_predbat.octopus_slots = [[], []]
 
-    now = datetime.now(tz=timezone.utc)
-    my_predbat.now_utc = now.replace(hour=12, minute=0, second=0, microsecond=0)
-    my_predbat.minutes_now = 0
+    pin_test_clock(my_predbat)
 
     my_predbat.args["car_charging_loss"] = 0.0
     my_predbat.args["car_charging_soc"] = [50.0, 50.0]

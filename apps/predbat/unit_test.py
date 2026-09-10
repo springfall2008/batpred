@@ -13,6 +13,7 @@ import time
 import sys
 import glob
 import argparse
+from datetime import timedelta
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -20,7 +21,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from predbat import PredBat
-from tests.test_infra import TestHAInterface, set_plot_enabled
+from tests.test_infra import FIXTURE_MINUTES_NOW, TestHAInterface, set_plot_enabled
 from tests.test_compute_metric import run_compute_metric_tests
 from tests.test_pv90 import run_pv90_tests
 from tests.test_performance_tweaks import run_performance_tweaks_tests
@@ -63,7 +64,7 @@ from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_battery_accuracy import run_battery_accuracy_tests
 from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_active_flag import test_active_flag
-from tests.test_component_health_status import test_component_health_status
+from tests.test_component_health_status import test_component_health_status, test_record_status_state_clamped
 from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_trim_export import run_trim_export_tests
 from tests.test_plan_tiebreak import run_plan_tiebreak_tests
@@ -389,6 +390,17 @@ def create_predbat():
     my_predbat.states = {}
     my_predbat.reset()
     my_predbat.update_time()
+    # update_time() takes the clock from the host, so the same module used to behave differently
+    # standalone and in the suite - a suite run sat at reset_inverter's noon residue while a
+    # standalone run inherited the wall clock, and a time-of-day-dependent test could pass one way
+    # and fail the other (#5026). Pin the fixture clock here instead, now_utc from midnight_utc so
+    # the two stay consistent, the same way the scenario loader pins a scenario's own clock
+    # (test_random_scenarios.py apply_random_scenario). Only minutes_now and now_utc are pinned
+    # here - update_time() has already taken midnight_utc and now_utc_real from the host clock
+    # and they are left alone. Modules that want more still pin and hand their clock back
+    # themselves, but no module inherits the wall clock into those two fields any more.
+    my_predbat.minutes_now = FIXTURE_MINUTES_NOW
+    my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=FIXTURE_MINUTES_NOW)
     my_predbat.ha_interface = TestHAInterface()
     my_predbat.ha_interface.base = my_predbat
     my_predbat.ha_interface.history_enable = False
@@ -484,6 +496,7 @@ def main():
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
         ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
         ("component_health_status", test_component_health_status, "Component errors fail the recorded run status tests", False),
+        ("record_status_state_clamped", test_record_status_state_clamped, "Status sensor state is clamped at the 255 characters Home Assistant accepts", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
         ("dynamic_load_high", test_dynamic_load_high_load_baseline, "Dynamic load high-load baseline tests", False),
         ("units", run_test_units, "Unit tests", False),
