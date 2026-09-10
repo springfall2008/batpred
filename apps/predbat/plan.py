@@ -36,7 +36,7 @@ from const import (
     EXPORT_MODE_IDLE,
 )
 
-from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot, export_mode_of, export_power_of, pack_export_limit, export_limit_exports_no_battery, export_limit_is_full_discharge
+from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot, export_mode_of, export_power_of, export_target_of, pack_export_limit, export_limit_exports_no_battery, export_limit_is_full_discharge
 from prediction import Prediction
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
@@ -3061,7 +3061,14 @@ class Plan:
         for window_n in range(min(record_export_windows, len(export_window_best))):
             window = export_window_best[window_n]
             limit = export_limits_best[window_n]
-            limit_soc = self.soc_max * limit / 100.0
+            # The SoC this window aims at. Only a target carries one - and it must come from the
+            # target field, not from float(limit): the packed value also carries the export power in
+            # its fraction, so a 50% target at 70% power reads as 50.3 and inflates the SoC by 0.3%
+            # of the battery. That made a slower export stop slightly early, for no reason connected
+            # to where the user asked it to stop. A mode has no target, and every use of limit_soc
+            # below is already inside the "not a freeze" branch, so None is safe here.
+            limit_target = export_target_of(limit)
+            limit_soc = self.soc_max * limit_target / 100.0 if limit_target is not None else 0.0
             window_start = max(window["start"], minutes_now)
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start

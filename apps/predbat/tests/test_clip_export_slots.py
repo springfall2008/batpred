@@ -8,6 +8,8 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_inverter
+from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, EXPORT_MODE_TARGET
+from utils import export_mode_of, export_target_of, export_power_of, pack_export_limit
 
 
 def run_clip_export_slots_tests(my_predbat):
@@ -21,6 +23,7 @@ def run_clip_export_slots_tests(my_predbat):
     failed |= test_normal_export_clipped_up_when_soc_above_limit(my_predbat)
     failed |= test_normal_export_clipped_up_when_soc_above_reserve_with_zero_limit(my_predbat)
     failed |= test_normal_export_clipped_up_when_soc_flat_above_limit(my_predbat)
+    failed |= test_export_power_does_not_shift_the_clip_target(my_predbat)
     failed |= test_disabled_window_ignored(my_predbat)
     failed |= test_passed_window_clipped(my_predbat)
     failed |= test_multiple_windows_mixed(my_predbat)
@@ -197,6 +200,49 @@ def test_normal_export_clipped_up_when_soc_flat_above_limit(my_predbat):
         failed = True
     if result_limits[0] <= 50.0:
         print("ERROR: Expected the limit to be clipped up from 50.0, got {}".format(result_limits[0]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_export_power_does_not_shift_the_clip_target(my_predbat):
+    """The chosen export power must not change the SoC the clip pass aims at.
+
+    The packed limit carries the target in the integer part and 1 - power in the fraction, so a 50%
+    target at 30% power reads as 50.7. The clip pass took that as a percentage, inflating the SoC it
+    compares against by up to 0.7% of the battery - enough to suppress the clip-up entirely, leaving
+    a slow export still aiming at a target the simulation says it will not reach, purely because it
+    was slow. Same target, different power, must clip to the same place.
+    """
+    print("**** test_export_power_does_not_shift_the_clip_target ****")
+    failed = False
+
+    results = []
+    for power in (1.0, 0.3):
+        setup(my_predbat)
+        # A small discharge rate keeps the ten minute clip margin from dominating the comparison
+        my_predbat.battery_rate_max_discharge = 0.001
+        my_predbat.battery_rate_max_scaling_discharge = 1.0
+        minutes_now = 720
+        windows = [make_window(720, 750)]
+        limits = [pack_export_limit(EXPORT_MODE_TARGET, 50, power)]
+        # SoC sits 0.6% of the battery above the 50% target - inside the 0.7% the packed fraction
+        # adds at 30% power, so the leak decides whether the clip-up fires at all
+        soc = my_predbat.soc_max * 50.6 / 100.0
+        predict_soc = {minute: soc for minute in range(0, 65, 5)}
+        _, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
+        results.append((power, export_target_of(result_limits[0]), export_power_of(result_limits[0])))
+
+    (_, target_full, _), (_, target_slow, power_slow) = results
+    if target_full != target_slow:
+        print("ERROR: export power changed the clipped target: full rate gave {} but 30% power gave {} - the packed fraction leaked into the SoC comparison".format(target_full, target_slow))
+        failed = True
+
+    # The power itself must survive the clip, or a slow export silently becomes a full rate one
+    if abs(power_slow - 0.3) > 0.001:
+        print("ERROR: clip lost the export power, expected 0.3 got {}".format(power_slow))
         failed = True
 
     if not failed:
