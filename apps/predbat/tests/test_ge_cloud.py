@@ -300,6 +300,7 @@ def test_ge_cloud(my_predbat=None):
         ("hybrid_detection", _test_hybrid_detection, "Hybrid inverter detection"),
         ("enable_defaults", _test_enable_default_options, "Enable default options"),
         ("enable_defaults_skip_target", _test_enable_default_options_skips_discharge_target, "Enable defaults skips the discharge target register"),
+        ("force_charge_control", _test_force_charge_control, "Force charge is the scheduled charge control when both charge switches exist"),
         ("enable_defaults_read_only", _test_run_read_only_skips_reset, "Enable defaults skipped in read-only mode"),
         ("enable_defaults_after_read_only", _test_run_enables_reset_after_read_only, "Enable defaults on first non-read-only run"),
         ("enable_defaults_24h", _test_run_enables_reset_after_24h, "Enable defaults re-runs after 24 hours"),
@@ -4744,6 +4745,168 @@ def _test_hybrid_detection(my_predbat):
         return 0
 
     return run_async(test())
+
+
+def _test_force_charge_control(my_predbat):
+    """GH#5040: on devices exposing both charge switches, Force Charge is the scheduled charge control and AC Charge is held on"""
+
+    async def test():
+        # --- Part A: async_automatic_config binds the right switch as scheduled_charge_enable ---
+
+        ge = MockGECloudDirect()
+
+        # A device exposing both charge switches (the 3-phase GEC register family) must bind
+        # enable_force_charge, as that is the switch that actually gates the timed grid charge.
+        ge.config_args = {}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_AC_Charge"}, "reg2": {"name": "Enable_Force_Charge"}, "reg3": {"name": "Enable_Force_Discharge"}}}
+        await ge.async_automatic_config({"ems": None, "gateway": None, "battery": ["battery001"]})
+
+        expect = ["switch.predbat_gecloud_battery001_enable_force_charge"]
+        if ge.config_args.get("scheduled_charge_enable") != expect:
+            print("ERROR: Both switches present should bind enable_force_charge, got {}".format(ge.config_args.get("scheduled_charge_enable")))
+            return 1
+        if not any("force charge: True" in message for message in ge.log_messages):
+            print("ERROR: Expected the detected-features log to report force charge: True")
+            return 1
+
+        # A standard device with only enable_ac_charge is unchanged by the new precedence.
+        ge.config_args = {}
+        ge.settings = {"battery002": {"reg1": {"name": "Enable_AC_Charge"}}}
+        await ge.async_automatic_config({"ems": None, "gateway": None, "battery": ["battery002"]})
+
+        expect = ["switch.predbat_gecloud_battery002_enable_ac_charge"]
+        if ge.config_args.get("scheduled_charge_enable") != expect:
+            print("ERROR: enable_ac_charge alone should still bind enable_ac_charge, got {}".format(ge.config_args.get("scheduled_charge_enable")))
+            return 1
+
+        # ac_charge_enable still wins over enable_ac_charge when there is no force charge register.
+        ge.config_args = {}
+        ge.settings = {"battery003": {"reg1": {"name": "AC_Charge_Enable"}, "reg2": {"name": "Enable_AC_Charge"}}}
+        await ge.async_automatic_config({"ems": None, "gateway": None, "battery": ["battery003"]})
+
+        expect = ["switch.predbat_gecloud_battery003_ac_charge_enable"]
+        if ge.config_args.get("scheduled_charge_enable") != expect:
+            print("ERROR: ac_charge_enable should still take precedence over enable_ac_charge, got {}".format(ge.config_args.get("scheduled_charge_enable")))
+            return 1
+
+        # Register sets can differ between inverters on one site, so the choice is made per device.
+        ge.config_args = {}
+        ge.settings = {
+            "battery001": {"reg1": {"name": "Enable_AC_Charge"}, "reg2": {"name": "Enable_Force_Charge"}},
+            "battery002": {"reg1": {"name": "Enable_AC_Charge"}},
+        }
+        await ge.async_automatic_config({"ems": None, "gateway": None, "battery": ["battery001", "battery002"]})
+
+        expect = ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_ac_charge"]
+        if ge.config_args.get("scheduled_charge_enable") != expect:
+            print("ERROR: Mixed register sets should bind per device, got {}".format(ge.config_args.get("scheduled_charge_enable")))
+            return 1
+
+        # --- Part B: enable_default_options holds enable_ac_charge on as the static enable ---
+
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.settings = {"test123": {}}
+
+        write_calls = []
+
+        async def mock_write(device, key, value):
+            write_calls.append({"device": device, "key": key, "value": value})
+            return {"value": value}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        ge_cloud.async_write_inverter_setting = mock_write
+        ge_cloud.publish_registers = mock_publish
+
+        # Force charge present and AC charge off — AC charge must be turned on and left on.
+        registers = {
+            200: {"name": "Enable_AC_Charge", "value": False, "validation_rules": []},
+            201: {"name": "Enable_Force_Charge", "value": False, "validation_rules": []},
+        }
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if len(write_calls) != 1 or write_calls[0]["key"] != 200 or write_calls[0]["value"] is not True:
+            print("ERROR: Expected a single write enabling Enable_AC_Charge, got {}".format(write_calls))
+            return 1
+        if not result:
+            print("ERROR: enable_default_options should report a change when enabling AC charge")
+            return 1
+        if registers[200]["value"] is not True:
+            print("ERROR: Enable_AC_Charge register should be updated to True, got {}".format(registers[200]["value"]))
+            return 1
+        # The scheduled charge control itself is Predbat's to drive per slot, so it is never written here.
+        if registers[201]["value"] is not False:
+            print("ERROR: Enable_Force_Charge must be left for Predbat to drive, got {}".format(registers[201]["value"]))
+            return 1
+
+        # Already on — nothing to write.
+        write_calls.clear()
+        registers = {
+            200: {"name": "Enable_AC_Charge", "value": True, "validation_rules": []},
+            201: {"name": "Enable_Force_Charge", "value": True, "validation_rules": []},
+        }
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if write_calls:
+            print("ERROR: Should not write when Enable_AC_Charge is already on, got {}".format(write_calls))
+            return 1
+
+        # No force charge register — enable_ac_charge is itself the scheduled charge control on this
+        # device, so Predbat must not force it on.
+        write_calls.clear()
+        registers = {200: {"name": "Enable_AC_Charge", "value": False, "validation_rules": []}}
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if write_calls:
+            print("ERROR: Should not touch Enable_AC_Charge without a force charge register, got {}".format(write_calls))
+            return 1
+        if result:
+            print("ERROR: enable_default_options should report no change on a standard device")
+            return 1
+        if registers[200]["value"] is not False:
+            print("ERROR: Enable_AC_Charge should be untouched on a standard device, got {}".format(registers[200]["value"]))
+            return 1
+
+        # The match is exact: the charge-limit enable register must not be mistaken for it.
+        write_calls.clear()
+        registers = {
+            202: {"name": "Enable_AC_Charge_Upper_Percent_Limit", "value": False, "validation_rules": []},
+            201: {"name": "Enable_Force_Charge", "value": False, "validation_rules": []},
+        }
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if write_calls:
+            print("ERROR: Enable_AC_Charge_Upper_Percent_Limit should not be force-enabled, got {}".format(write_calls))
+            return 1
+
+        # A rejected write is reported and does not count as a change.
+        async def mock_write_fail(device, key, value):
+            write_calls.append({"device": device, "key": key, "value": value})
+            return None
+
+        write_calls.clear()
+        ge_cloud.log_messages = []
+        ge_cloud.async_write_inverter_setting = mock_write_fail
+        registers = {
+            200: {"name": "Enable_AC_Charge", "value": False, "validation_rules": []},
+            201: {"name": "Enable_Force_Charge", "value": False, "validation_rules": []},
+        }
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if len(write_calls) != 1:
+            print("ERROR: Expected one attempted write on the failure path, got {}".format(write_calls))
+            return 1
+        if result:
+            print("ERROR: A failed write should not report a change")
+            return 1
+        if not any("Failed to enable AC charge" in message for message in ge_cloud.log_messages):
+            print("ERROR: Expected a warning when the AC charge write fails, got {}".format(ge_cloud.log_messages))
+            return 1
+
+        return 0
+
+    return asyncio.run(test())
 
 
 def _test_enable_default_options_skips_discharge_target(my_predbat):
