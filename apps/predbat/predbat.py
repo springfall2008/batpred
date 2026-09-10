@@ -76,7 +76,7 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
-from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths, is_entity_id, mask_secret_args, malloc_trim, limit_malloc_arenas, MALLOC_ARENA_LIMIT
+from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths, is_entity_id, mask_secret_args, malloc_trim, limit_malloc_arenas, MALLOC_ARENA_LIMIT, export_limits_to_stored, export_limits_from_stored
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
@@ -748,7 +748,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "charge_window_best": self.charge_window_best,
             "charge_limit_best": self.charge_limit_best,
             "export_window_best": self.export_window_best,
-            "export_limits_best": self.export_limits_best,
+            "export_limits_best": export_limits_to_stored(self.export_limits_best),
             "plan_preclip": self.plan_preclip,
             "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
             "plan_last_updated_minutes": self.plan_last_updated_minutes,
@@ -800,14 +800,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.charge_window_best = plan_data.get("charge_window_best", [])
         self.charge_limit_best = plan_data.get("charge_limit_best", [])
         self.export_window_best = plan_data.get("export_window_best", [])
-        # A JSON round trip turns each (mode, target, power) tuple into a list; restore the tuple so
-        # the accessors take their fast path. A bare number is a plan saved before the split and is
-        # left for the accessors' legacy decode.
-        self.export_limits_best = [tuple(limit) if isinstance(limit, list) and len(limit) == 3 else limit for limit in plan_data.get("export_limits_best", [])]
+        # Accepts the self-describing mapping form, the 3-element sequences a JSON round trip makes
+        # of the tuples, and the bare packed floats written by versions before the split.
+        self.export_limits_best = export_limits_from_stored(plan_data.get("export_limits_best", []))
         # The pre-clip snapshot plan selection scores against. Older saves predate it, and it is only ever a
         # four part plan, so anything else is discarded and the comparison falls back to the clipped plans.
         preclip = plan_data.get("plan_preclip")
-        self.plan_preclip = tuple(preclip) if isinstance(preclip, (list, tuple)) and len(preclip) == 4 else None
+        if isinstance(preclip, (list, tuple)) and len(preclip) == 4:
+            preclip_parts = list(preclip)
+            preclip_parts[3] = export_limits_from_stored(preclip_parts[3])
+            self.plan_preclip = tuple(preclip_parts)
+        else:
+            self.plan_preclip = None
         self.plan_last_updated = saved_dt
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
         self.plan_valid = True

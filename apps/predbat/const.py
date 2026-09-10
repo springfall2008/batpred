@@ -132,6 +132,13 @@ FULL_EXPORT_POWER = 1.0
 # backwards at the call site.
 LOW_EXPORT_POWER_LEVELS = [0.7, 0.5, 0.3]
 
+# Schema version for the debug yaml dump and the persisted plan. Bump when a field's *shape*
+# changes, not when one is added or removed - a reader can detect those itself, but it cannot tell
+# a new encoding from an old one when both are, say, a list of numbers. Absent means "before
+# versioning", which is any dump written before this was introduced; those are still read, so a
+# bug report from an older release keeps working (see export_limit_from_stored).
+DEBUG_SCHEMA_VERSION = 1
+
 # Create an array of times in the day in 5-minute intervals
 BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M:%S")) for minute in range(0, 24 * 60, 5)]

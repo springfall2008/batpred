@@ -1698,6 +1698,92 @@ def unpack_export_limit(packed):
     return pack_export_limit(EXPORT_MODE_TARGET, target, round(FULL_EXPORT_POWER - (packed - target), 1))
 
 
+EXPORT_MODE_NAMES = {EXPORT_MODE_TARGET: "target", EXPORT_MODE_FREEZE: "freeze", EXPORT_MODE_IDLE: "idle"}
+EXPORT_MODE_BY_NAME = {name: mode for mode, name in EXPORT_MODE_NAMES.items()}
+
+
+def export_limit_to_stored(export_limit):
+    """Serialise one export limit as a self-describing mapping.
+
+    The packed float is an internal encoding, not a format worth persisting: 99.0 does not say
+    "freeze" to anything that has not read const.py, and the fraction silently carries the export
+    power. A plain mapping says what it means, survives yaml.safe_dump, and leaves room for fields
+    the packed double has nowhere to put.
+
+    Only the fields that apply to the mode are written, so a freeze does not claim a meaningless
+    target or power.
+    """
+    mode = export_mode_of(export_limit)
+    if mode != EXPORT_MODE_TARGET:
+        return {"mode": EXPORT_MODE_NAMES[mode]}
+    # Round the power so the stored file reads cleanly - the packed float form carried binary noise
+    # (0.7 as 0.7000000000000028); the tuple is exact but a legacy value decoded here may not be.
+    return {"mode": EXPORT_MODE_NAMES[mode], "target": export_target_of(export_limit), "power": round(export_power_of(export_limit), 6)}
+
+
+def _export_limit_from_fields(mode, target, power):
+    """Validate and build a target-mode export limit from raw mode/target/power fields.
+
+    Shared by both branches of export_limit_from_stored() that carry real field values (the mapping
+    form and the 3-element sequence form) so a malformed value is rejected the same way regardless
+    of which shape it arrived in. GitHub Copilot review on PR #5047 found the sequence branch
+    skipped this entirely - export_limit_from_stored(stored) returned tuple(stored) unvalidated, so
+    a malformed 3-element sequence such as [EXPORT_MODE_TARGET, None, 0.7] reached the kernel
+    marshaller's struct.pack and crashed there instead of falling back to idle as the docstring
+    promises. A non-target mode (freeze/idle) carries no target or power to validate, so those go
+    straight to pack_export_limit without calling this.
+    """
+    if mode not in (EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE):
+        return pack_export_limit(EXPORT_MODE_IDLE)
+    if mode != EXPORT_MODE_TARGET:
+        return pack_export_limit(mode)
+    try:
+        target = int(target)
+        power = float(power)
+    except (TypeError, ValueError, OverflowError):
+        return pack_export_limit(EXPORT_MODE_IDLE)
+    if target < 0 or target >= EXPORT_LIMIT_FREEZE or power < 0 or power > FULL_EXPORT_POWER:
+        return pack_export_limit(EXPORT_MODE_IDLE)
+    return pack_export_limit(mode, target, power)
+
+
+def export_limit_from_stored(stored):
+    """Read one export limit from the mapping form, a bare packed float, or a 3-element sequence.
+
+    The float branch is the translation layer for plans and debug dumps written before the mapping
+    existed. Those arrive indefinitely - a bug report carries whatever version the user was running
+    - so it is a permanent compatibility path, not a migration. A YAML or JSON round trip turns a
+    tuple into a list, so a three-element sequence is an already-split limit that lost its type.
+
+    Anything unrecognised becomes an idle window rather than raising: a debug dump is a diagnostic
+    artefact and a malformed limit must not stop a replay.
+    """
+    if isinstance(stored, (list, tuple)) and len(stored) == 3 and not isinstance(stored[0], str):
+        mode, target, power = stored
+        return _export_limit_from_fields(mode, target, power)
+    if isinstance(stored, dict):
+        mode = EXPORT_MODE_BY_NAME.get(stored.get("mode"))
+        if mode is None:
+            return pack_export_limit(EXPORT_MODE_IDLE)
+        if mode != EXPORT_MODE_TARGET:
+            return pack_export_limit(mode)
+        return _export_limit_from_fields(mode, stored.get("target", 0), stored.get("power", FULL_EXPORT_POWER))
+    try:
+        return unpack_export_limit(float(stored))
+    except (TypeError, ValueError):
+        return pack_export_limit(EXPORT_MODE_IDLE)
+
+
+def export_limits_to_stored(export_limits):
+    """Serialise a list of export limits for the persisted plan or a debug dump."""
+    return [export_limit_to_stored(limit) for limit in export_limits or []]
+
+
+def export_limits_from_stored(stored):
+    """Read a list of export limits written in any of the accepted forms."""
+    return [export_limit_from_stored(limit) for limit in stored or []]
+
+
 def clone_windows(windows):
     """Shallow-copy a list of window dicts (start/end/average/... primitive fields only).
 
