@@ -38,7 +38,7 @@ from const import (
     INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES,
 )
 from control_ledger import generation_from_state, OWNED, UNOWNED
-from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
+from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -1833,6 +1833,11 @@ class Inverter:
         model's known floor instead (GivTCP does this with GE's 4%), so a user who has configured
         battery_min_soc lower has that reflected in what is published.
 
+        reserve does not have to be an entity at all - the huawei and sofar templates ship a literal
+        percentage, because those inverters have no reserve register to point at. A literal carries
+        no attributes, so the reads below warn and come back with nothing and there are no bounds to
+        honour, rather than the state lookup on a number that used to raise (GH#5003).
+
         The rounding is the caller's contract as much as this one's: reserve is written as a whole
         percent, so a floor takes the ceiling and a ceiling takes the floor and the value returned is
         always one the register accepts. Rounding to nearest instead would turn a published floor of
@@ -2102,14 +2107,32 @@ class Inverter:
             self.base.log("Inverter {} control ledger: {} ({}) verdict {} - Predbat set {}, inverter now reads {}".format(self.id, name, entity_id, verdict, owned, value))
         return verdict
 
+    def check_write_entity(self, caller, name, entity_id, new_value):
+        """
+        Whether a control can be written to, warning if it is missing or is a fixed value.
+
+        apps.yaml settings may hold a literal rather than an entity id - the huawei and sofar
+        templates ship one for reserve, because those inverters have no register to point at - and a
+        literal is not somewhere a value can be written. Every write path used to split it as though
+        it were an entity id, so a control configured that way raised instead of reporting that
+        Predbat cannot set it (GH#5003).
+        """
+        if is_entity_id(entity_id):
+            return True
+        if entity_id:
+            message = "Warn: Inverter {} {}: {} for {} is a fixed value, not an entity id, so {} can not be written".format(self.id, caller, entity_id, name, new_value)
+        else:
+            message = "Warn: Inverter {} {}: No entity_id for {} to write {}".format(self.id, caller, name, new_value)
+        self.base.log(message)
+        self.base.record_status(message, had_errors=True)
+        return False
+
     def write_and_poll_switch(self, name, entity_id, new_value):
         """
         GivTCP Workaround, keep writing until correct
         """
         # Re-written to minimise writes
-        if not entity_id:
-            self.base.log("Warn: Inverter {} write_and_poll_switch: No entity_id for {} to write {}".format(self.id, name, new_value))
-            self.base.record_status("Warn: Inverter {} write_and_poll_switch: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+        if not self.check_write_entity("write_and_poll_switch", name, entity_id, new_value):
             return False
         domain, entity_name = entity_id.split(".")
 
@@ -2188,9 +2211,7 @@ class Inverter:
     def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
-        if not entity_id:
-            self.base.log("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value))
-            self.base.record_status("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+        if not self.check_write_entity("write_and_poll_value", name, entity_id, new_value):
             return False
         domain, entity_name = entity_id.split(".")
 
@@ -2281,9 +2302,7 @@ class Inverter:
         """
         GivTCP Workaround, keep writing until correct
         """
-        if not entity_id:
-            self.base.log("Warn: Inverter {} write_and_poll_option: No entity_id for {} to write {}".format(self.id, name, new_value))
-            self.base.record_status("Warn: Inverter {} write_and_poll_option: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+        if not self.check_write_entity("write_and_poll_option", name, entity_id, new_value):
             return False
         entity_base = entity_id.split(".")[0]
 

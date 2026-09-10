@@ -1389,6 +1389,10 @@ If not set or set to 0, Predbat will attempt to automatically determine the batt
 This requires at least several days of historical data with charging periods of 15% or more SoC change. If automatic detection fails, you must manually set this value.
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
+Can also be set to a fixed percentage rather than an entity name for inverters that have no reserve register to point at -
+the supplied Huawei and Sofar templates do this. A fixed value tells Predbat what the inverter is set to so it can be modelled,
+but Predbat cannot then change the reserve, so `switch.predbat_set_reserve_enable` has nothing to write to and Predbat logs a
+warning if something tries. This is true of any setting given a fixed value in place of an entity name.
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set).
 - **givtcp_battery_dod** - Optional depth of discharge for a GivTCP (REST) battery, one per inverter, default 1.0.
 GivTCP does not report DoD, so set this if your battery cannot use its full nameplate capacity (e.g. 0.8 for an 80% DoD
