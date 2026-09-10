@@ -18,9 +18,9 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
-from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
-from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple, export_mode_of, export_power_of
+from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple, export_mode_of, export_power_of, export_target_of
 from prediction_batch import PredictionBatch, prediction_cache_key
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
 
@@ -727,6 +727,16 @@ class Prediction(PredictionBatch):
             export_window_active = export_window_n >= 0
             export_limit_now = export_limits[export_window_n] if export_window_active else EXPORT_LIMIT_IDLE
             export_mode_now = export_mode_of(export_limit_now)
+            # The SoC floor this window exports down to. A target exports to its target field - not
+            # to the packed value, which also carries 1 - power in its fraction and so raised the
+            # floor by up to 0.7% of the battery for a slow export, stopping it slightly early for
+            # no reason connected to where the user asked it to stop. The two modes carry no target
+            # of their own and keep the floor their packed sentinels produced: 99% for a freeze
+            # (hold SoC) and 100% for an idle window, where the floor never binds.
+            if export_mode_now == EXPORT_MODE_TARGET:
+                export_limit_percent = export_target_of(export_limit_now)
+            else:
+                export_limit_percent = EXPORT_LIMIT_FREEZE if export_mode_now == EXPORT_MODE_FREEZE else EXPORT_LIMIT_IDLE
 
             # Find charge limit
             charge_limit_n = 0
@@ -906,7 +916,7 @@ class Prediction(PredictionBatch):
 
             discharge_min = reserve
             if export_window_active:
-                discharge_min = max(soc_max * export_limit_now / 100.0, reserve, self.best_soc_min)
+                discharge_min = max(soc_max * export_limit_percent / 100.0, reserve, self.best_soc_min)
 
             if not set_export_freeze_only and export_window_active and export_mode_now == EXPORT_MODE_TARGET and (soc > discharge_min):
                 # Discharge enable, capped at export limit

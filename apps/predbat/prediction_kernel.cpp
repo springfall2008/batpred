@@ -43,7 +43,7 @@
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
 #define PK_ABI_VERSION 5
-#define PK_PARITY_REVISION 10
+#define PK_PARITY_REVISION 11
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_LIMIT_FREEZE 99.0 // const.py EXPORT_LIMIT_FREEZE
@@ -757,6 +757,10 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         const bool charge_window_active = charge_window_n >= 0;
         const bool export_window_active = export_window_n >= 0;
         const double export_limit_now = export_window_active ? s->export_limits[export_window_n] : PK_EXPORT_LIMIT_IDLE;
+        // The SoC floor a target exports down to - its whole-percent target, not the packed value,
+        // whose fraction carries 1 - power and would inflate the floor for a slow export (prediction.py).
+        // The two modes carry no target and keep the floor their sentinels produce.
+        const double export_limit_percent = (export_limit_now < PK_EXPORT_LIMIT_FREEZE) ? std::floor(export_limit_now) : export_limit_now;
 
         // Find charge limit - prediction.py:609-620
         double charge_limit_n = 0;
@@ -935,7 +939,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         // prediction.py:791-793
         double discharge_min = reserve;
         if (export_window_active) {
-            discharge_min = std::max({soc_max * export_limit_now / 100.0, reserve, c->best_soc_min});
+            discharge_min = std::max({soc_max * export_limit_percent / 100.0, reserve, c->best_soc_min});
         }
 
         double battery_draw = 0;
