@@ -12,6 +12,7 @@ import json
 import time
 from compare import Compare
 from const import CLOUD_FACTOR_PV10
+from utils import export_limit_sort_key
 from prediction import Prediction
 from tests.test_infra import reset_inverter
 
@@ -276,7 +277,15 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     print("Wrote plan to {} metric {}".format(filename, metric))
 
     # Expected
-    actual_data = {"charge_limit_best": my_predbat.charge_limit_best, "charge_window_best": my_predbat.charge_window_best, "export_window_best": my_predbat.export_window_best, "export_limits_best": my_predbat.export_limits_best}
+    # The committed .expected.json goldens hold export limits as the bare packed numbers they were
+    # before the fields were split. Compare in that form deliberately - regenerating them would
+    # destroy their value as a regression against historical plans.
+    actual_data = {
+        "charge_limit_best": my_predbat.charge_limit_best,
+        "charge_window_best": my_predbat.charge_window_best,
+        "export_window_best": my_predbat.export_window_best,
+        "export_limits_best": [float(export_limit_sort_key(limit)) for limit in my_predbat.export_limits_best],
+    }
     actual_json = json.dumps(actual_data)
     if expected_file:
         print("Compare with {}".format(expected_file))

@@ -1551,36 +1551,41 @@ def calc_percent_limit(charge_limit, soc_max):
 # ---------------------------------------------------------------------------
 # Export limit encoding
 #
-# An export window's instruction is currently a single double in export_limits_best carrying three
-# orthogonal signals: the target SoC percentage in the integer part, the export power level in the
-# fraction (stored as 1 - power, so 47.3 means a 70% rate), and the mode as two reserved whole
-# values (EXPORT_LIMIT_FREEZE = 99.0, EXPORT_LIMIT_IDLE = 100.0). One value answering three
-# questions meant every consumer re-derived intent by comparing against the sentinels, and did it
-# inconsistently - some test == 99, some < 99, some >= 99.
+# An export window's instruction is a 3-tuple: (mode, target SoC percentage, export power). A
+# plain tuple rather than a class because a plan builds, hashes and compares millions of them -
+# a tuple is built at C speed, indexes as fast as an attribute reads, and hashes without a
+# Python-level call. The fields are named by the accessors below and by these indices, so the
+# layout is written down once.
 #
-# The accessors below are the vocabulary callers should use instead. They still decode the packed
-# double here; a later commit swaps the representation underneath them without touching a call site.
-# pack_export_limit() is the single place the encoding is written down, replacing the by-hand
-# arithmetic scattered through plan.py's export ladder and the clip passes.
+# Three orthogonal signals as three fields, rather than the single double they used to be packed
+# into. That encoding put the target in the integer part, the power in the fraction and the mode
+# in two reserved whole values (EXPORT_LIMIT_FREEZE 99.0, EXPORT_LIMIT_IDLE 100.0), so one value
+# answered three questions and no consumer could ask a clean one of it. It was also lossy: the
+# power was recovered by subtracting the integer part, so 0.7 came back as 0.69999999999999929
+# or 0.70000000000000284 depending on which target it was packed against, and two windows both at
+# 70% did not compare equal.
+#
+# Every accessor also takes a bare number: plans and debug dumps written before the split arrive
+# indefinitely (a bug report carries whatever version the user was running), so decoding the old
+# packed value is a permanent compatibility path, not a migration.
 # ---------------------------------------------------------------------------
+
+EXPORT_FIELD_MODE = 0
+EXPORT_FIELD_TARGET = 1
+EXPORT_FIELD_POWER = 2
 
 
 def export_mode_of(export_limit):
-    """Which of the three export modes a packed export limit represents.
-
-    Callers should ask this rather than comparing against EXPORT_LIMIT_FREEZE / EXPORT_LIMIT_IDLE
-    themselves: several modules currently do that inconsistently (some test `== 99`, some `< 99`,
-    some `>= 99`), which is how a low-power export to a 99% target became inexpressible.
-
-    The freeze sentinel is matched exactly, not by range. That matters for the [99.0, 100.0)
-    interval, which the packed encoding cannot produce but which the codebase disagrees about:
-    most sites test `== EXPORT_LIMIT_FREEZE` (99.5 would be a normal export) rather than `< 99`.
-    Exact matching preserves the more common reading and keeps this function inert; the
-    disagreement is only truly fixable once the fields are split, since it exists because one
-    number is answering two questions.
+    """Which of the three export modes an export limit represents.
 
     Returns EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE or EXPORT_MODE_IDLE.
+
+    For a bare number (the legacy packed value) the freeze sentinel is matched exactly, not by
+    range: most sites tested `== EXPORT_LIMIT_FREEZE`, so a value in (99.0, 100.0) - which the
+    packed encoding could not itself produce - reads as a normal export.
     """
+    if isinstance(export_limit, tuple):
+        return export_limit[EXPORT_FIELD_MODE]
     if export_limit >= EXPORT_LIMIT_IDLE:
         return EXPORT_MODE_IDLE
     if export_limit == EXPORT_LIMIT_FREEZE:
@@ -1589,23 +1594,27 @@ def export_mode_of(export_limit):
 
 
 def export_target_of(export_limit):
-    """The target SoC percentage a packed export limit exports down to.
+    """The target SoC percentage an export limit exports down to.
 
-    Only meaningful for EXPORT_MODE_TARGET; the reserved mode values do not carry a target and
-    return None so a caller cannot silently use 99 or 100 as if it were one.
+    Only meaningful for EXPORT_MODE_TARGET; the other modes carry no target and return None so a
+    caller cannot silently use 99 or 100 as if it were one.
     """
+    if isinstance(export_limit, tuple):
+        return export_limit[EXPORT_FIELD_TARGET]
     if export_mode_of(export_limit) != EXPORT_MODE_TARGET:
         return None
     return int(export_limit)
 
 
 def export_power_of(export_limit):
-    """The export power fraction of a packed export limit, 1.0 being full rate.
+    """The export power fraction of an export limit, 1.0 being full rate.
 
-    Mirrors the decode in Prediction.run_prediction and prediction_kernel.cpp: the stored fraction
-    counts down from full power, so 47.3 means 70% rate. The mode values carry no power level and
-    return full rate, matching what the callers already assume.
+    For a bare number this mirrors the decode in Prediction.run_prediction and
+    prediction_kernel.cpp: the stored fraction counts down from full power, so 47.3 means 70%
+    rate. The other modes carry no power level and return full rate.
     """
+    if isinstance(export_limit, tuple):
+        return export_limit[EXPORT_FIELD_POWER]
     if export_mode_of(export_limit) != EXPORT_MODE_TARGET:
         return FULL_EXPORT_POWER
     return 1 - (export_limit - int(export_limit))
@@ -1614,19 +1623,21 @@ def export_power_of(export_limit):
 def export_limit_exports_no_battery(export_limit):
     """Whether this export limit discharges no battery - it is idle, or a freeze.
 
-    Wraps what plan.py's trim pass expresses as `limit >= EXPORT_LIMIT_FREEZE`, which works only
-    because both reserved values sort above every real target. That ordering is a property of the
-    packed encoding rather than of the question being asked, so it is named here; once mode is a
-    field of its own this becomes a membership test over modes.
+    Wraps what plan.py's trim pass expressed as `limit >= EXPORT_LIMIT_FREEZE`, which worked only
+    because both reserved values sorted above every real target. As a mode field that is a
+    membership test; the bare-number path keeps the >= behaviour for legacy values, including a
+    value in the unreachable [99.0, 100.0) interval where it and export_mode_of disagree.
     """
+    if isinstance(export_limit, tuple):
+        return export_limit[EXPORT_FIELD_MODE] in (EXPORT_MODE_IDLE, EXPORT_MODE_FREEZE)
     return export_limit >= EXPORT_LIMIT_FREEZE
 
 
 def export_limit_is_full_discharge(export_limit):
     """Whether this instruction exports the battery all the way down, at full power.
 
-    Wraps what the planner's passes express as `limit == 0`, which only works while a limit is a
-    bare number whose zero value means "target 0% at full rate".
+    Wraps what the planner's passes express as `limit == 0`, which only worked while a limit was a
+    bare number whose zero value meant "target 0% at full rate".
     """
     return export_mode_of(export_limit) == EXPORT_MODE_TARGET and export_target_of(export_limit) == 0 and export_power_of(export_limit) == FULL_EXPORT_POWER
 
@@ -1636,25 +1647,55 @@ def export_limit_sort_key(export_limit):
 
     The planner's passes compare limits to decide whether one is a shallower discharge than
     another (see the trim pass in optimise_plan_pass), and the modes must sort above every real
-    target as the reserved values did. Anything comparing two limits by depth, or formatting one
-    as a number for a chart, goes through this rather than reading the raw value - so that when the
-    representation stops being a bare number the call sites do not have to change again.
+    target as the reserved values did. Tuples order lexicographically, which is not that order, so
+    anything comparing two limits by depth - or formatting one as a number for a chart - goes
+    through this rather than the raw value.
     """
-    return export_limit
-
-
-def pack_export_limit(mode, target=None, power=FULL_EXPORT_POWER):
-    """Build a packed export limit from the three signals it encodes.
-
-    The inverse of export_mode_of / export_target_of / export_power_of, kept beside them so the
-    encoding is written down in exactly one place instead of being re-derived at each call site
-    (see plan.py's ladder, which builds the same values by hand).
-    """
+    if not isinstance(export_limit, tuple):
+        return export_limit
+    mode = export_limit[EXPORT_FIELD_MODE]
     if mode == EXPORT_MODE_IDLE:
         return EXPORT_LIMIT_IDLE
     if mode == EXPORT_MODE_FREEZE:
         return EXPORT_LIMIT_FREEZE
-    return int(target or 0) + (FULL_EXPORT_POWER - power)
+    return export_limit[EXPORT_FIELD_TARGET] + (FULL_EXPORT_POWER - export_limit[EXPORT_FIELD_POWER])
+
+
+def pack_export_limit(mode, target=None, power=FULL_EXPORT_POWER):
+    """Build an export limit from the three signals it carries.
+
+    The inverse of export_mode_of / export_target_of / export_power_of, kept beside them so the
+    layout is written down in exactly one place instead of being re-derived at each call site
+    (see plan.py's ladder, which builds the same values by hand).
+
+    The two modes carry neither a target nor a power, so they normalise to None and full rate - a
+    caller cannot then read 99 or 100 back out as if it were a target.
+    """
+    if mode != EXPORT_MODE_TARGET:
+        return (mode, None, FULL_EXPORT_POWER)
+    return (mode, int(target or 0), power)
+
+
+def unpack_export_limit(packed):
+    """Rebuild an export limit tuple from the packed float the encoding used to be.
+
+    The reserved whole values are the two modes; anything else is a target in the integer part
+    with the export power in the fraction. Used for plans and debug dumps written before the
+    fields were split, which arrive indefinitely, so this is a permanent compatibility path.
+    """
+    if isinstance(packed, tuple):
+        return packed
+    if packed >= EXPORT_LIMIT_IDLE:
+        return pack_export_limit(EXPORT_MODE_IDLE)
+    if packed == EXPORT_LIMIT_FREEZE:
+        return pack_export_limit(EXPORT_MODE_FREEZE)
+    target = int(packed)
+    # The packed fraction is 1 - power, and the subtraction is inexact in binary floating point:
+    # 99.3 - 99 gives 0.30000000000000284, so the power comes back as 0.7000000000000028 rather
+    # than 0.7. The encoding only ever carried one decimal place of power, so round to that - both
+    # to recover the value that was packed and because an inexact power would otherwise be handed
+    # to the C kernel.
+    return pack_export_limit(EXPORT_MODE_TARGET, target, round(FULL_EXPORT_POWER - (packed - target), 1))
 
 
 def clone_windows(windows):
@@ -1689,7 +1730,7 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
     the result against a naive reference implementation over randomised window layouts.
     """
     # Enabled export windows only - the sole candidates for clipping anything
-    export_active = sorted((export_window_best[n]["start"], export_window_best[n]["end"]) for n in range(len(export_limit_best)) if export_limit_best[n] < 100.0)
+    export_active = sorted((export_window_best[n]["start"], export_window_best[n]["end"]) for n in range(len(export_limit_best)) if export_mode_of(export_limit_best[n]) != EXPORT_MODE_IDLE)
     if not export_active:
         # Rebuild the windows rather than passing the caller's dicts back, so the returned windows
         # carry exactly the same keys (and are as freshly owned) as on the clipping path below

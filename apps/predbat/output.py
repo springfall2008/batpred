@@ -21,8 +21,8 @@ import copy
 from html import escape as escape_html
 from datetime import timedelta
 from predbat import THIS_VERSION_DISPLAY
-from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_limit_sort_key, pack_export_limit
+from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
 from prediction import Prediction
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
@@ -828,7 +828,20 @@ class Output:
         Get the charge export text for the given minute
         """
         if export_window_n >= 0:
-            target_export = self.export_window_best[export_window_n].get("target", self.export_limits_best[export_window_n])
+            # The window carries a plain-number target once clipped; fall back to the instruction's
+            # own target rather than the instruction, which would print as a tuple. A stored target
+            # can itself still be the tuple/list/mapping instruction - from a replayed debug dump or
+            # a plan saved before the window was clipped this cycle - so normalise it the same way
+            # publish_html_plan does, rather than trusting get()'s fallback to catch every case: a
+            # *present* legacy value would otherwise print as "force exporting to (0, 47, 0.7)%"
+            # (GitHub Copilot review, PR #5047).
+            stored_target = self.export_window_best[export_window_n].get("target")
+            if isinstance(stored_target, (tuple, list, dict)):
+                target_export = export_target_of(export_limit_from_stored(stored_target))
+            elif stored_target is not None:
+                target_export = stored_target
+            else:
+                target_export = export_target_of(self.export_limits_best[export_window_n])
             if export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_FREEZE:
                 text = "freeze exporting for the next {}".format(self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))  # don't include target % for freeze exporting as (the 99%) is meaningless
             else:
@@ -1445,9 +1458,21 @@ class Output:
 
             if export_window_n >= 0:
                 limit = self.export_limits_best[export_window_n]
-                target = limit
+                # The displayed target is the SoC percentage the instruction aims at, not the
+                # instruction itself - a mode carries no target, hence the None
+                target = export_target_of(limit)
                 if "target" in self.export_window_best[export_window_n]:
-                    target = self.export_window_best[export_window_n]["target"]
+                    stored_target = self.export_window_best[export_window_n]["target"]
+                    # A replayed debug dump can carry the instruction itself here, from before the
+                    # window target was stored as a plain number - take the target out of it. The
+                    # normal case is already a plain number, and must stay one: export_limit_from_stored
+                    # treats its input as a packed limit, not a target percentage, so running an
+                    # ordinary target through it misreads 47.0 as a packed instruction and can hand
+                    # back None (GH copilot review #5047 - fixed a raise here, introduced a None).
+                    if isinstance(stored_target, (tuple, list, dict)):
+                        target = export_target_of(export_limit_from_stored(stored_target))
+                    else:
+                        target = stored_target
 
                 if export_mode_of(limit) == EXPORT_MODE_FREEZE:  # freeze exporting
                     if not had_state:
@@ -1469,25 +1494,25 @@ class Output:
                         split = True
                     else:
                         state_color = "#FFFF00"
-                    if limit > soc_percent_max_window:
+                    if target is not None and target > soc_percent_max_window:
                         state += "HoldExp&searr;"
                         raw_state = "HoldExp"
                         reason_parts.append({"code": "hold_export_unreachable", "params": {"target_percent": dp2(target)}})
                     else:
                         state += "Exp&searr;"
                         raw_state = "Exp"
-                        export_rate_adjust = 1 - (limit - int(limit))
+                        export_rate_adjust = export_power_of(limit)
                         rate_kw = dp2(self.battery_rate_max_export * export_rate_adjust * MINUTE_WATT / 1000.0)
                         reason_parts.append({"code": "export_high_rate", "params": {"target_percent": dp2(target), "rate": rate_text_export, "rate_kw": "{:.2f}".format(rate_kw)}})
                     show_limit = str(dp2(target))
                     raw_state_target = str(dp2(target))
 
-                    if limit > int(limit):
+                    if export_power_of(limit) < FULL_EXPORT_POWER:
                         # Snail symbol
                         state += "&#x1F40C;"
 
                     if plan_debug:
-                        show_limit += " ({})".format(dp2(limit))
+                        show_limit += " ({})".format(dp2(export_limit_sort_key(limit)))
 
                 if self.export_window_best[export_window_n]["start"] in self.manual_export_times:
                     state += " &#8526;"
@@ -2309,11 +2334,14 @@ class Output:
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             if window_n >= 0 and (export_mode_of(export_limits[window_n]) != EXPORT_MODE_IDLE):
-                soc_perc = export_limits[window_n]
+                limit = export_limits[window_n]
+                # Published as a chart series, so this wants the target SoC percentage for target
+                # windows; the packed-sort sentinel still represents freeze.
+                soc_perc = float(export_target_of(limit)) if export_mode_of(limit) == EXPORT_MODE_TARGET else float(export_limit_sort_key(limit))
                 soc_kw = (soc_perc * self.soc_max) / 100.0
                 if not export_limit_first:
                     export_limit_soc = soc_kw
-                    export_limit_percent = export_limits[window_n]
+                    export_limit_percent = soc_perc
                     export_limit_first = True
             else:
                 soc_perc = EXPORT_LIMIT_IDLE

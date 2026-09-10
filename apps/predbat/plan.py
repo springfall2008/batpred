@@ -36,7 +36,24 @@ from const import (
     EXPORT_MODE_IDLE,
 )
 
-from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot, export_mode_of, export_power_of, export_target_of, pack_export_limit, export_limit_exports_no_battery, export_limit_is_full_discharge
+from utils import (
+    calc_percent_limit,
+    clone_windows,
+    dp0,
+    dp1,
+    dp2,
+    dp3,
+    dp4,
+    remove_intersecting_windows,
+    in_car_slot,
+    export_mode_of,
+    export_power_of,
+    export_target_of,
+    export_limit_sort_key,
+    pack_export_limit,
+    export_limit_exports_no_battery,
+    export_limit_is_full_discharge,
+)
 from prediction import Prediction
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
@@ -2481,7 +2498,7 @@ class Plan:
                 )
 
             window_size = try_export_window[window_n]["end"] - start
-            window_key = str(dp2(this_export_limit)) + "_" + str(window_size)
+            window_key = str(this_export_limit) + "_" + str(window_size)
             window_results[window_key] = [metric, cost]
 
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
@@ -3073,8 +3090,8 @@ class Plan:
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start
             # The window's target is the SoC percentage the plan displays and the clip pass compares
-            # against, not the instruction itself - keep it a number, as the charge side does
-            window["target"] = float(limit)
+            # against, not the packed legacy sort key's power-bearing fraction.
+            window["target"] = float(limit_target) if limit_target is not None else float(export_limit_sort_key(limit))
 
             if export_mode_of(limit) == EXPORT_MODE_IDLE:
                 # Ignore disabled windows
@@ -3107,7 +3124,8 @@ class Plan:
                         target_soc = max(limit_soc, soc_min)
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge * self.battery_rate_max_scaling_discharge)
                         window["target"] = calc_percent_limit(target_soc, self.soc_max)
-                        export_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max) + (limit - int(limit))
+                        # Rebuild the instruction with the clipped-up target, keeping the export power the pass never touches
+                        export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_TARGET, calc_percent_limit(limit_soc, self.soc_max), export_power_of(limit))
                         if limit != export_limits_best[window_n] and self.debug_enable:
                             self.log("Clip up export window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
             else:
@@ -3571,10 +3589,10 @@ class Plan:
                                 amount_to_move = min(orig_length_target - window_length_target, window_length)
                                 window_length_target_new = amount_to_move + window_length_target
                                 window_length_new = amount_to_move + window_length
-                                self.export_limits_best[window_n] = min(export_limit, export_limit_target)
+                                self.export_limits_best[window_n] = min(export_limit, export_limit_target, key=export_limit_sort_key)
                                 set_window_start(self.export_window_best[window_n], self.export_window_best[window_n]["end"] - window_length_new)
                                 set_window_start(self.export_window_best[window_n_target], self.export_window_best[window_n_target]["end"] - window_length_target_new)
-                                self.export_limits_best[window_n_target] = min(export_limit, export_limit_target)
+                                self.export_limits_best[window_n_target] = min(export_limit, export_limit_target, key=export_limit_sort_key)
                                 is_combined = True
                             else:
                                 # Swap
@@ -4096,7 +4114,7 @@ class Plan:
                             # never a deeper discharge nor an earlier start (a bigger window exports more, even
                             # when the SoC limit rises). Off/freeze export no battery and force the start back to
                             # the full window, so they are exempt from the earlier-start check.
-                            trim_export_ok = pass_type != "trim_export" or (n_best_soc >= self.export_limits_best[window_n] and (export_limit_exports_no_battery(n_best_soc) or n_best_start >= keep_start))
+                            trim_export_ok = pass_type != "trim_export" or (export_limit_sort_key(n_best_soc) >= export_limit_sort_key(self.export_limits_best[window_n]) and (export_limit_exports_no_battery(n_best_soc) or n_best_start >= keep_start))
                             if n_best_metric < best_metric and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]) and trim_export_ok:
                                 # Only a strict improvement drives another refinement iteration (see
                                 # the charge block above for why equal-metric flips must not).

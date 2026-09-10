@@ -800,7 +800,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.charge_window_best = plan_data.get("charge_window_best", [])
         self.charge_limit_best = plan_data.get("charge_limit_best", [])
         self.export_window_best = plan_data.get("export_window_best", [])
-        self.export_limits_best = plan_data.get("export_limits_best", [])
+        # A JSON round trip turns each (mode, target, power) tuple into a list; restore the tuple so
+        # the accessors take their fast path. A bare number is a plan saved before the split and is
+        # left for the accessors' legacy decode.
+        self.export_limits_best = [tuple(limit) if isinstance(limit, list) and len(limit) == 3 else limit for limit in plan_data.get("export_limits_best", [])]
         # The pre-clip snapshot plan selection scores against. Older saves predate it, and it is only ever a
         # four part plan, so anything else is discarded and the comparison falls back to the clipped plans.
         preclip = plan_data.get("plan_preclip")

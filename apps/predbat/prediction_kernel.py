@@ -28,7 +28,7 @@ import sys
 import weakref
 
 from const import PREDICT_STEP, PREDBAT_MAX_CARS
-from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
+from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_sort_key
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 5
@@ -838,7 +838,7 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
         charge_start, charge_end, _ = window_arrays(job.charge_window)
         export_start, export_end, _ = window_arrays(job.export_window)
         charge_limit = double_array(job.charge_limit)
-        export_limits = double_array(job.export_limits)
+        export_limits = double_array([export_limit_sort_key(limit) for limit in job.export_limits])
         buffers.append((charge_limit, export_limits))
 
         pk_job = job_array[index]
@@ -899,7 +899,7 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     # list lengths, the per-item call overhead outweighing what the comprehension costs.
     scenario.charge_limit = double_array(charge_limit)
     scenario.charge_start, scenario.charge_end = window_bound_arrays(charge_window)
-    scenario.export_limits = double_array(export_limits)
+    scenario.export_limits = double_array([export_limit_sort_key(limit) for limit in export_limits])
     scenario.export_start, scenario.export_end = window_bound_arrays(export_window)
     # A cached run discards the per-minute SoC series (see the `if not cache` block below), so the
     # buffer is not allocated and the kernel is told to skip filling it. That skips a round_py per

@@ -17,7 +17,7 @@ reserve level adjustments, and multi-inverter balancing.
 
 from datetime import timedelta, datetime
 from const import MINUTE_WATT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
-from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, export_mode_of, export_power_of
+from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, export_mode_of, export_power_of, export_target_of
 from predbat_metrics import metrics
 from inverter import Inverter
 import time
@@ -475,7 +475,7 @@ class Execute:
                 # Turn minutes into time
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + export_adjust))  # Add in 1 minute margin to allow Predbat to restore demand mode
-                discharge_soc = max((int(self.export_limits_best[0]) * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
+                discharge_soc = max(((export_target_of(self.export_limits_best[0]) or 0) * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
                 self.log("Next export window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.export_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (export_mode_of(self.export_limits_best[0]) != EXPORT_MODE_IDLE):
                     if not self.set_export_freeze_only and export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_TARGET and (self.soc_kw > discharge_soc):
@@ -830,7 +830,7 @@ class Execute:
         Returns:
         - int: export target as a percentage of the battery
         """
-        target = int(self.export_limits_best[0])
+        target = export_target_of(self.export_limits_best[0]) or 0
         if not self.set_reserve_enable:
             target = max(target, calc_percent_limit(max(self.reserve, self.best_soc_min), self.soc_max))
         return target

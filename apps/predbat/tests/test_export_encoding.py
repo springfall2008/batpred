@@ -18,7 +18,7 @@ out by hand in Prediction.run_prediction and prediction_kernel.cpp, so the two c
 import random
 
 from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
-from utils import export_mode_of, export_target_of, export_power_of, pack_export_limit
+from utils import export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit
 
 
 def test_export_encoding_roundtrip():
@@ -44,10 +44,10 @@ def test_export_encoding_modes():
     failed = 0
     for mode, expected in ((EXPORT_MODE_FREEZE, EXPORT_LIMIT_FREEZE), (EXPORT_MODE_IDLE, EXPORT_LIMIT_IDLE)):
         packed = pack_export_limit(mode)
-        # float() is the packed wire value the C kernel still reads - an instruction is deliberately
-        # not equal to a bare number, so this asks for the encoding explicitly rather than by ==
-        if float(packed) != expected:
-            print("ERROR: mode {} packed to {} expected {}".format(mode, float(packed), expected))
+        # The sort key is the packed value the encoding used to be, still used for ordering and the
+        # display paths - a limit is a tuple now, so this asks for it explicitly rather than by ==
+        if export_limit_sort_key(packed) != expected:
+            print("ERROR: mode {} packed to {} expected {}".format(mode, export_limit_sort_key(packed), expected))
             failed += 1
         if export_mode_of(packed) != mode:
             print("ERROR: mode {} decoded as {}".format(mode, export_mode_of(packed)))

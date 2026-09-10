@@ -248,6 +248,7 @@ GivEnergy
 givtcp
 gnueabihf
 GOELEC
+goldens
 gridcharge
 gridcode
 gridconsumption
