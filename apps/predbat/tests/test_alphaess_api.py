@@ -12,7 +12,7 @@ import predbat  # noqa: F401  (import first - avoids circular import: config.py 
 import hashlib
 import pytz
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from alphaess import AlphaESSAPI
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
 
@@ -32,12 +32,18 @@ class MockAlphaESS(AlphaESSAPI):
         self.state = {}
         self.published = {}
         self.external_state = {}
+        # 0 rather than initialize()'s real 2s default: api_delay is a courtesy pause between
+        # consecutive calls to AlphaESS's rate-limited cloud, and nothing here talks to the real
+        # cloud - every request is a scripted mock. Left at 2 it was several real seconds of
+        # dead wall-clock per test that reads more than one endpoint. A test that wants to
+        # exercise the pacing can still set client.api_delay itself.
         self.initialize(
             app_id=app_id,
             app_secret=app_secret,
             inverter_sn=inverter_sn,
             automatic=automatic,
             control_enable=control_enable,
+            api_delay=0,
         )
 
     def log(self, message):
@@ -57,8 +63,10 @@ class MockAlphaESS(AlphaESSAPI):
         """Read back whatever the test (or dashboard_item) put in self.state."""
         return self.state.get(entity_id, default)
 
-    async def set_state_external(self, entity_id, state, attributes={}):
+    async def set_state_external(self, entity_id, state, attributes=None):
         """Record a Predbat CONFIG_ITEMS switch change instead of reaching Home Assistant."""
+        if attributes is None:
+            attributes = {}
         self.external_state[entity_id] = state
 
     def set_arg_auto(self, arg, value):
@@ -213,7 +221,10 @@ def test_alphaess_transport_failure_returns_minus_one():
     failed = False
     client = MockAlphaESS()
     session = create_aiohttp_mock_session(exception=Exception("connection reset"))
-    with patch("alphaess.aiohttp.ClientSession", return_value=session):
+    # _request backs off between its retries with asyncio.sleep(1 + attempt) - 3 real seconds
+    # before it gives up. What is asserted here is the verdict it lands on, not the pacing it
+    # keeps on the way there, so the wait is skipped.
+    with patch("alphaess.aiohttp.ClientSession", return_value=session), patch("alphaess.asyncio.sleep", new_callable=AsyncMock):
         code, data = run_async_local(client._get("ess_list"))
     if code != -1:
         print(f"ERROR: transport failure code {code} should be -1")
@@ -301,7 +312,6 @@ def test_alphaess_response_code_is_logged_even_with_debug_on():
     with patch("alphaess.aiohttp.ClientSession", return_value=session):
         run_async_local(client._post("update_charge_config", body={"sysSn": "AL70"}))
     # Check that the response code 6008 was logged (not masked as ***)
-    response_logs = [msg for msg in client.log_messages if "response" in msg.lower() or "6008" in msg]
     if not any("6008" in msg for msg in client.log_messages):
         print(f"ERROR: code 6008 not logged, got {client.log_messages}")
         failed = True

@@ -974,6 +974,39 @@ def test_control_window_parsing():
     print("  ✓ Planned car charging windows are parsed and matched against the clock")
 
 
+def test_control_windows_across_new_year():
+    """A window spanning New Year is still matched, read from either side of midnight.
+
+    The plan carries no year, so a window read just after midnight on 1 January parses
+    its 31 December start as this year - eleven months in the future - unless the year is
+    rebuilt around the clock. Getting this wrong stops a car mid-charge once a year.
+    """
+    crossing = _plan_window(datetime.datetime(2026, 12, 31, 23, 0), datetime.datetime(2027, 1, 1, 5, 0))
+    component = _control_component(plans={0: [crossing]})
+
+    before_midnight = CONTROL_TZ.localize(datetime.datetime(2026, 12, 31, 23, 30))
+    assert component.refresh_car_windows(before_midnight) is True
+    assert component.should_charge_now(0, before_midnight) is True, "The window is active before midnight"
+
+    after_midnight = CONTROL_TZ.localize(datetime.datetime(2027, 1, 1, 0, 30))
+    assert component.refresh_car_windows(after_midnight) is True
+    assert component.should_charge_now(0, after_midnight) is True, "The same window is still active after midnight"
+
+    ended = CONTROL_TZ.localize(datetime.datetime(2027, 1, 1, 6, 0))
+    assert component.refresh_car_windows(ended) is True
+    assert component.should_charge_now(0, ended) is False, "The window has ended by 06:00"
+
+    # A window genuinely far ahead must not be dragged back a year by the rebuild - the
+    # plan reaches 48 hours, well beyond the 23 hour margin the first version allowed
+    ahead = _plan_window(datetime.datetime(2026, 8, 23, 20, 0), datetime.datetime(2026, 8, 24, 2, 0))
+    component = _control_component(plans={0: [ahead]})
+    now = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 10, 0))
+    assert component.refresh_car_windows(now) is True
+    assert component.should_charge_now(0, now) is False, "A window 34 hours ahead has not started"
+    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 21, 0))) is True, "...and is active once it arrives"
+    print("  ✓ Windows spanning New Year are matched from both sides of midnight")
+
+
 def test_control_windows_are_per_car():
     """Each car's own slot sensor drives its own Zappi, so car 1 does not follow car 0."""
     car0 = _plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
@@ -1138,6 +1171,8 @@ def test_control_gating_refuses_with_a_reason():
     for overrides, expected in (
         ({"zappi_control": False}, None),
         ({"automatic": False}, "myenergi_automatic"),
+        # The Zappi half is what maps a Zappi to a car, so control cannot run without it either
+        ({"automatic_zappi": False}, "myenergi_automatic_zappi"),
         ({"enable_controls": False}, "myenergi_enable_controls"),
     ):
         component = _controlling_component(**overrides)
@@ -1487,11 +1522,11 @@ def test_component_oauth_refresh_failure_stops_the_poll():
 
 def test_component_registration():
     """The component is registered with matching config keys and event filter."""
-    from components import COMPONENT_LIST
+    from components import COMPONENT_LIST, load_component_class
     from config import APPS_SCHEMA
 
     entry = COMPONENT_LIST["myenergi"]
-    assert entry["class"] is MyEnergiAPI
+    assert load_component_class(entry) is MyEnergiAPI
     assert entry["event_filter"] == "predbat_myenergi_"
     assert entry["phase"] == 1
     assert entry["can_restart"] is True
@@ -1549,6 +1584,37 @@ def test_automatic_config():
     print("  ✓ Automatic configuration wires both energy inputs, deterministically by serial")
 
 
+def test_automatic_config_wires_car_charging_power():
+    """Zappi live power sensors wire into car_charging_power in the same serial order.
+
+    The power sensors are display-only (the plan runs off car_charging_energy), but they have to
+    line up with the energy list so both describe the same chargers.
+    """
+    component = _make_component()
+    second_zappi = dict(MOCK_DIRECT_ZAPPI, sno=22223333)
+    component.devices = {
+        "Z22223333": normalise_direct_device(second_zappi, DEVICE_KIND_ZAPPI),
+        "E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI),
+        "Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
+    }
+    component.automatic_config()
+
+    assert component.base.args["car_charging_power"] == [
+        "sensor.predbat_myenergi_zappi_12345678_power",
+        "sensor.predbat_myenergi_zappi_22223333_power",
+    ], component.base.args["car_charging_power"]
+    print("  ✓ Automatic configuration wires the Zappi power sensors for the flow diagram")
+
+
+def test_automatic_config_eddi_only_leaves_car_charging_power_alone():
+    """An Eddi is not a car charger, so it must not appear as car charging power."""
+    component = _make_component()
+    component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
+    component.automatic_config()
+    assert "car_charging_power" not in component.base.args
+    print("  ✓ Eddi-only site leaves car_charging_power unset")
+
+
 def test_automatic_config_single_zappi_is_still_a_list():
     """A single Zappi still produces a list, so adding a second changes nothing else."""
     component = _make_component()
@@ -1569,6 +1635,100 @@ def test_automatic_config_eddi_only():
     assert "car_charging_planned" not in component.base.args
     assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_87654321_session_energy"
     print("  ✓ Eddi-only site wires iboost_energy_today and skips car_charging_energy")
+
+
+def test_automatic_config_zappi_half_defaults_on():
+    """automatic_zappi defaults to true, so an upgrade does not take Zappi wiring away."""
+    assert _make_component().automatic_zappi is True
+    from components import COMPONENT_LIST
+
+    assert COMPONENT_LIST["myenergi"]["args"]["automatic_zappi"]["default"] is True
+    print("  ✓ automatic_zappi defaults on, keeping existing myenergi_automatic users unchanged")
+
+
+def test_automatic_config_zappi_disabled_still_wires_the_eddi():
+    """With automatic_zappi off the Eddi is still wired, and no Zappi car inputs are contributed.
+
+    This is the whole point of the flag: an account holding both, where the car is charged by
+    some other make of charger. Turning myenergi_automatic off instead would take
+    iboost_energy_today away as well, which is the gap this closes.
+    """
+    component = _make_component(automatic_zappi=False)
+    # The charger the user actually charges with, already wired by hand in apps.yaml
+    component.base.args["car_charging_energy"] = ["sensor.other_charger_energy"]
+    component.devices = {
+        "Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
+        "E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI),
+    }
+    component.automatic_config()
+
+    assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_87654321_session_energy"
+    assert component.base.args["car_charging_energy"] == ["sensor.other_charger_energy"], component.base.args["car_charging_energy"]
+    assert "car_charging_planned" not in component.base.args
+    assert "car_charging_power" not in component.base.args
+    print("  ✓ automatic_zappi off wires the Eddi only and leaves another charger's car inputs alone")
+
+
+def test_automatic_config_zappi_disabled_on_a_zappi_only_site():
+    """A Zappi-only account with automatic_zappi off wires nothing at all, rather than a partial set."""
+    component = _make_component(automatic_zappi=False)
+    component.devices = {"Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
+    component.automatic_config()
+    for key in ("car_charging_energy", "car_charging_planned", "car_charging_power", "iboost_energy_today"):
+        assert key not in component.base.args, key
+    print("  ✓ automatic_zappi off on a Zappi-only site wires nothing")
+
+
+def test_automatic_config_eddi_half_defaults_on():
+    """automatic_eddi defaults to true, so an upgrade does not take Eddi wiring away."""
+    assert _make_component().automatic_eddi is True
+    from components import COMPONENT_LIST
+
+    assert COMPONENT_LIST["myenergi"]["args"]["automatic_eddi"]["default"] is True
+    print("  ✓ automatic_eddi defaults on, keeping existing myenergi_automatic users unchanged")
+
+
+def test_automatic_config_eddi_disabled_still_wires_the_zappi():
+    """With automatic_eddi off the Zappis are still wired, and iboost_energy_today is not.
+
+    The mirror of the automatic_zappi case: a Zappi owner whose hot water diversion is
+    handled elsewhere keeps the car inputs without Predbat claiming the Eddi for iboost.
+    """
+    component = _make_component(automatic_eddi=False)
+    # The diverter the user actually uses, already wired by hand in apps.yaml
+    component.base.args["iboost_energy_today"] = "sensor.other_diverter_energy"
+    component.devices = {
+        "Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
+        "E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI),
+    }
+    component.automatic_config()
+
+    assert component.base.args["car_charging_energy"] == ["sensor.predbat_myenergi_zappi_12345678_session_energy"], component.base.args["car_charging_energy"]
+    assert component.base.args["car_charging_planned"] == ["sensor.predbat_myenergi_zappi_12345678_plug_status"]
+    assert component.base.args["iboost_energy_today"] == "sensor.other_diverter_energy", component.base.args["iboost_energy_today"]
+    print("  ✓ automatic_eddi off wires the Zappis only and leaves another diverter's iboost alone")
+
+
+def test_automatic_config_eddi_disabled_on_an_eddi_only_site():
+    """An Eddi-only account with automatic_eddi off wires nothing at all, rather than a partial set."""
+    component = _make_component(automatic_eddi=False)
+    component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
+    component.automatic_config()
+    for key in ("car_charging_energy", "car_charging_planned", "car_charging_power", "iboost_energy_today"):
+        assert key not in component.base.args, key
+    print("  ✓ automatic_eddi off on an Eddi-only site wires nothing")
+
+
+def test_boost_still_works_with_the_zappi_half_disabled():
+    """automatic_zappi gates the car wiring only - the manual boost switches are untouched."""
+    component = _make_component(automatic_zappi=False)
+    device = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+    component.devices = {"E87654321": device}
+    component.transport.send_boost = AsyncMock(return_value=True)
+
+    run_async(component.switch_event_handler("switch.predbat_myenergi_eddi_87654321_boost", "turn_on"))
+    component.transport.send_boost.assert_called_once_with(device, DEFAULT_EDDI_BOOST_MINUTES)
+    print("  ✓ Manual boost still works with automatic_zappi off")
 
 
 def test_automatic_config_uses_set_arg_auto():
@@ -2350,6 +2510,7 @@ def test_myenergi(my_predbat=None):
     test_cloud_one_bad_device_does_not_lose_the_others()
     test_cloud_auth_error_still_aborts_the_poll()
     test_control_window_parsing()
+    test_control_windows_across_new_year()
     test_control_windows_are_per_car()
     test_control_windows_tolerate_a_bad_entry_and_a_missing_plan()
     test_control_windows_cross_the_year_boundary()
@@ -2382,8 +2543,17 @@ def test_myenergi(my_predbat=None):
     test_component_direct_auth_error_never_refreshes()
     test_component_registration()
     test_automatic_config()
+    test_automatic_config_wires_car_charging_power()
+    test_automatic_config_eddi_only_leaves_car_charging_power_alone()
     test_automatic_config_single_zappi_is_still_a_list()
     test_automatic_config_eddi_only()
+    test_automatic_config_zappi_half_defaults_on()
+    test_automatic_config_zappi_disabled_still_wires_the_eddi()
+    test_automatic_config_zappi_disabled_on_a_zappi_only_site()
+    test_automatic_config_eddi_half_defaults_on()
+    test_automatic_config_eddi_disabled_still_wires_the_zappi()
+    test_automatic_config_eddi_disabled_on_an_eddi_only_site()
+    test_boost_still_works_with_the_zappi_half_disabled()
     test_automatic_config_uses_set_arg_auto()
     test_automatic_config_disabled()
     test_automatic_config_runs_once()

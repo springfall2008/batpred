@@ -411,6 +411,30 @@ async def test_octopus_day_night_rates(my_predbat):
         print("PASS: async_update_intelligent_devices proceeds for IOG-only tariff code (no INTELLI substring)")
 
     # ------------------------------------------------------------------
+    # Test 11: has_six_hour_cap — detects the IOG-SMB tariff variant that
+    # Octopus enforces its 6-hour (12-slot) Intelligent cap on. Older
+    # INTELLI-VAR and non-SMB IOG tariffs are not capped by default.
+    # ------------------------------------------------------------------
+    print("\n*** Test 11: has_six_hour_cap detects IOG-SMB tariff codes ***")
+    six_hour_cap_cases = [
+        ("E-1R-IOG-SMB-TOU-25-12-12-H", True),
+        ("E-1R-INTELLI-VAR-25-01-01-H", False),
+        ("E-1R-IOG-FIX-12M-24-04-01-H", False),
+        ("E-1R-GO-VAR-22-10-14-H", False),
+        ("", False),
+        (None, False),
+    ]
+    case_failed = False
+    for tariff_code, expected in six_hour_cap_cases:
+        actual = OctopusAPI.has_six_hour_cap(tariff_code)
+        if actual != expected:
+            print(f"ERROR: has_six_hour_cap({tariff_code!r}) returned {actual}, expected {expected}")
+            failed = True
+            case_failed = True
+    if not case_failed:
+        print("PASS: has_six_hour_cap correctly classifies IOG-SMB and non-capped tariff codes")
+
+    # ------------------------------------------------------------------
     if failed:
         print("\n**** ❌ async_get_day_night_rates tests FAILED ****")
     else:

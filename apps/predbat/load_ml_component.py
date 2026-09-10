@@ -997,6 +997,7 @@ class LoadMLComponent(ComponentBase):
                     curriculum_window_days=window_days,
                     curriculum_step_days=5,
                     max_intermediate_passes=8,
+                    progress_callback=self.update_success_timestamp,
                 )
             else:
                 val_mae = self.predictor.train_curriculum(
@@ -1013,6 +1014,7 @@ class LoadMLComponent(ComponentBase):
                     curriculum_window_days=window_days,
                     curriculum_step_days=step_days,
                     max_intermediate_passes=max_intermediate_passes,
+                    progress_callback=self.update_success_timestamp,
                 )
 
             if val_mae is not None:
@@ -1087,7 +1089,6 @@ class LoadMLComponent(ComponentBase):
         reset_amount = 0
         load_today_h1 = 0
         load_today_h8 = 0
-        load_today_now = 0
         power_today_now = 0
         power_today_h1 = 0
         power_today_h8 = 0

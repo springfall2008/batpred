@@ -60,14 +60,15 @@ or edit as necessary in `apps.yaml` for your charger sensor.<BR>
 Note that this must be configured to point to an 'energy today' sensor in kWh not an instantaneous power sensor (in kW) from the car charger.<BR><BR>
 *IMPORTANT:* Predbat will subtract all car_charging_energy from your historic house load so if car_charging_energy is not configured with the correct sensor,
 your car charging energy sensor does not accurately report your car charging data (e.g. it falsely reports charging data when not actually charging), or your house load sensor already excludes car charging,
-then this will really mess up your predbat plan as Predbat will exclude all car_charging_energy from your load predictions and you could end up with erroneous or zero house load predictions.  Do check the entity!<BR><BR>
+then this will really mess up your Predbat plan as Predbat will exclude all car_charging_energy from your load predictions and you could end up with erroneous or zero house load predictions.  Do check the entity!<BR><BR>
 *NOTE:* The car charging energy sensor must be a daily incrementing kWh sensor. Check the history of your sensor in Home Assistant, that it increments through the day when your car is charging, resets to zero at midnight,
-and does not dip down in value or reset to zero other than at midnight. Some car charger energy sensors do not behave as Predbat requires them to do; for example, they may show cumulative energy per charge, not cumulative charge energy today, or may show 'unavailable' or 'unknown' when the car isn't plugged in.<BR>
-You may need to wrap the car charger energy sensor into a daily resetting utility meter to create a sensor that increments through the day and only changes to zero at midnight, or if your car energy sensor reports unknown/unavailable then create a helper template sensor, e.g.:
+and does not dip down in value or reset to zero other than at midnight. Some car charger energy sensors do not behave as Predbat requires them to do; for example, they may show cumulative energy per charge, not cumulative charge energy today.<BR>
+You may need to wrap the car charger energy sensor into a daily resetting utility meter to create a sensor that increments through the day and only changes to zero at midnight.<BR><BR>
 
-```yaml
-    {{ states('sensor.car_charger_energy') | float(0) }}
-```
+*NOTE:* A charger that reports 'unavailable' or 'unknown' when the car isn't plugged in needs no special handling. Predbat skips those readings when it loads the sensor history,
+and does not treat them as a configuration error, so the sensor can be used exactly as it is.<BR>
+Do **not** wrap such a sensor in a template that substitutes zero (for example `| float(0)`). For a daily incrementing sensor, a zero part way through the day looks exactly like the midnight reset,
+so Predbat starts counting the day's energy again from that point and the charging before it is counted twice.
 
 *TIP:* You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
 e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.<BR>
@@ -83,12 +84,35 @@ car_charging_energy can be set to a list of energy sensors, one per line if you 
 - **input_number.predbat_car_charging_energy_scale** - Used to define a scaling factor (in the range of 0 to 1.0)
 to multiply the **car_charging_energy** sensor data by if required (e.g. set to 0.001 to convert Watts to kW). Default 1.0, i.e. no scaling.
 
+- **car_charging_power** - Set in `apps.yaml` to point to an entity giving the **live charging power** of your car charger (in Watts, or any unit Predbat can convert such as kW).
+This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary in `apps.yaml` for your charger sensor.<BR>
+Unlike **car_charging_energy** this is display only - it has no effect at all on the Predbat plan. When it is set:
+
+- the [web interface](web-interface.md) power flow diagram gains a Car showing what the charger is drawing.
+What the Car is drawn as being fed from follows **switch.predbat_car_energy_reported_load**: with it on (the default) your charger sits inside the house CT clamp,
+so the Car hangs off the House and its power is subtracted from the House figure to stop the car being counted twice;
+with it off the charger is outside the clamp and was never part of your house load, so the Car hangs off the Grid instead and the House figure is left alone
+- Predbat publishes a **predbat.car_charging_power** sensor (in kW) which you can graph or use in your own automations
+
+Like car_charging_energy it can be a list of sensors, one per line per car charger, if you have more than one charger - they are added together in Predbat:
+
+```yaml
+  car_charging_power:
+    - sensor.zappi_charge_power
+    - sensor.wallbox_charging_power
+```
+
+If you have multiple cars sharing one charger, then only include a single entry for the charger.
+
+If your car charger has no live power sensor, leave **car_charging_power** commented out in `apps.yaml`; the power flow diagram then shows the same four items it always has, and no **predbat.car_charging_power** sensor is published.<BR>
+If you use one of the supported charger integrations (Ohme, myenergi Zappi, GivEnergy EV charger, AlphaESS EV charger or the Predbat gateway) then this is configured automatically and you do not need an `apps.yaml` entry of your own.
+
 If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the **car_charging_energy** line out of `apps.yaml` and configure **input_number.predbat_car_charging_threshold**
 
 - **input_number.predbat_car_charging_threshold** (default 6 = 6kW)- Sets the kW power threshold above which home consumption is assumed to be car charging
 and **input_number.predbat_car_charging_rate** (in kW) will be subtracted from the historical load data.
 
-Used to 'detect' EV charging if you have an EV charger but it does not have an energy today sensor that you can use.
+Used to 'detect' EV charging if you have an EV charger but it does not have an energy today sensor that you can use.  If **car_charging_energy** is set in `apps.yaml` then **input_number.predbat_car_charging_threshold** is ignored.
 
 If you do not have an EV charger then ensure you set **switch.predbat_car_charging_hold** to Off otherwise Predbat will assume any house load in excess of car_charging_threshold is EV charging and remove it from your house load predictions!
 
@@ -100,9 +124,8 @@ If you are on the Octopus Intelligent Tariff set the following entries in `apps.
 
 - **octopus_slot_low_rate** - Default is `true`, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If `false` the existing rates only will be used which is only suitable for tariffs other than IOG.
 
-- **octopus_slot_max** - Default is 48 (disabled). Sets the maximum number of 30-minute cheap rate slots per 24-hour period.
-Octopus Intelligent users may be from March 2026 limited to 6 hours of cheap charging per day. Slots beyond this limit will use standard rates.
-It's recommended you set this to 12 (for 6 hours) once Octopus enforce this Octopus Intelligent limit.
+- **octopus_slot_max** - Sets the maximum number of 30-minute cheap rate slots per 24-hour period. Slots beyond this limit will use standard rates.
+If unset, Predbat defaults this to 12 (6 hours) automatically for tariffs that Octopus enforces the 6-hour Intelligent cap on (tariff codes containing `IOG-SMB`), and to 48 (disabled) for other tariffs such as the older `INTELLI-VAR`. Set this explicitly to override the automatic default in either direction.
 
 If you are using Octopus-led charging with the [Octopus Energy integration](energy-rates.md#octopus-energy-home-assistant-integration):
 
@@ -196,7 +219,15 @@ To make Predbat-led car charging more accurate, additionally you can configure t
   #  - 're:sensor.tsunami_battery'
 ```
 
-- **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh which *must* be entered with one decimal place, e.g. 50.0.
+- **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh, as a list with one entry per car:
+
+```yaml
+  car_charging_battery_size:
+    - 75
+```
+
+Writing the number on the same line as the key (`car_charging_battery_size: 75`) fails Predbat's `apps.yaml` validation
+with *"is not of type 'sensor'"*, so use the list form above. A whole number is fine - a decimal place is not required.
 If not set, Predbat defaults to 100.0kWh. This will be used to predict when Predbat will stop car charging.
 
 - **car_charging_limit** - You should configure this to point to a sensor that specifies the % limit the car is set to charge to.

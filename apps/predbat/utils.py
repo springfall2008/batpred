@@ -16,13 +16,38 @@ dictionaries, time string parsing, data filtering/pruning, rounding,
 and historical data extraction from incrementing energy counters.
 """
 
+import re
 import array
+import ctypes
+import os
 from datetime import datetime, timedelta, timezone, time
+from io import StringIO
 from functools import lru_cache
 from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 import copy
+import json
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+# The live log and the one rotated out from under it - both read whole when serving logs.
+PREDBAT_LOG_FILE = "predbat.log"
+PREDBAT_LOG_FILE_PREV = "predbat.1.log"
+
+# Key-name substrings that mark an apps.yaml value as a credential, for mask_secret_args().
+# "_key" and "password" were the original pair; "secret" and "token" were added for #4768,
+# which promotes apps.yaml over MCP as the config-review route and so hands it to a cloud AI -
+# sigenergy_app_secret, solis_api_secret, solis_access_token, gateway_mqtt_token and
+# mcp_secret were all being served in the clear.
+SECRET_KEY_SUBSTRINGS = ("_key", "password", "secret", "token")
+
+# Key suffixes that match a credential substring but hold no secret - timing metadata about a
+# token rather than the token itself. An expiry time is exactly what you want to see when
+# debugging "my cloud integration stopped working", so keep it readable.
+SECRET_KEY_EXEMPT_SUFFIXES = ("_expires_at", "_expires", "_expiry", "_expiration", "_birth")
+
+# What a redacted credential is replaced with. Named because find_redacted_secret_overwrite()
+# has to recognise it coming back in on a write, so the writer and the redactor must agree.
+SECRET_MASK = "xxx"
 
 # Use datetime.fromisoformat in str2time rather than strptime, set False to revert to strptime
 STR2TIME_USE_FROMISOFORMAT = True
@@ -83,15 +108,263 @@ class MinuteArray:
         return new
 
 
+# Predbat member variables never included in a debug dump or served over MCP - live object
+# graphs, the HA interface, loaded secrets and the URL caches. Shared with is_debug_excluded_key().
+DEBUG_EXCLUDE_LIST = [
+    "ha_interface",
+    "components",
+    "prediction",
+    "logfile",
+    "predheat",
+    "inverters",
+    "run_list",
+    "threads",
+    "EVENT_LISTEN_LIST",
+    "local_tz",
+    "CONFIG_ITEMS",
+    "config_index",
+    "comparison",
+    "plugin_system",
+    "ge_url_cache",
+    "github_url_cache",
+    "octopus_url_cache",
+    "secrets",
+]
+
+
+def is_debug_excluded_key(key):
+    """
+    Return True when a Predbat member variable must be kept out of a debug dump or state query.
+
+    The "db" prefix drops the database internals and "_key" drops credentials; both predate
+    is_secret_key(), which is applied on top so secrets and tokens are caught here too (#4768).
+    """
+    if key.startswith("__") or key.startswith("db"):
+        return True
+    if key in DEBUG_EXCLUDE_LIST:
+        return True
+    return is_secret_key(key)
+
+
+_REGISTRY_SECRET_NAMES = None
+
+
+def registry_secret_key_names():
+    """
+    Return the apps.yaml config names components.py explicitly flags with "secret": True.
+
+    utils is imported by every component module, so components cannot be imported at module
+    scope here - it is imported on first use instead. An empty or failed result is not cached,
+    so a redaction that runs while components is still importing (a partially initialised
+    module) resolves properly on the next call rather than silently losing these names for the
+    life of the process. Standalone tools that never import components keep working on the
+    substring heuristic alone.
+    """
+    global _REGISTRY_SECRET_NAMES
+    if _REGISTRY_SECRET_NAMES is None:
+        try:
+            import components
+
+            names = components.secret_config_names()
+        except Exception:
+            names = None
+        if not names:
+            return frozenset()
+        _REGISTRY_SECRET_NAMES = frozenset(names)
+    return _REGISTRY_SECRET_NAMES
+
+
+def is_secret_key(key, registry=True):
+    """
+    Return True when an apps.yaml key name holds a credential and must not be served in the clear.
+
+    An explicit "secret": True flag in the component registry wins over both the substring
+    heuristic and the exempt-suffix list - the registry names a credential the key name alone
+    cannot reveal, such as an account number or a login identifier.
+
+    registry=False drops back to the key-name substrings alone, for callers asking the narrower
+    question "does this grant access?" rather than "must this be redacted?". Only
+    find_unmasked_secret_paths() does: an account number identifies rather than authenticates, so
+    telling every user with an inline octopus_api_account to move it into secrets.yaml would be
+    noise. Redaction is the strict default so a new caller fails safe rather than leaking.
+    """
+    key_lower = str(key).lower()
+    if registry and key_lower in registry_secret_key_names():
+        return True
+    if key_lower.endswith(SECRET_KEY_EXEMPT_SUFFIXES):
+        return False
+    return any(substring in key_lower for substring in SECRET_KEY_SUBSTRINGS)
+
+
+def _mask_secrets_in_place(value):
+    """
+    Redact credential-like keys anywhere inside an already-copied structure, in place.
+    """
+    if isinstance(value, dict):
+        for key in value:
+            if is_secret_key(key):
+                value[key] = SECRET_MASK
+            else:
+                _mask_secrets_in_place(value[key])
+    elif isinstance(value, list):
+        for entry in value:
+            _mask_secrets_in_place(entry)
+
+
 def mask_secret_args(args):
     """
     Return a deep copy of an apps.yaml-style args dict with credential-like keys redacted.
+
+    Recurses through nested dicts and lists rather than checking only top-level names. apps.yaml
+    routinely nests credentials one level down - the shipped template documents
+    forecast_solar as a list of dicts each carrying its own api_key - and 'forecast_solar'
+    matches none of SECRET_KEY_SUBSTRINGS, so a top-level-only pass hands that key over intact.
+    That matters because everything this redacts is on its way to a third-party model.
     """
     masked = copy.deepcopy(args)
-    for key in masked:
-        if ("_key" in key.lower()) or ("password" in key.lower()):
-            masked[key] = "xxx"
+    _mask_secrets_in_place(masked)
     return masked
+
+
+def find_unmasked_secret_paths(node, path=""):
+    """
+    Recursively walk a ruamel round-trip-loaded apps.yaml section and yield the dotted path
+    of every credential-like key (per is_secret_key()) whose value is a plain scalar rather
+    than a '!secret' reference into secrets.yaml (loaded as a ruamel TaggedScalar).
+
+    Deliberately asks is_secret_key(registry=False): this drives the "stored in plain text,
+    consider !secret" advice, which is about values that grant access. The registry additionally
+    flags account numbers, meter point numbers and login identifiers so they are redacted out of
+    anything shared, but an inline octopus_api_account is the documented normal setup and
+    warning every user about it would be noise rather than advice.
+
+    Only usable against a document loaded with ruamel's round-trip loader - a plain
+    yaml.safe_load() has already resolved '!secret' tags to their real value and lost the
+    distinction this depends on.
+    """
+    from ruamel.yaml.comments import TaggedScalar
+
+    if isinstance(node, dict):
+        for key, value in node.items():
+            key_path = "{}.{}".format(path, key) if path else str(key)
+            if is_secret_key(key, registry=False):
+                if value not in (None, "") and not isinstance(value, TaggedScalar):
+                    yield key_path
+            else:
+                yield from find_unmasked_secret_paths(value, key_path)
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            yield from find_unmasked_secret_paths(item, "{}[{}]".format(path, index))
+
+
+def _mask_secrets_in_yaml_node(node):
+    """
+    Redact credential values in a ruamel round-trip node, in place, leaving layout alone.
+
+    A '!secret name' reference (a TaggedScalar) is left exactly as written: it holds no
+    credential, only the name of one in secrets.yaml, and which secret a key resolves to is
+    what makes a misconfigured integration diagnosable.
+    """
+    from ruamel.yaml.comments import TaggedScalar
+
+    if isinstance(node, dict):
+        for key in node:
+            value = node[key]
+            if is_secret_key(key):
+                if value not in (None, "") and not isinstance(value, TaggedScalar):
+                    node[key] = SECRET_MASK
+            else:
+                _mask_secrets_in_yaml_node(value)
+    elif isinstance(node, list):
+        for item in node:
+            _mask_secrets_in_yaml_node(item)
+
+
+def mask_secret_yaml_text(text):
+    """
+    Return apps.yaml text with credential values redacted, preserving comments and layout.
+
+    mask_secret_args() redacts the parsed args Predbat is running on; this redacts the file as
+    the user wrote it, so a download still reads like their own apps.yaml - comments, ordering,
+    quoting and '!secret' references intact - with only the credential values replaced.
+
+    Raises rather than returning anything on a file that will not parse: the caller asked for
+    a redacted document, and serving unredacted text because the parse failed is exactly the
+    leak this exists to prevent.
+    """
+    from ruamel.yaml import YAML
+
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    yaml.width = YAML_DUMP_WIDTH
+    data = yaml.load(text)
+    _mask_secrets_in_yaml_node(data)
+    buf = StringIO()
+    yaml.dump(data, buf)
+    return buf.getvalue()
+
+
+def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=PREDBAT_LOG_FILE_PREV):
+    """
+    Return the contents of predbat.log, prefixed with the rotated previous log when one exists.
+    """
+    # Decoded explicitly rather than with the platform default: a single non-UTF-8 byte anywhere
+    # in the log - an inverter API error message carrying one, say - would otherwise raise
+    # UnicodeDecodeError and take out both /api/log and the get_log MCP tool.
+    logdata = ""
+    if os.path.exists(logfile):
+        with open(logfile, "r", encoding="utf-8", errors="replace") as f:
+            logdata = f.read()
+    if os.path.exists(logfile_prev):
+        with open(logfile_prev, "r", encoding="utf-8", errors="replace") as f:
+            logdata = f.read() + "\n" + logdata
+    return logdata
+
+
+def classify_log_line(line):
+    """
+    Return the severity bucket ("error", "warning", "info" or "log") for one predbat.log line.
+    """
+    line_lower = line.lower()
+    if "error" in line_lower:
+        return "error"
+    if "warn" in line_lower:
+        return "warning"
+    if "info" in line_lower:
+        return "info"
+    return "log"
+
+
+def log_line_included(line_type, filter_type):
+    """
+    Return True when a log line of the given severity belongs in the requested view.
+
+    Errors appear on every view; warnings on "all" and "warnings"; info on "all" and
+    "info"; everything else only on "all".
+    """
+    if line_type == "error":
+        return True
+    if line_type == "warning":
+        return filter_type in ("all", "warnings")
+    if line_type == "info":
+        return filter_type in ("all", "info")
+    return filter_type == "all"
+
+
+def parse_log_timestamp(line):
+    """
+    Return the datetime a predbat.log line was written, or None when it carries no timestamp.
+
+    Lines are written as "{datetime.now()}: {message}", so the stamp is the leading 26
+    characters - or 19 when the microseconds happened to be zero and str() dropped them.
+    """
+    for length, time_format in ((26, "%Y-%m-%d %H:%M:%S.%f"), (19, "%Y-%m-%d %H:%M:%S")):
+        if len(line) >= length:
+            try:
+                return datetime.strptime(line[0:length], time_format)
+            except ValueError:
+                continue
+    return None
 
 
 # Helper to make dict hashable for caching
@@ -146,6 +419,205 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             last_time = timekey
             prev_value = data[key]
     return results
+
+
+def is_entity_id(value):
+    """
+    Whether a resolved apps.yaml value names a Home Assistant entity rather than being a literal.
+
+    The same test resolve_arg() uses to decide whether to look a value up in HA: a string with a
+    domain separator in it. Anything else - a number, a boolean, None - is a hard-wired value the
+    user gave directly, which several shipped templates do for settings the inverter has no register
+    for (huawei.yaml and sofar.yaml both hard-wire reserve).
+
+    Anything fetched with indirect=False can therefore be a literal, and the state wrappers and the
+    write_and_poll helpers all used to index straight into it - "$" in 12, or 12.split("."). That
+    raised out of Inverter.__init__ and failed inverter creation outright, so no plan could be
+    computed at all (GH#5003). They gate on this instead, so a literal is a warning about a control
+    Predbat cannot read or write rather than a crash.
+    """
+    return isinstance(value, str) and "." in value
+
+
+def is_data_numerical(history, attribute=None):
+    """
+    Check if history data is numerical (supports both state and attribute checking)
+    Returns True if at least 10% of values are numeric or boolean
+    """
+    count_nums = 0
+    count_total = 0
+
+    if history and len(history) >= 1:
+        for item in history[0]:
+            if attribute:
+                # Check attribute value
+                attr_value = item.get("attributes", {}).get(attribute, None)
+                if attr_value is None:
+                    continue
+                value = str(attr_value)
+            else:
+                # Check state value
+                value = item.get("state", None)
+                if value is None:
+                    continue
+                value = str(value)
+
+            if value.lower() in ["on", "off", "true", "false"]:
+                count_nums += 1
+            else:
+                try:
+                    float(value)
+                    count_nums += 1
+                except (ValueError, TypeError):
+                    pass
+            count_total += 1
+
+    if count_total > 0 and (count_nums / count_total) >= 0.1:
+        return True
+    elif count_total == 0:
+        return True
+    return False
+
+
+# The top-level key apps.yaml wraps its whole Predbat configuration section in. Shared between
+# web.py's apps.yaml editor and the AI tool layer (agent_tools.py/chat_tools.py) so both read and
+# write the same section under one name - moved here, alongside update_nested_yaml_value() below,
+# for the same reason is_data_numerical() was: the tool layer must not import from web.py (#4768).
+ROOT_YAML_KEY = "pred_bat"
+
+# Line width for any dump of apps.yaml. ruamel defaults to 80, which folds a long plain scalar onto
+# a following, more-indented line - so rewriting the file to change one setting silently re-wraps
+# every long value in it, API keys included. That still parses back to the same string, but it
+# turns a one-line edit into a diff across the whole file and leaves credentials looking mangled.
+# Set high enough that nothing Predbat writes ever wraps.
+YAML_DUMP_WIDTH = 4096
+
+
+def parse_yaml_path(path):
+    """
+    Split a dot-notation apps.yaml path into its segments, with "[n]" indexes as their own entry.
+
+    "forecast_solar[0].azimuth" becomes ["forecast_solar", "[0]", "azimuth"]. Shared by
+    update_nested_yaml_value(), resolve_nested_yaml_value() and set_apps_config()'s guards so all
+    three agree on what a path means - a second copy of this parsing would eventually disagree
+    with the writer about which segment is the leaf, which is the segment the credential checks
+    depend on.
+    """
+    keys = []
+    for component in path.split("."):
+        # Split every bracket group into its own key, so a directly nested index - "foo[0][1]" -
+        # becomes "foo", "[0]", "[1]". The earlier version split on the first "[" and unpacked
+        # into two, which raised ValueError on any path with more than one index rather than
+        # returning anything: reachable from set_apps_config, where it surfaced as a failed tool
+        # call against the user's real configuration. Matches WebInterface._split_yaml_path, which
+        # arrived at the same algorithm independently for the apps.yaml editor.
+        for token in re.split(r"(\[[^\[\]]*\])", component):
+            if token:
+                keys.append(token)
+    return keys
+
+
+def resolve_nested_yaml_value(data, path):
+    """
+    Return the value a dot-notation path points at, raising KeyError if any segment is missing.
+
+    The read-only twin of update_nested_yaml_value(), so a caller can confirm a path exists and
+    read its current value *before* taking a backup and writing - update_nested_yaml_value raises
+    part-way through otherwise, after the caller has already committed to the write.
+    """
+    keys = parse_yaml_path(path)
+    current = data
+    for key in keys:
+        if key.startswith("[") and key.endswith("]"):
+            index = int(key[1:-1])
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError("Index '{}' out of range in path '{}'".format(index, path))
+            current = current[index]
+        else:
+            try:
+                contains = key in current
+            except TypeError:
+                contains = False
+            if not contains:
+                raise KeyError("Key '{}' not found in path '{}'".format(key, path))
+            current = current[key]
+    return current
+
+
+def find_redacted_secret_overwrite(previous_value, new_value):
+    """
+    Return the name of a credential a write would replace with the redaction placeholder.
+
+    get_apps_config redacts credentials to "xxx", so a model that reads a container, edits one
+    field and writes the whole thing back would store the literal "xxx" over a live key - the
+    read-modify-write round trip silently destroys the credential it was careful not to read.
+    Returns None when nothing is at risk, so the caller can refuse and point at the nested path
+    instead of the container.
+    """
+    if isinstance(new_value, dict) and isinstance(previous_value, dict):
+        for key, item in new_value.items():
+            if is_secret_key(key) and item == SECRET_MASK and previous_value.get(key) not in (None, SECRET_MASK):
+                return key
+            found = find_redacted_secret_overwrite(previous_value.get(key), item)
+            if found:
+                return found
+    elif isinstance(new_value, list) and isinstance(previous_value, list):
+        for index, item in enumerate(new_value):
+            if index < len(previous_value):
+                found = find_redacted_secret_overwrite(previous_value[index], item)
+                if found:
+                    return found
+    return None
+
+
+def update_nested_yaml_value(data, path, value):
+    """
+    Update a nested value in YAML data using a dot-notation path, e.g. "battery_charge_low.normal"
+    or a plain top-level key such as "num_inverters" (a path with no dots).
+
+    Shared by web.py's apps.yaml batch editor (WebInterface.html_apps_post) and the chat agent's
+    set_apps_config tool (chat_tools.py) - moved here so the tool layer can reuse it without
+    importing from web.py (#4768). Raises KeyError when a key in the path - including the final
+    one - is not already present, which is what gives both callers their "a key must already exist
+    to be changed" rule for free, rather than each having to check it separately.
+    """
+    keys = parse_yaml_path(path)
+
+    current = data
+
+    # Navigate to the parent of the target value
+    for key in keys[:-1]:
+        if key.startswith("[") and key.endswith("]"):
+            # Handle numerical index in square brackets
+            index = int(key[1:-1])
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(f"Index '{index}' out of range in path '{path}'")
+            current = current[index]
+        elif key in current:
+            current = current[key]
+        else:
+            raise KeyError(f"Key '{key}' not found in path '{path}'")
+
+    # Set the final value
+    key = keys[-1]
+    if key.startswith("[") and key.endswith("]"):
+        # Handle numerical index in square brackets
+        index = int(key[1:-1])
+        if not isinstance(current, list) or index >= len(current):
+            raise KeyError(f"Index '{index}' out of range in path '{path}'")
+        current[index] = value
+    elif key in current:
+        current[key] = value
+    else:
+        # If final key is numerical try it as an integer
+        if key.isdigit():
+            key = int(key)
+            if key not in current:
+                raise KeyError(f"Final key '{key}' not found in path '{path}'")
+            else:
+                current[key] = value
+        else:
+            raise KeyError(f"Final key '{key}' not found in path '{path}'")
 
 
 def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False, is_numerical=True):
@@ -349,7 +821,7 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
         try:
             timestamp_key = str2time(key)
             oldest_date = min(oldest_date, timestamp_key)
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             continue
 
         value = data[key]
@@ -372,7 +844,7 @@ def minute_data(
     clean_increment=False,
     divide_by=0,
     scale=1.0,
-    accumulate=[],
+    accumulate=None,
     adjust_key=None,
     spreading=None,
     required_unit=None,
@@ -388,11 +860,12 @@ def minute_data(
     Turns data from HA into a hash of data indexed by minute with the data being the value
     Can be backwards in time for history (N minutes ago) or forward in time (N minutes in the future)
     """
+    if accumulate is None:
+        accumulate = []
     mdata = {}
     adata = {}
     io_adjusted = {}
     newest_state = 0
-    prev_state = 0
     newest_age = 999999
 
     # Bounds on the data we store
@@ -546,7 +1019,6 @@ def minute_data(
 
         if minutes < newest_age:
             newest_age = minutes
-            prev_state = newest_state
             newest_state = state
 
         # Power to Energy
@@ -783,6 +1255,63 @@ def format_time_ago(last_updated):
     except Exception as e:
         print(f"Error formatting time ago: {e}")
         return "Unknown ({})".format(last_updated)
+
+
+# The format Predbat publishes car charging plan windows in. No year, because a plan never
+# reaches more than 48 hours ahead - parse_car_plan_windows() puts one back.
+CAR_PLAN_TIME_FORMAT = "%m-%d %H:%M:%S"
+
+# How far from now a parsed window has to land before the year stamped on it is treated as
+# the wrong one. Comfortably beyond the 48 hours a plan covers, so a genuinely distant
+# window is never dragged into a different year, and far short of the ~12 months a
+# mis-stamped year produces.
+CAR_PLAN_YEAR_MARGIN = timedelta(days=180)
+
+
+def parse_car_plan_windows(planned, now, local_tz):
+    """Turn one car's published charging plan into a list of localised (start, end) pairs.
+
+    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC)
+    so the awkward parts stay in one place: the plan carries no year, so each window is
+    rebuilt around now - without that, a plan read either side of New Year lands eleven
+    months out - and a malformed entry is skipped rather than costing the rest of the plan.
+
+    The rebuild is symmetric. A window read at 23:30 on 31 December whose end is stamped
+    01-01 parses as January of the year just ending, and needs shifting forward; the same
+    window read at 00:30 on 1 January has its 12-31 start parsed as December of the year
+    just started, and needs shifting back. Only the second case ever hides an active
+    window, which is why it is the one that stops a car mid-charge if it is missed.
+
+    Args:
+        planned: The 'planned' attribute of a car charging slot sensor, a list of dicts
+            with 'start' and 'end' keys.
+        now: The instant every window is judged against, localised.
+        local_tz: The timezone the plan's wall clock times are expressed in.
+    """
+    parsed = []
+    for window in planned or []:
+        try:
+            start = local_tz.localize(datetime.strptime(window["start"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
+            end = local_tz.localize(datetime.strptime(window["end"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
+        except (KeyError, TypeError, ValueError):
+            continue
+        # Shift both ends together so their spacing survives, then close a window whose
+        # end is in January while its start is still in December
+        if start > now + CAR_PLAN_YEAR_MARGIN:
+            start = start.replace(year=start.year - 1)
+            end = end.replace(year=end.year - 1)
+        elif start < now - CAR_PLAN_YEAR_MARGIN:
+            start = start.replace(year=start.year + 1)
+            end = end.replace(year=end.year + 1)
+        if end < start:
+            end = end.replace(year=end.year + 1)
+        parsed.append((start, end))
+    return parsed
+
+
+def in_car_plan_window(windows, now):
+    """Is now inside one of the (start, end) pairs returned by parse_car_plan_windows."""
+    return any(start <= now < end for start, end in windows)
 
 
 def in_iboost_slot(minute, iboost_plan):
@@ -1182,7 +1711,7 @@ def find_charge_rate(
     battery_loss,
     log_to,
     battery_temperature=20,
-    battery_temperature_curve={},
+    battery_temperature_curve=None,
     current_charge_rate=None,
     pv_window_kwh=0.0,
 ):
@@ -1193,6 +1722,8 @@ def find_charge_rate(
     overlaps PV production low power charging is abandoned as the throttled rate applies for the whole
     window and would push the PV out of the battery, raising the cost above the planned full rate charge
     """
+    if battery_temperature_curve is None:
+        battery_temperature_curve = {}
     margin = charge_low_power_margin
     target_soc = round(target_soc, 2)
 
@@ -1264,10 +1795,9 @@ def find_charge_rate(
             rate = rate_w / MINUTE_WATT
             if rate_w >= min_rate_w:
                 charge_now = soc
-                minute = 0
                 rate_scale_max = 0
                 # Compute over the time period, include the completion time
-                for minute in range(0, minutes_left, PREDICT_STEP):
+                for _minute in range(0, minutes_left, PREDICT_STEP):
                     rate_scale = get_charge_rate_curve_cached(round(charge_now, 1), rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple)
                     highest_achievable_rate = max(highest_achievable_rate, rate_scale)
                     rate_scale *= battery_rate_max_scaling
@@ -1305,3 +1835,133 @@ def find_charge_rate(
         return best_rate, best_rate_real
     else:
         return max_rate, max_rate_real
+
+
+CDN_BLOCK_MARKERS = ("cloudfront", "request blocked", "the request could not be satisfied")
+HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
+# Every Kraken-based provider mints its JWT through the same CDN-fronted endpoint, so an
+# edge block can catch the mint as well as the queries. Unlike a query the mint has no cached
+# result to fall back on: once the JWT expires every authenticated call needs a new one, so
+# without a backoff a component re-mints on every poll and keeps hammering an endpoint that
+# is already refusing it. Back off exponentially instead, capped so a block that lifts is
+# still picked up within the hour.
+TOKEN_MINT_BACKOFF_BASE_SECONDS = 300
+TOKEN_MINT_BACKOFF_MAX_SECONDS = 3600
+# Bound the exponent so a long block cannot grow 2 ** block_count without limit; the delay
+# is capped well before this, so the clamp only stops the arithmetic running away.
+TOKEN_MINT_BACKOFF_MAX_DOUBLINGS = 16
+# While suppressed the mint makes no request and so logs nothing, which leaves a reader of a
+# short log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason
+# at most this often.
+TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS = 600
+
+
+def token_mint_backoff_seconds(block_count):
+    """Backoff delay in seconds after this many consecutive CDN blocks on a token mint.
+
+    Doubles per consecutive block from TOKEN_MINT_BACKOFF_BASE_SECONDS, capped at
+    TOKEN_MINT_BACKOFF_MAX_SECONDS so a block that lifts is still picked up within the hour.
+
+    Args:
+        block_count: Number of consecutive blocks so far, 1 for the first.
+
+    Returns:
+        int: Delay in seconds.
+    """
+    exponent = min(max(block_count - 1, 0), TOKEN_MINT_BACKOFF_MAX_DOUBLINGS)
+    return min(TOKEN_MINT_BACKOFF_BASE_SECONDS * (2**exponent), TOKEN_MINT_BACKOFF_MAX_SECONDS)
+
+
+def is_edge_block_body(text):
+    """Return True if a 403 body is positively identifiable as a CDN/WAF error page.
+
+    Kraken reports authentication problems as a JSON GraphQL error body (normally with
+    HTTP 200) or as a 401. A 403 carrying an HTML error page - e.g. CloudFront's
+    "Request blocked" - is edge rate limiting, not a credential problem, so the cached
+    token must be kept rather than discarded and immediately re-minted.
+
+    Two conditions must both hold: the body must not parse as JSON (anything the API
+    itself produces is JSON), and it must look like an HTML document or name a known CDN.
+    Matching on wording alone would misclassify a genuine JSON error that happens to say
+    something like "access denied", which would keep an invalid token forever - the same
+    permanent lockout this check exists to prevent, arrived at from the other direction.
+
+    Detection is deliberately conservative: a 403 we cannot identify as a CDN page keeps
+    the existing "refresh the token and retry" behaviour, which recovers genuinely revoked
+    tokens without needing a restart.
+
+    Args:
+        text: The raw response body.
+
+    Returns:
+        bool: True if the body carries a known CDN/WAF block signature.
+    """
+    if not isinstance(text, str) or not text:
+        return False
+    try:
+        json.loads(text)
+    except (ValueError, TypeError):
+        pass
+    else:
+        # A parseable JSON body came from the API, not from an edge appliance
+        return False
+    stripped = text.lstrip().lower()
+    return stripped.startswith(HTML_DOCUMENT_PREFIXES) or any(marker in stripped for marker in CDN_BLOCK_MARKERS)
+
+
+# glibc's mallopt() parameter for the arena cap (from malloc.h)
+M_ARENA_MAX = -8
+
+# Arenas glibc is allowed to create for Predbat's threads, see limit_malloc_arenas()
+MALLOC_ARENA_LIMIT = 2
+
+
+def _libc_function(name, argtypes, restype):
+    """
+    Look up a C library function by name through ctypes, or return None where it does not exist.
+
+    Resolved against the running process (dlopen(NULL)), so it finds glibc's allocator extensions on
+    Linux without naming a library, and returns None on macOS, musl (Alpine) or Windows, where the
+    symbol is simply absent. Any failure to load or resolve counts as "not available", never an error.
+    """
+    try:
+        function = getattr(ctypes.CDLL(None), name)
+    except (OSError, AttributeError):
+        return None
+    function.argtypes = argtypes
+    function.restype = restype
+    return function
+
+
+def malloc_trim():
+    """
+    Hand the heap's free pages back to the operating system, returning True if any memory was released.
+
+    Predbat's memory use is spiky - the plan search, and above all the debug yaml dump, allocate far
+    more than the steady state keeps - and glibc holds on to the freed pages rather than returning
+    them, so RSS stays at the high-water mark of the last cycle and the process looks bigger than it
+    is to the Home Assistant supervisor. malloc_trim(0) releases every free page it can find across
+    all arenas; it takes a few milliseconds and is safe to call from any thread. A no-op that returns
+    False on platforms without glibc.
+    """
+    trim = _libc_function("malloc_trim", [ctypes.c_size_t], ctypes.c_int)
+    if trim is None:
+        return False
+    return bool(trim(0))
+
+
+def limit_malloc_arenas(max_arenas=MALLOC_ARENA_LIMIT):
+    """
+    Cap the number of malloc arenas glibc may create, returning True if the cap was applied.
+
+    glibc gives each thread that allocates its own arena, up to eight per core, and every arena keeps
+    its own pool of freed-but-retained memory. Predbat runs a thread (with its own event loop and
+    executor) per component, so it spreads its allocations across dozens of arenas and pays that
+    retention dozens of times over. Two arenas is plenty for threads that are idle nearly all the
+    time. Only affects arenas created after the call, so run it before the component threads start.
+    A no-op that returns False on platforms without glibc.
+    """
+    mallopt = _libc_function("mallopt", [ctypes.c_int, ctypes.c_int], ctypes.c_int)
+    if mallopt is None:
+        return False
+    return bool(mallopt(M_ARENA_MAX, max_arenas))

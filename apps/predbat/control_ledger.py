@@ -35,6 +35,7 @@ IMPLAUSIBLE = "implausible"  # the inverter returned something that cannot be a 
 SETTLING = "settling"  # exception-path guard: a write was noted that never resolved (see observe())
 EXTERNAL = "external"  # everything else ruled out - somebody else changed it
 UNAVAILABLE = "unavailable"  # the entity is not reporting - a non-reading cannot contradict anything
+PENDING = "pending"  # diverged once, with no timing metadata to trust it - see observe()
 
 # The rolling window the customer-facing entity reports over.
 DEFAULT_WINDOW_S = 86400
@@ -305,7 +306,29 @@ class ControlLedger:
         record = self.records.get(entity_id)
         return record["owned_value"] if record else None
 
-    def record_write(self, entity_id, control, read_back, fuzzy=0, now=0.0, generation=None):
+    def owns(self, entity_id):
+        """Return True when Predbat has a confirmed value for this entity."""
+        return entity_id in self.records
+
+    def record_ownership_from_read(self, entity_id, control, read_back, fuzzy=0, now=0.0, generation=None):
+        """Confer ownership from a read that ALREADY holds what Predbat wanted.
+
+        Weaker evidence than record_write() and marked as such - nobody watched this value being
+        set, so all it proves is that Predbat and the inverter currently agree. It exists because
+        the alternative is permanent blindness: once an EXTERNAL event has popped the record, or a
+        clear() has dropped it, a control already sitting at Predbat's target takes the write
+        helpers' no-write-needed early return on every subsequent cycle, so record_write() is
+        never reached again and that control is silently unwatched for the rest of the process.
+
+        Structurally refuses to touch a record that already exists. Re-arming is the only job, and
+        anything that refreshed a live record would revive the ownership age-out this feature has
+        already been burnt by once.
+        """
+        if entity_id in self.records:
+            return
+        self.record_write(entity_id, control, read_back, fuzzy=fuzzy, now=now, generation=generation, confirmed_by="read")
+
+    def record_write(self, entity_id, control, read_back, fuzzy=0, now=0.0, generation=None, confirmed_by="write"):
         """Record a VERIFIED read-back, conferring ownership.
 
         Only ever called with a read-back the write helper has already checked against the
@@ -328,6 +351,9 @@ class ControlLedger:
             "confirmed_at": now,
             "confirmed_generation": generation,
             "wrote_cycle": self.cycle,
+            "confirmed_by": confirmed_by,
+            # The cycle a divergence was first seen, for the persistence rule in observe().
+            "diverged_cycle": None,
         }
 
     def note_write_attempt(self, entity_id):
@@ -357,6 +383,9 @@ class ControlLedger:
             return UNAVAILABLE
 
         if values_match(value, record["owned_value"], record["fuzzy"]):
+            # Agreement resets the persistence rule below: a divergence that came back on its own
+            # was a cached read, not somebody holding the control at a different value.
+            record["diverged_cycle"] = None
             return OWNED
 
         # The read must be newer than the confirmation, by cycle and - where the entity
@@ -381,6 +410,17 @@ class ControlLedger:
         if record["wrote_cycle"] > record["confirmed_cycle"]:
             return SETTLING
 
+        # The freshness gate above FAILS OPEN: where either side has no generation it is skipped
+        # entirely, so a timestamp-less entity plus a vendor serving a cached read of the
+        # pre-write value walks straight to EXTERNAL - the exact false accusation the gate exists
+        # to prevent. With no timing metadata to trust, trust repetition instead: a cached read
+        # resolves on the next poll, somebody genuinely holding the control at another value does
+        # not. Two DISTINCT cycles, because a second pass inside one cycle can be the same read.
+        if generation is None or record["confirmed_generation"] is None:
+            if record["diverged_cycle"] is None or record["diverged_cycle"] == self.cycle:
+                record["diverged_cycle"] = self.cycle
+                return PENDING
+
         event = {
             "at": now,
             "control": control,
@@ -388,6 +428,7 @@ class ControlLedger:
             "we_set": record["owned_value"],
             "now_reads": value,
             "confirmed_at": record["confirmed_at"],
+            "confirmed_by": record["confirmed_by"],
         }
         self.events.append(event)
         self.session_events.append(event)
@@ -444,12 +485,18 @@ class ControlLedger:
         Events detected by THIS process are therefore kept ahead of restored history, whatever
         their timestamp says, and the remaining room goes to the newest history by time.
         """
+        if limit <= 0:
+            # [-0:] is the WHOLE list, so a zero or negative cap published everything.
+            return []
         if len(self.events) <= limit:
             return sorted(self.events, key=_event_sort_key)
         detected = {id(event) for event in self.session_events}
         mine = [event for event in self.events if id(event) in detected]
         if len(mine) >= limit:
-            return self.session_events[-limit:]
+            # Same events as `mine`, since prune() keeps the two lists in step - but in DETECTION
+            # order, which is what "keep the most recent" means when their timestamps are the very
+            # thing in doubt. Sorted on the way out to honour the oldest-first contract.
+            return sorted(self.session_events[-limit:], key=_event_sort_key)
         history = sorted((event for event in self.events if id(event) not in detected), key=_event_sort_key)
         return sorted(history[len(history) - (limit - len(mine)) :] + mine, key=_event_sort_key)
 
@@ -462,8 +509,15 @@ class ControlLedger:
 
         Takes the windowed list rather than a `now`/`window_s` pair so there is exactly one
         place the window is applied - a signature accepting both silently ignored one of them.
+
+        Counted per ENTITY, reported per control NAME. Counting by name conflated inverters: on a
+        three-inverter site one single external change to each inverter's own charge window is
+        three events all named "charge_start_time", which tripped a threshold meant to say "this
+        one control keeps being changed back". Three different controls touched once each is not
+        the repeated tug-of-war the threshold exists to find.
         """
         counts = {}
+        names = {}
         for event in events:
             # restore() does not require "control" to be present, so a restored event can carry
             # control=None or a non-name. The result is written straight into a customer-facing
@@ -472,8 +526,14 @@ class ControlLedger:
             control = event.get("control") if isinstance(event, dict) else None
             if not isinstance(control, str) or not control.strip():
                 continue
-            counts[control] = counts.get(control, 0) + 1
-        return sorted(control for control, count in counts.items() if count >= threshold)
+            # Keyed on the entity where there is one, falling back to the name for an event
+            # restored from a version that did not record it. An entity id always contains a dot
+            # and a control name never does, so the two key spaces cannot collide.
+            entity_id = event.get("entity_id")
+            key = entity_id if isinstance(entity_id, str) and entity_id.strip() else control
+            counts[key] = counts.get(key, 0) + 1
+            names[key] = control
+        return sorted({names[key] for key, count in counts.items() if count >= threshold})
 
     def prune(self, now, window_s=DEFAULT_WINDOW_S):
         """WRITE path: drop only what has genuinely aged out, so the list cannot grow unbounded.
@@ -485,6 +545,19 @@ class ControlLedger:
         real 24 hours of history irrecoverably on the very next publish. The clock corrects; the
         events have to still be there when it does.
         """
+        # A timestamp further ahead than the jitter allowance is CLAMPED to now rather than kept
+        # as it was. The detection was real; the timestamp was not - a pod that boots with its
+        # clock ahead stamps events in the future, and after the clock steps back they can never
+        # age out, because ageing out is exactly what keeping future-dated events prevents. They
+        # then squat every publish slot for the life of the process. Clamping brings them back inside the window
+        # so they count once and age out on schedule, and does the same good turn to the
+        # slow-clock restore case.
+        for event in self.events:
+            if not isinstance(event, dict):
+                continue
+            at = _event_time(event)
+            if at is not None and at > now + CLOCK_JITTER_S:
+                event["at"] = now
         self.events = self._in_window(now, window_s, drop_future=False)
         # Keep the protected set in step, or it grows for the life of the process and can protect
         # events that have already aged out of the store.
