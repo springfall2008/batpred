@@ -1151,6 +1151,8 @@ class CleanupModelTests(unittest.TestCase):
                 start = source.index(flow)
                 block = source[start : source.index("\ndef ", start + 10)]
                 self.assertIn("review_only=True", block)
+
+
 class JournalPrBodyTests(DaemonPathsTestCase):
     """The flush cannot pass a PR body on a command line - permission rules match a command
     string and a multi-line command matches nothing - so it edits a file and the daemon opens
