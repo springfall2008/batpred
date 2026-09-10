@@ -1587,6 +1587,11 @@ entities (`sensor.predbat_givtcp_0_*` and friends), then points its own settings
 **inverter_type**, **num_inverters**, the control entities, and the daily energy totals **load_today**,
 **import_today**, **export_today** and **pv_today**. You do not need to configure any of those by hand.
 
+If part of your fleet is not on GivTCP - another vendor's inverter, or one you configure by hand -
+keep **num_inverters** in `apps.yaml` set to the size of the whole fleet. Auto-configuration only ever
+raises it, never lowers it: the inverters that answered on GivTCP take the first slots, and whatever you
+configured for the inverters after them is left as you wrote it.
+
 The four daily energy totals are the one exception to auto-configuration winning: if you name a sensor
 of your own for **load_today**, **import_today**, **export_today** or **pv_today** in `apps.yaml`,
 Predbat keeps yours. It reads days of recorded history back from these to build its load model, and

@@ -737,11 +737,43 @@ class GivTCPComponent(ComponentBase):
                 self.log("Warn: GivTCP: failed to publish inverter {} at {}: {}".format(n, rest.inverter.rest_api, e))
                 self.non_fatal_error_occurred()
 
+    def _apps_yaml_value(self, key):
+        """The user's own apps.yaml value for key, as written, before any component configured over it."""
+        return (getattr(self.base, "args_from_apps_yaml", None) or {}).get(key)
+
+    def _configured_num_inverters(self):
+        """The fleet size apps.yaml asks for, or 0 when it says nothing (or says something unusable)."""
+        try:
+            return int(self._apps_yaml_value("num_inverters"))
+        except (TypeError, ValueError):
+            return 0
+
+    def _keep_user_tail(self, key, values, fleet_size):
+        """
+        values for the inverters discovered here, followed by the user's own apps.yaml entries for
+        any inverter beyond them.
+
+        The discovered inverters take the leading slots; the rest of the fleet is configured some
+        other way, and replacing the whole list with only this component's entities left those
+        inverters pointing at nothing (#5029). A scalar apps.yaml value applies to every index, so
+        it is broadcast into the tail rather than dropped; a user list shorter than the fleet is
+        left short, exactly as apps.yaml had it.
+        """
+        if fleet_size <= len(values):
+            return values
+        user_value = self._apps_yaml_value(key)
+        if user_value is None:
+            return values
+        if not isinstance(user_value, list):
+            user_value = [user_value] * fleet_size
+        return values + user_value[len(values) : fleet_size]
+
     async def automatic_config(self):
         """Point Predbat's standard entity-based apps.yaml keys at the entities this component publishes."""
-        # Driven by the endpoints that answered discovery, not by the length of the configured
-        # givtcp_rest list - counting the list would have Predbat build an Inverter against a URL
-        # with nothing behind it and then plan and execute against a phantom battery.
+        # What gets claimed is driven by the endpoints that answered discovery, not by the length of
+        # the configured givtcp_rest list - claiming an entity for a URL with nothing behind it
+        # would have Predbat plan and execute against a phantom battery. The fleet size can still
+        # come out larger than that, but only where the user asked for it: see n_inverters below.
         if not self.automatic:
             self.log("Info: GivTCP: givtcp_automatic is off - publishing entities but leaving apps.yaml to you")
             return
@@ -751,9 +783,18 @@ class GivTCPComponent(ComponentBase):
             self.log("Warn: GivTCP automatic_config: no inverters discovered, skipping configuration")
             return
 
-        n_inverters = len(discovered)
-        self.log("GivTCP: configuring Predbat for {} discovered inverter(s)".format(n_inverters))
-        self.set_arg_auto("inverter_type", ["GE" for _ in range(n_inverters)])
+        n_discovered = len(discovered)
+        # The fleet only ever grows here. An inverter this component cannot discover - another
+        # vendor's, or one configured by hand - is still part of the fleet, so writing the
+        # discovered count over a larger apps.yaml num_inverters dropped it from Predbat entirely
+        # (#5029). Measured against what apps.yaml actually says rather than the live args, so a
+        # second automatic_config() after a re-probe compares with the user's own setting rather
+        # than with the count this method wrote last time.
+        n_inverters = max(n_discovered, self._configured_num_inverters())
+        self.log("GivTCP: configuring Predbat for {} discovered inverter(s)".format(n_discovered))
+        if n_inverters > n_discovered:
+            self.log("Info: GivTCP: apps.yaml configures {} inverter(s) and {} answered here - leaving inverter {} onwards to your apps.yaml config".format(n_inverters, n_discovered, n_discovered))
+        self.set_arg_auto("inverter_type", self._keep_user_tail("inverter_type", ["GE" for _ in range(n_discovered)], n_inverters))
         self.set_arg_auto("num_inverters", n_inverters)
 
         keys = list(GIVTCP_AUTO_CONFIG_KEYS)
@@ -816,7 +857,7 @@ class GivTCPComponent(ComponentBase):
             domain, _, _ = GIVTCP_CONTROLS.get(key, (None, None, None))
             domain = domain or "sensor"
             if key == "battery_scaling":
-                self.set_arg_auto(key, [self._entity_id("sensor", n, "battery_dod_soh") for n in discovered])
+                self.set_arg_auto(key, self._keep_user_tail(key, [self._entity_id("sensor", n, "battery_dod_soh") for n in discovered], n_inverters))
                 continue
             # Indexed by REST endpoint, not by position: _parse_entity feeds self.rest[n] on every
             # write, so renumbering would route the surviving inverter's writes at a dead client.
@@ -824,7 +865,7 @@ class GivTCPComponent(ComponentBase):
             # overwrite=False on the history-bearing energy totals leaves a sensor the user named
             # themselves in place, so its recorded history survives - set_arg_auto still fills the
             # key in when they named nothing.
-            self.set_arg_auto(key, [self._entity_id(domain, n, key) for n in discovered], overwrite=key not in GIVTCP_AUTO_CONFIG_USER_WINS_KEYS)
+            self.set_arg_auto(key, self._keep_user_tail(key, [self._entity_id(domain, n, key) for n in discovered], n_inverters), overwrite=key not in GIVTCP_AUTO_CONFIG_USER_WINS_KEYS)
 
     def _parse_entity(self, entity_id):
         """entity_id -> (inverter index, control name), or (None, None) if it doesn't match."""
