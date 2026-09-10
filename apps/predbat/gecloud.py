@@ -1016,6 +1016,10 @@ class GECloudDirect(ComponentBase):
         device_ha_names = {regname_to_ha(registers[key].get("name", "")) for key in registers}
         has_charge_power = "battery_charge_power" in device_ha_names
         has_discharge_power = "battery_discharge_power" in device_ha_names
+        # When this device exposes both charge switches, async_automatic_config binds
+        # enable_force_charge as scheduled_charge_enable, so enable_ac_charge is a second gate that
+        # must be held on or the timed grid charge silently imports nothing (GH#5040).
+        has_force_charge = "enable_force_charge" in device_ha_names
         # Predbat drives the export target register itself (discharge_target_soc, the DC discharge
         # lower SoC limit) and tracks the minimum reserve SoC there, so leave that one alone rather
         # than resetting it and fighting adjust_force_export.
@@ -1114,6 +1118,23 @@ class GECloudDirect(ComponentBase):
                             changed = True
                         else:
                             self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
+            # Matched by substring as GE spells this family inconsistently across firmware, but the
+            # AC charge *upper limit* switch shares the prefix under at least three names
+            # (enable_ac_charge_upper_percent_limit, enable_ac_charge_1_upper_soc_percent_limit and
+            # enable_ac_charge_upper_limit) and is a different control, so limit registers are excluded.
+            if ("enable_ac_charge" in ha_name) and ("limit" not in ha_name) and has_force_charge:
+                if value:
+                    # Already on, so nothing was written and there is no change to report.
+                    continue
+                self.log("GECloud: Enabling AC charge for {} as enable_force_charge is the scheduled charge control, current value is {}".format(device, value))
+                result = await self.async_write_inverter_setting(device, key, True)
+                if result and ("value" in result):
+                    registers[key]["value"] = result["value"]
+                    await self.publish_registers(device, self.settings[device], select_key=key)
+                    changed = True
+                else:
+                    self.log("GECloud: Warn: Failed to enable AC charge for {}".format(device))
+                continue
             if "real_time_control" in ha_name:
                 if self.ems_device:
                     # RTC is on the EMS, not the individual inverters — skip
@@ -1248,6 +1269,7 @@ class GECloudDirect(ComponentBase):
         has_pause_start_time = False
         has_discharge_target_soc = False
         has_pause_battery = False
+        has_force_charge = False
         for device in batteries:
             registers = self.settings.get(device, {})
             for key in registers:
@@ -1267,6 +1289,8 @@ class GECloudDirect(ComponentBase):
                     has_discharge_target_soc = True
                 if "pause_battery" in ha_name:
                     has_pause_battery = True
+                if "enable_force_charge" in ha_name:
+                    has_force_charge = True
 
         def register_names(device):
             """Return HA-format register names for a specific device."""
@@ -1295,8 +1319,8 @@ class GECloudDirect(ComponentBase):
 
         self.log("GECloud: Auto-configuring Predbat and not using apps.yaml entries for control")
         self.log(
-            "GECloud: detected features - charge rate: {}, discharge rate: {}, charge power percent: {}, discharge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(
-                has_charge_rate, has_discharge_rate, has_charge_power_percent, has_discharge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc
+            "GECloud: detected features - charge rate: {}, discharge rate: {}, charge power percent: {}, discharge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}, force charge: {}".format(
+                has_charge_rate, has_discharge_rate, has_charge_power_percent, has_discharge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc, has_force_charge
             )
         )
 
@@ -1323,7 +1347,11 @@ class GECloudDirect(ComponentBase):
         self.set_arg("charge_limit_enable", build_entities("switch", ["enable_ac_charge_upper_percent_limit", "enable_ac_charge_1_upper_soc_percent_limit"]))
         self.set_arg("discharge_start_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_start_time" for device in batteries])
         self.set_arg("discharge_end_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_end_time" for device in batteries])
-        self.set_arg("scheduled_charge_enable", build_entities("switch", ["ac_charge_enable", "enable_ac_charge"]))
+        # On devices that expose both charge switches ("Enable AC Charge" and "Enable Force Charge")
+        # it is Force Charge that gates the timed grid charge, so bind that as the per-slot control and
+        # let enable_default_options hold AC Charge on as a static enable. Devices without a
+        # enable_force_charge register keep their existing AC-charge binding (GH#5040).
+        self.set_arg("scheduled_charge_enable", build_entities("switch", ["enable_force_charge", "ac_charge_enable", "enable_ac_charge"]))
         self.set_arg("scheduled_discharge_enable", build_entities("switch", ["enable_dc_discharge", "enable_force_discharge"]))
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_gecloud_{device}_battery_temperature" for device in batteries])
         self.set_arg("battery_scaling", [f"sensor.{self.prefix}_gecloud_{device}_battery_dod_soh" for device in batteries])
