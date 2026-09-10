@@ -1036,6 +1036,7 @@ def test_saving_session_auto_join_toggle(my_predbat):
     tz_offset = f"{tz_offset:02d}"
 
     # Use a fixed time reference before event to allow testing of pre-event lead hours.
+    original_now_utc = my_predbat.now_utc
     now = datetime.fromisoformat(f"{date_today}T15:45:00+{tz_offset}:00")
     my_predbat.now_utc = now
 
@@ -1172,6 +1173,7 @@ friendly_name: Octoplus Saving Session Events
     # Restore default state so we do not leak it to other tests
     my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
     my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 0, quiet=True)
+    my_predbat.now_utc = original_now_utc
     my_predbat.octopus_last_joined_try = None
 
     return failed
