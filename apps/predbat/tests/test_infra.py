@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta, timezone
+from utils import unpack_export_limit
 from const import PREDBAT_MAX_CARS, MINUTE_WATT
 from prediction import Prediction
 import sys
@@ -948,7 +949,9 @@ def simple_scenario(
     export_limit_best = []
     export_window_best = []
     if discharge < 100:
-        export_limit_best = [discharge]
+        # Callers express this as the packed percentage the encoding used to be (99 = freeze, a
+        # number = a target, with any fraction the export power) - normalise to an instruction
+        export_limit_best = [unpack_export_limit(discharge)]
         export_window_best = [{"start": my_predbat.minutes_now, "end": int(my_predbat.forecast_minutes / charge_period_divide) + my_predbat.minutes_now, "average": 0}]
     if save == "none":
         (

@@ -8,6 +8,8 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_rates, update_rates_export, update_rates_import, reset_inverter
+from const import EXPORT_MODE_TARGET
+from utils import pack_export_limit
 from utils import export_target_of
 from const import EXPORT_MODE_IDLE
 from utils import export_mode_of
@@ -91,9 +93,9 @@ def run_harness_live_test(my_predbat):
     my_predbat.export_window_best = export_window_best
     my_predbat.end_record = end_record
 
-    my_predbat.export_limits_best = [0.0]
-    metric_export = my_predbat.run_prediction_metric([], [], export_window_best, [0.0], end_record=end_record)[0]
-    metric_hold = my_predbat.run_prediction_metric([], [], export_window_best, [100.0], end_record=end_record)[0]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 0)]
+    metric_export = my_predbat.run_prediction_metric([], [], export_window_best, [pack_export_limit(EXPORT_MODE_TARGET, 0)], end_record=end_record)[0]
+    metric_hold = my_predbat.run_prediction_metric([], [], export_window_best, [pack_export_limit(EXPORT_MODE_IDLE)], end_record=end_record)[0]
 
     if metric_export >= metric_hold:
         print("ERROR: harness is not simulating a live battery - exporting scored {} against holding {}".format(metric_export, metric_hold))
@@ -157,7 +159,7 @@ def run_in_progress_start_test(my_predbat):
     my_predbat.isExporting = True
     my_predbat.export_window = [{"start": my_predbat.minutes_now - 30, "end": my_predbat.minutes_now + 90, "average": 30.0}]
 
-    best_export, best_start = my_predbat.optimise_export(0, record_export_windows, [], [], export_window_best, [0.0], end_record=end_record)[:2]
+    best_export, best_start = my_predbat.optimise_export(0, record_export_windows, [], [], export_window_best, [pack_export_limit(EXPORT_MODE_TARGET, 0)], end_record=end_record)[:2]
     if export_mode_of(best_export) == EXPORT_MODE_IDLE:
         print("ERROR: in-progress export was cancelled entirely, got limit {}".format(best_export))
         failed = True
@@ -198,7 +200,7 @@ def run_tweak_monotonic_test(my_predbat):
     my_predbat.charge_window_best = []
     my_predbat.charge_limit_best = []
     my_predbat.export_window_best = export_window_best
-    my_predbat.export_limits_best = [0.0]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 0)]
     my_predbat.end_record = end_record
 
     metric_before = my_predbat.run_prediction_metric([], [], my_predbat.export_window_best, my_predbat.export_limits_best, end_record=end_record)[0]
@@ -213,7 +215,7 @@ def run_tweak_monotonic_test(my_predbat):
         """
         worse_window = [dict(my_predbat.export_window_best[0])]
         worse_window[0]["start"] = my_predbat.minutes_now + 60
-        worse_metric = my_predbat.run_prediction_metric([], [], worse_window, [100.0], end_record=end_record)[0]
+        worse_metric = my_predbat.run_prediction_metric([], [], worse_window, [pack_export_limit(EXPORT_MODE_IDLE)], end_record=end_record)[0]
         return 100.0, my_predbat.minutes_now + 60, 0, 0, 0, 0, 0, 0, 0, 0, worse_metric
 
     my_predbat.optimise_export = worse_optimise_export
@@ -264,7 +266,7 @@ def run_second_pass_monotonic_test(my_predbat):
     my_predbat.charge_window_best = []
     my_predbat.charge_limit_best = []
     my_predbat.export_window_best = export_window_best
-    my_predbat.export_limits_best = [0.0]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 0)]
     my_predbat.end_record = end_record
 
     metric_before = my_predbat.run_prediction_metric([], [], my_predbat.export_window_best, my_predbat.export_limits_best, end_record=end_record)[0]
@@ -279,7 +281,7 @@ def run_second_pass_monotonic_test(my_predbat):
         """
         worse_window = [dict(my_predbat.export_window_best[0])]
         worse_window[0]["start"] = my_predbat.minutes_now + 60
-        worse_metric = my_predbat.run_prediction_metric([], [], worse_window, [100.0], end_record=end_record)[0]
+        worse_metric = my_predbat.run_prediction_metric([], [], worse_window, [pack_export_limit(EXPORT_MODE_IDLE)], end_record=end_record)[0]
         return 100.0, my_predbat.minutes_now + 60, 0, 0, 0, 0, 0, 0, 0, 0, worse_metric
 
     my_predbat.optimise_export = worse_optimise_export
@@ -325,7 +327,7 @@ def run_reported_metric_matches_plan_test(my_predbat):
     my_predbat.charge_window_best = []
     my_predbat.charge_limit_best = []
     my_predbat.export_window_best = export_window_best
-    my_predbat.export_limits_best = [100.0]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_IDLE)]
     my_predbat.end_record = end_record
 
     reported_metric = my_predbat.optimise_plan_pass(end_record, budget=8)[0]
@@ -421,7 +423,7 @@ def run_export_commitment_tests(my_predbat):
     my_predbat.metric_min_improvement_export_freeze = 0.1
     charge_window_best = []
     charge_limit_best = []
-    export_limits_best = [100.0]
+    export_limits_best = [pack_export_limit(EXPORT_MODE_IDLE)]
 
     # 1) Fresh plan, not currently exporting -> the export is gated out and the window is held at 100%
     my_predbat.isExporting = False

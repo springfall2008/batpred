@@ -27,12 +27,12 @@ import platform
 import sys
 import weakref
 
-from const import PREDICT_STEP, PREDBAT_MAX_CARS
-from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_sort_key
+from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPORT_POWER
+from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_from_stored
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 5
-KERNEL_PARITY_REVISION = 11
+KERNEL_ABI_VERSION = 6
+KERNEL_PARITY_REVISION = 12
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -145,7 +145,9 @@ class PkScenario(ctypes.Structure):
         ("charge_limit", ctypes.POINTER(ctypes.c_double)),
         ("charge_start", ctypes.POINTER(ctypes.c_int32)),
         ("charge_end", ctypes.POINTER(ctypes.c_int32)),
-        ("export_limits", ctypes.POINTER(ctypes.c_double)),
+        ("export_modes", ctypes.POINTER(ctypes.c_int32)),
+        ("export_targets", ctypes.POINTER(ctypes.c_int32)),
+        ("export_powers", ctypes.POINTER(ctypes.c_double)),
         ("export_start", ctypes.POINTER(ctypes.c_int32)),
         ("export_end", ctypes.POINTER(ctypes.c_int32)),
         ("soc_out", ctypes.POINTER(ctypes.c_double)),
@@ -188,7 +190,9 @@ class PkBatchJob(ctypes.Structure):
         ("charge_limit", ctypes.POINTER(ctypes.c_double)),
         ("charge_start", ctypes.POINTER(ctypes.c_int32)),
         ("charge_end", ctypes.POINTER(ctypes.c_int32)),
-        ("export_limits", ctypes.POINTER(ctypes.c_double)),
+        ("export_modes", ctypes.POINTER(ctypes.c_int32)),
+        ("export_targets", ctypes.POINTER(ctypes.c_int32)),
+        ("export_powers", ctypes.POINTER(ctypes.c_double)),
         ("export_start", ctypes.POINTER(ctypes.c_int32)),
         ("export_end", ctypes.POINTER(ctypes.c_int32)),
         ("soc_out", ctypes.POINTER(ctypes.c_double)),
@@ -380,6 +384,35 @@ def double_array(values):
         return (ctypes.c_double * len(values))(*values)
     backing = array.array(DOUBLE_TYPECODE, values)
     return (ctypes.c_double * len(backing)).from_buffer(backing)
+
+
+def export_limit_arrays(export_limits):
+    """Split a list of export instructions into the three parallel arrays the kernel takes.
+
+    One pass over the list building three array.arrays, rather than three comprehensions each
+    re-walking it. Target and power are only meaningful for a target instruction; the other modes
+    get 0 and full rate, which the kernel never reads.
+
+    Unpacking the tuple directly in the for statement is what makes this cheap: no attribute lookup
+    and no indexing, just the three names bound at C speed - but it trusts export_limits is already
+    tuple-shaped, one caller per plan rather than one per scenario in a fan-out, so the isinstance
+    check below is cheap insurance rather than a per-call cost. A caller that still holds an
+    unnormalised legacy element (a bare packed float, a malformed short sequence, or a stored
+    mapping) would otherwise unpack it as (mode, target, power) directly and raise, rather than
+    falling back to idle as every other entry point into this encoding does (GitHub Copilot review,
+    PR #5047). export_limit_from_stored is the general decoder - it also validates a 3-element
+    sequence's fields rather than trusting it, unlike the narrower unpack_export_limit.
+    """
+    if not all(isinstance(limit, tuple) for limit in export_limits):
+        export_limits = [export_limit_from_stored(limit) for limit in export_limits]
+    modes = []
+    targets = []
+    powers = []
+    for mode, target, power in export_limits:
+        modes.append(mode)
+        targets.append(target if mode == EXPORT_MODE_TARGET else 0)
+        powers.append(power if mode == EXPORT_MODE_TARGET else FULL_EXPORT_POWER)
+    return int32_array(modes), int32_array(targets), double_array(powers)
 
 
 def int32_array(values):
@@ -838,14 +871,16 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
         charge_start, charge_end, _ = window_arrays(job.charge_window)
         export_start, export_end, _ = window_arrays(job.export_window)
         charge_limit = double_array(job.charge_limit)
-        export_limits = double_array([export_limit_sort_key(limit) for limit in job.export_limits])
-        buffers.append((charge_limit, export_limits))
+        export_modes, export_targets, export_powers = export_limit_arrays(job.export_limits)
+        buffers.append((charge_limit, export_modes, export_targets, export_powers))
 
         pk_job = job_array[index]
         pk_job.charge_limit = charge_limit
         pk_job.charge_start = charge_start
         pk_job.charge_end = charge_end
-        pk_job.export_limits = export_limits
+        pk_job.export_modes = export_modes
+        pk_job.export_targets = export_targets
+        pk_job.export_powers = export_powers
         pk_job.export_start = export_start
         pk_job.export_end = export_end
         pk_job.soc_out = None
@@ -899,7 +934,7 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     # list lengths, the per-item call overhead outweighing what the comprehension costs.
     scenario.charge_limit = double_array(charge_limit)
     scenario.charge_start, scenario.charge_end = window_bound_arrays(charge_window)
-    scenario.export_limits = double_array([export_limit_sort_key(limit) for limit in export_limits])
+    scenario.export_modes, scenario.export_targets, scenario.export_powers = export_limit_arrays(export_limits)
     scenario.export_start, scenario.export_end = window_bound_arrays(export_window)
     # A cached run discards the per-minute SoC series (see the `if not cache` block below), so the
     # buffer is not allocated and the kernel is told to skip filling it. That skips a round_py per

@@ -493,7 +493,11 @@ class Execute:
                             inverter.adjust_charge_rate(0)
                             resetCharge = False
                         isExporting = True
-                        target = self.export_window_best[0].get("target", self.export_limits_best[0])
+                        # The window carries a plain-number target once clipped; fall back to the
+                        # instruction's own target rather than to the instruction itself
+                        target = self.export_window_best[0].get("target")
+                        if target is None:
+                            target = export_target_of(self.export_limits_best[0]) or 0
                         self.isExporting_Target = int(target)
 
                         status = "Exporting"
@@ -521,12 +525,16 @@ class Execute:
                             # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
                             status_extra_parts.append((inverter.id, "current SoC", status, "{}%".format(inverter.soc_percent)))  # append multi-inverter target SoC's together
                             isExporting = True
-                            target = self.export_window_best[0].get("target", self.export_limits_best[0])
+                            target = self.export_window_best[0].get("target")
+                            if target is None:
+                                target = export_target_of(self.export_limits_best[0]) or 0
                             self.isExporting_Target = int(target)
                         else:
                             status = "Hold exporting"
                             status_per_inverter[inverter.id] = status
-                            target = self.export_window_best[0].get("target", self.export_limits_best[0])
+                            target = self.export_window_best[0].get("target")
+                            if target is None:
+                                target = export_target_of(self.export_limits_best[0]) or 0
                             status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, inverter.soc_percent)))  # append multi-inverter target SoC's together
                             self.isExporting_Target = inverter.soc_percent
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
