@@ -8,11 +8,24 @@
 
 from datetime import datetime
 import asyncio
+import time
 import pytz
 import aiohttp
 import json
 from unittest.mock import MagicMock, patch, AsyncMock
-from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal, FOX_CACHE_KEYS, FOX_REFRESH_SETTINGS, FOX_REFRESH_REALTIME, OPTIONS_WORK_MODE, FOX_SETTINGS_CACHE_VERSION
+from fox import (
+    validate_schedule,
+    minutes_to_schedule_time,
+    end_minute_inclusive_to_exclusive,
+    FoxAPI,
+    schedules_are_equal,
+    FOX_CACHE_KEYS,
+    FOX_REFRESH_SETTINGS,
+    FOX_REFRESH_REALTIME,
+    OPTIONS_WORK_MODE,
+    FOX_SETTINGS_CACHE_VERSION,
+    SCHEDULER_READ_STALE_SECONDS,
+)
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -75,6 +88,8 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.device_production_year = {}
         self.device_battery_charging_time = {}
         self.device_scheduler = {}
+        self.scheduler_written_groups = {}
+        self.scheduler_write_time = {}
         self.local_schedule = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}
@@ -7108,6 +7123,141 @@ def test_apply_battery_schedule_limited_charge_power_sent_to_api(my_predbat):
     return False
 
 
+class MockFoxAPIStaleRead(MockFoxAPIWithRequests):
+    """
+    Mock FoxAPI whose scheduler read lags behind its writes, like the real Fox API does.
+
+    Observed live on an EVO 10-5-H (2026-09-10 19:42): a Feedin write returned success, a read 3s
+    later still returned the pre-write schedule, and a read 18s later returned Feedin.
+    """
+
+    def __init__(self):
+        """Set up the mock with an empty write log and a settable read payload."""
+        super().__init__()
+        self.written_groups = []
+        self.stale_groups = []
+        self.read_returns_stale = True
+
+    async def set_scheduler_write(self, deviceSN, groups):
+        """Record a write the way the real endpoint would accept it."""
+        self.written_groups.append([dict(group) for group in groups])
+        return True
+
+    async def get_scheduler(self, deviceSN, checkBattery=True):
+        """Return the stale schedule while read_returns_stale is set, then the written one."""
+        groups = self.stale_groups if self.read_returns_stale else (self.written_groups[-1] if self.written_groups else [])
+        result = {"enable": 1, "groups": [dict(group) for group in groups], "properties": {}}
+        self.apply_scheduler_read(deviceSN, result)
+        return result
+
+
+def _selfuse_groups():
+    """The all-day Self Use baseline apply_battery_schedule produces when no window is active."""
+    return validate_schedule([], 5, 5000, 0)
+
+
+def _feedin_groups():
+    """The all-day Feed-in First baseline apply_battery_schedule produces for a freeze export."""
+    return validate_schedule([], 5, 5000, 0, baseline_work_mode="Feedin")
+
+
+def test_stale_scheduler_read_does_not_overwrite_a_recent_write(my_predbat):
+    """
+    Test a scheduler read that lags behind our own write does not regress the cached schedule
+
+    The Fox scheduler read is eventually consistent: a write returns success and a read seconds
+    later can still return the pre-write schedule (confirmed live on an EVO 10-5-H, 2026-09-10).
+    A read like that used to be written straight into device_scheduler, throwing away what we
+    know we just set.
+    """
+    print("  - test_stale_scheduler_read_does_not_overwrite_a_recent_write")
+
+    fox = MockFoxAPIStaleRead()
+    deviceSN = "TEST123456"
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+
+    feedin = _feedin_groups()
+    fox.note_scheduler_write(deviceSN, feedin)
+    fox.stale_groups = _selfuse_groups()
+
+    run_async(fox.get_scheduler(deviceSN, checkBattery=False))
+
+    cached = fox.device_scheduler.get(deviceSN, {}).get("groups", [])
+    modes = [group.get("workMode") for group in cached if group.get("enable", 1)]
+    assert modes == ["Feedin"], f"Expected the cache to keep the written Feedin schedule, got {modes}"
+
+    return False
+
+
+def test_stale_scheduler_read_does_not_skip_the_write_that_ends_a_freeze(my_predbat):
+    """
+    Test a freeze export can still be ended after a stale read
+
+    This is what the stale read actually costs. set_scheduler skips a write whose schedule matches
+    the cache, so a read that regressed the cache to Self Use while the inverter was really in
+    Feedin made the next Self Use write look redundant - and the inverter stayed in Feed-in First
+    for the rest of the day. Seen for real: the live test's restore reported "Restore write
+    result: False" and left the inverter in Feedin (#5022).
+    """
+    print("  - test_stale_scheduler_read_does_not_skip_the_write_that_ends_a_freeze")
+
+    fox = MockFoxAPIStaleRead()
+    deviceSN = "TEST123456"
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+
+    # A freeze export is written and lands on the inverter
+    feedin = _feedin_groups()
+    fox.note_scheduler_write(deviceSN, feedin)
+
+    # A poll arrives inside the staleness window and still reports the pre-write Self Use
+    fox.stale_groups = _selfuse_groups()
+    run_async(fox.get_scheduler(deviceSN, checkBattery=False))
+
+    # The freeze ends, so Predbat asks for Self Use again - which must actually be written
+    writes = []
+
+    async def capture(path, datain=None, post=False, **kwargs):
+        """Record the scheduler write instead of calling the API."""
+        writes.append(datain)
+        return {}
+
+    fox.request_get = capture
+    wrote = run_async(fox.set_scheduler(deviceSN, _selfuse_groups()))
+
+    assert writes, "The write ending the freeze was skipped - the inverter would stay in Feedin"
+    assert wrote is True, f"set_scheduler should report the write, got {wrote}"
+
+    return False
+
+
+def test_scheduler_read_is_trusted_once_the_write_window_has_passed(my_predbat):
+    """
+    Test a later read still wins, so a change made outside Predbat is not ignored forever
+
+    The write is only preferred over a read for a short window. Beyond that a read is the truth -
+    the user may have changed the schedule in the Fox app, and pinning the cache to our last write
+    would hide that permanently.
+    """
+    print("  - test_scheduler_read_is_trusted_once_the_write_window_has_passed")
+
+    fox = MockFoxAPIStaleRead()
+    deviceSN = "TEST123456"
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+
+    fox.note_scheduler_write(deviceSN, _feedin_groups())
+    # Age the write past the staleness window
+    fox.scheduler_write_time[deviceSN] = time.time() - (SCHEDULER_READ_STALE_SECONDS + 5)
+    fox.stale_groups = _selfuse_groups()
+
+    run_async(fox.get_scheduler(deviceSN, checkBattery=False))
+
+    cached = fox.device_scheduler.get(deviceSN, {}).get("groups", [])
+    modes = [group.get("workMode") for group in cached if group.get("enable", 1)]
+    assert modes == ["SelfUse"], f"Expected a settled read to win, got {modes}"
+
+    return False
+
+
 def run_fox_api_tests(my_predbat):
     """
     Run all Fox API tests
@@ -7324,6 +7474,9 @@ def run_fox_api_tests(my_predbat):
         failed |= test_apply_battery_schedule_freeze_export_gaps_around_future_charge(my_predbat)
         failed |= test_write_battery_schedule_event_power_change_applies_schedule(my_predbat)
         failed |= test_write_battery_schedule_event_charge_power_restore_reaches_charge_group(my_predbat)
+        failed |= test_stale_scheduler_read_does_not_overwrite_a_recent_write(my_predbat)
+        failed |= test_stale_scheduler_read_does_not_skip_the_write_that_ends_a_freeze(my_predbat)
+        failed |= test_scheduler_read_is_trusted_once_the_write_window_has_passed(my_predbat)
 
         # compute_schedule charge-rate power fix tests (issue #3610)
         failed |= test_compute_schedule_charge_power_reads_slot_fdpwr(my_predbat)

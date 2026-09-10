@@ -40,6 +40,19 @@ FOX_DOMAIN = "https://www.foxesscloud.com"
 FOX_LANG = "en"
 TIMEOUT = 60
 FOX_RETRIES = 10
+# How long after our own scheduler write a disagreeing read is treated as stale rather than as
+# the truth. The Fox scheduler read is eventually consistent: confirmed live on an EVO 10-5-H
+# (2026-09-10 19:42) that a Feedin write returned success, a read 3s later still returned the
+# pre-write schedule, and a read 18s later returned Feedin.
+#
+# This matters because set_scheduler skips a write whose schedule matches the cache. A stale read
+# regressed the cache to the pre-write schedule, so the next write back to that schedule looked
+# redundant and was skipped - leaving the inverter in the mode we had meant to leave. For a freeze
+# export that means stuck in Feed-in First, not charging, for the rest of the day.
+#
+# Beyond this window a read wins, so a schedule changed in the Fox app is still picked up.
+SCHEDULER_READ_STALE_SECONDS = 60
+
 FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "MinSoc", "MinSocOnGrid"]
 OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
 
@@ -385,6 +398,10 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.device_production_year = {}
         self.device_battery_charging_time = {}
         self.device_scheduler = {}
+        # Our own last scheduler write per device, and when it happened, so an eventually
+        # consistent read can be told apart from a real change - see SCHEDULER_READ_STALE_SECONDS
+        self.scheduler_written_groups = {}
+        self.scheduler_write_time = {}
         self.local_schedule = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}
@@ -1293,6 +1310,39 @@ class FoxAPI(ComponentBase, OAuthMixin):
             return True
         return False
 
+    def note_scheduler_write(self, deviceSN, groups):
+        """
+        Remember a scheduler write so an eventually consistent read can be recognised as stale
+
+        See SCHEDULER_READ_STALE_SECONDS for why, and apply_scheduler_read for the other half.
+        """
+        self.scheduler_written_groups[deviceSN] = [dict(group) for group in groups]
+        self.scheduler_write_time[deviceSN] = time.time()
+        if deviceSN not in self.device_scheduler:
+            self.device_scheduler[deviceSN] = {}
+        self.device_scheduler[deviceSN]["enable"] = True
+        self.device_scheduler[deviceSN]["groups"] = groups
+
+    def apply_scheduler_read(self, deviceSN, result):
+        """
+        Cache a scheduler read, keeping our own recent write when the read still lags behind it
+
+        The read is left untouched for the caller - only what gets cached is corrected, since the
+        cache is what set_scheduler compares against to decide whether a write is needed.
+        """
+        groups = result.get("groups", [])
+        written = self.scheduler_written_groups.get(deviceSN)
+        write_age = time.time() - self.scheduler_write_time.get(deviceSN, 0)
+        if written is not None and write_age < SCHEDULER_READ_STALE_SECONDS and not schedules_are_equal(datetime.now(), groups, written):
+            self.log("Fox: Scheduler read for {} disagrees with our write {:.0f}s ago - treating the read as stale and keeping the written schedule".format(deviceSN, write_age))
+            groups = written
+        else:
+            # Either the read has caught up or it is a settled change, so stop second-guessing it
+            self.scheduler_written_groups.pop(deviceSN, None)
+            self.scheduler_write_time.pop(deviceSN, None)
+        self.device_scheduler[deviceSN] = dict(result, groups=groups)
+        return groups
+
     async def set_scheduler(self, deviceSN, groups):
         """
         Set scheduler groups, also disables scheduler if no groups provided
@@ -1318,10 +1368,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 else:
                     result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
                 if result is not None:
-                    if deviceSN not in self.device_scheduler:
-                        self.device_scheduler[deviceSN] = {}
-                    self.device_scheduler[deviceSN]["enable"] = True
-                    self.device_scheduler[deviceSN]["groups"] = groups
+                    self.note_scheduler_write(deviceSN, groups)
                     return True
         return False
 
@@ -1521,8 +1568,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
             # Min SOC On grid can change as Predbat writes reserve so this must be the real min
             self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)
             self.device_scheduler_count[deviceSN] = len(result.get("groups", []))
-            self.device_scheduler[deviceSN] = result
-            self.update_settings_from_schedule(deviceSN, result.get("groups", []), result.get("properties", {}))
+            groups = self.apply_scheduler_read(deviceSN, result)
+            self.update_settings_from_schedule(deviceSN, groups, result.get("properties", {}))
             return result
         return None
 
@@ -2435,6 +2482,33 @@ async def test_fox_api(sn, api_key, token_hash, token_expires, supabase_url, sup
     print("Run completed successfully")
 
 
+async def _await_schedule(fox_api, serial, expected, timeout=90, interval=5):  # pragma: no cover
+    """
+    Read the scheduler back until it agrees with expected, or the timeout runs out
+
+    The Fox scheduler read is eventually consistent - see SCHEDULER_READ_STALE_SECONDS. Reading
+    once, straight after a write, reported a Feedin write as rejected when it had in fact landed:
+    the read 3s after the write still returned the old schedule, and 18s after it returned Feedin.
+
+    Returns (groups, matched, seconds_waited). Argument order into schedules_are_equal matters: it
+    only walks schedule2's keys, so the read-back - which carries the extra
+    exportLimit/importLimit/pvLimit/reactivePower fields a read adds - must be schedule1, the same
+    way set_scheduler calls it.
+    """
+    started = time.time()
+    groups = []
+    while True:
+        read_back = await fox_api.get_scheduler(serial, checkBattery=False) or {}
+        groups = read_back.get("groups", [])
+        waited = int(time.time() - started)
+        if schedules_are_equal(datetime.now(), groups, expected):
+            return groups, True, waited
+        if waited >= timeout:
+            return groups, False, waited
+        print(f"  ...read has not caught up after {waited}s, retrying in {interval}s")
+        await asyncio.sleep(interval)
+
+
 async def test_feedin_schedule(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id, hold_seconds=180):  # pragma: no cover
     """
     Live-test the Feed-in First (freeze export) schedule against a real inverter
@@ -2511,15 +2585,8 @@ async def test_feedin_schedule(sn, api_key, token_hash, token_expires, supabase_
         write_ok = await fox_api.set_scheduler(serial, schedule)
         print(f"Write result: {write_ok}")
 
-        print("Reading back schedule...")
-        read_back = await fox_api.get_scheduler(serial, checkBattery=False) or {}
-        read_back_groups = read_back.get("groups", [])
-        print(f"Read back schedule:\n{json.dumps(read_back_groups, indent=2)}")
-
-        # Argument order matters: schedules_are_equal only walks schedule2's keys, so the
-        # read-back (which carries the extra exportLimit/importLimit/pvLimit/reactivePower fields
-        # a read adds) must be schedule1 - the same way set_scheduler itself calls it
-        match = schedules_are_equal(datetime.now(), read_back_groups, schedule)
+        read_back_groups, match, waited = await _await_schedule(fox_api, serial, schedule)
+        print(f"Read back schedule after {waited}s:\n{json.dumps(read_back_groups, indent=2)}")
         print(f"Schedule match: {match}")
         if not match:
             print("WARNING: written schedule does not match read-back schedule")
@@ -2563,15 +2630,75 @@ async def test_feedin_schedule(sn, api_key, token_hash, token_expires, supabase_
         print("\nInterrupted - restoring the original schedule")
     finally:
         print("\nRestoring original schedule...")
+        # set_scheduler skips a write whose schedule matches its cache, and the cache can hold
+        # anything by now - including a stale read of the pre-write schedule, which is exactly
+        # what silently skipped the restore and left an inverter in Feedin. A restore must always
+        # write, so drop what the cache believes first.
+        fox_api.device_scheduler.pop(serial, None)
+        fox_api.scheduler_written_groups.pop(serial, None)
+        fox_api.scheduler_write_time.pop(serial, None)
         restore_ok = await fox_api.set_scheduler(serial, original_groups)
-        restored = await fox_api.get_scheduler(serial, checkBattery=False) or {}
-        restored_groups = restored.get("groups", [])
-        back = schedules_are_equal(datetime.now(), restored_groups, original_groups) if original_groups else not restored_groups
-        print(f"Restore write result: {restore_ok}, schedule back to original: {back}")
+        restored_groups, back, waited = await _await_schedule(fox_api, serial, original_groups)
+        print(f"Restore write result: {restore_ok}, schedule back to original after {waited}s: {back}")
         if not back:
             print("WARNING: the original schedule was NOT restored - check the inverter")
             print_schedule_diff("original", original_groups, "now", restored_groups)
 
+    print("Done")
+
+
+async def restore_selfuse_schedule(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover
+    """
+    Write a plain all-day Self Use schedule, to get an inverter out of a mode left behind by a test
+
+    Recovery for the case the live test used to leave behind: a Feed-in First write that landed
+    while a stale read convinced the restore it had nothing to do. Predbat rewrites the schedule
+    on its next cycle anyway, so this is only needed when Predbat is not running against the
+    inverter, or to put it back straight away.
+    """
+    if supabase_url:
+        os.environ["SUPABASE_URL"] = supabase_url
+    if supabase_key:
+        os.environ["SUPABASE_KEY"] = supabase_key
+
+    mock_base = MockBase()
+    if user_id:
+        mock_base.args["user_id"] = user_id
+
+    arg_dict = {"key": api_key or "", "automatic": False}
+    if token_hash or supabase_url:
+        arg_dict["auth_method"] = "oauth"
+        arg_dict["token_hash"] = token_hash
+        arg_dict["token_expires_at"] = token_expires
+    fox_api = FoxAPI(mock_base, **arg_dict)
+
+    devices = await fox_api.get_device_list()
+    if not devices:
+        print("No devices found")
+        return
+    serial = sn if sn else devices[0].get("deviceSN")
+    print(f"Using device SN: {serial}")
+
+    await fox_api.get_device_detail(serial)
+    current = await fox_api.get_scheduler(serial, checkBattery=False) or {}
+    modes = [group.get("workMode") for group in current.get("groups", []) if group.get("enable", 1)]
+    print(f"Current enabled slot modes: {modes}")
+
+    fdPwr_max = fox_api.fdpwr_max.get(serial, 8000)
+    reserve = fox_api.fdsoc_min.get(serial, 10)
+    schedule = validate_schedule([], reserve, fdPwr_max, fox_api.device_scheduler_count.get(serial, 0))
+    print(f"Writing Self Use schedule:\n{json.dumps(schedule, indent=2)}")
+
+    # A restore must always write, whatever the cache believes
+    fox_api.device_scheduler.pop(serial, None)
+    fox_api.scheduler_written_groups.pop(serial, None)
+    fox_api.scheduler_write_time.pop(serial, None)
+    write_ok = await fox_api.set_scheduler(serial, schedule)
+    groups, match, waited = await _await_schedule(fox_api, serial, schedule)
+    modes = [group.get("workMode") for group in groups if group.get("enable", 1)]
+    print(f"Write result: {write_ok}, confirmed after {waited}s: {match}, enabled slot modes now {modes}")
+    if not match:
+        print_schedule_diff("written", schedule, "read-back", groups)
     print("Done")
 
 
@@ -2590,6 +2717,7 @@ def main():  # pragma: no cover
     parser.add_argument("--user-id", action="store", help="Supabase user ID for OAuth token refresh")
     parser.add_argument("--write-schedule", action="store_true", help="Write a test schedule and read it back instead of running a full test")
     parser.add_argument("--feedin-schedule", action="store_true", help="Live-test freeze export: write the Feed-in First schedule, read it back, hold it, then restore the original")
+    parser.add_argument("--restore-selfuse", action="store_true", help="Write a plain all-day Self Use schedule, to recover an inverter left in another work mode by a test")
     parser.add_argument("--hold-seconds", action="store", type=int, default=180, help="How long --feedin-schedule holds Feed-in First while reporting live power, before restoring (default 180, 0 to skip)")
 
     args = parser.parse_args()
@@ -2604,6 +2732,8 @@ def main():  # pragma: no cover
     # Run the test
     if args.write_schedule:
         asyncio.run(test_write_schedule(serial, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id))
+    elif args.restore_selfuse:
+        asyncio.run(restore_selfuse_schedule(serial, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id))
     elif args.feedin_schedule:
         asyncio.run(test_feedin_schedule(serial, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id, hold_seconds=args.hold_seconds))
     else:
