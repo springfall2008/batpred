@@ -4450,6 +4450,18 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"]
         assert ge.config_args.get("charge_limit_enable") is None, "charge_limit_enable should be None when enable register is absent"
 
+        # Test 10: Force charge is the schedule switch when both charge switches are available
+        ge.config_args = {}
+        ge.settings = {
+            "battery003": {
+                "reg1": {"name": "Enable_AC_Charge"},
+                "reg2": {"name": "Enable_Force_Charge"},
+            }
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery003"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("scheduled_charge_enable") == ["switch.predbat_gecloud_battery003_enable_force_charge"]
+
         return 0
 
     return run_async(test())
@@ -5229,6 +5241,28 @@ def _test_enable_default_options(my_predbat):
 
         if len(write_calls) != 0:
             print("ERROR: Expected 0 write calls when percentage already 100, got {}".format(len(write_calls)))
+            return 1
+
+        # Test 29: Keep AC charge enabled when force charge is the schedule switch
+        write_calls = []
+        registers = {
+            310: {"name": "Enable_Force_Charge", "value": False, "validation_rules": []},
+            311: {"name": "Enable_AC_Charge", "value": False, "validation_rules": []},
+        }
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if not result or len(write_calls) != 1 or write_calls[0]["key"] != 311 or write_calls[0]["value"] is not True:
+            print("ERROR: Expected AC charge to be enabled when force charge is available, got {}".format(write_calls))
+            return 1
+
+        # Devices without force charge retain their existing AC charge state.
+        write_calls = []
+        registers = {312: {"name": "Enable_AC_Charge", "value": False, "validation_rules": []}}
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if result or write_calls:
+            print("ERROR: AC charge should not be changed without force charge, got {}".format(write_calls))
             return 1
 
         return 0

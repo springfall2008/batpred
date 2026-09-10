@@ -1016,6 +1016,7 @@ class GECloudDirect(ComponentBase):
         device_ha_names = {regname_to_ha(registers[key].get("name", "")) for key in registers}
         has_charge_power = "battery_charge_power" in device_ha_names
         has_discharge_power = "battery_discharge_power" in device_ha_names
+        has_force_charge = "enable_force_charge" in device_ha_names
         # Predbat drives the export target register itself (discharge_target_soc, the DC discharge
         # lower SoC limit) and tracks the minimum reserve SoC there, so leave that one alone rather
         # than resetting it and fighting adjust_force_export.
@@ -1131,6 +1132,15 @@ class GECloudDirect(ComponentBase):
                     changed = True
                 else:
                     self.log("GECloud: Warn: Failed to enable real-time control for {}".format(device))
+            if has_force_charge and ha_name == "enable_ac_charge" and not value:
+                self.log("GECloud: Enabling AC charge for {} because force charge is available".format(device))
+                result = await self.async_write_inverter_setting(device, key, True)
+                if result and ("value" in result):
+                    registers[key]["value"] = result["value"]
+                    await self.publish_registers(device, self.settings[device], select_key=key)
+                    changed = True
+                else:
+                    self.log("GECloud: Warn: Failed to enable AC charge for {}".format(device))
         return changed
 
     async def publish_registers(self, device, registers, select_key=None):
@@ -1323,7 +1333,7 @@ class GECloudDirect(ComponentBase):
         self.set_arg("charge_limit_enable", build_entities("switch", ["enable_ac_charge_upper_percent_limit", "enable_ac_charge_1_upper_soc_percent_limit"]))
         self.set_arg("discharge_start_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_start_time" for device in batteries])
         self.set_arg("discharge_end_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_end_time" for device in batteries])
-        self.set_arg("scheduled_charge_enable", build_entities("switch", ["ac_charge_enable", "enable_ac_charge"]))
+        self.set_arg("scheduled_charge_enable", build_entities("switch", ["enable_force_charge", "ac_charge_enable", "enable_ac_charge"]))
         self.set_arg("scheduled_discharge_enable", build_entities("switch", ["enable_dc_discharge", "enable_force_discharge"]))
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_gecloud_{device}_battery_temperature" for device in batteries])
         self.set_arg("battery_scaling", [f"sensor.{self.prefix}_gecloud_{device}_battery_dod_soh" for device in batteries])
