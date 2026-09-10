@@ -1154,9 +1154,10 @@ class CleanupModelTests(unittest.TestCase):
 
 
 class JournalPrBodyTests(DaemonPathsTestCase):
-    """The flush cannot pass a PR body on a command line - permission rules match a command
-    string and a multi-line command matches nothing - so it edits a file and the daemon opens
-    the PR. PR #5011 shipped a one-line body promising a list that never arrived."""
+    """The flush writes its PR body to a file and the daemon opens the PR. A body is many
+    lines of markdown, and building one inline for --body is brittle (shell quoting + permission
+    matching), while --body-file needs an existing file path the flush has no grant to create.
+    PR #5011 shipped a one-line body promising a per-candidate list that never arrived."""
 
     def test_the_placeholder_is_written_before_the_run(self):
         """Edit needs an existing file, and a Write grant is not an option here."""
