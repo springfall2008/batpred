@@ -1926,6 +1926,58 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
     return failed
 
 
+def test_short_per_inverter_list_gets_its_dummy_entity(test_name, my_predbat):
+    """
+    A per-inverter args list that stops short of this inverter is treated as missing for it.
+
+    create_missing_arg() only replaced an arg that was absent or not a list, and every caller
+    assigns into [self.id] immediately afterwards - so a list naming fewer inverters than
+    num_inverters raised IndexError instead of getting its dummy entity. That is the normal shape
+    of a mixed fleet now that a component configures the inverters it discovered and leaves the
+    rest of the list alone (#5029): a GivTCP fleet of one alongside a hand-configured Solis at
+    index 1 crashed Inverter construction at inverter.py's scheduled_charge_enable dummy, since
+    GS reports no charge enable register of its own.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    # Constructing a non-GE inverter creates dummy entities for every register it lacks, and each
+    # one writes into args - so the whole dict is snapshotted and put back rather than a named few.
+    # This module shares one fixture across every test in it, and the keys this would otherwise
+    # leave behind change what the later window tests read.
+    saved_args = copy.deepcopy(my_predbat.args)
+    try:
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["inverter_type"] = ["GE", "GS"]
+        # One entry, as a component that discovered a single inverter leaves it
+        my_predbat.args["scheduled_charge_enable"] = ["switch.predbat_givtcp_0_scheduled_charge_enable"]
+        # Named for both inverters so this test is about the short list above and not about
+        # whatever an earlier test in this module left in the shared fixture's reserve
+        my_predbat.args["reserve"] = ["number.reserve", "number.reserve"]
+
+        try:
+            Inverter(my_predbat, 1, quiet=True)
+        except IndexError as e:
+            print("ERROR: Inverter 1 raised IndexError on a list that stops short of it: {}".format(e))
+            return 1
+
+        enable = my_predbat.args["scheduled_charge_enable"]
+        if len(enable) < 2:
+            print("ERROR: expected scheduled_charge_enable to be extended to cover inverter 1, got {}".format(enable))
+            failed = True
+        elif enable[0] != "switch.predbat_givtcp_0_scheduled_charge_enable":
+            print("ERROR: inverter 0's own entry was disturbed, got {}".format(enable[0]))
+            failed = True
+        elif enable[1] != "sensor.predbat_GS_1_scheduled_charge_enable":
+            print("ERROR: expected inverter 1 to get its dummy entity, got {}".format(enable[1]))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return 1 if failed else 0
+
+
 def test_window_warning_names_components_when_type_unset(test_name, my_predbat, dummy_items):
     """
     Issue #4990: a Solis Cloud comms failure must not be reported as a GivEnergy credential problem.
@@ -3965,6 +4017,7 @@ charge_start_service:
     failed |= test_export_window_ge_cloud_configured_but_no_data_yet("export_window_ge_cloud_configured_but_no_data_yet", my_predbat, dummy_items)
     failed |= test_export_window_no_source_configured_raises("export_window_no_source_configured_raises", my_predbat, dummy_items)
     failed |= test_window_warning_names_components_when_type_unset("window_warning_names_components_when_type_unset", my_predbat, dummy_items)
+    failed |= test_short_per_inverter_list_gets_its_dummy_entity("short_per_inverter_list_gets_its_dummy_entity", my_predbat)
     if failed:
         return failed
 

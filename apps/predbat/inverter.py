@@ -287,6 +287,19 @@ class Inverter:
         """
         if (arg not in self.base.args) or (not isinstance(self.base.args[arg], list)):
             self.base.args[arg] = [default, default, default, default]
+        elif len(self.base.args[arg]) <= self.id:
+            # A list that stops short of this inverter is just as missing for it as no list at all,
+            # and every caller assigns into [self.id] straight afterwards - so a short one raised
+            # IndexError rather than getting its dummy entity. Reachable whenever apps.yaml or a
+            # component's auto-config names fewer inverters than num_inverters, which is now the
+            # normal shape of a mixed fleet: a component configures the inverters it discovered and
+            # leaves the rest of the list to the user (#5029).
+            #
+            # Padded with None rather than the default: the caller overwrites [self.id] with its
+            # dummy entity, so the padding is only ever read by some other inverter, for which this
+            # key is genuinely unconfigured. A bare value there reads back as an entity id and is
+            # then looked up as one.
+            self.base.args[arg] = self.base.args[arg] + [None] * (self.id + 1 - len(self.base.args[arg]))
 
     def __init__(self, base, id=0, quiet=False):
         """
