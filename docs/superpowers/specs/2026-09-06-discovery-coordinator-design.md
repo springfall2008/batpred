@@ -1,6 +1,11 @@
 # Discovery Coordinator — Minimal Implementation Design
 
-Date: 2026-09-06. Status: agreed with maintainer (this session).
+Date: 2026-09-06. Status: **deferred**. Superseded for the first release by
+`2026-09-10-discovery-catalogue-design.md`, which ships discovery as an observe-only
+catalogue with no allocation. This document remains the design record for the slot
+allocator, to be implemented once catalogues from real installations can be read. Its
+report schema has since been revised there (entity descriptors, chargers separate from
+cars, tariffs as a property of meters).
 
 ## Problem
 

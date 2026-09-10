@@ -1,5 +1,11 @@
 # Discovery Coordinator (Minimal) Implementation Plan
 
+> **STATUS: DEFERRED — do not execute.** This plan implements slot allocation, which has
+> been deferred. The first release is the observe-only catalogue specified in
+> `docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md`; a plan for that
+> supersedes this one. Retained because Tasks 5 to 9 remain the reference for how the
+> allocator would be wired once it is built.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Components report discovery records into a JSON-serialisable catalogue held by a central coordinator, which allocates inverter slots, car indices and sensor indices after phase-1 startup; automatic configuration then writes apps.yaml keys at the assigned indices — unblocking multi-inverter automatic mode across two components (GivTCP + GECloud), proven by a test.
