@@ -1116,8 +1116,26 @@ friendly_name: Octoplus Saving Session Events
     else:
         print("  PASS: Join proceeds when octopus_saving_auto_join is True")
 
-    # Test 3: auto-join enabled, lead hours set to 0 (immediate) -> join proceeds
-    print("  Test 3: octopus_saving_auto_join=True with octopus_saving_auto_join_lead_hours=0 allows the join")
+    # Test 3: auto-join disabled, event within configured lead hours -> no join
+    print("  Test 3: octopus_saving_auto_join=False blocks the join despite time before event < octopus_saving_auto_join_lead_hours.")
+    setup_items()
+    my_predbat.expose_config("octopus_saving_auto_join", False, quiet=True)
+    my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 3, quiet=True)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if join_calls:
+        print(f"ERROR: Expected no join when auto-join disabled, got {join_calls}")
+        failed = True
+    else:
+        print("  PASS: Join skipped when octopus_saving_auto_join is False")
+
+    # Test 4: auto-join enabled, lead hours set to 0 (immediate) -> join proceeds
+    print("  Test 4: octopus_saving_auto_join=True with octopus_saving_auto_join_lead_hours=0 allows the join")
     setup_items()
     my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
     my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 0, quiet=True)
@@ -1134,8 +1152,8 @@ friendly_name: Octoplus Saving Session Events
     else:
         print("  PASS: Join proceeds when octopus_saving_auto_join is True")
 
-    # Test 4: auto-join enabled, event outside configured lead hours -> no join
-    print("  Test 4: octopus_saving_auto_join=True with time before event > octopus_saving_auto_join_lead_hours skips the join")
+    # Test 5: auto-join enabled, event outside configured lead hours -> no join
+    print("  Test 5: octopus_saving_auto_join=True with time before event > octopus_saving_auto_join_lead_hours skips the join")
     setup_items()
     my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
     my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 2, quiet=True)
@@ -1152,8 +1170,8 @@ friendly_name: Octoplus Saving Session Events
     else:
         print("  PASS: Join skipped when octopus_saving_auto_join is True and time before event > octopus_saving_auto_join_lead_hours")
 
-    # Test 5: auto-join enabled, event within configured lead hours  -> join proceeds
-    print("  Test 5: octopus_saving_auto_join=True with time before event < octopus_saving_auto_join_lead_hours allows the join")
+    # Test 6: auto-join enabled, event within configured lead hours  -> join proceeds
+    print("  Test 6: octopus_saving_auto_join=True with time before event < octopus_saving_auto_join_lead_hours allows the join")
     setup_items()
     my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
     my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 3, quiet=True)
