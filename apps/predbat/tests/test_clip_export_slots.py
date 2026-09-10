@@ -8,7 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_inverter
-from const import EXPORT_LIMIT_IDLE
 
 
 def run_clip_export_slots_tests(my_predbat):
@@ -232,20 +231,13 @@ def test_clip_up_never_lands_in_the_reserved_range(my_predbat):
 
     result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
 
+    # Pin the exact packed result rather than just excluding the reserved range: a loose check would
+    # also pass if the clip incorrectly collapsed to the freeze (99.0) or idle (100.0) sentinel,
+    # which loses the requested forced low-power export just as silently as landing in [99.0, 100.0).
     limit = result_limits[0]
-    if 99.0 < limit < 100.0:
-        print("ERROR: clip up produced {} which is in the reserved range - the window would do nothing (GH#4914)".format(limit))
-        failed = True
-
-    # The fraction is added after calc_percent_limit has already capped the integer part at 100, so
-    # an unclamped clip up can also overshoot the idle sentinel and silently disable the window
-    if limit > EXPORT_LIMIT_IDLE:
-        print("ERROR: clip up produced {} which is above the idle sentinel - the window is disabled (GH#4914)".format(limit))
-        failed = True
-
-    # The power fraction must survive the clamp, otherwise a low power export silently becomes full rate
-    if limit not in (100.0, 99.0) and abs((limit - int(limit)) - 0.3) > 0.001:
-        print("ERROR: clip up lost the export power fraction, expected .3 in {}".format(limit))
+    expected_limit = 98.3
+    if abs(limit - expected_limit) > 0.001:
+        print("ERROR: clip up produced {}, expected {} (98% target clamp, .3 power fraction preserved) (GH#4914)".format(limit, expected_limit))
         failed = True
 
     if not failed:
