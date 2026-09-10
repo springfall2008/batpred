@@ -891,6 +891,59 @@ def test_adjust_ge_eco_toggle_missing_entity(test_name, inv, force_export, inver
     return failed
 
 
+def test_fox_no_predbat_inverter_mode_control(test_name, my_predbat):
+    """
+    Test neither Fox type routes its work mode through Predbat's inverter_mode control
+
+    Fox's work mode is set per-slot inside the scheduler fox.py writes (Cloud, see
+    apply_battery_schedule - including the Feed-in First slot for a freeze export) or by the
+    charge/discharge/freeze service templates in templates/fox.yaml (modbus). Neither path wants
+    Predbat writing the mode as well, so Fox takes the same route as every other non-GE inverter:
+    a dummy inverter_mode entity that nothing reads and no service call behind it.
+
+    FoxCloud used to be the sole inverter type declaring the has_fox_inverter_mode flag, which
+    bought it a special case in adjust_inverter_mode pinning the work mode to SelfUse every cycle -
+    fighting the scheduler and stopping Feed-in First ever being selected (#5022). The flag has
+    been removed along with that branch; this test is what keeps a mode write from coming back.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_type = my_predbat.args.get("inverter_type")
+    saved_has_mode = "inverter_mode" in my_predbat.args
+    saved_mode = my_predbat.args.get("inverter_mode")
+    try:
+        my_predbat.args["inverter_type"] = ["FoxCloud"]
+        my_predbat.args.pop("inverter_mode", None)
+
+        inv = Inverter(my_predbat, 0, quiet=True)
+
+        services = []
+        orig_call = my_predbat.call_service_wrapper
+        my_predbat.call_service_wrapper = lambda service, **kwargs: services.append(service) or orig_call(service, **kwargs)
+        try:
+            inv.adjust_inverter_mode(False)
+            inv.adjust_inverter_mode(True)
+        finally:
+            my_predbat.call_service_wrapper = orig_call
+
+        # The mode must never leave Predbat - a real write would fight the scheduler
+        if services:
+            print("ERROR: FoxCloud adjust_inverter_mode should reach no inverter, got service calls {}".format(services))
+            failed = True
+    finally:
+        if saved_type is None:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = saved_type
+        if saved_has_mode:
+            my_predbat.args["inverter_mode"] = saved_mode
+        else:
+            my_predbat.args.pop("inverter_mode", None)
+
+    return failed
+
+
 def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, isCharging, isExporting, expect_soc=None, has_inv_time_button_press=False, expect_button_press=False):
     """
     Test the adjust_battery_target function
@@ -3534,6 +3587,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_unset_export", inv, True, "unset", True)
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_enable", inv, False, None, False)
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_export", inv, True, None, False)
+    failed |= test_fox_no_predbat_inverter_mode_control("fox_no_predbat_inverter_mode_control", my_predbat)
     if failed:
         return failed
 
