@@ -609,6 +609,13 @@ def update_rates_export(my_predbat, export_window_best):
     my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
 
+# The fixture's clock: noon. create_predbat() pins minutes_now/now_utc from it so a standalone run
+# behaves like the suite, reset_inverter re-asserts the same value after its scenarios, and modules
+# that want to check their own clock import it rather than restating the literal - so the three can
+# never silently diverge (#5026).
+FIXTURE_MINUTES_NOW = 12 * 60
+
+
 def reset_inverter(my_predbat):
     my_predbat.inverter_limit = 1 / 60.0
     my_predbat.num_inverters = 1
@@ -656,7 +663,7 @@ def reset_inverter(my_predbat):
     my_predbat.iboost_smart = False
     my_predbat.iboost_on_export = False
     my_predbat.iboost_prevent_discharge = False
-    my_predbat.minutes_now = 12 * 60
+    my_predbat.minutes_now = FIXTURE_MINUTES_NOW
     my_predbat.best_soc_keep = 0.0
     my_predbat.carbon_enable = 0
     my_predbat.inverter_soc_reset = True
