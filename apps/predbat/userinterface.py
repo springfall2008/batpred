@@ -807,7 +807,7 @@ class UserInterface:
         if isinstance(self.octopus_slots, list) and self.octopus_slots and isinstance(self.octopus_slots[0], dict):
             self.octopus_slots = [self.octopus_slots] + [[] for _ in range(7)]
 
-        # export_limits_best comes back from the dump as a list of self-describing mappings (or bare
+        # Both export limit lists come back from the dump as self-describing mappings (or bare
         # packed floats in an older dump, or 3-element sequences a YAML round trip made of the
         # tuples) - decode each back to a (mode, target, power) tuple. export_limits is the current
         # inverter state; export_limits_best is the plan.
@@ -873,11 +873,12 @@ class UserInterface:
             inverters_debug.append(inverter_debug)
         debug["inverters"] = inverters_debug
         debug["CONFIG_ITEMS"] = copy.deepcopy(self.CONFIG_ITEMS)
-        # Write export_limits_best as self-describing mappings rather than the (mode, target, power)
-        # tuples in memory: 99.0 does not say "freeze" to anything that has not read const.py, and a
-        # tuple would emit as an ordinary sequence a reader could not tell from a window count.
-        if "export_limits_best" in debug:
-            debug["export_limits_best"] = export_limits_to_stored(debug["export_limits_best"])
+        # Write both export limit lists as self-describing mappings rather than the (mode, target,
+        # power) tuples in memory: 99.0 does not say "freeze" to anything that has not read const.py,
+        # and a tuple would emit as an ordinary sequence a reader could not tell from a window count.
+        for attr in ("export_limits", "export_limits_best"):
+            if attr in debug:
+                debug[attr] = export_limits_to_stored(debug[attr])
         # Marks how the fields above are shaped, so a replay can tell an old encoding from a new one
         # rather than guessing from the data. Absent in dumps written before versioning.
         debug["debug_schema_version"] = DEBUG_SCHEMA_VERSION
