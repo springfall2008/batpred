@@ -1124,7 +1124,7 @@ class GECloudDirect(ComponentBase):
             # enable_ac_charge_upper_limit) and is a different control, so limit registers are excluded.
             if ("enable_ac_charge" in ha_name) and ("limit" not in ha_name) and has_force_charge:
                 if value:
-                    changed = True
+                    # Already on, so nothing was written and there is no change to report.
                     continue
                 self.log("GECloud: Enabling AC charge for {} as enable_force_charge is the scheduled charge control, current value is {}".format(device, value))
                 result = await self.async_write_inverter_setting(device, key, True)

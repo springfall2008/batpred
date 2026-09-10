@@ -4861,6 +4861,9 @@ def _test_force_charge_control(my_predbat):
         if write_calls:
             print("ERROR: Should not write when Enable_AC_Charge is already on, got {}".format(write_calls))
             return 1
+        if result:
+            print("ERROR: enable_default_options should report no change when Enable_AC_Charge is already on")
+            return 1
 
         # No force charge register — enable_ac_charge is itself the scheduled charge control on this
         # device, so Predbat must not force it on.
@@ -4895,6 +4898,9 @@ def _test_force_charge_control(my_predbat):
             if registers[202]["value"] is not False:
                 print("ERROR: {} should be left untouched, got {}".format(limit_name, registers[202]["value"]))
                 return 1
+            if result:
+                print("ERROR: enable_default_options should report no change for {}".format(limit_name))
+                return 1
 
         # A firmware that names the switch with a suffix is still matched, as the register family is
         # spelled inconsistently across GE devices.
@@ -4907,6 +4913,9 @@ def _test_force_charge_control(my_predbat):
 
         if len(write_calls) != 1 or write_calls[0]["key"] != 203 or write_calls[0]["value"] is not True:
             print("ERROR: A suffixed Enable_AC_Charge register should still be enabled, got {}".format(write_calls))
+            return 1
+        if not result:
+            print("ERROR: enable_default_options should report a change when a suffixed register is enabled")
             return 1
 
         # A rejected write is reported and does not count as a change.
