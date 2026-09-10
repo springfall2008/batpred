@@ -985,9 +985,9 @@ def journal_pr_body():
 def open_journal_pr(today):
     """Open the draft PR for a journal branch the flush pushed, if it did not already exist.
 
-    Done here rather than inside the flush because the body is written to a file: the flush
-    has no grant that would let it create one for --body-file, and building a real
-    per-candidate list into a --body argument means getting shell quoting right over many
+    Done here rather than inside the flush because the body is written to a pre-created file: the flush
+    can edit it but has no grant to create it for --body-file. Building a real
+    per-candidate list into a --body argument would also require careful shell quoting over many
     lines of markdown. Opening it from the daemon also means the one flow that can push no
     longer needs a `gh pr create` grant at all.
 
