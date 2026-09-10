@@ -1155,10 +1155,9 @@ class CleanupModelTests(unittest.TestCase):
 
 class JournalPrBodyTests(DaemonPathsTestCase):
     """The flush writes its PR body to a file and the daemon opens the PR. A body is many
-    lines of markdown, and assembling one in the shell means getting the quoting right on top
-    of the permission matcher - --body-file needs a file the flush has no grant to create, and
-    a --body heredoc puts the whole body through shell quoting. PR #5011 shipped a one-line
-    body promising a per-candidate list that never arrived."""
+    lines of markdown, and building one inline for --body is brittle (shell quoting + permission
+    matching), while --body-file needs an existing file path the flush has no grant to create.
+    PR #5011 shipped a one-line body promising a per-candidate list that never arrived."""
 
     def test_the_placeholder_is_written_before_the_run(self):
         """Edit needs an existing file, and a Write grant is not an option here."""
