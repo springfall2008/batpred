@@ -513,11 +513,11 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
 
     No octopus_intelligent_slot is configured and car_charging_slots starts empty.
     The car_charging_energy sensor records 1.5 kWh in the 30-minute window
-    starting at minute 60 of yesterday.  yesterday_reconstruct_car_slots should
+    starting at minute 600 of yesterday.  yesterday_reconstruct_car_slots should
     synthesise a slot for that window and subtract the corresponding kWh from the
     load step data before handing it to the Prediction.
 
-    Slot: start=60, end=90, kwh=1.5 → load rate = 1.5/0.5h = 3.0 kW
+    Slot: start=600, end=630, kwh=1.5 → load rate = 1.5/0.5h = 3.0 kW
     Subtraction per 5-min step: 3.0 * 5/60 = 0.25 kWh > FLAT_LOAD_KWH (0.1)
     Expected inside-slot value: max(0.1 - 0.25, 0) = 0.0
 
@@ -546,15 +546,30 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
     # calculate_yesterday fakes self.minutes_now to 0, but car_charging_energy is
     # indexed in minutes before the REAL now, so the lookup is
     #   minute_previous = real_minutes_now + 1440 - minute      (#5004)
-    # Record the session at plan-axis minute 60 (yesterday 01:00) and derive its
+    # Record the session at plan-axis minute 600 (yesterday 10:00) and derive its
     # sensor index from that, rather than hardcoding the faked-axis value.
     real_minutes_now = my_predbat.minutes_now  # 360
-    car_session_minute = 60
-    session_index = real_minutes_now + 24 * 60 - car_session_minute
-    # An incrementing kWh sensor reads 1.5 at the session minute and at every
-    # more-recent time (lower index), 0 before it.  The telescoping sum over the
-    # 30-minute window is data[session_index - 29] - data[session_index + 1] = 1.5.
-    my_predbat.car_charging_energy = {k: 1.5 for k in range(0, session_index + 1)}
+    # Use a session AFTER the real clock time so the broken lookup lands on a
+    # plan minute the reconstruction loop actually visits.  With the session at
+    # 60 the buggy index (1380) sits past the sensor's step edge, so the bug
+    # merely drops the slot and no ghost band exists to assert on.
+    car_session_minute = 600
+    plan_iv = my_predbat.plan_interval_minutes  # 30
+    # An incrementing kWh sensor that accrues ONLY across the session window:
+    # flat 1.5 at older indices, ramping down through the window, 0 after it.
+    # Bounding it this way means a mis-indexed lookup reads a genuinely
+    # different band rather than silently summing to zero.
+    session_start_index = real_minutes_now + 24 * 60 - car_session_minute
+    session_end_index = session_start_index - plan_iv
+    my_predbat.car_charging_energy = {}
+    for k in range(0, 24 * 60 + real_minutes_now + plan_iv + 1):
+        if k > session_start_index:
+            value = 0.0
+        elif k <= session_end_index:
+            value = 1.5
+        else:
+            value = 1.5 * (session_start_index - k) / plan_iv
+        my_predbat.car_charging_energy[k] = value
 
     captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
 
@@ -566,21 +581,23 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
         failed = True
     else:
         load_step = captured_load[0]
-        plan_iv = my_predbat.plan_interval_minutes  # 30 by default
-        slot_end = 60 + plan_iv
+        slot_end = car_session_minute + plan_iv
 
         # Inside-slot steps: max(0.1 - 3.0*5/60, 0) = max(0.1 - 0.25, 0) = 0.0
-        for inside_min in range(60, slot_end, PREDICT_STEP):
+        for inside_min in range(car_session_minute, slot_end, PREDICT_STEP):
             val = load_step.get(inside_min, -1)
             if abs(val) > 1e-9:
                 print("ERROR: step {} (inside energy-sensor slot) should be 0.0 but got {}".format(inside_min, val))
                 failed = True
 
-        # The bug (#5004) read the faked minutes_now, shifting the lookup by
-        # real_minutes_now and painting a ghost slot minutes_now earlier on the
-        # plan axis.  60 - 360 wraps below 0, so the ghost landed via the +1440
-        # wrap in get_from_incrementing; assert the band it corrupted is clean.
-        ghost_minute = (car_session_minute - real_minutes_now) % (24 * 60)
+        # The bug (#5004) read the faked minutes_now (0) instead of the real one,
+        # so for plan minute m it computed sensor index 1440 - m instead of
+        # real_minutes_now + 1440 - m.  The session's data therefore surfaced at
+        # the plan minute whose buggy index matches the session's real index:
+        # 1440 - m = real_minutes_now + 1440 - car_session_minute, i.e.
+        # m = car_session_minute - real_minutes_now, painting a ghost slot
+        # real_minutes_now EARLIER on the plan axis.  Assert that band is clean.
+        ghost_minute = car_session_minute - real_minutes_now
         for ghost_step in range(ghost_minute, ghost_minute + plan_iv, PREDICT_STEP):
             val = load_step.get(ghost_step, None)
             if val is not None and abs(val - FLAT_LOAD_KWH) > 1e-9:
@@ -588,7 +605,7 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
                 failed = True
 
         # Outside-slot steps should be unchanged at FLAT_LOAD_KWH.
-        for outside_min in [0, 5, 55, slot_end, slot_end + 5, 300]:
+        for outside_min in [0, 5, 55, 300, slot_end, slot_end + 5]:
             val = load_step.get(outside_min, -1)
             if abs(val - FLAT_LOAD_KWH) > 1e-9:
                 print("ERROR: step {} (outside energy-sensor slot) should be {} but got {}".format(outside_min, FLAT_LOAD_KWH, val))
@@ -662,6 +679,14 @@ def _test_reconstruct_car_slots(my_predbat, failed):
         load_octopus_slots is called and replaces car_charging_slots for that
         car.
     """
+    # unit_test.py hands the same PredBat instance to every registry test, so any
+    # config these subcases change has to be put back exactly as it was found.
+    # Snapshot BEFORE the first subcase mutates anything: taking these later
+    # (e.g. at 5g) would capture 5d-5f's own values and leak them onward.
+    entry_reported_load = my_predbat.car_energy_reported_load
+    entry_charging_loss = my_predbat.car_charging_loss
+    entry_octopus_arg = my_predbat.args.get("octopus_intelligent_slot", None)
+
     # -----------------------------------------------------------------------
     # 5a – non-octopus slot synthesised from car_charging_energy
     # -----------------------------------------------------------------------
@@ -953,9 +978,6 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     print("calculate_yesterday: Test 5g - reconstruction follows the passed minutes_now, not the faked one (#5004)")
 
     _setup_base(my_predbat, minutes_now=0)
-    saved_reported_load = my_predbat.car_energy_reported_load
-    saved_loss = my_predbat.car_charging_loss
-    saved_octopus_arg = my_predbat.args.get("octopus_intelligent_slot", None)
 
     my_predbat.num_cars = 1
     my_predbat.car_energy_reported_load = True
@@ -1018,9 +1040,9 @@ def _test_reconstruct_car_slots(my_predbat, failed):
 
     # Restore everything 5g/5h changed, including the flags the earlier
     # sub-cases leave set on the shared instance.
-    my_predbat.car_energy_reported_load = saved_reported_load
-    my_predbat.car_charging_loss = saved_loss
-    my_predbat.args["octopus_intelligent_slot"] = saved_octopus_arg
+    my_predbat.car_energy_reported_load = entry_reported_load
+    my_predbat.car_charging_loss = entry_charging_loss
+    my_predbat.args["octopus_intelligent_slot"] = entry_octopus_arg
     my_predbat.num_cars = 0
     my_predbat.car_charging_slots = [[] for _ in range(4)]
     my_predbat.car_charging_energy = {}
