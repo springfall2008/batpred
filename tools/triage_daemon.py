@@ -985,10 +985,11 @@ def journal_pr_body():
 def open_journal_pr(today):
     """Open the draft PR for a journal branch the flush pushed, if it did not already exist.
 
-    Done here rather than inside the flush because a pull request body does not fit on a
-    command line: permission rules match a command string, a multi-line command matches
-    nothing, and a real per-candidate list is many lines. Opening it from the daemon also
-    means the one flow that can push no longer needs a `gh pr create` grant at all.
+    Done here rather than inside the flush because the body is written to a pre-created file: the flush
+    can edit it but has no grant to create it for --body-file. Building a real
+    per-candidate list into a --body argument would also require careful shell quoting over many
+    lines of markdown. Opening it from the daemon also means the one flow that can push no
+    longer needs a `gh pr create` grant at all.
 
     A flush that deliberately landed nothing pushes no branch, so there is nothing to open.
     """
