@@ -1,0 +1,1223 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Annual Install Costs and Payback Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Annual Install Costs and Payback Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-07-27-annual-costs-payback.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Annual Install Costs and Payback Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="annual-install-costs-and-payback-implementation-plan">Annual Install Costs and Payback Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Add install-cost estimates and a simple payback period for PV alone, PV with a battery, and PV with a battery run by Predbat — plus a PV-only scenario to measure the first of those, and panel-count as an alternative to kWp.</p>
+<p><strong>Architecture:</strong> A new pure module <code>annual_costs.py</code> holds every cost and payback calculation with no I/O, so it is directly testable. The engine gains a fourth scenario (<code>pv_only</code>) and writes <code>annual.costs</code> and <code>annual.payback</code> into the results document, so the CLI gets both without any web-layer involvement. The web tab adds a kWp/panels toggle, editable cost parameters under Advanced, and a costs-and-payback table.</p>
+<p><strong>Tech Stack:</strong> Python 3, aiohttp, ApexCharts.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-07-27-annual-costs-payback-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li><strong>Costs are money figures a user makes purchasing decisions on.</strong> A wrong number here is worse than a missing one. Where a figure cannot be computed, say so rather than emitting a plausible-looking value.</li>
+<li><strong>Payback is emitted only when <code>months_included == 12</code>.</strong> Otherwise the annual saving covers less than a year and the payback would be overstated. Emit <code>{"available": false, "reason": ...}</code>, never an extrapolation.</li>
+<li><strong>A saving of zero or less means <code>{"pays_back": false}</code></strong> — never a negative or infinite year count.</li>
+<li><strong><code>predbat_annual_gbp</code> is recurring, not capital.</strong> It is subtracted from the Predbat row's annual saving. It must NOT be added to any capital figure and must NOT alter any scenario's <code>cost_p</code>.</li>
+<li><strong>The fourth chart colour is <code>#9439ef</code>.</strong> Validated with the dataviz validator in both light and dark mode. The existing three (<code>#0072B2</code>, <code>#D55E00</code>, <code>#009E73</code>) do not change. Do not substitute a colour without re-running the validator in both modes.</li>
+<li><strong><code>pv_only</code> must not call <code>calculate_plan()</code>.</strong> It is a single prediction with empty charge/export windows, like <code>no_pvbat</code> and <code>without_predbat</code>. Calling the planner would multiply run time.</li>
+<li><strong>Never set <code>predbat.debug_enable</code>.</strong> <code>kernel_supported()</code> requires it to be False; setting it disables the C++ kernel and makes every plan ~8x slower.</li>
+<li><strong>Line length 256 (Black) / 250 (Flake8); 100% docstrings (<code>interrogate</code>); British English (CSpell).</strong></li>
+<li><strong>Tests</strong> live in <code>apps/predbat/tests/</code>, are registered in <code>TEST_REGISTRY</code> in <code>apps/predbat/unit_test.py</code>, and run from <code>coverage/</code> via <code>./run_all --test &lt;name&gt;</code>. <strong>Always redirect test output to a file and grep the file</strong> — never pipe straight to grep.</li>
+<li><strong>Registry names are not file names.</strong> <code>--test web_annual</code> runs only <code>test_web_annual</code>, NOT <code>test_web_annual_form</code>. Use <code>./run_all -k web_annual</code> to run every web_annual test, and check your new test actually executed by grepping its printed line.</li>
+<li><strong>Run pre-commit as <code>coverage/venv/bin/pre-commit run --files &lt;paths&gt;</code>.</strong> There is no <code>./run_pre_commit</code>, and <code>--all-files</code> silently skips untracked files.</li>
+<li><strong>Verify new tests discriminate.</strong> After a test passes, mutate the code it covers to reintroduce the bug and confirm the test fails. Two defects have already shipped green in this feature because assertions matched broken code.</li>
+</ul>
+<hr />
+<h3 id="task-1-the-cost-and-payback-module">Task 1: The cost and payback module</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/annual_costs.py</code>
+- Create: <code>apps/predbat/tests/test_annual_costs.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code> (register the test)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing — this module is pure and standalone.
+- Produces:
+  - <code>DEFAULT_COSTS</code> (dict), <code>PV_RATE_ANCHORS_KWP = (2.0, 7.0, 30.0)</code>
+  - <code>resolve_costs(raw) -&gt; dict</code>
+  - <code>pv_rate_gbp_per_kwp(total_kwp, settings) -&gt; float</code>
+  - <code>pv_cost_gbp(total_kwp, settings) -&gt; float</code>
+  - <code>battery_cost_gbp(size_kwh, settings) -&gt; float</code>
+  - <code>build_costs(total_kwp, battery_kwh, settings) -&gt; dict</code>
+  - <code>payback_row(capital_gbp, annual_saving_gbp, recurring_gbp=0.0) -&gt; dict</code>
+  - <code>build_payback(annual_scenarios, costs, months_included, settings) -&gt; dict</code></p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_annual_costs.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+&quot;&quot;&quot;Unit tests for the annual install-cost and payback model.
+
+Everything here is pure arithmetic over plain dicts - no network, no Predbat
+instance, no plan run - so it is fast and registered as a non-slow test.
+&quot;&quot;&quot;
+
+from annual_costs import DEFAULT_COSTS, battery_cost_gbp, build_costs, build_payback, payback_row, pv_cost_gbp, pv_rate_gbp_per_kwp, resolve_costs
+
+
+def close(actual, expected, tolerance=0.01):
+    &quot;&quot;&quot;Return True when two floats agree to within a tolerance.&quot;&quot;&quot;
+    return abs(actual - expected) &lt;= tolerance
+
+
+def test_annual_costs():
+    &quot;&quot;&quot;Verify the cost bands, the minimum, and the payback arithmetic.&quot;&quot;&quot;
+    failed = False
+    print(&quot;**** Testing annual cost and payback model ****&quot;)
+    settings = resolve_costs(None)
+
+    print(&quot;Test: the band rate sits exactly on each published median at its anchor&quot;)
+    for kwp, expected in [(2.0, 1780.0), (7.0, 1697.0), (30.0, 1262.0)]:
+        rate = pv_rate_gbp_per_kwp(kwp, settings)
+        if not close(rate, expected):
+            print(&quot;  ERROR: {} kWp should be {} per kWp, got {}&quot;.format(kwp, expected, rate))
+            failed = True
+
+    print(&quot;Test: the rate interpolates between anchors rather than stepping&quot;)
+    # A step function is what produces the 4.0/4.1 kWp discontinuity this design exists
+    # to avoid, so assert an actual in-between value, not merely &quot;different&quot;.
+    if not close(pv_rate_gbp_per_kwp(4.5, settings), 1738.50):
+        print(&quot;  ERROR: 4.5 kWp should interpolate to 1738.50, got {}&quot;.format(pv_rate_gbp_per_kwp(4.5, settings)))
+        failed = True
+
+    print(&quot;Test: the rate is clamped flat outside the anchor span&quot;)
+    if not close(pv_rate_gbp_per_kwp(0.5, settings), 1780.0) or not close(pv_rate_gbp_per_kwp(45.0, settings), 1262.0):
+        print(&quot;  ERROR: the rate should clamp to 1780 below 2 kWp and 1262 above 30 kWp&quot;)
+        failed = True
+
+    print(&quot;Test: total PV cost never decreases as the system grows&quot;)
+    # This is the property that motivated interpolation over a step function.
+    previous = -1.0
+    size = 0.1
+    while size &lt;= 50.0:
+        cost = pv_cost_gbp(size, settings)
+        if cost &lt; previous - 0.001:
+            print(&quot;  ERROR: PV cost fell from {} to {} at {} kWp&quot;.format(previous, cost, size))
+            failed = True
+            break
+        previous = cost
+        size += 0.1
+
+    print(&quot;Test: the minimum applies to a small system and not to a large one&quot;)
+    if not close(pv_cost_gbp(1.0, settings), 2500.0):
+        print(&quot;  ERROR: a 1 kWp system should cost the 2500 minimum, got {}&quot;.format(pv_cost_gbp(1.0, settings)))
+        failed = True
+    if not close(pv_cost_gbp(5.0, settings), 8651.0, tolerance=1.0):
+        print(&quot;  ERROR: a 5 kWp system should cost about 8651, got {}&quot;.format(pv_cost_gbp(5.0, settings)))
+        failed = True
+
+    print(&quot;Test: no PV and no battery cost nothing, rather than the minimum&quot;)
+    if pv_cost_gbp(0, settings) != 0.0:
+        print(&quot;  ERROR: zero PV should cost nothing, got {}&quot;.format(pv_cost_gbp(0, settings)))
+        failed = True
+    if battery_cost_gbp(0, settings) != 0.0:
+        print(&quot;  ERROR: zero battery should cost nothing, got {}&quot;.format(battery_cost_gbp(0, settings)))
+        failed = True
+
+    print(&quot;Test: battery cost is the install fee plus the per-kWh rate&quot;)
+    if not close(battery_cost_gbp(9.5, settings), 500.0 + 300.0 * 9.5):
+        print(&quot;  ERROR: a 9.5 kWh battery should cost 3350, got {}&quot;.format(battery_cost_gbp(9.5, settings)))
+        failed = True
+
+    print(&quot;Test: custom settings override every default&quot;)
+    custom = resolve_costs({&quot;battery_install_gbp&quot;: 0, &quot;battery_per_kwh_gbp&quot;: 200, &quot;pv_minimum_gbp&quot;: 0, &quot;pv_rate_small_gbp_per_kwp&quot;: 1000, &quot;pv_rate_medium_gbp_per_kwp&quot;: 900, &quot;pv_rate_large_gbp_per_kwp&quot;: 800, &quot;predbat_annual_gbp&quot;: 99})
+    if not close(battery_cost_gbp(10, custom), 2000.0) or not close(pv_rate_gbp_per_kwp(2.0, custom), 1000.0) or custom[&quot;predbat_annual_gbp&quot;] != 99:
+        print(&quot;  ERROR: custom cost settings were not honoured: {}&quot;.format(custom))
+        failed = True
+
+    print(&quot;Test: payback divides capital by the annual saving&quot;)
+    row = payback_row(10000.0, 1000.0)
+    if not row[&quot;pays_back&quot;] or not close(row[&quot;years&quot;], 10.0):
+        print(&quot;  ERROR: 10000 capital against 1000 a year should pay back in 10 years, got {}&quot;.format(row))
+        failed = True
+
+    print(&quot;Test: a zero or negative saving does not pay back&quot;)
+    for saving in [0.0, -50.0]:
+        row = payback_row(10000.0, saving)
+        if row[&quot;pays_back&quot;] or row.get(&quot;years&quot;) is not None:
+            print(&quot;  ERROR: a saving of {} must not produce a payback period, got {}&quot;.format(saving, row))
+            failed = True
+
+    print(&quot;Test: a recurring cost reduces the saving and lengthens payback&quot;)
+    row = payback_row(10000.0, 1000.0, recurring_gbp=100.0)
+    if not close(row[&quot;years&quot;], 11.111) or not close(row[&quot;annual_saving_gbp&quot;], 900.0) or not close(row[&quot;gross_annual_saving_gbp&quot;], 1000.0):
+        print(&quot;  ERROR: a 100/year fee should give 900 net and 11.11 years, got {}&quot;.format(row))
+        failed = True
+
+    print(&quot;Test: a recurring cost exceeding the saving means it never pays back&quot;)
+    # The case a &quot;subscription as capital&quot; implementation gets wrong: treating the fee as
+    # a one-off would still show a payback period here.
+    row = payback_row(10000.0, 80.0, recurring_gbp=100.0)
+    if row[&quot;pays_back&quot;]:
+        print(&quot;  ERROR: a fee larger than the saving must not pay back, got {}&quot;.format(row))
+        failed = True
+
+    print(&quot;Test: payback is refused on a partial year rather than extrapolated&quot;)
+    scenarios = {&quot;no_pvbat&quot;: {&quot;cost_p&quot;: 200000.0}, &quot;pv_only&quot;: {&quot;cost_p&quot;: 130000.0}, &quot;without_predbat&quot;: {&quot;cost_p&quot;: 110000.0}, &quot;with_predbat&quot;: {&quot;cost_p&quot;: 80000.0}}
+    costs = build_costs(5.0, 9.5, settings)
+    partial = build_payback(scenarios, costs, 11, settings)
+    if partial.get(&quot;available&quot;) is not False or &quot;11&quot; not in str(partial.get(&quot;reason&quot;, &quot;&quot;)):
+        print(&quot;  ERROR: 11 months should refuse payback and say why, got {}&quot;.format(partial))
+        failed = True
+
+    print(&quot;Test: a full year produces all three payback rows&quot;)
+    full = build_payback(scenarios, costs, 12, settings)
+    for key, capital in [(&quot;pv_only&quot;, costs[&quot;pv_gbp&quot;]), (&quot;pv_battery&quot;, costs[&quot;total_gbp&quot;]), (&quot;pv_battery_predbat&quot;, costs[&quot;total_gbp&quot;])]:
+        if key not in full:
+            print(&quot;  ERROR: {} row missing from payback, got {}&quot;.format(key, full))
+            failed = True
+        elif not close(full[key][&quot;capital_gbp&quot;], capital):
+            print(&quot;  ERROR: {} should use capital {}, got {}&quot;.format(key, capital, full[key][&quot;capital_gbp&quot;]))
+            failed = True
+    # no_pvbat 200000p - pv_only 130000p = 70000p = 700 GBP a year against PV-only capital
+    if not close(full[&quot;pv_only&quot;][&quot;annual_saving_gbp&quot;], 700.0):
+        print(&quot;  ERROR: the PV-only saving should be 700 a year, got {}&quot;.format(full[&quot;pv_only&quot;][&quot;annual_saving_gbp&quot;]))
+        failed = True
+
+    print(&quot;Test: the Predbat fee changes only the Predbat row&quot;)
+    paid = build_payback(scenarios, costs, 12, resolve_costs({&quot;predbat_annual_gbp&quot;: 100}))
+    if not close(paid[&quot;pv_only&quot;][&quot;annual_saving_gbp&quot;], full[&quot;pv_only&quot;][&quot;annual_saving_gbp&quot;]):
+        print(&quot;  ERROR: the Predbat fee must not touch the PV-only row&quot;)
+        failed = True
+    if not close(paid[&quot;pv_battery&quot;][&quot;annual_saving_gbp&quot;], full[&quot;pv_battery&quot;][&quot;annual_saving_gbp&quot;]):
+        print(&quot;  ERROR: the Predbat fee must not touch the PV+battery row&quot;)
+        failed = True
+    if not close(paid[&quot;pv_battery_predbat&quot;][&quot;annual_saving_gbp&quot;], full[&quot;pv_battery_predbat&quot;][&quot;annual_saving_gbp&quot;] - 100.0):
+        print(&quot;  ERROR: the Predbat fee should reduce the Predbat row's saving by 100&quot;)
+        failed = True
+    if not close(paid[&quot;pv_battery_predbat&quot;][&quot;capital_gbp&quot;], full[&quot;pv_battery_predbat&quot;][&quot;capital_gbp&quot;]):
+        print(&quot;  ERROR: the Predbat fee is recurring and must not change capital&quot;)
+        failed = True
+
+    if failed:
+        print(&quot;**** ERROR: annual cost tests failed ****&quot;)
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Register the test</strong></li>
+</ul>
+<p>In <code>apps/predbat/unit_test.py</code>, add the import beside the other annual imports:</p>
+<pre><code class="language-python">from tests.test_annual_costs import test_annual_costs
+</code></pre>
+<p>and the registry entry beside the other annual entries:</p>
+<pre><code class="language-python">        (&quot;annual_costs&quot;, test_annual_costs, &quot;Annual install cost and payback model tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Run it and watch it fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test annual_costs &gt; /tmp/t.txt 2&gt;&amp;1; grep -iE &quot;ERROR|FAIL|Traceback&quot; /tmp/t.txt
+</code></pre>
+<p>Expected: <code>ModuleNotFoundError: No module named 'annual_costs'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 4: Write the module</strong></li>
+</ul>
+<p>Create <code>apps/predbat/annual_costs.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+
+&quot;&quot;&quot;Install-cost and payback model for the annual prediction tool.
+
+Pure arithmetic over plain dicts: no I/O, no Predbat state, no network. The engine
+calls this once per run to turn a system size into an estimated capital cost, and a
+year of modelled savings into a payback period.
+
+The PV rate interpolates between published band medians rather than stepping between
+them. A step function makes a 4.1 kWp system cost less in total than a 4.0 kWp one,
+because it drops onto the cheaper band's rate for its whole size - an artefact of the
+bucketing, not a real price. Interpolating between each band's midpoint keeps total
+cost monotonic across the whole range.
+&quot;&quot;&quot;
+
+# Published median install costs, GBP per kWp, for financial year 2025/26. Each is the
+# median for systems within a size band, so it describes the typical system at that
+# band's CENTRE - which is where it is anchored below.
+DEFAULT_COSTS = {
+    &quot;battery_install_gbp&quot;: 500.0,
+    &quot;battery_per_kwh_gbp&quot;: 300.0,
+    &quot;pv_minimum_gbp&quot;: 2500.0,
+    &quot;pv_rate_small_gbp_per_kwp&quot;: 1780.0,  # band 0-4 kWp
+    &quot;pv_rate_medium_gbp_per_kwp&quot;: 1697.0,  # band 4-10 kWp
+    &quot;pv_rate_large_gbp_per_kwp&quot;: 1262.0,  # band 10-50 kWp
+    # Predbat itself. Zero when self-hosted; the hosted version is expected to charge
+    # around 100 a year. RECURRING, not capital - see payback_row().
+    &quot;predbat_annual_gbp&quot;: 0.0,
+}
+
+# Midpoints of the 0-4, 4-10 and 10-50 kWp bands the rates above are medians of.
+PV_RATE_ANCHORS_KWP = (2.0, 7.0, 30.0)
+
+_RATE_KEYS = (&quot;pv_rate_small_gbp_per_kwp&quot;, &quot;pv_rate_medium_gbp_per_kwp&quot;, &quot;pv_rate_large_gbp_per_kwp&quot;)
+
+
+def resolve_costs(raw):
+    &quot;&quot;&quot;Return the cost settings, merging any overrides over the defaults.
+
+    Every value must be a non-negative number; anything else raises ValueError naming
+    the field, rather than silently falling back to a default and quietly costing the
+    user's system at a price they did not ask for.
+    &quot;&quot;&quot;
+    settings = dict(DEFAULT_COSTS)
+    if not raw:
+        return settings
+    if not isinstance(raw, dict):
+        raise ValueError(&quot;annual.costs must be a mapping&quot;)
+    for key, value in raw.items():
+        if key not in DEFAULT_COSTS:
+            raise ValueError(&quot;annual.costs.{} is not a recognised cost setting&quot;.format(key))
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(&quot;annual.costs.{} must be a number, got {!r}&quot;.format(key, value))
+        if number &lt; 0:
+            raise ValueError(&quot;annual.costs.{} must not be negative, got {}&quot;.format(key, number))
+        settings[key] = number
+    return settings
+
+
+def pv_rate_gbp_per_kwp(total_kwp, settings):
+    &quot;&quot;&quot;Return the GBP-per-kWp rate for a system of this size.
+
+    Linear interpolation between the three band anchors, clamped flat beyond the first
+    and last. Clamping rather than extrapolating keeps a very small or very large system
+    on a published figure instead of a straight line run off the end of the data.
+    &quot;&quot;&quot;
+    rates = [settings[key] for key in _RATE_KEYS]
+    anchors = PV_RATE_ANCHORS_KWP
+    size = float(total_kwp)
+    if size &lt;= anchors[0]:
+        return rates[0]
+    if size &gt;= anchors[-1]:
+        return rates[-1]
+    for index in range(len(anchors) - 1):
+        low, high = anchors[index], anchors[index + 1]
+        if low &lt;= size &lt;= high:
+            fraction = (size - low) / (high - low)
+            return rates[index] + fraction * (rates[index + 1] - rates[index])
+    return rates[-1]
+
+
+def pv_cost_gbp(total_kwp, settings):
+    &quot;&quot;&quot;Return the estimated PV install cost, or zero when there is no PV.
+
+    The minimum install price applies to a real system only. A system of no panels
+    costs nothing - returning the minimum there would invent a cost for equipment the
+    user does not have and make a no-PV scenario look expensive.
+    &quot;&quot;&quot;
+    size = float(total_kwp or 0)
+    if size &lt;= 0:
+        return 0.0
+    return max(settings[&quot;pv_minimum_gbp&quot;], size * pv_rate_gbp_per_kwp(size, settings))
+
+
+def battery_cost_gbp(size_kwh, settings):
+    &quot;&quot;&quot;Return the estimated battery install cost, or zero when there is no battery.&quot;&quot;&quot;
+    size = float(size_kwh or 0)
+    if size &lt;= 0:
+        return 0.0
+    return settings[&quot;battery_install_gbp&quot;] + settings[&quot;battery_per_kwh_gbp&quot;] * size
+
+
+def build_costs(total_kwp, battery_kwh, settings):
+    &quot;&quot;&quot;Return the capital cost breakdown for a system of this size.&quot;&quot;&quot;
+    pv = pv_cost_gbp(total_kwp, settings)
+    battery = battery_cost_gbp(battery_kwh, settings)
+    return {
+        &quot;pv_gbp&quot;: round(pv, 2),
+        &quot;battery_gbp&quot;: round(battery, 2),
+        &quot;total_gbp&quot;: round(pv + battery, 2),
+        &quot;pv_rate_gbp_per_kwp&quot;: round(pv_rate_gbp_per_kwp(total_kwp or 0, settings), 2) if (total_kwp or 0) &gt; 0 else 0.0,
+        &quot;total_kwp&quot;: round(float(total_kwp or 0), 3),
+        &quot;battery_kwh&quot;: round(float(battery_kwh or 0), 3),
+    }
+
+
+def payback_row(capital_gbp, annual_saving_gbp, recurring_gbp=0.0):
+    &quot;&quot;&quot;Return one payback row: capital divided by the net annual saving.
+
+    ``recurring_gbp`` is an ongoing yearly cost (Predbat's own fee), so it is subtracted
+    from the saving rather than added to capital. Adding it to capital would understate
+    it enormously - over a ten year payback a 100 a year fee is 1000, not 100.
+
+    A net saving of zero or less reports ``pays_back: False`` with no year count. A
+    negative payback period is meaningless, and dividing by a near-zero saving produces
+    a huge number that reads like an answer rather than the absence of one.
+    &quot;&quot;&quot;
+    gross = float(annual_saving_gbp)
+    net = gross - float(recurring_gbp or 0.0)
+    row = {
+        &quot;capital_gbp&quot;: round(float(capital_gbp), 2),
+        &quot;gross_annual_saving_gbp&quot;: round(gross, 2),
+        &quot;annual_saving_gbp&quot;: round(net, 2),
+        &quot;predbat_annual_gbp&quot;: round(float(recurring_gbp or 0.0), 2),
+    }
+    if net &lt;= 0:
+        row[&quot;pays_back&quot;] = False
+        row[&quot;years&quot;] = None
+        return row
+    row[&quot;pays_back&quot;] = True
+    row[&quot;years&quot;] = round(float(capital_gbp) / net, 2)
+    return row
+
+
+def build_payback(annual_scenarios, costs, months_included, settings):
+    &quot;&quot;&quot;Return the payback block for a completed run, or a reason it could not be built.
+
+    Payback needs a full year. When a month is unavailable the annual totals cover less
+    than twelve months, so every saving is understated and every payback period
+    correspondingly overstated. Extrapolating a partial year to a full one would invent
+    savings for months the tool could not price, so this refuses instead and says which
+    it had - matching how the rest of the tool declines to count an unavailable month.
+    &quot;&quot;&quot;
+    if not annual_scenarios:
+        return {&quot;available&quot;: False, &quot;reason&quot;: &quot;No month produced a usable result, so there is nothing to pay back.&quot;}
+    if months_included != 12:
+        return {&quot;available&quot;: False, &quot;reason&quot;: &quot;Payback needs a full year, but only {} of 12 months could be modelled. The missing months are named in the caveats.&quot;.format(months_included)}
+
+    baseline = annual_scenarios.get(&quot;no_pvbat&quot;, {}).get(&quot;cost_p&quot;)
+    if baseline is None:
+        return {&quot;available&quot;: False, &quot;reason&quot;: &quot;The no-PV/battery baseline is missing, so there is nothing to compare against.&quot;}
+
+    def saving_gbp(key):
+        &quot;&quot;&quot;Return the annual saving in GBP of one scenario against the no-system baseline.&quot;&quot;&quot;
+        return (baseline - annual_scenarios.get(key, {}).get(&quot;cost_p&quot;, baseline)) / 100.0
+
+    return {
+        &quot;available&quot;: True,
+        &quot;pv_only&quot;: payback_row(costs[&quot;pv_gbp&quot;], saving_gbp(&quot;pv_only&quot;)),
+        &quot;pv_battery&quot;: payback_row(costs[&quot;total_gbp&quot;], saving_gbp(&quot;without_predbat&quot;)),
+        &quot;pv_battery_predbat&quot;: payback_row(costs[&quot;total_gbp&quot;], saving_gbp(&quot;with_predbat&quot;), recurring_gbp=settings[&quot;predbat_annual_gbp&quot;]),
+    }
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the tests</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test annual_costs &gt; /tmp/t.txt 2&gt;&amp;1; echo &quot;EXIT=$?&quot;; grep -iE &quot;ERROR|FAIL|Traceback&quot; /tmp/t.txt
+</code></pre>
+<p>Expected: PASS, exit 0.</p>
+<ul>
+<li>[ ] <strong>Step 6: Verify the monotonic test discriminates</strong></li>
+</ul>
+<p>Temporarily replace <code>pv_rate_gbp_per_kwp</code>'s interpolation with a step function (return <code>rates[0]</code> below 4, <code>rates[1]</code> below 10, else <code>rates[2]</code>), re-run, and confirm the monotonic test FAILS. Restore afterwards. This is the property the whole interpolation design exists to protect; a test that passes either way is worthless.</p>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/source/batpred
+coverage/venv/bin/pre-commit run --files apps/predbat/annual_costs.py apps/predbat/tests/test_annual_costs.py apps/predbat/unit_test.py
+git add apps/predbat/annual_costs.py apps/predbat/tests/test_annual_costs.py apps/predbat/unit_test.py
+git commit -m &quot;feat(annual): add the install cost and payback model&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-panel-count-as-an-alternative-to-kwp">Task 2: Panel count as an alternative to kWp</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/annual.py</code> (<code>_validate_solar</code>, around line 105)
+- Test: <code>apps/predbat/tests/test_annual_config.py</code> — this module already covers <code>validate_config</code>'s solar handling and already has a <code>base_config()</code> helper at line 17 returning a minimal valid config, which the tests below use directly.</p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing from Task 1.
+- Produces: <code>_validate_solar</code> accepts <code>panels</code> and <code>panel_watts</code>, and every normalised array still carries a <code>kwp</code> float. <code>DEFAULT_PANEL_WATTS = 400.0</code> is exported from <code>annual.py</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to the test module covering <code>validate_config</code>, following that file's existing print-and-flag style:</p>
+<pre><code class="language-python">    print(&quot;Test: a panel count derives kwp at 400 W a panel&quot;)
+    config = base_config()
+    config[&quot;solar&quot;] = [{&quot;panels&quot;: 13}]
+    validated = validate_config(config)
+    if abs(validated[&quot;solar&quot;][0][&quot;kwp&quot;] - 5.2) &gt; 0.001:
+        print(&quot;  ERROR: 13 panels at 400 W should be 5.2 kWp, got {}&quot;.format(validated[&quot;solar&quot;][0][&quot;kwp&quot;]))
+        failed = True
+
+    print(&quot;Test: a custom panel wattage is honoured&quot;)
+    config = base_config()
+    config[&quot;solar&quot;] = [{&quot;panels&quot;: 10, &quot;panel_watts&quot;: 450}]
+    validated = validate_config(config)
+    if abs(validated[&quot;solar&quot;][0][&quot;kwp&quot;] - 4.5) &gt; 0.001:
+        print(&quot;  ERROR: 10 panels at 450 W should be 4.5 kWp, got {}&quot;.format(validated[&quot;solar&quot;][0][&quot;kwp&quot;]))
+        failed = True
+
+    print(&quot;Test: the panel count and wattage survive validation for form round-tripping&quot;)
+    if validated[&quot;solar&quot;][0].get(&quot;panels&quot;) != 10 or validated[&quot;solar&quot;][0].get(&quot;panel_watts&quot;) != 450:
+        print(&quot;  ERROR: panels/panel_watts should be retained, got {}&quot;.format(validated[&quot;solar&quot;][0]))
+        failed = True
+
+    print(&quot;Test: supplying both kwp and panels is rejected rather than silently preferring one&quot;)
+    config = base_config()
+    config[&quot;solar&quot;] = [{&quot;kwp&quot;: 5.0, &quot;panels&quot;: 13}]
+    try:
+        validate_config(config)
+        print(&quot;  ERROR: supplying both kwp and panels should be rejected&quot;)
+        failed = True
+    except AnnualConfigError as error:
+        if &quot;panels&quot; not in str(error) or &quot;kwp&quot; not in str(error):
+            print(&quot;  ERROR: the error should name both fields, got {}&quot;.format(error))
+            failed = True
+
+    print(&quot;Test: an array with neither kwp nor panels is rejected&quot;)
+    config = base_config()
+    config[&quot;solar&quot;] = [{&quot;declination&quot;: 35}]
+    try:
+        validate_config(config)
+        print(&quot;  ERROR: an array with neither kwp nor panels should be rejected&quot;)
+        failed = True
+    except AnnualConfigError:
+        pass
+
+    print(&quot;Test: a fractional or zero panel count is rejected&quot;)
+    for bad in [0, 2.5, -3]:
+        config = base_config()
+        config[&quot;solar&quot;] = [{&quot;panels&quot;: bad}]
+        try:
+            validate_config(config)
+            print(&quot;  ERROR: a panel count of {} should be rejected&quot;.format(bad))
+            failed = True
+        except AnnualConfigError:
+            pass
+</code></pre>
+<p><code>base_config()</code> and <code>AnnualConfigError</code> are already imported in that module; add nothing new beyond the tests themselves.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run it and watch it fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k annual &gt; /tmp/t.txt 2&gt;&amp;1; grep -iE &quot;  ERROR|FAIL&quot; /tmp/t.txt
+</code></pre>
+<p>Expected: failures on the panel tests.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>apps/predbat/annual.py</code>, add near the other defaults:</p>
+<pre><code class="language-python"># A typical domestic panel in 2026. Only used to turn a panel count into kWp.
+DEFAULT_PANEL_WATTS = 400.0
+</code></pre>
+<p>Replace the <code>if "kwp" not in array:</code> block in <code>_validate_solar</code> with:</p>
+<pre><code class="language-python">        has_kwp = &quot;kwp&quot; in array
+        has_panels = &quot;panels&quot; in array
+        if has_kwp and has_panels:
+            # Two figures that disagree are a mistake worth surfacing. Guessing which the
+            # user meant would silently model a different system than they described.
+            raise AnnualConfigError(&quot;annual.solar[{}] has both kwp and panels; give one or the other, not both&quot;.format(index))
+        if not has_kwp and not has_panels:
+            raise AnnualConfigError(&quot;annual.solar[{}] is missing kwp (the array's peak power in kW) or panels (how many panels it has)&quot;.format(index))
+        normalised = dict(array)
+        if has_panels:
+            panels = _require_number(array[&quot;panels&quot;], &quot;annual.solar[{}].panels&quot;.format(index), minimum=0, exclusive_minimum=True, integer=True)
+            panel_watts = _require_number(array.get(&quot;panel_watts&quot;, DEFAULT_PANEL_WATTS), &quot;annual.solar[{}].panel_watts&quot;.format(index), minimum=0, exclusive_minimum=True)
+            # Retained alongside the derived kwp so the web form can show back what the
+            # user actually typed rather than replacing it with a computed decimal.
+            normalised[&quot;panels&quot;] = panels
+            normalised[&quot;panel_watts&quot;] = panel_watts
+            normalised[&quot;kwp&quot;] = panels * panel_watts / 1000.0
+        else:
+            normalised[&quot;kwp&quot;] = _require_number(array[&quot;kwp&quot;], &quot;annual.solar[{}].kwp&quot;.format(index), minimum=0, exclusive_minimum=True)
+</code></pre>
+<p>Leave the <code>declination</code>/<code>azimuth</code>/<code>efficiency</code>/<code>azimuth_zero_south</code> lines that follow unchanged.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k annual &gt; /tmp/t.txt 2&gt;&amp;1; echo &quot;EXIT=$?&quot;; grep -iE &quot;  ERROR|FAIL|Traceback&quot; /tmp/t.txt
+</code></pre>
+<p>Expected: all pass, exit 0.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files apps/predbat/annual.py apps/predbat/tests/test_annual_config.py
+git add apps/predbat/annual.py apps/predbat/tests/
+git commit -m &quot;feat(annual): accept a panel count as an alternative to kWp&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-the-pv_only-scenario">Task 3: The <code>pv_only</code> scenario</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/annual.py</code> (<code>_run_scenarios</code> around line 1010, <code>SCENARIO_KEYS</code> at line 1149)
+- Test: <code>apps/predbat/tests/test_annual_results.py</code>, <code>apps/predbat/tests/test_annual_integration.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing from Tasks 1-2.
+- Produces: <code>SCENARIO_KEYS = ["no_pvbat", "pv_only", "without_predbat", "with_predbat"]</code>. Every month row's <code>scenarios</code> dict and the annual totals gain a <code>pv_only</code> entry with the same fields as the others.</p>
+<ul>
+<li>[ ] <strong>Step 1: Add the scenario key</strong></li>
+</ul>
+<p>In <code>apps/predbat/annual.py</code>:</p>
+<pre><code class="language-python">SCENARIO_KEYS = [&quot;no_pvbat&quot;, &quot;pv_only&quot;, &quot;without_predbat&quot;, &quot;with_predbat&quot;]
+</code></pre>
+<p><code>_blend_results</code>, <code>_month_scenarios</code> and <code>_build_results</code> all iterate <code>SCENARIO_KEYS</code>, so they follow automatically. Do not hand-edit them.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run the tests to see what breaks</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k annual &gt; /tmp/t.txt 2&gt;&amp;1; grep -iE &quot;  ERROR|FAIL|KeyError&quot; /tmp/t.txt
+</code></pre>
+<p>Expected: failures in tests that build scenario dicts from hand-written literals (they will be missing <code>pv_only</code>). Note which, and fix them in Step 5.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement the scenario</strong></li>
+</ul>
+<p>In <code>_run_scenarios</code>, immediately after the <code>results["no_pvbat"] = ...</code> line and its plan capture, insert:</p>
+<pre><code class="language-python">    # Scenario 1b: PV but no battery. apply_hardware gives the array its real inverter
+    # and export limits - a PV-only system still has an inverter, and clipping matters -
+    # while soc_max=0 leaves it with nowhere to store surplus, so everything the house
+    # cannot use at the moment it is generated is exported. That difference is the whole
+    # point of this scenario: it is what makes PV-only payback different from a fixed
+    # fraction of the PV-plus-battery figure.
+    #
+    # Like scenarios 1 and 2 this is a single prediction with empty windows. It must NOT
+    # call calculate_plan(): the planner is what makes a run expensive, and there is
+    # nothing to plan without a battery.
+    apply_hardware(predbat, config[&quot;battery&quot;], config[&quot;solar&quot;])
+    predbat.soc_kw = 0
+    predbat.charge_limit_best = []
+    predbat.charge_window_best = []
+    predbat.export_window_best = []
+    predbat.export_limits_best = []
+    predbat.prediction = Prediction(predbat, actual_step, actual_step, load_step, load_step, soc_kw=0, soc_max=0)
+    results[&quot;pv_only&quot;] = _billed_result(predbat, DAY_MINUTES, actual_step)
+    if plans is not None:
+        plans[&quot;pv_only&quot;] = _capture_plan(predbat, actual_step, actual_step, load_step, load_step, DAY_MINUTES)
+</code></pre>
+<p><code>predbat.load_forecast</code> is still <code>baseline_load</code> from scenario 1 at this point, which is what this scenario wants — the same household load, including the car on its timer, as the other baselines.</p>
+<ul>
+<li>[ ] <strong>Step 4: Add an assertion that it is a real, distinct scenario</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_annual_integration.py</code>, inside the existing integration test after a day has been run:</p>
+<pre><code class="language-python">    print(&quot;Test: pv_only generates PV but stores none of it&quot;)
+    pv_only = result[&quot;pv_only&quot;]
+    if pv_only[&quot;pv_generated_kwh&quot;] &lt;= 0:
+        print(&quot;  ERROR: the PV-only scenario should generate PV, got {}&quot;.format(pv_only[&quot;pv_generated_kwh&quot;]))
+        failed = True
+    if pv_only[&quot;battery_throughput_kwh&quot;] != 0:
+        print(&quot;  ERROR: the PV-only scenario must have no battery throughput, got {}&quot;.format(pv_only[&quot;battery_throughput_kwh&quot;]))
+        failed = True
+
+    print(&quot;Test: pv_only sits between the no-system baseline and PV-plus-battery on cost&quot;)
+    # Not an arbitrary ordering check: PV alone must beat no system (it displaces import),
+    # and must not beat PV plus a battery (the battery can only add value). A violation
+    # means the scenario is not modelling what its name says.
+    if not (result[&quot;no_pvbat&quot;][&quot;cost_p&quot;] &gt; pv_only[&quot;cost_p&quot;] &gt; result[&quot;without_predbat&quot;][&quot;cost_p&quot;]):
+        print(&quot;  ERROR: expected no_pvbat &gt; pv_only &gt; without_predbat on cost, got {} / {} / {}&quot;.format(result[&quot;no_pvbat&quot;][&quot;cost_p&quot;], pv_only[&quot;cost_p&quot;], result[&quot;without_predbat&quot;][&quot;cost_p&quot;]))
+        failed = True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Fix the hand-written scenario literals</strong></li>
+</ul>
+<p>Update every test dict that enumerates scenarios by hand to include <code>pv_only</code>, using a value between <code>no_pvbat</code> and <code>without_predbat</code> so the ordering assertion above holds. The three files with hand-written literals are:</p>
+<ul>
+<li><code>test_annual_results.py</code> — every <code>make_month_row(...)</code> call site passes a <code>costs</code> dict keyed by scenario; each gains a <code>"pv_only"</code> key.</li>
+<li><code>test_annual_cli.py</code> — the sample results documents around lines 66-68 and 122-124.</li>
+<li><code>test_web_annual.py</code> — <code>sample_run_results()</code>'s month and annual scenario dicts.</li>
+</ul>
+<p><code>test_annual_scenarios.py</code> needs <strong>no</strong> change: it builds its scenario dicts with <code>{key: ... for key in SCENARIO_KEYS}</code> comprehensions, so it picks the new key up automatically. Do not add literals to it.</p>
+<ul>
+<li>[ ] <strong>Step 6: Run the tests</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k annual &gt; /tmp/t.txt 2&gt;&amp;1; echo &quot;EXIT=$?&quot;; grep -iE &quot;  ERROR|FAIL|Traceback&quot; /tmp/t.txt
+cd coverage &amp;&amp; ./run_all --test annual_integration &gt; /tmp/i.txt 2&gt;&amp;1; echo &quot;EXIT=$?&quot;; grep -iE &quot;  ERROR|FAIL&quot; /tmp/i.txt
+</code></pre>
+<p>Expected: all pass, exit 0. Note the integration test takes ~90 s.</p>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files apps/predbat/annual.py apps/predbat/tests/test_annual_results.py apps/predbat/tests/test_annual_integration.py apps/predbat/tests/test_annual_cli.py
+git add apps/predbat/annual.py apps/predbat/tests/
+git commit -m &quot;feat(annual): add a PV-only scenario so PV alone can be costed&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-wire-costs-and-payback-into-the-results-document">Task 4: Wire costs and payback into the results document</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/annual.py</code> (<code>validate_config</code> return, <code>_build_results</code>)
+- Test: <code>apps/predbat/tests/test_annual_results.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>resolve_costs</code>, <code>build_costs</code>, <code>build_payback</code> from Task 1; <code>SCENARIO_KEYS</code> including <code>pv_only</code> from Task 3; <code>kwp</code> on every array from Task 2.
+- Produces: <code>config["costs"]</code> (validated settings dict); <code>results["annual"]["costs"]</code> and <code>results["annual"]["payback"]</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_annual_results.py</code>:</p>
+<pre><code class="language-python">    print(&quot;Test: the annual block carries a cost breakdown&quot;)
+    predictor = make_predictor()
+    months = [make_month_row(month, {&quot;no_pvbat&quot;: 1000.0, &quot;pv_only&quot;: 700.0, &quot;without_predbat&quot;: 600.0, &quot;with_predbat&quot;: 400.0}) for month in range(1, 13)]
+    result = predictor._build_results(months)
+    costs = result[&quot;annual&quot;][&quot;costs&quot;]
+    # base_config()'s solar is a single 5.0 kWp array and its battery is 10.0 kWh.
+    if abs(costs[&quot;total_kwp&quot;] - 5.0) &gt; 0.001 or abs(costs[&quot;battery_kwh&quot;] - 10.0) &gt; 0.001:
+        print(&quot;  ERROR: the cost block should reflect the configured system, got {}&quot;.format(costs))
+        failed = True
+    if abs(costs[&quot;battery_gbp&quot;] - 3500.0) &gt; 0.01:
+        print(&quot;  ERROR: a 10 kWh battery should cost 3500, got {}&quot;.format(costs[&quot;battery_gbp&quot;]))
+        failed = True
+    if abs(costs[&quot;total_gbp&quot;] - (costs[&quot;pv_gbp&quot;] + costs[&quot;battery_gbp&quot;])) &gt; 0.01:
+        print(&quot;  ERROR: total should be pv plus battery, got {}&quot;.format(costs))
+        failed = True
+
+    print(&quot;Test: a full twelve months produces payback for all three options&quot;)
+    payback = result[&quot;annual&quot;][&quot;payback&quot;]
+    if not payback.get(&quot;available&quot;):
+        print(&quot;  ERROR: twelve months should produce payback, got {}&quot;.format(payback))
+        failed = True
+    for key in [&quot;pv_only&quot;, &quot;pv_battery&quot;, &quot;pv_battery_predbat&quot;]:
+        if key not in payback:
+            print(&quot;  ERROR: payback should include {}, got {}&quot;.format(key, list(payback)))
+            failed = True
+
+    print(&quot;Test: a partial year refuses payback rather than extrapolating&quot;)
+    partial_months = [make_month_row(month, {&quot;no_pvbat&quot;: 1000.0, &quot;pv_only&quot;: 700.0, &quot;without_predbat&quot;: 600.0, &quot;with_predbat&quot;: 400.0}) for month in range(1, 12)]
+    partial_months.append(make_unavailable_row(12))
+    partial = make_predictor()._build_results(partial_months)
+    if partial[&quot;annual&quot;][&quot;payback&quot;].get(&quot;available&quot;) is not False:
+        print(&quot;  ERROR: eleven usable months should refuse payback, got {}&quot;.format(partial[&quot;annual&quot;][&quot;payback&quot;]))
+        failed = True
+    if partial[&quot;annual&quot;][&quot;costs&quot;][&quot;total_gbp&quot;] &lt;= 0:
+        print(&quot;  ERROR: costs should still be reported even when payback cannot be&quot;)
+        failed = True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run it and watch it fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test annual_results &gt; /tmp/t.txt 2&gt;&amp;1; grep -iE &quot;  ERROR|KeyError&quot; /tmp/t.txt
+</code></pre>
+<p>Expected: <code>KeyError: 'costs'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Validate the costs block</strong></li>
+</ul>
+<p>In <code>apps/predbat/annual.py</code>, import at the top beside the other local imports:</p>
+<pre><code class="language-python">from annual_costs import build_costs, build_payback, resolve_costs
+</code></pre>
+<p>In <code>validate_config</code>'s returned dict, add beside <code>"samples_per_month"</code>:</p>
+<pre><code class="language-python">        &quot;costs&quot;: _validated_costs(raw.get(&quot;costs&quot;)),
+</code></pre>
+<p>and add this helper beside the other <code>_validate_*</code> functions, so a bad cost value produces the same error type as every other config mistake:</p>
+<pre><code class="language-python">def _validated_costs(raw):
+    &quot;&quot;&quot;Return the validated install-cost settings, as an AnnualConfigError on failure.
+
+    annual_costs.resolve_costs raises ValueError because it is a pure module with no
+    dependency on this one; translating here keeps every config problem a single
+    exception type for the CLI and web layer to catch.
+    &quot;&quot;&quot;
+    try:
+        return resolve_costs(raw)
+    except ValueError as error:
+        raise AnnualConfigError(str(error))
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Emit both blocks</strong></li>
+</ul>
+<p>In <code>_build_results</code>, replace the <code>return {</code> block's <code>"annual"</code> value so it also carries costs and payback. Compute them just before the return:</p>
+<pre><code class="language-python">        total_kwp = sum(float(array.get(&quot;kwp&quot;, 0) or 0) for array in self.config.get(&quot;solar&quot;) or [])
+        battery_kwh = float((self.config.get(&quot;battery&quot;) or {}).get(&quot;size_kwh&quot;, 0) or 0)
+        costs = build_costs(total_kwp, battery_kwh, self.config[&quot;costs&quot;])
+        payback = build_payback(annual_scenarios, costs, len(included), self.config[&quot;costs&quot;])
+        if not payback.get(&quot;available&quot;):
+            self.caveats.append(&quot;Payback could not be calculated: {}&quot;.format(payback[&quot;reason&quot;]))
+        else:
+            self.caveats.append(&quot;Payback is simple payback - capital divided by the modelled annual saving. It ignores panel degradation, electricity price inflation, battery replacement and finance costs, so treat it as a comparison aid rather than a financial projection.&quot;)
+</code></pre>
+<p>and add to the <code>"annual"</code> dict:</p>
+<pre><code class="language-python">                &quot;costs&quot;: costs,
+                &quot;payback&quot;: payback,
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the tests</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k annual &gt; /tmp/t.txt 2&gt;&amp;1; echo &quot;EXIT=$?&quot;; grep -iE &quot;  ERROR|FAIL|Traceback&quot; /tmp/t.txt
+</code></pre>
+<p>Expected: all pass, exit 0.</p>
+<ul>
+<li>[ ] <strong>Step 6: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files apps/predbat/annual.py apps/predbat/tests/test_annual_results.py
+git add apps/predbat/annual.py apps/predbat/tests/test_annual_results.py
+git commit -m &quot;feat(annual): report install costs and payback in the results document&quot;
+</code></pre>
+<hr />
+<h3 id="task-5-web-form-panel-toggle-live-total-and-cost-settings">Task 5: Web form — panel toggle, live total, and cost settings</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/web_annual.py</code> (<code>render_form</code> solar fieldset ~line 339, <code>config_from_post</code> ~line 473, <code>render_css</code>, <code>render_script</code>, <code>DEFAULT_CONFIG</code>)
+- Test: <code>apps/predbat/tests/test_web_annual.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>panels</code>/<code>panel_watts</code> from Task 2; <code>DEFAULT_COSTS</code> from Task 1.
+- Produces: form fields <code>solar_mode_{i}</code>, <code>solar_panels_{i}</code>, <code>solar_panel_watts_{i}</code>, and <code>cost_{key}</code> for each key in <code>DEFAULT_COSTS</code>; <code>config_from_post</code> emits a <code>costs</code> block.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>test_web_annual_form</code> in <code>apps/predbat/tests/test_web_annual.py</code>:</p>
+<pre><code class="language-python">    print(&quot;Test: each array offers a kWp/panels mode toggle and a panel count&quot;)
+    form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+    for field in ['name=&quot;solar_mode_0&quot;', 'name=&quot;solar_panels_0&quot;', 'name=&quot;solar_panel_watts_0&quot;']:
+        if field not in form:
+            print(&quot;  ERROR: the solar fieldset should offer {}&quot;.format(field))
+            failed = True
+
+    print(&quot;Test: a running total is shown under the roof aspects&quot;)
+    if 'id=&quot;annual-solar-total&quot;' not in form:
+        print(&quot;  ERROR: the solar fieldset should show a running kWp/panel total&quot;)
+        failed = True
+
+    print(&quot;Test: submitting panels produces a panels config, not a kwp one&quot;)
+    postdata = valid_postdata()
+    postdata[&quot;solar_mode_0&quot;] = &quot;panels&quot;
+    postdata[&quot;solar_panels_0&quot;] = &quot;13&quot;
+    postdata[&quot;solar_panel_watts_0&quot;] = &quot;400&quot;
+    config = make_page(my_predbat).config_from_post(postdata)
+    array = config[&quot;solar&quot;][0]
+    if array.get(&quot;panels&quot;) != 13 or &quot;kwp&quot; in array:
+        print(&quot;  ERROR: panel mode should send panels and NOT kwp - validate_config rejects both together. Got {}&quot;.format(array))
+        failed = True
+    validate_config(config)
+
+    print(&quot;Test: submitting kWp produces a kwp config, not a panels one&quot;)
+    postdata = valid_postdata()
+    postdata[&quot;solar_mode_0&quot;] = &quot;kwp&quot;
+    config = make_page(my_predbat).config_from_post(postdata)
+    array = config[&quot;solar&quot;][0]
+    if &quot;panels&quot; in array or not array.get(&quot;kwp&quot;):
+        print(&quot;  ERROR: kWp mode should send kwp and NOT panels. Got {}&quot;.format(array))
+        failed = True
+    validate_config(config)
+
+    print(&quot;Test: the cost settings appear and round-trip&quot;)
+    for key in [&quot;cost_battery_install_gbp&quot;, &quot;cost_battery_per_kwh_gbp&quot;, &quot;cost_pv_minimum_gbp&quot;, &quot;cost_predbat_annual_gbp&quot;]:
+        if 'name=&quot;{}&quot;'.format(key) not in form:
+            print(&quot;  ERROR: the form should offer {}&quot;.format(key))
+            failed = True
+    postdata = valid_postdata()
+    postdata[&quot;cost_battery_per_kwh_gbp&quot;] = &quot;250&quot;
+    postdata[&quot;cost_predbat_annual_gbp&quot;] = &quot;100&quot;
+    config = make_page(my_predbat).config_from_post(postdata)
+    if config.get(&quot;costs&quot;, {}).get(&quot;battery_per_kwh_gbp&quot;) != 250 or config.get(&quot;costs&quot;, {}).get(&quot;predbat_annual_gbp&quot;) != 100:
+        print(&quot;  ERROR: submitted cost settings should reach the config, got {}&quot;.format(config.get(&quot;costs&quot;)))
+        failed = True
+
+    print(&quot;Test: the Predbat annual cost defaults to zero&quot;)
+    if make_page(my_predbat).prefill_config().get(&quot;costs&quot;, {}).get(&quot;predbat_annual_gbp&quot;, 0) != 0:
+        print(&quot;  ERROR: predbat_annual_gbp must default to 0 - Predbat is free when self-hosted&quot;)
+        failed = True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run and watch it fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test web_annual_form &gt; /tmp/t.txt 2&gt;&amp;1; grep -E &quot;  ERROR&quot; /tmp/t.txt
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Render the mode toggle and panel fields</strong></li>
+</ul>
+<p>Replace the solar fieldset loop body in <code>render_form</code> with:</p>
+<pre><code class="language-python">        text += &quot;&lt;fieldset&gt;&lt;legend&gt;Solar&lt;/legend&gt;\n&quot;
+        for index, array in enumerate(solar):
+            mode = &quot;panels&quot; if array.get(&quot;panels&quot;) else &quot;kwp&quot;
+            text += '&lt;div class=&quot;annual-array&quot;&gt;&lt;strong&gt;Array {}&lt;/strong&gt;\n'.format(index + 1)
+            text += '&lt;div class=&quot;annual-field&quot;&gt;&lt;label for=&quot;solar_mode_{i}&quot;&gt;Describe this array by&lt;/label&gt;&lt;select id=&quot;solar_mode_{i}&quot; name=&quot;solar_mode_{i}&quot; onchange=&quot;annualSolarModeChanged({i})&quot;&gt;\n'.format(i=index)
+            for value, caption in [(&quot;kwp&quot;, &quot;Peak power (kWp)&quot;), (&quot;panels&quot;, &quot;Number of panels&quot;)]:
+                text += '&lt;option value=&quot;{}&quot; {}&gt;{}&lt;/option&gt;\n'.format(value, &quot;selected&quot; if mode == value else &quot;&quot;, caption)
+            text += &quot;&lt;/select&gt;&lt;/div&gt;\n&quot;
+            text += '&lt;div id=&quot;solar-kwp-row-{i}&quot; style=&quot;display:{d}&quot;&gt;\n'.format(i=index, d=&quot;none&quot; if mode == &quot;panels&quot; else &quot;block&quot;)
+            text += self._number_field(&quot;solar_kwp_{}&quot;.format(index), &quot;Peak power&quot;, array.get(&quot;kwp&quot;), suffix=&quot;kWp&quot;)
+            text += &quot;&lt;/div&gt;\n&quot;
+            text += '&lt;div id=&quot;solar-panels-row-{i}&quot; style=&quot;display:{d}&quot;&gt;\n'.format(i=index, d=&quot;block&quot; if mode == &quot;panels&quot; else &quot;none&quot;)
+            text += self._number_field(&quot;solar_panels_{}&quot;.format(index), &quot;Number of panels&quot;, array.get(&quot;panels&quot;, 0), step=&quot;1&quot;)
+            text += self._number_field(&quot;solar_panel_watts_{}&quot;.format(index), &quot;Watts per panel&quot;, array.get(&quot;panel_watts&quot;, 400), suffix=&quot;W&quot;)
+            text += &quot;&lt;/div&gt;\n&quot;
+            text += self._number_field(&quot;solar_declination_{}&quot;.format(index), &quot;Pitch&quot;, array.get(&quot;declination&quot;, 35), suffix=&quot;degrees&quot;)
+            text += self._number_field(&quot;solar_azimuth_{}&quot;.format(index), &quot;Azimuth (180 = south)&quot;, array.get(&quot;azimuth&quot;, 180), suffix=&quot;degrees&quot;)
+            text += &quot;&lt;/div&gt;\n&quot;
+        text += '&lt;p class=&quot;annual-note&quot; id=&quot;annual-solar-total&quot;&gt;&lt;/p&gt;\n'
+        text += &quot;&lt;/fieldset&gt;\n&quot;
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Add the cost settings to Advanced</strong></li>
+</ul>
+<p>In the Advanced fieldset, beside <code>samples_per_month</code>, add one number field per cost key:</p>
+<pre><code class="language-python">        costs_config = config.get(&quot;costs&quot;) or {}
+        for key, label in [
+            (&quot;battery_install_gbp&quot;, &quot;Battery install cost&quot;),
+            (&quot;battery_per_kwh_gbp&quot;, &quot;Battery cost per kWh&quot;),
+            (&quot;pv_minimum_gbp&quot;, &quot;Minimum PV install cost&quot;),
+            (&quot;pv_rate_small_gbp_per_kwp&quot;, &quot;PV £/kWp for a small system (about 2 kWp)&quot;),
+            (&quot;pv_rate_medium_gbp_per_kwp&quot;, &quot;PV £/kWp for a medium system (about 7 kWp)&quot;),
+            (&quot;pv_rate_large_gbp_per_kwp&quot;, &quot;PV £/kWp for a large system (about 30 kWp)&quot;),
+            (&quot;predbat_annual_gbp&quot;, &quot;Predbat cost per year&quot;),
+        ]:
+            text += self._number_field(&quot;cost_{}&quot;.format(key), label, costs_config.get(key, DEFAULT_COSTS[key]), suffix=&quot;£&quot;)
+</code></pre>
+<p>Import <code>DEFAULT_COSTS</code> at the top of <code>web_annual.py</code>:</p>
+<pre><code class="language-python">from annual_costs import DEFAULT_COSTS
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Read them back in <code>config_from_post</code></strong></li>
+</ul>
+<p>Replace the solar-array loop so each array sends <strong>either</strong> <code>kwp</code> <strong>or</strong> <code>panels</code>, never both — <code>validate_config</code> rejects an array carrying both:</p>
+<pre><code class="language-python">        index = 0
+        arrays = []
+        while value(&quot;solar_kwp_{}&quot;.format(index)) is not None or value(&quot;solar_panels_{}&quot;.format(index)) is not None:
+            array = {
+                &quot;declination&quot;: numeric(&quot;solar_declination_{}&quot;.format(index), 35),
+                &quot;azimuth&quot;: numeric(&quot;solar_azimuth_{}&quot;.format(index), 180),
+                &quot;efficiency&quot;: numeric(&quot;solar_efficiency_{}&quot;.format(index), 0.95),
+            }
+            if value(&quot;solar_mode_{}&quot;.format(index)) == &quot;panels&quot;:
+                array[&quot;panels&quot;] = int(numeric(&quot;solar_panels_{}&quot;.format(index), 0) or 0)
+                array[&quot;panel_watts&quot;] = numeric(&quot;solar_panel_watts_{}&quot;.format(index), 400)
+            else:
+                array[&quot;kwp&quot;] = numeric(&quot;solar_kwp_{}&quot;.format(index))
+            arrays.append(array)
+            index += 1
+</code></pre>
+<p>and add the costs block after it:</p>
+<pre><code class="language-python">        costs = {}
+        for key in DEFAULT_COSTS:
+            submitted = numeric(&quot;cost_{}&quot;.format(key), None)
+            if submitted is not None:
+                costs[key] = submitted
+        if costs:
+            config[&quot;costs&quot;] = costs
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Add the toggle and running total to the page script</strong></li>
+</ul>
+<p>In <code>render_script</code>, add:</p>
+<pre><code class="language-javascript">function annualSolarModeChanged(index) {
+  var mode = document.getElementById('solar_mode_' + index).value;
+  document.getElementById('solar-kwp-row-' + index).style.display = (mode === 'panels') ? 'none' : 'block';
+  document.getElementById('solar-panels-row-' + index).style.display = (mode === 'panels') ? 'block' : 'none';
+  annualUpdateSolarTotal();
+}
+function annualUpdateSolarTotal() {
+  var totalKwp = 0, totalPanels = 0, allPanels = true, index = 0;
+  while (document.getElementById('solar_mode_' + index)) {
+    var mode = document.getElementById('solar_mode_' + index).value;
+    if (mode === 'panels') {
+      var count = parseFloat(document.getElementById('solar_panels_' + index).value) || 0;
+      var watts = parseFloat(document.getElementById('solar_panel_watts_' + index).value) || 0;
+      totalPanels += count;
+      totalKwp += count * watts / 1000;
+    } else {
+      allPanels = false;
+      totalKwp += parseFloat(document.getElementById('solar_kwp_' + index).value) || 0;
+    }
+    index += 1;
+  }
+  var note = document.getElementById('annual-solar-total');
+  if (!note) { return; }
+  // The panel count is shown only when EVERY array was entered as panels. A partial
+  // count would read as the whole system's, which is worse than not showing one.
+  note.textContent = allPanels &amp;&amp; totalPanels &gt; 0
+    ? 'Total: ' + totalKwp.toFixed(2) + ' kWp across ' + totalPanels + ' panels'
+    : 'Total: ' + totalKwp.toFixed(2) + ' kWp';
+}
+document.addEventListener('input', function (event) {
+  if (event.target &amp;&amp; /^solar_(kwp|panels|panel_watts)_/.test(event.target.id)) { annualUpdateSolarTotal(); }
+});
+annualUpdateSolarTotal();
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 7: Run the tests and verify they discriminate</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k web_annual &gt; /tmp/t.txt 2&gt;&amp;1; echo &quot;EXIT=$?&quot;; grep -E &quot;  ERROR|FAILED&quot; /tmp/t.txt
+</code></pre>
+<p>Then mutate <code>config_from_post</code> to emit BOTH <code>kwp</code> and <code>panels</code> in panel mode, re-run, and confirm the "panel mode should send panels and NOT kwp" test fails. Restore afterwards.</p>
+<ul>
+<li>[ ] <strong>Step 8: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files apps/predbat/web_annual.py apps/predbat/tests/test_web_annual.py
+git add apps/predbat/web_annual.py apps/predbat/tests/test_web_annual.py
+git commit -m &quot;feat(annual): offer panel counts and editable install costs in the form&quot;
+</code></pre>
+<hr />
+<h3 id="task-6-web-results-fourth-series-and-the-payback-table">Task 6: Web results — fourth series and the payback table</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/web_annual.py</code> (<code>SCENARIO_COLOURS</code>, <code>SCENARIO_LABELS</code>, <code>SCENARIO_ORDER</code>, <code>render_results</code>)
+- Modify: <code>docs/annual-prediction.md</code>
+- Test: <code>apps/predbat/tests/test_web_annual.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>annual.costs</code> and <code>annual.payback</code> from Task 4; the <code>pv_only</code> scenario from Task 3.
+- Produces: nothing further.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>test_web_annual_results</code> in <code>apps/predbat/tests/test_web_annual.py</code>, and extend that module's <code>sample_run_results()</code> so its month rows and annual block carry <code>pv_only</code> plus a <code>costs</code>/<code>payback</code> block:</p>
+<pre><code class="language-python">    print(&quot;Test: the PV-only scenario appears in the chart and the month table&quot;)
+    if &quot;#9439ef&quot; not in html:
+        print(&quot;  ERROR: the validated PV-only colour should be present&quot;)
+        failed = True
+    if &quot;PV only&quot; not in html:
+        print(&quot;  ERROR: the PV-only scenario should be labelled in the results&quot;)
+        failed = True
+
+    print(&quot;Test: the payback table shows all three purchase options&quot;)
+    for label in [&quot;PV only&quot;, &quot;PV + battery&quot;, &quot;With Predbat&quot;]:
+        if label not in html:
+            print(&quot;  ERROR: the payback table should include {}&quot;.format(label))
+            failed = True
+
+    print(&quot;Test: a non-paying-back option says so rather than showing a number&quot;)
+    no_payback = copy.deepcopy(results)
+    no_payback[&quot;annual&quot;][&quot;payback&quot;][&quot;pv_only&quot;] = {&quot;pays_back&quot;: False, &quot;years&quot;: None, &quot;capital_gbp&quot;: 8000.0, &quot;annual_saving_gbp&quot;: -10.0, &quot;gross_annual_saving_gbp&quot;: -10.0, &quot;predbat_annual_gbp&quot;: 0.0}
+    text = page.render_results(no_payback, runs, runs[0][&quot;id&quot;])
+    if &quot;does not pay back&quot; not in text.lower():
+        print(&quot;  ERROR: an option that never pays back should say so&quot;)
+        failed = True
+
+    print(&quot;Test: an unavailable payback shows its reason instead of a blank table&quot;)
+    unavailable = copy.deepcopy(results)
+    unavailable[&quot;annual&quot;][&quot;payback&quot;] = {&quot;available&quot;: False, &quot;reason&quot;: &quot;Payback needs a full year, but only 11 of 12 months could be modelled.&quot;}
+    text = page.render_results(unavailable, runs, runs[0][&quot;id&quot;])
+    if &quot;11 of 12&quot; not in text:
+        print(&quot;  ERROR: the reason payback is unavailable should be shown&quot;)
+        failed = True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run and watch it fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test web_annual_results &gt; /tmp/t.txt 2&gt;&amp;1; grep -E &quot;  ERROR&quot; /tmp/t.txt
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Add the fourth scenario to the palette</strong></li>
+</ul>
+<pre><code class="language-python"># Validated with the dataviz palette checker in BOTH light and dark mode, all pairs.
+# Predbat's house chart trio (#2196F3/#FF9800/#4CAF50) FAILS here: green vs orange is
+# only deltaE 3.6 under protanopia, so roughly one man in twelve could not tell
+# &quot;Without Predbat&quot; from &quot;With Predbat&quot; - the exact comparison this chart exists to
+# make. #9439ef was chosen for pv_only by sweeping 216 candidates through the same
+# validator: the obvious Okabe-Ito picks (#E69F00, #56B4E9) fall outside the dark-mode
+# lightness band, and #CC79A7/#AA4499 only reach deltaE 7.6/6.4 against a neighbour.
+# Do not substitute without re-running the validator in both modes.
+SCENARIO_COLOURS = {&quot;no_pvbat&quot;: &quot;#0072B2&quot;, &quot;pv_only&quot;: &quot;#9439ef&quot;, &quot;without_predbat&quot;: &quot;#D55E00&quot;, &quot;with_predbat&quot;: &quot;#009E73&quot;}
+SCENARIO_LABELS = {&quot;no_pvbat&quot;: &quot;No PV/Battery&quot;, &quot;pv_only&quot;: &quot;PV only&quot;, &quot;without_predbat&quot;: &quot;Without Predbat&quot;, &quot;with_predbat&quot;: &quot;With Predbat&quot;}
+SCENARIO_ORDER = [&quot;no_pvbat&quot;, &quot;pv_only&quot;, &quot;without_predbat&quot;, &quot;with_predbat&quot;]
+</code></pre>
+<p>The chart and month table both iterate <code>SCENARIO_ORDER</code>, so they pick this up without further change. Check <code>_render_month_table</code>'s <code>colspan</code> on the unavailable-month row still matches the column count.</p>
+<ul>
+<li>[ ] <strong>Step 4: Render the costs and payback table</strong></li>
+</ul>
+<p>Add a <code>_render_payback</code> method and call it from <code>render_results</code> immediately before <code>self._render_chart(results)</code>:</p>
+<pre><code class="language-python">    def _render_payback(self, results):
+        &quot;&quot;&quot;Return the install cost and payback table, or the reason there is none.&quot;&quot;&quot;
+        annual = results.get(&quot;annual&quot;) or {}
+        costs = annual.get(&quot;costs&quot;) or {}
+        payback = annual.get(&quot;payback&quot;) or {}
+        if not costs:
+            return &quot;&quot;
+
+        text = &quot;&lt;h2&gt;Cost and payback&lt;/h2&gt;\n&quot;
+        text += &quot;&lt;p class='annual-note'&gt;Estimated install cost for a {} kWp array and a {} kWh battery: &lt;strong&gt;£{:,.0f}&lt;/strong&gt; (PV £{:,.0f} at £{:,.0f}/kWp, battery £{:,.0f}).&lt;/p&gt;\n&quot;.format(
+            costs.get(&quot;total_kwp&quot;, 0), costs.get(&quot;battery_kwh&quot;, 0), costs.get(&quot;total_gbp&quot;, 0), costs.get(&quot;pv_gbp&quot;, 0), costs.get(&quot;pv_rate_gbp_per_kwp&quot;, 0), costs.get(&quot;battery_gbp&quot;, 0)
+        )
+
+        if not payback.get(&quot;available&quot;):
+            reason = html.escape(str(payback.get(&quot;reason&quot;, &quot;Payback could not be calculated.&quot;)), quote=True)
+            text += &quot;&lt;p class='annual-unavailable'&gt;{}&lt;/p&gt;\n&quot;.format(reason)
+            return text
+
+        text += &quot;&lt;table class='comparison-table'&gt;\n&lt;tr&gt;&lt;th&gt;Option&lt;/th&gt;&lt;th&gt;Capital&lt;/th&gt;&lt;th&gt;Saving a year&lt;/th&gt;&lt;th&gt;Pays back in&lt;/th&gt;&lt;/tr&gt;\n&quot;
+        for key, label in [(&quot;pv_only&quot;, &quot;PV only&quot;), (&quot;pv_battery&quot;, &quot;PV + battery&quot;), (&quot;pv_battery_predbat&quot;, &quot;With Predbat&quot;)]:
+            row = payback.get(key) or {}
+            if row.get(&quot;pays_back&quot;):
+                years = &quot;{:.1f} years&quot;.format(row.get(&quot;years&quot;, 0))
+            else:
+                years = &quot;&lt;span class='annual-unavailable'&gt;does not pay back&lt;/span&gt;&quot;
+            saving = &quot;£{:,.0f}&quot;.format(row.get(&quot;annual_saving_gbp&quot;, 0))
+            if row.get(&quot;predbat_annual_gbp&quot;):
+                saving += &quot; &lt;span class='annual-note'&gt;(after £{:,.0f}/year for Predbat)&lt;/span&gt;&quot;.format(row[&quot;predbat_annual_gbp&quot;])
+            text += &quot;&lt;tr&gt;&lt;td&gt;{}&lt;/td&gt;&lt;td&gt;£{:,.0f}&lt;/td&gt;&lt;td&gt;{}&lt;/td&gt;&lt;td&gt;{}&lt;/td&gt;&lt;/tr&gt;\n&quot;.format(label, row.get(&quot;capital_gbp&quot;, 0), saving, years)
+        text += &quot;&lt;/table&gt;\n&quot;
+        text += &quot;&lt;p class='annual-note'&gt;Simple payback: capital divided by the modelled annual saving. It ignores panel degradation, price inflation, battery replacement and finance costs.&lt;/p&gt;\n&quot;
+        return text
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Document it</strong></li>
+</ul>
+<p>In <code>docs/annual-prediction.md</code>, add a "Cost and payback" subsection under the results section covering: the cost formulae and their defaults; that all seven values are editable under Advanced; that <code>predbat_annual_gbp</code> is recurring and defaults to zero; that payback needs a full twelve months; and that simple payback ignores degradation, inflation, replacement and finance. Also update the scenario list wherever the docs enumerate the three scenarios, to include <code>pv_only</code>.</p>
+<ul>
+<li>[ ] <strong>Step 6: Run everything</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all &gt; /tmp/full.txt 2&gt;&amp;1; echo &quot;EXIT=$?&quot;; grep -iE &quot;FAILED|Some tests failed|All tests passed \(total&quot; /tmp/full.txt | tail -3
+</code></pre>
+<p>Expected: all pass, exit 0.</p>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files apps/predbat/web_annual.py apps/predbat/tests/test_web_annual.py docs/annual-prediction.md
+git add apps/predbat/web_annual.py apps/predbat/tests/test_web_annual.py docs/annual-prediction.md
+git commit -m &quot;feat(annual): show the PV-only scenario and a cost/payback table&quot;
+</code></pre>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

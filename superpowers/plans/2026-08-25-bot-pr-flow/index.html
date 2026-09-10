@@ -1,0 +1,1297 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Bot PR Flow Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Bot PR Flow Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-08-25-bot-pr-flow.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Bot PR Flow Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="bot-pr-flow-implementation-plan">Bot PR Flow Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking. Tasks 12 and 13 are explicitly <strong>not</strong> for automated execution — see their headers.</p>
+</blockquote>
+<p><strong>Goal:</strong> Extend the issue-triage bot so that adding the <code>BOT_PR</code> label to an already-triaged GitHub issue makes it implement the fix/feature and open a draft PR for maintainer review.</p>
+<p><strong>Architecture:</strong> <code>tools/triage_daemon.py</code> gains a second poll (issues labelled <code>BOT_PR</code>) alongside its existing new-issue poll, orchestrating a precondition check, a duplicate-work guard, and a new <code>/issue-pr</code> skill invocation under a separate, more permissive tool allowlist. State lives entirely in GitHub labels (<code>BOT_TRIAGED</code>, <code>BOT_PR_OPENED</code>, <code>BOT_PR_FAILED</code>) — no new fields in <code>state.json</code>. Success/failure is judged by re-checking for the PR afterwards, not by the invocation's exit code.</p>
+<p><strong>Tech Stack:</strong> Python 3 stdlib (<code>subprocess</code>, <code>json</code>, <code>pathlib</code>, <code>unittest</code>, <code>unittest.mock</code>), <code>gh</code> CLI, Claude Code CLI (<code>claude -p</code>), pre-commit.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-08-25-bot-pr-flow-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Line length: 256 chars (Black), 250 chars (Flake8).</li>
+<li>Docstrings: one-line docstring on every new function (100% coverage required per CLAUDE.md's <code>interrogate</code> policy).</li>
+<li>British English spelling in all prose/comments/docstrings (e.g. "labelled" not "labeled", "behaviour" not "behavior") — this repo enforces <code>en-gb</code> via CSpell.</li>
+<li>Variable naming: <code>lower_case_with_underscores</code>.</li>
+<li>Unit tests required for all new code (CLAUDE.md).</li>
+<li><code>tools/triage_daemon.py</code> and its test file have no dependency on <code>apps/predbat</code> — do not import from it, and do not register the new tests in <code>TEST_REGISTRY</code>/<code>run_all</code>.</li>
+<li>Every <code>subprocess.run</code> call in <code>tools/triage_daemon.py</code> uses <code>check=True</code> unless the call's own failure is meaningful to the caller (matches the existing pattern in the file).</li>
+</ul>
+<hr />
+<h2 id="task-1-apply-bot_triaged-label-from-the-existing-triage-skill">Task 1: Apply <code>BOT_TRIAGED</code> label from the existing triage skill</h2>
+<p><strong>Files:</strong>
+- Modify: <code>.claude/skills/issue-triage/SKILL.md:91-95</code> (step 9)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing new.
+- Produces: every future triage run applies the <code>BOT_TRIAGED</code> label — later tasks' <code>is_already_triaged()</code> (Task 4) depends on this label existing on newly-triaged issues.</p>
+<ul>
+<li>[ ] <strong>Step 1: Edit step 9 of the skill</strong></li>
+</ul>
+<p>Find this text in <code>.claude/skills/issue-triage/SKILL.md</code>:</p>
+<pre><code class="language-markdown">## 9. Post one comment
+
+Check existing comments first — if one from you is already there, stop; don't post again.
+
+Post exactly one comment via `gh issue comment &lt;number&gt; --body &quot;...&quot;`, opening with a line disclosing this is an automated first-pass triage (a maintainer will review before any action is taken), followed by: classification, priority (if set), what you investigated and found (including test result if you ran one), a root-cause pointer if you have one, and any information request.
+</code></pre>
+<p>Replace it with:</p>
+<pre><code class="language-markdown">## 9. Post one comment
+
+Check existing comments first — if one from you is already there, stop; don't post again.
+
+Post exactly one comment via `gh issue comment &lt;number&gt; --body &quot;...&quot;`, opening with a line disclosing this is an automated first-pass triage (a maintainer will review before any action is taken), followed by: classification, priority (if set), what you investigated and found (including test result if you ran one), a root-cause pointer if you have one, and any information request.
+
+After posting, apply the `BOT_TRIAGED` label via `gh issue edit &lt;number&gt; --add-label BOT_TRIAGED` — every triage run gets this label, including a duplicate-close, regardless of classification. It marks the issue as triaged for the separate PR-creation flow (see `.claude/skills/issue-pr/SKILL.md`).
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Verify</strong></li>
+</ul>
+<p>Read the file back and confirm the new paragraph reads correctly after step 9's existing content, before the <code>## Guardrails</code> section.</p>
+<ul>
+<li>[ ] <strong>Step 3: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add .claude/skills/issue-triage/SKILL.md
+git commit -m &quot;feat(issue-triage): apply BOT_TRIAGED label after posting the triage comment&quot;
+</code></pre>
+<hr />
+<h2 id="task-2-test-file-skeleton-and-characterisation-tests-for-existing-functions">Task 2: Test file skeleton and characterisation tests for existing functions</h2>
+<p><strong>Files:</strong>
+- Create: <code>tools/test_triage_daemon.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>triage_daemon.load_state</code>, <code>triage_daemon.save_state</code>, <code>triage_daemon.fetch_new_issues</code> (all pre-existing, unchanged signatures).
+- Produces: <code>DaemonPathsTestCase</code> — a base <code>unittest.TestCase</code> that patches <code>triage_daemon.BASE_DIR</code>, <code>STATE_FILE</code>, <code>LOG_DIR</code>, <code>CLONE_DIR</code>, <code>SCRATCH_DIR</code> onto a temp directory for the duration of a test, exposing <code>self.state_file</code> and <code>self.log_dir</code>. Every later task's tests that touch daemon paths or <code>subprocess.run</code> inherit from this class.</p>
+<p>These are <strong>characterisation tests</strong> for code that already exists and already works — there is no red phase for this task. Write each test, run it, and confirm it passes immediately.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the test file</strong></li>
+</ul>
+<pre><code class="language-python">#!/usr/bin/env python3
+&quot;&quot;&quot;Unit tests for tools/triage_daemon.py.
+
+Runs standalone, not through coverage/run_all: the daemon has no dependency on
+apps/predbat, so folding these into TEST_REGISTRY would be a layering violation.
+Run directly with `python3 tools/test_triage_daemon.py`. Every gh/git/claude call is
+mocked - nothing here touches a real repo, GitHub, or Claude Code session.
+&quot;&quot;&quot;
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import triage_daemon
+
+
+class DaemonPathsTestCase(unittest.TestCase):
+    &quot;&quot;&quot;Base class that points the daemon's module-level paths at a scratch temp dir.&quot;&quot;&quot;
+
+    def setUp(self):
+        &quot;&quot;&quot;Create a scratch directory and patch the daemon's path constants onto it.&quot;&quot;&quot;
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp_dir.cleanup)
+        base = Path(self.tmp_dir.name)
+        self.state_file = base / &quot;state.json&quot;
+        self.log_dir = base / &quot;logs&quot;
+        self._patch(&quot;BASE_DIR&quot;, base)
+        self._patch(&quot;STATE_FILE&quot;, self.state_file)
+        self._patch(&quot;LOG_DIR&quot;, self.log_dir)
+        self._patch(&quot;CLONE_DIR&quot;, base / &quot;batpred&quot;)
+        self._patch(&quot;SCRATCH_DIR&quot;, base / &quot;scratch&quot;)
+
+    def _patch(self, name, value):
+        &quot;&quot;&quot;Patch a module-level constant on triage_daemon for the duration of the test.&quot;&quot;&quot;
+        patcher = patch.object(triage_daemon, name, value)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+class LoadSaveStateTests(DaemonPathsTestCase):
+    &quot;&quot;&quot;Characterisation tests for load_state()/save_state() - pre-existing, unchanged.&quot;&quot;&quot;
+
+    def test_save_then_load_round_trips(self):
+        &quot;&quot;&quot;A saved state dict is returned unchanged by a subsequent load.&quot;&quot;&quot;
+        triage_daemon.save_state({&quot;last_processed&quot;: 42})
+        self.assertEqual(triage_daemon.load_state(), {&quot;last_processed&quot;: 42})
+
+    def test_load_missing_file_returns_default(self):
+        &quot;&quot;&quot;With no state file yet, load_state() returns the zeroed default.&quot;&quot;&quot;
+        self.assertEqual(triage_daemon.load_state(), {&quot;last_processed&quot;: 0})
+
+    def test_load_corrupt_file_returns_default(self):
+        &quot;&quot;&quot;A truncated/corrupt state file is treated the same as a missing one.&quot;&quot;&quot;
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.state_file.write_text(&quot;{not valid json&quot;)
+        self.assertEqual(triage_daemon.load_state(), {&quot;last_processed&quot;: 0})
+
+
+class FetchNewIssuesTests(unittest.TestCase):
+    &quot;&quot;&quot;Characterisation tests for fetch_new_issues() - pre-existing, unchanged.&quot;&quot;&quot;
+
+    @patch(&quot;triage_daemon.subprocess.run&quot;)
+    def test_filters_and_sorts_by_issue_number(self, mock_run):
+        &quot;&quot;&quot;Only issues newer than since_number are returned, sorted ascending.&quot;&quot;&quot;
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps(
+                [
+                    {&quot;number&quot;: 10, &quot;createdAt&quot;: &quot;2026-01-01T00:00:00Z&quot;},
+                    {&quot;number&quot;: 8, &quot;createdAt&quot;: &quot;2025-12-01T00:00:00Z&quot;},
+                    {&quot;number&quot;: 12, &quot;createdAt&quot;: &quot;2026-02-01T00:00:00Z&quot;},
+                ]
+            )
+        )
+        result = triage_daemon.fetch_new_issues(9)
+        self.assertEqual([issue[&quot;number&quot;] for issue in result], [10, 12])
+
+
+if __name__ == &quot;__main__&quot;:
+    unittest.main()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the tests and confirm they pass</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: all 4 tests PASS (no red phase — these characterise existing, already-correct behaviour).</p>
+<ul>
+<li>[ ] <strong>Step 3: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add tools/test_triage_daemon.py
+git commit -m &quot;test(triage_daemon): add test file with characterisation tests for existing functions&quot;
+</code></pre>
+<hr />
+<h2 id="task-3-fetch_bot_pr_issues">Task 3: <code>fetch_bot_pr_issues()</code></h2>
+<p><strong>Files:</strong>
+- Modify: <code>tools/triage_daemon.py</code> (add function near <code>fetch_new_issues</code>)
+- Modify: <code>tools/test_triage_daemon.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>REPO</code> (module constant, pre-existing).
+- Produces: <code>fetch_bot_pr_issues() -&gt; list[dict]</code>, each dict shaped <code>{"number": int, "labels": [{"name": str, ...}, ...]}</code> — Task 9's <code>process_bot_pr_issue()</code> iterates this list directly.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Add to <code>tools/test_triage_daemon.py</code>, after <code>FetchNewIssuesTests</code>:</p>
+<pre><code class="language-python">class FetchBotPrIssuesTests(unittest.TestCase):
+    &quot;&quot;&quot;Tests for fetch_bot_pr_issues(), new in the bot PR flow.&quot;&quot;&quot;
+
+    @patch(&quot;triage_daemon.subprocess.run&quot;)
+    def test_queries_open_issues_labelled_bot_pr(self, mock_run):
+        &quot;&quot;&quot;Calls gh issue list scoped to the BOT_PR label and returns the parsed issues.&quot;&quot;&quot;
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps([{&quot;number&quot;: 4720, &quot;labels&quot;: [{&quot;name&quot;: &quot;BOT_PR&quot;}, {&quot;name&quot;: &quot;BOT_TRIAGED&quot;}]}])
+        )
+        result = triage_daemon.fetch_bot_pr_issues()
+        self.assertEqual(result, [{&quot;number&quot;: 4720, &quot;labels&quot;: [{&quot;name&quot;: &quot;BOT_PR&quot;}, {&quot;name&quot;: &quot;BOT_TRIAGED&quot;}]}])
+        args = mock_run.call_args[0][0]
+        self.assertIn(&quot;--label&quot;, args)
+        self.assertEqual(args[args.index(&quot;--label&quot;) + 1], &quot;BOT_PR&quot;)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: FAIL with <code>AttributeError: module 'triage_daemon' has no attribute 'fetch_bot_pr_issues'</code></p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>tools/triage_daemon.py</code>, add directly after <code>fetch_new_issues()</code>:</p>
+<pre><code class="language-python">def fetch_bot_pr_issues():
+    &quot;&quot;&quot;Return open issues currently labelled BOT_PR, each with its full label list.&quot;&quot;&quot;
+    result = subprocess.run(
+        [&quot;gh&quot;, &quot;issue&quot;, &quot;list&quot;, &quot;--repo&quot;, REPO, &quot;--state&quot;, &quot;open&quot;, &quot;--label&quot;, &quot;BOT_PR&quot;, &quot;--json&quot;, &quot;number,labels&quot;],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: PASS</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add tools/triage_daemon.py tools/test_triage_daemon.py
+git commit -m &quot;feat(triage_daemon): add fetch_bot_pr_issues()&quot;
+</code></pre>
+<hr />
+<h2 id="task-4-bot_pr-precondition-check-ensure_triaged-and-helpers">Task 4: BOT_PR precondition check (<code>ensure_triaged</code> and helpers)</h2>
+<p><strong>Files:</strong>
+- Modify: <code>tools/triage_daemon.py</code>
+- Modify: <code>tools/test_triage_daemon.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing new (uses stdlib <code>subprocess</code>/<code>json</code> already imported).
+- Produces:
+  - <code>TRIAGE_DISCLOSURE_MARKER</code> (module constant, str) — the substring identifying a bot triage comment.
+  - <code>is_already_triaged(labels: list[dict]) -&gt; bool</code>
+  - <code>find_triage_comment(issue_number: int) -&gt; bool</code>
+  - <code>backfill_triaged_label(issue_number: int) -&gt; None</code>
+  - <code>ensure_triaged(issue_number: int, labels: list[dict]) -&gt; bool</code> — Task 9's <code>process_bot_pr_issue()</code> calls this directly.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>tools/test_triage_daemon.py</code>, after <code>FetchBotPrIssuesTests</code>:</p>
+<pre><code class="language-python">class EnsureTriagedTests(unittest.TestCase):
+    &quot;&quot;&quot;Tests for the BOT_PR precondition check, new in the bot PR flow.&quot;&quot;&quot;
+
+    def test_is_already_triaged_true_when_label_present(self):
+        &quot;&quot;&quot;BOT_TRIAGED anywhere in the label list is detected.&quot;&quot;&quot;
+        self.assertTrue(triage_daemon.is_already_triaged([{&quot;name&quot;: &quot;bug&quot;}, {&quot;name&quot;: &quot;BOT_TRIAGED&quot;}]))
+
+    def test_is_already_triaged_false_when_label_absent(self):
+        &quot;&quot;&quot;A label list without BOT_TRIAGED is not mistaken for one.&quot;&quot;&quot;
+        self.assertFalse(triage_daemon.is_already_triaged([{&quot;name&quot;: &quot;bug&quot;}]))
+
+    @patch(&quot;triage_daemon.subprocess.run&quot;)
+    def test_find_triage_comment_true_when_disclosure_present(self, mock_run):
+        &quot;&quot;&quot;A comment containing the triage disclosure line counts as already triaged.&quot;&quot;&quot;
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps({&quot;comments&quot;: [{&quot;body&quot;: &quot;This is an automated first-pass triage of...&quot;}]})
+        )
+        self.assertTrue(triage_daemon.find_triage_comment(4720))
+
+    @patch(&quot;triage_daemon.subprocess.run&quot;)
+    def test_find_triage_comment_false_when_no_match(self, mock_run):
+        &quot;&quot;&quot;Unrelated comments don't count as a triage comment.&quot;&quot;&quot;
+        mock_run.return_value = MagicMock(stdout=json.dumps({&quot;comments&quot;: [{&quot;body&quot;: &quot;thanks for the report&quot;}]}))
+        self.assertFalse(triage_daemon.find_triage_comment(4720))
+
+    @patch(&quot;triage_daemon.subprocess.run&quot;)
+    def test_ensure_triaged_skips_lookup_when_label_present(self, mock_run):
+        &quot;&quot;&quot;With BOT_TRIAGED already on the issue, no gh calls are made at all.&quot;&quot;&quot;
+        result = triage_daemon.ensure_triaged(4720, [{&quot;name&quot;: &quot;BOT_TRIAGED&quot;}])
+        self.assertTrue(result)
+        mock_run.assert_not_called()
+
+    @patch(&quot;triage_daemon.backfill_triaged_label&quot;)
+    @patch(&quot;triage_daemon.find_triage_comment&quot;, return_value=True)
+    def test_ensure_triaged_backfills_when_comment_found(self, mock_find, mock_backfill):
+        &quot;&quot;&quot;An old issue with a triage comment but no label gets the label backfilled.&quot;&quot;&quot;
+        result = triage_daemon.ensure_triaged(4720, [{&quot;name&quot;: &quot;bug&quot;}])
+        self.assertTrue(result)
+        mock_backfill.assert_called_once_with(4720)
+
+    @patch(&quot;triage_daemon.backfill_triaged_label&quot;)
+    @patch(&quot;triage_daemon.find_triage_comment&quot;, return_value=False)
+    def test_ensure_triaged_false_when_neither_found(self, mock_find, mock_backfill):
+        &quot;&quot;&quot;No label and no comment means /issue-triage still needs to run.&quot;&quot;&quot;
+        result = triage_daemon.ensure_triaged(4720, [{&quot;name&quot;: &quot;bug&quot;}])
+        self.assertFalse(result)
+        mock_backfill.assert_not_called()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: FAIL with <code>AttributeError: module 'triage_daemon' has no attribute 'is_already_triaged'</code></p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>tools/triage_daemon.py</code>, add after <code>fetch_bot_pr_issues()</code>:</p>
+<pre><code class="language-python">TRIAGE_DISCLOSURE_MARKER = &quot;automated first-pass triage&quot;
+
+
+def is_already_triaged(labels):
+    &quot;&quot;&quot;Return True if BOT_TRIAGED is present in a gh --json labels list.&quot;&quot;&quot;
+    return any(label[&quot;name&quot;] == &quot;BOT_TRIAGED&quot; for label in labels)
+
+
+def find_triage_comment(issue_number):
+    &quot;&quot;&quot;Return True if the issue already carries a bot triage comment (pre-BOT_TRIAGED-label issues).&quot;&quot;&quot;
+    result = subprocess.run(
+        [&quot;gh&quot;, &quot;issue&quot;, &quot;view&quot;, str(issue_number), &quot;--json&quot;, &quot;comments&quot;],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    comments = json.loads(result.stdout).get(&quot;comments&quot;, [])
+    return any(TRIAGE_DISCLOSURE_MARKER in comment.get(&quot;body&quot;, &quot;&quot;) for comment in comments)
+
+
+def backfill_triaged_label(issue_number):
+    &quot;&quot;&quot;Apply BOT_TRIAGED to an issue found to already have a bot triage comment.&quot;&quot;&quot;
+    subprocess.run([&quot;gh&quot;, &quot;issue&quot;, &quot;edit&quot;, str(issue_number), &quot;--add-label&quot;, &quot;BOT_TRIAGED&quot;], check=True)
+
+
+def ensure_triaged(issue_number, labels):
+    &quot;&quot;&quot;Return True if the issue is (now) marked BOT_TRIAGED; False if /issue-triage still needs to run.
+
+    Checks the label first, then falls back to scanning comments for issues triaged
+    before BOT_TRIAGED existed, backfilling the label onto them when found.
+    &quot;&quot;&quot;
+    if is_already_triaged(labels):
+        return True
+    if find_triage_comment(issue_number):
+        backfill_triaged_label(issue_number)
+        return True
+    return False
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: PASS (11 tests total so far)</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add tools/triage_daemon.py tools/test_triage_daemon.py
+git commit -m &quot;feat(triage_daemon): add BOT_PR precondition check (ensure_triaged)&quot;
+</code></pre>
+<hr />
+<h2 id="task-5-duplicate-work-guard">Task 5: Duplicate-work guard</h2>
+<p><strong>Files:</strong>
+- Modify: <code>tools/triage_daemon.py</code>
+- Modify: <code>tools/test_triage_daemon.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing new.
+- Produces: <code>build_duplicate_search_query(issue_number: int) -&gt; str</code>, <code>has_existing_pr(issue_number: int) -&gt; bool</code> — Task 9's <code>process_bot_pr_issue()</code> calls <code>has_existing_pr()</code> both as the entry guard and as the post-hoc success check.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>tools/test_triage_daemon.py</code>, after <code>EnsureTriagedTests</code>:</p>
+<pre><code class="language-python">class DuplicateGuardTests(unittest.TestCase):
+    &quot;&quot;&quot;Tests for the duplicate-work guard, new in the bot PR flow.&quot;&quot;&quot;
+
+    def test_search_query_uses_quoted_fixes_phrase(self):
+        &quot;&quot;&quot;The query searches the exact quoted phrase, not a bare issue number.&quot;&quot;&quot;
+        self.assertEqual(triage_daemon.build_duplicate_search_query(4720), '&quot;Fixes #4720&quot; in:body')
+
+    @patch(&quot;triage_daemon.subprocess.run&quot;)
+    def test_has_existing_pr_true_when_match_found(self, mock_run):
+        &quot;&quot;&quot;A non-empty search result means a PR already exists for this issue.&quot;&quot;&quot;
+        mock_run.return_value = MagicMock(stdout=json.dumps([{&quot;number&quot;: 99}]))
+        self.assertTrue(triage_daemon.has_existing_pr(4720))
+
+    @patch(&quot;triage_daemon.subprocess.run&quot;)
+    def test_has_existing_pr_false_when_no_match(self, mock_run):
+        &quot;&quot;&quot;An empty search result means no PR exists yet for this issue.&quot;&quot;&quot;
+        mock_run.return_value = MagicMock(stdout=json.dumps([]))
+        self.assertFalse(triage_daemon.has_existing_pr(4720))
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: FAIL with <code>AttributeError: module 'triage_daemon' has no attribute 'build_duplicate_search_query'</code></p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>tools/triage_daemon.py</code>, add after <code>ensure_triaged()</code>:</p>
+<pre><code class="language-python">def build_duplicate_search_query(issue_number):
+    &quot;&quot;&quot;Build the gh pr list --search query used to detect an existing PR for an issue.
+
+    Matches the exact &quot;Fixes #N&quot; phrase the issue-pr skill always includes in its PR
+    body, rather than a bare issue number, which could match an unrelated PR.
+    &quot;&quot;&quot;
+    return f'&quot;Fixes #{issue_number}&quot; in:body'
+
+
+def has_existing_pr(issue_number):
+    &quot;&quot;&quot;Return True if a PR already references this issue, in any state.&quot;&quot;&quot;
+    query = build_duplicate_search_query(issue_number)
+    result = subprocess.run(
+        [&quot;gh&quot;, &quot;pr&quot;, &quot;list&quot;, &quot;--search&quot;, query, &quot;--state&quot;, &quot;all&quot;, &quot;--json&quot;, &quot;number&quot;],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return len(json.loads(result.stdout)) &gt; 0
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: PASS (14 tests total so far)</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add tools/triage_daemon.py tools/test_triage_daemon.py
+git commit -m &quot;feat(triage_daemon): add duplicate-work guard (has_existing_pr)&quot;
+</code></pre>
+<hr />
+<h2 id="task-6-label-swap-helpers">Task 6: Label-swap helpers</h2>
+<p><strong>Files:</strong>
+- Modify: <code>tools/triage_daemon.py</code>
+- Modify: <code>tools/test_triage_daemon.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing new.
+- Produces: <code>mark_pr_opened(issue_number: int) -&gt; None</code>, <code>mark_pr_failed(issue_number: int) -&gt; None</code> — Task 9's <code>process_bot_pr_issue()</code> calls exactly one of these per run.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>tools/test_triage_daemon.py</code>, after <code>DuplicateGuardTests</code>:</p>
+<pre><code class="language-python">class LabelSwapTests(unittest.TestCase):
+    &quot;&quot;&quot;Tests for mark_pr_opened/mark_pr_failed, new in the bot PR flow.&quot;&quot;&quot;
+
+    @patch(&quot;triage_daemon.subprocess.run&quot;)
+    def test_mark_pr_opened_swaps_labels(self, mock_run):
+        &quot;&quot;&quot;Removes BOT_PR and adds BOT_PR_OPENED.&quot;&quot;&quot;
+        triage_daemon.mark_pr_opened(4720)
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args, [&quot;gh&quot;, &quot;issue&quot;, &quot;edit&quot;, &quot;4720&quot;, &quot;--remove-label&quot;, &quot;BOT_PR&quot;, &quot;--add-label&quot;, &quot;BOT_PR_OPENED&quot;])
+
+    @patch(&quot;triage_daemon.subprocess.run&quot;)
+    def test_mark_pr_failed_swaps_labels(self, mock_run):
+        &quot;&quot;&quot;Removes BOT_PR and adds BOT_PR_FAILED.&quot;&quot;&quot;
+        triage_daemon.mark_pr_failed(4720)
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args, [&quot;gh&quot;, &quot;issue&quot;, &quot;edit&quot;, &quot;4720&quot;, &quot;--remove-label&quot;, &quot;BOT_PR&quot;, &quot;--add-label&quot;, &quot;BOT_PR_FAILED&quot;])
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: FAIL with <code>AttributeError: module 'triage_daemon' has no attribute 'mark_pr_opened'</code></p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>tools/triage_daemon.py</code>, add after <code>has_existing_pr()</code>:</p>
+<pre><code class="language-python">def mark_pr_opened(issue_number):
+    &quot;&quot;&quot;Swap BOT_PR for BOT_PR_OPENED once the draft PR has been confirmed open.&quot;&quot;&quot;
+    subprocess.run(
+        [&quot;gh&quot;, &quot;issue&quot;, &quot;edit&quot;, str(issue_number), &quot;--remove-label&quot;, &quot;BOT_PR&quot;, &quot;--add-label&quot;, &quot;BOT_PR_OPENED&quot;],
+        check=True,
+    )
+
+
+def mark_pr_failed(issue_number):
+    &quot;&quot;&quot;Swap BOT_PR for BOT_PR_FAILED so a failed run isn't retried every poll cycle.&quot;&quot;&quot;
+    subprocess.run(
+        [&quot;gh&quot;, &quot;issue&quot;, &quot;edit&quot;, str(issue_number), &quot;--remove-label&quot;, &quot;BOT_PR&quot;, &quot;--add-label&quot;, &quot;BOT_PR_FAILED&quot;],
+        check=True,
+    )
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: PASS (16 tests total so far)</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add tools/triage_daemon.py tools/test_triage_daemon.py
+git commit -m &quot;feat(triage_daemon): add mark_pr_opened/mark_pr_failed label-swap helpers&quot;
+</code></pre>
+<hr />
+<h2 id="task-7-permission-model-allowed_tools_pr-disallowed_tools_pr">Task 7: Permission model — <code>ALLOWED_TOOLS_PR</code> / <code>DISALLOWED_TOOLS_PR</code></h2>
+<p><strong>Files:</strong>
+- Modify: <code>tools/triage_daemon.py:83-174</code> (the existing <code>ALLOWED_TOOLS</code>/<code>DISALLOWED_TOOLS</code> block)
+- Modify: <code>tools/test_triage_daemon.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>EDIT_SCOPE</code>, <code>SCRATCH_SCOPE</code> (pre-existing module constants, unchanged).
+- Produces: <code>ALLOWED_TOOLS</code> and <code>DISALLOWED_TOOLS</code> (pre-existing names, values byte-identical to before this task), plus new <code>ALLOWED_TOOLS_PR</code> and <code>DISALLOWED_TOOLS_PR</code> (both comma-joined strings, same format <code>triage()</code>/Task 8's <code>create_pr()</code> already expect from <code>ALLOWED_TOOLS</code>/<code>DISALLOWED_TOOLS</code>).</p>
+<p>This task is a <strong>refactor with no behaviour change</strong> to <code>ALLOWED_TOOLS</code>/<code>DISALLOWED_TOOLS</code> — it extracts their list literals into named base lists so the PR variants can be derived without duplicating ~50 lines of text. The tests exist specifically to pin that relationship down, since this is the security boundary between "opens a draft PR" and "can merge/close/administer the repo."</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>tools/test_triage_daemon.py</code>, after <code>LabelSwapTests</code>:</p>
+<pre><code class="language-python">class PermissionModelTests(unittest.TestCase):
+    &quot;&quot;&quot;Regression tests for the ALLOWED_TOOLS/DISALLOWED_TOOLS delta between the
+    read-only triage invocation and the push/PR-create-capable /issue-pr invocation.
+    This boundary should never drift silently.&quot;&quot;&quot;
+
+    def test_triage_allowed_tools_still_contains_the_broad_gh_grant(self):
+        &quot;&quot;&quot;Sanity check that the refactor didn't drop the base allowlist's core entry.&quot;&quot;&quot;
+        self.assertIn(&quot;Bash(gh *)&quot;, triage_daemon.ALLOWED_TOOLS.split(&quot;,&quot;))
+
+    def test_pr_disallowed_tools_still_blocks_dangerous_gh_subcommands(self):
+        &quot;&quot;&quot;Everything dangerous stays denied for the PR flow too.&quot;&quot;&quot;
+        still_denied = [
+            &quot;Bash(gh pr merge*)&quot;,
+            &quot;Bash(gh pr close*)&quot;,
+            &quot;Bash(gh repo*)&quot;,
+            &quot;Bash(gh release*)&quot;,
+            &quot;Bash(gh workflow*)&quot;,
+            &quot;Bash(gh auth*)&quot;,
+            &quot;Bash(gh secret*)&quot;,
+            &quot;Bash(gh api*)&quot;,
+            &quot;mcp__*&quot;,
+        ]
+        pr_denied = triage_daemon.DISALLOWED_TOOLS_PR.split(&quot;,&quot;)
+        for entry in still_denied:
+            self.assertIn(entry, pr_denied)
+
+    def test_pr_disallowed_tools_carves_out_exactly_three_entries(self):
+        &quot;&quot;&quot;Only git push, git commit and gh pr create are removed from the denial list.&quot;&quot;&quot;
+        base = set(triage_daemon.DISALLOWED_TOOLS.split(&quot;,&quot;))
+        pr = set(triage_daemon.DISALLOWED_TOOLS_PR.split(&quot;,&quot;))
+        self.assertEqual(base - pr, {&quot;Bash(git push*)&quot;, &quot;Bash(git commit*)&quot;, &quot;Bash(gh pr create*)&quot;})
+
+    def test_pr_allowed_tools_is_a_superset_of_the_triage_allowlist(self):
+        &quot;&quot;&quot;The PR flow's allowlist only ever adds to the read-only allowlist, never removes.&quot;&quot;&quot;
+        base = set(triage_daemon.ALLOWED_TOOLS.split(&quot;,&quot;))
+        pr = set(triage_daemon.ALLOWED_TOOLS_PR.split(&quot;,&quot;))
+        self.assertTrue(base.issubset(pr))
+
+    def test_pr_allowed_tools_adds_exactly_the_expected_entries(self):
+        &quot;&quot;&quot;The only additions are add/commit/push/pr-create/pre-commit.&quot;&quot;&quot;
+        base = set(triage_daemon.ALLOWED_TOOLS.split(&quot;,&quot;))
+        pr = set(triage_daemon.ALLOWED_TOOLS_PR.split(&quot;,&quot;))
+        self.assertEqual(
+            pr - base,
+            {
+                &quot;Bash(git add*)&quot;,
+                &quot;Bash(git commit*)&quot;,
+                &quot;Bash(git push*)&quot;,
+                &quot;Bash(gh pr create*)&quot;,
+                &quot;Bash(./run_pre_commit*)&quot;,
+                &quot;Bash(./run_pre_commit)&quot;,
+            },
+        )
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: FAIL with <code>AttributeError: module 'triage_daemon' has no attribute 'ALLOWED_TOOLS_PR'</code> (the first test passes; the rest fail on the missing attribute).</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>tools/triage_daemon.py</code>, replace the entire existing block from <code>EDIT_SCOPE = ...</code> through the end of the <code>DISALLOWED_TOOLS = ",".join(...)</code> call (currently lines 83-174) with:</p>
+<pre><code class="language-python">EDIT_SCOPE = f&quot;//{CLONE_DIR.relative_to('/')}/**&quot;
+SCRATCH_SCOPE = f&quot;//{SCRATCH_DIR.relative_to('/')}/**&quot;
+_ALLOWED_TOOLS_BASE = [
+    # Read the issue, search for duplicates, post the triage comment
+    &quot;Bash(gh *)&quot;,
+    # Git history, and the re-sync/discard the skill does before investigating
+    &quot;Bash(git log*)&quot;,
+    &quot;Bash(git diff*)&quot;,
+    &quot;Bash(git show*)&quot;,
+    &quot;Bash(git blame*)&quot;,
+    &quot;Bash(git grep*)&quot;,
+    &quot;Bash(git status*)&quot;,
+    &quot;Bash(git branch*)&quot;,
+    &quot;Bash(git tag*)&quot;,
+    &quot;Bash(git describe*)&quot;,
+    &quot;Bash(git rev-parse*)&quot;,
+    &quot;Bash(git remote -v*)&quot;,
+    &quot;Bash(git remote show*)&quot;,
+    &quot;Bash(git fetch*)&quot;,
+    &quot;Bash(git reset*)&quot;,
+    &quot;Bash(git checkout*)&quot;,
+    &quot;Bash(git restore*)&quot;,
+    &quot;Bash(git clean*)&quot;,
+    &quot;Bash(git stash*)&quot;,
+    # Running one targeted test. tools/triage_test.sh keeps the cd into
+    # coverage/ and the output redirect inside the script, because Claude Code
+    # prompts on a cd combined with an output redirect - which is what the
+    # obvious &quot;cd coverage &amp;&amp; ./run_all --test X &gt; log 2&gt;&amp;1&quot; form is, so it is
+    # denied outright under dontAsk no matter what rules are listed here.
+    &quot;Bash(tools/triage_test.sh *)&quot;,
+    &quot;Bash(./tools/triage_test.sh *)&quot;,
+    &quot;Bash(cd *)&quot;,
+    &quot;Bash(./run_all *)&quot;,
+    &quot;Bash(./run_all)&quot;,
+    &quot;Bash(python3 *)&quot;,
+    # Pulling issue attachments down and picking them apart. A predbat.log
+    # is often tens of MB - too big for WebFetch and too big to read into
+    # context, so it gets downloaded and grepped instead.
+    &quot;Bash(curl *)&quot;,
+    &quot;Bash(mkdir *)&quot;,
+    &quot;Bash(unzip *)&quot;,
+    &quot;Bash(gunzip *)&quot;,
+    &quot;Bash(zcat *)&quot;,
+    &quot;Bash(tar *)&quot;,
+    &quot;Bash(file *)&quot;,
+    &quot;Bash(ls *)&quot;,
+    &quot;Bash(find *)&quot;,
+    &quot;Bash(wc *)&quot;,
+    &quot;Bash(head *)&quot;,
+    &quot;Bash(tail *)&quot;,
+    &quot;Bash(cat *)&quot;,
+    &quot;Bash(grep *)&quot;,
+    &quot;Bash(rg *)&quot;,
+    &quot;Bash(sed *)&quot;,
+    &quot;Bash(awk *)&quot;,
+    &quot;Bash(sort *)&quot;,
+    &quot;Bash(uniq *)&quot;,
+    &quot;Bash(cut *)&quot;,
+    &quot;Bash(tr *)&quot;,
+    &quot;Bash(tee *)&quot;,
+    &quot;Bash(echo *)&quot;,
+    # Edit rules cover every file-editing tool (Write included) - a Write(path)
+    # rule is not matched by the file permission check, so don't add one.
+    f&quot;Edit({EDIT_SCOPE})&quot;,
+    f&quot;Edit({SCRATCH_SCOPE})&quot;,
+    &quot;WebFetch&quot;,
+    &quot;Read&quot;,
+    &quot;Grep&quot;,
+    &quot;Glob&quot;,
+]
+ALLOWED_TOOLS = &quot;,&quot;.join(_ALLOWED_TOOLS_BASE)
+# The /issue-pr invocation needs everything the read-only triage flow has, plus
+# committing/pushing its branch, opening the PR, and running pre-commit as a quality gate.
+_ALLOWED_TOOLS_PR_EXTRA = [
+    &quot;Bash(git add*)&quot;,
+    &quot;Bash(git commit*)&quot;,
+    &quot;Bash(git push*)&quot;,
+    &quot;Bash(gh pr create*)&quot;,
+    &quot;Bash(./run_pre_commit*)&quot;,
+    &quot;Bash(./run_pre_commit)&quot;,
+]
+ALLOWED_TOOLS_PR = &quot;,&quot;.join(_ALLOWED_TOOLS_BASE + _ALLOWED_TOOLS_PR_EXTRA)
+# Deny wins over allow, so these carve the publishing commands back out of
+# the broad &quot;Bash(gh *)&quot; / &quot;Bash(git ...)&quot; entries above.
+_DISALLOWED_TOOLS_BASE = [
+    &quot;mcp__*&quot;,
+    &quot;Bash(git push*)&quot;,
+    &quot;Bash(git commit*)&quot;,
+    &quot;Bash(git remote add*)&quot;,
+    &quot;Bash(git remote set-url*)&quot;,
+    &quot;Bash(gh pr create*)&quot;,
+    &quot;Bash(gh pr merge*)&quot;,
+    &quot;Bash(gh pr close*)&quot;,
+    &quot;Bash(gh repo*)&quot;,
+    &quot;Bash(gh release*)&quot;,
+    &quot;Bash(gh workflow*)&quot;,
+    &quot;Bash(gh auth*)&quot;,
+    &quot;Bash(gh secret*)&quot;,
+    &quot;Bash(gh api*)&quot;,
+]
+DISALLOWED_TOOLS = &quot;,&quot;.join(_DISALLOWED_TOOLS_BASE)
+# The PR flow needs to push its branch and open the PR - carve those three back out of
+# the base denial list. Everything else (merge, close, repo/release/workflow/auth/secret/
+# api admin, all mcp__*) stays denied.
+_PR_REMOVED_DENIALS = {&quot;Bash(git push*)&quot;, &quot;Bash(git commit*)&quot;, &quot;Bash(gh pr create*)&quot;}
+DISALLOWED_TOOLS_PR = &quot;,&quot;.join(item for item in _DISALLOWED_TOOLS_BASE if item not in _PR_REMOVED_DENIALS)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: PASS (21 tests total so far)</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add tools/triage_daemon.py tools/test_triage_daemon.py
+git commit -m &quot;refactor(triage_daemon): derive ALLOWED_TOOLS_PR/DISALLOWED_TOOLS_PR from the triage allowlist&quot;
+</code></pre>
+<hr />
+<h2 id="task-8-create_pr">Task 8: <code>create_pr()</code></h2>
+<p><strong>Files:</strong>
+- Modify: <code>tools/triage_daemon.py</code>
+- Modify: <code>tools/test_triage_daemon.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>ALLOWED_TOOLS_PR</code>, <code>DISALLOWED_TOOLS_PR</code> (Task 7), <code>CLONE_DIR</code>, <code>SCRATCH_DIR</code>, <code>LOG_DIR</code> (pre-existing module constants).
+- Produces: <code>create_pr(issue_number: int) -&gt; None</code> — Task 9's <code>process_bot_pr_issue()</code> calls this and then checks <code>has_existing_pr()</code> afterwards; <code>create_pr()</code>'s own return value carries no success/failure meaning (see docstring — a <code>claude -p</code> session exits 0 whether it opened a PR or posted a failure comment instead, so the exit code can't be used to decide the outcome).</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>tools/test_triage_daemon.py</code>, after <code>PermissionModelTests</code>:</p>
+<pre><code class="language-python">class CreatePrTests(DaemonPathsTestCase):
+    &quot;&quot;&quot;Tests for create_pr(), new in the bot PR flow.&quot;&quot;&quot;
+
+    @patch(&quot;triage_daemon.subprocess.run&quot;)
+    def test_invokes_claude_with_the_pr_permission_set(self, mock_run):
+        &quot;&quot;&quot;Runs the /issue-pr skill with the PR-flow allow/deny lists and budget caps.&quot;&quot;&quot;
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn(&quot;/issue-pr 4720&quot;, cmd[2])
+        self.assertIn(triage_daemon.ALLOWED_TOOLS_PR, cmd)
+        self.assertIn(triage_daemon.DISALLOWED_TOOLS_PR, cmd)
+        self.assertIn(&quot;150&quot;, cmd)
+        self.assertIn(&quot;25.00&quot;, cmd)
+
+    @patch(&quot;triage_daemon.subprocess.run&quot;)
+    def test_does_not_raise_on_a_non_zero_exit(self, mock_run):
+        &quot;&quot;&quot;Unlike triage(), a non-zero exit is logged, not raised - the caller decides
+        success by checking for the PR afterwards, not from this function's return.&quot;&quot;&quot;
+        mock_run.return_value = MagicMock(returncode=1)
+        triage_daemon.create_pr(4720)  # must not raise
+
+    @patch(&quot;triage_daemon.subprocess.run&quot;)
+    def test_writes_a_log_file(self, mock_run):
+        &quot;&quot;&quot;A per-issue PR-flow log file is created under LOG_DIR.&quot;&quot;&quot;
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        self.assertTrue((self.log_dir / &quot;issue-4720-pr.log&quot;).exists())
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: FAIL with <code>AttributeError: module 'triage_daemon' has no attribute 'create_pr'</code></p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>tools/triage_daemon.py</code>, add directly after <code>triage()</code>:</p>
+<pre><code class="language-python">def create_pr(issue_number):
+    &quot;&quot;&quot;Run the /issue-pr skill for one issue under the push/PR-create-capable permission set.
+
+    Whether it succeeded is judged by the caller re-checking has_existing_pr()
+    afterwards, not by this function's return value or the invocation's exit code -
+    a claude -p session that completes normally exits 0 whether it opened a PR or
+    decided the quality gate failed and posted a comment instead.
+    &quot;&quot;&quot;
+    cmd = [
+        &quot;claude&quot;,
+        &quot;-p&quot;,
+        f&quot;/issue-pr {issue_number} scratch={SCRATCH_DIR}&quot;,
+        &quot;--permission-mode&quot;,
+        &quot;dontAsk&quot;,
+        &quot;--allowedTools&quot;,
+        ALLOWED_TOOLS_PR,
+        &quot;--disallowedTools&quot;,
+        DISALLOWED_TOOLS_PR,
+        &quot;--verbose&quot;,
+        &quot;--add-dir&quot;,
+        str(SCRATCH_DIR),
+        &quot;--max-turns&quot;,
+        &quot;150&quot;,
+        &quot;--max-budget-usd&quot;,
+        &quot;25.00&quot;,
+    ]
+    log_path = LOG_DIR / f&quot;issue-{issue_number}-pr.log&quot;
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f&quot;[pr] issue #{issue_number}: starting, logging to {log_path}&quot;, flush=True)
+    with log_path.open(&quot;a&quot;) as log_handle:
+        log_handle.write(f&quot;\n==== issue #{issue_number} PR flow started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n&quot;)
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        log_handle.write(f&quot;==== issue #{issue_number} PR flow exited {result.returncode} ====\n&quot;)
+    print(f&quot;[pr] issue #{issue_number}: exited {result.returncode}&quot;, flush=True)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: PASS (24 tests total so far)</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add tools/triage_daemon.py tools/test_triage_daemon.py
+git commit -m &quot;feat(triage_daemon): add create_pr() to invoke the /issue-pr skill&quot;
+</code></pre>
+<hr />
+<h2 id="task-9-process_bot_pr_issue-and-daemon-loop-wiring">Task 9: <code>process_bot_pr_issue()</code> and daemon loop wiring</h2>
+<p><strong>Files:</strong>
+- Modify: <code>tools/triage_daemon.py</code> (<code>main()</code>)
+- Modify: <code>tools/test_triage_daemon.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>has_existing_pr</code> (Task 5), <code>sync_repo</code>, <code>reset_scratch</code>, <code>triage</code> (all pre-existing), <code>ensure_triaged</code> (Task 4), <code>create_pr</code> (Task 8), <code>mark_pr_opened</code>, <code>mark_pr_failed</code> (Task 6).
+- Produces: <code>process_bot_pr_issue(issue: dict) -&gt; None</code>, called from <code>main()</code> for every result of <code>fetch_bot_pr_issues()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>tools/test_triage_daemon.py</code>, after <code>CreatePrTests</code>:</p>
+<pre><code class="language-python">class ProcessBotPrIssueTests(unittest.TestCase):
+    &quot;&quot;&quot;Tests for process_bot_pr_issue(), the orchestrator wiring the whole BOT_PR flow
+    together - new in the bot PR flow.&quot;&quot;&quot;
+
+    def setUp(self):
+        &quot;&quot;&quot;Patch every collaborator process_bot_pr_issue() calls.&quot;&quot;&quot;
+        self.patches = {}
+        for name in [
+            &quot;has_existing_pr&quot;,
+            &quot;sync_repo&quot;,
+            &quot;reset_scratch&quot;,
+            &quot;ensure_triaged&quot;,
+            &quot;triage&quot;,
+            &quot;create_pr&quot;,
+            &quot;mark_pr_opened&quot;,
+            &quot;mark_pr_failed&quot;,
+        ]:
+            patcher = patch.object(triage_daemon, name)
+            self.patches[name] = patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_skips_entirely_when_pr_already_exists(self):
+        &quot;&quot;&quot;An issue that already has a referencing PR is left alone.&quot;&quot;&quot;
+        self.patches[&quot;has_existing_pr&quot;].return_value = True
+        triage_daemon.process_bot_pr_issue({&quot;number&quot;: 4720, &quot;labels&quot;: []})
+        self.patches[&quot;sync_repo&quot;].assert_not_called()
+        self.patches[&quot;create_pr&quot;].assert_not_called()
+
+    def test_runs_triage_first_when_not_yet_triaged(self):
+        &quot;&quot;&quot;An untriaged issue is triaged before the PR flow runs.&quot;&quot;&quot;
+        self.patches[&quot;has_existing_pr&quot;].side_effect = [False, True]  # entry guard, then post-hoc check
+        self.patches[&quot;ensure_triaged&quot;].return_value = False
+        triage_daemon.process_bot_pr_issue({&quot;number&quot;: 4720, &quot;labels&quot;: []})
+        self.patches[&quot;triage&quot;].assert_called_once_with(4720)
+        self.patches[&quot;create_pr&quot;].assert_called_once_with(4720)
+
+    def test_skips_triage_when_already_triaged(self):
+        &quot;&quot;&quot;An already-triaged issue goes straight to the PR flow.&quot;&quot;&quot;
+        self.patches[&quot;has_existing_pr&quot;].side_effect = [False, True]
+        self.patches[&quot;ensure_triaged&quot;].return_value = True
+        triage_daemon.process_bot_pr_issue({&quot;number&quot;: 4720, &quot;labels&quot;: [{&quot;name&quot;: &quot;BOT_TRIAGED&quot;}]})
+        self.patches[&quot;triage&quot;].assert_not_called()
+        self.patches[&quot;create_pr&quot;].assert_called_once_with(4720)
+
+    def test_marks_opened_when_a_pr_exists_afterwards(self):
+        &quot;&quot;&quot;If a PR references the issue after create_pr() runs, swap to BOT_PR_OPENED.&quot;&quot;&quot;
+        self.patches[&quot;has_existing_pr&quot;].side_effect = [False, True]
+        self.patches[&quot;ensure_triaged&quot;].return_value = True
+        triage_daemon.process_bot_pr_issue({&quot;number&quot;: 4720, &quot;labels&quot;: []})
+        self.patches[&quot;mark_pr_opened&quot;].assert_called_once_with(4720)
+        self.patches[&quot;mark_pr_failed&quot;].assert_not_called()
+
+    def test_marks_failed_when_no_pr_exists_afterwards(self):
+        &quot;&quot;&quot;If no PR exists after create_pr() runs (quality gate failed), swap to BOT_PR_FAILED.&quot;&quot;&quot;
+        self.patches[&quot;has_existing_pr&quot;].side_effect = [False, False]
+        self.patches[&quot;ensure_triaged&quot;].return_value = True
+        triage_daemon.process_bot_pr_issue({&quot;number&quot;: 4720, &quot;labels&quot;: []})
+        self.patches[&quot;mark_pr_failed&quot;].assert_called_once_with(4720)
+        self.patches[&quot;mark_pr_opened&quot;].assert_not_called()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: FAIL with <code>AttributeError: module 'triage_daemon' has no attribute 'process_bot_pr_issue'</code></p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>tools/triage_daemon.py</code>, add directly after <code>create_pr()</code>:</p>
+<pre><code class="language-python">def process_bot_pr_issue(issue):
+    &quot;&quot;&quot;Run the full BOT_PR flow for one issue: guard against duplicate work, ensure it's
+    triaged, run the PR flow, then swap the label based on whether a PR now exists.
+    &quot;&quot;&quot;
+    issue_number = issue[&quot;number&quot;]
+    labels = issue.get(&quot;labels&quot;, [])
+    if has_existing_pr(issue_number):
+        print(f&quot;[pr] issue #{issue_number}: a PR already references this issue, skipping&quot;, flush=True)
+        return
+    sync_repo()
+    reset_scratch()
+    if not ensure_triaged(issue_number, labels):
+        triage(issue_number)
+    create_pr(issue_number)
+    if has_existing_pr(issue_number):
+        mark_pr_opened(issue_number)
+    else:
+        mark_pr_failed(issue_number)
+</code></pre>
+<p>Then modify <code>main()</code> to also process <code>BOT_PR</code> issues each poll cycle. Find:</p>
+<pre><code class="language-python">    state = load_state()
+    while True:
+        try:
+            for issue in fetch_new_issues(state[&quot;last_processed&quot;]):
+                sync_repo()
+                reset_scratch()
+                triage(issue[&quot;number&quot;])
+                state[&quot;last_processed&quot;] = issue[&quot;number&quot;]
+                save_state(state)
+        except subprocess.CalledProcessError as exc:
+            print(f&quot;[triage] error: {exc}&quot;, flush=True)
+        time.sleep(POLL_SECONDS)
+</code></pre>
+<p>Replace it with:</p>
+<pre><code class="language-python">    state = load_state()
+    while True:
+        try:
+            for issue in fetch_new_issues(state[&quot;last_processed&quot;]):
+                sync_repo()
+                reset_scratch()
+                triage(issue[&quot;number&quot;])
+                state[&quot;last_processed&quot;] = issue[&quot;number&quot;]
+                save_state(state)
+            for issue in fetch_bot_pr_issues():
+                process_bot_pr_issue(issue)
+        except subprocess.CalledProcessError as exc:
+            print(f&quot;[triage] error: {exc}&quot;, flush=True)
+        time.sleep(POLL_SECONDS)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>python3 tools/test_triage_daemon.py -v</code>
+Expected: PASS (29 tests total)</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add tools/triage_daemon.py tools/test_triage_daemon.py
+git commit -m &quot;feat(triage_daemon): add process_bot_pr_issue() and wire it into the poll loop&quot;
+</code></pre>
+<hr />
+<h2 id="task-10-new-skill-claudeskillsissue-prskillmd">Task 10: New skill — <code>.claude/skills/issue-pr/SKILL.md</code></h2>
+<p><strong>Files:</strong>
+- Create: <code>.claude/skills/issue-pr/SKILL.md</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>.claude/skills/issue-triage/references/debug-journal.md</code> (existing, referenced not duplicated), <code>CLAUDE.md</code> (repo root, read automatically by Claude Code from the working directory).
+- Produces: the <code>/issue-pr &lt;issue-number&gt; [scratch=&lt;dir&gt;]</code> slash command Task 8's <code>create_pr()</code> invokes.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the skill file</strong></li>
+</ul>
+<pre><code class="language-markdown">---
+name: issue-pr
+description: Implement the fix or feature described in an already-triaged batpred GitHub issue and open a draft pull request referencing it, for maintainer review.
+allowed-tools: You can view and edit files in this repo, write code and tests, run local tests and pre-commit, commit and push a new branch, and open a draft pull request with 'gh'. Do not merge, close, or push directly to main.
+---
+
+# Issue PR
+
+You are implementing the fix or feature described in one already-triaged GitHub issue on `springfall2008/batpred`, and opening a draft pull request for maintainer review. The working directory is the same dedicated local clone the triage skill uses — investigate and work using it directly.
+
+Arguments: `&lt;issue-number&gt; [scratch=&lt;dir&gt;]`, same convention as `/issue-triage`. If no `scratch=` is given (an interactive invocation), use `/tmp/predbat-triage/&lt;issue-number&gt;` and `mkdir -p` it yourself.
+
+This skill assumes the issue has already been triaged — the daemon only invokes it once that's confirmed. Read the existing triage comment before doing anything else.
+
+## 1. Read the ticket
+
+Fetch it with `gh issue view &lt;number&gt; --json title,body,labels,comments`. The bot's own triage comment (opens with &quot;automated first-pass triage&quot;) already has the classification, priority, and any root-cause pointer — start from there rather than re-investigating from scratch.
+
+## 2. Investigate
+
+- Sync the clone first, so you are reading the code you think you are:
+
+  ```bash
+  git fetch origin main &amp;&amp; git reset --hard origin/main &amp;&amp; git clean -fd
+  git describe --tags
+  ```
+
+- Read [../issue-triage/references/debug-journal.md](../issue-triage/references/debug-journal.md) before forming an implementation approach — it maps common symptoms to modules and records known per-integration behaviour from past investigations. Its entries are dated observations, not current truth — confirm anything you rely on against the working tree.
+- Read the relevant source area named in the triage comment's root-cause pointer, or that the issue's classification points to.
+- Check `git log`/`git blame` on that area — the triage comment may already cover this, but confirm nothing has changed on `main` since triage ran.
+
+## 3. Implement
+
+- Write the fix or feature following this repo's conventions (`CLAUDE.md`, already loaded automatically for this session): `lower_case_with_underscores` naming, 256-character line length, a one-line docstring on every new function or class.
+- Add or update a unit test for the change, in the matching `apps/predbat/tests/test_&lt;feature&gt;.py` module (registered in `TEST_REGISTRY` in `apps/predbat/unit_test.py` if it's a new module) — `CLAUDE.md` requires unit tests for all new code, no exceptions for bot-authored ones.
+- Keep the change scoped to what the issue describes. Don't refactor unrelated code, even if you notice something else worth fixing.
+
+## 4. Quality gate
+
+Both of these must pass before you continue to step 5:
+
+```bash
+./run_pre_commit
+tools/triage_test.sh &lt;name&gt; &lt;scratch&gt;/test.log
+</code></pre>
+<p>Use the test module named in the triage comment, or the one <code>TEST_REGISTRY</code> maps to the area you changed. If there's no clean single-module mapping, run <code>./run_all --quick</code> instead (from <code>coverage/</code>) rather than guessing at a module name.</p>
+<p>If either fails, stop here — do not commit, push, or open a PR. Go to step 7 and report what failed.</p>
+<h2 id="5-branch-commit-push">5. Branch, commit, push</h2>
+<p>Branch name: <code>fix/&lt;slug&gt;-&lt;issue-number&gt;</code> for a <code>bug</code> classification, <code>feat/&lt;slug&gt;-&lt;issue-number&gt;</code> for <code>enhancement</code> — matching this repo's existing convention (e.g. <code>fix/solis-tou-bit-refused-4707</code>). <code>&lt;slug&gt;</code> is a short kebab-case description of the change.</p>
+<pre><code class="language-bash">git checkout -b fix/&lt;slug&gt;-&lt;issue-number&gt;
+git add &lt;changed files&gt;
+git commit -m &quot;&lt;one-line summary of the fix&gt;&quot;
+git push -u origin fix/&lt;slug&gt;-&lt;issue-number&gt;
+</code></pre>
+<p>Never push to <code>main</code>, and never force-push.</p>
+<h2 id="6-open-the-draft-pr">6. Open the draft PR</h2>
+<pre><code class="language-bash">gh pr create --draft --assignee springfall2008 \
+  --title &quot;&lt;one-line summary&gt;&quot; \
+  --body &quot;$(cat &lt;&lt;'EOF'
+This is an automated draft PR generated from issue #&lt;issue-number&gt; — a maintainer should review it before merging.
+
+Fixes #&lt;issue-number&gt;
+
+## Summary
+
+&lt;what changed and why, in a sentence or two&gt;
+
+## Testing
+
+&lt;what you ran in step 4 and its result&gt;
+
+## Notes
+
+&lt;a debug-journal.md reference if one informed the approach, otherwise omit this section&gt;
+EOF
+)&quot;
+</code></pre>
+<p>This is the last step on success — there is nothing further to report; the daemon detects the new PR itself.</p>
+<h2 id="7-on-failure">7. On failure</h2>
+<p>If step 4's quality gate failed, or an earlier step couldn't proceed (e.g. the fix genuinely needs information only a maintainer has), post exactly one comment on the issue via <code>gh issue comment &lt;number&gt; --body "..."</code> explaining plainly what you attempted and what failed — never word it so a skipped step reads as one you completed (same guardrail as the triage skill). Then stop. Do not commit, push, or open a PR — the daemon detects this outcome itself by finding no PR referencing the issue afterwards.</p>
+<h2 id="guardrails">Guardrails</h2>
+<ul>
+<li>Never push to <code>main</code> or force-push.</li>
+<li>Never merge, close, or edit an existing PR.</li>
+<li>Never remove a label a human applied.</li>
+<li>The PR is always a draft — never open it as ready-for-review.</li>
+<li>If a command you needed was blocked by permissions, say plainly in the failure comment what you could not do.</li>
+</ul>
+<pre><code>
+- [ ] **Step 2: Verify**
+
+Read the file back and confirm the frontmatter parses (matches the shape of `.claude/skills/issue-triage/SKILL.md`'s frontmatter) and the relative link to `debug-journal.md` resolves: `ls .claude/skills/issue-triage/references/debug-journal.md` from repo root.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add .claude/skills/issue-pr/SKILL.md
+git commit -m &quot;feat(issue-pr): add the issue-pr skill&quot;
+</code></pre>
+<hr />
+<h2 id="task-11-wire-the-new-tests-into-pre-commit">Task 11: Wire the new tests into pre-commit</h2>
+<p><strong>Files:</strong>
+- Modify: <code>.pre-commit-config.yaml</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>tools/test_triage_daemon.py</code> (Tasks 2–9).
+- Produces: nothing consumed by later tasks — this is the last automated task.</p>
+<ul>
+<li>[ ] <strong>Step 1: Add the local hook</strong></li>
+</ul>
+<p>In <code>.pre-commit-config.yaml</code>, add a new hook to the existing <code>repo: local</code> block (the one that already contains <code>cspell-dictionary-sorter</code>):</p>
+<p>Find:</p>
+<pre><code class="language-yaml">- repo: local
+  hooks:
+  - id: cspell-dictionary-sorter
+    name: cspell dictionary sorter
+    language: python
+    entry: python .cspell/sort_dictionary.py
+    files: ^\.cspell\/custom-dictionary-workspace\.txt$
+</code></pre>
+<p>Replace with:</p>
+<pre><code class="language-yaml">- repo: local
+  hooks:
+  - id: cspell-dictionary-sorter
+    name: cspell dictionary sorter
+    language: python
+    entry: python .cspell/sort_dictionary.py
+    files: ^\.cspell\/custom-dictionary-workspace\.txt$
+  - id: triage-daemon-tests
+    name: triage daemon unit tests
+    language: python
+    entry: python tools/test_triage_daemon.py
+    files: ^tools/(triage_daemon\.py|test_triage_daemon\.py)$
+    pass_filenames: false
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Verify the hook runs and passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; source setup.csh &amp;&amp; python3 -m pre_commit run triage-daemon-tests --files ../tools/triage_daemon.py</code>
+Expected: the hook fires and reports success (29 tests passing).</p>
+<ul>
+<li>[ ] <strong>Step 3: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add .pre-commit-config.yaml
+git commit -m &quot;chore: run triage_daemon.py unit tests via pre-commit&quot;
+</code></pre>
+<hr />
+<h2 id="task-12-create-the-github-labels-manual-run-by-the-user-not-automated">Task 12: Create the GitHub labels — <strong>manual, run by the user, not automated</strong></h2>
+<p>This task modifies live state on <code>springfall2008/batpred</code> (visible labels on a public repo). Do not run these commands as part of automated task execution — present them to the user and let them run it, or get explicit confirmation before running.</p>
+<ul>
+<li>[ ] <strong>Step 1: Create the four labels</strong></li>
+</ul>
+<pre><code class="language-bash">gh label create BOT_TRIAGED --repo springfall2008/batpred --color 0e8a16 --description &quot;Has been through the triage bot&quot;
+gh label create BOT_PR --repo springfall2008/batpred --color 5319e7 --description &quot;Trigger: bot should implement this ticket and open a draft PR&quot;
+gh label create BOT_PR_OPENED --repo springfall2008/batpred --color 0e8a16 --description &quot;Bot PR flow opened a draft PR for this ticket&quot;
+gh label create BOT_PR_FAILED --repo springfall2008/batpred --color d93f0b --description &quot;Bot PR flow's quality gate failed; see the comment for details&quot;
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Verify</strong></li>
+</ul>
+<pre><code class="language-bash">gh label list --repo springfall2008/batpred | grep -E &quot;^BOT_&quot;
+</code></pre>
+<p>Expected: all four labels listed.</p>
+<ul>
+<li>[ ] <strong>Step 3: Confirm the daemon's <code>gh auth</code> identity has push access</strong></li>
+</ul>
+<p>Per the spec (Section 6.1): whatever GitHub identity <code>tools/triage_daemon.py</code> runs as needs push access to <code>springfall2008/batpred</code>. No separate bot account is required — the PR uses <code>--assignee springfall2008</code> rather than <code>--reviewer</code>, and self-assignment is allowed, so the daemon can run as <code>springfall2008</code> itself. Confirm push access on whichever machine runs the daemon before enabling <code>BOT_PR</code> for real use:</p>
+<pre><code class="language-bash">gh auth status
+</code></pre>
+<hr />
+<h2 id="task-13-end-to-end-verification-manual-human-supervised-not-automated">Task 13: End-to-end verification — <strong>manual, human-supervised, not automated</strong></h2>
+<p>This exercises the live daemon against the real repo with push/PR-create permissions — do not run unsupervised. Requires Task 12 complete.</p>
+<ul>
+<li>[ ] <strong>Step 1: Dry run against a real triaged issue</strong></li>
+</ul>
+<p>Pick an issue already carrying a bot triage comment (or let the daemon triage a fresh one first). Add the <code>BOT_PR</code> label:</p>
+<pre><code class="language-bash">gh issue edit &lt;number&gt; --repo springfall2008/batpred --add-label BOT_PR
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Watch the daemon log</strong></li>
+</ul>
+<pre><code class="language-bash">tail -f ~/predbat-triage-bot/logs/issue-&lt;number&gt;-pr.log
+</code></pre>
+<p>Confirm: the branch is created, the commit looks right, <code>./run_pre_commit</code> and the targeted test both pass in the log, the branch is pushed, and a draft PR appears on GitHub with <code>springfall2008</code> as assignee, <code>Fixes #&lt;number&gt;</code> in the body, and the disclosure line.</p>
+<ul>
+<li>[ ] <strong>Step 3: Confirm the label swap</strong></li>
+</ul>
+<pre><code class="language-bash">gh issue view &lt;number&gt; --repo springfall2008/batpred --json labels
+</code></pre>
+<p>Expected: <code>BOT_PR</code> is gone, <code>BOT_PR_OPENED</code> is present.</p>
+<ul>
+<li>[ ] <strong>Step 4: Confirm the failure path separately</strong></li>
+</ul>
+<p>Add <code>BOT_PR</code> to a ticket engineered to fail the quality gate (e.g. one whose obvious fix would break an existing test). Confirm: no branch is pushed, no PR opens, one comment is posted explaining the failure, and the issue ends up with <code>BOT_PR_FAILED</code> instead of <code>BOT_PR</code>.</p>
+<hr />
+<h2 id="self-review-notes">Self-Review Notes</h2>
+<ul>
+<li><strong>Spec coverage:</strong> Section 2 (labels) → Tasks 1, 12. Section 2.1 (backfill) → Task 4. Section 3 (issue-triage modification) → Task 1. Section 4 (daemon changes, including the corrected success-detection mechanism) → Tasks 3, 5, 6, 9. Section 5 (issue-pr skill) → Task 10. Section 6 (permission model) → Tasks 7, 8; Section 6.1 (infra prerequisite) → Task 12 Step 3. Section 7.1 (unit tests) → Tasks 2–9. Section 7.2 (pre-commit wiring) → Task 11. Section 7.3 (E2E verification) → Task 13. Section 8 (error handling table) → covered across Tasks 4, 5, 9.</li>
+<li><strong>Placeholder scan:</strong> no TBD/TODO; every code block is complete, runnable code, not a description of code.</li>
+<li><strong>Type consistency:</strong> <code>has_existing_pr(issue_number)</code>, <code>ensure_triaged(issue_number, labels)</code>, <code>create_pr(issue_number)</code>, <code>mark_pr_opened(issue_number)</code>/<code>mark_pr_failed(issue_number)</code> use the same parameter names and call signatures everywhere they appear across Tasks 4–9. <code>process_bot_pr_issue(issue)</code> consistently takes the raw dict shape <code>fetch_bot_pr_issues()</code> (Task 3) produces.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

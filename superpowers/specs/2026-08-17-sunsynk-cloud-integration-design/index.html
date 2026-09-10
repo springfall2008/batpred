@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Sunsynk Cloud Inverter Integration — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Sunsynk Cloud Inverter Integration \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-08-17-sunsynk-cloud-integration-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Sunsynk Cloud Inverter Integration — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="sunsynk-cloud-inverter-integration-design">Sunsynk Cloud Inverter Integration — Design</h1>
+<p>Date: 2026-08-17
+Status: Draft (awaiting review)</p>
+<h2 id="goal">Goal</h2>
+<p>Add a Sunsynk Connect cloud component to Predbat, modelled on the existing Fox and DEYE
+cloud integrations (<code>apps/predbat/fox.py</code>, <code>apps/predbat/deye.py</code>), providing monitoring
+and battery control for Sunsynk hybrid inverters via the Sunsynk Connect API, so a
+Sunsynk inverter can be driven by Predbat with no local hardware or Modbus dongle access,
+on both the self-hosted Home Assistant add-on and the Predbat.com SaaS platform.</p>
+<h2 id="scope-decisions-agreed">Scope decisions (agreed)</h2>
+<ul>
+<li><strong>Standalone module.</strong> New <code>sunsynk.py</code> and <code>sunsynk_const.py</code> written in <code>deye.py</code>'s
+  image, with their own derivation logic. <code>deye.py</code> is not modified. This matches how
+  every cloud component in Predbat stands alone today — <code>fox</code>, <code>deye</code>, <code>solax</code>, <code>enphase</code>
+  and <code>solis</code> share only <code>ComponentBase</code>, <code>OAuthMixin</code> and <code>MockBase</code>. The duplicated
+  window-to-slot logic is accepted in exchange for zero risk to shipped DEYE behaviour.</li>
+<li><strong>Pure-Python RSA.</strong> The Sunsynk login RSA-encrypts the account password. This is
+  implemented in ~50 lines in <code>sunsynk_const.py</code> rather than by adding <code>cryptography</code> to
+  <code>requirements.txt</code>, so no Rust-built binary wheel is introduced for the armv7/armhf
+  add-on targets. Only public-key encryption is performed — no private keys, no
+  timing-sensitive operations.</li>
+<li><strong>Both deployment modes, three auth methods.</strong> A <code>sunsynk_auth_method</code> arg selects
+  <code>password</code> (self-hosted, RSA-encrypted login, the default), <code>password_legacy</code>
+  (self-hosted, the pre-2025 plaintext login, opt-in) or <code>oauth</code> (Predbat.com injects the
+  access token), mirroring and extending <code>deye_auth_method</code>. <code>password</code> never
+  auto-downgrades to <code>password_legacy</code> — see "No automatic downgrade".</li>
+<li><strong>Multi-inverter from the start.</strong> Discover every inverter on the account and register
+  each as a Predbat inverter, with an optional <code>sunsynk_inverter_sn</code> filter.</li>
+<li><strong>No Predbat-facing work-mode control.</strong> Predbat owns the charge window, the export
+  window, reserve, target SOCs and enables. The component derives the Sunsynk work mode
+  internally. This is the DEYE/Enphase mode-less pattern, not the Fox work-mode-select
+  pattern.</li>
+<li><strong>Battery and solar only.</strong> No generator control, smart-load, EV charger, or
+  plant-management surface.</li>
+<li><strong>Control is opt-in until field-verified.</strong> Nobody on the project has a Sunsynk account.
+  Monitoring is always active; writes to the inverter happen only when
+  <code>sunsynk_control_enable: true</code> (default <code>false</code>). The default flips once a tester
+  confirms the wire format.</li>
+<li><strong>Default to DEYE semantics where the API is silent.</strong> See below — this is the
+  tie-breaking rule for every unknown, and it has a deliberate boundary.</li>
+</ul>
+<h2 id="defaulting-to-deye-semantics">Defaulting to DEYE semantics</h2>
+<p>Sunsynk inverters are rebadged DEYE hardware. The control registers behind both cloud
+APIs are the same registers, so where this design has to guess, it guesses at whatever
+<code>deye.py</code> already does. That rule has a boundary, and stating it precisely matters more
+than stating it:</p>
+<p><strong>Assume DEYE for <em>semantics</em>. Never assume DEYE for <em>encoding</em>.</strong></p>
+<p>Semantics are register-level and transfer: the six sequential time-of-use slots and their
+distinct-ascending-start-time constraint; the existence of exactly three work modes and
+what each one does; which mode-and-flag combination produces charge, hold, freeze-charge,
+export and freeze-export; a battery capacity reported in amp-hours needing a pack voltage;
+an installer-set SOC floor the inverter will not go below; the battery-power sign
+convention. All of it is lifted directly from <code>deye.py</code>, and the intent-mapping table in
+"Control model" below <em>is</em> DEYE's <code>derive_control_state()</code> table.</p>
+<p>Encoding is wrapper-level and demonstrably differs: DeyeCloud is a developer API with
+camelCase fields and string enums (<code>"SELLING_FIRST"</code>) and asynchronous <code>orderId</code> writes;
+Sunsynk Connect is the <code>csp-web</code> application backend with a flat object of numeric
+strings and a synchronous whole-object write. Field names, value types, enum
+representations and request shape are established from the Sunsynk sources only, never
+carried across.</p>
+<p>The clearest trap this rule catches is <code>sysWorkMode</code>. That Sunsynk has the same three
+modes as DEYE is a semantic claim and safe to assume. That they are numbered <code>0</code>, <code>1</code>,
+<code>2</code> <em>in DEYE's enum order</em> is an encoding claim, and it is exactly the kind of assumption
+that is plausible, unverifiable from the sources, and wrong in a way that silently swaps
+export for charge. It stays flagged as an unknown regardless of how well the semantics
+line up.</p>
+<p>Two supports for the rule:</p>
+<ul>
+<li>Where a Sunsynk field name is ambiguous, the <strong>published Modbus register map</strong> for these
+  inverters (as used by <a href="https://github.com/kellerza/sunsynk">https://github.com/kellerza/sunsynk</a>) disambiguates the meaning,
+  because it describes the same registers both clouds are writing. It is the tiebreaker
+  when the two cloud clients disagree.</li>
+<li>The rule sets <em>defaults</em>, never <em>safety</em>. Guessing DEYE never relaxes a guard: the SOC
+  floor clamp stays unconditional, and any response that does not parse as expected fails
+  closed — the component skips the write and leaves the inverter in self-use — rather than
+  falling through into assumed-DEYE behaviour. A wrong assumption must cost a missed
+  optimisation, not a battery driven the wrong way.</li>
+</ul>
+<h2 id="background-the-sunsynk-connect-api">Background: the Sunsynk Connect API</h2>
+<p>There is no public Sunsynk API documentation. Three sources were used, all reviewed
+during design:</p>
+<ol>
+<li><a href="https://github.com/martinville/solarsynkv3">https://github.com/martinville/solarsynkv3</a> — the Home Assistant add-on that
+   supersedes the abandoned <code>solarsynkv2</code> the request pointed at (that repository now
+   404s). Confirms the auth flow, the telemetry endpoints and field names, and — despite
+   its README describing it as sensor-only — it <em>does</em> write settings, via
+   <code>settingsmanager.py</code>. Its control architecture is not reusable (settings are driven by
+   a user typing JSON fragments into an <code>input_text</code> helper, and state is passed between
+   functions through temporary files on disk), but its endpoint and field vocabulary is
+   directly applicable.</li>
+<li><a href="https://github.com/hammingweight/synkctl">https://github.com/hammingweight/synkctl</a> — a Go CLI. The most authoritative source
+   for the endpoint list, the current RSA authentication workflow (<code>rest/authentication.go</code>)
+   and the full settings object shape (<code>rest/inverter_struct.go</code>).</li>
+<li><a href="https://github.com/jamesridgway/sunsynk-api-client">https://github.com/jamesridgway/sunsynk-api-client</a> and community write-ups, used to
+   corroborate the read endpoints and the absence of a documented rate limit.</li>
+</ol>
+<p>Sunsynk inverters are rebadged DEYE hardware, so the underlying control registers are the
+same ones <code>deye.py</code> already drives. The cloud wrapper differs: DEYE exposes a
+<code>strategy/dynamicControl</code> endpoint taking structured <code>timeUseSettingItems</code>; Sunsynk
+exposes one flat settings object with indexed fields.</p>
+<h3 id="regions">Regions</h3>
+<p>Selected by a <code>sunsynk_region</code> arg:</p>
+<table>
+<thead>
+<tr>
+<th><code>sunsynk_region</code></th>
+<th>Host</th>
+<th><code>source</code> parameter</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sunsynk</code> (default)</td>
+<td><code>api.sunsynk.net</code></td>
+<td><code>sunsynk</code></td>
+</tr>
+<tr>
+<td><code>inteless</code></td>
+<td><code>pv.inteless.com</code></td>
+<td><code>elinter</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="auth">Auth</h3>
+<p><code>sunsynk_auth_method</code> selects one of three paths. All of them end with a bearer token
+used identically thereafter.</p>
+<h4 id="password-default-rsa-encrypted-login"><code>password</code> (default) — RSA-encrypted login</h4>
+<p>Three steps, all against the region host:</p>
+<ol>
+<li><code>nonce = int(time.time() * 1000)</code>;
+   <code>sign = md5(f"nonce={nonce}&amp;source={source}POWER_VIEW")</code></li>
+<li><code>GET /anonymous/publicKey?source={source}&amp;nonce={nonce}&amp;sign={sign}</code> →
+   <code>data</code> is a base64 DER <code>SubjectPublicKeyInfo</code> RSA public key (no PEM armour).</li>
+<li><code>POST /oauth/token/new</code> with
+   <code>{client_id: "csp-web", grant_type: "password", source, username,
+   password: &lt;base64 RSA-PKCS1v15 ciphertext&gt;, nonce, sign}</code>, where this second
+   <code>sign = md5(f"nonce={nonce}&amp;source={source}" + public_key_string[:10])</code> →
+   <code>data.access_token</code>, <code>data.refresh_token</code>, <code>data.expires_in</code>.</li>
+</ol>
+<h4 id="password_legacy-plaintext-login"><code>password_legacy</code> — plaintext login</h4>
+<p>The pre-2025 flow, a single call with no public-key step, no nonce and no signature:</p>
+<p><code>POST /oauth/token</code> with
+<code>{areaCode: "sunsynk", client_id: "csp-web", grant_type: "password", source, username,
+password: &lt;plaintext&gt;}</code> → the same <code>data.access_token</code> / <code>refresh_token</code> / <code>expires_in</code>
+envelope.</p>
+<p>Retained because the two flows are served by different Sunsynk server generations and it
+is not established which regions have migrated. <code>pv.inteless.com</code> in particular is a
+separate deployment from <code>api.sunsynk.net</code> and may still be on the older path, and the
+legacy endpoint is a one-line request that costs almost nothing to keep working. It is
+also the diagnostic that separates "my credentials are wrong" from "the RSA handshake is
+wrong" when a tester reports a login failure — the single most likely place for this
+integration to fail on first contact, given nobody on the project can try it first.</p>
+<h4 id="oauth-injected-token"><code>oauth</code> — injected token</h4>
+<p>Skips login entirely. <code>OAuthMixin</code> assigns the injected <code>sunsynk_key</code> straight to the
+access token, exactly as the DEYE component does. This is the Predbat.com path.</p>
+<h4 id="no-automatic-downgrade">No automatic downgrade</h4>
+<p><code>password</code> never silently falls back to <code>password_legacy</code>. The fallback is superficially
+attractive — it would make the component self-configuring across both server generations
+— but it converts any failure of the <code>publicKey</code> step into a plaintext credential
+transmission, and that failure is externally triggerable. TLS-intercepting middleboxes
+are common on home and corporate networks, and against one of those the RSA layer is the
+only thing protecting the password: an interceptor can read the TLS stream but cannot
+decrypt an RSA ciphertext without Sunsynk's private key. Auto-downgrade hands it the
+plaintext instead, and Sunsynk very likely added the RSA step for exactly this reason.</p>
+<p>So the legacy method is opt-in: the user sets <code>sunsynk_auth_method: password_legacy</code>
+deliberately, and the component logs a warning naming the trade-off each time it starts
+with that setting. A failing RSA login logs the diagnostic pointing at the legacy option
+rather than taking it unasked.</p>
+<h3 id="reads">Reads</h3>
+<p>All <code>GET</code> with <code>Accept: application/json</code> and <code>Authorization: Bearer &lt;token&gt;</code>. Every
+response is <code>{code, msg, success, data}</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Purpose</th>
+<th>Path</th>
+<th>Key fields consumed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Inverter discovery</td>
+<td><code>/api/v1/inverters?page={n}&amp;limit=10&amp;type=-2&amp;status=-1</code></td>
+<td><code>data.infos[].sn</code>, <code>data.total</code></td>
+</tr>
+<tr>
+<td>Inverter detail</td>
+<td><code>/api/v1/inverter/{sn}</code></td>
+<td><code>ratePower</code>, <code>model</code>, <code>plant.id</code>, <code>etoday</code>, <code>etotal</code></td>
+</tr>
+<tr>
+<td>Battery</td>
+<td><code>/api/v1/inverter/battery/{sn}/realtime?sn={sn}&amp;lan=en</code></td>
+<td><code>soc</code>, <code>power</code>, <code>capacity</code>, <code>temp</code>, <code>voltage</code>, <code>chargeVolt</code>, <code>maxChargeCurrentLimit</code>, <code>maxDischargeCurrentLimit</code>, <code>etodayChg</code>, <code>etodayDischg</code></td>
+</tr>
+<tr>
+<td>Grid</td>
+<td><code>/api/v1/inverter/grid/{sn}/realtime?sn={sn}</code></td>
+<td><code>pac</code>, <code>etodayFrom</code>, <code>etodayTo</code></td>
+</tr>
+<tr>
+<td>Load</td>
+<td><code>/api/v1/inverter/load/{sn}/realtime?sn={sn}</code></td>
+<td><code>totalPower</code>, <code>dailyUsed</code></td>
+</tr>
+<tr>
+<td>PV input</td>
+<td><code>/api/v1/inverter/{sn}/realtime/input</code></td>
+<td><code>pac</code>, <code>etoday</code></td>
+</tr>
+<tr>
+<td>Settings</td>
+<td><code>/api/v1/common/setting/{sn}/read</code></td>
+<td>the full settings object</td>
+</tr>
+</tbody>
+</table>
+<h3 id="write">Write</h3>
+<p>One endpoint: <code>POST /api/v1/common/setting/{sn}/set</code>, body is the settings object,
+response <code>{code, msg: "Success", success: true}</code>.</p>
+<p>Unlike DEYE this is <strong>synchronous at the API layer</strong> — there is no <code>orderId</code> to poll — so
+the DEYE component's <code>poll_order()</code> and <code>_reconcile_control()</code> machinery collapses into a
+straight response check. It is <em>not</em> synchronous at the hardware layer; see "Cloud to
+dongle latency" under Error handling.</p>
+<p><strong>Strategy: read-modify-write the full object.</strong> <code>GET .../read</code>, mutate only the fields
+this design owns, <code>POST .../set</code> with everything else preserved verbatim. Nothing
+documents whether Sunsynk treats an absent field as "leave unchanged" or "reset to
+default", and the second interpretation would silently wipe installer settings such as
+<code>batteryShutDownCap</code>. The extra read costs one call per <em>changed</em> plan, not per cycle.</p>
+<h2 id="architecture">Architecture</h2>
+<h3 id="component">Component</h3>
+<p><code>SunsynkAPI(ComponentBase, OAuthMixin)</code> in <code>apps/predbat/sunsynk.py</code>, registered in
+<code>components.py</code> under key <code>sunsynk</code> with <code>event_filter: "predbat_sunsynk_"</code> and
+<code>phase: 1</code>. <code>required_or: ["username", "key"]</code> gates activation on having at least one
+usable auth path, matching the DEYE registration.</p>
+<p><code>run(seconds, first)</code> loop:</p>
+<ol>
+<li>On <code>first</code>, restore cached device data from Storage.</li>
+<li>Discover inverters (<code>/inverters</code>, paged), refreshed on the static tier.</li>
+<li>Poll the settings object on the config tier; telemetry on the live tier.</li>
+<li>Read the control entities into local state; apply on write-button or payload diff.</li>
+<li><code>publish_data()</code> (sensors) and <code>publish_schedule_settings_ha()</code> (control entities).</li>
+<li>On <code>first and automatic</code>, <code>automatic_config()</code>.</li>
+</ol>
+<h3 id="files">Files</h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps/predbat/sunsynk.py</code></td>
+<td><strong>New</strong> — the component</td>
+</tr>
+<tr>
+<td><code>apps/predbat/sunsynk_const.py</code></td>
+<td><strong>New</strong> — endpoints, field maps, TTLs, RSA helper</td>
+</tr>
+<tr>
+<td><code>apps/predbat/components.py</code></td>
+<td>Register <code>sunsynk</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/config.py</code></td>
+<td><code>sunsynk_*</code> keys in <code>APPS_SCHEMA</code>; <code>INVERTER_DEF["SunsynkCloud"]</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_sunsynk_auth.py</code></td>
+<td><strong>New</strong></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_sunsynk_api.py</code></td>
+<td><strong>New</strong></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_sunsynk_control.py</code></td>
+<td><strong>New</strong></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_sunsynk_publish.py</code></td>
+<td><strong>New</strong></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_sunsynk_config.py</code></td>
+<td><strong>New</strong></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_sunsynk_const.py</code></td>
+<td><strong>New</strong></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_sunsynk_storage.py</code></td>
+<td><strong>New</strong></td>
+</tr>
+<tr>
+<td><code>apps/predbat/unit_test.py</code></td>
+<td>Register the seven suites in <code>TEST_REGISTRY</code></td>
+</tr>
+<tr>
+<td><code>docs/components.md</code></td>
+<td>New "Sunsynk Cloud API (sunsynk)" section</td>
+</tr>
+<tr>
+<td><code>docs/inverter-setup.md</code></td>
+<td>Sunsynk Cloud setup walkthrough</td>
+</tr>
+<tr>
+<td><code>docs/apps-yaml.md</code></td>
+<td>Config reference</td>
+</tr>
+<tr>
+<td><code>.cspell/custom-dictionary-workspace.txt</code></td>
+<td><code>inteless</code>, <code>elinter</code>, <code>solarsynk</code>, <code>synkctl</code>, <code>Vallery</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="inverter-definition">Inverter definition</h3>
+<p><code>INVERTER_DEF["SunsynkCloud"]</code> is a copy of <code>INVERTER_DEF["DeyeCloud"]</code> — the capability
+flags are identical because the underlying registers are:</p>
+<pre><code class="language-text">output_charge_control:    &quot;power&quot;
+charge_control_immediate: False
+has_charge_enable_time:   True
+has_discharge_enable_time: True
+has_target_soc:           True
+has_reserve_soc:          True
+has_timed_pause:          False
+charge_time_format:       &quot;HH:MM:SS&quot;
+charge_time_entity_is_option: True
+soc_units:                &quot;%&quot;
+num_load_entities:        1
+time_button_press:        True
+has_time_window:          False
+support_charge_freeze:    True
+support_discharge_freeze: True
+has_idle_time:            False
+can_span_midnight:        False
+charge_discharge_with_rate: False
+target_soc_used_for_discharge: True
+</code></pre>
+<h2 id="control-model">Control model</h2>
+<h3 id="slot-derivation">Slot derivation</h3>
+<p>Sunsynk exposes six time-of-use slots as flat indexed fields. Slots are sequential
+intervals — each runs from its own start time until the next slot's start — so all six
+start times must be distinct and ascending, the same constraint DEYE has.</p>
+<p>Since confirmed by Sunsynk's own documentation, "Avoiding conflicts in the System Mode
+timer": the six slots are sequential chronological intervals, each running until the next
+begins, and "Timers MUST be set chronologically from Timer 1 to Timer 6". Timer 6 is the
+only one permitted to roll over midnight and continue until Timer 1 restarts.</p>
+<p>The same article settles a question the API alone could not: a slot is an interval
+regardless of its grid-charge flag — the documented factory default runs all six timers as
+ranges with Grid Charge ticked on only two. That is what makes the filler padding work, since
+a filler slot with grid charge off still terminates the charge window before it. Had the
+opposite been true (only grid-charge-enabled slots being active), a Predbat charge window
+would never have handed over and would have grid-charged for 24 hours.</p>
+<p>An inverter can nonetheless be found sitting with all six slots at 00:00, which the API
+stores happily. That is an unconfigured default rather than a valid programme, so no
+conclusion about legal schedules follows from it.</p>
+<p>The component derives six ordered slots from Predbat's charge and export windows using
+the same segment-boundary approach as <code>deye.py</code>'s <code>build_tou_slots()</code>: start from a
+baseline self-use segment at <code>00:00</code>, add a segment at each enabled window's start and
+another at its end returning to self-use, sort, then pad with self-use slots at filler
+times not already used until exactly six remain, trimming to the earliest six.</p>
+<table>
+<thead>
+<tr>
+<th>Per-slot concept</th>
+<th>Sunsynk field (<code>N</code> = 1..6)</th>
+<th>Wire type</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Slot start time</td>
+<td><code>sellTime{N}</code></td>
+<td><code>"HH:MM"</code> string</td>
+</tr>
+<tr>
+<td>Slot power limit</td>
+<td><code>sellTime{N}Pac</code></td>
+<td>watts, string</td>
+</tr>
+<tr>
+<td>Slot target SOC</td>
+<td><code>cap{N}</code></td>
+<td>percent, string</td>
+</tr>
+<tr>
+<td>Grid charge enabled in slot</td>
+<td><code>time{N}on</code></td>
+<td>JSON boolean</td>
+</tr>
+<tr>
+<td>Generator charge in slot</td>
+<td><code>genTime{N}on</code></td>
+<td>preserved from read</td>
+</tr>
+<tr>
+<td>Voltage-mode target</td>
+<td><code>sellTime{N}Volt</code></td>
+<td>preserved from read</td>
+</tr>
+</tbody>
+</table>
+<h3 id="intent-mapping">Intent mapping</h3>
+<table>
+<thead>
+<tr>
+<th>Predbat behaviour</th>
+<th><code>sysWorkMode</code></th>
+<th><code>solarSell</code></th>
+<th><code>cap{N}</code></th>
+<th><code>time{N}on</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Charge</td>
+<td>zero-export-to-load</td>
+<td>off</td>
+<td>target SOC</td>
+<td>true</td>
+</tr>
+<tr>
+<td>Freeze charge</td>
+<td>zero-export-to-load</td>
+<td>off</td>
+<td>reserve</td>
+<td>true</td>
+</tr>
+<tr>
+<td>Hold charge</td>
+<td>zero-export-to-load</td>
+<td>off</td>
+<td>reserve</td>
+<td>false</td>
+</tr>
+<tr>
+<td>Export</td>
+<td>selling-first</td>
+<td>on</td>
+<td>target SOC</td>
+<td>false</td>
+</tr>
+<tr>
+<td>Freeze export</td>
+<td>selling-first</td>
+<td>on</td>
+<td>99</td>
+<td>false</td>
+</tr>
+<tr>
+<td>Idle / self-use</td>
+<td>zero-export-to-load</td>
+<td>off</td>
+<td>reserve</td>
+<td>false</td>
+</tr>
+</tbody>
+</table>
+<p>Plus, on every write: <code>peakAndVallery: "1"</code> (the time-of-use master enable),
+<code>mondayOn</code> through <code>sundayOn</code> all true, and <code>sn</code> echoed back.</p>
+<p>Sunsynk has a single global work mode, so — exactly as in <code>deye.py</code>'s <code>_active_state()</code> —
+the top-level mode and flags follow the window active <strong>right now</strong>, not a static
+export-first precedence. Without that rule an export window enabled elsewhere in the day
+would pin the mode to selling-first and block the charge window's grid charging. The six
+slots still encode every window.</p>
+<p>A final guard clamps any slot SOC below the inverter's own floor (<code>batteryLowCap</code> from
+the settings object) up to that floor, logged once per serial — the same protection
+<code>deye.py</code> applies, and for the same reason: Predbat's control entities start at 0 and
+only reach their real values once it has written them.</p>
+<h3 id="sensor-mapping-sunsynk_automatic-true">Sensor mapping (<code>sunsynk_automatic: true</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Predbat arg</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>soc_percent</code></td>
+<td>battery <code>soc</code></td>
+</tr>
+<tr>
+<td><code>battery_power</code></td>
+<td>battery <code>power</code></td>
+</tr>
+<tr>
+<td><code>grid_power</code></td>
+<td>grid <code>pac</code></td>
+</tr>
+<tr>
+<td><code>load_power</code></td>
+<td>load <code>totalPower</code></td>
+</tr>
+<tr>
+<td><code>pv_power</code></td>
+<td>input <code>pac</code></td>
+</tr>
+<tr>
+<td><code>battery_temperature</code></td>
+<td>battery <code>temp</code></td>
+</tr>
+<tr>
+<td><code>pv_today</code></td>
+<td>input <code>etoday</code></td>
+</tr>
+<tr>
+<td><code>import_today</code></td>
+<td>grid <code>etodayFrom</code></td>
+</tr>
+<tr>
+<td><code>export_today</code></td>
+<td>grid <code>etodayTo</code></td>
+</tr>
+<tr>
+<td><code>load_today</code></td>
+<td>load <code>dailyUsed</code></td>
+</tr>
+<tr>
+<td><code>battery_charge_today</code></td>
+<td>battery <code>etodayChg</code></td>
+</tr>
+<tr>
+<td><code>battery_discharge_today</code></td>
+<td>battery <code>etodayDischg</code></td>
+</tr>
+<tr>
+<td><code>inverter_limit</code></td>
+<td>detail <code>ratePower</code></td>
+</tr>
+<tr>
+<td><code>battery_min_soc</code></td>
+<td>settings <code>batteryLowCap</code></td>
+</tr>
+<tr>
+<td><code>soc_max</code></td>
+<td>derived, see below</td>
+</tr>
+<tr>
+<td><code>battery_rate_max</code></td>
+<td>derived, see below</td>
+</tr>
+</tbody>
+</table>
+<p>Battery <code>capacity</code> is reported in amp-hours, so <code>soc_max</code> needs a pack voltage to become
+kilowatt-hours, and <code>battery_rate_max</code> needs one to turn <code>maxChargeCurrentLimit</code> (amps)
+into watts. The component uses the same derivation <code>deye.py</code> already does — infer the
+nominal pack voltage from the BMS charge target (<code>chargeVolt</code>) over LiFePO4 volts per
+cell — with <code>sunsynk_battery_nominal_voltage</code> as an explicit override for packs that do
+not report one.</p>
+<p>Following the DEYE precedent, an arg is only mapped when <em>every</em> discovered inverter
+reports the underlying value; otherwise the component logs a warning naming the arg and
+leaves it for <code>apps.yaml</code>. An arg pointing at a sensor that is never published is worse
+than an absent arg.</p>
+<h2 id="refresh-tiers">Refresh tiers</h2>
+<p><code>ComponentBase</code> ticks <code>run()</code> every 60 seconds. Sunsynk data only updates at the dongle's
+upload interval (typically 60 seconds) and the API has no documented rate limit but is
+known to throttle, so each tier is the maximum age its cache may reach before re-polling:</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Interval</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Static</td>
+<td>8 hours</td>
+<td>inverter list, detail and <code>ratePower</code></td>
+</tr>
+<tr>
+<td>Config</td>
+<td>15 minutes</td>
+<td>the settings object</td>
+</tr>
+<tr>
+<td>Live</td>
+<td>5 minutes</td>
+<td>battery, grid, load and input telemetry</td>
+</tr>
+</tbody>
+</table>
+<p>The live tier is deliberately slower than DEYE's 1-minute equivalent: Sunsynk needs four
+separate endpoint calls per inverter per poll where DEYE needs one, so a 1-minute tier on
+a three-inverter account would be 720 calls an hour against an undocumented limit. Five
+minutes matches Predbat's own replan cadence, so no plan ever acts on data more than one
+cycle stale.</p>
+<p>Tier clocks are seeded from <code>storage.age()</code> at startup so the cadence survives a process
+restart rather than restarting with it — the DEYE storage pattern.</p>
+<h3 id="caching">Caching</h3>
+<p>One Storage file per tier under the <code>sunsynk</code> module, so each gets an independent
+<code>storage.age()</code> clock:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>static</code></td>
+<td>inverter serials, detail</td>
+</tr>
+<tr>
+<td><code>config</code></td>
+<td>the last-read settings object</td>
+</tr>
+<tr>
+<td><code>ratings</code></td>
+<td>derived capacity, pack voltage, rated power</td>
+</tr>
+<tr>
+<td><code>control</code></td>
+<td>last-applied payload for change detection</td>
+</tr>
+</tbody>
+</table>
+<p>Telemetry is not cached: the live tier polls every five minutes, Home Assistant already
+retains the last published value of every entity, and <code>publish_data()</code> only writes a
+sensor when it has a value — so a failed poll leaves the previous reading in place rather
+than overwriting it.</p>
+<p>The <code>control</code> cache is restored only within a bounded window
+(<code>SUNSYNK_RESTORE_MAX_CONTROL</code>, 15 minutes). It is a change-detection cache with no
+read-back, so restoring it asserts the inverter still holds what Predbat last wrote. If
+something changed it externally while Predbat was down, that assertion is false, the next
+write is wrongly skipped, and the battery silently diverges from the plan. A redundant
+write is cheap; a skipped one is not.</p>
+<h2 id="error-handling">Error handling</h2>
+<h3 id="cloud-to-dongle-latency">Cloud to dongle latency</h3>
+<p>A <code>POST .../set</code> returning <code>Success</code> means the <em>cloud</em> accepted the settings, not that the
+inverter applied them. The dongle picks changes up on its next poll, typically one to five
+minutes later. Predbat replans every five minutes, so a write may still be in flight when
+the next cycle starts.</p>
+<p>Mitigations: writes are diff-gated against the <code>control</code> cache so an unchanged plan never
+rewrites; and the read-back comparison tolerates a configurable number of cycles of
+divergence (<code>SUNSYNK_SETTLE_POLLS</code>) before warning, so normal latency is not reported as
+a failure.</p>
+<h3 id="read-modify-write-races">Read-modify-write races</h3>
+<p>Someone using the Sunsynk phone app while Predbat is running can have their change
+overwritten, and vice versa. This is unavoidable with a single whole-object write
+endpoint. The component re-reads immediately before each write to keep the window as
+small as possible, and logs at info level whenever the freshly-read object differs from
+the cached one in a field Predbat does not own.</p>
+<h3 id="rate-limiting-and-transport-failures">Rate limiting and transport failures</h3>
+<p>Retry with exponential backoff on transport errors, non-200 status, and <code>success: false</code>
+bodies. Auth failures are detected from the body as well as the status code — the DEYE
+component learned that these APIs answer an expired token with HTTP 200 carrying a
+body-level failure, and Sunsynk's uniform <code>{code, msg, success}</code> envelope makes the same
+handling necessary here. A body-level auth marker triggers one token refresh and one
+retry, then gives up for that cycle.</p>
+<h3 id="field-serialisation">Field serialisation</h3>
+<p>solarsynkv3 carries a <code>ReplaceTRUE()</code> helper that rewrites the string <code>"true"</code> to a bare
+<code>true</code> in its payload before posting. That is strong evidence the API requires real JSON
+booleans for the <code>time{N}on</code> and day-of-week flags while numeric fields stay strings.
+Serialisation is therefore declared per field in <code>sunsynk_const.py</code> rather than guessed at
+each call site, so a correction is a one-line change in one file.</p>
+<h2 id="testing">Testing</h2>
+<p>Seven test modules under <code>apps/predbat/tests/</code>, all running against <code>MockBase</code> with no
+network access, mirroring the coverage DEYE has:</p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_sunsynk_auth</code></td>
+<td>RSA PKCS#1 v1.5 against a fixed key with a known ciphertext; DER <code>SubjectPublicKeyInfo</code> parsing; nonce and sign derivation for both steps; all three methods (<code>password</code>, <code>password_legacy</code>, <code>oauth</code>) producing an equivalent authenticated client; that a failing <code>password</code> login never emits the plaintext password on any path; token refresh; expiry handling</td>
+</tr>
+<tr>
+<td><code>test_sunsynk_api</code></td>
+<td>Endpoint construction per region; discovery pagination; <code>success: false</code> handling; body-level auth-error detection; retry and backoff</td>
+</tr>
+<tr>
+<td><code>test_sunsynk_control</code></td>
+<td>Every row of the intent-mapping table; six-slot derivation including midnight-wrapping windows; distinct ascending start times; filler padding and trimming; SOC floor clamping; read-modify-write preserving untouched keys; diff gating</td>
+</tr>
+<tr>
+<td><code>test_sunsynk_publish</code></td>
+<td>Sensor names and values; amp-hour to kilowatt-hour derivation; pack-voltage inference and the explicit override; missing-field tolerance</td>
+</tr>
+<tr>
+<td><code>test_sunsynk_config</code></td>
+<td><code>automatic_config()</code> arg mapping; multi-inverter; the "only map when every inverter reports it" rule; <code>sunsynk_inverter_sn</code> filtering</td>
+</tr>
+<tr>
+<td><code>test_sunsynk_const</code></td>
+<td>Field-map integrity — all six slots present in every map, no typos, serialisation declared for every owned field</td>
+</tr>
+<tr>
+<td><code>test_sunsynk_storage</code></td>
+<td>Cache save, restore and age per tier; the bounded control restore; restart behaviour</td>
+</tr>
+</tbody>
+</table>
+<p>The RSA test is the one with a hand-rolled cryptographic primitive behind it, so it
+verifies against a fixed key pair with a pre-computed expected ciphertext, and separately
+round-trips through a decryption implemented in the test itself — padding structure
+included, since PKCS#1 v1.5 encryption is randomised and a naive equality check would be
+either flaky or vacuous.</p>
+<h2 id="field-verification">Field verification</h2>
+<p>Nobody on the project has a Sunsynk account, so the wire-format details in this design are
+inferred from two third-party clients rather than read from documentation. The build is
+therefore explicitly defensive:</p>
+<ul>
+<li>Every inferred constant is marked <code># VERIFY@SPIKE</code> in <code>sunsynk_const.py</code>.</li>
+<li><code>api_debug</code> defaults to <code>True</code>, tracing every request and response body with credentials
+  and tokens redacted, so a tester can paste raw traffic into an issue.</li>
+<li><code>sunsynk.py</code> carries a standalone <code>argparse</code> CLI entry point (the <code>fox.py</code> pattern) that
+  logs in, dumps the settings object and telemetry, and optionally performs one round-trip
+  write — usable without running Predbat at all. <code>--auth-method</code> selects the login flow so
+  a tester can establish which one their region serves in a single command, before any
+  <code>apps.yaml</code> is written.</li>
+<li><code>sunsynk_control_enable</code> defaults to <code>false</code>. Monitoring works immediately; writes
+  require an explicit opt-in until the format is confirmed.</li>
+</ul>
+<p>Per "Defaulting to DEYE semantics", every unknown below is an <strong>encoding</strong> question. The
+semantic questions — how many slots, which modes exist, what each mode does — are
+answered by DEYE and are not on this list.</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Unknown</th>
+<th>Current assumption</th>
+<th>Cost if wrong</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>sysWorkMode</code> enum values</td>
+<td><code>0</code> selling-first, <code>1</code> zero-export-to-load, <code>2</code> zero-export-to-CT — DEYE's mode <em>order</em>, which is an encoding claim</td>
+<td>High: silently swaps export for charge</td>
+</tr>
+<tr>
+<td>2</td>
+<td>String versus boolean per field, especially <code>time{N}on</code>, <code>solarSell</code>, <code>peakAndVallery</code>, day flags</td>
+<td>Booleans bare, numerics quoted, per solarsynkv3's <code>ReplaceTRUE()</code></td>
+<td>Medium: write rejected, or flag ignored</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Whether <code>/set</code> accepts a partial body</td>
+<td>Not assumed — full read-modify-write</td>
+<td>None; a confirmed yes is a later simplification</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>battery power</code> sign convention</td>
+<td>DEYE's convention</td>
+<td>High: charge and discharge readings inverted</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Whether <code>capacity</code> is per-battery or pack total</td>
+<td>Pack total</td>
+<td>Medium: <code>soc_max</code> wrong by an integer factor</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Which auth flow each region serves</td>
+<td><code>api.sunsynk.net</code> on RSA, <code>pv.inteless.com</code> unknown</td>
+<td>Low: both are implemented, so this is a documentation fix, not a code one</td>
+</tr>
+</tbody>
+</table>
+<p>Unknowns 1 and 4 are the two that can drive the battery the wrong way, so both are
+verified first, before <code>sunsynk_control_enable</code> is documented as safe to turn on. The
+fail-closed rule means a parse failure on either leaves the inverter in self-use rather
+than acting on a guess.</p>
+<p>Unknown 6 is why <code>password_legacy</code> earns its place. Login is where this integration is
+most likely to fail on first contact, and having both flows available turns an
+unresolvable "it will not connect" report into a one-line config change that isolates
+which half is broken.</p>
+<h2 id="out-of-scope">Out of scope</h2>
+<ul>
+<li>Generator, smart-load, EV-charger and plant-management control surfaces.</li>
+<li>Historical or daily-curve endpoints (<code>/output/day</code>, <code>/flow</code>) — Predbat sources history
+  from Home Assistant.</li>
+<li>Automatic fallback from the RSA login to the plaintext one. Both are implemented; the
+  choice between them is the user's.</li>
+<li>Any change to <code>deye.py</code>. Should a shared time-of-use derivation module prove worthwhile
+  once both components are in production, extracting one is a separate piece of work with
+  both test suites as its safety net.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

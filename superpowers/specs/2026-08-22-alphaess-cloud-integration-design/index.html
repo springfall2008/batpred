@@ -1,0 +1,1482 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>AlphaESS Cloud Inverter Integration — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "AlphaESS Cloud Inverter Integration \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-08-22-alphaess-cloud-integration-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">AlphaESS Cloud Inverter Integration — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="alphaess-cloud-inverter-integration-design">AlphaESS Cloud Inverter Integration — Design</h1>
+<p>Date: 2026-08-22
+Status: Draft (awaiting review)</p>
+<h2 id="goal">Goal</h2>
+<p>Add an AlphaESS Open API cloud component to Predbat, modelled on the existing Sunsynk and
+DEYE cloud integrations (<code>apps/predbat/sunsynk.py</code>, <code>apps/predbat/deye.py</code>), providing
+monitoring and battery control for AlphaESS SMILE/Storion hybrid inverters via the
+AlphaESS Open API, so an AlphaESS inverter can be driven by Predbat with no local
+hardware or Modbus access, on both the self-hosted Home Assistant add-on and the
+Predbat.com SaaS platform.</p>
+<p>The user supplies an AlphaESS developer <strong>AppID</strong> and <strong>AppSecret</strong>, obtained from
+<a href="https://open.alphaess.com/">https://open.alphaess.com/</a>.</p>
+<h2 id="scope-decisions-agreed">Scope decisions (agreed)</h2>
+<ul>
+<li><strong>Standalone module.</strong> New <code>alphaess.py</code> and <code>alphaess_const.py</code> written in
+  <code>sunsynk.py</code>'s image, with their own derivation logic. No existing component is
+  modified. This matches how every cloud component in Predbat stands alone today — <code>fox</code>,
+  <code>deye</code>, <code>sunsynk</code>, <code>solax</code>, <code>enphase</code> and <code>solis</code> share only <code>ComponentBase</code> and
+  <code>MockBase</code>.</li>
+<li><strong>Native <code>aiohttp</code> client, no new dependency.</strong> The <code>alphaessopenapi</code> PyPI package is
+  <em>not</em> added to <code>requirements.txt</code>. The auth is a single SHA-512 hash and the endpoints
+  are plain REST, so the client is short; and the package discards the response <code>code</code>,
+  which this design depends on to tell a successful write from a rejected one (see
+  "Writes are ambiguous without the code"). This also keeps the component testable
+  against the existing mock infrastructure with no network stubbing library.</li>
+<li><strong>No <code>OAuthMixin</code>.</strong> AlphaESS auth is stateless — every request is signed from the
+  AppID and AppSecret. There is no token, no refresh, no expiry. The Predbat.com SaaS
+  path injects <code>alphaess_app_id</code>/<code>alphaess_app_secret</code> directly, so both deployment modes
+  use one code path.</li>
+<li><strong>Multi-inverter from the start.</strong> Discover every system bound to the AppID and
+  register each as a Predbat inverter, with an optional <code>alphaess_inverter_sn</code> filter.</li>
+<li><strong>Predbat's controls pass straight through.</strong> Predbat owns the charge window, the
+  export window, reserve, target SOCs and enables. The component maps them onto the
+  AlphaESS schedule fields directly and lets the inverter do the timing. It does <em>not</em>
+  re-derive a per-instant work mode the way <code>sunsynk.py</code> must, because the AlphaESS API
+  is genuinely a schedule API.</li>
+<li><strong>Probe the periodic API, fall back to legacy.</strong> <code>setTimeChargeBySn</code> offers six windows
+  per day and a per-window power setpoint but is not entitled on many systems. Probe once
+  per serial, cache the verdict, and use the universally available
+  <code>updateChargeConfigInfo</code>/<code>updateDisChargeConfigInfo</code> pair otherwise.</li>
+<li><strong>Bind and unbind supported.</strong> Bind is CLI-only (the API requires an emailed code that
+  cannot be entered from a toggle). Unbind gets both a CLI flag and a per-serial toggle
+  switch, following the Sigenergy <code>offboard</code> pattern.</li>
+<li><strong>Battery and solar only.</strong> The EV charger endpoints are read for an informational
+  power sensor only. No EV charger control, no system binding management beyond
+  bind/unbind, no meter offset.</li>
+<li><strong>Control on by default, EXPERIMENTAL wire format.</strong> <code>alphaess_control_enable</code> defaults
+  to true, as <code>sunsynk_control_enable</code> does — an inverter component that does not drive
+  the inverter is not what a user configuring it expects. Nobody on the project has an
+  AlphaESS account, so every request/response is traced to the log by default and a
+  tester's log is usable evidence. <code>switch.predbat_set_read_only</code> gates every write,
+  including the component's own reconcile loop.</li>
+<li><strong>No history backfill.</strong> <code>getOneDayPowerBySn</code> returns a ~288-sample daily series that
+  could seed load history on a fresh install, and <code>GECloudData</code> is the existing pattern
+  for that. Explicitly out of scope: the 5-minute energy tier supplies data on a regular
+  basis from the moment the component starts, which is what Predbat's learning needs.</li>
+</ul>
+<h2 id="background-the-alphaess-open-api">Background: the AlphaESS Open API</h2>
+<p>Base URL: <code>https://openapi.alphaess.com/api</code></p>
+<h3 id="auth">Auth</h3>
+<p>Stateless per-request signing. Every call carries four headers:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Header</th>
+<th style="text-align: left;">Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>appId</code></td>
+<td style="text-align: left;">The developer AppID</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>timeStamp</code></td>
+<td style="text-align: left;">Unix seconds</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>timestamp</code></td>
+<td style="text-align: left;">Unix seconds (the API accepts and the reference client sends both spellings)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>sign</code></td>
+<td style="text-align: left;"><code>sha512(appId + appSecret + timeStamp)</code>, lower-case hex</td>
+</tr>
+</tbody>
+</table>
+<p>The timestamp must be within <strong>300 seconds</strong> of server time, so a host with a badly
+skewed clock fails every call with <code>6006</code>. The component detects this specific case and
+logs it as a clock problem rather than a credentials problem.</p>
+<h3 id="response-envelope">Response envelope</h3>
+<pre><code class="language-json">{&quot;code&quot;: 200, &quot;msg&quot;: &quot;Success&quot;, &quot;expMsg&quot;: null, &quot;extra&quot;: null, &quot;data&quot;: {...}}
+</code></pre>
+<p>Success is <code>code == 200</code>. The periodic endpoints report their status in <code>info</code> rather
+than <code>msg</code>, so the success test checks <code>code</code>, <code>msg</code> and <code>info</code>.</p>
+<p><code>expMsg</code> is null most of the time, but on parameter errors it is the only field that
+names what was wrong — <code>msg</code> says "Parameter error" while <code>expMsg</code> says "time list is
+null". It is always logged.</p>
+<h3 id="return-codes">Return codes</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Code</th>
+<th style="text-align: left;">Meaning</th>
+<th style="text-align: left;">Handling</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>200</code></td>
+<td style="text-align: left;">Success</td>
+<td style="text-align: left;">—</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6001</code></td>
+<td style="text-align: left;">Parameter error</td>
+<td style="text-align: left;">Fatal for that call; log <code>expMsg</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6002</code></td>
+<td style="text-align: left;">SN not bound to the user</td>
+<td style="text-align: left;">Actionable — bind first</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6003</code></td>
+<td style="text-align: left;">You have bound this SN</td>
+<td style="text-align: left;"><strong>Success</strong> on bind (idempotent)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6004</code></td>
+<td style="text-align: left;">CheckCode error</td>
+<td style="text-align: left;">Actionable — wrong CheckCode on verify</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6005</code></td>
+<td style="text-align: left;">AppID not bound to the SN</td>
+<td style="text-align: left;"><strong>Success</strong> on unbind (already gone)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6006</code></td>
+<td style="text-align: left;">Timestamp error</td>
+<td style="text-align: left;">Host clock skew — logged as such</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6007</code> / <code>6010</code> / <code>6012</code></td>
+<td style="text-align: left;">Sign verification error / sign empty / AppId empty</td>
+<td style="text-align: left;">Credentials problem</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6008</code></td>
+<td style="text-align: left;">Set failed</td>
+<td style="text-align: left;">Write rejected — check the 15-minute grid and window overlap</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6009</code></td>
+<td style="text-align: left;">Whitelist verification failed</td>
+<td style="text-align: left;">The developer account has an IP allow-list</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6017</code></td>
+<td style="text-align: left;">No operation permissions</td>
+<td style="text-align: left;">Periodic API not entitled — cached, never retried</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6038</code></td>
+<td style="text-align: left;">System SN does not exist</td>
+<td style="text-align: left;">Actionable</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6042</code></td>
+<td style="text-align: left;">System offline</td>
+<td style="text-align: left;">Routine and transient; not a component failure</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6046</code></td>
+<td style="text-align: left;">Verification code error</td>
+<td style="text-align: left;">Actionable — re-run <code>--verify</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>6053</code></td>
+<td style="text-align: left;">Request too fast</td>
+<td style="text-align: left;">Back the tier off; not a failure</td>
+</tr>
+</tbody>
+</table>
+<h3 id="reads">Reads</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Endpoint</th>
+<th style="text-align: left;">Returns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>getEssList</code></td>
+<td style="text-align: left;">Every system bound to the AppID: <code>sysSn</code>, <code>cobat</code> kWh, <code>mbat</code>, <code>minv</code>, <code>poinv</code> kW, <code>popv</code> kW, <code>surplusCobat</code> kWh, <code>usCapacity</code> %, <code>emsStatus</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>getLastPowerData</code></td>
+<td style="text-align: left;">Live watts: <code>ppv</code>, <code>pload</code>, <code>soc</code> %, <code>pgrid</code>, <code>pbat</code>, <code>pev</code>, per-phase and per-string detail</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>getOneDateEnergyBySn</code></td>
+<td style="text-align: left;">Daily kWh: <code>epv</code>, <code>eCharge</code>, <code>eDischarge</code>, <code>eGridCharge</code>, <code>eInput</code>, <code>eOutput</code>, <code>eChargingPile</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>getSumDataForCustomer</code></td>
+<td style="text-align: left;">Daily and lifetime totals including <code>eload</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>getChargeConfigInfo</code></td>
+<td style="text-align: left;"><code>gridCharge</code>, <code>timeChaf1</code>, <code>timeChae1</code>, <code>timeChaf2</code>, <code>timeChae2</code>, <code>batHighCap</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>getDisChargeConfigInfo</code></td>
+<td style="text-align: left;"><code>ctrDis</code>, <code>timeDisf1</code>, <code>timeDise1</code>, <code>timeDisf2</code>, <code>timeDise2</code>, <code>batUseCap</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>getTimeChargeBySn</code></td>
+<td style="text-align: left;">Periodic schedule — <code>chargeTimeList</code>, <code>dischargeTimeList</code>, <code>executeCycleType</code>, <code>gridChargeCycle</code>, <code>ctrDisCycle</code></td>
+</tr>
+</tbody>
+</table>
+<p>Field naming: <code>f</code> = <em>from</em> (start), <code>e</code> = <em>end</em>. <code>timeChaf1</code> is the start of charge period
+1, <code>timeChae1</code> is its end.</p>
+<h3 id="writes">Writes</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Endpoint</th>
+<th style="text-align: left;">Fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>updateChargeConfigInfo</code></td>
+<td style="text-align: left;"><code>sysSn</code>, <code>batHighCap</code>, <code>gridCharge</code>, <code>timeChaf1</code>, <code>timeChae1</code>, <code>timeChaf2</code>, <code>timeChae2</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>updateDisChargeConfigInfo</code></td>
+<td style="text-align: left;"><code>sysSn</code>, <code>batUseCap</code>, <code>ctrDis</code>, <code>timeDisf1</code>, <code>timeDise1</code>, <code>timeDisf2</code>, <code>timeDise2</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>setTimeChargeBySn</code></td>
+<td style="text-align: left;"><code>sysSn</code>, <code>executeCycleType</code>, <code>chargeTimeList</code>, <code>dischargeTimeList</code>, optional <code>gridChargeCycle</code>, <code>ctrDisCycle</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>bindSn</code></td>
+<td style="text-align: left;"><code>sysSn</code>, <code>code</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>unBindSn</code></td>
+<td style="text-align: left;"><code>sysSn</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>getVerificationCode</code></td>
+<td style="text-align: left;"><code>sysSn</code>, <code>checkCode</code> — <strong>GET</strong>, despite the portal describing a JSON body</td>
+</tr>
+</tbody>
+</table>
+<p>Both <code>update*ConfigInfo</code> endpoints are <strong>full replacements, not patches</strong>. All seven
+fields must be sent or the omitted ones are silently reset. The component therefore
+always builds a complete payload from its cached config read.</p>
+<p><strong>Times are on a 15-minute grid.</strong> <code>HH:mm</code>, minimum <code>00:00</code>, maximum <code>23:45</code>, steps of
+<code>:00</code>/<code>:15</code>/<code>:30</code>/<code>:45</code>. Values off the grid are <em>accepted by the API and ignored by the
+device</em> — a silent no-op, which is the worst possible failure mode, so snapping is done
+in the component and asserted in tests.</p>
+<p><strong>Disabling a period</strong> is start == end, conventionally <code>00:00</code>–<code>00:00</code>.</p>
+<h3 id="writes-are-ambiguous-without-the-code">Writes are ambiguous without the code</h3>
+<p>Every write endpoint returns <code>data: null</code> on success <em>and</em> on failure. Only <code>code</code>
+distinguishes them. The <code>alphaessopenapi</code> package returns <code>None</code> in both cases, which is
+why this design uses a native client: <code>_request</code> returns the parsed envelope, and the
+caller decides based on <code>code</code>.</p>
+<h3 id="rate-limits">Rate limits</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Scope</th>
+<th style="text-align: left;">Limit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">General polling</td>
+<td style="text-align: left;">AlphaESS advise a minimum <strong>10-second</strong> interval; exceeding it returns <code>6053</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>updateChargeConfigInfo</code></td>
+<td style="text-align: left;">Documented as <strong>once per 24 hours</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>updateDisChargeConfigInfo</code></td>
+<td style="text-align: left;">Documented as <strong>once per 24 hours</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;">Signature validity</td>
+<td style="text-align: left;"><code>timeStamp</code> within <strong>300 seconds</strong> of server time</td>
+</tr>
+</tbody>
+</table>
+<p>The 24-hour write limit is documented but not enforced in practice — the Home Assistant
+AlphaESS integration writes far more often. It is nevertheless treated as a real budget
+by this design: see "Write minimisation".</p>
+<h2 id="architecture">Architecture</h2>
+<h3 id="component">Component</h3>
+<p><code>AlphaESSAPI(ComponentBase)</code> in <code>apps/predbat/alphaess.py</code>, registered in
+<code>components.py</code>:</p>
+<pre><code class="language-python">&quot;alphaess&quot;: {
+    &quot;class&quot;: AlphaESSAPI,
+    &quot;name&quot;: &quot;AlphaESS Cloud API&quot;,
+    &quot;event_filter&quot;: &quot;predbat_alphaess_&quot;,
+    &quot;args&quot;: {
+        &quot;app_id&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;alphaess_app_id&quot;},
+        &quot;app_secret&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;alphaess_app_secret&quot;},
+        &quot;inverter_sn&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;alphaess_inverter_sn&quot;},
+        &quot;automatic&quot;: {&quot;required&quot;: False, &quot;default&quot;: False, &quot;config&quot;: &quot;alphaess_automatic&quot;},
+        &quot;automatic_ignore_pv&quot;: {&quot;required&quot;: False, &quot;default&quot;: False, &quot;config&quot;: &quot;alphaess_automatic_ignore_pv&quot;},
+        &quot;control_enable&quot;: {&quot;required&quot;: False, &quot;default&quot;: True, &quot;config&quot;: &quot;alphaess_control_enable&quot;},
+        &quot;battery_rate_max&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;alphaess_battery_rate_max&quot;},
+        &quot;api_delay&quot;: {&quot;required&quot;: False, &quot;default&quot;: 2, &quot;config&quot;: &quot;alphaess_api_delay&quot;},
+        &quot;min_write_interval&quot;: {&quot;required&quot;: False, &quot;default&quot;: 300, &quot;config&quot;: &quot;alphaess_min_write_interval&quot;},
+    },
+    &quot;required_or&quot;: [&quot;app_id&quot;],
+    &quot;phase&quot;: 1,
+    &quot;can_restart&quot;: True,
+},
+</code></pre>
+<p><code>control_enable</code> defaults to <strong>true</strong>, matching <code>sunsynk_control_enable</code>: a user who has
+configured an inverter component expects it to drive the inverter. Set it false for
+monitoring only. The documented 24-hour write limit is handled by write minimisation
+rather than by refusing to write at all, and <code>switch.predbat_set_read_only</code> remains the
+per-run way to hold every write back.</p>
+<h3 id="files">Files</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">File</th>
+<th style="text-align: left;">Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>apps/predbat/alphaess_const.py</code></td>
+<td style="text-align: left;"><strong>New</strong> — base URL, endpoint map, return codes, field maps, TTLs, cache names, timeouts, time-grid helpers</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>apps/predbat/alphaess.py</code></td>
+<td style="text-align: left;"><strong>New</strong> — <code>AlphaESSAPI</code>, the native client, control derivation, publishing, bind/unbind, and the standalone CLI</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>apps/predbat/components.py</code></td>
+<td style="text-align: left;">Register the <code>alphaess</code> component</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>apps/predbat/config.py</code></td>
+<td style="text-align: left;"><code>INVERTER_DEF["AlphaESSCloud"]</code> and the <code>alphaess_*</code> <code>APPS_SCHEMA</code> keys</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>templates/alphaess_cloud.yaml</code></td>
+<td style="text-align: left;"><strong>New</strong> example configuration</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>docs/apps-yaml.md</code></td>
+<td style="text-align: left;">New "AlphaESS Cloud API" section</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>docs/inverter-setup.md</code></td>
+<td style="text-align: left;">AlphaESS entry</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>apps/predbat/unit_test.py</code></td>
+<td style="text-align: left;">Register the new test modules</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>apps/predbat/tests/test_alphaess_*.py</code></td>
+<td style="text-align: left;"><strong>New</strong> — six test modules</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>.cspell/custom-dictionary-workspace.txt</code></td>
+<td style="text-align: left;"><code>alphaess</code>, <code>sysSn</code>, <code>batHighCap</code>, <code>batUseCap</code>, <code>ctrDis</code>, <code>timeChaf</code>, <code>timeChae</code>, <code>timeDisf</code>, <code>timeDise</code>, <code>cobat</code>, <code>poinv</code>, <code>popv</code>, <code>minv</code>, <code>mbat</code>, <code>usCapacity</code>, <code>epv</code>, <code>openapi</code> and friends</td>
+</tr>
+</tbody>
+</table>
+<h3 id="inverter-definition">Inverter definition</h3>
+<pre><code class="language-python">&quot;AlphaESSCloud&quot;: {
+    &quot;name&quot;: &quot;AlphaESSCloud&quot;,
+    &quot;has_rest_api&quot;: False,
+    &quot;has_mqtt_api&quot;: False,
+    &quot;output_charge_control&quot;: &quot;power&quot;,
+    &quot;charge_control_immediate&quot;: False,
+    &quot;has_charge_enable_time&quot;: True,
+    &quot;has_discharge_enable_time&quot;: True,
+    &quot;has_target_soc&quot;: True,
+    &quot;has_reserve_soc&quot;: True,
+    &quot;has_timed_pause&quot;: False,
+    &quot;charge_time_format&quot;: &quot;HH:MM:SS&quot;,
+    &quot;charge_time_entity_is_option&quot;: True,
+    &quot;soc_units&quot;: &quot;%&quot;,
+    &quot;num_load_entities&quot;: 1,
+    &quot;has_ge_inverter_mode&quot;: False,
+    &quot;has_ge_eco_toggle&quot;: False,
+    &quot;has_fox_inverter_mode&quot;: False,
+    &quot;time_button_press&quot;: True,
+    &quot;clock_time_format&quot;: &quot;%Y-%m-%d %H:%M:%S&quot;,
+    &quot;write_and_poll_sleep&quot;: 2,
+    &quot;has_time_window&quot;: False,
+    &quot;support_charge_freeze&quot;: True,
+    &quot;support_discharge_freeze&quot;: True,
+    &quot;has_idle_time&quot;: False,
+    &quot;can_span_midnight&quot;: False,
+    &quot;charge_discharge_with_rate&quot;: False,
+    &quot;target_soc_used_for_discharge&quot;: True,
+},
+</code></pre>
+<p>Notes on the non-obvious choices:</p>
+<ul>
+<li><strong><code>charge_time_format: "HH:MM:SS"</code></strong> — anything else makes <code>inverter.py</code> replace the
+  published select entities with its own dummies and the window never reaches the
+  component. The AlphaESS API wants <code>HH:mm</code>; the conversion happens at the payload
+  boundary, not in the entity.</li>
+<li><strong><code>can_span_midnight: False</code></strong> — wrap-around behaviour is undocumented for
+  <code>timeChaf1</code>/<code>timeChae1</code>. Predbat splits the window instead, and period 2 takes the
+  second half.</li>
+<li><strong><code>output_charge_control: "power"</code></strong> — the periodic path has a real <code>chargePower</code>
+  setpoint. On the legacy path a non-zero rate simply means "unrestricted"; a rate of
+  <strong>zero</strong> is meaningful on both paths (see "Rate zero is freeze").</li>
+<li><strong><code>has_timed_pause: False</code></strong> — there is no pause endpoint, so Predbat expresses freeze
+  through the charge/discharge rate entities.</li>
+</ul>
+<h2 id="control-model">Control model</h2>
+<h3 id="predbats-controls-map-straight-through">Predbat's controls map straight through</h3>
+<p>The component publishes Predbat's control surface as HA entities under
+<code>predbat_alphaess_&lt;sn&gt;_*</code>, reads them back every tick, and builds two payloads. There is
+no per-instant state machine: AlphaESS is a schedule API, so the inverter does the timing.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Predbat control entity</th>
+<th style="text-align: left;">AlphaESS field</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>scheduled_charge_enable</code></td>
+<td style="text-align: left;"><code>gridCharge</code> (1/0)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>charge_start_time</code></td>
+<td style="text-align: left;"><code>timeChaf1</code> (15-min snapped)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>charge_end_time</code></td>
+<td style="text-align: left;"><code>timeChae1</code> (15-min snapped)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>charge_limit</code> %</td>
+<td style="text-align: left;"><code>batHighCap</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>scheduled_discharge_enable</code></td>
+<td style="text-align: left;"><code>ctrDis</code> (1/0)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>discharge_start_time</code></td>
+<td style="text-align: left;"><code>timeDisf1</code> (15-min snapped)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>discharge_end_time</code></td>
+<td style="text-align: left;"><code>timeDise1</code> (15-min snapped)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>discharge_target_soc</code> % while exporting, else <code>reserve</code> %</td>
+<td style="text-align: left;"><code>batUseCap</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>execute.py</code> already gates how far ahead a window is programmed
+(<code>(minutes_start - self.minutes_now) &lt;= self.set_window_minutes</code>, <code>execute.py:514</code>), so
+Predbat never hands the component a window hours in advance. That is why the naive
+pass-through is safe and no window-blanking state machine is needed.</p>
+<p><strong><code>batUseCap</code> serves two Predbat concepts</strong> because the API has only one field for the
+discharge floor. It is the export target while an export window is programmed and the
+reserve otherwise. A one-line conditional in the payload builder, asserted in tests.</p>
+<p><strong>Period 2 is the midnight split, not a state.</strong> <code>timeChaf2</code>/<code>timeChae2</code> and
+<code>timeDisf2</code>/<code>timeDise2</code> are <code>00:00</code>–<code>00:00</code> (disabled) unless <code>can_span_midnight: False</code>
+has caused Predbat to cut a window at midnight, in which case period 2 carries the
+remainder.</p>
+<h3 id="rate-zero-is-freeze">Rate zero is freeze</h3>
+<p>AlphaESS has no pause endpoint, so Predbat expresses freeze by driving the rate entities
+to zero (<code>execute.py:491-495</code>). The component treats zero as a distinct instruction:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Predbat writes</th>
+<th style="text-align: left;">AlphaESS write</th>
+<th style="text-align: left;">Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>charge_rate == 0</code></td>
+<td style="text-align: left;"><code>gridCharge = 0</code>, overriding the charge window</td>
+<td style="text-align: left;">No grid charging — freeze charge, no cross-charging</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>discharge_rate == 0</code></td>
+<td style="text-align: left;"><code>ctrDis = 1</code> with both discharge periods disabled</td>
+<td style="text-align: left;">Battery holds SOC — freeze export</td>
+</tr>
+</tbody>
+</table>
+<p>A non-zero rate becomes a real <code>chargePower</code> value on the periodic path. On the legacy
+path it means "unrestricted" and is not written; the docs state this so a user is not
+surprised that a planned slow charge runs at full power.</p>
+<h3 id="time-snapping">Time snapping</h3>
+<p>Window times are snapped <strong>inward</strong> to the 15-minute grid — start rounded up, end rounded
+down — so Predbat never claims time the inverter will not honour. If snapping collapses a
+window to zero length or inverts it, the window is written as disabled (<code>00:00</code>–<code>00:00</code>)
+rather than as a wrap-around, and the decision is logged. Predbat's plan slots are
+normally half-hourly, so in practice snapping is a no-op; the code exists for the
+five-minute and manually-overridden cases.</p>
+<p><code>23:45</code> is the maximum. An end time of <code>24:00</code> (midnight) snaps to <code>23:45</code>.</p>
+<h3 id="periodic-path">Periodic path</h3>
+<p>On the first config-tier refresh for each serial, <code>getTimeChargeBySn</code> is called once.</p>
+<ul>
+<li><code>code == 200</code> → the system is entitled. <code>_periodic_ok[sn] = True</code>. Writes use
+  <code>setTimeChargeBySn</code> with <code>executeCycleType: 0</code> (daily), giving up to six windows and a
+  per-window <code>chargePower</code>.</li>
+<li><code>code == 6017</code> → not entitled. <code>_periodic_ok[sn] = False</code>, cached to disk, <strong>never
+  retried</strong>. The API docs are explicit that <code>6017</code> is an entitlement verdict, not a
+  transient error.</li>
+<li>Any other failure → verdict left unknown and re-probed next config tier.</li>
+</ul>
+<p>The periodic write must satisfy two constraints the legacy path does not: both lists need
+at least one element (an empty list is rejected with <code>6001 "time list is null"</code>, and an
+omitted key with <code>10001</code>), and charge and discharge periods must not overlap. When Predbat
+has no window for one direction, that list gets a single <code>00:00</code>–<code>00:00</code> element and the
+corresponding cycle flag is set to <code>0</code>, so the disabled state is expressed by the flag
+rather than by an ambiguous zero-length window.</p>
+<h3 id="write-minimisation">Write minimisation</h3>
+<p>The 24-hour documented write limit is treated as a real budget, three ways:</p>
+<ol>
+<li><strong>Change detection.</strong> <code>_applied_payload[sn][direction]</code> caches the last payload
+   actually sent. A byte-identical rebuild is not re-sent. Charge and discharge payloads
+   are gated <strong>independently</strong>, so a charge-only change does not consume a discharge
+   write. This is the bug DEYE hit in PR #4371 (commit <code>3e1de759</code>): 40 button presses
+   produced 36 byte-identical control orders over two hours on a live site because the
+   write button forced the write.</li>
+<li><strong>Minimum interval.</strong> <code>alphaess_min_write_interval</code> (default 300 s) is the floor
+   between two writes for the same serial and direction. A change arriving inside the
+   window is held and applied on the next eligible tick, not dropped.</li>
+<li><strong><code>6053</code> backs off</strong> rather than counting as a failure, and the tier that triggered it
+   has its interval doubled up to a cap.</li>
+</ol>
+<p>The write button (<code>time_button_press: True</code>) is deliberately <strong>not</strong> forced. Predbat
+presses it every cycle as its normal "apply" action, so <code>force=True</code> there would bypass
+the change-detection gate on every single cycle — exactly the DEYE bug above.</p>
+<h3 id="read-only-and-control-gating">Read-only and control gating</h3>
+<p>Writes are suppressed when either:</p>
+<ul>
+<li><code>alphaess_control_enable</code> is false (monitoring only — it defaults to <strong>true</strong>, matching
+  <code>sunsynk_control_enable</code>), or</li>
+<li><code>switch.predbat_set_read_only</code> is on.</li>
+</ul>
+<p><strong>The read-only gate belongs on the component's own writes, and this is easy to get
+wrong.</strong> Predbat's upstream read-only handling (<code>execute.py:145</code>) stops Predbat driving
+the control entities, which covers every write that originates from a plan. It does <em>not</em>
+cover a write the component initiates by itself — and this component has one:
+<code>_reconcile_control</code> re-applies the schedule on every tick.</p>
+<p>That re-apply is not idle. The payload depends on whether an export window is currently
+programmed, because <code>batUseCap</code> switches between the export target and the reserve, so a
+window transition changes the payload with no plan change at all. Without an explicit
+gate, that transition would write to the inverter while Predbat was in read-only mode.
+This is precisely GH#4436, fixed for DEYE and Sunsynk by adding <code>_is_read_only()</code> to their
+reconcile loops (<code>deye.py:1661</code>, <code>sunsynk.py:1346</code>); the same gate is required here from
+the start rather than added after someone reports it.</p>
+<p>Concretely, <code>_reconcile_control(sn)</code> returns early when <strong>any</strong> of these hold:</p>
+<ul>
+<li><code>switch.predbat_set_read_only</code> is on,</li>
+<li><code>alphaess_control_enable</code> is false, or</li>
+<li>the serial is not in <code>control_active</code> — Predbat has not yet been asked to drive it, so a
+  startup cycle can never clobber an inverter before there is a plan to apply.</li>
+</ul>
+<p>The bind/unbind path is deliberately outside this gate: read-only guards writes to the
+inverter, and unbinding is account management, not an inverter write.</p>
+<h2 id="monitoring-and-sensor-mapping">Monitoring and sensor mapping</h2>
+<p>Sensors are published as <code>sensor.predbat_alphaess_&lt;sn&gt;_&lt;leaf&gt;</code> via <code>dashboard_item</code>.</p>
+<h3 id="power-getlastpowerdata-60-s-tier-watts">Power — <code>getLastPowerData</code>, 60 s tier, watts</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Predbat arg</th>
+<th style="text-align: left;">Leaf</th>
+<th style="text-align: left;">Source</th>
+<th style="text-align: left;">Sign</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>load_power</code></td>
+<td style="text-align: left;"><code>load_power</code></td>
+<td style="text-align: left;"><code>pload</code></td>
+<td style="text-align: left;">pass through</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>pv_power</code></td>
+<td style="text-align: left;"><code>pv_power</code></td>
+<td style="text-align: left;"><code>ppv</code></td>
+<td style="text-align: left;">pass through</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>battery_power</code></td>
+<td style="text-align: left;"><code>battery_power</code></td>
+<td style="text-align: left;"><code>pbat</code></td>
+<td style="text-align: left;">pass through — positive is already discharge</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>grid_power</code></td>
+<td style="text-align: left;"><code>grid_power</code></td>
+<td style="text-align: left;"><code>pgrid</code></td>
+<td style="text-align: left;"><strong>negated</strong> — AlphaESS is positive-on-import, Predbat wants negative-on-import</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>soc_percent</code></td>
+<td style="text-align: left;"><code>soc</code></td>
+<td style="text-align: left;"><code>soc</code></td>
+<td style="text-align: left;">%</td>
+</tr>
+<tr>
+<td style="text-align: left;">—</td>
+<td style="text-align: left;"><code>ev_power</code></td>
+<td style="text-align: left;"><code>pev</code></td>
+<td style="text-align: left;">informational</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>pbat</code> sign is established by arithmetic, not assumption: in the API documentation's
+live evening sample, <code>pgrid 11 + pbat 1264 = pload 1275</code> with <code>ppv 0</code>, so a positive
+<code>pbat</code> is discharge, matching Predbat's convention directly. The <strong>charge</strong> direction
+being negative is the one part still to be confirmed by a tester, and is on the field
+verification list.</p>
+<p><code>automatic_config()</code> sets <code>grid_power_invert</code>, <code>battery_power_invert</code> and
+<code>load_power_invert</code> explicitly to <code>False</code> for every index rather than leaving them to
+default. <code>base.args</code> is shared and not namespaced per inverter type, so a Teslemetry or
+Fox install that legitimately inverts its own grid sensor leaves the flag set for every
+index; an AlphaESS inverter that does not claim it inherits the flip, the sensor is
+negated a second time, and an export reads as an import. This is the Sunsynk lesson at
+<code>sunsynk.py:1543-1553</code>.</p>
+<h3 id="energy-5-min-tier-kwh-daily-counters">Energy — 5 min tier, kWh daily counters</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Predbat arg</th>
+<th style="text-align: left;">Leaf</th>
+<th style="text-align: left;">Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>load_today</code></td>
+<td style="text-align: left;"><code>load_today</code></td>
+<td style="text-align: left;"><code>getSumDataForCustomer</code> → <code>eload</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>import_today</code></td>
+<td style="text-align: left;"><code>import_today</code></td>
+<td style="text-align: left;"><code>getOneDateEnergyBySn</code> → <code>eInput</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>export_today</code></td>
+<td style="text-align: left;"><code>export_today</code></td>
+<td style="text-align: left;"><code>getOneDateEnergyBySn</code> → <code>eOutput</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>pv_today</code></td>
+<td style="text-align: left;"><code>pv_today</code></td>
+<td style="text-align: left;"><code>getOneDateEnergyBySn</code> → <code>epv</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">—</td>
+<td style="text-align: left;"><code>battery_charge_today</code></td>
+<td style="text-align: left;"><code>eCharge</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">—</td>
+<td style="text-align: left;"><code>battery_discharge_today</code></td>
+<td style="text-align: left;"><code>eDischarge</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">—</td>
+<td style="text-align: left;"><code>grid_charge_today</code></td>
+<td style="text-align: left;"><code>eGridCharge</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>eload</code> is the reason <code>getSumDataForCustomer</code> is called at all —
+<code>getOneDateEnergyBySn</code> has no load field. When <code>eload</code> is null the component falls back to
+the energy balance <code>epv + eInput − eOutput − eCharge + eDischarge</code> rather than leaving
+<code>load_today</code> unmapped. The API docs warn that most <code>SumData</code> fields are null without a
+configured tariff, though the <code>e*</code> daily totals were populated on the live test account.</p>
+<p>These counters reset at midnight; <code>minute_data</code>/<code>clean_incrementing_reverse</code> absorbs that.
+They are published with <code>device_class: energy</code> and <code>state_class: measurement</code> so the
+recorder keeps them.</p>
+<h3 id="static-and-ratings-getesslist-8-h-tier">Static and ratings — <code>getEssList</code>, 8 h tier</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Predbat arg</th>
+<th style="text-align: left;">Source</th>
+<th style="text-align: left;">Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>soc_max</code></td>
+<td style="text-align: left;"><code>cobat</code> (kWh)</td>
+<td style="text-align: left;">Direct</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>inverter_limit</code></td>
+<td style="text-align: left;"><code>poinv</code> (kW × 1000)</td>
+<td style="text-align: left;">Direct — the AC/grid-side limit</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>battery_rate_max</code></td>
+<td style="text-align: left;"><code>poinv</code> (kW × 1000), overridable by <code>alphaess_battery_rate_max</code></td>
+<td style="text-align: left;">Derived, not reported — see "Battery rate max" below</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>export_limit</code></td>
+<td style="text-align: left;"><strong>Not in the API</strong></td>
+<td style="text-align: left;">Unmapped, with a warning — otherwise Predbat falls back to the 99999 W default and plans exports the grid connection clips</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>battery_min_soc</code></td>
+<td style="text-align: left;">Deliberately <strong>not</strong> mapped</td>
+<td style="text-align: left;"><code>batUseCap</code> is a field Predbat <em>writes</em>; reading it back as the floor would be circular</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>battery_temperature</code></td>
+<td style="text-align: left;">Not available</td>
+<td style="text-align: left;">Unmapped</td>
+</tr>
+</tbody>
+</table>
+<p><code>minv</code>, <code>mbat</code>, <code>emsStatus</code> and <code>popv</code> are published as informational sensors only.</p>
+<p><code>usCapacity</code> and <code>surplusCobat</code> are published but <strong>not</strong> mapped to <code>soc_percent</code>/<code>soc_kw</code>.
+The arithmetic in the API docs' two live samples (<code>13.34/13.34 = 100.0</code> and
+<code>9.09/10.1 = 90.0</code>) fits both "current SOC" and "configured usable depth" equally well,
+and this is an 8-hour tier regardless, so live SOC comes from <code>LastPower.soc</code> where there
+is no ambiguity.</p>
+<p>Throughout, the Sunsynk rule applies: an arg is mapped only when <strong>every</strong> discovered
+inverter reports the underlying value. An arg pointing at a sensor that never appears is
+worse than an absent arg the user can fill in.</p>
+<h3 id="battery-rate-max">Battery rate max</h3>
+<p>The API reports no battery charge/discharge power limit and no pack current or voltage
+from which to derive one, so unlike <code>sunsynk.py</code> there is nothing to compute. It is
+nevertheless <strong>derived from <code>poinv</code> rather than left unmapped</strong>, because leaving it
+unmapped is not neutral:</p>
+<ul>
+<li><code>inverter.py:410</code> falls back to a hard-coded <strong>2600 W</strong> when <code>battery_rate_max</code> is
+  absent from <code>base.args</code>. On a SMILE5 (<code>poinv</code> 5.0 kW) that is roughly half the real
+  rate, applied silently to every plan, with nothing in the log to indicate it.</li>
+<li><code>inverter.py:423</code> computes
+  <code>battery_rate_max_charge = min(inverter_limit_charge, battery_rate_max_raw)</code>, and
+  <code>inverter_limit_charge</code> itself defaults to <code>battery_rate_max_raw</code> (<code>inverter.py:415</code>).
+  So <code>battery_rate_max</code> is the governing value; mapping <code>inverter_limit</code> from <code>poinv</code>
+  does <strong>not</strong> rescue it.</li>
+</ul>
+<p><code>poinv</code> is the inverter's nominal AC power, which on a matched AlphaESS package (a SMILE5
+paired with SMILE-BAT modules) is close to the battery rate. Where it is not — a small
+battery on a large inverter, where the BMS C-rate binds first — the estimate is high, and
+that error is the safer one to make: <code>inverter.py:1295-1318</code> measures the achieved rate,
+derives a charge/discharge power curve, and logs
+<code>Consider setting in HA: input_number.battery_rate_max_scaling: X</code>, with
+<code>battery_charge_power_curve_auto</code> able to apply the curve automatically. An over-estimate
+is therefore self-reporting and correctable; the 2600 W default is invisible.</p>
+<p><code>alphaess_battery_rate_max</code> overrides the derived value outright, for a user who knows
+their pack's real limit. The startup log states which of the two is in use and where the
+derived figure came from.</p>
+<p><code>export_limit</code> is treated differently and deliberately left unmapped, because there is no
+equivalent proxy: <code>poinv</code> is the inverter rating, not the site's grid-connection limit, and
+a G98/G99-capped site can sit far below it. Guessing there would produce a plan that
+over-exports with no feedback path, whereas the warning prompts the user to enter the one
+number only they know.</p>
+<h3 id="hybrid-versus-ac-coupled">Hybrid versus AC-coupled</h3>
+<p><code>inverter_hybrid</code> is one of Predbat's own <code>CONFIG_ITEMS</code> switches, not an <code>apps.yaml</code> arg,
+so it is written with <code>set_state_external</code> rather than <code>set_arg_auto</code> — writing the entity
+state alone would move the displayed switch without changing the value the planner reads
+(<code>component_base.py:316-324</code>). GECloud infers it from the model string
+(<code>gecloud.py:1188-1197</code>) and Teslemetry hard-sets it off for every Powerwall
+(<code>teslemetry.py:689-698</code>); this component follows GECloud's shape but is deliberately more
+conservative about acting on the verdict.</p>
+<p><strong>The two errors are not symmetric.</strong> <code>inverter_hybrid</code> controls whether PV output counts
+against the inverter's capacity and incurs its conversion loss (<code>prediction.py:38-52</code>):</p>
+<ul>
+<li><strong>True on an actually AC-coupled system</strong> — PV wrongly consumes inverter headroom, so
+  Predbat under-uses the battery. Conservative, and it self-limits.</li>
+<li><strong>False on an actually hybrid system</strong> — PV stops counting against <code>inverter_limit</code>, so
+  Predbat plans charge-plus-PV beyond what the inverter can pass, and the surplus is
+  clipped. Targets are silently missed.</li>
+</ul>
+<p>Predbat's default is <code>True</code>, and every mainstream AlphaESS unit (SMILE5, SMILE-T10,
+SMILE-G3, Storion-S5) is a hybrid with DC PV inputs, so the default is right for the
+common case. The component therefore only ever moves the switch on positive evidence of
+AC coupling, and never the other way.</p>
+<p><strong>Signals, in confidence order:</strong></p>
+<ol>
+<li><strong><code>ppvDetail</code> all-null.</strong> <code>getLastPowerData</code> returns <code>ppv1</code>–<code>ppv4</code> inside <code>ppvDetail</code>.
+   AlphaESS uses null-for-absent in these detail objects — the API docs state <code>pevDetail</code>
+   values are "<code>null</code> when no charger is fitted" — so a unit with no DC strings should
+   report nulls, while a hybrid at night reports zeros (the docs' live sample shows
+   <code>"ppv1":0.0</code> on a hybrid after dark). Null versus zero is the discriminator, and unlike
+   a PV-power threshold it works at any time of day. Applying the <code>pevDetail</code> convention
+   to <code>ppvDetail</code> is inference, not documented — hence <code>VERIFY@FIELD</code>.</li>
+<li><strong><code>popv == 0</code> while <code>epv &gt; 0</code>.</strong> A system generating solar energy but declaring no PV
+   nameplate on the AlphaESS unit has its PV somewhere else. Needs daylight to evaluate,
+   so it is assessed on the static tier rather than at startup.</li>
+<li><strong>Model string</strong>, via <code>ALPHAESS_AC_COUPLED_MODELS</code> in <code>alphaess_const.py</code>. Seeded
+   <strong>empty</strong>. AlphaESS model naming does not encode coupling the way GivEnergy's does —
+   there is no <code>"ac"</code> substring to match — and the HA integration's <code>KNOWN_INVERTERS</code>
+   list (<code>Storion-S5</code>, <code>SMILE5-INV</code>, <code>VT1000</code>, <code>SMILE-T10-HV-INV</code>, <code>SMILE-G3-B5-INV</code>,
+   <code>SMILE-G3-T10-INV</code>, <code>SMILE-S6-HV-INV</code>) contains no confirmed AC-coupled entry.
+   Inventing a table here would be guessing; entries are added only as testers confirm
+   them.</li>
+</ol>
+<p>The switch is flipped to AC-coupled only when signal 1 and signal 2 <strong>agree</strong>, or when the
+model appears in <code>ALPHAESS_AC_COUPLED_MODELS</code>. Any other combination leaves Predbat's
+default alone and logs what was observed, naming the model and pointing the user at
+<code>switch.predbat_inverter_hybrid</code>. A guess that lands on the damaging side of an asymmetric
+error is worse than asking.</p>
+<h2 id="discovery-filtering-and-model-capability">Discovery filtering and model capability</h2>
+<h3 id="systems-with-no-battery-are-skipped">Systems with no battery are skipped</h3>
+<p><code>getEssList</code> returns every product bound to the AppID, and not all of them are battery
+systems — AlphaESS also sells plug-in solar (the VT1000 family), which has nothing for
+Predbat to drive. Any discovered system reporting <code>cobat</code> of zero, null or missing is
+skipped at discovery: not registered as a Predbat inverter, no control entities, no
+control writes. It is logged once by serial and model so the user can see it was
+recognised and deliberately passed over, and monitoring sensors are still published for it
+if it reports power data.</p>
+<p>This is a capability filter, not a model filter, which is why it is preferred to a
+blacklist: it catches every non-battery product AlphaESS ships now or later without anyone
+having to maintain a table. A serial the user has explicitly named in
+<code>alphaess_inverter_sn</code> is still skipped when it has no battery — there is no plan to apply
+to it — but the log says so explicitly rather than silently returning an empty device
+list, since a filter matching nothing otherwise looks identical to an empty account.</p>
+<h3 id="live-telemetry-falls-back-to-history">Live telemetry falls back to history</h3>
+<p>Not every system serves <code>getLastPowerData</code>. <code>Storion-S5</code> is the known example — the Home
+Assistant integration skips the call outright for it (<code>LOWER_INVERTER_API_CALL_LIST</code>,
+homeassistant-alphaESS <code>coordinator.py:2528</code>) — but the component does <strong>not</strong> keep a
+model list for this. It decides on behaviour instead: if live data is not present, use the
+history.</p>
+<p>That matters because <code>getLastPowerData</code> is the whole 60-second power tier — live <code>soc</code>,
+<code>pbat</code>, <code>pgrid</code>, <code>ppv</code> and <code>pload</code> — and Predbat cannot plan without a live SOC. A model
+list would only cover the models someone had already written down, while the behavioural
+rule covers <code>Storion-S5</code>, any unlisted model with the same gap, and a system that simply
+stops answering.</p>
+<p><strong>The rule.</strong> On the power tier, call <code>getLastPowerData</code>. If it fails, or comes back
+without a usable <code>soc</code>, fall back to <code>getOneDayPowerBySn</code> for today and take the most
+recent sample. Those samples carry everything needed:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">History field</th>
+<th style="text-align: left;">Supplies</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>cbat</code></td>
+<td style="text-align: left;">Battery SOC %</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>ppv</code></td>
+<td style="text-align: left;">PV power W</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>load</code></td>
+<td style="text-align: left;">Load power W</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>feedIn</code>, <code>gridCharge</code></td>
+<td style="text-align: left;">Grid power, reconstructed as <code>gridCharge - feedIn</code></td>
+</tr>
+</tbody>
+</table>
+<p>Two details make the fallback usable rather than merely available:</p>
+<ul>
+<li><strong><code>cbat</code>, not <code>cobat</code>.</strong> The portal documents this field as <code>cobat</code>, the live API returns
+  <code>cbat</code>, and reading the portal name silently yields <code>None</code> — which would look exactly
+  like "this system has no SOC either". Both spellings are read, <code>cbat</code> first.</li>
+<li><strong>Grid sign.</strong> <code>feedIn</code> and <code>gridCharge</code> are separate positive-only fields rather than a
+  signed <code>pgrid</code>, so grid power is reconstructed as <code>gridCharge - feedIn</code> before Predbat's
+  negate-on-import convention is applied.</li>
+</ul>
+<p><strong>Demotion is latched, and reversible.</strong> <code>getOneDayPowerBySn</code> returns ~288 records for a
+full day, so it is not something to poll every minute. After a small number of consecutive
+<code>getLastPowerData</code> failures a serial is demoted to the history path and its power tier
+drops to 5 minutes, which is the resolution the history has anyway. The demotion is
+re-probed on the config tier (every 30 minutes) with a single <code>getLastPowerData</code> call, so
+a system that was merely offline or briefly failing returns to 60-second live data by
+itself and a genuinely incapable one costs two extra calls an hour. The verdict is cached
+so a restart does not re-learn it from scratch.</p>
+<p>If neither path yields a SOC — no <code>getLastPowerData</code> and no <code>cbat</code> in the history — that
+serial cannot be driven. It is logged plainly, saying which of the two calls failed and
+how, and skipped rather than registered with a fabricated SOC.</p>
+<p><code>Storion-S5</code> also appears in the HA integration's <code>LIMITED_INVERTER_SENSOR_LIST</code>, which
+needs no special handling here either: the standing rule that an arg is mapped only when
+every inverter actually reports the underlying value already covers it.</p>
+<h2 id="control-entities">Control entities</h2>
+<p>Published per serial, matching <code>sunsynk.py</code>'s naming and domains so <code>inverter.py</code> drives
+them unmodified:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Entity</th>
+<th style="text-align: left;">Domain</th>
+<th style="text-align: left;">Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>predbat_alphaess_&lt;sn&gt;_battery_schedule_reserve</code></td>
+<td style="text-align: left;"><code>number</code></td>
+<td style="text-align: left;">Reserve %</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>predbat_alphaess_&lt;sn&gt;_battery_schedule_charge_start_time</code></td>
+<td style="text-align: left;"><code>select</code></td>
+<td style="text-align: left;"><code>HH:MM:SS</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>predbat_alphaess_&lt;sn&gt;_battery_schedule_charge_end_time</code></td>
+<td style="text-align: left;"><code>select</code></td>
+<td style="text-align: left;"><code>HH:MM:SS</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>predbat_alphaess_&lt;sn&gt;_battery_schedule_charge_soc</code></td>
+<td style="text-align: left;"><code>number</code></td>
+<td style="text-align: left;">Target SOC %</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>predbat_alphaess_&lt;sn&gt;_battery_schedule_charge_power</code></td>
+<td style="text-align: left;"><code>number</code></td>
+<td style="text-align: left;">W</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>predbat_alphaess_&lt;sn&gt;_battery_schedule_charge_enable</code></td>
+<td style="text-align: left;"><code>switch</code></td>
+<td style="text-align: left;">—</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>predbat_alphaess_&lt;sn&gt;_battery_schedule_export_*</code></td>
+<td style="text-align: left;">as above</td>
+<td style="text-align: left;">Export equivalents</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>predbat_alphaess_&lt;sn&gt;_battery_schedule_charge_write</code></td>
+<td style="text-align: left;"><code>switch</code></td>
+<td style="text-align: left;">Apply button</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>predbat_alphaess_&lt;sn&gt;_unbind</code></td>
+<td style="text-align: left;"><code>switch</code></td>
+<td style="text-align: left;">Unbind this system (see below)</td>
+</tr>
+</tbody>
+</table>
+<p>The reserve and SOC entities are published with the value Predbat wrote, <strong>not</strong> clamped.
+Predbat writes then reads back to confirm (<code>write_and_poll_value</code>), so publishing anything
+other than what was written guarantees a mismatch and a retry storm. Clamping happens at
+the API boundary in the payload builder.</p>
+<p>Control entities are read <strong>every tick, including the first</strong>. Home Assistant retains them
+across a Predbat restart, so on restart they already hold the live plan; seeding from an
+empty schedule and publishing that back would cancel an in-flight charge until Predbat
+next replanned.</p>
+<h2 id="bind-and-unbind">Bind and unbind</h2>
+<h3 id="the-flow">The flow</h3>
+<p>Binding a system to an AppID is two steps, and the second needs a code that is emailed to
+the <strong>system owner</strong>:</p>
+<pre><code>getVerificationCode(sysSn, checkCode)  →  emails a code to the owner's registered address
+bindSn(sysSn, code)                    →  binds the system to the AppID
+</code></pre>
+<p><code>checkCode</code> comes from the device label or the installer. Because the code arrives by
+email and must be typed in, bind cannot be driven from a toggle — hence CLI-only.</p>
+<h3 id="cli">CLI</h3>
+<p>Added to <code>main()</code> in <code>alphaess.py</code>, alongside the diagnostic run:</p>
+<pre><code>--verify --serial SN --check-code CC   → getVerificationCode  (triggers the email)
+--bind   --serial SN --code 123456     → bindSn
+--unbind --serial SN                   → unBindSn
+</code></pre>
+<p>All three change account state, so each prompts <code>[y/N]</code> before sending. The confirmation
+uses the <code>EOFError</code>/<code>KeyboardInterrupt</code> handling from <code>sunsynk.py</code>'s <code>--write-test</code>: a
+remote tester on SSH or in a container with no TTY gets a clean "nothing sent", not a
+traceback.</p>
+<p>Result reporting uses the response <code>code</code>, which is the whole reason for the native
+client — <code>data</code> is <code>null</code> whichever way the call went:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Call</th>
+<th style="text-align: left;">Code</th>
+<th style="text-align: left;">Reported as</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">bind</td>
+<td style="text-align: left;"><code>200</code></td>
+<td style="text-align: left;">Bound</td>
+</tr>
+<tr>
+<td style="text-align: left;">bind</td>
+<td style="text-align: left;"><code>6003</code></td>
+<td style="text-align: left;">Bound (already bound — idempotent success)</td>
+</tr>
+<tr>
+<td style="text-align: left;">bind</td>
+<td style="text-align: left;"><code>6046</code></td>
+<td style="text-align: left;">Failed: code wrong or expired, re-run <code>--verify</code></td>
+</tr>
+<tr>
+<td style="text-align: left;">verify</td>
+<td style="text-align: left;"><code>6004</code></td>
+<td style="text-align: left;">Failed: CheckCode incorrect</td>
+</tr>
+<tr>
+<td style="text-align: left;">verify</td>
+<td style="text-align: left;"><code>6002</code></td>
+<td style="text-align: left;">Failed: SN not bound to any user</td>
+</tr>
+<tr>
+<td style="text-align: left;">verify / bind</td>
+<td style="text-align: left;"><code>6038</code></td>
+<td style="text-align: left;">Failed: SN unknown to the platform</td>
+</tr>
+<tr>
+<td style="text-align: left;">unbind</td>
+<td style="text-align: left;"><code>200</code></td>
+<td style="text-align: left;">Unbound</td>
+</tr>
+<tr>
+<td style="text-align: left;">unbind</td>
+<td style="text-align: left;"><code>6005</code></td>
+<td style="text-align: left;">Unbound (was not bound — idempotent success)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="unbind-switch">Unbind switch</h3>
+<p><code>switch.predbat_alphaess_&lt;sn&gt;_unbind</code>, published for every discovered serial, default
+<code>off</code>. Follows the Sigenergy <code>offboard</code> pattern (<code>sigenergy.py:2008-2016</code>):</p>
+<ul>
+<li><strong>Turn on</strong> → call <code>unBindSn</code>. On success the serial is latched in <code>_unbind_done</code>,
+  persisted to the control cache, so neither the 60-second tick nor a Predbat restart
+  re-fires it.</li>
+<li><strong>Failure</strong> leaves the latch clear so the next tick retries, matching
+  <code>_offboard_system_if_needed</code>.</li>
+<li><strong>Turn off</strong> → clears the latch so discovery picks the system up again if it was re-bound
+  via the CLI or the AlphaESS portal. It does <strong>not</strong> re-bind; that is impossible without
+  the emailed code. The switch is one-way from Home Assistant, and its <code>friendly_name</code> and
+  the documentation both say so.</li>
+<li><strong>After a successful unbind</strong> the serial is dropped from <code>device_list</code>, its control
+  entities stop being republished, and a warning is logged that <code>num_inverters</code> and the
+  auto-config args in <code>apps.yaml</code> now reference a system Predbat can no longer read.</li>
+</ul>
+<p>The switch is deliberately <strong>not</strong> gated on <code>switch.predbat_set_read_only</code>: read-only
+guards writes to the inverter, and unbinding is account management, not an inverter write.</p>
+<h2 id="refresh-tiers">Refresh tiers</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Tier</th>
+<th style="text-align: left;">TTL</th>
+<th style="text-align: left;">Calls per serial</th>
+<th style="text-align: left;">Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>static</code></td>
+<td style="text-align: left;">8 h</td>
+<td style="text-align: left;"><code>getEssList</code> (account-wide, once)</td>
+<td style="text-align: left;">Discovery, capacity, ratings, models</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>config</code></td>
+<td style="text-align: left;">30 min</td>
+<td style="text-align: left;"><code>getChargeConfigInfo</code>, <code>getDisChargeConfigInfo</code> (+ periodic probe once)</td>
+<td style="text-align: left;">The read-modify-write baseline</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>power</code></td>
+<td style="text-align: left;">60 s, or 5 min when demoted</td>
+<td style="text-align: left;"><code>getLastPowerData</code>, or <code>getOneDayPowerBySn</code> when demoted</td>
+<td style="text-align: left;">Live telemetry — see "Live telemetry falls back to history"</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>energy</code></td>
+<td style="text-align: left;">5 min</td>
+<td style="text-align: left;"><code>getOneDateEnergyBySn</code>, <code>getSumDataForCustomer</code></td>
+<td style="text-align: left;">Daily counters for load/import/export/PV learning</td>
+</tr>
+</tbody>
+</table>
+<p>Steady state is roughly 88 calls per hour per serial, plus one account-wide <code>getEssList</code>
+per 8 hours — comfortably inside the 10-second guidance for a single system.
+<code>alphaess_api_delay</code> (default 2 s) spaces consecutive calls when several serials are on
+one account.</p>
+<p>Splitting live telemetry into separate <code>power</code> and <code>energy</code> tiers exists specifically to
+cut call volume: the daily energy counters do not need 60-second granularity, and polling
+them at 5 minutes removes two thirds of what a single combined tier would cost.</p>
+<p><code>refresh_static</code> never overwrites <code>device_list</code> with an empty discovery result. Absence of
+a result is not a result: one transient failure must not take a working component down
+until the next success, and writing <code>{'device_list': []}</code> to the cache would additionally
+make a restart skip re-discovery for a full TTL.</p>
+<p>Tier clocks are marked fresh <strong>only on success</strong>, so a deferred startup genuinely retries
+rather than finding the tier "fresh" and skipping the poll.</p>
+<h3 id="caching">Caching</h3>
+<p>Persisted through the Storage component (never direct file access), following
+<code>sunsynk.py</code>'s four-file split:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Cache</th>
+<th style="text-align: left;">Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>static</code></td>
+<td style="text-align: left;"><code>device_list</code>, per-serial detail from <code>getEssList</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>config</code></td>
+<td style="text-align: left;">Last read <code>ChargeConfig</code>/<code>DisChargeConfig</code> per serial, <code>_periodic_ok</code> verdicts</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>ratings</code></td>
+<td style="text-align: left;">Derived capacity, inverter limit</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>control</code></td>
+<td style="text-align: left;"><code>local_schedule</code>, <code>_applied_payload</code>, <code>control_active</code>, <code>_unbind_done</code>, last write timestamps</td>
+</tr>
+</tbody>
+</table>
+<p><code>load_cache</code> returns <code>{}</code> when <code>self.storage</code> is None — the normal state for a standalone
+CLI run — silently and without flagging a restore error.</p>
+<h2 id="error-handling">Error handling</h2>
+<h3 id="cloud-latency">Cloud latency</h3>
+<p>Settings reach the inverter on its next cloud poll, typically one to five minutes after
+Predbat writes them. A read-back immediately after a write shows the old values; that is
+not a failure and the component does not retry on it. The settle counter from
+<code>sunsynk.py</code> (<code>note_settle</code>) is reused: a written payload is considered pending for a
+fixed number of polls before an unexpected read-back counts as external interference.</p>
+<h3 id="external-interference">External interference</h3>
+<p>Using the AlphaESS phone app while Predbat is running overwrites Predbat's settings, and
+vice versa — the write endpoints are whole-object replacements, so the last writer wins.
+Detected changes to Predbat-owned fields are logged (<code>note_external_change</code>), which is
+what the control ledger consumes.</p>
+<h3 id="transport-versus-api-failure">Transport versus API failure</h3>
+<p>Two distinct paths, as in the reference client:</p>
+<ul>
+<li><strong>API-level</strong> (<code>code != 200</code>) — the request reached the service and was rejected.
+  Resending it unchanged will not help. Logged with <code>code</code>, <code>msg</code> and <code>expMsg</code>, and
+  returned to the caller as a failure with the code intact.</li>
+<li><strong>Transport</strong> (connection reset, DNS, timeout, non-2xx HTTP) — affects every endpoint.
+  Retried with backoff by <code>ComponentBase</code>.</li>
+</ul>
+<p><code>6042</code> (system offline) is routine on <code>getLastPowerData</code> for a system that has dropped off
+and does not count as a component failure.</p>
+<h3 id="clock-skew">Clock skew</h3>
+<p><code>6006</code> means the host clock is more than 300 seconds from AlphaESS server time. It is
+logged as a clock problem with the measured skew, not as a credentials problem, because
+the symptom otherwise looks identical to a bad AppSecret.</p>
+<h2 id="testing">Testing</h2>
+<p>Six modules, registered in <code>TEST_REGISTRY</code> in <code>unit_test.py</code>:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Module</th>
+<th style="text-align: left;">Covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>test_alphaess_const.py</code></td>
+<td style="text-align: left;">Endpoint map, return-code table, time-grid snapping helpers, field maps</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>test_alphaess_api.py</code></td>
+<td style="text-align: left;">Signature construction, header set, envelope parsing, <code>msg</code>/<code>info</code> success forms, every return code in the table, bind/unbind code mapping including <code>6003</code>/<code>6005</code> as success, clock-skew detection</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>test_alphaess_control.py</code></td>
+<td style="text-align: left;">The full control mapping table, <code>batUseCap</code> dual role, rate-zero-is-freeze, midnight split into period 2, snapping edge cases (collapse to zero, <code>24:00</code> → <code>23:45</code>), write minimisation (change detection, independent charge/discharge gating, minimum interval), periodic probe and <code>6017</code> caching, read-only gating of <code>_reconcile_control</code> specifically (a window transition that changes <code>batUseCap</code> must not write while <code>switch.predbat_set_read_only</code> is on - GH#4436), <code>control_enable</code> gating, unbind staying outside both gates, unbind switch latch idempotency and latch survival across restart, <code>device_list</code> removal after unbind</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>test_alphaess_publish.py</code></td>
+<td style="text-align: left;">Every sensor in the monitoring tables, <code>pgrid</code> negation, the three <code>*_invert</code> flags forced to <code>False</code>, <code>eload</code> null fallback to the energy balance, <code>battery_rate_max</code> derived from <code>poinv</code> and overridden by <code>alphaess_battery_rate_max</code>, <code>export_limit</code> left unmapped with a warning, "only map when every inverter reports it"</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>test_alphaess_config.py</code></td>
+<td style="text-align: left;"><code>INVERTER_DEF["AlphaESSCloud"]</code> completeness against the other cloud types, <code>APPS_SCHEMA</code> keys, <code>automatic_config</code> arg mapping, hybrid inference (all-null <code>ppvDetail</code> plus <code>popv</code>/<code>epv</code> disagreement leaves the switch alone; both agreeing flips it via <code>set_state_external</code>; a hybrid at night with zero-valued <code>ppvDetail</code> is never misread), history fallback when <code>getLastPowerData</code> fails or returns no <code>soc</code> (grid reconstructed as <code>gridCharge - feedIn</code>, <code>cbat</code> preferred over <code>cobat</code>, demotion latched after N failures, re-probe restoring 60 s live data, serial skipped when neither path yields a SOC), systems with zero/null/missing <code>cobat</code> skipped at discovery (including when named in <code>alphaess_inverter_sn</code>)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>test_alphaess_storage.py</code></td>
+<td style="text-align: left;">Cache round-trip for all four files, <code>storage is None</code> path, empty-discovery refusal, tier freshness only on success</td>
+</tr>
+</tbody>
+</table>
+<p>Tests use <code>TestHAInterface</code> from <code>tests/test_infra.py</code> with a stubbed HTTP layer — no
+network, no new test dependency. Per <code>CLAUDE.md</code>, unit tests are added for all new code,
+and <code>./run_all</code> output is written to a file and grepped rather than piped.</p>
+<h2 id="field-verification">Field verification</h2>
+<p>Nobody on the project has an AlphaESS account, so these are inferred from the API
+documentation and the Home Assistant integration, and need a tester's log to confirm.
+Each is marked <code>VERIFY@FIELD</code> in <code>alphaess_const.py</code>:</p>
+<ol>
+<li><strong><code>pbat</code> sign on charge.</strong> Discharge-positive is confirmed by arithmetic from a live
+   sample; charge-negative is inferred.</li>
+<li><strong><code>ctrDis = 1</code> with both periods disabled means "never discharge".</strong> This is the
+   natural reading of the documented "disabling a period is start == end", and it is what
+   freeze CHARGE and the iBoost/car holds depend on. Update (GH#4701): supported by
+   AlphaESS's own manual - "outside the set time period, the batteries are only allowed
+   to be charged but cannot be discharged" - though start == end as the empty form is
+   still the inferred part. Note this is NOT what freeze export depends on; freeze export
+   needs charging stopped, which the API cannot express at all (see 3).</li>
+<li><strong>Whether surplus above house load reaches the grid during a discharge window.</strong>
+   <code>ctrDis</code> is documented as "Battery Discharge Time Control", so how much of an export
+   window actually exports may depend on the unit's working mode. The writes are identical
+   either way — this affects what a user should expect, not what the component sends.
+   <strong>ANSWERED, No (GH#4701).</strong> A tester reports the battery covering house load and
+   exporting only solar surplus during a programmed window, and AlphaESS's manual
+   describes the window as a permission window (self-consumption inside it, charge-only
+   outside it). Force Export is therefore not deliverable over the Open API, and neither
+   is Freeze Export, which needs charging stopped rather than discharging permitted.
+   Documented in apps-yaml.md; the recommended configuration is predbat_mode
+   'Control charge'. Forced export is reachable over local Modbus dispatch registers.</li>
+<li><strong>Whether the 24-hour write limit is enforced.</strong> If a live tester sees <code>6008</code> or <code>6053</code>
+   on a second same-day write, <code>alphaess_min_write_interval</code> becomes the primary defence
+   and its default should rise.</li>
+<li><strong><code>usCapacity</code> semantics</strong> — current SOC or configured usable depth. Not relied on
+   either way; confirmation would let it be published with an accurate friendly name.</li>
+<li><strong>How closely <code>poinv</code> tracks the real battery rate.</strong> <code>battery_rate_max</code> is derived
+   from the inverter's nominal AC power for want of anything better. A tester's
+   <code>battery_rate_max_scaling</code> suggestion from <code>inverter.py:1295-1318</code> after a few full
+   charge cycles is exactly the evidence needed; if it lands consistently below 1.0
+   across systems, the derivation should apply that factor rather than <code>poinv</code> raw.</li>
+<li><strong><code>ppvDetail</code> null-versus-zero on an AC-coupled unit.</strong> The hybrid inference rests on
+   AlphaESS reporting null (not zero) for absent DC strings, which is documented for
+   <code>pevDetail</code> and inferred for <code>ppvDetail</code>. A single log from an AC-coupled system
+   settles it; until then the switch is only moved when two signals agree.</li>
+<li><strong>Which models are actually AC-coupled.</strong> <code>ALPHAESS_AC_COUPLED_MODELS</code> ships empty
+   because AlphaESS model names do not encode coupling. Confirmed entries go in as
+   testers report them.
+   Separately, whether any battery-bearing system reports a zero <code>cobat</code> — if one does,
+   the no-battery discovery filter would wrongly skip it and would need a second signal.</li>
+<li><strong>Whether a <code>Storion-S5</code> really cannot serve <code>getLastPowerData</code>, and whether its
+   history carries <code>cbat</code>.</strong> The first is taken from the HA integration rather than
+   measured; the behavioural fallback makes it moot either way, but the second is not —
+   if the history has no SOC for such a system, it cannot be driven at all and that needs
+   to be known before a user is told the model is supported.</li>
+<li><strong>Periodic entitlement in the wild.</strong> How many real systems answer <code>200</code> rather than
+   <code>6017</code> for <code>getTimeChargeBySn</code> determines whether the periodic path is the common case
+   or a rarity.</li>
+</ol>
+<p><code>api_debug = True</code> by default so every request and response is traced, with the AppSecret
+and <code>sign</code> redacted. Flipped to <code>False</code> once the format is confirmed.</p>
+<h2 id="documentation">Documentation</h2>
+<ul>
+<li><code>docs/apps-yaml.md</code> — an "AlphaESS Cloud API" section covering obtaining the AppID and
+  AppSecret from <a href="https://open.alphaess.com/">https://open.alphaess.com/</a>, every <code>alphaess_*</code> arg, the EXPERIMENTAL
+  status, that <code>alphaess_control_enable</code> defaults to true and how to set it false for
+  monitoring only, the cloud-to-inverter latency,
+  the last-writer-wins interaction with the phone app, that a non-zero charge rate is not
+  honoured on the legacy path, that <code>battery_rate_max</code> is estimated from the inverter
+  rating and how to correct it with <code>battery_rate_max_scaling</code> or
+  <code>alphaess_battery_rate_max</code>, that <code>export_limit</code> must be set by hand for a
+  G98/G99-capped site, that <code>switch.predbat_inverter_hybrid</code> is only moved on positive
+  evidence of AC coupling and should be checked by hand on a retrofit system, and that
+  the unbind switch is one-way.</li>
+<li><code>docs/inverter-setup.md</code> — an AlphaESS entry.</li>
+<li><code>templates/alphaess_cloud.yaml</code> — a complete example.</li>
+</ul>
+<h2 id="out-of-scope">Out of scope</h2>
+<ul>
+<li><strong>History backfill</strong> from <code>getOneDayPowerBySn</code>. The 5-minute energy tier supplies data
+  regularly from startup, which is what Predbat's learning needs. <code>GECloudData</code> remains
+  the pattern if this is ever wanted.</li>
+<li><strong>EV charger control.</strong> <code>getEvChargerConfigList</code> and friends are read only far enough to
+  publish <code>pev</code>; <code>setEvChargerCurrentsBySn</code> and <code>remoteControlEvCharger</code> are not wired up.</li>
+<li><strong>Meter offset</strong> (<code>getMeterOffsetConfigInfo</code> / <code>updateMeterOffsetConfigInfo</code>) — not
+  available to a standard developer account.</li>
+<li><strong>Weekly scheduling.</strong> The periodic path is used with <code>executeCycleType: 0</code> (daily)
+  only. Predbat replans continuously, so a weekday-aware schedule has nothing to express.</li>
+<li><strong>Local IP polling.</strong> The reference client can poll a device directly on the LAN; this
+  component is cloud-only, matching every other Predbat cloud integration.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

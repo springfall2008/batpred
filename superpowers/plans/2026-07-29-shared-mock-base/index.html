@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Shared MockBase Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Shared MockBase Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-07-29-shared-mock-base.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Shared MockBase Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="shared-mockbase-implementation-plan">Shared MockBase Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Replace eleven near-identical <code>MockBase</code> classes in production modules with a single shared <code>apps/predbat/mock_base.py</code>, keeping every existing call site working.</p>
+<p><strong>Architecture:</strong> One concrete (not abstract) <code>MockBase</code> class provides the full superset of the PredBat base surface that <code>ComponentBase</code> dereferences. Five modules import it directly, five subclass it to add module-specific state, and <code>kraken</code> aliases it. The spec is <code>docs/superpowers/specs/2026-07-29-shared-mock-base-design.md</code>.</p>
+<p><strong>Tech Stack:</strong> Python 3, Predbat's own <code>unit_test.py</code> harness (not pytest), Black/Flake8/interrogate/CSpell via pre-commit.</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Line length: 256 chars (Black), 250 chars (Flake8).</li>
+<li><strong>100% docstring coverage</strong> (<code>interrogate</code>) — every class and every function needs a docstring, including test functions.</li>
+<li>Variable naming: <code>lower_case_with_underscores</code>.</li>
+<li>British English spelling (CSpell, <code>en-gb</code>).</li>
+<li>Tests live in <code>apps/predbat/tests/</code>, are registered in <code>TEST_REGISTRY</code> in <code>apps/predbat/unit_test.py</code>, and are run from the <code>coverage/</code> directory.</li>
+<li><strong>Test convention:</strong> a test function takes a single <code>my_predbat</code> argument and returns <code>False</code> on success, <code>True</code> on failure. An aggregator <code>test_&lt;feature&gt;_all(my_predbat)</code> runs them and returns <code>True</code> if any failed.</li>
+<li><strong>Always save test output to a file, then grep the file.</strong> Never pipe test output straight into grep.</li>
+<li>Every file starts with the standard 9-line Predbat copyright/pylint header (copy it verbatim from <code>apps/predbat/component_base.py</code>).</li>
+</ul>
+<h2 id="working-context">Working Context</h2>
+<p>Work happens on branch <code>refactor/shared-mock-base</code>, which already exists and holds the committed spec.</p>
+<p>First-time environment setup, if the venv is not already present:</p>
+<pre><code class="language-bash">cd coverage
+source setup.csh
+</code></pre>
+<hr />
+<h3 id="task-1-create-the-shared-mock_basepy-and-its-tests">Task 1: Create the shared <code>mock_base.py</code> and its tests</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/mock_base.py</code>
+- Create: <code>apps/predbat/tests/test_mock_base.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code> (add import near line 149, add <code>TEST_REGISTRY</code> entry near line 374)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing (this is the foundation task).
+- Produces: <code>MockBase</code> in <code>apps/predbat/mock_base.py</code> with constructor
+  <code>MockBase(config_root="./temp_predbat", local_tz=None, **kwargs)</code> and methods
+  <code>log(message)</code>,
+  <code>get_state_wrapper(entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False)</code>,
+  <code>set_state_wrapper(entity_id, state, attributes=None, app=None, required_unit=None)</code>,
+  <code>dashboard_item(entity_id, state=None, attributes=None, app=None)</code>,
+  <code>get_arg(arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None)</code>,
+  <code>set_arg(key, value)</code>,
+  <code>get_ha_config(name, default)</code>,
+  <code>get_history_wrapper(entity_id, days=30, required=True, tracked=True)</code>,
+  <code>call_notify(message)</code>,
+  <code>record_status(message, debug="", had_errors=False, notify=False, extra="")</code>.
+  Instance attributes set by the constructor: <code>local_tz</code>, <code>now_utc</code>, <code>now_utc_exact</code>,
+  <code>midnight_utc</code>, <code>minutes_now</code>, <code>prefix</code>, <code>entities</code>, <code>config_root</code>,
+  <code>plan_interval_minutes</code>, <code>fatal_error</code>, <code>had_errors</code>, <code>components</code>, <code>num_cars</code>,
+  <code>currency_symbols</code>, <code>arg_errors</code>, <code>args</code>.</p>
+<p>Note: <code>mock_base.py</code> does <strong>not</strong> carry a <code># pragma: no cover</code> marker. The old classes did, but this one is directly unit-tested, so the coverage should be real. The CLI harness functions that <em>call</em> it keep their own pragmas.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test file</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_mock_base.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+
+&quot;&quot;&quot;
+Tests for the shared MockBase used by the standalone command-line harnesses.
+&quot;&quot;&quot;
+
+from datetime import datetime, timezone
+
+from mock_base import MockBase
+
+
+def test_mock_base_attribute_superset(my_predbat):
+    &quot;&quot;&quot;Every attribute ComponentBase dereferences off self.base is present after construction.&quot;&quot;&quot;
+    base = MockBase()
+    for name in (
+        &quot;local_tz&quot;,
+        &quot;now_utc&quot;,
+        &quot;now_utc_exact&quot;,
+        &quot;midnight_utc&quot;,
+        &quot;minutes_now&quot;,
+        &quot;prefix&quot;,
+        &quot;args&quot;,
+        &quot;entities&quot;,
+        &quot;config_root&quot;,
+        &quot;plan_interval_minutes&quot;,
+        &quot;fatal_error&quot;,
+        &quot;had_errors&quot;,
+        &quot;components&quot;,
+        &quot;num_cars&quot;,
+        &quot;currency_symbols&quot;,
+        &quot;arg_errors&quot;,
+    ):
+        assert hasattr(base, name), f&quot;MockBase is missing attribute {name}&quot;
+    assert base.prefix == &quot;predbat&quot;, &quot;prefix should default to predbat&quot;
+    assert base.components is None, &quot;components must be None so ComponentBase.storage resolves to None&quot;
+    assert base.fatal_error is False, &quot;fatal_error should start False&quot;
+    assert base.had_errors is False, &quot;had_errors should start False&quot;
+    assert base.config_root == &quot;./temp_predbat&quot;, &quot;config_root should use the documented default&quot;
+    print(&quot;PASS: MockBase exposes the full base attribute superset&quot;)
+    return False
+
+
+def test_mock_base_config_root_and_local_tz_overrides(my_predbat):
+    &quot;&quot;&quot;config_root and local_tz are constructor-overridable, as the axle/gecloud/octopus/solax subclasses need.&quot;&quot;&quot;
+    base = MockBase(config_root=&quot;./temp_example&quot;)
+    assert base.config_root == &quot;./temp_example&quot;, &quot;config_root override was ignored&quot;
+    utc_base = MockBase(local_tz=timezone.utc)
+    assert utc_base.local_tz == timezone.utc, &quot;local_tz override was ignored&quot;
+    assert utc_base.now_utc.tzinfo == timezone.utc, &quot;now_utc should use the supplied timezone&quot;
+    print(&quot;PASS: MockBase honours config_root and local_tz overrides&quot;)
+    return False
+
+
+def test_mock_base_midnight_utc_is_aware(my_predbat):
+    &quot;&quot;&quot;midnight_utc is timezone-aware so now_utc - midnight_utc does not raise (fox/kraken/solis had naive values).&quot;&quot;&quot;
+    base = MockBase()
+    assert base.midnight_utc.tzinfo is not None, &quot;midnight_utc must be timezone-aware&quot;
+    delta = base.now_utc - base.midnight_utc
+    assert delta.total_seconds() &gt;= 0, &quot;now_utc should not precede midnight&quot;
+    assert base.midnight_utc.hour == 0, &quot;midnight_utc should be at hour zero&quot;
+    assert base.midnight_utc.minute == 0, &quot;midnight_utc should be at minute zero&quot;
+    print(&quot;PASS: MockBase midnight_utc is timezone-aware&quot;)
+    return False
+
+
+def test_mock_base_kwargs_populate_args(my_predbat):
+    &quot;&quot;&quot;Surplus kwargs land in self.args, covering the KrakenMockBase(user_id=...) call site.&quot;&quot;&quot;
+    base = MockBase(user_id=&quot;user-123&quot;)
+    assert base.args.get(&quot;user_id&quot;) == &quot;user-123&quot;, &quot;kwargs should be stored into args&quot;
+    print(&quot;PASS: MockBase stores surplus kwargs into args&quot;)
+    return False
+
+
+def test_mock_base_none_kwargs_are_skipped(my_predbat):
+    &quot;&quot;&quot;A None-valued kwarg is not stored, matching kraken's 'if user_id:' guard and oauth_mixin's args.get(key, '').&quot;&quot;&quot;
+    base = MockBase(user_id=None)
+    assert &quot;user_id&quot; not in base.args, &quot;None-valued kwargs must not be stored&quot;
+    assert base.args.get(&quot;user_id&quot;, &quot;&quot;) == &quot;&quot;, &quot;absent user_id must fall back to the empty-string default&quot;
+    falsy = MockBase(control_enable=False)
+    assert falsy.args.get(&quot;control_enable&quot;) is False, &quot;a legitimate False value must still be stored&quot;
+    print(&quot;PASS: MockBase skips None kwargs but keeps False&quot;)
+    return False
+
+
+def test_mock_base_arg_round_trip(my_predbat):
+    &quot;&quot;&quot;set_arg persists into args and get_arg reads it back; unset keys return the caller's default.&quot;&quot;&quot;
+    base = MockBase()
+    assert base.get_arg(&quot;missing_key&quot;, &quot;fallback&quot;) == &quot;fallback&quot;, &quot;unset keys should return the default&quot;
+    assert base.get_arg(&quot;set_read_only&quot;, False) is False, &quot;unset boolean should return the supplied default&quot;
+    base.set_arg(&quot;set_read_only&quot;, True)
+    assert base.get_arg(&quot;set_read_only&quot;, False) is True, &quot;set_arg value should be readable via get_arg&quot;
+    print(&quot;PASS: MockBase get_arg/set_arg round-trip&quot;)
+    return False
+
+
+def test_mock_base_dashboard_item_does_not_mutate_attributes(my_predbat):
+    &quot;&quot;&quot;dashboard_item must not corrupt the caller's attributes dict when eliding the options list.&quot;&quot;&quot;
+    base = MockBase()
+    attributes = {&quot;options&quot;: [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;], &quot;friendly_name&quot;: &quot;Test&quot;}
+    base.dashboard_item(&quot;select.predbat_test&quot;, state=&quot;a&quot;, attributes=attributes)
+    assert attributes[&quot;options&quot;] == [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;], &quot;dashboard_item mutated the caller's options list&quot;
+    stored = base.get_state_wrapper(&quot;select.predbat_test&quot;, raw=True)
+    assert stored[&quot;attributes&quot;][&quot;options&quot;] == [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;], &quot;the stored attributes were corrupted&quot;
+    assert stored[&quot;state&quot;] == &quot;a&quot;, &quot;the stored state is wrong&quot;
+    print(&quot;PASS: MockBase dashboard_item leaves caller attributes intact&quot;)
+    return False
+
+
+def test_mock_base_dashboard_item_serialises_datetime(my_predbat):
+    &quot;&quot;&quot;dashboard_item serialises non-JSON-native attribute values instead of raising TypeError.&quot;&quot;&quot;
+    base = MockBase()
+    base.dashboard_item(&quot;sensor.predbat_test&quot;, state=&quot;ok&quot;, attributes={&quot;last_updated&quot;: datetime.now()})
+    assert base.get_state_wrapper(&quot;sensor.predbat_test&quot;) == &quot;ok&quot;, &quot;state should still be stored&quot;
+    print(&quot;PASS: MockBase dashboard_item serialises datetime attributes&quot;)
+    return False
+
+
+def test_mock_base_state_wrapper_paths(my_predbat):
+    &quot;&quot;&quot;get_state_wrapper covers the raw, attribute and default-fallback paths.&quot;&quot;&quot;
+    base = MockBase()
+    base.set_state_wrapper(&quot;sensor.predbat_test&quot;, &quot;42&quot;, attributes={&quot;unit_of_measurement&quot;: &quot;kWh&quot;})
+    assert base.get_state_wrapper(&quot;sensor.predbat_test&quot;) == &quot;42&quot;, &quot;plain state lookup failed&quot;
+    assert base.get_state_wrapper(&quot;sensor.predbat_test&quot;, attribute=&quot;unit_of_measurement&quot;) == &quot;kWh&quot;, &quot;attribute lookup failed&quot;
+    assert base.get_state_wrapper(&quot;sensor.predbat_test&quot;, raw=True)[&quot;state&quot;] == &quot;42&quot;, &quot;raw lookup failed&quot;
+    assert base.get_state_wrapper(&quot;sensor.predbat_missing&quot;, default=&quot;none&quot;) == &quot;none&quot;, &quot;missing entity should return the default&quot;
+    assert base.get_state_wrapper(&quot;sensor.predbat_test&quot;, attribute=&quot;absent&quot;, default=&quot;dflt&quot;) == &quot;dflt&quot;, &quot;missing attribute should return the default&quot;
+    print(&quot;PASS: MockBase get_state_wrapper handles raw/attribute/default paths&quot;)
+    return False
+
+
+def test_mock_base_set_state_wrapper_accepts_both_kwargs(my_predbat):
+    &quot;&quot;&quot;set_state_wrapper accepts both app= and required_unit=, since the modules disagree on which they pass.&quot;&quot;&quot;
+    base = MockBase()
+    base.set_state_wrapper(&quot;sensor.predbat_one&quot;, &quot;1&quot;, attributes={}, app=&quot;predbat&quot;)
+    base.set_state_wrapper(&quot;sensor.predbat_two&quot;, &quot;2&quot;, attributes={}, required_unit=&quot;kWh&quot;)
+    assert base.get_state_wrapper(&quot;sensor.predbat_one&quot;) == &quot;1&quot;, &quot;app= form failed&quot;
+    assert base.get_state_wrapper(&quot;sensor.predbat_two&quot;) == &quot;2&quot;, &quot;required_unit= form failed&quot;
+    print(&quot;PASS: MockBase set_state_wrapper accepts app and required_unit&quot;)
+    return False
+
+
+def test_mock_base_record_status_tracks_errors(my_predbat):
+    &quot;&quot;&quot;record_status sets had_errors when told to, so gecloud's guarded call reflects failures.&quot;&quot;&quot;
+    base = MockBase()
+    base.record_status(&quot;All good&quot;)
+    assert base.had_errors is False, &quot;a clean status must not set had_errors&quot;
+    base.record_status(&quot;Something broke&quot;, debug=&quot;url&quot;, had_errors=True)
+    assert base.had_errors is True, &quot;had_errors should be set when reported&quot;
+    print(&quot;PASS: MockBase record_status tracks the error flag&quot;)
+    return False
+
+
+def test_mock_base_no_ha_helpers(my_predbat):
+    &quot;&quot;&quot;get_ha_config returns the caller's default and get_history_wrapper returns None, matching a no-HA run.&quot;&quot;&quot;
+    base = MockBase()
+    assert base.get_ha_config(&quot;anything&quot;, &quot;dflt&quot;) == &quot;dflt&quot;, &quot;get_ha_config should return the default&quot;
+    assert base.get_history_wrapper(&quot;sensor.predbat_test&quot;) is None, &quot;get_history_wrapper should return None with no HA interface&quot;
+    print(&quot;PASS: MockBase HA helpers degrade cleanly&quot;)
+    return False
+
+
+def test_mock_base_all(my_predbat):
+    &quot;&quot;&quot;Run all mock_base tests.&quot;&quot;&quot;
+    tests = [
+        (&quot;attribute_superset&quot;, test_mock_base_attribute_superset, &quot;Full base attribute superset is present&quot;),
+        (&quot;constructor_overrides&quot;, test_mock_base_config_root_and_local_tz_overrides, &quot;config_root and local_tz are overridable&quot;),
+        (&quot;midnight_aware&quot;, test_mock_base_midnight_utc_is_aware, &quot;midnight_utc is timezone-aware&quot;),
+        (&quot;kwargs_args&quot;, test_mock_base_kwargs_populate_args, &quot;Surplus kwargs populate args&quot;),
+        (&quot;none_kwargs&quot;, test_mock_base_none_kwargs_are_skipped, &quot;None kwargs are skipped, False is kept&quot;),
+        (&quot;arg_round_trip&quot;, test_mock_base_arg_round_trip, &quot;get_arg/set_arg round-trip&quot;),
+        (&quot;dashboard_no_mutate&quot;, test_mock_base_dashboard_item_does_not_mutate_attributes, &quot;dashboard_item does not mutate caller attributes&quot;),
+        (&quot;dashboard_datetime&quot;, test_mock_base_dashboard_item_serialises_datetime, &quot;dashboard_item serialises datetime attributes&quot;),
+        (&quot;state_wrapper&quot;, test_mock_base_state_wrapper_paths, &quot;get_state_wrapper raw/attribute/default paths&quot;),
+        (&quot;state_wrapper_kwargs&quot;, test_mock_base_set_state_wrapper_accepts_both_kwargs, &quot;set_state_wrapper accepts app and required_unit&quot;),
+        (&quot;record_status&quot;, test_mock_base_record_status_tracks_errors, &quot;record_status tracks had_errors&quot;),
+        (&quot;ha_helpers&quot;, test_mock_base_no_ha_helpers, &quot;HA helpers degrade cleanly&quot;),
+    ]
+
+    failed = []
+    for name, test_func, description in tests:
+        print(f&quot;\n*** Running: {name} - {description} ***&quot;)
+        try:
+            result = test_func(my_predbat)
+            if result:
+                failed.append(name)
+                print(f&quot;FAILED: {name}&quot;)
+        except Exception as e:
+            failed.append(name)
+            print(f&quot;ERROR in {name}: {e}&quot;)
+
+    if failed:
+        print(f&quot;\n*** {len(failed)} test(s) failed: {', '.join(failed)} ***&quot;)
+        return True
+    else:
+        print(f&quot;\n*** All {len(tests)} mock_base tests passed ***&quot;)
+        return False
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Register the test in <code>unit_test.py</code></strong></li>
+</ul>
+<p>Add the import alongside the other test-module imports (near line 149, next to <code>from tests.test_component_base import test_component_base_all</code>):</p>
+<pre><code class="language-python">from tests.test_mock_base import test_mock_base_all
+</code></pre>
+<p>Add the registry entry in <code>TEST_REGISTRY</code> (near line 374, next to the <code>component_base</code> entry):</p>
+<pre><code class="language-python">        (&quot;mock_base&quot;, test_mock_base_all, &quot;Shared CLI-harness MockBase tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Run the test to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test mock_base &gt; /tmp/mock_base_test.txt 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -iE &quot;ModuleNotFoundError|No module named|Traceback&quot; /tmp/mock_base_test.txt
+</code></pre>
+<p>Expected: FAIL with <code>ModuleNotFoundError: No module named 'mock_base'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 4: Write the implementation</strong></li>
+</ul>
+<p>Create <code>apps/predbat/mock_base.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+
+&quot;&quot;&quot;Shared mock base object for standalone command-line runs of components.
+
+Most component modules (fox, solis, octopus, teslemetry, ...) can be executed directly
+from the command line to exercise their API against a live vendor endpoint. Those
+harnesses need an object to pass as the ``base`` argument of ComponentBase. MockBase
+provides the minimal PredBat base surface that ComponentBase and the components read:
+a clock, an in-memory entity store, argument accessors and a logger.
+
+It is deliberately concrete rather than abstract - modules instantiate it directly, and
+the few needing extra state subclass it. ``components`` is always None, so
+``ComponentBase.storage`` resolves to None and the disk cache is skipped for a
+standalone run.
+&quot;&quot;&quot;
+
+from datetime import datetime
+import json
+
+
+class MockBase:
+    &quot;&quot;&quot;Minimal stand-in for the PredBat base object, used by the standalone CLI harnesses.&quot;&quot;&quot;
+
+    def __init__(self, config_root=&quot;./temp_predbat&quot;, local_tz=None, **kwargs):
+        &quot;&quot;&quot;Initialise the mock with a clock, empty entity/arg stores and the full base attribute superset.
+
+        Surplus keyword arguments are stored into self.args, with None values skipped so an
+        unset optional argument stays absent rather than shadowing a caller's default.
+        &quot;&quot;&quot;
+        self.local_tz = local_tz if local_tz is not None else datetime.now().astimezone().tzinfo
+        self.now_utc = datetime.now(self.local_tz)
+        self.now_utc_exact = self.now_utc
+        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
+        self.prefix = &quot;predbat&quot;
+        self.entities = {}
+        self.config_root = config_root
+        self.plan_interval_minutes = 30
+        self.fatal_error = False
+        self.had_errors = False
+        self.components = None
+        self.num_cars = 0
+        self.currency_symbols = &quot;£p&quot;
+        self.arg_errors = {}
+        self.args = {key: value for key, value in kwargs.items() if value is not None}
+
+    def log(self, message):
+        &quot;&quot;&quot;Print a timestamped log line.&quot;&quot;&quot;
+        print(f&quot;[{datetime.now().strftime('%H:%M:%S')}] {message}&quot;)
+
+    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
+        &quot;&quot;&quot;Return a stored entity state, one of its attributes, or the whole record when raw is set.&quot;&quot;&quot;
+        entity = self.entities.get(entity_id, {})
+        if raw:
+            return entity
+        if attribute is not None:
+            return entity.get(&quot;attributes&quot;, {}).get(attribute, default)
+        return entity.get(&quot;state&quot;, default)
+
+    def set_state_wrapper(self, entity_id, state, attributes=None, app=None, required_unit=None):
+        &quot;&quot;&quot;Store an entity's state and attributes in memory.
+
+        Accepts both app and required_unit because the component modules disagree on which
+        one they pass, and ComponentBase.set_state_wrapper forwards required_unit.
+        &quot;&quot;&quot;
+        self.entities[entity_id] = {&quot;state&quot;: state, &quot;attributes&quot;: attributes or {}}
+
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        &quot;&quot;&quot;Print a published entity and store it.
+
+        The options list is elided in a copy of the attributes, so the caller's dict - which
+        is then stored verbatim - is never mutated.
+        &quot;&quot;&quot;
+        print(f&quot;ENTITY: {entity_id} = {state}&quot;)
+        if attributes:
+            print_attrs = dict(attributes)
+            if &quot;options&quot; in print_attrs:
+                print_attrs[&quot;options&quot;] = &quot;...&quot;
+            print(f&quot;  Attributes: {json.dumps(print_attrs, indent=2, default=str)}&quot;)
+        self.set_state_wrapper(entity_id, state, attributes)
+
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+        &quot;&quot;&quot;Return a configured argument, falling back to the caller's default.&quot;&quot;&quot;
+        return self.args.get(arg, default)
+
+    def set_arg(self, key, value):
+        &quot;&quot;&quot;Record an argument set by automatic_config, printing it with any referenced entity's state.&quot;&quot;&quot;
+        self.args[key] = value
+        if isinstance(value, str) and &quot;.&quot; in value:
+            state = self.get_state_wrapper(value, default=None)
+        elif isinstance(value, list):
+            state = &quot;n/a []&quot;
+            for item in value:
+                if isinstance(item, str) and &quot;.&quot; in item:
+                    state = self.get_state_wrapper(item, default=None)
+                    break
+        else:
+            state = &quot;n/a&quot;
+        print(f&quot;Set arg {key} = {value} (state={state})&quot;)
+
+    def get_ha_config(self, name, default):
+        &quot;&quot;&quot;Return the caller's default - a standalone run has no Home Assistant config.&quot;&quot;&quot;
+        return default
+
+    def get_history_wrapper(self, entity_id, days=30, required=True, tracked=True):
+        &quot;&quot;&quot;Return None - a standalone run has no Home Assistant recorder, matching PredBat's no-interface path.&quot;&quot;&quot;
+        return None
+
+    def call_notify(self, message):
+        &quot;&quot;&quot;Print a notification message.&quot;&quot;&quot;
+        print(f&quot;NOTIFY: {message}&quot;)
+
+    def record_status(self, message, debug=&quot;&quot;, had_errors=False, notify=False, extra=&quot;&quot;):
+        &quot;&quot;&quot;Print a status record and track the error flag.&quot;&quot;&quot;
+        print(f&quot;STATUS: {message}&quot; + (f&quot; ({debug})&quot; if debug else &quot;&quot;))
+        if had_errors:
+            self.had_errors = True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the test to verify it passes</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test mock_base &gt; /tmp/mock_base_test.txt 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -iE &quot;All 12 mock_base tests passed|FAILED|ERROR in&quot; /tmp/mock_base_test.txt
+</code></pre>
+<p>Expected: <code>*** All 12 mock_base tests passed ***</code>, exit 0.</p>
+<ul>
+<li>[ ] <strong>Step 6: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/mock_base.py apps/predbat/tests/test_mock_base.py apps/predbat/unit_test.py
+git commit -m &quot;refactor(mock): add shared MockBase for standalone CLI harnesses
+
+Adds apps/predbat/mock_base.py providing the superset of the PredBat base
+surface that ComponentBase dereferences, with unit tests. No module uses it
+yet; migrations follow.&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-migrate-the-five-plain-re-export-modules">Task 2: Migrate the five plain re-export modules</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/deye.py</code> (delete lines 1366-1416)
+- Modify: <code>apps/predbat/enphase.py</code> (delete lines 1470-1534)
+- Modify: <code>apps/predbat/fox.py</code> (delete lines 2249-2298)
+- Modify: <code>apps/predbat/solis.py</code> (delete lines 3031-3081)
+- Modify: <code>apps/predbat/teslemetry.py</code> (delete lines 1239-1291)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>MockBase</code> from <code>mock_base</code> (Task 1).
+- Produces: a module-level <code>MockBase</code> name in each of these five modules, so existing call sites (<code>mock_base = MockBase()</code>) and <code>from teslemetry import MockBase</code> in <code>tests/test_teslemetry.py:1458</code> keep resolving.</p>
+<p>These five need no extra state, so each is a straight import.</p>
+<p><strong>Line numbers drift as you edit.</strong> Locate each class by searching rather than trusting the numbers above:</p>
+<pre><code class="language-bash">grep -n &quot;^class MockBase&quot; apps/predbat/deye.py
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 1: Replace the class in each of the five modules</strong></li>
+</ul>
+<p>In each file, delete the entire <code>class MockBase:</code> block (from the <code>class MockBase:  # pragma: no cover</code> line through to the line before the next top-level <code>def</code>/<code>async def</code>/<code>class</code>/<code>if __name__</code>), and add this import next to the existing <code>from component_base import ComponentBase</code> line at the top of the file:</p>
+<pre><code class="language-python">from mock_base import MockBase
+</code></pre>
+<p>Apply to: <code>deye.py</code>, <code>enphase.py</code>, <code>fox.py</code>, <code>solis.py</code>, <code>teslemetry.py</code>.</p>
+<p>Do <strong>not</strong> remove any <code>import json</code> or <code>import datetime</code> from these five — all five use both outside the deleted class. (Only <code>kraken.py</code> needs an import removed, handled in Task 3.)</p>
+<ul>
+<li>[ ] <strong>Step 2: Verify each module still imports cleanly</strong></li>
+</ul>
+<pre><code class="language-bash">cd apps/predbat &amp;&amp; for m in deye enphase fox solis teslemetry; do
+  python3 -c &quot;import $m; print('$m OK', $m.MockBase)&quot; || echo &quot;$m FAILED&quot;
+done
+</code></pre>
+<p>Expected: five <code>OK</code> lines, each showing <code>&lt;class 'mock_base.MockBase'&gt;</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Run the affected test suites</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test mock_base --test teslemetry --test fox_api --test fox_oauth --test solis --test deye_api --test enphase_api &gt; /tmp/task2_test.txt 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -iE &quot;passed|FAILED|ERROR in|Traceback&quot; /tmp/task2_test.txt | head -40
+</code></pre>
+<p>Expected: exit 0, all pass. In particular <code>test_teslemetry_mock_base_get_arg_consults_args</code> must still pass — it is the regression check that the <code>get_arg</code> persistence unification preserved teslemetry's behaviour.</p>
+<p>(These suite names were confirmed against <code>./run_all --list</code>.)</p>
+<ul>
+<li>[ ] <strong>Step 4: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/enphase.py apps/predbat/fox.py apps/predbat/solis.py apps/predbat/teslemetry.py
+git commit -m &quot;refactor(mock): use shared MockBase in deye, enphase, fox, solis, teslemetry
+
+These five need no module-specific state, so each drops its local copy in
+favour of a plain import.&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-migrate-the-five-subclass-modules-and-the-kraken-alias">Task 3: Migrate the five subclass modules and the kraken alias</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/axle.py</code> (replace class at 709-764)
+- Modify: <code>apps/predbat/gecloud.py</code> (replace class at 1962-2014; keep <code>MockHAInterface</code> at 1952-1960)
+- Modify: <code>apps/predbat/octopus.py</code> (replace class at 3004-3056; leave <code>QuietMockBase</code> untouched)
+- Modify: <code>apps/predbat/sigenergy.py</code> (replace class at 2500-2547)
+- Modify: <code>apps/predbat/solax.py</code> (replace class at 2845-2894)
+- Modify: <code>apps/predbat/kraken.py</code> (replace class at 1404-1461; <strong>delete <code>import json</code> at line 19</strong>)
+- Modify: <code>apps/predbat/tests/test_mock_base.py</code> (add the subclass tests below)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>MockBase</code> from <code>mock_base</code> (Task 1).
+- Produces: <code>MockBase</code> in <code>axle</code>, <code>gecloud</code>, <code>octopus</code>, <code>sigenergy</code>, <code>solax</code>; <code>KrakenMockBase</code> in <code>kraken</code>. <code>sigenergy.MockBase</code> keeps its <code>readonly=False</code> first positional parameter.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing subclass tests</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/tests/test_mock_base.py</code>, immediately <strong>before</strong> <code>def test_mock_base_all</code>:</p>
+<pre><code class="language-python">def test_mock_base_module_subclasses(my_predbat):
+    &quot;&quot;&quot;The five subclassing modules keep their distinguishing state on top of the shared base.&quot;&quot;&quot;
+    from axle import MockBase as AxleMockBase
+    from gecloud import MockBase as GECloudMockBase
+    from octopus import MockBase as OctopusMockBase
+    from sigenergy import MockBase as SigenergyMockBase
+    from solax import MockBase as SolaxMockBase
+
+    assert AxleMockBase().config_root == &quot;./temp_axle&quot;, &quot;axle config_root is wrong&quot;
+    assert OctopusMockBase().config_root == &quot;./temp_octopus&quot;, &quot;octopus config_root is wrong&quot;
+
+    gecloud_base = GECloudMockBase()
+    assert gecloud_base.config_root == &quot;./temp_gecloud&quot;, &quot;gecloud config_root is wrong&quot;
+    assert gecloud_base.ha_interface is not None, &quot;gecloud must supply a mock ha_interface&quot;
+    assert hasattr(gecloud_base.ha_interface, &quot;set_state_external&quot;), &quot;gecloud ha_interface needs set_state_external&quot;
+
+    assert SolaxMockBase().local_tz == timezone.utc, &quot;solax must keep using UTC&quot;
+
+    read_only = SigenergyMockBase(readonly=True)
+    assert read_only.get_state_wrapper(&quot;switch.predbat_set_read_only&quot;) == &quot;on&quot;, &quot;sigenergy readonly=True should seed the switch on&quot;
+    writable = SigenergyMockBase(readonly=False)
+    assert writable.get_state_wrapper(&quot;switch.predbat_set_read_only&quot;) == &quot;off&quot;, &quot;sigenergy readonly=False should seed the switch off&quot;
+
+    print(&quot;PASS: module MockBase subclasses keep their distinguishing state&quot;)
+    return False
+
+
+def test_mock_base_kraken_alias(my_predbat):
+    &quot;&quot;&quot;KrakenMockBase is the shared base and still accepts user_id, skipping it when None.&quot;&quot;&quot;
+    from kraken import KrakenMockBase
+
+    assert KrakenMockBase(user_id=&quot;user-123&quot;).args.get(&quot;user_id&quot;) == &quot;user-123&quot;, &quot;user_id should be stored&quot;
+    assert &quot;user_id&quot; not in KrakenMockBase(user_id=None).args, &quot;a None user_id must not be stored&quot;
+    print(&quot;PASS: KrakenMockBase preserves its user_id contract&quot;)
+    return False
+</code></pre>
+<p>Register both in the <code>tests</code> list inside <code>test_mock_base_all</code>, after the <code>ha_helpers</code> entry:</p>
+<pre><code class="language-python">        (&quot;module_subclasses&quot;, test_mock_base_module_subclasses, &quot;Module subclasses keep their distinguishing state&quot;),
+        (&quot;kraken_alias&quot;, test_mock_base_kraken_alias, &quot;KrakenMockBase alias preserves the user_id contract&quot;),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run to establish the baseline — these tests must PASS now</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test mock_base &gt; /tmp/task3_baseline.txt 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -iE &quot;All 14 mock_base tests passed|FAILED|ERROR in&quot; /tmp/task3_baseline.txt
+</code></pre>
+<p>Expected: <strong>PASS</strong>, exit 0.</p>
+<p>This is deliberate and is <strong>not</strong> a broken red step. These two are <em>characterization</em> tests: they pin down behaviour the five modules already have, so the refactor cannot silently change it. Unlike Task 1 — where the module genuinely did not exist yet — there is no new behaviour to drive out here. A test that passes before <em>and</em> after is exactly the safety net a pure refactor needs.</p>
+<p>If either test <strong>fails</strong> at this point, stop: the assertions do not match today's behaviour, so they would lock in the wrong contract. Correct the test against the real current behaviour before touching any module.</p>
+<ul>
+<li>[ ] <strong>Step 3: Replace each class with a subclass</strong></li>
+</ul>
+<p><strong>All five modules need this import</strong> added next to their existing <code>from component_base import ComponentBase</code> line. The alias avoids a name clash with the subclass, which must keep the plain name <code>MockBase</code> for the existing call sites:</p>
+<pre><code class="language-python">from mock_base import MockBase as SharedMockBase
+</code></pre>
+<p>Then replace each deleted class block with the subclass below, at the position the old class occupied.</p>
+<p>In <code>axle.py</code>:</p>
+<pre><code class="language-python">class MockBase(SharedMockBase):  # pragma: no cover
+    &quot;&quot;&quot;Mock base for the Axle command-line harness, with its own cache directory.&quot;&quot;&quot;
+
+    def __init__(self):
+        &quot;&quot;&quot;Initialise the shared mock with the Axle cache root.&quot;&quot;&quot;
+        super().__init__(config_root=&quot;./temp_axle&quot;)
+</code></pre>
+<p>In <code>octopus.py</code> (leave the <code>QuietMockBase(MockBase)</code> subclass further down the file untouched — it now inherits through the new subclass and keeps working):</p>
+<pre><code class="language-python">class MockBase(SharedMockBase):  # pragma: no cover
+    &quot;&quot;&quot;Mock base for the Octopus command-line harness, with its own cache directory.&quot;&quot;&quot;
+
+    def __init__(self):
+        &quot;&quot;&quot;Initialise the shared mock with the Octopus cache root.&quot;&quot;&quot;
+        super().__init__(config_root=&quot;./temp_octopus&quot;)
+</code></pre>
+<p>In <code>gecloud.py</code> (keep the existing <code>MockHAInterface</code> class exactly as it is, directly above):</p>
+<pre><code class="language-python">class MockBase(SharedMockBase):  # pragma: no cover
+    &quot;&quot;&quot;Mock base for the GE Cloud command-line harness, with its own cache root and HA interface.&quot;&quot;&quot;
+
+    def __init__(self):
+        &quot;&quot;&quot;Initialise the shared mock with the GE Cloud cache root and a mock HA interface.&quot;&quot;&quot;
+        super().__init__(config_root=&quot;./temp_gecloud&quot;)
+        self.ha_interface = MockHAInterface()
+</code></pre>
+<p>In <code>solax.py</code>:</p>
+<pre><code class="language-python">class MockBase(SharedMockBase):  # pragma: no cover
+    &quot;&quot;&quot;Mock base for the Solax command-line harness, which works in UTC rather than local time.&quot;&quot;&quot;
+
+    def __init__(self):
+        &quot;&quot;&quot;Initialise the shared mock pinned to UTC.&quot;&quot;&quot;
+        super().__init__(local_tz=timezone.utc)
+</code></pre>
+<p>In <code>sigenergy.py</code>:</p>
+<pre><code class="language-python">class MockBase(SharedMockBase):  # pragma: no cover
+    &quot;&quot;&quot;Mock base for the Sigenergy command-line harness, which can pre-seed read-only mode.&quot;&quot;&quot;
+
+    def __init__(self, readonly=False):
+        &quot;&quot;&quot;Initialise the shared mock, seeding the read-only switch so control writes are gated.&quot;&quot;&quot;
+        super().__init__()
+        self.entities[&quot;switch.predbat_set_read_only&quot;] = {&quot;state&quot;: &quot;on&quot; if readonly else &quot;off&quot;, &quot;attributes&quot;: {}}
+</code></pre>
+<p>In <code>kraken.py</code>, delete the <code>class KrakenMockBase:</code> block, <strong>delete <code>import json</code> on line 19</strong>, and add:</p>
+<pre><code class="language-python">from mock_base import MockBase as KrakenMockBase
+</code></pre>
+<p>Note on <code>sigenergy</code>: the original seeded <code>{"state": ...}</code> with no <code>attributes</code> key. The version above adds <code>"attributes": {}</code> so the record matches what <code>set_state_wrapper</code> produces and an <code>attribute=</code> lookup cannot raise <code>KeyError</code>. <code>get_state_wrapper</code> reads <code>.get("state")</code>, so the seeded value is found either way.</p>
+<p>Note on <code>solax</code>: it already imports <code>timezone</code> from <code>datetime</code> (line 24), so no import change is needed.</p>
+<ul>
+<li>[ ] <strong>Step 4: Verify <code>kraken.py</code> has no other <code>json</code> usage before committing the import removal</strong></li>
+</ul>
+<pre><code class="language-bash">grep -n &quot;json&quot; apps/predbat/kraken.py
+</code></pre>
+<p>Expected: only <code>response.json()</code> calls, the <code>json={"query": ...}</code> kwarg, and the <code>"application/json"</code> string — no bare <code>json.</code> attribute access, and no <code>import json</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Verify every module imports cleanly</strong></li>
+</ul>
+<pre><code class="language-bash">cd apps/predbat &amp;&amp; for m in axle gecloud octopus sigenergy solax; do
+  python3 -c &quot;import $m; b = $m.MockBase(); print('$m OK', b.config_root, b.local_tz)&quot; || echo &quot;$m FAILED&quot;
+done
+python3 -c &quot;import kraken; print('kraken OK', kraken.KrakenMockBase)&quot;
+</code></pre>
+<p>Expected: six <code>OK</code> lines. <code>sigenergy</code> prints <code>./temp_predbat</code> (it does not override <code>config_root</code>); the others print their own roots.</p>
+<ul>
+<li>[ ] <strong>Step 6: Run the tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test mock_base --test axle --test ge_cloud --test sigenergy --test solax --test kraken --test kraken_auth -k octopus_ &gt; /tmp/task3_test.txt 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -iE &quot;All 14 mock_base tests passed|FAILED|ERROR in|Traceback&quot; /tmp/task3_test.txt
+</code></pre>
+<p>Expected: <code>*** All 14 mock_base tests passed ***</code> and exit 0 with no other failures — the same result as the Step 2 baseline, which is the point: the refactor changed the implementation, not the behaviour.</p>
+<p>If <code>-k octopus_</code> cannot be combined with <code>--test</code> in one invocation, run the octopus suites as a second command:</p>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k octopus_ &gt; /tmp/task3_octopus.txt 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -iE &quot;FAILED|ERROR in|Traceback&quot; /tmp/task3_octopus.txt
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/axle.py apps/predbat/gecloud.py apps/predbat/octopus.py apps/predbat/sigenergy.py apps/predbat/solax.py apps/predbat/kraken.py apps/predbat/tests/test_mock_base.py
+git commit -m &quot;refactor(mock): use shared MockBase in the five subclassing modules
+
+axle, gecloud and octopus keep their own cache roots, gecloud its mock HA
+interface, solax its UTC clock and sigenergy its readonly seeding. kraken
+aliases the shared class and drops the now-unused json import.&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-full-suite-and-pre-commit-verification">Task 4: Full-suite and pre-commit verification</h3>
+<p><strong>Files:</strong> none modified unless a check fails.</p>
+<p><strong>Interfaces:</strong>
+- Consumes: everything from Tasks 1-3.
+- Produces: a green full test suite and a clean pre-commit run.</p>
+<ul>
+<li>[ ] <strong>Step 1: Confirm no stray <code>MockBase</code> definitions remain</strong></li>
+</ul>
+<pre><code class="language-bash">grep -rn &quot;^class MockBase\|^class KrakenMockBase&quot; apps/predbat/*.py
+</code></pre>
+<p>Expected: exactly six lines — <code>mock_base.py</code> plus the five subclasses in <code>axle</code>, <code>gecloud</code>, <code>octopus</code>, <code>sigenergy</code>, <code>solax</code>. <code>kraken.py</code> must <strong>not</strong> appear (it is now an import alias).</p>
+<p>Note that <code>web_mcp.py:1293</code> has a function-local <code>class MockBase:</code> — it is indented, so this <code>^</code>-anchored grep will not match it. That is correct: it is a different, unrelated mock and is deliberately out of scope.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run the full test suite</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all &gt; /tmp/full_test.txt 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -icE &quot;^FAILED|ERROR in|Traceback&quot; /tmp/full_test.txt
+tail -30 /tmp/full_test.txt
+</code></pre>
+<p>Expected: exit 0 and no failures. If anything fails, read the surrounding context in <code>/tmp/full_test.txt</code> before changing code — do not guess at a fix.</p>
+<ul>
+<li>[ ] <strong>Step 3: Run pre-commit</strong></li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &gt; /tmp/precommit.txt 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -iE &quot;Failed|error|F401|would reformat&quot; /tmp/precommit.txt | head -30
+</code></pre>
+<p>Expected: exit 0. Watch specifically for:
+- <strong>F401 unused import</strong> — most likely <code>json</code> in <code>kraken.py</code> if Step 4 of Task 3 was missed.
+- <strong>interrogate</strong> docstring coverage — every new class and function needs one.
+- <strong>CSpell</strong> — if it flags a word, add it to <code>.cspell/custom-dictionary-workspace.txt</code>. That file is auto-sorted on commit, so re-stage it afterwards.
+- <strong>Black</strong> reformatting — if it rewrites a file, re-stage and re-run.</p>
+<ul>
+<li>[ ] <strong>Step 4: Commit any pre-commit fixups</strong></li>
+</ul>
+<p>Only if Step 3 changed files:</p>
+<pre><code class="language-bash">git status --short
+git add -u
+git commit -m &quot;chore: pre-commit fixups for shared MockBase&quot;
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Confirm the diff is the expected shape</strong></li>
+</ul>
+<pre><code class="language-bash">git diff --stat main...HEAD
+</code></pre>
+<p>Expected: roughly 588 lines deleted across the eleven modules, offset by ~120 added in <code>mock_base.py</code> plus ~40 in subclasses and the new test file. A substantially different shape means something was missed — investigate before finishing.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

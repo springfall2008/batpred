@@ -1,0 +1,2447 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>myenergi Integration Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "myenergi Integration Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-08-23-myenergi-integration.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">myenergi Integration Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="myenergi-integration-implementation-plan">myenergi Integration Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Add a <code>myenergi</code> Predbat component that monitors Zappi and Eddi devices over either of myenergi's two APIs, auto-wires their energy sensors into <code>car_charging_energy</code> and <code>iboost_energy_today</code>, and exposes send-boost / cancel-boost controls.</p>
+<p><strong>Architecture:</strong> One module <code>apps/predbat/myenergi.py</code> holding a <code>MyEnergiAPI(ComponentBase, OAuthMixin)</code> component over a <code>MyEnergiTransport</code> abstraction with two implementations — <code>MyEnergiDirectTransport</code> (HTTP digest against <code>director.myenergi.net</code>, <code>/cgi-*</code> endpoints, the default) and <code>MyEnergiCloudTransport</code> (bearer JWT against <code>api.s18.myenergi.net</code>, REST endpoints). Both normalise to a shared <code>MyEnergiDevice</code> dataclass, so publishing, auto-config, controls and tests are written once.</p>
+<p><strong>Tech Stack:</strong> Python 3, <code>aiohttp</code> (including <code>aiohttp.DigestAuthMiddleware</code>), <code>dataclasses</code>, <code>abc</code>, existing Predbat infrastructure (<code>ComponentBase</code>, <code>OAuthMixin</code>, <code>MockBase</code>, <code>dashboard_item</code>, <code>set_arg_auto</code>), <code>unittest.mock</code> for tests.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-08-23-myenergi-integration-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li><strong>Line length:</strong> 256 chars (Black), 250 chars (Flake8).</li>
+<li><strong>Docstrings:</strong> 100% coverage required (<code>interrogate</code>) — every function, method and class needs one, including nested helpers and test functions.</li>
+<li><strong>Spelling:</strong> British English (<code>en-gb</code>) via CSpell. New words go in <code>.cspell/custom-dictionary-workspace.txt</code>, which is auto-sorted on commit, so re-stage after running pre-commit. <code>Eddi</code>, <code>myenergi</code> and <code>zappi</code> are already present; <code>libbi</code>, <code>jstatus</code>, <code>jdayhour</code>, <code>harvi</code> and <code>asn</code> are not.</li>
+<li><strong>Variable naming:</strong> <code>lower_case_with_underscores</code>.</li>
+<li><strong>aiohttp floor:</strong> <code>aiohttp.DigestAuthMiddleware</code> and the <code>ClientSession(middlewares=...)</code> parameter require <strong>aiohttp &gt;= 3.12</strong>. <code>requirements.txt</code> currently lists <code>aiohttp</code> unpinned and must be changed to <code>aiohttp&gt;=3.12</code>.</li>
+<li><strong>Test invocation:</strong> always redirect test output to a file and grep the file afterwards — never pipe straight to grep. Use the scratchpad directory for output files.</li>
+<li><strong>Shared fixture:</strong> Predbat tests share one <code>my_predbat</code> fixture. Never mutate it in a way that leaks into later tests; construct components against <code>MockBase</code> wherever a full Predbat instance is not needed.</li>
+<li><strong>Every new code path needs a unit test</strong> (repository rule in <code>CLAUDE.md</code>).</li>
+<li><strong>Pre-commit:</strong> <code>./run_pre_commit</code> must pass before any commit.</li>
+<li><strong>Commit messages:</strong> descriptive sentence style matching repository history (e.g. "Retain the last good GE Cloud reading when leaf values come back null"), ending with:
+  <code>Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;</code></li>
+<li><strong>Branch:</strong> all work happens on a feature branch off <code>main</code>, not on <code>main</code> itself.</li>
+</ul>
+<h3 id="reference-myenergi-wire-formats">Reference: myenergi wire formats</h3>
+<p>Direct API (<code>director.myenergi.net</code>, digest auth, username = hub serial, password = API key):</p>
+<table>
+<thead>
+<tr>
+<th>Purpose</th>
+<th>Path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ASN discovery</td>
+<td><code>GET /cgi-jstatus-E</code> against <code>https://director.myenergi.net</code></td>
+</tr>
+<tr>
+<td>All device status</td>
+<td><code>GET /cgi-jstatus-*</code></td>
+</tr>
+<tr>
+<td>Zappi manual boost</td>
+<td><code>GET /cgi-zappi-mode-Z{serial}-0-10-{kwh}-0000</code></td>
+</tr>
+<tr>
+<td>Zappi smart boost</td>
+<td><code>GET /cgi-zappi-mode-Z{serial}-0-11-{kwh}-{hhmm}</code></td>
+</tr>
+<tr>
+<td>Zappi cancel boost</td>
+<td><code>GET /cgi-zappi-mode-Z{serial}-0-2-0-0000</code></td>
+</tr>
+<tr>
+<td>Eddi boost</td>
+<td><code>GET /cgi-eddi-boost-E{serial}-10-{target}-{minutes}</code></td>
+</tr>
+<tr>
+<td>Eddi cancel boost</td>
+<td><code>GET /cgi-eddi-boost-E{serial}-1-{target}-0</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>/cgi-jstatus-*</code> returns a <strong>list of single-key dicts</strong>, e.g.
+<code>[{"eddi": [{...}]}, {"zappi": [{...}]}, {"harvi": [...]}, {"asn": "s18.myenergi.net"}, {"fwv": "3560S5.036"}]</code>.</p>
+<p>Every response carries an <code>X_MYENERGI-asn</code> header naming the real host. Its absence means bad credentials.</p>
+<p>Cloud API (<code>https://api.s18.myenergi.net</code>, <code>Authorization: Bearer &lt;jwt&gt;</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Purpose</th>
+<th>Path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Device list</td>
+<td><code>GET /devices</code> → <code>{"sites": [{"devices": [{"deviceId", "model", "alias", "serialNumber", "online", ...}]}]}</code></td>
+</tr>
+<tr>
+<td>Device status</td>
+<td><code>GET /devices/{id}/status</code></td>
+</tr>
+<tr>
+<td>Send boost</td>
+<td><code>POST /devices/{id}/boost</code></td>
+</tr>
+<tr>
+<td>Cancel boost</td>
+<td><code>DELETE /devices/{id}/boost</code></td>
+</tr>
+</tbody>
+</table>
+<p>Zappi boost body: <code>{"mode": "normal", "parameters": {"energy": N}}</code> (N is 1–99 kWh) or <code>{"mode": "smart", "parameters": {"energy": N, "targetTime": "&lt;ISO-8601&gt;"}}</code>.
+Eddi boost body: <code>{"durationMinutes": M}</code> (M is 0–240). Cross-sending these fields is a 400.</p>
+<hr />
+<h3 id="task-1-module-foundation-constants-device-model-and-normalisers">Task 1: Module foundation — constants, device model and normalisers</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/myenergi.py</code>
+- Create: <code>apps/predbat/tests/test_myenergi.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code> (import near line 226, <code>TEST_REGISTRY</code> entry near line 540)
+- Modify: <code>.cspell/custom-dictionary-workspace.txt</code>
+- Modify: <code>requirements.txt</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing.
+- Produces:
+  - <code>MyEnergiError</code>, <code>MyEnergiAuthError(MyEnergiError)</code>, <code>MyEnergiApiError(MyEnergiError)</code> — exception classes.
+  - <code>MyEnergiDevice</code> — frozen-by-convention dataclass, fields listed in step 3.
+  - <code>normalise_direct_device(raw: dict, kind: str) -&gt; MyEnergiDevice</code>
+  - <code>normalise_cloud_device(raw: dict, meta: dict) -&gt; MyEnergiDevice</code>
+  - Constants: <code>MYENERGI_DIRECTOR_URL</code>, <code>MYENERGI_CLOUD_URL</code>, <code>DEVICE_KIND_ZAPPI</code>, <code>DEVICE_KIND_EDDI</code>, <code>SUPPORTED_KINDS</code>, <code>DIRECT_PREFIX</code>, <code>CLOUD_PREFIX</code>, <code>ZAPPI_CHARGE_MODES</code>, <code>ZAPPI_STATES</code>, <code>EDDI_STATES</code>, <code>ZAPPI_PLUG_STATES</code>, <code>EDDI_BOOST_TARGETS</code>, <code>CLOUD_MODE_TO_NAME</code>, <code>CLOUD_STATUS_TO_NAME</code>, <code>API_TIMEOUT</code>, <code>USER_AGENT</code>.
+  - <code>test_myenergi(my_predbat=None) -&gt; bool</code> — returns <code>False</code> on success, matching <code>test_axle</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Create the module with its header, imports and constants</strong></li>
+</ul>
+<p>Create <code>apps/predbat/myenergi.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# myenergi API library.
+# Supports both the direct &quot;director&quot; API (digest auth, /cgi-* endpoints) that
+# pymyenergi and the ha-myenergi integration use, and the official 3rd party API
+# documented at https://api-docs.s18.myenergi.net/
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+
+
+&quot;&quot;&quot;myenergi Zappi and Eddi integration.
+
+Provides monitoring of myenergi Zappi EV chargers and Eddi hot water diverters,
+automatic wiring of their energy sensors into Predbat's car charging and iboost
+inputs, and send/cancel boost controls. Two interchangeable transports cover the
+two myenergi APIs: a direct digest-authenticated transport that any myenergi owner
+can configure today, and a bearer-token transport for the official 3rd party API.
+&quot;&quot;&quot;
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Optional
+import argparse
+import asyncio
+
+import aiohttp
+
+from component_base import ComponentBase
+from mock_base import MockBase
+from oauth_mixin import OAuthMixin
+from predbat_metrics import record_api_call
+
+MYENERGI_DIRECTOR_URL = &quot;https://director.myenergi.net&quot;
+MYENERGI_CLOUD_URL = &quot;https://api.s18.myenergi.net&quot;
+
+API_TIMEOUT = 30
+USER_AGENT = &quot;Wget/1.14 (linux-gnu)&quot;
+
+DEVICE_KIND_ZAPPI = &quot;zappi&quot;
+DEVICE_KIND_EDDI = &quot;eddi&quot;
+SUPPORTED_KINDS = (DEVICE_KIND_ZAPPI, DEVICE_KIND_EDDI)
+
+# Device id prefixes. The direct API uses a single letter, the cloud API two letters.
+DIRECT_PREFIX = {DEVICE_KIND_ZAPPI: &quot;Z&quot;, DEVICE_KIND_EDDI: &quot;E&quot;}
+CLOUD_PREFIX = {DEVICE_KIND_ZAPPI: &quot;ZA&quot;, DEVICE_KIND_EDDI: &quot;ED&quot;}
+
+# Index tables used by the direct API's numeric status fields.
+ZAPPI_CHARGE_MODES = [&quot;None&quot;, &quot;Fast&quot;, &quot;Eco&quot;, &quot;Eco+&quot;, &quot;Stopped&quot;]
+ZAPPI_STATES = [&quot;Unknown&quot;, &quot;Paused&quot;, &quot;Unknown&quot;, &quot;Charging&quot;, &quot;Boosting&quot;, &quot;Completed&quot;]
+EDDI_STATES = [&quot;Unknown&quot;, &quot;Paused&quot;, &quot;Unknown&quot;, &quot;Diverting&quot;, &quot;Boosting&quot;, &quot;Max temp reached&quot;, &quot;Stopped&quot;]
+
+ZAPPI_PLUG_STATES = {
+    &quot;A&quot;: &quot;EV Disconnected&quot;,
+    &quot;B1&quot;: &quot;EV Connected&quot;,
+    &quot;B2&quot;: &quot;Waiting for EV&quot;,
+    &quot;C1&quot;: &quot;EV ready to charge&quot;,
+    &quot;C2&quot;: &quot;Charging&quot;,
+    &quot;D1&quot;: &quot;EV ready to charge&quot;,
+    &quot;D2&quot;: &quot;Charging&quot;,
+    &quot;F&quot;: &quot;Fault&quot;,
+}
+
+EDDI_BOOST_TARGETS = {&quot;heater1&quot;: 1, &quot;heater2&quot;: 2, &quot;relay1&quot;: 11, &quot;relay2&quot;: 12}
+EDDI_DEFAULT_BOOST_TARGET = &quot;heater1&quot;
+
+# The cloud API reports modes and statuses as strings. These maps translate them into
+# the same vocabulary the direct API's index tables produce, so both transports emit
+# identical MyEnergiDevice values for equivalent device states.
+CLOUD_MODE_TO_NAME = {&quot;fast&quot;: &quot;Fast&quot;, &quot;eco&quot;: &quot;Eco&quot;, &quot;eco+&quot;: &quot;Eco+&quot;, &quot;stop&quot;: &quot;Stopped&quot;}
+
+CLOUD_STATUS_TO_NAME = {
+    &quot;ev_not_connected&quot;: &quot;Paused&quot;,
+    &quot;waiting_for_surplus&quot;: &quot;Paused&quot;,
+    &quot;waiting_for_ev&quot;: &quot;Paused&quot;,
+    &quot;charge_delayed&quot;: &quot;Paused&quot;,
+    &quot;smart_charge_delay&quot;: &quot;Paused&quot;,
+    &quot;charge_complete&quot;: &quot;Completed&quot;,
+    &quot;charging&quot;: &quot;Charging&quot;,
+    &quot;boosting&quot;: &quot;Boosting&quot;,
+    &quot;stopped&quot;: &quot;Stopped&quot;,
+    &quot;diverting&quot;: &quot;Diverting&quot;,
+    &quot;hot&quot;: &quot;Max temp reached&quot;,
+    &quot;starting&quot;: &quot;Paused&quot;,
+    &quot;dsr&quot;: &quot;Paused&quot;,
+}
+
+# Zappi boost energy limits, from the 3rd party API schema. The direct API accepts the
+# same range in practice, so both transports validate against these.
+BOOST_ENERGY_MIN = 1
+BOOST_ENERGY_MAX = 99
+BOOST_MINUTES_MIN = 0
+BOOST_MINUTES_MAX = 240
+
+# Boosting a Zappi is only accepted while it is in one of the green-energy modes.
+ZAPPI_BOOSTABLE_MODES = (&quot;Eco&quot;, &quot;Eco+&quot;)
+
+
+class MyEnergiError(Exception):
+    &quot;&quot;&quot;Base class for every myenergi transport failure.&quot;&quot;&quot;
+
+
+class MyEnergiAuthError(MyEnergiError):
+    &quot;&quot;&quot;Raised when myenergi rejects the supplied credentials.&quot;&quot;&quot;
+
+
+class MyEnergiApiError(MyEnergiError):
+    &quot;&quot;&quot;Raised when a myenergi request fails for a non-authentication reason.&quot;&quot;&quot;
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Write the failing normalisation tests</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_myenergi.py</code>:</p>
+<pre><code class="language-python"># fmt: off
+# pylint: disable=line-too-long
+&quot;&quot;&quot;
+Unit tests for the myenergi Zappi and Eddi integration
+&quot;&quot;&quot;
+
+import os
+import sys
+
+# Add parent directory to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from myenergi import (
+    DEVICE_KIND_EDDI,
+    DEVICE_KIND_ZAPPI,
+    normalise_cloud_device,
+    normalise_direct_device,
+)
+
+# ============================================================================
+# Mock data constants
+# ============================================================================
+
+# One entry from the &quot;zappi&quot; group of a direct /cgi-jstatus-* response
+MOCK_DIRECT_ZAPPI = {
+    &quot;sno&quot;: 12345678,
+    &quot;sta&quot;: 3,
+    &quot;zmo&quot;: 2,
+    &quot;pst&quot;: &quot;C2&quot;,
+    &quot;div&quot;: 7360,
+    &quot;che&quot;: 4.25,
+    &quot;grd&quot;: 120,
+    &quot;gen&quot;: 3400,
+    &quot;vol&quot;: 2405,
+    &quot;frq&quot;: 50.02,
+}
+
+# One entry from the &quot;eddi&quot; group of a direct /cgi-jstatus-* response
+MOCK_DIRECT_EDDI = {
+    &quot;sno&quot;: 87654321,
+    &quot;sta&quot;: 3,
+    &quot;div&quot;: 1500,
+    &quot;che&quot;: 2.5,
+    &quot;grd&quot;: -40,
+    &quot;gen&quot;: 3400,
+    &quot;vol&quot;: 2401,
+    &quot;bsm&quot;: 0,
+    &quot;rbt&quot;: 0,
+    &quot;tp1&quot;: 54,
+    &quot;tp2&quot;: 127,
+    &quot;hno&quot;: 1,
+}
+
+# GET /devices/{id}/status for the same Zappi, plus its GET /devices metadata
+MOCK_CLOUD_ZAPPI_STATUS = {
+    &quot;deviceClass&quot;: &quot;ZAPPI&quot;,
+    &quot;status&quot;: &quot;active&quot;,
+    &quot;state&quot;: &quot;charging&quot;,
+    &quot;deviceStatus&quot;: &quot;charging&quot;,
+    &quot;supplyMode&quot;: &quot;eco&quot;,
+    &quot;pilotState&quot;: &quot;C2&quot;,
+    &quot;boostCharge&quot;: False,
+    &quot;actualPower&quot;: 7.36,
+    &quot;gridPower&quot;: 0.12,
+    &quot;genPower&quot;: 3.4,
+    &quot;sessionEnergy&quot;: 4.25,
+    &quot;energyDelivered&quot;: 0.12,
+}
+
+MOCK_CLOUD_ZAPPI_META = {
+    &quot;deviceId&quot;: &quot;ZA12345678&quot;,
+    &quot;model&quot;: &quot;zappi&quot;,
+    &quot;alias&quot;: &quot;Driveway&quot;,
+    &quot;serialNumber&quot;: 12345678,
+    &quot;online&quot;: True,
+}
+
+MOCK_CLOUD_EDDI_STATUS = {
+    &quot;deviceClass&quot;: &quot;EDDI&quot;,
+    &quot;status&quot;: &quot;active&quot;,
+    &quot;state&quot;: &quot;waiting_for_surplus&quot;,
+    &quot;deviceStatus&quot;: &quot;diverting&quot;,
+    &quot;boostActive&quot;: False,
+    &quot;actualPower&quot;: 1.5,
+    &quot;gridPower&quot;: -0.04,
+    &quot;genPower&quot;: 3.4,
+    &quot;sessionEnergy&quot;: 2.5,
+}
+
+MOCK_CLOUD_EDDI_META = {
+    &quot;deviceId&quot;: &quot;ED87654321&quot;,
+    &quot;model&quot;: &quot;eddi&quot;,
+    &quot;alias&quot;: &quot;Hot water&quot;,
+    &quot;serialNumber&quot;: 87654321,
+    &quot;online&quot;: True,
+}
+
+
+def test_normalise_direct_zappi():
+    &quot;&quot;&quot;Direct Zappi payloads normalise into the shared device model.&quot;&quot;&quot;
+    device = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    assert device.device_id == &quot;Z12345678&quot;
+    assert device.kind == DEVICE_KIND_ZAPPI
+    assert device.serial == &quot;12345678&quot;
+    assert device.status == &quot;Charging&quot;
+    assert device.mode == &quot;Eco&quot;
+    assert device.plug_status == &quot;Charging&quot;
+    assert device.power_w == 7360
+    assert device.grid_power_w == 120
+    assert device.generation_w == 3400
+    assert device.voltage == 240.5
+    assert device.session_energy_kwh == 4.25
+    assert device.boost_active is False
+    assert device.temp_1 is None
+    print(&quot;  ✓ Direct Zappi normalisation&quot;)
+
+
+def test_normalise_direct_eddi():
+    &quot;&quot;&quot;Direct Eddi payloads normalise, including probe temperature handling.&quot;&quot;&quot;
+    device = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+    assert device.device_id == &quot;E87654321&quot;
+    assert device.kind == DEVICE_KIND_EDDI
+    assert device.status == &quot;Diverting&quot;
+    assert device.power_w == 1500
+    assert device.session_energy_kwh == 2.5
+    assert device.boost_active is False
+    assert device.plug_status == &quot;&quot;
+    assert device.temp_1 == 54
+    # 127 is myenergi's &quot;probe not connected&quot; sentinel and must not be published
+    assert device.temp_2 is None
+    print(&quot;  ✓ Direct Eddi normalisation&quot;)
+
+
+def test_normalise_direct_eddi_boosting():
+    &quot;&quot;&quot;An Eddi mid-boost reports boost_active and remaining minutes.&quot;&quot;&quot;
+    raw = dict(MOCK_DIRECT_EDDI, sta=4, bsm=1, rbt=1800)
+    device = normalise_direct_device(raw, DEVICE_KIND_EDDI)
+    assert device.status == &quot;Boosting&quot;
+    assert device.boost_active is True
+    assert device.boost_remaining_mins == 30
+    print(&quot;  ✓ Direct Eddi boost state&quot;)
+
+
+def test_normalise_cloud_matches_direct():
+    &quot;&quot;&quot;Cloud and direct payloads for the same device produce equal values.&quot;&quot;&quot;
+    direct_zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    cloud_zappi = normalise_cloud_device(MOCK_CLOUD_ZAPPI_STATUS, MOCK_CLOUD_ZAPPI_META)
+    assert cloud_zappi.kind == direct_zappi.kind
+    assert cloud_zappi.serial == direct_zappi.serial
+    assert cloud_zappi.status == direct_zappi.status
+    assert cloud_zappi.mode == direct_zappi.mode
+    assert cloud_zappi.plug_status == direct_zappi.plug_status
+    # Cloud reports kW, direct reports W - both land in W
+    assert cloud_zappi.power_w == direct_zappi.power_w
+    assert cloud_zappi.generation_w == direct_zappi.generation_w
+    assert cloud_zappi.session_energy_kwh == direct_zappi.session_energy_kwh
+    # The cloud device id keeps its two letter prefix and the friendly alias is used
+    assert cloud_zappi.device_id == &quot;ZA12345678&quot;
+    assert cloud_zappi.name == &quot;Driveway&quot;
+
+    direct_eddi = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+    cloud_eddi = normalise_cloud_device(MOCK_CLOUD_EDDI_STATUS, MOCK_CLOUD_EDDI_META)
+    assert cloud_eddi.kind == direct_eddi.kind
+    assert cloud_eddi.status == direct_eddi.status
+    assert cloud_eddi.power_w == direct_eddi.power_w
+    assert cloud_eddi.session_energy_kwh == direct_eddi.session_energy_kwh
+    print(&quot;  ✓ Cloud and direct normalisation agree&quot;)
+
+
+def test_normalise_handles_bad_values():
+    &quot;&quot;&quot;Out of range indices and missing fields fall back rather than raising.&quot;&quot;&quot;
+    device = normalise_direct_device({&quot;sno&quot;: 1, &quot;sta&quot;: 99, &quot;zmo&quot;: &quot;x&quot;}, DEVICE_KIND_ZAPPI)
+    assert device.status == &quot;Unknown&quot;
+    assert device.mode == &quot;Unknown&quot;
+    assert device.power_w == 0
+    assert device.session_energy_kwh == 0
+
+    device = normalise_direct_device({}, DEVICE_KIND_EDDI)
+    assert device.serial == &quot;&quot;
+    assert device.temp_1 is None
+
+    device = normalise_cloud_device({&quot;deviceClass&quot;: &quot;EDDI&quot;}, {})
+    assert device.kind == DEVICE_KIND_EDDI
+    assert device.power_w == 0
+    print(&quot;  ✓ Malformed payloads degrade safely&quot;)
+
+
+def test_myenergi(my_predbat=None):
+    &quot;&quot;&quot;
+    ======================================================================
+    MYENERGI TEST SUITE
+    ======================================================================
+    Comprehensive test suite for the myenergi Zappi and Eddi integration including:
+    - Payload normalisation for both transports
+    &quot;&quot;&quot;
+    print(&quot;\n&quot; + &quot;=&quot; * 70)
+    print(&quot;MYENERGI TEST SUITE&quot;)
+    print(&quot;=&quot; * 70)
+
+    test_normalise_direct_zappi()
+    test_normalise_direct_eddi()
+    test_normalise_direct_eddi_boosting()
+    test_normalise_cloud_matches_direct()
+    test_normalise_handles_bad_values()
+
+    print(&quot;=&quot; * 70)
+    return False
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Register the test suite</strong></li>
+</ul>
+<p>In <code>apps/predbat/unit_test.py</code>, add the import alongside the other component test imports (near the <code>from tests.test_ohme import test_ohme</code> line):</p>
+<pre><code class="language-python">from tests.test_myenergi import test_myenergi
+</code></pre>
+<p>And add to <code>TEST_REGISTRY</code>, near the <code>("ohme", ...)</code> entry:</p>
+<pre><code class="language-python">        # myenergi Zappi and Eddi unit tests
+        (&quot;myenergi&quot;, test_myenergi, &quot;myenergi Zappi and Eddi comprehensive tests (normalisation, transports, publishing, auto-config, controls)&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the test to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t1.log 2&gt;&amp;1; grep -iE &quot;error|fail|ImportError|cannot import&quot; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t1.log | head -20
+</code></pre>
+<p>Expected: FAIL with <code>ImportError: cannot import name 'normalise_direct_device' from 'myenergi'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Implement the device model and normalisers</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/myenergi.py</code>:</p>
+<pre><code class="language-python">@dataclass
+class MyEnergiDevice:
+    &quot;&quot;&quot;One normalised myenergi device, identical in shape across both transports.&quot;&quot;&quot;
+
+    device_id: str
+    kind: str
+    serial: str
+    name: str
+    online: bool
+    status: str
+    mode: str
+    plug_status: str
+    power_w: float
+    grid_power_w: float
+    generation_w: float
+    voltage: float
+    session_energy_kwh: float
+    boost_active: bool
+    boost_remaining_mins: int
+    temp_1: Optional[float]
+    temp_2: Optional[float]
+
+
+def _to_float(value, default=0.0):
+    &quot;&quot;&quot;Coerce a raw API value to float, returning default for None or junk.&quot;&quot;&quot;
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _index_lookup(table, index, default=&quot;Unknown&quot;):
+    &quot;&quot;&quot;Look a numeric status code up in one of the direct API's index tables.&quot;&quot;&quot;
+    try:
+        position = int(index)
+    except (TypeError, ValueError):
+        return default
+    if 0 &lt;= position &lt; len(table):
+        return table[position]
+    return default
+
+
+def _optional_temp(value):
+    &quot;&quot;&quot;Return an Eddi probe temperature, or None when no probe is connected.
+
+    myenergi reports 127 for an unconnected probe and a negative value when the
+    reading is unknown; publishing either as a temperature would be misleading.
+    &quot;&quot;&quot;
+    if value is None:
+        return None
+    try:
+        temperature = float(value)
+    except (TypeError, ValueError):
+        return None
+    if temperature &gt;= 127 or temperature &lt; 0:
+        return None
+    return temperature
+
+
+def normalise_direct_device(raw, kind):
+    &quot;&quot;&quot;Convert one direct API device record into a MyEnergiDevice.
+
+    Args:
+        raw: A single device dict from a /cgi-jstatus-* response.
+        kind: Either DEVICE_KIND_ZAPPI or DEVICE_KIND_EDDI.
+    &quot;&quot;&quot;
+    serial = str(raw.get(&quot;sno&quot;, &quot;&quot;) or &quot;&quot;)
+    if kind == DEVICE_KIND_ZAPPI:
+        status = _index_lookup(ZAPPI_STATES, raw.get(&quot;sta&quot;))
+        mode = _index_lookup(ZAPPI_CHARGE_MODES, raw.get(&quot;zmo&quot;))
+        plug_status = ZAPPI_PLUG_STATES.get(str(raw.get(&quot;pst&quot;, &quot;&quot;) or &quot;&quot;), &quot;&quot;)
+        boost_active = status == &quot;Boosting&quot;
+        boost_remaining_mins = 0
+        temp_1 = None
+        temp_2 = None
+    else:
+        status = _index_lookup(EDDI_STATES, raw.get(&quot;sta&quot;))
+        mode = &quot;Stopped&quot; if status == &quot;Stopped&quot; else &quot;Normal&quot;
+        plug_status = &quot;&quot;
+        boost_active = int(_to_float(raw.get(&quot;bsm&quot;))) == 1
+        boost_remaining_mins = int(round(_to_float(raw.get(&quot;rbt&quot;)) / 60.0))
+        temp_1 = _optional_temp(raw.get(&quot;tp1&quot;))
+        temp_2 = _optional_temp(raw.get(&quot;tp2&quot;))
+
+    return MyEnergiDevice(
+        device_id=DIRECT_PREFIX[kind] + serial,
+        kind=kind,
+        serial=serial,
+        name=&quot;{}-{}&quot;.format(kind, serial),
+        online=True,
+        status=status,
+        mode=mode,
+        plug_status=plug_status,
+        power_w=_to_float(raw.get(&quot;div&quot;)),
+        grid_power_w=_to_float(raw.get(&quot;grd&quot;)),
+        generation_w=_to_float(raw.get(&quot;gen&quot;)),
+        voltage=_to_float(raw.get(&quot;vol&quot;)) / 10.0,
+        session_energy_kwh=_to_float(raw.get(&quot;che&quot;)),
+        boost_active=boost_active,
+        boost_remaining_mins=boost_remaining_mins,
+        temp_1=temp_1,
+        temp_2=temp_2,
+    )
+
+
+def normalise_cloud_device(raw, meta):
+    &quot;&quot;&quot;Convert one cloud API status response into a MyEnergiDevice.
+
+    Args:
+        raw: The body of GET /devices/{id}/status.
+        meta: The matching device entry from GET /devices, used for the id, alias
+              and online flag that the status response does not carry.
+    &quot;&quot;&quot;
+    kind = DEVICE_KIND_ZAPPI if str(raw.get(&quot;deviceClass&quot;, &quot;&quot;)).upper() == &quot;ZAPPI&quot; else DEVICE_KIND_EDDI
+    serial = str(meta.get(&quot;serialNumber&quot;, &quot;&quot;) or &quot;&quot;)
+    device_id = str(meta.get(&quot;deviceId&quot;, &quot;&quot;) or &quot;&quot;)
+    if not serial and device_id:
+        serial = device_id[2:]
+
+    status = CLOUD_STATUS_TO_NAME.get(str(raw.get(&quot;deviceStatus&quot;, &quot;&quot;) or &quot;&quot;).lower(), &quot;Unknown&quot;)
+    if kind == DEVICE_KIND_ZAPPI:
+        mode = CLOUD_MODE_TO_NAME.get(str(raw.get(&quot;supplyMode&quot;, &quot;&quot;) or &quot;&quot;).lower(), &quot;Unknown&quot;)
+        plug_status = ZAPPI_PLUG_STATES.get(str(raw.get(&quot;pilotState&quot;, &quot;&quot;) or &quot;&quot;), &quot;&quot;)
+        boost_active = bool(raw.get(&quot;boostCharge&quot;, False))
+    else:
+        mode = &quot;Stopped&quot; if status == &quot;Stopped&quot; else &quot;Normal&quot;
+        plug_status = &quot;&quot;
+        boost_active = bool(raw.get(&quot;boostActive&quot;, False))
+
+    return MyEnergiDevice(
+        device_id=device_id or (CLOUD_PREFIX[kind] + serial),
+        kind=kind,
+        serial=serial,
+        name=meta.get(&quot;alias&quot;) or &quot;{}-{}&quot;.format(kind, serial),
+        online=bool(meta.get(&quot;online&quot;, True)),
+        status=status,
+        mode=mode,
+        plug_status=plug_status,
+        # The cloud API reports power in kW, the direct API in W. Normalise to W.
+        power_w=_to_float(raw.get(&quot;actualPower&quot;)) * 1000.0,
+        grid_power_w=_to_float(raw.get(&quot;gridPower&quot;)) * 1000.0,
+        generation_w=_to_float(raw.get(&quot;genPower&quot;)) * 1000.0,
+        voltage=0.0,
+        session_energy_kwh=_to_float(raw.get(&quot;sessionEnergy&quot;)),
+        boost_active=boost_active,
+        boost_remaining_mins=0,
+        # The cloud API does not expose Eddi probe temperatures
+        temp_1=None,
+        temp_2=None,
+    )
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Run the tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t1.log 2&gt;&amp;1; tail -20 /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t1.log
+</code></pre>
+<p>Expected: PASS, all five normalisation checks printed.</p>
+<p>Note: every kW→W conversion in the mock payloads is exact in IEEE 754 (<code>7.36 * 1000.0 == 7360.0</code>, <code>3.4 * 1000.0 == 3400.0</code>, <code>1.5 * 1000.0 == 1500.0</code>, <code>0.12 * 1000.0 == 120.0</code>), so the equality assertions hold as written. If you add a mock value whose conversion is not exact, compare with <code>abs(a - b) &lt; 0.001</code> instead of <code>==</code>.</p>
+<ul>
+<li>[ ] <strong>Step 7: Pin aiohttp and add the new dictionary words</strong></li>
+</ul>
+<p>In <code>requirements.txt</code>, change the <code>aiohttp</code> line to:</p>
+<pre><code>aiohttp&gt;=3.12
+</code></pre>
+<p>Add to <code>.cspell/custom-dictionary-workspace.txt</code> (the file is auto-sorted on commit, so append and re-stage):</p>
+<pre><code>asn
+harvi
+jdayhour
+jstatus
+libbi
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 8: Run pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2 &amp;&amp; ./run_pre_commit
+git add apps/predbat/myenergi.py apps/predbat/tests/test_myenergi.py apps/predbat/unit_test.py .cspell/custom-dictionary-workspace.txt requirements.txt
+git commit -m &quot;Add myenergi device model and payload normalisation
+
+Introduces the myenergi module with the shared MyEnergiDevice dataclass and
+normalisers for both the direct and cloud API payload shapes, so that the
+transports added next can share every layer above the wire format.
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-transport-abstraction-and-stubbed-controls">Task 2: Transport abstraction and stubbed controls</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/myenergi.py</code>
+- Modify: <code>apps/predbat/tests/test_myenergi.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>MyEnergiDevice</code>, <code>MyEnergiError</code> from Task 1.
+- Produces: <code>MyEnergiTransport</code> ABC with abstract <code>connect()</code>, <code>fetch_devices()</code>, <code>send_boost(device, amount, target_time=None)</code>, <code>cancel_boost(device)</code>; concrete stub methods <code>set_mode(device, mode)</code>, <code>set_priority(device, priority)</code>, <code>set_min_green_level(device, level)</code>, <code>set_phase_setting(device, phase)</code>, <code>get_schedule(device)</code>, <code>set_schedule(device, schedule)</code>, each returning <code>False</code>; helper <code>_not_implemented(what) -&gt; bool</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing stub tests</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/tests/test_myenergi.py</code>, above <code>test_myenergi()</code>:</p>
+<pre><code class="language-python">class _StubTransport(MyEnergiTransport):
+    &quot;&quot;&quot;Minimal concrete transport used to exercise the abstract base's stubs.&quot;&quot;&quot;
+
+    async def connect(self):
+        &quot;&quot;&quot;Pretend to connect.&quot;&quot;&quot;
+        return True
+
+    async def fetch_devices(self):
+        &quot;&quot;&quot;Return no devices.&quot;&quot;&quot;
+        return []
+
+    async def send_boost(self, device, amount, target_time=None):
+        &quot;&quot;&quot;Pretend to send a boost.&quot;&quot;&quot;
+        return True
+
+    async def cancel_boost(self, device):
+        &quot;&quot;&quot;Pretend to cancel a boost.&quot;&quot;&quot;
+        return True
+
+
+def test_transport_stubs():
+    &quot;&quot;&quot;Every unimplemented control returns False and warns exactly once.&quot;&quot;&quot;
+    messages = []
+    transport = _StubTransport(messages.append)
+
+    assert run_async(transport.set_mode(None, &quot;Eco&quot;)) is False
+    assert run_async(transport.set_priority(None, 1)) is False
+    assert run_async(transport.set_min_green_level(None, 50)) is False
+    assert run_async(transport.set_phase_setting(None, &quot;1&quot;)) is False
+    assert run_async(transport.get_schedule(None)) is False
+    assert run_async(transport.set_schedule(None, [])) is False
+
+    assert len(messages) == 6, &quot;Each stub should warn once, got {}&quot;.format(messages)
+    assert all(&quot;not implemented&quot; in message for message in messages)
+
+    # A second call must not warn again
+    assert run_async(transport.set_mode(None, &quot;Eco&quot;)) is False
+    assert len(messages) == 6, &quot;Repeat calls must not warn again&quot;
+    print(&quot;  ✓ Stubbed controls warn once and return False&quot;)
+</code></pre>
+<p>Extend the imports at the top of the test file:</p>
+<pre><code class="language-python">from tests.test_infra import run_async
+
+from myenergi import (
+    DEVICE_KIND_EDDI,
+    DEVICE_KIND_ZAPPI,
+    MyEnergiTransport,
+    normalise_cloud_device,
+    normalise_direct_device,
+)
+</code></pre>
+<p>And call it from <code>test_myenergi()</code>:</p>
+<pre><code class="language-python">    test_transport_stubs()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the test to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t2.log 2&gt;&amp;1; grep -iE &quot;error|fail|cannot import&quot; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t2.log | head
+</code></pre>
+<p>Expected: FAIL with <code>ImportError: cannot import name 'MyEnergiTransport'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement the transport base class</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/myenergi.py</code>:</p>
+<pre><code class="language-python">class MyEnergiTransport(ABC):
+    &quot;&quot;&quot;Wire-format adapter for one of the two myenergi APIs.
+
+    This is the only layer that knows how a myenergi request is shaped. Everything
+    above it works in terms of MyEnergiDevice, so adding or changing a transport
+    never touches publishing, auto-configuration or the controls.
+    &quot;&quot;&quot;
+
+    def __init__(self, log):
+        &quot;&quot;&quot;Store the logging function and initialise the one-shot warning set.&quot;&quot;&quot;
+        self.log = log
+        self._warned_stubs = set()
+
+    @abstractmethod
+    async def connect(self):
+        &quot;&quot;&quot;Establish and validate the connection. Returns True on success.&quot;&quot;&quot;
+
+    @abstractmethod
+    async def fetch_devices(self):
+        &quot;&quot;&quot;Return a list of MyEnergiDevice for every supported device found.&quot;&quot;&quot;
+
+    @abstractmethod
+    async def send_boost(self, device, amount, target_time=None):
+        &quot;&quot;&quot;Start a boost on a device.
+
+        Args:
+            device: The MyEnergiDevice to boost.
+            amount: kWh for a Zappi, minutes for an Eddi.
+            target_time: Optional &quot;HH:MM&quot; completion time, Zappi smart boost only.
+        &quot;&quot;&quot;
+
+    @abstractmethod
+    async def cancel_boost(self, device):
+        &quot;&quot;&quot;Cancel an active boost on a device.&quot;&quot;&quot;
+
+    def _not_implemented(self, what):
+        &quot;&quot;&quot;Warn once that a control is not implemented in this release, and return False.&quot;&quot;&quot;
+        if what not in self._warned_stubs:
+            self._warned_stubs.add(what)
+            self.log(&quot;Warn: myenergi: {} is not implemented in this release&quot;.format(what))
+        return False
+
+    async def set_mode(self, device, mode):
+        &quot;&quot;&quot;Set the device supply mode. Not implemented in this release.&quot;&quot;&quot;
+        return self._not_implemented(&quot;set_mode&quot;)
+
+    async def set_priority(self, device, priority):
+        &quot;&quot;&quot;Set the device diversion priority. Not implemented in this release.&quot;&quot;&quot;
+        return self._not_implemented(&quot;set_priority&quot;)
+
+    async def set_min_green_level(self, device, level):
+        &quot;&quot;&quot;Set the Zappi minimum green level. Not implemented in this release.&quot;&quot;&quot;
+        return self._not_implemented(&quot;set_min_green_level&quot;)
+
+    async def set_phase_setting(self, device, phase):
+        &quot;&quot;&quot;Set the Zappi phase setting. Not implemented in this release.&quot;&quot;&quot;
+        return self._not_implemented(&quot;set_phase_setting&quot;)
+
+    async def get_schedule(self, device):
+        &quot;&quot;&quot;Read the device charging schedule. Not implemented in this release.&quot;&quot;&quot;
+        return self._not_implemented(&quot;get_schedule&quot;)
+
+    async def set_schedule(self, device, schedule):
+        &quot;&quot;&quot;Write the device charging schedule. Not implemented in this release.&quot;&quot;&quot;
+        return self._not_implemented(&quot;set_schedule&quot;)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t2.log 2&gt;&amp;1; tail -20 /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t2.log
+</code></pre>
+<p>Expected: PASS.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2 &amp;&amp; ./run_pre_commit
+git add apps/predbat/myenergi.py apps/predbat/tests/test_myenergi.py
+git commit -m &quot;Add the myenergi transport abstraction with stubbed controls
+
+Fixes the interface both transports implement, and lands the controls that are
+out of scope for this release as single-warning stubs so the follow-up work is
+purely additive.
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-direct-transport">Task 3: Direct transport</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/myenergi.py</code>
+- Modify: <code>apps/predbat/tests/test_myenergi.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>MyEnergiTransport</code>, <code>MyEnergiDevice</code>, <code>normalise_direct_device</code>, exceptions, constants from Tasks 1–2.
+- Produces: <code>MyEnergiDirectTransport(log, hub_serial, api_key)</code> with <code>connect()</code>, <code>fetch_devices()</code>, <code>send_boost()</code>, <code>cancel_boost()</code>, and the internal <code>_request(path)</code> that performs ASN resolution. Exposes <code>self.base_url</code> and <code>self.needs_asn_refresh</code> for tests.</p>
+<p><strong>Behaviour to implement</strong>, exactly matching what the myenergi service does:</p>
+<ol>
+<li>When <code>base_url</code> is unset or <code>needs_asn_refresh</code> is True, GET <code>https://director.myenergi.net/cgi-jstatus-E</code> with digest auth and read <code>X_MYENERGI-asn</code> from the response headers; <code>base_url</code> becomes <code>https://&lt;asn&gt;</code>.</li>
+<li>Issue the real request against <code>base_url + path</code>.</li>
+<li>Re-read <code>X_MYENERGI-asn</code> from every response and follow it if it changed.</li>
+<li>A missing <code>X_MYENERGI-asn</code> header means bad credentials → <code>MyEnergiAuthError</code>.</li>
+<li>HTTP 401 → <code>MyEnergiAuthError</code>. Any other non-200 → <code>MyEnergiApiError</code>, and set <code>needs_asn_refresh</code> so the next call re-resolves.</li>
+<li>A timeout sets <code>needs_asn_refresh</code> and raises <code>MyEnergiApiError</code>.</li>
+</ol>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing direct transport tests</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/tests/test_myenergi.py</code>:</p>
+<pre><code class="language-python">def _direct_response(json_data, asn=&quot;s18.myenergi.net&quot;, status=200):
+    &quot;&quot;&quot;Build a mock aiohttp response carrying an X_MYENERGI-asn header.&quot;&quot;&quot;
+    response = MagicMock()
+    response.status = status
+    response.headers = {&quot;X_MYENERGI-asn&quot;: asn} if asn else {}
+    response.json = AsyncMock(return_value=json_data)
+    response.__aenter__ = AsyncMock(return_value=response)
+    response.__aexit__ = AsyncMock(return_value=False)
+    return response
+
+
+def _direct_session(responses):
+    &quot;&quot;&quot;Build a mock aiohttp session whose get() returns the next queued response.
+
+    Returns (session, calls), where calls records every requested URL in order.
+    &quot;&quot;&quot;
+    calls = []
+    queue = list(responses)
+
+    def _get(url, **kwargs):
+        calls.append(url)
+        return queue.pop(0) if queue else _direct_response({})
+
+    session = MagicMock()
+    session.get = _get
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    return session, calls
+
+
+MOCK_JSTATUS_ALL = [
+    {&quot;eddi&quot;: [MOCK_DIRECT_EDDI]},
+    {&quot;zappi&quot;: [MOCK_DIRECT_ZAPPI]},
+    {&quot;harvi&quot;: [{&quot;sno&quot;: 11112222}]},
+    {&quot;asn&quot;: &quot;s18.myenergi.net&quot;},
+    {&quot;fwv&quot;: &quot;3560S5.036&quot;},
+]
+
+
+def test_direct_fetch_devices():
+    &quot;&quot;&quot;The direct transport resolves the ASN then parses the jstatus device groups.&quot;&quot;&quot;
+    session, calls = _direct_session([_direct_response([]), _direct_response(MOCK_JSTATUS_ALL)])
+    transport = MyEnergiDirectTransport(print, &quot;12345678&quot;, &quot;secret-key&quot;)
+
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session):
+        devices = run_async(transport.fetch_devices())
+
+    assert calls[0].startswith(&quot;https://director.myenergi.net/cgi-jstatus-E&quot;), calls
+    assert calls[1] == &quot;https://s18.myenergi.net/cgi-jstatus-*&quot;, calls
+    assert transport.base_url == &quot;https://s18.myenergi.net&quot;
+    # harvi is not a supported kind and must be skipped
+    assert len(devices) == 2, [device.kind for device in devices]
+    kinds = sorted(device.kind for device in devices)
+    assert kinds == [DEVICE_KIND_EDDI, DEVICE_KIND_ZAPPI]
+    print(&quot;  ✓ Direct transport resolves ASN and parses devices&quot;)
+
+
+def test_direct_missing_asn_is_auth_error():
+    &quot;&quot;&quot;A response without the ASN header means bad credentials.&quot;&quot;&quot;
+    session, _calls = _direct_session([_direct_response([], asn=None)])
+    transport = MyEnergiDirectTransport(print, &quot;12345678&quot;, &quot;wrong-key&quot;)
+
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError(&quot;Expected MyEnergiAuthError&quot;)
+        except MyEnergiAuthError:
+            pass
+    print(&quot;  ✓ Missing ASN header raises MyEnergiAuthError&quot;)
+
+
+def test_direct_boost_urls():
+    &quot;&quot;&quot;Boost and cancel produce the exact documented URLs for both device kinds.&quot;&quot;&quot;
+    zappi = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, zmo=2), DEVICE_KIND_ZAPPI)
+    eddi = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+    transport = MyEnergiDirectTransport(print, &quot;12345678&quot;, &quot;secret-key&quot;)
+    # Pre-resolve the active server so the requests under test are the only ones made
+    transport.base_url = &quot;https://s18.myenergi.net&quot;
+    transport.needs_asn_refresh = False
+
+    session, calls = _direct_session([_direct_response({&quot;status&quot;: 0}) for _ in range(4)])
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session):
+        run_async(transport.send_boost(zappi, 10))
+        run_async(transport.cancel_boost(zappi))
+        run_async(transport.send_boost(eddi, 60))
+        run_async(transport.cancel_boost(eddi))
+
+    assert calls[0] == &quot;https://s18.myenergi.net/cgi-zappi-mode-Z12345678-0-10-10-0000&quot;, calls[0]
+    assert calls[1] == &quot;https://s18.myenergi.net/cgi-zappi-mode-Z12345678-0-2-0-0000&quot;, calls[1]
+    assert calls[2] == &quot;https://s18.myenergi.net/cgi-eddi-boost-E87654321-10-1-60&quot;, calls[2]
+    assert calls[3] == &quot;https://s18.myenergi.net/cgi-eddi-boost-E87654321-1-1-0&quot;, calls[3]
+    print(&quot;  ✓ Direct transport boost URLs&quot;)
+
+
+def test_direct_smart_boost_url():
+    &quot;&quot;&quot;A Zappi boost with a target time uses the smart boost command.&quot;&quot;&quot;
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    transport = MyEnergiDirectTransport(print, &quot;12345678&quot;, &quot;secret-key&quot;)
+    transport.base_url = &quot;https://s18.myenergi.net&quot;
+    transport.needs_asn_refresh = False
+
+    session, calls = _direct_session([_direct_response({&quot;status&quot;: 0})])
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session):
+        run_async(transport.send_boost(zappi, 15, target_time=&quot;07:30&quot;))
+
+    assert calls[0] == &quot;https://s18.myenergi.net/cgi-zappi-mode-Z12345678-0-11-15-0730&quot;, calls[0]
+    print(&quot;  ✓ Direct transport smart boost URL&quot;)
+</code></pre>
+<p>Extend the test file imports:</p>
+<pre><code class="language-python">from unittest.mock import AsyncMock, MagicMock, patch
+
+from myenergi import (
+    DEVICE_KIND_EDDI,
+    DEVICE_KIND_ZAPPI,
+    MyEnergiAuthError,
+    MyEnergiDirectTransport,
+    MyEnergiTransport,
+    normalise_cloud_device,
+    normalise_direct_device,
+)
+</code></pre>
+<p>And call them from <code>test_myenergi()</code>:</p>
+<pre><code class="language-python">    test_direct_fetch_devices()
+    test_direct_missing_asn_is_auth_error()
+    test_direct_boost_urls()
+    test_direct_smart_boost_url()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t3.log 2&gt;&amp;1; grep -iE &quot;error|fail|cannot import&quot; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t3.log | head
+</code></pre>
+<p>Expected: FAIL with <code>ImportError: cannot import name 'MyEnergiDirectTransport'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement the direct transport</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/myenergi.py</code>:</p>
+<pre><code class="language-python">class MyEnergiDirectTransport(MyEnergiTransport):
+    &quot;&quot;&quot;Transport for the direct myenergi API used by pymyenergi and ha-myenergi.
+
+    Authenticates with HTTP digest, using the hub serial as the username and the
+    API key generated at myaccount.myenergi.com as the password. myenergi shards
+    accounts across servers, so the first request goes to director.myenergi.net,
+    whose X_MYENERGI-asn response header names the host to use from then on.
+    &quot;&quot;&quot;
+
+    def __init__(self, log, hub_serial, api_key):
+        &quot;&quot;&quot;Store credentials and start with an unresolved active server.&quot;&quot;&quot;
+        super().__init__(log)
+        self.hub_serial = str(hub_serial)
+        self.api_key = api_key
+        self.base_url = None
+        self.needs_asn_refresh = True
+
+    def _new_session(self):
+        &quot;&quot;&quot;Create an aiohttp session carrying the digest auth middleware.&quot;&quot;&quot;
+        digest = aiohttp.DigestAuthMiddleware(self.hub_serial, self.api_key)
+        return aiohttp.ClientSession(middlewares=(digest,), headers={&quot;User-Agent&quot;: USER_AGENT})
+
+    def _update_asn(self, headers):
+        &quot;&quot;&quot;Follow the active server named by the X_MYENERGI-asn response header.&quot;&quot;&quot;
+        asn = headers.get(&quot;X_MYENERGI-asn&quot;)
+        if not asn:
+            raise MyEnergiAuthError(&quot;no X_MYENERGI-asn header returned - check the hub serial and API key&quot;)
+        new_url = &quot;https://&quot; + asn
+        if new_url != self.base_url:
+            self.log(&quot;Info: myenergi: active server is {}&quot;.format(new_url))
+            self.base_url = new_url
+
+    async def _resolve_asn(self):
+        &quot;&quot;&quot;Ask director.myenergi.net which server this account lives on.&quot;&quot;&quot;
+        async with self._new_session() as session:
+            async with session.get(MYENERGI_DIRECTOR_URL + &quot;/cgi-jstatus-E&quot;, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
+                self._update_asn(response.headers)
+        self.needs_asn_refresh = False
+
+    async def _request(self, path):
+        &quot;&quot;&quot;Perform one GET against the active server, resolving the ASN if needed.&quot;&quot;&quot;
+        if self.base_url is None or self.needs_asn_refresh:
+            await self._resolve_asn()
+        url = self.base_url + path
+        try:
+            async with self._new_session() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
+                    self._update_asn(response.headers)
+                    if response.status == 401:
+                        record_api_call(&quot;myenergi&quot;, success=False, reason=&quot;unauthorised&quot;)
+                        raise MyEnergiAuthError(&quot;myenergi rejected the credentials for {}&quot;.format(path))
+                    if response.status != 200:
+                        self.needs_asn_refresh = True
+                        record_api_call(&quot;myenergi&quot;, success=False, reason=&quot;http_{}&quot;.format(response.status))
+                        raise MyEnergiApiError(&quot;HTTP {} from {}&quot;.format(response.status, path))
+                    record_api_call(&quot;myenergi&quot;, success=True)
+                    return await response.json(content_type=None)
+        except asyncio.TimeoutError as exc:
+            self.needs_asn_refresh = True
+            record_api_call(&quot;myenergi&quot;, success=False, reason=&quot;timeout&quot;)
+            raise MyEnergiApiError(&quot;timed out calling {}&quot;.format(path)) from exc
+        except aiohttp.ClientError as exc:
+            self.needs_asn_refresh = True
+            record_api_call(&quot;myenergi&quot;, success=False, reason=&quot;client_error&quot;)
+            raise MyEnergiApiError(&quot;request to {} failed: {}&quot;.format(path, exc)) from exc
+
+    async def connect(self):
+        &quot;&quot;&quot;Resolve the active server, which also validates the credentials.&quot;&quot;&quot;
+        await self._resolve_asn()
+        return True
+
+    async def fetch_devices(self):
+        &quot;&quot;&quot;Fetch every device in one /cgi-jstatus-* call and normalise the supported ones.
+
+        The response is a list of single-key dicts, one per device family, plus
+        housekeeping entries such as {&quot;asn&quot;: ...} and {&quot;fwv&quot;: ...} that are skipped.
+        &quot;&quot;&quot;
+        payload = await self._request(&quot;/cgi-jstatus-*&quot;)
+        devices = []
+        if not isinstance(payload, list):
+            return devices
+        for group in payload:
+            if not isinstance(group, dict):
+                continue
+            for kind, records in group.items():
+                if kind not in SUPPORTED_KINDS or not isinstance(records, list):
+                    continue
+                for raw in records:
+                    if isinstance(raw, dict):
+                        devices.append(normalise_direct_device(raw, kind))
+        return devices
+
+    async def send_boost(self, device, amount, target_time=None):
+        &quot;&quot;&quot;Start a boost, choosing the manual or smart command for a Zappi.&quot;&quot;&quot;
+        if device.kind == DEVICE_KIND_ZAPPI:
+            energy = int(amount)
+            if target_time:
+                when = str(target_time).replace(&quot;:&quot;, &quot;&quot;)
+                await self._request(&quot;/cgi-zappi-mode-Z{}-0-11-{}-{}&quot;.format(device.serial, energy, when))
+            else:
+                await self._request(&quot;/cgi-zappi-mode-Z{}-0-10-{}-0000&quot;.format(device.serial, energy))
+        else:
+            target = EDDI_BOOST_TARGETS[EDDI_DEFAULT_BOOST_TARGET]
+            await self._request(&quot;/cgi-eddi-boost-E{}-10-{}-{}&quot;.format(device.serial, target, int(amount)))
+        return True
+
+    async def cancel_boost(self, device):
+        &quot;&quot;&quot;Cancel an active boost.&quot;&quot;&quot;
+        if device.kind == DEVICE_KIND_ZAPPI:
+            await self._request(&quot;/cgi-zappi-mode-Z{}-0-2-0-0000&quot;.format(device.serial))
+        else:
+            target = EDDI_BOOST_TARGETS[EDDI_DEFAULT_BOOST_TARGET]
+            await self._request(&quot;/cgi-eddi-boost-E{}-1-{}-0&quot;.format(device.serial, target))
+        return True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t3.log 2&gt;&amp;1; tail -25 /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t3.log
+</code></pre>
+<p>Expected: PASS.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2 &amp;&amp; ./run_pre_commit
+git add apps/predbat/myenergi.py apps/predbat/tests/test_myenergi.py
+git commit -m &quot;Add the direct myenergi transport with ASN resolution
+
+Digest-authenticated access to the director API, following the X_MYENERGI-asn
+header to the account's active server and treating its absence as a credential
+failure rather than a transport error.
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-cloud-transport">Task 4: Cloud transport</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/myenergi.py</code>
+- Modify: <code>apps/predbat/tests/test_myenergi.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: everything from Tasks 1–3.
+- Produces: <code>MyEnergiCloudTransport(log, access_token_getter)</code> where <code>access_token_getter</code> is a zero-argument callable returning the current bearer token. Methods: <code>connect()</code>, <code>fetch_devices()</code>, <code>send_boost()</code>, <code>cancel_boost()</code>, plus <code>self.device_meta</code> (a dict keyed by <code>deviceId</code>) and <code>self.meta_age_seconds</code> for the 30 minute device-list cache.</p>
+<p>Taking the token through a callable rather than a stored string means <code>OAuthMixin</code> can refresh it on the component without the transport holding a stale copy.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing cloud transport tests</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/tests/test_myenergi.py</code>:</p>
+<pre><code class="language-python">MOCK_CLOUD_DEVICES = {
+    &quot;sites&quot;: [
+        {
+            &quot;siteId&quot;: &quot;site-1&quot;,
+            &quot;name&quot;: &quot;Home&quot;,
+            &quot;gridLimit&quot;: 15,
+            &quot;devices&quot;: [
+                MOCK_CLOUD_ZAPPI_META,
+                MOCK_CLOUD_EDDI_META,
+                {&quot;deviceId&quot;: &quot;HA11112222&quot;, &quot;model&quot;: &quot;harvi&quot;, &quot;alias&quot;: &quot;CT&quot;, &quot;serialNumber&quot;: 11112222, &quot;online&quot;: True},
+            ],
+        }
+    ]
+}
+
+
+def _cloud_response(json_data, status=200):
+    &quot;&quot;&quot;Build a mock aiohttp response for the cloud API.&quot;&quot;&quot;
+    response = MagicMock()
+    response.status = status
+    response.json = AsyncMock(return_value=json_data)
+    response.__aenter__ = AsyncMock(return_value=response)
+    response.__aexit__ = AsyncMock(return_value=False)
+    return response
+
+
+def _cloud_session(responses):
+    &quot;&quot;&quot;Patch aiohttp.ClientSession recording (method, url, json) for each request.&quot;&quot;&quot;
+    calls = []
+    queue = list(responses)
+
+    def _request(method, url, **kwargs):
+        calls.append((method, url, kwargs.get(&quot;json&quot;)))
+        return queue.pop(0) if queue else _cloud_response({})
+
+    session = MagicMock()
+    session.request = _request
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    return session, calls
+
+
+def test_cloud_fetch_devices():
+    &quot;&quot;&quot;The cloud transport lists devices then polls status for supported ones only.&quot;&quot;&quot;
+    session, calls = _cloud_session(
+        [
+            _cloud_response(MOCK_CLOUD_DEVICES),
+            _cloud_response(MOCK_CLOUD_ZAPPI_STATUS),
+            _cloud_response(MOCK_CLOUD_EDDI_STATUS),
+        ]
+    )
+    transport = MyEnergiCloudTransport(print, lambda: &quot;jwt-token&quot;)
+
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session):
+        devices = run_async(transport.fetch_devices())
+
+    assert calls[0] == (&quot;GET&quot;, &quot;https://api.s18.myenergi.net/devices&quot;, None), calls[0]
+    assert calls[1][1] == &quot;https://api.s18.myenergi.net/devices/ZA12345678/status&quot;, calls[1]
+    assert calls[2][1] == &quot;https://api.s18.myenergi.net/devices/ED87654321/status&quot;, calls[2]
+    # harvi is unsupported and must never be polled
+    assert len(calls) == 3, calls
+    assert len(devices) == 2
+    assert devices[0].name == &quot;Driveway&quot;
+    print(&quot;  ✓ Cloud transport lists and polls supported devices&quot;)
+
+
+def test_cloud_boost_bodies():
+    &quot;&quot;&quot;Boost bodies are shaped per device class, never mixing the two forms.&quot;&quot;&quot;
+    zappi = normalise_cloud_device(MOCK_CLOUD_ZAPPI_STATUS, MOCK_CLOUD_ZAPPI_META)
+    eddi = normalise_cloud_device(MOCK_CLOUD_EDDI_STATUS, MOCK_CLOUD_EDDI_META)
+    transport = MyEnergiCloudTransport(print, lambda: &quot;jwt-token&quot;)
+
+    session, calls = _cloud_session([_cloud_response({&quot;commandId&quot;: &quot;c1&quot;}) for _ in range(4)])
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session):
+        run_async(transport.send_boost(zappi, 10))
+        run_async(transport.send_boost(eddi, 60))
+        run_async(transport.cancel_boost(zappi))
+        run_async(transport.cancel_boost(eddi))
+
+    assert calls[0] == (&quot;POST&quot;, &quot;https://api.s18.myenergi.net/devices/ZA12345678/boost&quot;, {&quot;mode&quot;: &quot;normal&quot;, &quot;parameters&quot;: {&quot;energy&quot;: 10}}), calls[0]
+    assert calls[1] == (&quot;POST&quot;, &quot;https://api.s18.myenergi.net/devices/ED87654321/boost&quot;, {&quot;durationMinutes&quot;: 60}), calls[1]
+    assert calls[2][0] == &quot;DELETE&quot; and calls[2][1].endswith(&quot;/devices/ZA12345678/boost&quot;), calls[2]
+    assert calls[3][0] == &quot;DELETE&quot; and calls[3][1].endswith(&quot;/devices/ED87654321/boost&quot;), calls[3]
+
+    # A Zappi body must never carry durationMinutes, an Eddi body never mode/parameters
+    assert &quot;durationMinutes&quot; not in calls[0][2]
+    assert &quot;mode&quot; not in calls[1][2] and &quot;parameters&quot; not in calls[1][2]
+    print(&quot;  ✓ Cloud transport boost bodies&quot;)
+
+
+def test_cloud_sets_bearer_header():
+    &quot;&quot;&quot;Requests carry the current bearer token from the supplied callable.&quot;&quot;&quot;
+    tokens = [&quot;first-token&quot;]
+    session, _calls = _cloud_session([_cloud_response(MOCK_CLOUD_DEVICES)])
+    transport = MyEnergiCloudTransport(print, lambda: tokens[0])
+
+    captured = {}
+
+    def _client_session(**kwargs):
+        captured.update(kwargs.get(&quot;headers&quot;) or {})
+        return session
+
+    with patch(&quot;aiohttp.ClientSession&quot;, side_effect=_client_session):
+        run_async(transport._request(&quot;GET&quot;, &quot;/devices&quot;))
+
+    assert captured.get(&quot;Authorization&quot;) == &quot;Bearer first-token&quot;, captured
+    print(&quot;  ✓ Cloud transport sends the bearer token&quot;)
+
+
+def test_cloud_unauthorised_raises_auth_error():
+    &quot;&quot;&quot;An HTTP 401 from the cloud API surfaces as MyEnergiAuthError.&quot;&quot;&quot;
+    session, _calls = _cloud_session([_cloud_response({&quot;message&quot;: &quot;nope&quot;, &quot;code&quot;: &quot;UNAUTHORISED&quot;}, status=401)])
+    transport = MyEnergiCloudTransport(print, lambda: &quot;stale-token&quot;)
+
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError(&quot;Expected MyEnergiAuthError&quot;)
+        except MyEnergiAuthError:
+            pass
+    print(&quot;  ✓ Cloud transport 401 raises MyEnergiAuthError&quot;)
+</code></pre>
+<p>Add <code>MyEnergiCloudTransport</code> to the test file's <code>myenergi</code> imports, and call the four new tests from <code>test_myenergi()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t4.log 2&gt;&amp;1; grep -iE &quot;error|fail|cannot import&quot; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t4.log | head
+</code></pre>
+<p>Expected: FAIL with <code>ImportError: cannot import name 'MyEnergiCloudTransport'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement the cloud transport</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/myenergi.py</code>:</p>
+<pre><code class="language-python"># The cloud device list changes rarely, so it is cached between polls.
+CLOUD_DEVICE_LIST_MAX_AGE = 30 * 60
+
+# Model names in GET /devices that map onto the kinds this release supports.
+CLOUD_MODEL_TO_KIND = {&quot;zappi&quot;: DEVICE_KIND_ZAPPI, &quot;eddi&quot;: DEVICE_KIND_EDDI}
+
+
+class MyEnergiCloudTransport(MyEnergiTransport):
+    &quot;&quot;&quot;Transport for the official myenergi 3rd party API.
+
+    Authenticates with a bearer JWT obtained through the OAuth2 authorization code
+    flow. The token is read through a callable on every request so that a refresh
+    performed by OAuthMixin on the component takes effect immediately.
+    &quot;&quot;&quot;
+
+    def __init__(self, log, access_token_getter):
+        &quot;&quot;&quot;Store the token accessor and initialise the device list cache.&quot;&quot;&quot;
+        super().__init__(log)
+        self.access_token_getter = access_token_getter
+        self.device_meta = {}
+        self.meta_age_seconds = CLOUD_DEVICE_LIST_MAX_AGE
+
+    def _headers(self):
+        &quot;&quot;&quot;Build the request headers, including the current bearer token.&quot;&quot;&quot;
+        return {
+            &quot;Authorization&quot;: &quot;Bearer {}&quot;.format(self.access_token_getter() or &quot;&quot;),
+            &quot;Accept&quot;: &quot;application/json&quot;,
+            &quot;User-Agent&quot;: USER_AGENT,
+        }
+
+    async def _request(self, method, path, body=None):
+        &quot;&quot;&quot;Perform one cloud API request and return the decoded JSON body.&quot;&quot;&quot;
+        url = MYENERGI_CLOUD_URL + path
+        try:
+            async with aiohttp.ClientSession(headers=self._headers()) as session:
+                async with session.request(method, url, json=body, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
+                    if response.status == 401:
+                        record_api_call(&quot;myenergi&quot;, success=False, reason=&quot;unauthorised&quot;)
+                        raise MyEnergiAuthError(&quot;myenergi rejected the access token for {}&quot;.format(path))
+                    if response.status not in (200, 201, 202, 204):
+                        record_api_call(&quot;myenergi&quot;, success=False, reason=&quot;http_{}&quot;.format(response.status))
+                        raise MyEnergiApiError(&quot;HTTP {} from {} {}&quot;.format(response.status, method, path))
+                    record_api_call(&quot;myenergi&quot;, success=True)
+                    if response.status == 204:
+                        return {}
+                    return await response.json(content_type=None)
+        except asyncio.TimeoutError as exc:
+            record_api_call(&quot;myenergi&quot;, success=False, reason=&quot;timeout&quot;)
+            raise MyEnergiApiError(&quot;timed out calling {} {}&quot;.format(method, path)) from exc
+        except aiohttp.ClientError as exc:
+            record_api_call(&quot;myenergi&quot;, success=False, reason=&quot;client_error&quot;)
+            raise MyEnergiApiError(&quot;request to {} {} failed: {}&quot;.format(method, path, exc)) from exc
+
+    async def _refresh_device_list(self):
+        &quot;&quot;&quot;Reload GET /devices, keeping only the Zappi and Eddi entries.&quot;&quot;&quot;
+        payload = await self._request(&quot;GET&quot;, &quot;/devices&quot;)
+        meta = {}
+        for site in payload.get(&quot;sites&quot;, []) or []:
+            for entry in site.get(&quot;devices&quot;, []) or []:
+                kind = CLOUD_MODEL_TO_KIND.get(str(entry.get(&quot;model&quot;, &quot;&quot;)).lower())
+                device_id = entry.get(&quot;deviceId&quot;)
+                if kind and device_id:
+                    meta[device_id] = entry
+        self.device_meta = meta
+        self.meta_age_seconds = 0
+
+    async def connect(self):
+        &quot;&quot;&quot;Load the device list, which also validates the access token.&quot;&quot;&quot;
+        await self._refresh_device_list()
+        return True
+
+    async def fetch_devices(self):
+        &quot;&quot;&quot;Poll status for every cached Zappi and Eddi, refreshing the list when stale.&quot;&quot;&quot;
+        if not self.device_meta or self.meta_age_seconds &gt;= CLOUD_DEVICE_LIST_MAX_AGE:
+            await self._refresh_device_list()
+        devices = []
+        for device_id, meta in self.device_meta.items():
+            status = await self._request(&quot;GET&quot;, &quot;/devices/{}/status&quot;.format(device_id))
+            if status:
+                devices.append(normalise_cloud_device(status, meta))
+        return devices
+
+    async def send_boost(self, device, amount, target_time=None):
+        &quot;&quot;&quot;Start a boost, selecting the request body shape by device class.&quot;&quot;&quot;
+        if device.kind == DEVICE_KIND_ZAPPI:
+            body = {&quot;mode&quot;: &quot;normal&quot;, &quot;parameters&quot;: {&quot;energy&quot;: int(amount)}}
+            if target_time:
+                body = {&quot;mode&quot;: &quot;smart&quot;, &quot;parameters&quot;: {&quot;energy&quot;: int(amount), &quot;targetTime&quot;: target_time}}
+        else:
+            body = {&quot;durationMinutes&quot;: int(amount)}
+        await self._request(&quot;POST&quot;, &quot;/devices/{}/boost&quot;.format(device.device_id), body=body)
+        return True
+
+    async def cancel_boost(self, device):
+        &quot;&quot;&quot;Cancel an active boost.&quot;&quot;&quot;
+        await self._request(&quot;DELETE&quot;, &quot;/devices/{}/boost&quot;.format(device.device_id))
+        return True
+</code></pre>
+<p>Note: <code>target_time</code> for the cloud transport is an ISO-8601 timestamp, not the <code>HH:MM</code> the direct transport takes. The component only issues untimed boosts in this release, so the difference is confined to the transports; Task 8's controls never pass <code>target_time</code>.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t4.log 2&gt;&amp;1; tail -25 /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t4.log
+</code></pre>
+<p>Expected: PASS.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2 &amp;&amp; ./run_pre_commit
+git add apps/predbat/myenergi.py apps/predbat/tests/test_myenergi.py
+git commit -m &quot;Add the cloud myenergi transport for the 3rd party API
+
+Bearer-token access to api.s18.myenergi.net with a cached device list and
+per-device-class boost bodies, so a Zappi never receives durationMinutes and an
+Eddi never receives mode or parameters.
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-5-component-core-initialisation-transport-selection-run-loop-and-publishing">Task 5: Component core — initialisation, transport selection, run loop and publishing</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/myenergi.py</code>
+- Modify: <code>apps/predbat/tests/test_myenergi.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: everything from Tasks 1–4.
+- Produces: <code>MyEnergiAPI(ComponentBase, OAuthMixin)</code> with <code>initialize(auth_method, hub_serial, api_key, key, token_expires_at, token_hash, automatic, enable_controls, poll_seconds)</code>, <code>run(seconds, first)</code>, <code>publish_data()</code>, <code>entity_prefix(device)</code>, and the attributes <code>self.transport</code>, <code>self.devices</code> (dict keyed by <code>device_id</code>), <code>self.boost_amounts</code> (dict keyed by <code>device_id</code>), <code>self.queued_events</code>.
+- Also produces the module-level <code>myenergi_attribute_table</code> used by publishing.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing component tests</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/tests/test_myenergi.py</code>:</p>
+<pre><code class="language-python">def _make_component(**overrides):
+    &quot;&quot;&quot;Build a MyEnergiAPI against MockBase with a stub transport already attached.&quot;&quot;&quot;
+    base = MockBase()
+    args = {
+        &quot;auth_method&quot;: &quot;direct&quot;,
+        &quot;hub_serial&quot;: &quot;12345678&quot;,
+        &quot;api_key&quot;: &quot;secret-key&quot;,
+        &quot;key&quot;: None,
+        &quot;token_expires_at&quot;: None,
+        &quot;token_hash&quot;: None,
+        &quot;automatic&quot;: True,
+        &quot;enable_controls&quot;: True,
+        &quot;poll_seconds&quot;: 60,
+    }
+    args.update(overrides)
+    return MyEnergiAPI(base, **args)
+
+
+def test_component_selects_transport():
+    &quot;&quot;&quot;auth_method picks the transport, and missing credentials refuse to start.&quot;&quot;&quot;
+    component = _make_component()
+    assert isinstance(component.transport, MyEnergiDirectTransport)
+
+    component = _make_component(auth_method=&quot;oauth&quot;, hub_serial=None, api_key=None, key=&quot;jwt-token&quot;)
+    assert isinstance(component.transport, MyEnergiCloudTransport)
+
+    # No credentials at all - no transport, and the reason is logged
+    component = _make_component(hub_serial=None, api_key=None)
+    assert component.transport is None
+    print(&quot;  ✓ Transport selection and credential validation&quot;)
+
+
+def test_component_publishes_entities():
+    &quot;&quot;&quot;A poll publishes the documented entity set for each device.&quot;&quot;&quot;
+    component = _make_component()
+    component.devices = {
+        &quot;Z12345678&quot;: normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
+        &quot;E87654321&quot;: normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI),
+    }
+    run_async(component.publish_data())
+
+    entities = component.base.entities
+    assert &quot;sensor.predbat_myenergi_zappi_12345678_status&quot; in entities
+    assert &quot;sensor.predbat_myenergi_zappi_12345678_mode&quot; in entities
+    assert &quot;sensor.predbat_myenergi_zappi_12345678_plug_status&quot; in entities
+    assert &quot;sensor.predbat_myenergi_zappi_12345678_power&quot; in entities
+    assert &quot;sensor.predbat_myenergi_zappi_12345678_session_energy&quot; in entities
+    assert &quot;binary_sensor.predbat_myenergi_zappi_12345678_charging&quot; in entities
+    assert &quot;switch.predbat_myenergi_zappi_12345678_boost&quot; in entities
+    assert &quot;number.predbat_myenergi_zappi_12345678_boost_energy&quot; in entities
+
+    assert &quot;sensor.predbat_myenergi_eddi_87654321_status&quot; in entities
+    assert &quot;sensor.predbat_myenergi_eddi_87654321_power&quot; in entities
+    assert &quot;sensor.predbat_myenergi_eddi_87654321_session_energy&quot; in entities
+    assert &quot;sensor.predbat_myenergi_eddi_87654321_temp_1&quot; in entities
+    assert &quot;switch.predbat_myenergi_eddi_87654321_boost&quot; in entities
+    assert &quot;number.predbat_myenergi_eddi_87654321_boost_minutes&quot; in entities
+
+    # tp2 was the 127 sentinel, so no entity should exist for it
+    assert &quot;sensor.predbat_myenergi_eddi_87654321_temp_2&quot; not in entities
+
+    # The boost switch reflects the device, not a locally held value
+    assert component.base.get_state_wrapper(&quot;switch.predbat_myenergi_zappi_12345678_boost&quot;) == &quot;off&quot;
+
+    # Units come from the attribute table
+    power = component.base.entities[&quot;sensor.predbat_myenergi_zappi_12345678_power&quot;]
+    assert power[&quot;attributes&quot;][&quot;unit_of_measurement&quot;] == &quot;W&quot;
+    assert power[&quot;attributes&quot;][&quot;device_class&quot;] == &quot;power&quot;
+    energy = component.base.entities[&quot;sensor.predbat_myenergi_zappi_12345678_session_energy&quot;]
+    assert energy[&quot;attributes&quot;][&quot;unit_of_measurement&quot;] == &quot;kWh&quot;
+    print(&quot;  ✓ Component publishes the expected entities&quot;)
+
+
+def test_component_retains_last_good_reading():
+    &quot;&quot;&quot;A failed poll leaves the previously published values alone.&quot;&quot;&quot;
+    component = _make_component()
+    component.transport.fetch_devices = AsyncMock(return_value=[normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)])
+    assert run_async(component.run(0, True)) is True
+    good = component.base.get_state_wrapper(&quot;sensor.predbat_myenergi_zappi_12345678_session_energy&quot;)
+    assert good == 4.25
+
+    component.transport.fetch_devices = AsyncMock(side_effect=MyEnergiApiError(&quot;boom&quot;))
+    assert run_async(component.run(60, False)) is False
+    still_good = component.base.get_state_wrapper(&quot;sensor.predbat_myenergi_zappi_12345678_session_energy&quot;)
+    assert still_good == 4.25, &quot;A failed poll must not overwrite the last good reading&quot;
+    print(&quot;  ✓ Failed polls retain the last good reading&quot;)
+
+
+def test_component_poll_seconds_rounding():
+    &quot;&quot;&quot;poll_seconds is clamped to a whole number of base loop intervals.&quot;&quot;&quot;
+    assert _make_component(poll_seconds=1).poll_seconds == 60
+    assert _make_component(poll_seconds=90).poll_seconds == 120
+    assert _make_component(poll_seconds=300).poll_seconds == 300
+    print(&quot;  ✓ poll_seconds rounds to a multiple of 60&quot;)
+</code></pre>
+<p>Extend the test imports with <code>MockBase</code>, <code>MyEnergiAPI</code>, <code>MyEnergiApiError</code>, <code>MyEnergiCloudTransport</code>, and register the four tests in <code>test_myenergi()</code>:</p>
+<pre><code class="language-python">from mock_base import MockBase
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t5.log 2&gt;&amp;1; grep -iE &quot;error|fail|cannot import&quot; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t5.log | head
+</code></pre>
+<p>Expected: FAIL with <code>ImportError: cannot import name 'MyEnergiAPI'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement the attribute table and component core</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/myenergi.py</code>:</p>
+<pre><code class="language-python"># Attribute table for the published Home Assistant entities, in the style of ohme.py
+myenergi_attribute_table = {
+    &quot;status&quot;: {&quot;friendly_name&quot;: &quot;myenergi Status&quot;, &quot;icon&quot;: &quot;mdi:information-outline&quot;},
+    &quot;mode&quot;: {&quot;friendly_name&quot;: &quot;myenergi Mode&quot;, &quot;icon&quot;: &quot;mdi:ev-station&quot;},
+    &quot;plug_status&quot;: {&quot;friendly_name&quot;: &quot;myenergi Plug Status&quot;, &quot;icon&quot;: &quot;mdi:ev-plug-type2&quot;},
+    &quot;power&quot;: {&quot;friendly_name&quot;: &quot;myenergi Power&quot;, &quot;icon&quot;: &quot;mdi:lightning-bolt&quot;, &quot;unit_of_measurement&quot;: &quot;W&quot;, &quot;device_class&quot;: &quot;power&quot;, &quot;state_class&quot;: &quot;measurement&quot;},
+    &quot;session_energy&quot;: {&quot;friendly_name&quot;: &quot;myenergi Session Energy&quot;, &quot;icon&quot;: &quot;mdi:lightning-bolt&quot;, &quot;unit_of_measurement&quot;: &quot;kWh&quot;, &quot;device_class&quot;: &quot;energy&quot;, &quot;state_class&quot;: &quot;total_increasing&quot;},
+    &quot;charging&quot;: {&quot;friendly_name&quot;: &quot;myenergi Charging&quot;, &quot;icon&quot;: &quot;mdi:battery-charging&quot;},
+    &quot;boost&quot;: {&quot;friendly_name&quot;: &quot;myenergi Boost&quot;, &quot;icon&quot;: &quot;mdi:rocket-launch&quot;},
+    &quot;boost_energy&quot;: {&quot;friendly_name&quot;: &quot;myenergi Boost Energy&quot;, &quot;icon&quot;: &quot;mdi:rocket-launch&quot;, &quot;unit_of_measurement&quot;: &quot;kWh&quot;, &quot;min&quot;: BOOST_ENERGY_MIN, &quot;max&quot;: BOOST_ENERGY_MAX, &quot;step&quot;: 1},
+    &quot;boost_minutes&quot;: {&quot;friendly_name&quot;: &quot;myenergi Boost Minutes&quot;, &quot;icon&quot;: &quot;mdi:rocket-launch&quot;, &quot;unit_of_measurement&quot;: &quot;minutes&quot;, &quot;min&quot;: BOOST_MINUTES_MIN, &quot;max&quot;: BOOST_MINUTES_MAX, &quot;step&quot;: 5},
+    &quot;temp_1&quot;: {&quot;friendly_name&quot;: &quot;myenergi Temperature 1&quot;, &quot;icon&quot;: &quot;mdi:thermometer&quot;, &quot;unit_of_measurement&quot;: &quot;°C&quot;, &quot;device_class&quot;: &quot;temperature&quot;, &quot;state_class&quot;: &quot;measurement&quot;},
+    &quot;temp_2&quot;: {&quot;friendly_name&quot;: &quot;myenergi Temperature 2&quot;, &quot;icon&quot;: &quot;mdi:thermometer&quot;, &quot;unit_of_measurement&quot;: &quot;°C&quot;, &quot;device_class&quot;: &quot;temperature&quot;, &quot;state_class&quot;: &quot;measurement&quot;},
+}
+
+DEFAULT_ZAPPI_BOOST_KWH = 10
+DEFAULT_EDDI_BOOST_MINUTES = 60
+
+
+class MyEnergiAPI(ComponentBase, OAuthMixin):
+    &quot;&quot;&quot;myenergi component providing Zappi and Eddi monitoring and boost control.&quot;&quot;&quot;
+
+    def initialize(self, auth_method=None, hub_serial=None, api_key=None, key=None, token_expires_at=None, token_hash=None, automatic=True, enable_controls=True, poll_seconds=60):
+        &quot;&quot;&quot;Select a transport from the configured credentials and set up component state.&quot;&quot;&quot;
+        self.auth_method = (auth_method or &quot;direct&quot;).lower()
+        self.hub_serial = hub_serial
+        self.api_key = api_key
+        self.automatic = automatic
+        self.enable_controls = enable_controls
+        # ComponentBase.start() calls run() on a fixed 60 second cadence, so the poll
+        # interval can only be a whole number of those intervals.
+        self.poll_seconds = max(60, int(round(_to_float(poll_seconds, 60) / 60.0)) * 60)
+
+        self.devices = {}
+        self.boost_amounts = {}
+        self.queued_events = []
+        self._auto_configured = False
+        self.transport = None
+
+        if self.auth_method == &quot;oauth&quot;:
+            self._init_oauth(&quot;oauth&quot;, key, token_expires_at, &quot;myenergi&quot;)
+            self.token_hash = token_hash or &quot;&quot;
+            if not key and not token_hash:
+                self.log(&quot;Error: myenergi: auth_method is 'oauth' but neither myenergi_key nor myenergi_token_hash is set&quot;)
+                return
+            self.transport = MyEnergiCloudTransport(self.log, lambda: self.access_token)
+        else:
+            self._init_oauth(&quot;api_key&quot;, None, None, &quot;myenergi&quot;)
+            if not hub_serial or not api_key:
+                self.log(&quot;Error: myenergi: auth_method is 'direct' but myenergi_hub_serial and myenergi_api_key are not both set&quot;)
+                return
+            self.transport = MyEnergiDirectTransport(self.log, hub_serial, api_key)
+
+    def entity_prefix(self, device):
+        &quot;&quot;&quot;Return the entity name prefix for a device, e.g. predbat_myenergi_zappi_12345678.&quot;&quot;&quot;
+        return &quot;{}_myenergi_{}_{}&quot;.format(self.prefix, device.kind, device.serial)
+
+    def boost_amount_for(self, device):
+        &quot;&quot;&quot;Return the currently selected boost amount for a device.&quot;&quot;&quot;
+        default = DEFAULT_ZAPPI_BOOST_KWH if device.kind == DEVICE_KIND_ZAPPI else DEFAULT_EDDI_BOOST_MINUTES
+        return self.boost_amounts.get(device.device_id, default)
+
+    async def run(self, seconds, first):
+        &quot;&quot;&quot;Process queued control events, then poll and publish.&quot;&quot;&quot;
+        if first:
+            self.log(&quot;Info: myenergi: starting with the {} transport&quot;.format(self.auth_method))
+        if not self.transport:
+            return False
+
+        if self.auth_method == &quot;oauth&quot;:
+            await self.check_and_refresh_oauth_token()
+
+        refresh = False
+        while self.queued_events:
+            handler, *event_args = self.queued_events.pop(0)
+            try:
+                await handler(*event_args)
+            except MyEnergiError as exc:
+                self.log(&quot;Warn: myenergi: control failed: {}&quot;.format(exc))
+            refresh = True
+
+        if first or refresh or (seconds % self.poll_seconds) == 0:
+            try:
+                devices = await self.transport.fetch_devices()
+            except MyEnergiError as exc:
+                self.log(&quot;Warn: myenergi: poll failed: {}&quot;.format(exc))
+                return False
+            if devices:
+                self.devices = {device.device_id: device for device in devices}
+                await self.publish_data()
+            elif first:
+                self.log(&quot;Warn: myenergi: connected but no Zappi or Eddi devices were found&quot;)
+
+        self.update_success_timestamp()
+        return True
+
+    async def publish_data(self):
+        &quot;&quot;&quot;Publish every known device as Predbat entities.&quot;&quot;&quot;
+        for device in self.devices.values():
+            prefix = self.entity_prefix(device)
+            self.dashboard_item(&quot;sensor.{}_status&quot;.format(prefix), state=device.status, attributes=myenergi_attribute_table[&quot;status&quot;], app=&quot;myenergi&quot;)
+            self.dashboard_item(&quot;sensor.{}_power&quot;.format(prefix), state=device.power_w, attributes=myenergi_attribute_table[&quot;power&quot;], app=&quot;myenergi&quot;)
+            self.dashboard_item(&quot;sensor.{}_session_energy&quot;.format(prefix), state=device.session_energy_kwh, attributes=myenergi_attribute_table[&quot;session_energy&quot;], app=&quot;myenergi&quot;)
+            self.dashboard_item(&quot;switch.{}_boost&quot;.format(prefix), state=&quot;on&quot; if device.boost_active else &quot;off&quot;, attributes=myenergi_attribute_table[&quot;boost&quot;], app=&quot;myenergi&quot;)
+
+            if device.kind == DEVICE_KIND_ZAPPI:
+                self.dashboard_item(&quot;sensor.{}_mode&quot;.format(prefix), state=device.mode, attributes=myenergi_attribute_table[&quot;mode&quot;], app=&quot;myenergi&quot;)
+                self.dashboard_item(&quot;sensor.{}_plug_status&quot;.format(prefix), state=device.plug_status, attributes=myenergi_attribute_table[&quot;plug_status&quot;], app=&quot;myenergi&quot;)
+                self.dashboard_item(&quot;binary_sensor.{}_charging&quot;.format(prefix), state=&quot;on&quot; if device.status == &quot;Charging&quot; else &quot;off&quot;, attributes=myenergi_attribute_table[&quot;charging&quot;], app=&quot;myenergi&quot;)
+                self.dashboard_item(&quot;number.{}_boost_energy&quot;.format(prefix), state=self.boost_amount_for(device), attributes=myenergi_attribute_table[&quot;boost_energy&quot;], app=&quot;myenergi&quot;)
+            else:
+                self.dashboard_item(&quot;number.{}_boost_minutes&quot;.format(prefix), state=self.boost_amount_for(device), attributes=myenergi_attribute_table[&quot;boost_minutes&quot;], app=&quot;myenergi&quot;)
+                if device.temp_1 is not None:
+                    self.dashboard_item(&quot;sensor.{}_temp_1&quot;.format(prefix), state=device.temp_1, attributes=myenergi_attribute_table[&quot;temp_1&quot;], app=&quot;myenergi&quot;)
+                if device.temp_2 is not None:
+                    self.dashboard_item(&quot;sensor.{}_temp_2&quot;.format(prefix), state=device.temp_2, attributes=myenergi_attribute_table[&quot;temp_2&quot;], app=&quot;myenergi&quot;)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t5.log 2&gt;&amp;1; tail -30 /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t5.log
+</code></pre>
+<p>Expected: PASS.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2 &amp;&amp; ./run_pre_commit
+git add apps/predbat/myenergi.py apps/predbat/tests/test_myenergi.py
+git commit -m &quot;Add the myenergi component core with polling and entity publishing
+
+Selects a transport from the configured credentials, polls on the component base
+cadence and publishes per-device entities. A failed poll returns False without
+republishing, so the last good reading survives a transient outage.
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-6-component-registration-and-configuration-schema">Task 6: Component registration and configuration schema</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/components.py</code> (import block near line 36, <code>COMPONENT_LIST</code> — add after the <code>"ohme"</code> entry)
+- Modify: <code>apps/predbat/config.py</code> (<code>APPS_SCHEMA</code>, near the existing <code>fox_*</code> keys around line 2510)
+- Modify: <code>apps/predbat/tests/test_myenergi.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>MyEnergiAPI</code> from Task 5.
+- Produces: the <code>"myenergi"</code> key in <code>COMPONENT_LIST</code> with <code>event_filter</code> <code>"predbat_myenergi_"</code>; nine <code>myenergi_*</code> keys in <code>APPS_SCHEMA</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing registration test</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/tests/test_myenergi.py</code>:</p>
+<pre><code class="language-python">def test_component_registration():
+    &quot;&quot;&quot;The component is registered with matching config keys and event filter.&quot;&quot;&quot;
+    from components import COMPONENT_LIST
+    from config import APPS_SCHEMA
+
+    entry = COMPONENT_LIST[&quot;myenergi&quot;]
+    assert entry[&quot;class&quot;] is MyEnergiAPI
+    assert entry[&quot;event_filter&quot;] == &quot;predbat_myenergi_&quot;
+    assert entry[&quot;phase&quot;] == 1
+    assert entry[&quot;can_restart&quot;] is True
+    assert entry[&quot;required_or&quot;] == [&quot;api_key&quot;, &quot;key&quot;]
+
+    # Every declared arg must name a config key that exists in the schema, and every
+    # arg must be accepted by initialize()
+    import inspect
+
+    parameters = inspect.signature(MyEnergiAPI.initialize).parameters
+    for arg_name, spec in entry[&quot;args&quot;].items():
+        assert arg_name in parameters, &quot;initialize() has no parameter '{}'&quot;.format(arg_name)
+        assert spec[&quot;config&quot;] in APPS_SCHEMA, &quot;{} missing from APPS_SCHEMA&quot;.format(spec[&quot;config&quot;])
+    print(&quot;  ✓ Component registration and schema keys&quot;)
+</code></pre>
+<p>Register it in <code>test_myenergi()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t6.log 2&gt;&amp;1; grep -iE &quot;KeyError|error|fail&quot; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t6.log | head
+</code></pre>
+<p>Expected: FAIL with <code>KeyError: 'myenergi'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Register the component</strong></li>
+</ul>
+<p>In <code>apps/predbat/components.py</code>, add to the import block:</p>
+<pre><code class="language-python">from myenergi import MyEnergiAPI
+</code></pre>
+<p>And add to <code>COMPONENT_LIST</code>, after the <code>"ohme"</code> entry:</p>
+<pre><code class="language-python">    &quot;myenergi&quot;: {
+        &quot;class&quot;: MyEnergiAPI,
+        &quot;name&quot;: &quot;myenergi&quot;,
+        &quot;event_filter&quot;: &quot;predbat_myenergi_&quot;,
+        &quot;args&quot;: {
+            &quot;auth_method&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_auth_method&quot;, &quot;default&quot;: &quot;direct&quot;},
+            &quot;hub_serial&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_hub_serial&quot;},
+            &quot;api_key&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_api_key&quot;},
+            &quot;key&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_key&quot;},
+            &quot;token_expires_at&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_token_expires_at&quot;},
+            &quot;token_hash&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_token_hash&quot;},
+            &quot;automatic&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_automatic&quot;, &quot;default&quot;: True},
+            &quot;enable_controls&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_enable_controls&quot;, &quot;default&quot;: True},
+            &quot;poll_seconds&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;myenergi_poll_seconds&quot;, &quot;default&quot;: 60},
+        },
+        &quot;required_or&quot;: [&quot;api_key&quot;, &quot;key&quot;],
+        &quot;phase&quot;: 1,
+        &quot;can_restart&quot;: True,
+    },
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Add the schema keys</strong></li>
+</ul>
+<p>In <code>apps/predbat/config.py</code>, add to <code>APPS_SCHEMA</code> near the <code>fox_*</code> keys:</p>
+<pre><code class="language-python">    &quot;myenergi_auth_method&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;myenergi_hub_serial&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;myenergi_api_key&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;myenergi_key&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;myenergi_token_expires_at&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;myenergi_token_hash&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;myenergi_automatic&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+    &quot;myenergi_enable_controls&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+    &quot;myenergi_poll_seconds&quot;: {&quot;type&quot;: &quot;integer&quot;, &quot;zero&quot;: False},
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the myenergi tests and the config validation tests</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi --test validate_config --test plugin_startup &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t6.log 2&gt;&amp;1; tail -30 /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t6.log
+</code></pre>
+<p>Expected: PASS for all three.</p>
+<ul>
+<li>[ ] <strong>Step 6: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2 &amp;&amp; ./run_pre_commit
+git add apps/predbat/components.py apps/predbat/config.py apps/predbat/tests/test_myenergi.py
+git commit -m &quot;Register the myenergi component and its apps.yaml schema
+
+Adds the COMPONENT_LIST entry with required_or on the two credential sets so the
+component only starts when one transport is fully configured, plus the matching
+APPS_SCHEMA keys.
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-7-automatic-configuration">Task 7: Automatic configuration</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/myenergi.py</code>
+- Modify: <code>apps/predbat/tests/test_myenergi.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>MyEnergiAPI</code>, <code>entity_prefix()</code> from Task 5.
+- Produces: <code>MyEnergiAPI.automatic_config()</code>, called once from <code>run()</code> after the first successful poll.</p>
+<p>Behaviour: Zappi session energy entities go to <code>car_charging_energy</code> (a list when there is more than one Zappi, since <code>minute_data_import_export</code> accepts and sums a list); the first Eddi's session energy entity goes to <code>iboost_energy_today</code>. Both use <code>set_arg_auto()</code> so an explicit apps.yaml value is reported rather than silently replaced.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing auto-config tests</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/tests/test_myenergi.py</code>:</p>
+<pre><code class="language-python">def test_automatic_config():
+    &quot;&quot;&quot;Zappis wire into car_charging_energy and the Eddi into iboost_energy_today.&quot;&quot;&quot;
+    component = _make_component()
+    second_zappi = dict(MOCK_DIRECT_ZAPPI, sno=22223333)
+    component.devices = {
+        &quot;Z12345678&quot;: normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
+        &quot;Z22223333&quot;: normalise_direct_device(second_zappi, DEVICE_KIND_ZAPPI),
+        &quot;E87654321&quot;: normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI),
+    }
+    component.automatic_config()
+
+    assert component.base.args[&quot;car_charging_energy&quot;] == [
+        &quot;sensor.predbat_myenergi_zappi_12345678_session_energy&quot;,
+        &quot;sensor.predbat_myenergi_zappi_22223333_session_energy&quot;,
+    ], component.base.args[&quot;car_charging_energy&quot;]
+    assert component.base.args[&quot;iboost_energy_today&quot;] == &quot;sensor.predbat_myenergi_eddi_87654321_session_energy&quot;
+    print(&quot;  ✓ Automatic configuration wires both energy inputs&quot;)
+
+
+def test_automatic_config_single_zappi_is_still_a_list():
+    &quot;&quot;&quot;A single Zappi still produces a list, so adding a second changes nothing else.&quot;&quot;&quot;
+    component = _make_component()
+    component.devices = {&quot;Z12345678&quot;: normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
+    component.automatic_config()
+    assert component.base.args[&quot;car_charging_energy&quot;] == [&quot;sensor.predbat_myenergi_zappi_12345678_session_energy&quot;]
+    assert &quot;iboost_energy_today&quot; not in component.base.args
+    print(&quot;  ✓ Single Zappi auto-config&quot;)
+
+
+def test_automatic_config_disabled():
+    &quot;&quot;&quot;With automatic off, nothing is wired even after a successful poll.&quot;&quot;&quot;
+    component = _make_component(automatic=False)
+    component.transport.fetch_devices = AsyncMock(return_value=[normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)])
+    run_async(component.run(0, True))
+    assert &quot;car_charging_energy&quot; not in component.base.args
+    print(&quot;  ✓ Automatic configuration respects the off switch&quot;)
+
+
+def test_automatic_config_runs_once():
+    &quot;&quot;&quot;Auto-config runs after the first poll and is not repeated.&quot;&quot;&quot;
+    component = _make_component()
+    component.transport.fetch_devices = AsyncMock(return_value=[normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)])
+    run_async(component.run(0, True))
+    assert component._auto_configured is True
+    component.base.args[&quot;car_charging_energy&quot;] = [&quot;sensor.user_override&quot;]
+    run_async(component.run(60, False))
+    assert component.base.args[&quot;car_charging_energy&quot;] == [&quot;sensor.user_override&quot;], &quot;Auto-config must not run twice&quot;
+    print(&quot;  ✓ Automatic configuration runs exactly once&quot;)
+</code></pre>
+<p>Register the four tests in <code>test_myenergi()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t7.log 2&gt;&amp;1; grep -iE &quot;AttributeError|error|fail&quot; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t7.log | head
+</code></pre>
+<p>Expected: FAIL with <code>AttributeError: 'MyEnergiAPI' object has no attribute 'automatic_config'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement automatic configuration</strong></li>
+</ul>
+<p>Add to <code>MyEnergiAPI</code> in <code>apps/predbat/myenergi.py</code>:</p>
+<pre><code class="language-python">    def automatic_config(self):
+        &quot;&quot;&quot;Wire the device energy sensors into Predbat's load inputs.
+
+        Zappi charging energy is subtracted from house load as car charging, so it
+        goes to car_charging_energy - as a list, because minute_data_import_export
+        accepts one and sums the entities. Eddi diverted energy feeds the iboost
+        model instead.
+
+        Note that these sensors are session-scoped and reset to zero when a session
+        ends. get_from_incrementing() clamps negative deltas to zero so the per-minute
+        subtraction is unaffected, but the iboost_today total derived in fetch.py from
+        the midnight-to-now difference will under-report after a mid-day Eddi reset.
+        This is a known limitation, documented in docs/components.md.
+        &quot;&quot;&quot;
+        zappi_entities = []
+        eddi_entity = None
+        for device in sorted(self.devices.values(), key=lambda item: item.serial):
+            entity = &quot;sensor.{}_session_energy&quot;.format(self.entity_prefix(device))
+            if device.kind == DEVICE_KIND_ZAPPI:
+                zappi_entities.append(entity)
+            elif eddi_entity is None:
+                eddi_entity = entity
+
+        if zappi_entities:
+            self.log(&quot;Info: myenergi: setting car_charging_energy to {}&quot;.format(zappi_entities))
+            self.set_arg_auto(&quot;car_charging_energy&quot;, zappi_entities)
+        if eddi_entity:
+            self.log(&quot;Info: myenergi: setting iboost_energy_today to {}&quot;.format(eddi_entity))
+            self.set_arg_auto(&quot;iboost_energy_today&quot;, eddi_entity)
+</code></pre>
+<p>And call it from <code>run()</code>, immediately after the successful publish:</p>
+<pre><code class="language-python">            if devices:
+                self.devices = {device.device_id: device for device in devices}
+                await self.publish_data()
+                if self.automatic and not self._auto_configured:
+                    self.automatic_config()
+                    self._auto_configured = True
+            elif first:
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t7.log 2&gt;&amp;1; tail -30 /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t7.log
+</code></pre>
+<p>Expected: PASS.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2 &amp;&amp; ./run_pre_commit
+git add apps/predbat/myenergi.py apps/predbat/tests/test_myenergi.py
+git commit -m &quot;Wire myenergi devices into car_charging_energy and iboost_energy_today
+
+Zappi session energy sensors are set as a list on car_charging_energy so several
+chargers sum, and the first Eddi feeds iboost_energy_today. Uses set_arg_auto so
+an explicit apps.yaml value is reported rather than silently replaced.
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-8-boost-controls">Task 8: Boost controls</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/myenergi.py</code>
+- Modify: <code>apps/predbat/tests/test_myenergi.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>MyEnergiAPI</code>, transports' <code>send_boost</code>/<code>cancel_boost</code>.
+- Produces: <code>MyEnergiAPI.switch_event(entity_id, service)</code>, <code>number_event(entity_id, value)</code>, <code>switch_event_handler(entity_id, service)</code>, <code>number_event_handler(entity_id, value)</code>, <code>device_for_entity(entity_id)</code>.</p>
+<p>Events are queued onto <code>self.queued_events</code> rather than actioned inline, so API calls never run on the event thread — the same pattern <code>ohme.py</code> uses.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing control tests</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/tests/test_myenergi.py</code>:</p>
+<pre><code class="language-python">def test_controls_queue_rather_than_call():
+    &quot;&quot;&quot;Switch and number events queue for the run loop instead of calling inline.&quot;&quot;&quot;
+    component = _make_component()
+    component.devices = {&quot;Z12345678&quot;: normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
+    component.transport.send_boost = AsyncMock(return_value=True)
+
+    run_async(component.switch_event(&quot;switch.predbat_myenergi_zappi_12345678_boost&quot;, &quot;turn_on&quot;))
+    assert len(component.queued_events) == 1
+    component.transport.send_boost.assert_not_called()
+
+    component.transport.fetch_devices = AsyncMock(return_value=list(component.devices.values()))
+    run_async(component.run(60, False))
+    component.transport.send_boost.assert_called_once()
+    assert component.queued_events == []
+    print(&quot;  ✓ Control events queue for the run loop&quot;)
+
+
+def test_boost_uses_number_entity_value():
+    &quot;&quot;&quot;The boost amount comes from the companion number entity.&quot;&quot;&quot;
+    component = _make_component()
+    device = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    component.devices = {&quot;Z12345678&quot;: device}
+    component.transport.send_boost = AsyncMock(return_value=True)
+
+    # number_event only queues, so drain the queue the way run() would
+    run_async(component.number_event(&quot;number.predbat_myenergi_zappi_12345678_boost_energy&quot;, 25))
+    handler, *event_args = component.queued_events.pop(0)
+    run_async(handler(*event_args))
+
+    run_async(component.switch_event_handler(&quot;switch.predbat_myenergi_zappi_12345678_boost&quot;, &quot;turn_on&quot;))
+
+    component.transport.send_boost.assert_called_once_with(device, 25)
+    print(&quot;  ✓ Boost uses the number entity value&quot;)
+
+
+def test_boost_refused_in_fast_mode():
+    &quot;&quot;&quot;A Zappi outside Eco or Eco+ is not boosted, and no API call is made.&quot;&quot;&quot;
+    component = _make_component()
+    fast = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, zmo=1), DEVICE_KIND_ZAPPI)
+    assert fast.mode == &quot;Fast&quot;
+    component.devices = {&quot;Z12345678&quot;: fast}
+    component.transport.send_boost = AsyncMock(return_value=True)
+
+    run_async(component.switch_event_handler(&quot;switch.predbat_myenergi_zappi_12345678_boost&quot;, &quot;turn_on&quot;))
+    component.transport.send_boost.assert_not_called()
+    print(&quot;  ✓ Boost refused outside Eco and Eco+&quot;)
+
+
+def test_cancel_boost():
+    &quot;&quot;&quot;Turning the switch off cancels the boost.&quot;&quot;&quot;
+    component = _make_component()
+    device = normalise_direct_device(dict(MOCK_DIRECT_EDDI, bsm=1, sta=4), DEVICE_KIND_EDDI)
+    component.devices = {&quot;E87654321&quot;: device}
+    component.transport.cancel_boost = AsyncMock(return_value=True)
+
+    run_async(component.switch_event_handler(&quot;switch.predbat_myenergi_eddi_87654321_boost&quot;, &quot;turn_off&quot;))
+    component.transport.cancel_boost.assert_called_once_with(device)
+    print(&quot;  ✓ Cancel boost&quot;)
+
+
+def test_controls_disabled():
+    &quot;&quot;&quot;With enable_controls off, events are ignored entirely.&quot;&quot;&quot;
+    component = _make_component(enable_controls=False)
+    component.devices = {&quot;Z12345678&quot;: normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
+    component.transport.send_boost = AsyncMock(return_value=True)
+
+    run_async(component.switch_event(&quot;switch.predbat_myenergi_zappi_12345678_boost&quot;, &quot;turn_on&quot;))
+    assert component.queued_events == []
+    run_async(component.switch_event_handler(&quot;switch.predbat_myenergi_zappi_12345678_boost&quot;, &quot;turn_on&quot;))
+    component.transport.send_boost.assert_not_called()
+    print(&quot;  ✓ Controls respect enable_controls&quot;)
+
+
+def test_control_for_unknown_entity_is_ignored():
+    &quot;&quot;&quot;An event for a device that is not known does nothing and does not raise.&quot;&quot;&quot;
+    component = _make_component()
+    component.transport.send_boost = AsyncMock(return_value=True)
+    run_async(component.switch_event_handler(&quot;switch.predbat_myenergi_zappi_99999999_boost&quot;, &quot;turn_on&quot;))
+    component.transport.send_boost.assert_not_called()
+    print(&quot;  ✓ Unknown entity events are ignored&quot;)
+</code></pre>
+<p>Register the six tests in <code>test_myenergi()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t8.log 2&gt;&amp;1; grep -iE &quot;AttributeError|error|fail&quot; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t8.log | head
+</code></pre>
+<p>Expected: FAIL — <code>switch_event_handler</code> does not exist (the base class's no-op <code>switch_event</code> swallows the call, so <code>queued_events</code> stays empty).</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement the controls</strong></li>
+</ul>
+<p>Add to <code>MyEnergiAPI</code> in <code>apps/predbat/myenergi.py</code>:</p>
+<pre><code class="language-python">    def device_for_entity(self, entity_id):
+        &quot;&quot;&quot;Find the device an entity belongs to, or None when it is not known.&quot;&quot;&quot;
+        for device in self.devices.values():
+            if self.entity_prefix(device) in entity_id:
+                return device
+        return None
+
+    async def switch_event(self, entity_id, service):
+        &quot;&quot;&quot;Queue a switch service call for the run loop.&quot;&quot;&quot;
+        if not self.enable_controls:
+            return
+        self.queued_events.append((self.switch_event_handler, entity_id, service))
+
+    async def number_event(self, entity_id, value):
+        &quot;&quot;&quot;Queue a number change for the run loop.&quot;&quot;&quot;
+        if not self.enable_controls:
+            return
+        self.queued_events.append((self.number_event_handler, entity_id, value))
+
+    async def number_event_handler(self, entity_id, value):
+        &quot;&quot;&quot;Record a new boost amount for the device the entity belongs to.&quot;&quot;&quot;
+        device = self.device_for_entity(entity_id)
+        if not device:
+            return
+        if device.kind == DEVICE_KIND_ZAPPI:
+            amount = int(_to_float(value, DEFAULT_ZAPPI_BOOST_KWH))
+            amount = max(BOOST_ENERGY_MIN, min(BOOST_ENERGY_MAX, amount))
+        else:
+            amount = int(_to_float(value, DEFAULT_EDDI_BOOST_MINUTES))
+            amount = max(BOOST_MINUTES_MIN, min(BOOST_MINUTES_MAX, amount))
+        self.boost_amounts[device.device_id] = amount
+
+    async def switch_event_handler(self, entity_id, service):
+        &quot;&quot;&quot;Send or cancel a boost in response to the boost switch.&quot;&quot;&quot;
+        if not self.enable_controls:
+            return
+        if not entity_id.endswith(&quot;_boost&quot;):
+            return
+        device = self.device_for_entity(entity_id)
+        if not device:
+            self.log(&quot;Warn: myenergi: no known device for {}&quot;.format(entity_id))
+            return
+
+        if service == &quot;turn_on&quot;:
+            # myenergi rejects a boost unless the Zappi is in one of the green modes
+            if device.kind == DEVICE_KIND_ZAPPI and device.mode not in ZAPPI_BOOSTABLE_MODES:
+                self.log(&quot;Warn: myenergi: cannot boost {} while it is in {} mode - boost needs Eco or Eco+&quot;.format(device.name, device.mode))
+                return
+            amount = self.boost_amount_for(device)
+            self.log(&quot;Info: myenergi: boosting {} by {}&quot;.format(device.name, amount))
+            await self.transport.send_boost(device, amount)
+        elif service == &quot;turn_off&quot;:
+            self.log(&quot;Info: myenergi: cancelling boost on {}&quot;.format(device.name))
+            await self.transport.cancel_boost(device)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --test myenergi &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t8.log 2&gt;&amp;1; tail -35 /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t8.log
+</code></pre>
+<p>Expected: PASS.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2 &amp;&amp; ./run_pre_commit
+git add apps/predbat/myenergi.py apps/predbat/tests/test_myenergi.py
+git commit -m &quot;Add myenergi send and cancel boost controls
+
+Boost switches with a companion number entity for the amount, queued onto the run
+loop so API calls never run on the event thread. A Zappi outside Eco or Eco+ is
+refused locally rather than issuing a call myenergi would reject.
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-9-command-line-test-interface-and-documentation">Task 9: Command line test interface and documentation</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/myenergi.py</code>
+- Modify: <code>docs/components.md</code>
+- Modify: <code>docs/apps-yaml.md</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>MyEnergiAPI</code>, <code>MockBase</code>.
+- Produces: module-level <code>test_myenergi_api(...)</code> coroutine and <code>main()</code>, guarded by <code>if __name__ == "__main__":</code>. Both are <code># pragma: no cover</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Implement the CLI harness</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/myenergi.py</code>:</p>
+<pre><code class="language-python">async def run_myenergi_cli(args):  # pragma: no cover
+    &quot;&quot;&quot;Run one myenergi poll, and optionally a boost command, against the live API.&quot;&quot;&quot;
+    mock_base = MockBase()
+    arg_dict = {
+        &quot;auth_method&quot;: &quot;oauth&quot; if args.token else &quot;direct&quot;,
+        &quot;hub_serial&quot;: args.hub_serial,
+        &quot;api_key&quot;: args.api_key,
+        &quot;key&quot;: args.token,
+        &quot;token_hash&quot;: args.token_hash,
+        &quot;automatic&quot;: False,
+        &quot;enable_controls&quot;: True,
+    }
+    component = MyEnergiAPI(mock_base, **arg_dict)
+    if not component.transport:
+        print(&quot;No usable credentials - pass --hub-serial and --api-key, or --token&quot;)
+        return
+
+    print(&quot;Connecting with the {} transport...&quot;.format(component.auth_method))
+    devices = await component.transport.fetch_devices()
+    if not devices:
+        print(&quot;No Zappi or Eddi devices found&quot;)
+        return
+
+    if args.raw:
+        for device in devices:
+            print(device)
+    else:
+        print(&quot;{:&lt;12} {:&lt;10} {:&lt;16} {:&lt;10} {:&gt;10} {:&gt;12}&quot;.format(&quot;DEVICE&quot;, &quot;KIND&quot;, &quot;STATUS&quot;, &quot;MODE&quot;, &quot;POWER W&quot;, &quot;SESSION kWh&quot;))
+        for device in devices:
+            print(&quot;{:&lt;12} {:&lt;10} {:&lt;16} {:&lt;10} {:&gt;10.0f} {:&gt;12.2f}&quot;.format(device.device_id, device.kind, device.status, device.mode, device.power_w, device.session_energy_kwh))
+
+    target_kind = args.boost or args.cancel_boost
+    if target_kind:
+        device = next((item for item in devices if item.kind == target_kind), None)
+        if not device:
+            print(&quot;No {} device found to control&quot;.format(target_kind))
+            return
+        if args.boost:
+            print(&quot;Boosting {} by {}...&quot;.format(device.name, args.amount))
+            await component.transport.send_boost(device, args.amount)
+        else:
+            print(&quot;Cancelling boost on {}...&quot;.format(device.name))
+            await component.transport.cancel_boost(device)
+        print(&quot;Done&quot;)
+
+
+def main():  # pragma: no cover
+    &quot;&quot;&quot;Main function for command line execution.&quot;&quot;&quot;
+    parser = argparse.ArgumentParser(description=&quot;Test the myenergi API&quot;)
+    parser.add_argument(&quot;--hub-serial&quot;, action=&quot;store&quot;, default=None, help=&quot;myenergi hub serial number (direct transport)&quot;)
+    parser.add_argument(&quot;--api-key&quot;, action=&quot;store&quot;, default=None, help=&quot;myenergi API key from myaccount.myenergi.com (direct transport)&quot;)
+    parser.add_argument(&quot;--token&quot;, action=&quot;store&quot;, default=None, help=&quot;myenergi OAuth access token (cloud transport)&quot;)
+    parser.add_argument(&quot;--token-hash&quot;, action=&quot;store&quot;, default=None, help=&quot;myenergi OAuth token hash for refresh (cloud transport)&quot;)
+    parser.add_argument(&quot;--boost&quot;, choices=SUPPORTED_KINDS, default=None, help=&quot;Send a boost to the first matching device&quot;)
+    parser.add_argument(&quot;--cancel-boost&quot;, choices=SUPPORTED_KINDS, default=None, help=&quot;Cancel a boost on the first matching device&quot;)
+    parser.add_argument(&quot;--amount&quot;, type=int, default=DEFAULT_ZAPPI_BOOST_KWH, help=&quot;Boost amount: kWh for a Zappi, minutes for an Eddi&quot;)
+    parser.add_argument(&quot;--raw&quot;, action=&quot;store_true&quot;, help=&quot;Print the full normalised device records&quot;)
+
+    args = parser.parse_args()
+    asyncio.run(run_myenergi_cli(args))
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Verify the harness runs</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/apps/predbat &amp;&amp; ../../coverage/venv/bin/python myenergi.py --help &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t9.log 2&gt;&amp;1; cat /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t9.log
+</code></pre>
+<p>Expected: the argparse help text, listing every option above. No credentials are needed for <code>--help</code>.</p>
+<p>Then confirm the no-credentials path exits cleanly:</p>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/apps/predbat &amp;&amp; ../../coverage/venv/bin/python myenergi.py &gt;&gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t9.log 2&gt;&amp;1; tail -5 /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/t9.log
+</code></pre>
+<p>Expected: <code>No usable credentials - pass --hub-serial and --api-key, or --token</code>, exit 0.</p>
+<ul>
+<li>[ ] <strong>Step 3: Document the component</strong></li>
+</ul>
+<p>Add to <code>docs/components.md</code>, following the layout of the existing sections (<code>### &lt;Name&gt; (&lt;key&gt;)</code>, then <code>#### What it does</code>, <code>#### When to enable</code>, <code>#### Configuration Options</code>, and any extra subsections, each heading suffixed with the component key):</p>
+<pre><code class="language-markdown">### myenergi (myenergi)
+
+#### What it does (myenergi)
+
+Monitors myenergi Zappi EV chargers and Eddi hot water diverters, publishing their
+status, power and session energy as Predbat entities, and provides send-boost and
+cancel-boost controls.
+
+Predbat supports both of myenergi's APIs:
+
+- **Direct** (default) — HTTP digest authentication against `director.myenergi.net`,
+  using your hub serial number and an API key you generate yourself. This is the same
+  API the `ha-myenergi` Home Assistant integration uses, and any myenergi owner can
+  set it up today.
+- **Cloud OAuth** — the official 3rd party API at `api.s18.myenergi.net`. This needs
+  credentials issued by myenergi through their partner registration process.
+
+#### When to enable (myenergi)
+
+Enable it if you own a Zappi or an Eddi and want Predbat to account for their energy
+use when planning. With `myenergi_automatic` on (the default), Predbat wires the
+sensors up for you:
+
+- Zappi session energy is set as `car_charging_energy`, so charging is subtracted
+  from your house load rather than being learnt as base load. Turn on
+  `car_charging_hold` for that subtraction to take effect.
+- The first Eddi's session energy is set as `iboost_energy_today`, feeding the
+  iboost model.
+
+#### Configuration Options (myenergi)
+
+| Option | Default | Description |
+|---|---|---|
+| `myenergi_auth_method` | `direct` | `direct` or `oauth` |
+| `myenergi_hub_serial` | — | Hub serial number, direct transport |
+| `myenergi_api_key` | — | API key from myaccount.myenergi.com, direct transport |
+| `myenergi_key` | — | OAuth access token, cloud transport |
+| `myenergi_token_hash` | — | OAuth token hash used for refresh, cloud transport |
+| `myenergi_token_expires_at` | — | OAuth access token expiry, cloud transport |
+| `myenergi_automatic` | `True` | Wire the energy sensors into Predbat automatically |
+| `myenergi_enable_controls` | `True` | Set to `False` for monitor-only operation |
+| `myenergi_poll_seconds` | `60` | Poll interval, rounded up to a multiple of 60 |
+
+Example for the direct transport:
+
+```yaml
+myenergi_hub_serial: '12345678'
+myenergi_api_key: 'your-api-key'
+```
+
+#### How to get your API key (myenergi)
+
+1. Sign in at &lt;https://myaccount.myenergi.com&gt;.
+2. Open **Advanced** then **API Key**.
+3. Generate a key for your hub and copy it.
+4. Your hub serial number is printed on the hub and shown in the myenergi app.
+
+#### Published entities (myenergi)
+
+Per Zappi (`{sn}` is the device serial number):
+
+- `sensor.predbat_myenergi_zappi_{sn}_status`, `_mode`, `_plug_status`, `_power`, `_session_energy`
+- `binary_sensor.predbat_myenergi_zappi_{sn}_charging`
+- `switch.predbat_myenergi_zappi_{sn}_boost`, `number.predbat_myenergi_zappi_{sn}_boost_energy`
+
+Per Eddi:
+
+- `sensor.predbat_myenergi_eddi_{sn}_status`, `_power`, `_session_energy`, `_temp_1`, `_temp_2`
+- `switch.predbat_myenergi_eddi_{sn}_boost`, `number.predbat_myenergi_eddi_{sn}_boost_minutes`
+
+Temperature sensors are only published when a probe is connected.
+
+#### Controls (myenergi)
+
+Turning a boost switch on sends a boost of the amount selected on the companion
+number entity — kWh for a Zappi, minutes for an Eddi. Turning it off cancels the
+boost. The switch state is read back from the device, so a boost started or stopped
+in the myenergi app is reflected here too.
+
+myenergi only accepts a Zappi boost while the charger is in Eco or Eco+ mode.
+Predbat checks this first and logs a warning rather than issuing a call that would
+be rejected.
+
+Not implemented in this release: mode selection, priority, minimum green level,
+phase setting, charging schedules, super schedules, managed mode, and Libbi
+batteries. Attempting one of these logs a warning.
+
+#### Known limitation (myenergi)
+
+The session energy sensors reset to zero when a charging or heating session ends.
+Predbat's per-minute load subtraction handles that correctly, so `car_charging_energy`
+is unaffected. However, the `iboost_today` total is derived from the difference
+between the midnight and current readings, so it will under-report if an Eddi session
+resets part-way through the day. The planner's behaviour is unaffected; only the
+reported daily iboost total is.
+</code></pre>
+<p>Add the section to the Table of Contents at the top of <code>docs/components.md</code>.</p>
+<ul>
+<li>[ ] <strong>Step 4: Document the apps.yaml keys</strong></li>
+</ul>
+<p>Add the nine <code>myenergi_*</code> keys to <code>docs/apps-yaml.md</code>, following the format used for the neighbouring <code>fox_*</code> and <code>ohme_*</code> keys in that file.</p>
+<ul>
+<li>[ ] <strong>Step 5: Run the full test suite</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2/coverage &amp;&amp; ./run_all --quick &gt; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/full.log 2&gt;&amp;1; tail -30 /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/full.log; grep -icE &quot;^FAILED|Traceback&quot; /private/tmp/claude-501/-Users-treforsouthwell-batpred2/7ef137ca-438c-4434-b5ef-9af8b509c595/scratchpad/full.log
+</code></pre>
+<p>Expected: every test passes and the grep count is 0. Any pre-existing failure must be confirmed as pre-existing by checking out <code>main</code> and re-running before it is dismissed.</p>
+<ul>
+<li>[ ] <strong>Step 6: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/batpred2 &amp;&amp; ./run_pre_commit
+git add apps/predbat/myenergi.py docs/components.md docs/apps-yaml.md
+git commit -m &quot;Add the myenergi command line harness and documentation
+
+Standalone CLI for exercising either transport against the live API, plus the
+components and apps.yaml documentation, including the iboost_today limitation
+that follows from the session-scoped energy sensors.
+
+Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h2 id="self-review-notes">Self-Review Notes</h2>
+<p>Checked against the spec:</p>
+<ul>
+<li>§2 both APIs → Tasks 3 and 4, with the exact endpoints in the Global Constraints reference table.</li>
+<li>§3 architecture and transport selection → Tasks 2, 3, 4 and 5.</li>
+<li>§3.1 normalised device model → Task 1.</li>
+<li>§4 configuration → Task 6.</li>
+<li>§5 published entities → Task 5. The <code>_boosting</code> binary sensors are absent, matching the spec's note that the boost switch already carries that state.</li>
+<li>§6 automatic configuration and §6.1 the known limitation → Task 7 (docstring) and Task 9 (documentation).</li>
+<li>§7 controls and §7.1 stubs → Tasks 8 and 2.</li>
+<li>§8 polling and error handling → Task 5 (<code>poll_seconds</code> rounding, last-good-reading retention, <code>record_api_call</code> in Tasks 3 and 4).</li>
+<li>§9 CLI → Task 9.</li>
+<li>§10 testing — all nine listed areas are covered: normalisation (1), direct transport (3), cloud transport (4), transport selection (5), publishing (5), auto-config (7), controls (8), stubs (2), error handling (5).</li>
+<li>§11 documentation → Tasks 1 (cspell) and 9 (components.md, apps-yaml.md).</li>
+<li>§12 out of scope — nothing in the plan implements Libbi, webhooks or schedules.</li>
+</ul>
+<p>Type consistency: <code>MyEnergiDevice</code> field names are used identically in Tasks 1, 3, 4, 5, 7 and 8. <code>send_boost(device, amount, target_time=None)</code> and <code>cancel_boost(device)</code> keep the same signature in the ABC (Task 2) and both implementations (Tasks 3, 4), and are called with two positional arguments from Task 8. <code>entity_prefix(device)</code> is defined in Task 5 and used in Tasks 7 and 8.</p>
+<p>One deliberate cross-transport asymmetry is flagged in Task 4: <code>target_time</code> is <code>HH:MM</code> for the direct transport and ISO-8601 for the cloud one. Nothing in this release passes it, so the divergence stays inside the transports; unifying it is a prerequisite for any future smart-boost control.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

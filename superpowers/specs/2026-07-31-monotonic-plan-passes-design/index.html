@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Monotonic tweak_plan and optimise_full_second_pass - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Monotonic tweak_plan and optimise_full_second_pass";
+        var mkdocs_page_input_path = "superpowers/specs/2026-07-31-monotonic-plan-passes-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Monotonic tweak_plan and optimise_full_second_pass</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="monotonic-tweak_plan-and-optimise_full_second_pass">Monotonic <code>tweak_plan</code> and <code>optimise_full_second_pass</code></h1>
+<p><strong>Date:</strong> 2026-07-31
+<strong>Status:</strong> Approved - implemented, but the code it describes has since changed shape</p>
+<blockquote>
+<p><strong>Superseded in part.</strong> <code>tweak_plan</code> and <code>optimise_full_second_pass</code> were later merged into a
+single <code>optimise_plan_pass(end_record, budget)</code>: they were the same loop, differing only in the
+window cap and in an export-window <code>start_orig</code> reset that only <code>tweak_plan</code> performed.
+<code>calculate_second_pass</code> now selects <code>budget=0</code> (every window in the record) rather than a second
+implementation, and it defaults On behind <code>switch.predbat_performance_tweaks</code>.</p>
+<p>The guarantee this document specifies is unchanged and still holds - the merged pass keeps the
+<code>keep_window_change_if_improved</code> check on every window it writes back, and both the budgeted and
+unbudgeted forms are covered by the monotonicity tests in <code>test_export_commitment.py</code>. Only the
+function names and the split between two passes are out of date below.</p>
+</blockquote>
+<h2 id="problem">Problem</h2>
+<p><code>tweak_plan</code> and <code>optimise_full_second_pass</code> can hand back a plan that is worse than the one
+they were given.</p>
+<p>Both iterate the windows in the record period, call <code>optimise_charge_limit</code> or <code>optimise_export</code>
+on one window at a time, and write the result straight back with no check that the whole plan
+improved. Neither pass has a notion of "this made things worse, put it back".</p>
+<p>The symptom reported from the field (PR #4398): during a force export at the highest export price
+of the horizon, a recompute cancelled the export and switched the inverter to Demand. The plan
+handed to <code>tweak_plan</code> had metric -16218.30; the plan it returned had metric -15846.94 — 371.36
+worse — with the running export moved from "start now" to "start 35 minutes from now". The export
+then flapped <code>Exporting -&gt; Demand -&gt; Exporting -&gt; Demand</code> over the next 16 minutes, idling the
+battery through the best-priced hour of the horizon.</p>
+<p>The whole-plan guard in <code>should_replace_plan</code> did not catch it, because that compares the new plan
+against the <em>previous cycle's</em> plan. The value <code>tweak_plan</code> had just destroyed was never visible
+to it.</p>
+<p>Two days of production logs from the reporting system (Kostal, 44.79 kWh, <code>calculate_second_pass</code>
+off) showed 25 of 104 <code>tweak_plan</code> calls regressed the plan — 24%.</p>
+<h2 id="root-cause">Root cause</h2>
+<p>Nothing is blocking the optimisers, and neither is blind to the status quo. <code>optimise_charge_limit</code>
+explicitly forces the current setting into its candidate list (plan.py, "Keep the current setting if
+different from the selected ones"), and <code>optimise_export</code> regenerates the full start grid so the
+current start is re-enumerated. The setting the plan already holds is always scored. It is simply
+not <em>privileged</em>, and it is not scored on the yardstick the plan is finally judged by.</p>
+<p>Three distinct causes, in rough order of how much damage they do at default settings:</p>
+<h3 id="a-the-ranking-score-is-not-the-plan-metric">A. The ranking score is not the plan metric</h3>
+<p>Inside <code>optimise_export</code> the metric carries adjustments the whole-plan metric does not: the
+in-progress export commitment bonus, and small tie-break weightings (-0.002 for off, -0.001 for
+0%). <code>optimise_charge_limit</code> has its own (-0.003 / -0.002 / -0.001, plus
+<code>-max(0.1, metric_min_improvement)</code> when the inverter's live target matches the candidate).</p>
+<p>Maximising that adjusted score can move the plan metric the wrong way. This is the direct cause of
+the reported symptom: the commitment bonus added by #4118 was applied to <em>every</em> candidate in the
+window, including ones starting after <code>minutes_now</code>. Giving "stop now, restart later" the same bonus
+as "keep exporting" cancels it out, so a delayed start scored equal-or-better internally while
+costing the plan 371 metric.</p>
+<h3 id="b-the-reference-point-is-a-fixed-default-not-the-status-quo">B. The reference point is a fixed default, not the status quo</h3>
+<p>Both functions latch their comparison basis on their <em>first</em> candidate:</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>First candidate</th>
+<th>Latched into</th>
+<th>Fallback if nothing wins</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>optimise_charge_limit</code></td>
+<td>highest SoC (<code>try_socs = [loop_soc]</code>)</td>
+<td><code>best_metric_first</code></td>
+<td><code>best_soc = soc_max</code></td>
+</tr>
+<tr>
+<td><code>optimise_export</code></td>
+<td>export off, at the window start</td>
+<td><code>off_metric</code> / <code>off_cost</code></td>
+<td><code>best_export = 100.0</code></td>
+</tr>
+</tbody>
+</table>
+<p>So every window is re-decided as though fresh, against "charge to max" or "do not export".
+Whatever an earlier pass chose has to re-win from scratch against that default, in a context where
+other windows have since moved (<code>optimise_swap_export</code> runs immediately before, and mutates the
+plan).</p>
+<h3 id="c-the-export-gate-is-a-cost-test-but-the-plan-is-judged-on-metric">C. The export gate is a cost test, but the plan is judged on metric</h3>
+<p><code>(cost + min_improvement_scaled) &lt;= off_cost</code> is deliberate — it is the #2984 fix that stops exports
+which only game <code>metric_keep</code> without real cash savings. But the metric also carries battery value,
+cycle cost and carbon, so an export that improves the metric can still fail the cash test and be
+dropped.</p>
+<h3 id="why-hysteresis-is-not-the-main-culprit">Why hysteresis is not the main culprit</h3>
+<p><code>metric_min_improvement</code> defaults to <strong>0.0</strong>, so charge windows have no margin to clear at all.
+<code>metric_min_improvement_export</code> defaults to <strong>0.1</strong>, which scales to roughly 0.4p on a two-hour
+window at a 30-minute plan interval. The min_improvement bar is a minor contributor at defaults.
+Cause A is doing the damage.</p>
+<h2 id="approach">Approach</h2>
+<p>Fixing A or B properly means seeding the reference with the current setting's metric, or stripping
+the adjustments out of the ranking. Both change fresh-plan behaviour, because <code>optimise_levels_pass</code>
+and <code>optimise_detailed_pass</code> call the same two functions — and the levels pass genuinely wants
+fresh-decision semantics. That is a much larger blast radius than this change warrants.</p>
+<p>Instead: leave every selection rule untouched and refuse to write back a net regression. The sibling
+passes already work this way — <code>optimise_swap_export</code> measures, mutates, re-measures and restores;
+<code>optimise_solar</code> snapshots, mutates, re-measures and reverts on a threshold. This brings tweak and
+the second pass in line rather than introducing a new principle.</p>
+<p>This treats the symptom, not the cause. The passes will keep <em>proposing</em> regressions; we stop
+accepting them. See Follow-ups.</p>
+<h2 id="design">Design</h2>
+<h3 id="1-window-snapshot-helpers">1. Window snapshot helpers</h3>
+<p>Every plan mutation in both passes is at index <code>window_n</code>, and neither optimiser touches
+<code>self.*_best</code> at all — both work on copies (<code>try_charge_limit = list(charge_limit)</code>,
+<code>try_export_window = copy.deepcopy(export_window)</code>). So a single-window restore is sufficient; the
+whole-plan deepcopy that <code>optimise_solar</code> uses is not needed here.</p>
+<p>Two helpers on <code>PredBat</code> in <code>plan.py</code>, placed next to <code>should_replace_plan</code>:</p>
+<pre><code class="language-python">def plan_window_snapshot(self, typ, window_n):
+    &quot;&quot;&quot;Copy the single window a pass can modify, so the change can be undone.&quot;&quot;&quot;
+    if typ == &quot;c&quot;:
+        return self.charge_limit_best[window_n]
+    return self.export_limits_best[window_n], copy.deepcopy(self.export_window_best[window_n])
+
+def plan_window_restore(self, typ, window_n, snapshot):
+    &quot;&quot;&quot;Put the window back as it was when plan_window_snapshot() captured it.&quot;&quot;&quot;
+    if typ == &quot;c&quot;:
+        self.charge_limit_best[window_n] = snapshot
+    else:
+        self.export_limits_best[window_n], self.export_window_best[window_n] = snapshot
+</code></pre>
+<p>The export branch copies the <strong>whole window dict</strong> rather than naming <code>start</code> and <code>start_orig</code>
+individually. Same size, but it restores <code>start_orig</code> correctly whether or not it existed
+beforehand, and it will not quietly go wrong if a field is added to the window dict later.</p>
+<p>Restoring by element reassignment is safe: <code>window_links</code> holds only a type and an integer index,
+and both loops re-read <code>self.export_window_best[window_n]</code> each iteration, so no stale reference to
+the replaced dict survives.</p>
+<h3 id="2-the-optimisers-report-the-plan-metric">2. The optimisers report the plan metric</h3>
+<p><code>optimise_charge_limit</code> and <code>optimise_export</code> already simulate the whole plan for every option they try,
+so the guard does not need to simulate again — it needs the number they already have. What they <em>return</em>
+today is unusable for this: <code>best_metric</code> has the ranking adjustments baked in (the -0.003/-0.002/-0.001
+tie-break weightings, the isCharging bonus, the export commitment bonus). Those adjustments are root
+cause A, so comparing on them would leave the guard blind to exactly what it exists to catch.</p>
+<p>Both functions therefore capture the metric straight out of <code>compute_metric</code>, before any adjustment, and
+return it as an extra value:</p>
+<pre><code class="language-python">metric, battery_value = self.compute_metric(...)
+metric_plan = metric        # unadjusted: what this option does to the plan
+... ranking adjustments ...
+</code></pre>
+<p>The adjusted <code>best_metric</code> is still returned and still ranks candidates, so <code>optimise_detailed_pass</code> —
+which uses it as its own accept/reject gate — is untouched. Replacing it outright would strip the
+isCharging and export-commitment stickiness from that gate, changing fresh-plan behaviour.</p>
+<p>Six call sites gain a name for the new value; four of them ignore it.</p>
+<h3 id="3-dead-best_soc_margin-removed">3. Dead <code>best_soc_margin</code> removed</h3>
+<p><code>optimise_charge_limit</code> applied <code>best_soc = min(best_soc + self.best_soc_margin, self.soc_max)</code> <em>after</em>
+selection, which would mean the SoC written back was not the one simulated. The field is dead: assigned
+<code>0.0</code> in <code>fetch.py</code> and <code>0</code> in <code>predbat.py</code> and set nowhere else — no config item, no apps.yaml key, no
+schema entry, unlike its <code>best_soc_min</code>/<code>best_soc_max</code>/<code>best_soc_keep</code> neighbours. Removing it makes
+"the option simulated is the option written back" a property rather than a coincidence.</p>
+<p>The <code>min(..., self.soc_max)</code> clamp stays: <code>best_soc_min_setting</code> is appended to <code>try_socs</code> unclamped.</p>
+<h3 id="4-the-guard-in-both-passes">4. The guard in both passes</h3>
+<p>Each pass measures its baseline once on entry via <code>plan_metric_now()</code>, then wraps each existing window
+change:</p>
+<pre><code class="language-python">snapshot = self.plan_window_snapshot(typ, window_n)
+&lt;existing window change, untouched&gt;
+candidate = (best_metric_plan, best_cost, best_keep, best_cycle, best_carbon, best_import)
+if candidate[0] &lt; selected[0]:   # element 0 is the metric, lower is better
+    selected = candidate
+else:
+    self.plan_window_restore(typ, window_n, snapshot)
+</code></pre>
+<p>This costs <strong>no extra simulation per window</strong> — only the single baseline measurement per pass.</p>
+<p><code>selected</code> is returned at the end of the pass in place of the values previously carried out of the
+last optimise call.</p>
+<p><strong>The baseline cannot come from the caller.</strong> <code>optimise_swap_export</code> runs immediately before both
+passes, mutates the plan, and its return value is discarded at the call site. The <code>best_metric</code> the
+caller holds is therefore already stale by the time either pass is entered.</p>
+<p><strong>Ties are kept (<code>&lt;=</code>).</strong> Only a genuine regression is reverted, matching <code>optimise_swap_export</code>.</p>
+<p>Reverting ties was tried first, on the reasoning that it reduces churn. The random-scenario benchmark
+disagreed: reverting a metric-neutral tie leaves a differently shaped plan of equal value, and the
+passes that run after tweak (<code>optimise_solar</code>, <code>optimise_swap_charge</code>, clipping) amplify that into a
+real difference. Measured over 20 scenarios against <code>main</code>:</p>
+<table>
+<thead>
+<tr>
+<th>tie handling</th>
+<th>unchanged</th>
+<th>better</th>
+<th>worse</th>
+<th>avg metric</th>
+<th>golden file</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>strict <code>&lt;</code></td>
+<td>18</td>
+<td>1 (-0.27)</td>
+<td>1 (+2.52)</td>
+<td>+0.1125 worse</td>
+<td>needed regenerating</td>
+</tr>
+<tr>
+<td><code>&lt;=</code></td>
+<td>19</td>
+<td>1 (-0.27)</td>
+<td>0</td>
+<td>-0.0136 better</td>
+<td>unchanged</td>
+</tr>
+</tbody>
+</table>
+<p>In the one regressing scenario <code>tweak_plan</code> itself finished at metric 256.76 / cost 384.81 under both
+rules - identical. The pass is monotonic either way; the divergence was entirely downstream of a tie
+that cost nothing to make.</p>
+<p>Any log line reads from <code>selected</code> by unpacking it first rather than indexing it positionally.
+Reverts are logged under <code>debug_enable</code>.</p>
+<h3 id="5-scope-the-in-progress-export-commitment-bonus">5. Scope the in-progress export commitment bonus</h3>
+<p>In <code>optimise_export</code>, move</p>
+<pre><code class="language-python">metric -= max(0.5, self.metric_min_improvement_export)
+</code></pre>
+<p>inside the existing <code>if start &lt;= self.minutes_now:</code> so a candidate that starts <em>after</em> the current
+minute no longer receives the in-progress bonus. This matches the <code>keep_export</code> condition that
+already sits directly below it, and is the direct fix for cause A.</p>
+<h3 id="6-signature">6. Signature</h3>
+<p><code>tweak_plan(self, end_record)</code> — the <code>best_metric</code> and <code>metric_keep</code> parameters become unused once
+the baseline is measured internally, so they go, along with the one caller in <code>optimise_all_windows</code>.
+<code>optimise_full_second_pass</code> keeps its signature; its <code>best_soc_min</code> and <code>best_battery_value</code>
+parameters are still passed through unchanged.</p>
+<h2 id="testing">Testing</h2>
+<p>In <code>apps/predbat/tests/test_export_commitment.py</code>:</p>
+<ol>
+<li>
+<p><strong>Prerequisite fix to <code>setup_single_export_window</code>.</strong> <code>Prediction.__init__</code> snapshots <code>soc_kw</code>,
+   <code>soc_max</code> and the rate tables at construction time, but the helper builds it <em>before</em> those are
+   assigned. The prediction object therefore simulates an empty battery (<code>soc_kw = 0.0</code>), every plan
+   in the module costs 0.0, and any assertion on a plan metric is silently a no-op. Move the
+   <code>Prediction(...)</code> construction to after <code>reset_rates</code> / <code>update_rates_export</code>. Verified: the three
+   existing tests still pass, and a metric assertion that previously compared <code>0.0</code> to <code>0.0</code> then
+   reports a real <code>-215.0</code> to <code>-200.0</code> regression.</p>
+</li>
+<li>
+<p><strong><code>tweak_plan</code> reverts a window change that worsens the plan.</strong> Stub <code>optimise_export</code> to return
+   a worse option than the plan holds (export off, start delayed) and assert the limit, the start and
+   the absence of <code>start_orig</code> are all restored, and that the plan metric did not worsen.</p>
+</li>
+<li>
+<p><strong><code>optimise_full_second_pass</code> reverts likewise.</strong> New coverage — the existing
+   <code>optimise_windows_kernel</code> test exercises <code>second_pass=True</code> but only proves the pass still runs.</p>
+</li>
+<li>
+<p><strong>An in-progress export is not restarted later inside its own window.</strong> Covers §5. Needs a
+   capacity-limited battery and a rising price inside the window, so that starting late is genuinely
+   better on the raw metric and only the commitment keeps the running export alive. A flat rate does
+   not discriminate: starting earlier already wins, so the bonus decides nothing.</p>
+</li>
+<li>
+<p><strong>A reported metric equals a fresh whole-plan simulation</strong>, for both the export and charge branches.
+   This is the invariant §2 rests on. The tolerance must stay below the 0.001 tie-break weightings,
+   or reporting the adjusted metric by mistake slips through.</p>
+</li>
+</ol>
+<p>Each new test must be verified to fail with the corresponding production change reverted, not merely
+to pass with it. Mutation battery run: guard disabled, bonus scoping reverted, export reports adjusted
+metric, charge reports adjusted metric, <code>Prediction</code> built before config — 5/5 caught.</p>
+<p>Full suite (<code>./run_all</code>), not just <code>--quick</code>, plus <code>./run_pre_commit</code>. Check <code>run_all</code>'s own summary
+line, not the shell exit code of a compound command.</p>
+<h2 id="risks-and-non-goals">Risks and non-goals</h2>
+<ul>
+<li><strong>The guard's objective excludes the commitment bonus.</strong> An in-progress export that is
+  raw-metric-worse than what the plan already holds will be reverted, because the metric it compares on
+  is the unadjusted one. This follows from the strict comparison and is stated in the helper docstring so
+  it is a documented property rather than a surprise. In practice it rarely bites: in tweak mode the
+  incoming plan already holds the export, so re-selecting it is a no-change tie.</li>
+<li><strong><code>tweak_plan</code>'s 8-window budget is spent on reverted windows too</strong>, so a cycle can burn its budget
+  achieving nothing. Existing behaviour of the cap; not changed here.</li>
+<li><strong>Performance.</strong> No extra simulation per window: the guard reuses the metric the optimiser already
+  computed, and each pass adds only one baseline measurement. Verified in a real plan run that the
+  reported metric matched a fresh simulation on all 16 guard invocations, delta 0.0 on every one.</li>
+<li><strong>Not touching:</strong> <code>optimise_detailed_pass</code>, <code>optimise_levels_pass</code>, <code>optimise_solar</code>,
+  <code>should_replace_plan</code>.</li>
+</ul>
+<h2 id="follow-ups">Follow-ups</h2>
+<p>Open an issue for root causes A and B — the ranking score diverging from the plan metric, and the
+reference point being a fixed default rather than the status quo. Fixing those would make the passes
+monotonic by construction and let the guard become a cheap assertion rather than a correction.</p>
+<p>Fixing A also collapses the two metrics this change has to carry: once ranking no longer applies
+adjustments, <code>best_metric</code> and <code>best_metric_plan</code> are the same number and the extra return value goes
+away, along with the <code>optimise_detailed_pass</code> gate's dependence on the adjusted score.</p>
+<h2 id="provenance">Provenance</h2>
+<p>The diagnosis, the field logs and the performance measurements are from PR #4398 by @mbuhansen.
+This design keeps that analysis and reduces the implementation from roughly 50 lines of helpers to
+about 10, after establishing that only one window changes per iteration.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

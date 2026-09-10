@@ -1,0 +1,2847 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Annual Prediction Web UI Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Annual Prediction Web UI Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-07-26-annual-web-ui.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Annual Prediction Web UI Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="annual-prediction-web-ui-implementation-plan">Annual Prediction Web UI Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Add an <strong>Annual</strong> tab to the Predbat web interface — a form that prefills from the live instance, a subprocess run with a real progress bar, and results as annual totals plus a grouped monthly bar chart, with the last five runs kept in Storage.</p>
+<p><strong>Architecture:</strong> The tab spawns <code>annual_cli.py --machine</code> as a child process; results come back as JSON on stdout and progress as JSON-per-line on stderr, so the child needs no filesystem and no reach into the parent's Storage. <code>annual_job.py</code> owns the process lifecycle and knows no HTML; <code>web_annual.py</code> owns the HTML and knows no process handling; <code>annual_store.py</code> owns the five-run ring.</p>
+<p><strong>Tech Stack:</strong> Python 3, aiohttp (already the web server), <code>asyncio.create_subprocess_exec</code>, ApexCharts (already loaded from CDN by the existing chart pages), Predbat's Storage component.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-07-26-annual-web-ui-design.md</code>
+<strong>Engine spec (already built):</strong> <code>docs/superpowers/specs/2026-07-25-annual-prediction-tool-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li><strong>Line length:</strong> 256 chars (Black), 250 chars (Flake8).</li>
+<li><strong>Docstrings:</strong> 100% coverage — every function <em>and</em> class, including test functions and nested helpers.</li>
+<li><strong>Spelling:</strong> British English (<code>en-gb</code>) via CSpell. New words go in <code>.cspell/custom-dictionary-workspace.txt</code>, which a pre-commit hook auto-sorts — <strong>re-stage it</strong> after running pre-commit. <code>docs/*.md</code> is spell-checked; <code>docs/superpowers/</code> is not.</li>
+<li><strong>String formatting:</strong> <code>"...".format(...)</code>, <strong>not</strong> f-strings, in <code>apps/predbat/*.py</code>.</li>
+<li><strong>Indent:</strong> 4 spaces, never tabs.</li>
+<li><strong>File header:</strong> every new <code>apps/predbat/*.py</code> starts with the five-line copyright block used by all existing modules.</li>
+<li><strong>Storage:</strong> all persistence goes through the Storage component, never direct file access. Reached via <code>self.base.components.get_component("storage")</code>.</li>
+<li><strong>Never re-read <code>apps/predbat/apps.yaml</code> from disk.</strong> Read configuration from the in-memory args dictionary via <code>get_arg()</code>. The file may not exist in some deployments.</li>
+<li><strong>Tests:</strong> registered in <code>TEST_REGISTRY</code> in <code>apps/predbat/unit_test.py</code>; signature <code>def test_name(my_predbat):</code> returning truthy on failure. No network I/O. <strong>No test may spawn the real engine</strong> — <code>annual_job</code> is driven by a stub script.</li>
+<li><strong><code>git add</code> new files BEFORE running pre-commit.</strong> <code>pre-commit --all-files</code> enumerates via <code>git ls-files</code> and silently skips untracked files, producing a false pass. This has bitten this branch repeatedly.</li>
+<li><strong>Pre-commit:</strong> the script is <code>coverage/run_pre_commit</code>, NOT the repo root. Prefer <code>coverage/venv/bin/pre-commit run --files &lt;paths&gt;</code>. A run reporting "files were modified by this hook" has <strong>not</strong> passed — re-stage and re-run until clean.</li>
+<li><strong>Report only what you ran.</strong> Never state a check passed unless you executed it and read the output.</li>
+<li><strong>Tests run from <code>coverage/</code>:</strong> <code>cd coverage &amp;&amp; ./run_all --test &lt;name&gt; &gt; /tmp/out.txt 2&gt;&amp;1</code>, then grep the FILE. Never pipe test output straight to grep.</li>
+<li><strong>The full annual suite takes ~95 seconds.</strong> If it runs for many minutes, stop — that symptom previously meant a test leaked <code>debug_enable</code> onto the shared fixture, disabling the C++ prediction kernel.</li>
+</ul>
+<hr />
+<h2 id="file-structure">File Structure</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps/predbat/tariff_catalogue.py</code></td>
+<td><strong>New.</strong> Curated tariff list as data, the Compare→annual key mapping, and the merge with a user's <code>compare_list</code>.</td>
+</tr>
+<tr>
+<td><code>apps/predbat/annual_job.py</code></td>
+<td><strong>New.</strong> Subprocess lifecycle only: spawn, parse progress, track state, cancel, reap. No HTML, no Storage.</td>
+</tr>
+<tr>
+<td><code>apps/predbat/annual_store.py</code></td>
+<td><strong>New.</strong> The five-run ring over a Storage object: save, list, load, evict, label generation.</td>
+</tr>
+<tr>
+<td><code>apps/predbat/web_annual.py</code></td>
+<td><strong>New.</strong> The tab: prefill, config load/save, form HTML, results HTML, and the five route handlers.</td>
+</tr>
+<tr>
+<td><code>apps/predbat/annual_cli.py</code></td>
+<td><strong>Modify.</strong> Add <code>--machine</code>: results JSON on stdout, progress JSON on stderr, no human table.</td>
+</tr>
+<tr>
+<td><code>apps/predbat/web.py</code></td>
+<td><strong>Modify.</strong> Import, instantiate <code>AnnualPage</code>, register six routes.</td>
+</tr>
+<tr>
+<td><code>apps/predbat/web_helper.py</code></td>
+<td><strong>Modify.</strong> One nav link beside <code>&lt;a href='./compare'&gt;Compare&lt;/a&gt;</code>.</td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_annual_*.py</code></td>
+<td><strong>New.</strong> One test module per new module.</td>
+</tr>
+<tr>
+<td><code>docs/annual-prediction.md</code></td>
+<td><strong>Modify.</strong> Document the tab.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-validated-chart-palette">The validated chart palette</h3>
+<p>The three scenario colours are <strong>not</strong> free choice. Predbat's house chart trio
+(<code>#2196F3</code>, <code>#FF9800</code>, <code>#4CAF50</code>) was measured with the <code>dataviz</code> skill's
+validator and <strong>fails</strong>: green↔orange is ΔE 3.6 under protanopia, far below the
+floor of 8 — meaning roughly 1 in 12 men cannot distinguish "Without Predbat"
+from "With Predbat", the exact comparison this tool exists to make.</p>
+<p>Use the Okabe-Ito trio below. It passes all five checks — lightness band, chroma
+floor, CVD separation across all pairs, normal-vision floor, and contrast — in
+<strong>both</strong> light and dark mode:</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Colour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No PV/Battery</td>
+<td><code>#0072B2</code> (blue)</td>
+</tr>
+<tr>
+<td>Without Predbat</td>
+<td><code>#D55E00</code> (vermillion)</td>
+</tr>
+<tr>
+<td>With Predbat</td>
+<td><code>#009E73</code> (bluish green)</td>
+</tr>
+</tbody>
+</table>
+<p>Worst all-pairs CVD separation is ΔE 11.0 (deutan). Do not substitute
+"Predbat-looking" colours without re-running
+<code>node scripts/validate_palette.js "&lt;hex,hex,hex&gt;" --mode light --pairs all</code> and
+the same for <code>--mode dark</code>.</p>
+<hr />
+<h2 id="task-1-tariff-catalogue">Task 1: Tariff catalogue</h2>
+<p>Pure data plus two small functions. No dependencies, so it goes first and later tasks can rely on it.</p>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/tariff_catalogue.py</code>
+- Create: <code>apps/predbat/tests/test_tariff_catalogue.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing.
+- Produces:
+  - <code>tariff_catalogue.BUILTIN_TARIFFS</code> — list of <code>{"id", "name", "import_octopus_url", "export_octopus_url"}</code>
+  - <code>tariff_catalogue.CUSTOM_ID</code> — the string <code>"custom"</code>
+  - <code>tariff_catalogue.convert_compare_entry(entry) -&gt; dict | None</code>
+  - <code>tariff_catalogue.merged_catalogue(compare_list=None) -&gt; list[dict]</code></p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_tariff_catalogue.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+&quot;&quot;&quot;Tests for the tariff catalogue used by the Annual tab's dropdown.&quot;&quot;&quot;
+
+from tariff_catalogue import BUILTIN_TARIFFS, CUSTOM_ID, convert_compare_entry, merged_catalogue
+
+
+def test_tariff_catalogue(my_predbat):
+    &quot;&quot;&quot;Verify the built-in catalogue, the Compare key mapping, and the merge.&quot;&quot;&quot;
+    failed = False
+    print(&quot;**** Testing tariff_catalogue ****&quot;)
+
+    print(&quot;Test: every built-in entry has an id, a name and at least an import URL&quot;)
+    if not BUILTIN_TARIFFS:
+        print(&quot;  ERROR: the built-in catalogue is empty&quot;)
+        failed = True
+    seen_ids = set()
+    for entry in BUILTIN_TARIFFS:
+        for key in [&quot;id&quot;, &quot;name&quot;]:
+            if not entry.get(key):
+                print(&quot;  ERROR: entry {} is missing '{}'&quot;.format(entry, key))
+                failed = True
+        if not entry.get(&quot;import_octopus_url&quot;) and not entry.get(&quot;rates_import&quot;):
+            print(&quot;  ERROR: entry {} has neither an import URL nor fixed rates&quot;.format(entry.get(&quot;id&quot;)))
+            failed = True
+        if entry.get(&quot;id&quot;) in seen_ids:
+            print(&quot;  ERROR: duplicate id {}&quot;.format(entry.get(&quot;id&quot;)))
+            failed = True
+        seen_ids.add(entry.get(&quot;id&quot;))
+
+    print(&quot;Test: no built-in entry uses Compare's key names&quot;)
+    for entry in BUILTIN_TARIFFS:
+        for stale in [&quot;rates_import_octopus_url&quot;, &quot;rates_export_octopus_url&quot;]:
+            if stale in entry:
+                print(&quot;  ERROR: entry {} still uses Compare's key '{}'&quot;.format(entry.get(&quot;id&quot;), stale))
+                failed = True
+
+    print(&quot;Test: convert_compare_entry maps Compare's URL keys onto the engine's&quot;)
+    converted = convert_compare_entry(
+        {
+            &quot;id&quot;: &quot;agile_agile&quot;,
+            &quot;name&quot;: &quot;Agile import/Agile export&quot;,
+            &quot;rates_import_octopus_url&quot;: &quot;https://example.com/import/&quot;,
+            &quot;rates_export_octopus_url&quot;: &quot;https://example.com/export/&quot;,
+        }
+    )
+    if converted is None:
+        print(&quot;  ERROR: a valid Compare entry should convert&quot;)
+        failed = True
+    else:
+        if converted.get(&quot;import_octopus_url&quot;) != &quot;https://example.com/import/&quot;:
+            print(&quot;  ERROR: import URL not mapped, got {}&quot;.format(converted))
+            failed = True
+        if converted.get(&quot;export_octopus_url&quot;) != &quot;https://example.com/export/&quot;:
+            print(&quot;  ERROR: export URL not mapped, got {}&quot;.format(converted))
+            failed = True
+        if &quot;rates_import_octopus_url&quot; in converted:
+            print(&quot;  ERROR: the Compare key should not survive conversion&quot;)
+            failed = True
+
+    print(&quot;Test: fixed rate structures pass through unchanged&quot;)
+    converted = convert_compare_entry({&quot;id&quot;: &quot;cap&quot;, &quot;name&quot;: &quot;Price cap&quot;, &quot;rates_import&quot;: [{&quot;rate&quot;: 24.86}], &quot;rates_export&quot;: [{&quot;rate&quot;: 4.1}]})
+    if converted is None or converted.get(&quot;rates_import&quot;) != [{&quot;rate&quot;: 24.86}]:
+        print(&quot;  ERROR: fixed rates should pass through, got {}&quot;.format(converted))
+        failed = True
+
+    print(&quot;Test: an entry with no usable rate source is rejected rather than shown&quot;)
+    if convert_compare_entry({&quot;id&quot;: &quot;current&quot;, &quot;name&quot;: &quot;Current Tariff&quot;}) is not None:
+        print(&quot;  ERROR: an entry with no rates should be rejected&quot;)
+        failed = True
+    if convert_compare_entry({&quot;name&quot;: &quot;No id&quot;}) is not None:
+        print(&quot;  ERROR: an entry with no id should be rejected&quot;)
+        failed = True
+    if convert_compare_entry(&quot;not a dict&quot;) is not None:
+        print(&quot;  ERROR: a non-dict should be rejected rather than raising&quot;)
+        failed = True
+
+    print(&quot;Test: merged_catalogue with no user list returns the built-ins plus Custom&quot;)
+    merged = merged_catalogue(None)
+    if len(merged) != len(BUILTIN_TARIFFS) + 1:
+        print(&quot;  ERROR: expected {} entries, got {}&quot;.format(len(BUILTIN_TARIFFS) + 1, len(merged)))
+        failed = True
+    if merged[-1][&quot;id&quot;] != CUSTOM_ID:
+        print(&quot;  ERROR: Custom should be the last entry, got {}&quot;.format(merged[-1]))
+        failed = True
+
+    print(&quot;Test: a user's compare_list is merged in and does not clobber a built-in id&quot;)
+    builtin_id = BUILTIN_TARIFFS[0][&quot;id&quot;]
+    merged = merged_catalogue(
+        [
+            {&quot;id&quot;: builtin_id, &quot;name&quot;: &quot;My override&quot;, &quot;rates_import_octopus_url&quot;: &quot;https://example.com/mine/&quot;},
+            {&quot;id&quot;: &quot;my_tariff&quot;, &quot;name&quot;: &quot;My tariff&quot;, &quot;rates_import&quot;: [{&quot;rate&quot;: 20.0}]},
+        ]
+    )
+    ids = [entry[&quot;id&quot;] for entry in merged]
+    if ids.count(builtin_id) != 1:
+        print(&quot;  ERROR: a user entry sharing a built-in id should not duplicate it, ids were {}&quot;.format(ids))
+        failed = True
+    if &quot;my_tariff&quot; not in ids:
+        print(&quot;  ERROR: a new user entry should appear, ids were {}&quot;.format(ids))
+        failed = True
+
+    print(&quot;Test: a malformed user entry is skipped rather than breaking the dropdown&quot;)
+    merged = merged_catalogue([{&quot;junk&quot;: True}, None, &quot;string&quot;, {&quot;id&quot;: &quot;ok&quot;, &quot;name&quot;: &quot;Ok&quot;, &quot;rates_import&quot;: [{&quot;rate&quot;: 5.0}]}])
+    ids = [entry[&quot;id&quot;] for entry in merged]
+    if &quot;ok&quot; not in ids:
+        print(&quot;  ERROR: the valid entry should survive alongside malformed ones, ids were {}&quot;.format(ids))
+        failed = True
+
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Register the test and run it to verify it fails</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/unit_test.py</code>, alongside the other <code>from tests.test_* import ...</code> lines:</p>
+<pre><code class="language-python">from tests.test_tariff_catalogue import test_tariff_catalogue
+</code></pre>
+<p>and to the <code>TEST_REGISTRY</code> list inside <code>main()</code>:</p>
+<pre><code class="language-python">        (&quot;tariff_catalogue&quot;, test_tariff_catalogue, &quot;Tariff catalogue tests&quot;, False),
+</code></pre>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test tariff_catalogue &gt; /tmp/w1.txt 2&gt;&amp;1; grep -E "ERROR|ModuleNotFound" /tmp/w1.txt</code></p>
+<p>Expected: FAIL with <code>ModuleNotFoundError: No module named 'tariff_catalogue'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Create <code>apps/predbat/tariff_catalogue.py</code></strong></li>
+</ul>
+<p>The entries are transcribed from the commented-out <code>compare_list</code> template in <code>apps/predbat/config/apps.yaml</code> (around lines 531-592), with Compare's key names mapped to the engine's.</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+
+&quot;&quot;&quot;Curated tariff catalogue for the Annual prediction tab's dropdown.
+
+The entries mirror the commented-out ``compare_list`` template in
+``config/apps.yaml`` so a user does not have to hand-copy a YAML block to get a
+realistic tariff. Compare's key names differ from the annual engine's, so the
+mapping lives here and nowhere else.
+&quot;&quot;&quot;
+
+# Compare writes rates_import_octopus_url; the annual engine reads import_octopus_url
+COMPARE_KEY_MAP = {
+    &quot;rates_import_octopus_url&quot;: &quot;import_octopus_url&quot;,
+    &quot;rates_export_octopus_url&quot;: &quot;export_octopus_url&quot;,
+}
+
+# Keys that mean the same thing in both and need no translation
+PASSTHROUGH_KEYS = [&quot;rates_import&quot;, &quot;rates_export&quot;]
+
+# The dropdown's escape hatch: leaves the URL fields blank for a hand-entered tariff
+CUSTOM_ID = &quot;custom&quot;
+
+_OCTOPUS = &quot;https://api.octopus.energy/v1/products&quot;
+
+BUILTIN_TARIFFS = [
+    {&quot;id&quot;: &quot;cap_seg&quot;, &quot;name&quot;: &quot;Price cap import / SEG export&quot;, &quot;rates_import&quot;: [{&quot;rate&quot;: 24.86}], &quot;rates_export&quot;: [{&quot;rate&quot;: 4.1}]},
+    {
+        &quot;id&quot;: &quot;eon_next_drive&quot;,
+        &quot;name&quot;: &quot;Eon Next Drive import / Fixed export&quot;,
+        &quot;rates_import&quot;: [{&quot;rate&quot;: 6.7, &quot;start&quot;: &quot;00:00:00&quot;, &quot;end&quot;: &quot;07:00:00&quot;}, {&quot;rate&quot;: 24.86, &quot;start&quot;: &quot;07:00:00&quot;, &quot;end&quot;: &quot;00:00:00&quot;}],
+        &quot;rates_export&quot;: [{&quot;rate&quot;: 16.5}],
+    },
+    {
+        &quot;id&quot;: &quot;igo_fixed&quot;,
+        &quot;name&quot;: &quot;Intelligent GO import / Fixed export&quot;,
+        &quot;import_octopus_url&quot;: &quot;{}/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+        &quot;export_octopus_url&quot;: &quot;{}/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+    },
+    {
+        &quot;id&quot;: &quot;igo_agile&quot;,
+        &quot;name&quot;: &quot;Intelligent GO import / Agile export&quot;,
+        &quot;import_octopus_url&quot;: &quot;{}/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+        &quot;export_octopus_url&quot;: &quot;{}/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+    },
+    {
+        &quot;id&quot;: &quot;go_fixed&quot;,
+        &quot;name&quot;: &quot;GO import / Fixed export&quot;,
+        &quot;import_octopus_url&quot;: &quot;{}/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+        &quot;export_octopus_url&quot;: &quot;{}/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+    },
+    {
+        &quot;id&quot;: &quot;go_agile&quot;,
+        &quot;name&quot;: &quot;GO import / Agile export&quot;,
+        &quot;import_octopus_url&quot;: &quot;{}/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+        &quot;export_octopus_url&quot;: &quot;{}/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+    },
+    {
+        &quot;id&quot;: &quot;agile_fixed&quot;,
+        &quot;name&quot;: &quot;Agile import / Fixed export&quot;,
+        &quot;import_octopus_url&quot;: &quot;{}/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+        &quot;export_octopus_url&quot;: &quot;{}/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+    },
+    {
+        &quot;id&quot;: &quot;agile_agile&quot;,
+        &quot;name&quot;: &quot;Agile import / Agile export&quot;,
+        &quot;import_octopus_url&quot;: &quot;{}/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+        &quot;export_octopus_url&quot;: &quot;{}/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+    },
+    {
+        &quot;id&quot;: &quot;flux&quot;,
+        &quot;name&quot;: &quot;Flux import / Flux export&quot;,
+        &quot;import_octopus_url&quot;: &quot;{}/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-{{dno_region}}/standard-unit-rates&quot;.format(_OCTOPUS),
+        &quot;export_octopus_url&quot;: &quot;{}/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-{{dno_region}}/standard-unit-rates&quot;.format(_OCTOPUS),
+    },
+    {
+        &quot;id&quot;: &quot;cosy_fixed&quot;,
+        &quot;name&quot;: &quot;Cosy import / Fixed export&quot;,
+        &quot;import_octopus_url&quot;: &quot;{}/COSY-22-12-08/electricity-tariffs/E-1R-COSY-22-12-08-{{dno_region}}/standard-unit-rates&quot;.format(_OCTOPUS),
+        &quot;export_octopus_url&quot;: &quot;{}/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+    },
+    {
+        &quot;id&quot;: &quot;cosy_agile&quot;,
+        &quot;name&quot;: &quot;Cosy import / Agile export&quot;,
+        &quot;import_octopus_url&quot;: &quot;{}/COSY-22-12-08/electricity-tariffs/E-1R-COSY-22-12-08-{{dno_region}}/standard-unit-rates&quot;.format(_OCTOPUS),
+        &quot;export_octopus_url&quot;: &quot;{}/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+    },
+    {
+        &quot;id&quot;: &quot;snug_fixed&quot;,
+        &quot;name&quot;: &quot;Snug import / Fixed export&quot;,
+        &quot;import_octopus_url&quot;: &quot;{}/SNUG-24-11-07/electricity-tariffs/E-1R-SNUG-24-11-07-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+        &quot;export_octopus_url&quot;: &quot;{}/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+    },
+    {
+        &quot;id&quot;: &quot;iflux&quot;,
+        &quot;name&quot;: &quot;Intelligent Flux import / export&quot;,
+        &quot;import_octopus_url&quot;: &quot;{}/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+        # Not a copy-paste slip: the Octopus products API lists only
+        # INTELLI-FLUX-IMPORT-23-07-14, and the export rates live under that same
+        # product code. There is no INTELLI-FLUX-EXPORT product to point at.
+        &quot;export_octopus_url&quot;: &quot;{}/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{{dno_region}}/standard-unit-rates/&quot;.format(_OCTOPUS),
+    },
+]
+
+
+def convert_compare_entry(entry):
+    &quot;&quot;&quot;Convert one Compare ``compare_list`` entry into the annual engine's shape.
+
+    Returns None when the entry cannot be used - it is not a mapping, it has no
+    id, or it carries no rate source at all. Compare allows an entry with neither
+    (the 'current' pseudo-tariff, which means &quot;whatever is configured&quot;), and that
+    has no meaning here, so it is dropped rather than offered as a broken choice.
+    &quot;&quot;&quot;
+    if not isinstance(entry, dict):
+        return None
+    if not entry.get(&quot;id&quot;) or not entry.get(&quot;name&quot;):
+        return None
+
+    converted = {&quot;id&quot;: entry[&quot;id&quot;], &quot;name&quot;: entry[&quot;name&quot;]}
+    for source_key, target_key in COMPARE_KEY_MAP.items():
+        if entry.get(source_key):
+            converted[target_key] = entry[source_key]
+    for key in PASSTHROUGH_KEYS:
+        if entry.get(key):
+            converted[key] = entry[key]
+
+    if not converted.get(&quot;import_octopus_url&quot;) and not converted.get(&quot;rates_import&quot;):
+        return None
+    return converted
+
+
+def merged_catalogue(compare_list=None):
+    &quot;&quot;&quot;Return the dropdown's entries: built-ins, then the user's own, then Custom.
+
+    A user entry sharing a built-in id replaces it rather than appearing twice -
+    the user's own definition is the more specific one. Malformed entries are
+    skipped so one bad line in apps.yaml cannot empty the dropdown.
+    &quot;&quot;&quot;
+    catalogue = [dict(entry) for entry in BUILTIN_TARIFFS]
+    by_id = {entry[&quot;id&quot;]: index for index, entry in enumerate(catalogue)}
+
+    for entry in compare_list or []:
+        converted = convert_compare_entry(entry)
+        if converted is None:
+            continue
+        if converted[&quot;id&quot;] in by_id:
+            catalogue[by_id[converted[&quot;id&quot;]]] = converted
+        else:
+            by_id[converted[&quot;id&quot;]] = len(catalogue)
+            catalogue.append(converted)
+
+    catalogue.append({&quot;id&quot;: CUSTOM_ID, &quot;name&quot;: &quot;Custom - enter URLs below&quot;})
+    return catalogue
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test tariff_catalogue &gt; /tmp/w1.txt 2&gt;&amp;1; grep -E "ERROR|Traceback" /tmp/w1.txt</code></p>
+<p>Expected: no output.</p>
+<ul>
+<li>[ ] <strong>Step 5: Run pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/tariff_catalogue.py apps/predbat/tests/test_tariff_catalogue.py apps/predbat/unit_test.py
+coverage/venv/bin/pre-commit run --files apps/predbat/tariff_catalogue.py apps/predbat/tests/test_tariff_catalogue.py apps/predbat/unit_test.py
+git commit -m &quot;feat(annual): add the tariff catalogue for the Annual tab dropdown&quot;
+</code></pre>
+<hr />
+<h2 id="task-2-machine-mode-for-the-cli">Task 2: Machine mode for the CLI</h2>
+<p>The child process must hand results back over the pipe. <code>annual_cli.py</code> currently prints a human table to stdout and prose progress to stderr, so results cannot simply join stdout. One flag switches both streams together.</p>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/annual_cli.py</code>
+- Modify: <code>apps/predbat/tests/test_annual_cli.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>annual.AnnualPredictor</code> (existing).
+- Produces:
+  - <code>annual_cli.make_progress(quiet, machine=False)</code> — returns a callback writing either <code>[3/12] msg</code> or <code>{"completed": 3, "total": 12, "message": "msg"}</code> to stderr
+  - <code>--machine</code> flag: stdout carries the results document as one JSON object; the human table is suppressed</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/tests/test_annual_cli.py</code> (and add <code>make_progress</code> to its <code>annual_cli</code> import line):</p>
+<pre><code class="language-python">def test_annual_cli_machine(my_predbat):
+    &quot;&quot;&quot;Verify machine mode emits JSON progress on stderr and nothing human on stdout.&quot;&quot;&quot;
+    import io
+    import json
+    import sys
+
+    failed = False
+    print(&quot;**** Testing annual CLI machine mode ****&quot;)
+
+    print(&quot;Test: machine progress writes one JSON object per line to stderr&quot;)
+    captured = io.StringIO()
+    original_stderr = sys.stderr
+    sys.stderr = captured
+    try:
+        progress = make_progress(quiet=False, machine=True)
+        progress(3, 12, &quot;Month 03/2025&quot;)
+    finally:
+        sys.stderr = original_stderr
+
+    line = captured.getvalue().strip()
+    try:
+        parsed = json.loads(line)
+    except ValueError:
+        print(&quot;  ERROR: machine progress should be JSON, got {!r}&quot;.format(line))
+        parsed = {}
+        failed = True
+    if parsed.get(&quot;completed&quot;) != 3 or parsed.get(&quot;total&quot;) != 12 or parsed.get(&quot;message&quot;) != &quot;Month 03/2025&quot;:
+        print(&quot;  ERROR: unexpected progress payload {}&quot;.format(parsed))
+        failed = True
+
+    print(&quot;Test: human progress is unchanged when machine mode is off&quot;)
+    captured = io.StringIO()
+    sys.stderr = captured
+    try:
+        progress = make_progress(quiet=False, machine=False)
+        progress(3, 12, &quot;Month 03/2025&quot;)
+    finally:
+        sys.stderr = original_stderr
+    if &quot;[3/12]&quot; not in captured.getvalue():
+        print(&quot;  ERROR: expected the human form, got {!r}&quot;.format(captured.getvalue()))
+        failed = True
+
+    print(&quot;Test: quiet still suppresses progress in both modes&quot;)
+    if make_progress(quiet=True, machine=False) is not None:
+        print(&quot;  ERROR: quiet should give no progress callback&quot;)
+        failed = True
+    if make_progress(quiet=True, machine=True) is not None:
+        print(&quot;  ERROR: quiet should give no progress callback in machine mode either&quot;)
+        failed = True
+
+    return failed
+</code></pre>
+<p>Register it in <code>apps/predbat/unit_test.py</code>:</p>
+<pre><code class="language-python">from tests.test_annual_cli import test_annual_cli, test_annual_cli_machine
+</code></pre>
+<pre><code class="language-python">        (&quot;annual_cli_machine&quot;, test_annual_cli_machine, &quot;Annual CLI machine mode tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_cli_machine &gt; /tmp/w2.txt 2&gt;&amp;1; grep -E "ERROR|TypeError|cannot import" /tmp/w2.txt</code></p>
+<p>Expected: FAIL — <code>make_progress()</code> does not yet accept <code>machine</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add machine mode to <code>apps/predbat/annual_cli.py</code></strong></li>
+</ul>
+<p>Replace <code>make_progress</code> with:</p>
+<pre><code class="language-python">def make_progress(quiet, machine=False):
+    &quot;&quot;&quot;Return a progress callback writing to stderr, or None when quiet.
+
+    Machine mode emits one JSON object per line so the parent process never has
+    to parse prose - the human wording is free to change without breaking a
+    caller. Progress always goes to stderr so stdout carries only the result,
+    whichever mode is in use.
+    &quot;&quot;&quot;
+    if quiet:
+        return None
+
+    if machine:
+
+        def progress(completed, total, message):
+            &quot;&quot;&quot;Emit one JSON progress record to stderr.&quot;&quot;&quot;
+            sys.stderr.write(json.dumps({&quot;completed&quot;: completed, &quot;total&quot;: total, &quot;message&quot;: message}) + &quot;\n&quot;)
+            sys.stderr.flush()
+
+        return progress
+
+    def progress(completed, total, message):
+        &quot;&quot;&quot;Report progress to stderr so stdout stays parseable.&quot;&quot;&quot;
+        sys.stderr.write(&quot;[{}/{}] {}\n&quot;.format(completed, total, message))
+        sys.stderr.flush()
+
+    return progress
+</code></pre>
+<p>Add the flag in <code>main()</code>, beside the existing arguments:</p>
+<pre><code class="language-python">    parser.add_argument(&quot;--machine&quot;, action=&quot;store_true&quot;, help=&quot;Emit results as JSON on stdout and progress as JSON on stderr, for a calling process&quot;)
+</code></pre>
+<p>Pass it through where the progress callback is built:</p>
+<pre><code class="language-python">        results = asyncio.run(predictor.run(progress=make_progress(args.quiet, machine=args.machine)))
+</code></pre>
+<p>Then replace the output section at the end of <code>main()</code> so machine mode emits JSON and suppresses the table:</p>
+<pre><code class="language-python">    if args.out:
+        try:
+            with open(args.out, &quot;w&quot;, encoding=&quot;utf-8&quot;) as handle:
+                json.dump(results, handle, indent=2)
+        except (OSError, TypeError, ValueError) as error:
+            sys.stderr.write(&quot;Could not write results to {}: {}\n&quot;.format(args.out, error))
+            exit_code = 1
+
+    if args.machine:
+        # The parent reads exactly one JSON object from stdout; the human table would
+        # corrupt it, so it is suppressed rather than merely reordered.
+        json.dump(results, sys.stdout)
+        sys.stdout.write(&quot;\n&quot;)
+    else:
+        print(format_table(results))
+
+    return exit_code
+</code></pre>
+<p>Ensure <code>import json</code> and <code>import sys</code> are present at the top of the file.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k annual_cli &gt; /tmp/w2.txt 2&gt;&amp;1; grep -E "ERROR|Traceback" /tmp/w2.txt</code></p>
+<p>Expected: no output; both <code>annual_cli</code> and <code>annual_cli_machine</code> pass.</p>
+<ul>
+<li>[ ] <strong>Step 5: Verify machine mode by hand</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; echo &quot;annual: {}&quot; &gt; /tmp/bad.yaml &amp;&amp; ./venv/bin/python3 ../apps/predbat/annual_cli.py --config /tmp/bad.yaml --machine; echo &quot;exit=$?&quot;
+</code></pre>
+<p>Expected: a readable config error on stderr and <code>exit=2</code>, with <strong>nothing</strong> on stdout — a parent parsing stdout must not receive half a document on failure. Put the actual output in your report.</p>
+<ul>
+<li>[ ] <strong>Step 6: Run pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/annual_cli.py apps/predbat/tests/test_annual_cli.py apps/predbat/unit_test.py
+coverage/venv/bin/pre-commit run --files apps/predbat/annual_cli.py apps/predbat/tests/test_annual_cli.py apps/predbat/unit_test.py
+git commit -m &quot;feat(annual): add machine mode so a parent process can drive the CLI&quot;
+</code></pre>
+<hr />
+<h2 id="task-3-subprocess-job-control">Task 3: Subprocess job control</h2>
+<p>Owns the child process and nothing else — no HTML, no Storage, no knowledge of what the results mean. That isolation is what lets it be tested against a stub script rather than the real three-minute engine.</p>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/annual_job.py</code>
+- Create: <code>apps/predbat/tests/test_annual_job.py</code>
+- Create: <code>apps/predbat/tests/annual_stub.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing from earlier tasks.
+- Produces:
+  - <code>annual_job.AnnualJob(log)</code> with:
+    - <code>async start(command) -&gt; bool</code> — False if a run is already in progress
+    - <code>async cancel() -&gt; bool</code>
+    - <code>status() -&gt; dict</code> of <code>{state, completed, total, message, elapsed, error}</code>
+    - <code>results</code> — the parsed results document once state is <code>complete</code>, else None
+    - <code>state</code> — one of <code>idle</code>, <code>running</code>, <code>complete</code>, <code>failed</code>, <code>cancelled</code></p>
+<ul>
+<li>[ ] <strong>Step 1: Write the stub child process</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/annual_stub.py</code>. This stands in for <code>annual_cli.py</code> so no test ever spawns the real engine:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+
+&quot;&quot;&quot;A stand-in for annual_cli.py --machine, used to drive AnnualJob in tests.
+
+Behaviour is chosen by argv[1] so one script covers every case the job control
+has to survive, without ever running the real three-minute engine.
+&quot;&quot;&quot;
+
+import json
+import sys
+import time
+
+
+def main():
+    &quot;&quot;&quot;Emit the behaviour named by argv[1] and exit with a matching code.&quot;&quot;&quot;
+    mode = sys.argv[1] if len(sys.argv) &gt; 1 else &quot;ok&quot;
+
+    if mode == &quot;ok&quot;:
+        for step in range(1, 4):
+            sys.stderr.write(json.dumps({&quot;completed&quot;: step, &quot;total&quot;: 3, &quot;message&quot;: &quot;step {}&quot;.format(step)}) + &quot;\n&quot;)
+            sys.stderr.flush()
+        json.dump({&quot;year&quot;: 2025, &quot;months&quot;: [], &quot;annual&quot;: {&quot;months_included&quot;: 0}}, sys.stdout)
+        return 0
+
+    if mode == &quot;garbage_progress&quot;:
+        sys.stderr.write(&quot;not json at all\n&quot;)
+        sys.stderr.write(json.dumps({&quot;completed&quot;: 1, &quot;total&quot;: 1, &quot;message&quot;: &quot;recovered&quot;}) + &quot;\n&quot;)
+        sys.stderr.flush()
+        json.dump({&quot;year&quot;: 2025, &quot;months&quot;: [], &quot;annual&quot;: {&quot;months_included&quot;: 0}}, sys.stdout)
+        return 0
+
+    if mode == &quot;fail&quot;:
+        sys.stderr.write(&quot;something went wrong\n&quot;)
+        return 3
+
+    if mode == &quot;bad_output&quot;:
+        sys.stdout.write(&quot;this is not json&quot;)
+        return 0
+
+    if mode == &quot;hang&quot;:
+        while True:
+            time.sleep(0.1)
+
+    return 0
+
+
+if __name__ == &quot;__main__&quot;:
+    sys.exit(main())
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Write the failing test</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_annual_job.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+&quot;&quot;&quot;Tests for the Annual tab's subprocess job control.&quot;&quot;&quot;
+
+import asyncio
+import os
+import sys
+
+from annual_job import AnnualJob
+
+STUB = os.path.join(os.path.dirname(__file__), &quot;annual_stub.py&quot;)
+
+
+def stub_command(mode):
+    &quot;&quot;&quot;Return the argv for the stub child in the given mode.&quot;&quot;&quot;
+    return [sys.executable, STUB, mode]
+
+
+async def run_to_completion(job, mode, timeout=20):
+    &quot;&quot;&quot;Start the stub in the given mode and wait for the job to leave 'running'.&quot;&quot;&quot;
+    started = await job.start(stub_command(mode))
+    waited = 0.0
+    while job.state == &quot;running&quot; and waited &lt; timeout:
+        await asyncio.sleep(0.1)
+        waited += 0.1
+    return started
+
+
+def test_annual_job(my_predbat):
+    &quot;&quot;&quot;Verify progress parsing, completion, failure, cancellation and refusal to double-run.&quot;&quot;&quot;
+    failed = False
+    print(&quot;**** Testing annual_job ****&quot;)
+    messages = []
+
+    print(&quot;Test: a successful run parses progress and returns the results document&quot;)
+    job = AnnualJob(log=messages.append)
+    started = asyncio.run(run_to_completion(job, &quot;ok&quot;))
+    if not started:
+        print(&quot;  ERROR: start() should return True for a fresh job&quot;)
+        failed = True
+    if job.state != &quot;complete&quot;:
+        print(&quot;  ERROR: expected state 'complete', got {} ({})&quot;.format(job.state, job.status().get(&quot;error&quot;)))
+        failed = True
+    if job.status().get(&quot;completed&quot;) != 3 or job.status().get(&quot;total&quot;) != 3:
+        print(&quot;  ERROR: final progress should be 3/3, got {}&quot;.format(job.status()))
+        failed = True
+    if (job.results or {}).get(&quot;year&quot;) != 2025:
+        print(&quot;  ERROR: the results document should be parsed from stdout, got {}&quot;.format(job.results))
+        failed = True
+
+    print(&quot;Test: a malformed progress line does not crash the parser&quot;)
+    job = AnnualJob(log=messages.append)
+    asyncio.run(run_to_completion(job, &quot;garbage_progress&quot;))
+    if job.state != &quot;complete&quot;:
+        print(&quot;  ERROR: a garbage progress line should not fail the run, got {}&quot;.format(job.state))
+        failed = True
+    if job.status().get(&quot;message&quot;) != &quot;recovered&quot;:
+        print(&quot;  ERROR: parsing should recover after a bad line, got {}&quot;.format(job.status()))
+        failed = True
+
+    print(&quot;Test: a non-zero exit is reported as failed, with the child's stderr kept&quot;)
+    job = AnnualJob(log=messages.append)
+    asyncio.run(run_to_completion(job, &quot;fail&quot;))
+    if job.state != &quot;failed&quot;:
+        print(&quot;  ERROR: expected state 'failed', got {}&quot;.format(job.state))
+        failed = True
+    error_text = job.status().get(&quot;error&quot;) or &quot;&quot;
+    if &quot;something went wrong&quot; not in error_text:
+        print(&quot;  ERROR: the child's stderr should be reported, got {!r}&quot;.format(error_text))
+        failed = True
+    if &quot;3&quot; not in error_text:
+        print(&quot;  ERROR: the exit code should be reported, got {!r}&quot;.format(error_text))
+        failed = True
+
+    print(&quot;Test: unparseable stdout is reported as failed rather than a silent empty result&quot;)
+    job = AnnualJob(log=messages.append)
+    asyncio.run(run_to_completion(job, &quot;bad_output&quot;))
+    if job.state != &quot;failed&quot;:
+        print(&quot;  ERROR: unparseable output should fail the run, got {}&quot;.format(job.state))
+        failed = True
+    if job.results is not None:
+        print(&quot;  ERROR: no results should be exposed after a parse failure, got {}&quot;.format(job.results))
+        failed = True
+
+    print(&quot;Test: a second start while running is refused, and cancel stops the child&quot;)
+
+    async def double_start_then_cancel():
+        &quot;&quot;&quot;Start a hanging child, try to start another, then cancel.&quot;&quot;&quot;
+        job = AnnualJob(log=messages.append)
+        first = await job.start(stub_command(&quot;hang&quot;))
+        await asyncio.sleep(0.5)
+        second = await job.start(stub_command(&quot;hang&quot;))
+        cancelled = await job.cancel()
+        waited = 0.0
+        while job.state == &quot;running&quot; and waited &lt; 10:
+            await asyncio.sleep(0.1)
+            waited += 0.1
+        return first, second, cancelled, job
+
+    first, second, cancelled, job = asyncio.run(double_start_then_cancel())
+    if not first:
+        print(&quot;  ERROR: the first start should succeed&quot;)
+        failed = True
+    if second:
+        print(&quot;  ERROR: a second start while running must be refused&quot;)
+        failed = True
+    if not cancelled:
+        print(&quot;  ERROR: cancel should report that it acted&quot;)
+        failed = True
+    if job.state != &quot;cancelled&quot;:
+        print(&quot;  ERROR: expected state 'cancelled', got {}&quot;.format(job.state))
+        failed = True
+
+    print(&quot;Test: a fresh job reports idle with no results&quot;)
+    job = AnnualJob(log=messages.append)
+    if job.state != &quot;idle&quot; or job.results is not None:
+        print(&quot;  ERROR: a fresh job should be idle with no results, got {} / {}&quot;.format(job.state, job.results))
+        failed = True
+    if job.status().get(&quot;elapsed&quot;) != 0:
+        print(&quot;  ERROR: an idle job should report zero elapsed, got {}&quot;.format(job.status()))
+        failed = True
+
+    return failed
+</code></pre>
+<p>Register it in <code>apps/predbat/unit_test.py</code>:</p>
+<pre><code class="language-python">from tests.test_annual_job import test_annual_job
+</code></pre>
+<pre><code class="language-python">        (&quot;annual_job&quot;, test_annual_job, &quot;Annual subprocess job control tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Run the test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_job &gt; /tmp/w3.txt 2&gt;&amp;1; grep -E "ERROR|ModuleNotFound" /tmp/w3.txt</code></p>
+<p>Expected: FAIL with <code>ModuleNotFoundError: No module named 'annual_job'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 4: Create <code>apps/predbat/annual_job.py</code></strong></li>
+</ul>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+
+&quot;&quot;&quot;Subprocess control for the Annual prediction run.
+
+The annual engine is one to three minutes of synchronous CPU work - two to six
+with a car - so running it inside the web server's event loop would freeze the
+whole Predbat interface and the five minute optimiser loop that shares it. It
+runs as a child process instead, handing progress back on stderr and the results
+document on stdout.
+
+This module owns the process and nothing else: no HTML, no Storage, no opinion
+about what the results mean. That is what lets it be tested against a stub child
+rather than the real engine.
+&quot;&quot;&quot;
+
+import asyncio
+import json
+import time
+
+# How much of the child's stderr to keep for the failure message. Enough to carry
+# a traceback, bounded so a chatty failure cannot grow without limit.
+MAX_ERROR_LINES = 20
+
+# Grace period between asking the child to stop and killing it outright
+CANCEL_GRACE_SECONDS = 5.0
+
+
+class AnnualJob:
+    &quot;&quot;&quot;Runs one annual prediction child process at a time and tracks its progress.&quot;&quot;&quot;
+
+    def __init__(self, log):
+        &quot;&quot;&quot;Create an idle job that logs through the supplied callable.&quot;&quot;&quot;
+        self.log = log
+        self.state = &quot;idle&quot;
+        self.completed = 0
+        self.total = 0
+        self.message = &quot;&quot;
+        self.error = None
+        self.results = None
+        self.started_at = None
+        self._process = None
+        self._stderr_tail = []
+
+    def status(self):
+        &quot;&quot;&quot;Return a JSON-serialisable snapshot for the polling endpoint.&quot;&quot;&quot;
+        elapsed = 0
+        if self.started_at is not None:
+            end = self.started_at if self.state == &quot;idle&quot; else time.time()
+            elapsed = int(end - self.started_at)
+        return {
+            &quot;state&quot;: self.state,
+            &quot;completed&quot;: self.completed,
+            &quot;total&quot;: self.total,
+            &quot;message&quot;: self.message,
+            &quot;elapsed&quot;: elapsed,
+            &quot;error&quot;: self.error,
+        }
+
+    async def start(self, command):
+        &quot;&quot;&quot;Spawn the child. Returns False when a run is already in progress.
+
+        Refusing rather than queueing is deliberate: two annual runs on the same
+        machine would compete for the same CPU and both would take twice as long.
+        &quot;&quot;&quot;
+        if self.state == &quot;running&quot;:
+            self.log(&quot;Warn: Annual: a run is already in progress, refusing to start another&quot;)
+            return False
+
+        self.state = &quot;running&quot;
+        self.completed = 0
+        self.total = 0
+        self.message = &quot;Starting&quot;
+        self.error = None
+        self.results = None
+        self.started_at = time.time()
+        self._stderr_tail = []
+
+        try:
+            self._process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        except (OSError, ValueError) as exception:
+            self.state = &quot;failed&quot;
+            self.error = &quot;Could not start the annual run: {}&quot;.format(exception)
+            self.log(&quot;Warn: Annual: {}&quot;.format(self.error))
+            return False
+
+        asyncio.ensure_future(self._supervise())
+        return True
+
+    async def cancel(self):
+        &quot;&quot;&quot;Ask the child to stop, killing it if it does not. Returns False if nothing was running.&quot;&quot;&quot;
+        if self.state != &quot;running&quot; or self._process is None:
+            return False
+        self.state = &quot;cancelled&quot;
+        self.message = &quot;Cancelled&quot;
+        try:
+            self._process.terminate()
+        except ProcessLookupError:
+            return True
+        try:
+            await asyncio.wait_for(self._process.wait(), timeout=CANCEL_GRACE_SECONDS)
+        except asyncio.TimeoutError:
+            self.log(&quot;Warn: Annual: the run did not stop when asked, killing it&quot;)
+            try:
+                self._process.kill()
+            except ProcessLookupError:
+                pass
+        return True
+
+    async def _read_progress(self, stream):
+        &quot;&quot;&quot;Consume the child's stderr, updating progress and keeping a tail for errors.&quot;&quot;&quot;
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            text = line.decode(&quot;utf-8&quot;, errors=&quot;replace&quot;).strip()
+            if not text:
+                continue
+            self._stderr_tail.append(text)
+            if len(self._stderr_tail) &gt; MAX_ERROR_LINES:
+                self._stderr_tail.pop(0)
+            try:
+                record = json.loads(text)
+            except ValueError:
+                # Not a progress record - the child is allowed to write plain
+                # warnings to stderr, and one bad line must not stop the parse.
+                continue
+            if isinstance(record, dict) and &quot;completed&quot; in record:
+                self.completed = record.get(&quot;completed&quot;, self.completed)
+                self.total = record.get(&quot;total&quot;, self.total)
+                self.message = record.get(&quot;message&quot;, self.message)
+
+    async def _supervise(self):
+        &quot;&quot;&quot;Read both streams to completion, then settle the final state.&quot;&quot;&quot;
+        process = self._process
+        try:
+            stdout_data, _ = await asyncio.gather(process.stdout.read(), self._read_progress(process.stderr))
+            await process.wait()
+        except (OSError, ValueError) as exception:
+            self.state = &quot;failed&quot;
+            self.error = &quot;The annual run could not be read: {}&quot;.format(exception)
+            self.log(&quot;Warn: Annual: {}&quot;.format(self.error))
+            return
+
+        if self.state == &quot;cancelled&quot;:
+            return
+
+        tail = &quot;\n&quot;.join(self._stderr_tail)
+
+        if process.returncode != 0:
+            self.state = &quot;failed&quot;
+            self.error = &quot;The annual run exited with code {}.\n{}&quot;.format(process.returncode, tail)
+            self.log(&quot;Warn: Annual: {}&quot;.format(self.error))
+            return
+
+        try:
+            self.results = json.loads(stdout_data.decode(&quot;utf-8&quot;, errors=&quot;replace&quot;))
+        except ValueError as exception:
+            # A zero exit with unreadable output is worse than a crash: it would
+            # otherwise render as an empty result that looks like a real answer.
+            self.state = &quot;failed&quot;
+            self.results = None
+            self.error = &quot;The annual run finished but its output could not be read: {}\n{}&quot;.format(exception, tail)
+            self.log(&quot;Warn: Annual: {}&quot;.format(self.error))
+            return
+
+        self.state = &quot;complete&quot;
+        self.message = &quot;Complete&quot;
+        if self.total:
+            self.completed = self.total
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_job &gt; /tmp/w3.txt 2&gt;&amp;1; grep -E "ERROR|Traceback" /tmp/w3.txt</code></p>
+<p>Expected: no output. If the cancel case hangs, check that <code>terminate()</code> is reached before <code>wait()</code> and that the stub's <code>hang</code> mode is actually being spawned.</p>
+<ul>
+<li>[ ] <strong>Step 6: Run pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/annual_job.py apps/predbat/tests/test_annual_job.py apps/predbat/tests/annual_stub.py apps/predbat/unit_test.py
+coverage/venv/bin/pre-commit run --files apps/predbat/annual_job.py apps/predbat/tests/test_annual_job.py apps/predbat/tests/annual_stub.py apps/predbat/unit_test.py
+git commit -m &quot;feat(annual): add subprocess job control for the Annual tab&quot;
+</code></pre>
+<hr />
+<h2 id="task-4-the-run-store">Task 4: The run store</h2>
+<p>A five-run ring over a Storage object. Keeping the ring here rather than in the web layer means the eviction rule has one implementation and one test.</p>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/annual_store.py</code>
+- Create: <code>apps/predbat/tests/test_annual_store.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: a Storage object exposing <code>async save(module, filename, data, format=...)</code>, <code>async load(module, filename)</code>.
+- Produces:
+  - <code>annual_store.MAX_RUNS</code> (5), <code>annual_store.STORAGE_MODULE</code> (<code>"annual"</code>), <code>annual_store.INDEX_NAME</code> (<code>"runs_index"</code>)
+  - <code>annual_store.build_label(config) -&gt; str</code>
+  - <code>annual_store.save_run(storage, results, config, run_id) -&gt; str</code> (async)
+  - <code>annual_store.list_runs(storage) -&gt; list[dict]</code> (async)
+  - <code>annual_store.load_run(storage, run_id) -&gt; dict | None</code> (async)</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_annual_store.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+&quot;&quot;&quot;Tests for the Annual tab's five-run store.&quot;&quot;&quot;
+
+import asyncio
+
+from annual_store import INDEX_NAME, MAX_RUNS, STORAGE_MODULE, build_label, list_runs, load_run, save_run
+
+
+class FakeStorage:
+    &quot;&quot;&quot;An in-memory stand-in for the Storage component.&quot;&quot;&quot;
+
+    def __init__(self):
+        &quot;&quot;&quot;Start with nothing stored.&quot;&quot;&quot;
+        self.store = {}
+        self.deleted = []
+
+    async def save(self, module, filename, data, format=&quot;yaml&quot;, expiry=None):
+        &quot;&quot;&quot;Record a saved value.&quot;&quot;&quot;
+        self.store[(module, filename)] = data
+
+    async def load(self, module, filename):
+        &quot;&quot;&quot;Return a stored value, or None.&quot;&quot;&quot;
+        return self.store.get((module, filename))
+
+    async def delete(self, module, filename):
+        &quot;&quot;&quot;Remove a stored value and record that it happened.&quot;&quot;&quot;
+        self.deleted.append(filename)
+        self.store.pop((module, filename), None)
+
+
+def sample_results(cost):
+    &quot;&quot;&quot;Return a minimal results document with a distinguishing cost.&quot;&quot;&quot;
+    return {&quot;year&quot;: 2025, &quot;annual&quot;: {&quot;scenarios&quot;: {&quot;with_predbat&quot;: {&quot;cost_p&quot;: cost}}, &quot;months_included&quot;: 12}, &quot;months&quot;: []}
+
+
+def sample_config(size_kwh=9.5):
+    &quot;&quot;&quot;Return a minimal validated-shape config.&quot;&quot;&quot;
+    return {&quot;battery&quot;: {&quot;size_kwh&quot;: size_kwh}, &quot;solar&quot;: [{&quot;kwp&quot;: 5.6}], &quot;tariff&quot;: {&quot;import_octopus_url&quot;: &quot;https://example.com/AGILE-24-10-01/x&quot;}}
+
+
+def test_annual_store(my_predbat):
+    &quot;&quot;&quot;Verify saving, listing, loading, eviction and label generation.&quot;&quot;&quot;
+    failed = False
+    print(&quot;**** Testing annual_store ****&quot;)
+
+    print(&quot;Test: a saved run appears in the index and can be loaded back&quot;)
+    storage = FakeStorage()
+    run_id = asyncio.run(save_run(storage, sample_results(100), sample_config(), &quot;run-1&quot;))
+    if run_id != &quot;run-1&quot;:
+        print(&quot;  ERROR: save_run should return the id it was given, got {}&quot;.format(run_id))
+        failed = True
+    index = asyncio.run(list_runs(storage))
+    if len(index) != 1 or index[0][&quot;id&quot;] != &quot;run-1&quot;:
+        print(&quot;  ERROR: expected one indexed run, got {}&quot;.format(index))
+        failed = True
+    loaded = asyncio.run(load_run(storage, &quot;run-1&quot;))
+    if (loaded or {}).get(&quot;annual&quot;, {}).get(&quot;scenarios&quot;, {}).get(&quot;with_predbat&quot;, {}).get(&quot;cost_p&quot;) != 100:
+        print(&quot;  ERROR: the loaded run should match what was saved, got {}&quot;.format(loaded))
+        failed = True
+
+    print(&quot;Test: the index is newest-first&quot;)
+    asyncio.run(save_run(storage, sample_results(200), sample_config(), &quot;run-2&quot;))
+    index = asyncio.run(list_runs(storage))
+    if [entry[&quot;id&quot;] for entry in index] != [&quot;run-2&quot;, &quot;run-1&quot;]:
+        print(&quot;  ERROR: expected newest first, got {}&quot;.format([entry[&quot;id&quot;] for entry in index]))
+        failed = True
+
+    print(&quot;Test: a sixth run evicts the oldest AND deletes its stored document&quot;)
+    storage = FakeStorage()
+    for number in range(1, MAX_RUNS + 2):
+        asyncio.run(save_run(storage, sample_results(number), sample_config(), &quot;run-{}&quot;.format(number)))
+    index = asyncio.run(list_runs(storage))
+    if len(index) != MAX_RUNS:
+        print(&quot;  ERROR: the ring should hold {} runs, got {}&quot;.format(MAX_RUNS, len(index)))
+        failed = True
+    if &quot;run-1&quot; in [entry[&quot;id&quot;] for entry in index]:
+        print(&quot;  ERROR: the oldest run should have been evicted from the index&quot;)
+        failed = True
+    if &quot;run_run-1&quot; not in storage.deleted:
+        print(&quot;  ERROR: the evicted run's document should be deleted, deletions were {}&quot;.format(storage.deleted))
+        failed = True
+    if asyncio.run(load_run(storage, &quot;run-1&quot;)) is not None:
+        print(&quot;  ERROR: an evicted run should no longer load&quot;)
+        failed = True
+
+    print(&quot;Test: loading an unknown or missing run returns None rather than raising&quot;)
+    if asyncio.run(load_run(storage, &quot;does-not-exist&quot;)) is not None:
+        print(&quot;  ERROR: an unknown run id should give None&quot;)
+        failed = True
+
+    print(&quot;Test: an index entry whose document is missing is reported, not rendered empty&quot;)
+    storage = FakeStorage()
+    asyncio.run(save_run(storage, sample_results(1), sample_config(), &quot;orphan&quot;))
+    storage.store.pop((STORAGE_MODULE, &quot;run_orphan&quot;))
+    if asyncio.run(load_run(storage, &quot;orphan&quot;)) is not None:
+        print(&quot;  ERROR: a missing document should give None so the caller can say so&quot;)
+        failed = True
+
+    print(&quot;Test: an empty store lists nothing rather than raising&quot;)
+    if asyncio.run(list_runs(FakeStorage())) != []:
+        print(&quot;  ERROR: an empty store should list no runs&quot;)
+        failed = True
+
+    print(&quot;Test: the label describes the configuration, not just a timestamp&quot;)
+    label = build_label(sample_config(size_kwh=9.5))
+    if &quot;9.5&quot; not in label or &quot;5.6&quot; not in label:
+        print(&quot;  ERROR: the label should name the battery and array size, got {!r}&quot;.format(label))
+        failed = True
+    if &quot;Agile&quot; not in label:
+        print(&quot;  ERROR: the label should name the tariff, got {!r}&quot;.format(label))
+        failed = True
+
+    print(&quot;Test: a label is still produced for a config with no battery or solar&quot;)
+    label = build_label({&quot;tariff&quot;: {&quot;rates_import&quot;: [{&quot;rate&quot;: 25.0}]}})
+    if not label:
+        print(&quot;  ERROR: a sparse config should still produce a label&quot;)
+        failed = True
+
+    print(&quot;Test: the index survives a corrupt stored value&quot;)
+    storage = FakeStorage()
+    storage.store[(STORAGE_MODULE, INDEX_NAME)] = &quot;not a list&quot;
+    if asyncio.run(list_runs(storage)) != []:
+        print(&quot;  ERROR: a corrupt index should read as empty rather than raising&quot;)
+        failed = True
+
+    return failed
+</code></pre>
+<p>Register it in <code>apps/predbat/unit_test.py</code>:</p>
+<pre><code class="language-python">from tests.test_annual_store import test_annual_store
+</code></pre>
+<pre><code class="language-python">        (&quot;annual_store&quot;, test_annual_store, &quot;Annual run store tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_store &gt; /tmp/w4.txt 2&gt;&amp;1; grep -E "ERROR|ModuleNotFound" /tmp/w4.txt</code></p>
+<p>Expected: FAIL with <code>ModuleNotFoundError: No module named 'annual_store'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Create <code>apps/predbat/annual_store.py</code></strong></li>
+</ul>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+
+&quot;&quot;&quot;Storage-backed history of annual prediction runs.
+
+Keeps the most recent runs so a user can flip between &quot;with a 5 kWh battery&quot; and
+&quot;with a 10 kWh battery&quot; without re-running either. Everything goes through the
+Storage abstraction rather than the filesystem, because there may not be one.
+&quot;&quot;&quot;
+
+MAX_RUNS = 5
+STORAGE_MODULE = &quot;annual&quot;
+INDEX_NAME = &quot;runs_index&quot;
+
+
+def _run_key(run_id):
+    &quot;&quot;&quot;Return the storage filename holding one run's results document.&quot;&quot;&quot;
+    return &quot;run_{}&quot;.format(run_id)
+
+
+def _describe_tariff(tariff):
+    &quot;&quot;&quot;Return a short human name for the tariff a run used.&quot;&quot;&quot;
+    if not isinstance(tariff, dict):
+        return &quot;tariff&quot;
+    url = tariff.get(&quot;import_octopus_url&quot;) or &quot;&quot;
+    for name in [&quot;AGILE&quot;, &quot;INTELLI-FLUX&quot;, &quot;INTELLI&quot;, &quot;FLUX&quot;, &quot;COSY&quot;, &quot;SNUG&quot;, &quot;GO&quot;]:
+        if name in url.upper():
+            return name.title().replace(&quot;Intelli-Flux&quot;, &quot;Intelligent Flux&quot;).replace(&quot;Intelli&quot;, &quot;Intelligent Go&quot;)
+    if tariff.get(&quot;rates_import&quot;):
+        return &quot;fixed rates&quot;
+    return &quot;tariff&quot;
+
+
+def build_label(config):
+    &quot;&quot;&quot;Return a short human label describing the configuration a run used.
+
+    A selector listing five bare timestamps tells the user nothing about which
+    run was which, which defeats the point of keeping more than one.
+    &quot;&quot;&quot;
+    # Normalise once: `config or {}` is NOT enough, because any truthy non-dict
+    # (a string, an int, a non-empty list - i.e. a corrupted stored document)
+    # short-circuits past it and then raises on .get(). A label failure must never
+    # take out the page the user needs in order to start a fresh run.
+    config = config if isinstance(config, dict) else {}
+
+    parts = []
+    battery = config.get(&quot;battery&quot;)
+    if isinstance(battery, dict) and battery.get(&quot;size_kwh&quot;):
+        parts.append(&quot;{}kWh battery&quot;.format(battery[&quot;size_kwh&quot;]))
+    else:
+        parts.append(&quot;no battery&quot;)
+
+    solar = config.get(&quot;solar&quot;)
+    if solar:
+        total_kwp = sum(array.get(&quot;kwp&quot;, 0) for array in solar if isinstance(array, dict))
+        if total_kwp:
+            parts.append(&quot;{}kWp&quot;.format(round(total_kwp, 2)))
+    else:
+        parts.append(&quot;no solar&quot;)
+
+    parts.append(_describe_tariff(config.get(&quot;tariff&quot;)))
+    return &quot; · &quot;.join(parts)
+
+
+async def list_runs(storage):
+    &quot;&quot;&quot;Return the stored runs newest-first, or an empty list when there are none.
+
+    A corrupt or unexpected index reads as empty rather than raising: the tab
+    must still render so the user can start a fresh run.
+    &quot;&quot;&quot;
+    if not storage:
+        return []
+    index = await storage.load(STORAGE_MODULE, INDEX_NAME)
+    if not isinstance(index, list):
+        return []
+    return [entry for entry in index if isinstance(entry, dict) and entry.get(&quot;id&quot;)]
+
+
+async def load_run(storage, run_id):
+    &quot;&quot;&quot;Return one run's results document, or None when it is unknown or missing.&quot;&quot;&quot;
+    if not storage or not run_id:
+        return None
+    return await storage.load(STORAGE_MODULE, _run_key(run_id))
+
+
+async def save_run(storage, results, config, run_id):
+    &quot;&quot;&quot;Save a completed run and prune the ring to MAX_RUNS. Returns the run id.
+
+    The evicted run's document is deleted as well as its index entry, so the ring
+    cannot leak documents that nothing references.
+    &quot;&quot;&quot;
+    if not storage:
+        return run_id
+
+    await storage.save(STORAGE_MODULE, _run_key(run_id), results, format=&quot;json&quot;)
+
+    annual = results.get(&quot;annual&quot;, {}) if isinstance(results, dict) else {}
+    entry = {
+        &quot;id&quot;: run_id,
+        &quot;timestamp&quot;: run_id,
+        &quot;label&quot;: build_label(config),
+        &quot;months_included&quot;: annual.get(&quot;months_included&quot;, 0),
+        &quot;status&quot;: &quot;ok&quot; if annual.get(&quot;months_included&quot;) else &quot;empty&quot;,
+    }
+
+    index = await list_runs(storage)
+    index = [existing for existing in index if existing.get(&quot;id&quot;) != run_id]
+    index.insert(0, entry)
+
+    for dropped in index[MAX_RUNS:]:
+        if hasattr(storage, &quot;delete&quot;):
+            await storage.delete(STORAGE_MODULE, _run_key(dropped[&quot;id&quot;]))
+    index = index[:MAX_RUNS]
+
+    await storage.save(STORAGE_MODULE, INDEX_NAME, index, format=&quot;json&quot;)
+    return run_id
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Check the Storage component actually has <code>delete</code></strong></li>
+</ul>
+<p>The fake in the test provides <code>delete</code>, and <code>save_run</code> guards with <code>hasattr</code>. Confirm what the real component offers:</p>
+<p>Run: <code>grep -n "async def delete\|def delete" apps/predbat/storage.py</code></p>
+<p>If there is no <code>delete</code>, say so in your report and instead overwrite the evicted key with <code>None</code> (still through <code>storage.save</code>) so the ring does not leave a live document behind. Do not invent a filesystem call.</p>
+<ul>
+<li>[ ] <strong>Step 5: Run the test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test annual_store &gt; /tmp/w4.txt 2&gt;&amp;1; grep -E "ERROR|Traceback" /tmp/w4.txt</code></p>
+<p>Expected: no output.</p>
+<ul>
+<li>[ ] <strong>Step 6: Run pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/annual_store.py apps/predbat/tests/test_annual_store.py apps/predbat/unit_test.py
+coverage/venv/bin/pre-commit run --files apps/predbat/annual_store.py apps/predbat/tests/test_annual_store.py apps/predbat/unit_test.py
+git commit -m &quot;feat(annual): add the five-run store for the Annual tab&quot;
+</code></pre>
+<hr />
+<h2 id="task-5-prefill-and-config-persistence">Task 5: Prefill and config persistence</h2>
+<p>Reads what the live instance knows and fills the rest from a typical UK system. This is the task that makes the unconfigured case work, so its test is the acceptance criterion for that requirement.</p>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/web_annual.py</code>
+- Create: <code>apps/predbat/tests/test_web_annual.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>tariff_catalogue.merged_catalogue</code>.
+- Produces:
+  - <code>web_annual.DEFAULT_CONFIG</code> — the typical-UK example as a dict
+  - <code>web_annual.AnnualPage(web_interface)</code> with:
+    - <code>prefill_config() -&gt; dict</code>
+    - <code>is_configured() -&gt; bool</code>
+    - <code>load_config() -&gt; dict</code>
+    - <code>save_config(config)</code>
+    - <code>catalogue() -&gt; list[dict]</code></p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_web_annual.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+&quot;&quot;&quot;Tests for the Annual tab's prefill and configuration handling.&quot;&quot;&quot;
+
+from annual import validate_config
+from web import WebInterface
+from web_annual import DEFAULT_CONFIG, AnnualPage
+
+
+def make_page(my_predbat):
+    &quot;&quot;&quot;Return an AnnualPage backed by a WebInterface over the test fixture.&quot;&quot;&quot;
+    return AnnualPage(WebInterface(my_predbat, web_port=5054))
+
+
+def test_web_annual(my_predbat):
+    &quot;&quot;&quot;Verify prefill against a configured and an unconfigured instance.&quot;&quot;&quot;
+    failed = False
+    print(&quot;**** Testing web_annual prefill ****&quot;)
+
+    saved_args = dict(my_predbat.args)
+    try:
+        print(&quot;Test: an unconfigured instance still produces a complete, valid config&quot;)
+        # This is the acceptance criterion for &quot;must work with Predbat unconfigured&quot;:
+        # a prospective buyer, and eventually an unregistered Predbat.com visitor,
+        # arrives with none of this set.
+        for key in [&quot;soc_max&quot;, &quot;inverter_limit&quot;, &quot;export_limit&quot;, &quot;open_meteo_forecast&quot;, &quot;forecast_solar&quot;, &quot;compare_list&quot;, &quot;dno_region&quot;]:
+            my_predbat.args.pop(key, None)
+        page = make_page(my_predbat)
+        config = page.prefill_config()
+        try:
+            validate_config(config)
+        except Exception as error:
+            print(&quot;  ERROR: an unconfigured prefill must still validate, got {}&quot;.format(error))
+            failed = True
+        if page.is_configured():
+            print(&quot;  ERROR: with no battery and no solar the page should report unconfigured&quot;)
+            failed = True
+        if config[&quot;battery&quot;][&quot;size_kwh&quot;] != DEFAULT_CONFIG[&quot;battery&quot;][&quot;size_kwh&quot;]:
+            print(&quot;  ERROR: battery should fall back to the default, got {}&quot;.format(config[&quot;battery&quot;]))
+            failed = True
+        if not config[&quot;solar&quot;]:
+            print(&quot;  ERROR: solar should fall back to the default array&quot;)
+            failed = True
+
+        print(&quot;Test: a zero soc_max counts as unset and falls back to the default&quot;)
+        my_predbat.args[&quot;soc_max&quot;] = 0
+        config = make_page(my_predbat).prefill_config()
+        if config[&quot;battery&quot;][&quot;size_kwh&quot;] != DEFAULT_CONFIG[&quot;battery&quot;][&quot;size_kwh&quot;]:
+            print(&quot;  ERROR: a zero soc_max should fall back, got {}&quot;.format(config[&quot;battery&quot;][&quot;size_kwh&quot;]))
+            failed = True
+
+        print(&quot;Test: configured values are read from args and used&quot;)
+        my_predbat.args[&quot;soc_max&quot;] = 12.5
+        my_predbat.args[&quot;open_meteo_forecast&quot;] = [{&quot;kwp&quot;: 7.2, &quot;declination&quot;: 30, &quot;azimuth&quot;: 170, &quot;efficiency&quot;: 0.9}]
+        config = make_page(my_predbat).prefill_config()
+        if config[&quot;battery&quot;][&quot;size_kwh&quot;] != 12.5:
+            print(&quot;  ERROR: soc_max from args should be used, got {}&quot;.format(config[&quot;battery&quot;][&quot;size_kwh&quot;]))
+            failed = True
+        if config[&quot;solar&quot;][0][&quot;kwp&quot;] != 7.2 or config[&quot;solar&quot;][0][&quot;azimuth&quot;] != 170:
+            print(&quot;  ERROR: the solar array should come from args, got {}&quot;.format(config[&quot;solar&quot;]))
+            failed = True
+
+        print(&quot;Test: prefill is per-field, not all-or-nothing&quot;)
+        # Solar configured but no battery: the real array must survive alongside the
+        # default battery rather than the whole prefill collapsing to defaults.
+        my_predbat.args.pop(&quot;soc_max&quot;, None)
+        config = make_page(my_predbat).prefill_config()
+        if config[&quot;solar&quot;][0][&quot;kwp&quot;] != 7.2:
+            print(&quot;  ERROR: configured solar should survive an absent battery, got {}&quot;.format(config[&quot;solar&quot;]))
+            failed = True
+        if config[&quot;battery&quot;][&quot;size_kwh&quot;] != DEFAULT_CONFIG[&quot;battery&quot;][&quot;size_kwh&quot;]:
+            print(&quot;  ERROR: the battery should still fall back, got {}&quot;.format(config[&quot;battery&quot;]))
+            failed = True
+        if not make_page(my_predbat).is_configured():
+            print(&quot;  ERROR: a configured solar array alone should count as configured&quot;)
+            failed = True
+
+        print(&quot;Test: the catalogue merges the user's compare_list&quot;)
+        my_predbat.args[&quot;compare_list&quot;] = [{&quot;id&quot;: &quot;mine&quot;, &quot;name&quot;: &quot;My tariff&quot;, &quot;rates_import_octopus_url&quot;: &quot;https://example.com/x&quot;}]
+        ids = [entry[&quot;id&quot;] for entry in make_page(my_predbat).catalogue()]
+        if &quot;mine&quot; not in ids:
+            print(&quot;  ERROR: a user compare_list entry should appear in the catalogue, got {}&quot;.format(ids))
+            failed = True
+        if &quot;agile_agile&quot; not in ids:
+            print(&quot;  ERROR: built-in entries should still be present, got {}&quot;.format(ids))
+            failed = True
+
+        print(&quot;Test: the default config validates on its own&quot;)
+        try:
+            validate_config(DEFAULT_CONFIG)
+        except Exception as error:
+            print(&quot;  ERROR: DEFAULT_CONFIG must be valid, got {}&quot;.format(error))
+            failed = True
+
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return failed
+</code></pre>
+<p>Register it in <code>apps/predbat/unit_test.py</code>:</p>
+<pre><code class="language-python">from tests.test_web_annual import test_web_annual
+</code></pre>
+<pre><code class="language-python">        (&quot;web_annual&quot;, test_web_annual, &quot;Annual web tab prefill tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test web_annual &gt; /tmp/w5.txt 2&gt;&amp;1; grep -E "ERROR|ModuleNotFound" /tmp/w5.txt</code></p>
+<p>Expected: FAIL with <code>ModuleNotFoundError: No module named 'web_annual'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Create <code>apps/predbat/web_annual.py</code> with prefill and config handling</strong></li>
+</ul>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+
+&quot;&quot;&quot;The Annual prediction tab.
+
+Renders the configuration form, drives the subprocess that runs the annual
+prediction engine, and presents the results. Prefills from whatever the live
+Predbat instance knows and falls back to a typical UK system for the rest, so
+the tab is usable by someone who has not configured Predbat at all - which is
+the prospective-buyer path the tool exists to serve.
+&quot;&quot;&quot;
+
+import copy
+import os
+
+import yaml
+
+from tariff_catalogue import merged_catalogue
+
+# A plausible UK home, used for any field the live instance cannot supply. These
+# are an EXAMPLE, not a recommendation - the form says so, because a visitor
+# could otherwise mistake them for a reading of their own system.
+DEFAULT_CONFIG = {
+    &quot;location&quot;: {&quot;postcode&quot;: &quot;SW1A 1AA&quot;},
+    &quot;solar&quot;: [{&quot;kwp&quot;: 5.0, &quot;declination&quot;: 35, &quot;azimuth&quot;: 180, &quot;efficiency&quot;: 0.95}],
+    &quot;battery&quot;: {&quot;size_kwh&quot;: 9.5, &quot;inverter_kw&quot;: 5.0, &quot;export_limit_kw&quot;: 5.0, &quot;hybrid&quot;: True},
+    &quot;load&quot;: {&quot;annual_kwh&quot;: 3800, &quot;shape&quot;: &quot;flat&quot;, &quot;car_charging_kwh&quot;: 0, &quot;car_rate_kw&quot;: 7.4},
+    &quot;tariff&quot;: {&quot;rates_import&quot;: [{&quot;rate&quot;: 24.86}], &quot;rates_export&quot;: [{&quot;rate&quot;: 4.1}], &quot;standing_charge_p_per_day&quot;: 60.0},
+    &quot;samples_per_month&quot;: 2,
+}
+
+CONFIG_FILENAME = &quot;annual.yaml&quot;
+
+
+class AnnualPage:
+    &quot;&quot;&quot;Renders and drives the Annual prediction tab.&quot;&quot;&quot;
+
+    def __init__(self, web_interface):
+        &quot;&quot;&quot;Attach to the running web interface so args and Storage are reachable.&quot;&quot;&quot;
+        self.web = web_interface
+        self.base = web_interface.base
+        self.log = web_interface.log
+
+    def _arg(self, name, default=None, indirect=True):
+        &quot;&quot;&quot;Read one configuration value from the in-memory args dictionary.
+
+        Pass indirect=False for any value that may contain a dot but is NOT an entity
+        id - a URL, most obviously. resolve_arg would otherwise try to resolve it as a
+        Home Assistant entity and hand back None.
+
+        Pass a FLOAT default for any numeric field. get_arg() type-directs its
+        coercion off the default's type, so an int default silently truncates a
+        real float - soc_max 12.5 would come back as 12.
+
+        Never reads apps.yaml from disk: the file may not exist at all in some
+        deployments, which is exactly where the unconfigured case matters most.
+        &quot;&quot;&quot;
+        try:
+            return self.base.get_arg(name, default, indirect=indirect)
+        except Exception:
+            return default
+
+    def _solar_from_args(self):
+        &quot;&quot;&quot;Return the configured solar arrays, or an empty list.
+
+        open_meteo_forecast and forecast_solar are already lists of
+        {kwp, declination, azimuth, efficiency}, which is the annual engine's own
+        shape, so no translation is needed.
+        &quot;&quot;&quot;
+        for name in [&quot;open_meteo_forecast&quot;, &quot;forecast_solar&quot;]:
+            configured = self._arg(name, None)
+            if isinstance(configured, dict):
+                configured = [configured]
+            if isinstance(configured, list) and configured:
+                arrays = []
+                for entry in configured:
+                    if not isinstance(entry, dict) or not entry.get(&quot;kwp&quot;):
+                        continue
+                    arrays.append(
+                        {
+                            &quot;kwp&quot;: entry.get(&quot;kwp&quot;),
+                            &quot;declination&quot;: entry.get(&quot;declination&quot;, DEFAULT_CONFIG[&quot;solar&quot;][0][&quot;declination&quot;]),
+                            &quot;azimuth&quot;: entry.get(&quot;azimuth&quot;, DEFAULT_CONFIG[&quot;solar&quot;][0][&quot;azimuth&quot;]),
+                            &quot;efficiency&quot;: entry.get(&quot;efficiency&quot;, DEFAULT_CONFIG[&quot;solar&quot;][0][&quot;efficiency&quot;]),
+                        }
+                    )
+                if arrays:
+                    return arrays
+        return []
+
+    def _location_from_args(self):
+        &quot;&quot;&quot;Return the configured location, taken from the solar entries if present.&quot;&quot;&quot;
+        for name in [&quot;open_meteo_forecast&quot;, &quot;forecast_solar&quot;]:
+            configured = self._arg(name, None)
+            if isinstance(configured, dict):
+                configured = [configured]
+            for entry in configured or []:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get(&quot;postcode&quot;):
+                    return {&quot;postcode&quot;: entry[&quot;postcode&quot;]}
+                if entry.get(&quot;latitude&quot;) is not None and entry.get(&quot;longitude&quot;) is not None:
+                    return {&quot;latitude&quot;: entry[&quot;latitude&quot;], &quot;longitude&quot;: entry[&quot;longitude&quot;]}
+        return None
+
+    def is_configured(self):
+        &quot;&quot;&quot;Return True when the live instance has a battery or a solar array.
+
+        Those two are what signal a configured system; with neither, the form
+        shows a banner saying the values on screen are examples.
+        &quot;&quot;&quot;
+        battery_kwh = self._arg(&quot;soc_max&quot;, 0.0) or 0.0
+        try:
+            battery_kwh = float(battery_kwh)
+        except (TypeError, ValueError):
+            battery_kwh = 0
+        return battery_kwh &gt; 0 or bool(self._solar_from_args())
+
+    def prefill_config(self):
+        &quot;&quot;&quot;Build a complete config from the live instance, filling gaps with the example.
+
+        Every field falls back independently, so a half-configured Predbat gets its
+        real values alongside example ones rather than all-or-nothing.
+        &quot;&quot;&quot;
+        config = copy.deepcopy(DEFAULT_CONFIG)
+
+        location = self._location_from_args()
+        if location:
+            config[&quot;location&quot;] = location
+
+        arrays = self._solar_from_args()
+        if arrays:
+            config[&quot;solar&quot;] = arrays
+
+        battery_kwh = self._arg(&quot;soc_max&quot;, 0.0) or 0.0
+        try:
+            battery_kwh = float(battery_kwh)
+        except (TypeError, ValueError):
+            battery_kwh = 0
+        # A zero or absent soc_max means it is not set - fall back so the user can adjust
+        if battery_kwh &gt; 0:
+            config[&quot;battery&quot;][&quot;size_kwh&quot;] = battery_kwh
+
+        for arg_name, field, divisor in [(&quot;inverter_limit&quot;, &quot;inverter_kw&quot;, 1000.0), (&quot;export_limit&quot;, &quot;export_limit_kw&quot;, 1000.0)]:
+            watts = self._arg(arg_name, 0.0) or 0.0
+            try:
+                watts = float(watts)
+            except (TypeError, ValueError):
+                watts = 0
+            if watts &gt; 0:
+                config[&quot;battery&quot;][field] = round(watts / divisor, 2)
+
+        inverter_type = self._arg(&quot;inverter_type&quot;, None)
+        if inverter_type:
+            config[&quot;battery&quot;][&quot;hybrid&quot;] = True
+
+        # indirect=False is REQUIRED here. resolve_arg (userinterface.py:149) treats any
+        # dotted string as a Home Assistant entity id and looks it up, and a URL is full
+        # of dots - so with the default indirect=True the URL resolves to None and the
+        # prefill silently does nothing. Every other call site in the codebase passes
+        # indirect=False for these two args; see compare.py:75 and fetch.py:848.
+        import_url = self._arg(&quot;rates_import_octopus_url&quot;, None, indirect=False)
+        export_url = self._arg(&quot;rates_export_octopus_url&quot;, None, indirect=False)
+        if import_url:
+            config[&quot;tariff&quot;] = {&quot;import_octopus_url&quot;: import_url, &quot;standing_charge_p_per_day&quot;: DEFAULT_CONFIG[&quot;tariff&quot;][&quot;standing_charge_p_per_day&quot;]}
+            if export_url:
+                config[&quot;tariff&quot;][&quot;export_octopus_url&quot;] = export_url
+
+        dno_region = self._arg(&quot;dno_region&quot;, None)
+        if dno_region:
+            config[&quot;tariff&quot;][&quot;dno_region&quot;] = dno_region
+
+        return config
+
+    def catalogue(self):
+        &quot;&quot;&quot;Return the tariff dropdown entries: built-ins merged with the user's own.&quot;&quot;&quot;
+        return merged_catalogue(self._arg(&quot;compare_list&quot;, None))
+
+    def _config_path(self):
+        &quot;&quot;&quot;Return the path of the saved annual configuration.&quot;&quot;&quot;
+        return os.path.join(self.base.config_root, CONFIG_FILENAME)
+
+    def load_config(self):
+        &quot;&quot;&quot;Return the saved configuration, or a fresh prefill when none exists.&quot;&quot;&quot;
+        path = self._config_path()
+        try:
+            if os.path.exists(path):
+                with open(path, &quot;r&quot;, encoding=&quot;utf-8&quot;) as handle:
+                    saved = yaml.safe_load(handle)
+                if isinstance(saved, dict) and saved:
+                    return saved.get(&quot;annual&quot;, saved)
+        except (OSError, yaml.YAMLError) as error:
+            self.log(&quot;Warn: Annual: could not read {}: {}&quot;.format(path, error))
+        return self.prefill_config()
+
+    def save_config(self, config):
+        &quot;&quot;&quot;Write the configuration so the CLI subprocess can consume it directly.&quot;&quot;&quot;
+        path = self._config_path()
+        try:
+            with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as handle:
+                yaml.safe_dump({&quot;annual&quot;: config}, handle, default_flow_style=False, allow_unicode=True)
+        except OSError as error:
+            self.log(&quot;Warn: Annual: could not write {}: {}&quot;.format(path, error))
+            raise
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test web_annual &gt; /tmp/w5.txt 2&gt;&amp;1; grep -E "ERROR|Traceback" /tmp/w5.txt</code></p>
+<p>Expected: no output. If <code>WebInterface(my_predbat, web_port=5054)</code> raises, check how <code>tests/test_web_functions.py</code> constructs it and match that.</p>
+<ul>
+<li>[ ] <strong>Step 5: Run pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/web_annual.py apps/predbat/tests/test_web_annual.py apps/predbat/unit_test.py
+coverage/venv/bin/pre-commit run --files apps/predbat/web_annual.py apps/predbat/tests/test_web_annual.py apps/predbat/unit_test.py
+git commit -m &quot;feat(annual): add Annual tab prefill and config persistence&quot;
+</code></pre>
+<hr />
+<h2 id="task-6-the-form">Task 6: The form</h2>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/web_annual.py</code>
+- Modify: <code>apps/predbat/tests/test_web_annual.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>AnnualPage.prefill_config</code>, <code>load_config</code>, <code>catalogue</code>, <code>is_configured</code> from Task 5; <code>tariff_catalogue.CUSTOM_ID</code>.
+- Produces:
+  - <code>AnnualPage.render_form(config, errors=None) -&gt; str</code>
+  - <code>AnnualPage.config_from_post(postdata) -&gt; dict</code></p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/tests/test_web_annual.py</code> (add <code>CUSTOM_ID</code> to the imports from <code>tariff_catalogue</code>):</p>
+<pre><code class="language-python">def test_web_annual_form(my_predbat):
+    &quot;&quot;&quot;Verify the form renders every group, reflects config, and round-trips a post.&quot;&quot;&quot;
+    failed = False
+    print(&quot;**** Testing web_annual form ****&quot;)
+
+    saved_args = dict(my_predbat.args)
+    try:
+        for key in [&quot;soc_max&quot;, &quot;open_meteo_forecast&quot;, &quot;forecast_solar&quot;]:
+            my_predbat.args.pop(key, None)
+        page = make_page(my_predbat)
+        config = page.prefill_config()
+        html = page.render_form(config)
+
+        print(&quot;Test: every configuration group is present&quot;)
+        for heading in [&quot;Location&quot;, &quot;Solar&quot;, &quot;Battery&quot;, &quot;Load&quot;, &quot;Tariff&quot;, &quot;Advanced&quot;]:
+            if heading not in html:
+                print(&quot;  ERROR: the form is missing the '{}' group&quot;.format(heading))
+                failed = True
+
+        print(&quot;Test: an unconfigured instance gets the example-values banner&quot;)
+        if &quot;example values&quot; not in html.lower():
+            print(&quot;  ERROR: an unconfigured instance should be told these are examples&quot;)
+            failed = True
+
+        print(&quot;Test: a configured instance does NOT get the banner&quot;)
+        my_predbat.args[&quot;soc_max&quot;] = 10.0
+        configured_html = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+        if &quot;example values&quot; in configured_html.lower():
+            print(&quot;  ERROR: a configured instance should not be told its values are examples&quot;)
+            failed = True
+        my_predbat.args.pop(&quot;soc_max&quot;, None)
+
+        print(&quot;Test: the tariff dropdown lists the catalogue and a Custom entry&quot;)
+        if CUSTOM_ID not in html:
+            print(&quot;  ERROR: the dropdown should offer a Custom entry&quot;)
+            failed = True
+        if &quot;Agile import / Agile export&quot; not in html:
+            print(&quot;  ERROR: the dropdown should list the built-in tariffs&quot;)
+            failed = True
+
+        print(&quot;Test: the load source is a radio pair, not two independent sections&quot;)
+        if html.count('type=&quot;radio&quot;') &lt; 2:
+            print(&quot;  ERROR: expected a radio pair for the load source&quot;)
+            failed = True
+        if &quot;octopus&quot; not in html.lower():
+            print(&quot;  ERROR: the Octopus load option should be offered&quot;)
+            failed = True
+
+        print(&quot;Test: current values are rendered into the inputs&quot;)
+        if 'value=&quot;3800&quot;' not in html.replace(&quot;'&quot;, '&quot;'):
+            print(&quot;  ERROR: the annual kWh value should appear in the form&quot;)
+            failed = True
+
+        print(&quot;Test: validation errors are shown with the form still populated&quot;)
+        html_with_error = page.render_form(config, errors=&quot;annual.solar[0] is missing kwp&quot;)
+        if &quot;annual.solar[0] is missing kwp&quot; not in html_with_error:
+            print(&quot;  ERROR: the error message should be displayed&quot;)
+            failed = True
+        if 'value=&quot;3800&quot;' not in html_with_error.replace(&quot;'&quot;, '&quot;'):
+            print(&quot;  ERROR: the form should stay populated when an error is shown&quot;)
+            failed = True
+
+        print(&quot;Test: config_from_post rebuilds a config the engine accepts&quot;)
+        postdata = {
+            &quot;postcode&quot;: &quot;SW1A 1AA&quot;,
+            &quot;solar_kwp_0&quot;: &quot;5.6&quot;,
+            &quot;solar_declination_0&quot;: &quot;35&quot;,
+            &quot;solar_azimuth_0&quot;: &quot;180&quot;,
+            &quot;solar_efficiency_0&quot;: &quot;0.95&quot;,
+            &quot;battery_size_kwh&quot;: &quot;9.5&quot;,
+            &quot;battery_inverter_kw&quot;: &quot;5.0&quot;,
+            &quot;battery_export_limit_kw&quot;: &quot;5.0&quot;,
+            &quot;battery_hybrid&quot;: &quot;on&quot;,
+            &quot;load_source&quot;: &quot;manual&quot;,
+            &quot;load_annual_kwh&quot;: &quot;3800&quot;,
+            &quot;load_shape&quot;: &quot;flat&quot;,
+            &quot;load_car_charging_kwh&quot;: &quot;2500&quot;,
+            &quot;load_car_rate_kw&quot;: &quot;7.4&quot;,
+            &quot;tariff_id&quot;: CUSTOM_ID,
+            &quot;tariff_import_url&quot;: &quot;https://example.com/import/&quot;,
+            &quot;tariff_export_url&quot;: &quot;https://example.com/export/&quot;,
+            &quot;tariff_standing_charge&quot;: &quot;60.0&quot;,
+            &quot;samples_per_month&quot;: &quot;2&quot;,
+        }
+        rebuilt = page.config_from_post(postdata)
+        try:
+            validate_config(rebuilt)
+        except Exception as error:
+            print(&quot;  ERROR: a posted form should rebuild into a valid config, got {}&quot;.format(error))
+            failed = True
+        if rebuilt[&quot;load&quot;][&quot;car_charging_kwh&quot;] != 2500:
+            print(&quot;  ERROR: car charging should survive the round trip, got {}&quot;.format(rebuilt[&quot;load&quot;]))
+            failed = True
+
+        print(&quot;Test: choosing the Octopus load source drops the manual figures&quot;)
+        postdata[&quot;load_source&quot;] = &quot;octopus&quot;
+        postdata[&quot;load_octopus_api_key&quot;] = &quot;sk_test&quot;
+        postdata[&quot;load_octopus_account_id&quot;] = &quot;A-1234ABCD&quot;
+        rebuilt = page.config_from_post(postdata)
+        if &quot;annual_kwh&quot; in rebuilt[&quot;load&quot;] or &quot;car_charging_kwh&quot; in rebuilt[&quot;load&quot;]:
+            print(&quot;  ERROR: the manual figures must not be sent alongside Octopus, got {}&quot;.format(rebuilt[&quot;load&quot;]))
+            failed = True
+        try:
+            validate_config(rebuilt)
+        except Exception as error:
+            print(&quot;  ERROR: the Octopus form should rebuild into a valid config, got {}&quot;.format(error))
+            failed = True
+
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return failed
+</code></pre>
+<p>Register it:</p>
+<pre><code class="language-python">from tests.test_web_annual import test_web_annual, test_web_annual_form
+</code></pre>
+<pre><code class="language-python">        (&quot;web_annual_form&quot;, test_web_annual_form, &quot;Annual web tab form tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test web_annual_form &gt; /tmp/w6.txt 2&gt;&amp;1; grep -E "ERROR|AttributeError" /tmp/w6.txt</code></p>
+<p>Expected: FAIL — <code>AnnualPage</code> has no <code>render_form</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add the form to <code>apps/predbat/web_annual.py</code></strong></li>
+</ul>
+<p>Add <code>from tariff_catalogue import CUSTOM_ID, merged_catalogue</code> to the imports, then append these methods to <code>AnnualPage</code>:</p>
+<pre><code class="language-python">    def _number_field(self, name, label, value, step=&quot;any&quot;, suffix=&quot;&quot;):
+        &quot;&quot;&quot;Return one labelled numeric input row.&quot;&quot;&quot;
+        return '&lt;div class=&quot;annual-field&quot;&gt;&lt;label for=&quot;{name}&quot;&gt;{label}&lt;/label&gt;&lt;input type=&quot;number&quot; step=&quot;{step}&quot; id=&quot;{name}&quot; name=&quot;{name}&quot; value=&quot;{value}&quot;&gt;{suffix}&lt;/div&gt;\n'.format(
+            name=name, label=label, step=step, value=value if value is not None else &quot;&quot;, suffix=&quot; {}&quot;.format(suffix) if suffix else &quot;&quot;
+        )
+
+    def _text_field(self, name, label, value):
+        &quot;&quot;&quot;Return one labelled text input row.&quot;&quot;&quot;
+        return '&lt;div class=&quot;annual-field&quot;&gt;&lt;label for=&quot;{name}&quot;&gt;{label}&lt;/label&gt;&lt;input type=&quot;text&quot; id=&quot;{name}&quot; name=&quot;{name}&quot; value=&quot;{value}&quot;&gt;&lt;/div&gt;\n'.format(
+            name=name, label=label, value=value if value is not None else &quot;&quot;
+        )
+
+    def render_form(self, config, errors=None):
+        &quot;&quot;&quot;Return the configuration form as HTML, populated from ``config``.
+
+        ``errors`` is displayed above the form with every field left as the user
+        entered it - losing their input on a validation failure would be worse
+        than the failure.
+        &quot;&quot;&quot;
+        solar = config.get(&quot;solar&quot;) or [{}]
+        battery = config.get(&quot;battery&quot;) or {}
+        load = config.get(&quot;load&quot;) or {}
+        tariff = config.get(&quot;tariff&quot;) or {}
+        location = config.get(&quot;location&quot;) or {}
+
+        text = '&lt;div class=&quot;annual-form-wrap&quot;&gt;\n'
+
+        if errors:
+            text += '&lt;div class=&quot;annual-error&quot;&gt;&lt;strong&gt;Could not run:&lt;/strong&gt; {}&lt;/div&gt;\n'.format(errors)
+
+        if not self.is_configured():
+            text += '&lt;div class=&quot;annual-banner&quot;&gt;Predbat isn\'t configured yet — these are &lt;strong&gt;example values&lt;/strong&gt;, edit them to match your home.&lt;/div&gt;\n'
+
+        text += '&lt;form action=&quot;./annual_run&quot; method=&quot;post&quot; id=&quot;annualform&quot;&gt;\n'
+
+        text += '&lt;fieldset&gt;&lt;legend&gt;Location&lt;/legend&gt;\n'
+        text += self._text_field(&quot;postcode&quot;, &quot;Postcode&quot;, location.get(&quot;postcode&quot;, &quot;&quot;))
+        text += self._number_field(&quot;latitude&quot;, &quot;Latitude (instead of postcode)&quot;, location.get(&quot;latitude&quot;))
+        text += self._number_field(&quot;longitude&quot;, &quot;Longitude&quot;, location.get(&quot;longitude&quot;))
+        text += &quot;&lt;/fieldset&gt;\n&quot;
+
+        text += '&lt;fieldset&gt;&lt;legend&gt;Solar&lt;/legend&gt;\n'
+        for index, array in enumerate(solar):
+            text += '&lt;div class=&quot;annual-array&quot;&gt;&lt;strong&gt;Array {}&lt;/strong&gt;\n'.format(index + 1)
+            text += self._number_field(&quot;solar_kwp_{}&quot;.format(index), &quot;Peak power&quot;, array.get(&quot;kwp&quot;), suffix=&quot;kWp&quot;)
+            text += self._number_field(&quot;solar_declination_{}&quot;.format(index), &quot;Pitch&quot;, array.get(&quot;declination&quot;, 35), suffix=&quot;degrees&quot;)
+            text += self._number_field(&quot;solar_azimuth_{}&quot;.format(index), &quot;Azimuth (180 = south)&quot;, array.get(&quot;azimuth&quot;, 180), suffix=&quot;degrees&quot;)
+            text += &quot;&lt;/div&gt;\n&quot;
+        text += &quot;&lt;/fieldset&gt;\n&quot;
+
+        text += '&lt;fieldset&gt;&lt;legend&gt;Battery&lt;/legend&gt;\n'
+        text += self._number_field(&quot;battery_size_kwh&quot;, &quot;Usable capacity&quot;, battery.get(&quot;size_kwh&quot;), suffix=&quot;kWh&quot;)
+        text += self._number_field(&quot;battery_inverter_kw&quot;, &quot;Inverter size&quot;, battery.get(&quot;inverter_kw&quot;), suffix=&quot;kW&quot;)
+        text += self._number_field(&quot;battery_export_limit_kw&quot;, &quot;Export limit&quot;, battery.get(&quot;export_limit_kw&quot;), suffix=&quot;kW&quot;)
+        text += '&lt;div class=&quot;annual-field&quot;&gt;&lt;label for=&quot;battery_hybrid&quot;&gt;Hybrid inverter&lt;/label&gt;&lt;input type=&quot;checkbox&quot; id=&quot;battery_hybrid&quot; name=&quot;battery_hybrid&quot; {}&gt;&lt;/div&gt;\n'.format(&quot;checked&quot; if battery.get(&quot;hybrid&quot;, True) else &quot;&quot;)
+        text += &quot;&lt;/fieldset&gt;\n&quot;
+
+        using_octopus = &quot;octopus&quot; in load
+        text += '&lt;fieldset&gt;&lt;legend&gt;Load&lt;/legend&gt;\n'
+        text += '&lt;div class=&quot;annual-field&quot;&gt;&lt;label&gt;&lt;input type=&quot;radio&quot; name=&quot;load_source&quot; value=&quot;manual&quot; {}&gt; Enter my usage&lt;/label&gt;&lt;/div&gt;\n'.format(&quot;&quot; if using_octopus else &quot;checked&quot;)
+        text += '&lt;div class=&quot;annual-subgroup&quot; id=&quot;load-manual&quot;&gt;\n'
+        text += self._number_field(&quot;load_annual_kwh&quot;, &quot;Annual consumption&quot;, load.get(&quot;annual_kwh&quot;, DEFAULT_CONFIG[&quot;load&quot;][&quot;annual_kwh&quot;]), suffix=&quot;kWh&quot;)
+        shape = load.get(&quot;shape&quot;, &quot;flat&quot;)
+        text += '&lt;div class=&quot;annual-field&quot;&gt;&lt;label for=&quot;load_shape&quot;&gt;Usage pattern&lt;/label&gt;&lt;select id=&quot;load_shape&quot; name=&quot;load_shape&quot;&gt;\n'
+        for value, caption in [(&quot;flat&quot;, &quot;About the same through the day&quot;), (&quot;night&quot;, &quot;More at night&quot;), (&quot;day&quot;, &quot;More during the day&quot;)]:
+            text += '&lt;option value=&quot;{}&quot; {}&gt;{}&lt;/option&gt;\n'.format(value, &quot;selected&quot; if shape == value else &quot;&quot;, caption)
+        text += &quot;&lt;/select&gt;&lt;/div&gt;\n&quot;
+        text += self._number_field(&quot;load_car_charging_kwh&quot;, &quot;Car charging per year (0 for none)&quot;, load.get(&quot;car_charging_kwh&quot;, 0), suffix=&quot;kWh&quot;)
+        text += self._number_field(&quot;load_car_rate_kw&quot;, &quot;Charger power&quot;, load.get(&quot;car_rate_kw&quot;, 7.4), suffix=&quot;kW&quot;)
+        text += &quot;&lt;/div&gt;\n&quot;
+        text += '&lt;div class=&quot;annual-field&quot;&gt;&lt;label&gt;&lt;input type=&quot;radio&quot; name=&quot;load_source&quot; value=&quot;octopus&quot; {}&gt; Import from Octopus&lt;/label&gt;&lt;/div&gt;\n'.format(&quot;checked&quot; if using_octopus else &quot;&quot;)
+        text += '&lt;div class=&quot;annual-subgroup&quot; id=&quot;load-octopus&quot;&gt;\n'
+        text += self._text_field(&quot;load_octopus_api_key&quot;, &quot;Octopus API key&quot;, (load.get(&quot;octopus&quot;) or {}).get(&quot;api_key&quot;, &quot;&quot;))
+        text += self._text_field(&quot;load_octopus_account_id&quot;, &quot;Account ID&quot;, (load.get(&quot;octopus&quot;) or {}).get(&quot;account_id&quot;, &quot;&quot;))
+        text += '&lt;p class=&quot;annual-note&quot;&gt;Your meter readings already include any car charging, so the figures above are not used with this option.&lt;/p&gt;\n'
+        text += &quot;&lt;/div&gt;\n&quot;
+        text += &quot;&lt;/fieldset&gt;\n&quot;
+
+        text += '&lt;fieldset&gt;&lt;legend&gt;Tariff&lt;/legend&gt;\n'
+        text += '&lt;div class=&quot;annual-field&quot;&gt;&lt;label for=&quot;tariff_id&quot;&gt;Tariff&lt;/label&gt;&lt;select id=&quot;tariff_id&quot; name=&quot;tariff_id&quot; onchange=&quot;annualTariffChanged()&quot;&gt;\n'
+        for entry in self.catalogue():
+            text += '&lt;option value=&quot;{}&quot; data-import=&quot;{}&quot; data-export=&quot;{}&quot;&gt;{}&lt;/option&gt;\n'.format(
+                entry[&quot;id&quot;], entry.get(&quot;import_octopus_url&quot;, &quot;&quot;), entry.get(&quot;export_octopus_url&quot;, &quot;&quot;), entry[&quot;name&quot;]
+            )
+        text += &quot;&lt;/select&gt;&lt;/div&gt;\n&quot;
+        text += self._text_field(&quot;tariff_import_url&quot;, &quot;Import rates URL&quot;, tariff.get(&quot;import_octopus_url&quot;, &quot;&quot;))
+        text += self._text_field(&quot;tariff_export_url&quot;, &quot;Export rates URL&quot;, tariff.get(&quot;export_octopus_url&quot;, &quot;&quot;))
+        text += self._text_field(&quot;tariff_dno_region&quot;, &quot;Octopus region letter&quot;, tariff.get(&quot;dno_region&quot;, &quot;&quot;))
+        text += self._number_field(&quot;tariff_standing_charge&quot;, &quot;Standing charge&quot;, tariff.get(&quot;standing_charge_p_per_day&quot;, 60.0), suffix=&quot;p/day&quot;)
+        text += &quot;&lt;/fieldset&gt;\n&quot;
+
+        text += '&lt;details&gt;&lt;summary&gt;Advanced&lt;/summary&gt;\n'
+        text += self._number_field(&quot;year&quot;, &quot;Year to model (blank for the most recent complete year)&quot;, config.get(&quot;year&quot;))
+        text += self._number_field(&quot;samples_per_month&quot;, &quot;Days sampled per month&quot;, config.get(&quot;samples_per_month&quot;, 2), step=&quot;1&quot;)
+        text += self._number_field(&quot;pv10_derate_fallback&quot;, &quot;P10 fallback derate&quot;, config.get(&quot;pv10_derate_fallback&quot;, 0.7))
+        for index, array in enumerate(solar):
+            text += self._number_field(&quot;solar_efficiency_{}&quot;.format(index), &quot;Array {} efficiency&quot;.format(index + 1), array.get(&quot;efficiency&quot;, 0.95))
+        text += &quot;&lt;/details&gt;\n&quot;
+
+        text += '&lt;button type=&quot;submit&quot; id=&quot;annual-run-button&quot;&gt;Run&lt;/button&gt;\n'
+        text += &quot;&lt;/form&gt;\n&lt;/div&gt;\n&quot;
+        return text
+
+    def config_from_post(self, postdata):
+        &quot;&quot;&quot;Rebuild a config dict from submitted form fields.
+
+        Values are left as the strings the browser sent; validate_config() in the
+        engine does the coercion and range checking, so there is exactly one place
+        that decides what a valid number is.
+        &quot;&quot;&quot;
+
+        def value(name, default=None):
+            &quot;&quot;&quot;Return one posted field, or the default when absent or blank.&quot;&quot;&quot;
+            raw = postdata.get(name)
+            if raw is None or str(raw).strip() == &quot;&quot;:
+                return default
+            return str(raw).strip()
+
+        config = {}
+
+        location = {}
+        if value(&quot;postcode&quot;):
+            location[&quot;postcode&quot;] = value(&quot;postcode&quot;)
+        if value(&quot;latitude&quot;) is not None and value(&quot;longitude&quot;) is not None:
+            location[&quot;latitude&quot;] = value(&quot;latitude&quot;)
+            location[&quot;longitude&quot;] = value(&quot;longitude&quot;)
+        config[&quot;location&quot;] = location
+
+        arrays = []
+        index = 0
+        while value(&quot;solar_kwp_{}&quot;.format(index)) is not None:
+            arrays.append(
+                {
+                    &quot;kwp&quot;: value(&quot;solar_kwp_{}&quot;.format(index)),
+                    &quot;declination&quot;: value(&quot;solar_declination_{}&quot;.format(index), 35),
+                    &quot;azimuth&quot;: value(&quot;solar_azimuth_{}&quot;.format(index), 180),
+                    &quot;efficiency&quot;: value(&quot;solar_efficiency_{}&quot;.format(index), 0.95),
+                }
+            )
+            index += 1
+        if arrays:
+            config[&quot;solar&quot;] = arrays
+
+        if value(&quot;battery_size_kwh&quot;) is not None:
+            config[&quot;battery&quot;] = {
+                &quot;size_kwh&quot;: value(&quot;battery_size_kwh&quot;),
+                &quot;inverter_kw&quot;: value(&quot;battery_inverter_kw&quot;, 5.0),
+                &quot;export_limit_kw&quot;: value(&quot;battery_export_limit_kw&quot;, 5.0),
+                &quot;hybrid&quot;: bool(postdata.get(&quot;battery_hybrid&quot;)),
+            }
+
+        # The engine rejects an Octopus block alongside manual figures, because the
+        # meter series already contains any car charging. Send one or the other.
+        if value(&quot;load_source&quot;, &quot;manual&quot;) == &quot;octopus&quot;:
+            config[&quot;load&quot;] = {&quot;octopus&quot;: {&quot;api_key&quot;: value(&quot;load_octopus_api_key&quot;, &quot;&quot;), &quot;account_id&quot;: value(&quot;load_octopus_account_id&quot;, &quot;&quot;)}}
+        else:
+            config[&quot;load&quot;] = {
+                &quot;annual_kwh&quot;: value(&quot;load_annual_kwh&quot;, 3800),
+                &quot;shape&quot;: value(&quot;load_shape&quot;, &quot;flat&quot;),
+                &quot;car_charging_kwh&quot;: value(&quot;load_car_charging_kwh&quot;, 0),
+                &quot;car_rate_kw&quot;: value(&quot;load_car_rate_kw&quot;, 7.4),
+            }
+
+        tariff = {&quot;standing_charge_p_per_day&quot;: value(&quot;tariff_standing_charge&quot;, 0)}
+        if value(&quot;tariff_import_url&quot;):
+            tariff[&quot;import_octopus_url&quot;] = value(&quot;tariff_import_url&quot;)
+        if value(&quot;tariff_export_url&quot;):
+            tariff[&quot;export_octopus_url&quot;] = value(&quot;tariff_export_url&quot;)
+        if value(&quot;tariff_dno_region&quot;):
+            tariff[&quot;dno_region&quot;] = value(&quot;tariff_dno_region&quot;)
+        if not tariff.get(&quot;import_octopus_url&quot;):
+            tariff[&quot;rates_import&quot;] = DEFAULT_CONFIG[&quot;tariff&quot;][&quot;rates_import&quot;]
+            tariff[&quot;rates_export&quot;] = DEFAULT_CONFIG[&quot;tariff&quot;][&quot;rates_export&quot;]
+        config[&quot;tariff&quot;] = tariff
+
+        if value(&quot;year&quot;):
+            config[&quot;year&quot;] = value(&quot;year&quot;)
+        config[&quot;samples_per_month&quot;] = value(&quot;samples_per_month&quot;, 2)
+        if value(&quot;pv10_derate_fallback&quot;):
+            config[&quot;pv10_derate_fallback&quot;] = value(&quot;pv10_derate_fallback&quot;)
+
+        return config
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k web_annual &gt; /tmp/w6.txt 2&gt;&amp;1; grep -E "ERROR|Traceback" /tmp/w6.txt</code></p>
+<p>Expected: no output; both <code>web_annual</code> and <code>web_annual_form</code> pass.</p>
+<ul>
+<li>[ ] <strong>Step 5: Run pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/web_annual.py apps/predbat/tests/test_web_annual.py apps/predbat/unit_test.py
+coverage/venv/bin/pre-commit run --files apps/predbat/web_annual.py apps/predbat/tests/test_web_annual.py apps/predbat/unit_test.py
+git commit -m &quot;feat(annual): render the Annual tab configuration form&quot;
+</code></pre>
+<hr />
+<h2 id="task-7-routes-and-wiring">Task 7: Routes and wiring</h2>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/web_annual.py</code>
+- Modify: <code>apps/predbat/web.py</code>
+- Modify: <code>apps/predbat/web_helper.py</code>
+- Modify: <code>apps/predbat/tests/test_web_annual.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>annual_job.AnnualJob</code>, <code>annual_store.save_run/list_runs/load_run</code>, <code>annual.validate_config</code>, <code>AnnualPage.render_form/config_from_post/save_config/load_config</code>.
+- Produces:
+  - <code>AnnualPage.html_annual(request)</code>, <code>html_annual_post</code>, <code>html_annual_run</code>, <code>html_annual_status</code>, <code>html_annual_cancel</code> — all async aiohttp handlers
+  - <code>AnnualPage.cli_command(config_path) -&gt; list[str]</code></p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/tests/test_web_annual.py</code>:</p>
+<pre><code class="language-python">def test_web_annual_routes(my_predbat):
+    &quot;&quot;&quot;Verify the run command, validation gating and the status payload.&quot;&quot;&quot;
+    import asyncio
+
+    failed = False
+    print(&quot;**** Testing web_annual routes ****&quot;)
+
+    page = make_page(my_predbat)
+
+    print(&quot;Test: the CLI command targets annual_cli.py in machine mode&quot;)
+    command = page.cli_command(&quot;/tmp/annual.yaml&quot;)
+    if &quot;--machine&quot; not in command:
+        print(&quot;  ERROR: the child must be run in machine mode, got {}&quot;.format(command))
+        failed = True
+    if not any(&quot;annual_cli.py&quot; in part for part in command):
+        print(&quot;  ERROR: the command should invoke annual_cli.py, got {}&quot;.format(command))
+        failed = True
+    if &quot;--config&quot; not in command or &quot;/tmp/annual.yaml&quot; not in command:
+        print(&quot;  ERROR: the config path should be passed, got {}&quot;.format(command))
+        failed = True
+
+    print(&quot;Test: the status payload is JSON-serialisable and names its state&quot;)
+    status = asyncio.run(page.status_payload())
+    for key in [&quot;state&quot;, &quot;completed&quot;, &quot;total&quot;, &quot;message&quot;, &quot;elapsed&quot;]:
+        if key not in status:
+            print(&quot;  ERROR: status is missing '{}', got {}&quot;.format(key, status))
+            failed = True
+    if status.get(&quot;state&quot;) != &quot;idle&quot;:
+        print(&quot;  ERROR: a fresh page should report idle, got {}&quot;.format(status.get(&quot;state&quot;)))
+        failed = True
+
+    print(&quot;Test: an invalid config is rejected before anything is spawned&quot;)
+    bad = {&quot;location&quot;: {}, &quot;load&quot;: {&quot;annual_kwh&quot;: 1}, &quot;tariff&quot;: {&quot;rates_import&quot;: [{&quot;rate&quot;: 5}]}}
+    error = page.validation_error(bad)
+    if not error:
+        print(&quot;  ERROR: an invalid config should produce an error message&quot;)
+        failed = True
+    if page.job.state != &quot;idle&quot;:
+        print(&quot;  ERROR: validation must not start a job, state was {}&quot;.format(page.job.state))
+        failed = True
+
+    print(&quot;Test: a valid config produces no error&quot;)
+    if page.validation_error(page.prefill_config()):
+        print(&quot;  ERROR: the prefill config should validate, got {}&quot;.format(page.validation_error(page.prefill_config())))
+        failed = True
+
+    return failed
+</code></pre>
+<p>Register it:</p>
+<pre><code class="language-python">from tests.test_web_annual import test_web_annual, test_web_annual_form, test_web_annual_routes
+</code></pre>
+<pre><code class="language-python">        (&quot;web_annual_routes&quot;, test_web_annual_routes, &quot;Annual web tab route tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test web_annual_routes &gt; /tmp/w7.txt 2&gt;&amp;1; grep -E "ERROR|AttributeError" /tmp/w7.txt</code></p>
+<p>Expected: FAIL — <code>AnnualPage</code> has no <code>cli_command</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add the handlers to <code>apps/predbat/web_annual.py</code></strong></li>
+</ul>
+<p>Add to the imports:</p>
+<pre><code class="language-python">import datetime
+import sys
+
+from aiohttp import web
+
+from annual import AnnualConfigError, validate_config
+from annual_job import AnnualJob
+from annual_store import list_runs, load_run, save_run
+</code></pre>
+<p>Add to <code>AnnualPage.__init__</code>, after <code>self.log</code>:</p>
+<pre><code class="language-python">        self.job = AnnualJob(log=self.log)
+        self.last_error = None
+</code></pre>
+<p>Then append:</p>
+<pre><code class="language-python">    def cli_command(self, config_path):
+        &quot;&quot;&quot;Return the argv for the child process that performs the run.&quot;&quot;&quot;
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), &quot;annual_cli.py&quot;)
+        work_dir = os.path.join(self.base.config_root, &quot;annual_work&quot;)
+        return [sys.executable, script, &quot;--config&quot;, config_path, &quot;--work-dir&quot;, work_dir, &quot;--machine&quot;]
+
+    def validation_error(self, config):
+        &quot;&quot;&quot;Return a message when the config is invalid, or None when it is fine.
+
+        Validation runs here for immediate feedback, but the same validate_config
+        runs again inside the child and remains the authority.
+        &quot;&quot;&quot;
+        try:
+            validate_config(config)
+        except AnnualConfigError as error:
+            return str(error)
+        return None
+
+    def _storage(self):
+        &quot;&quot;&quot;Return the Storage component, or None when it is unavailable.&quot;&quot;&quot;
+        components = getattr(self.base, &quot;components&quot;, None)
+        return components.get_component(&quot;storage&quot;) if components else None
+
+    async def status_payload(self):
+        &quot;&quot;&quot;Return the polling payload: job state plus the stored run list.&quot;&quot;&quot;
+        payload = self.job.status()
+        payload[&quot;runs&quot;] = await list_runs(self._storage())
+        return payload
+
+    async def _store_completed_run(self, config):
+        &quot;&quot;&quot;Save a finished run into the ring, once.&quot;&quot;&quot;
+        if self.job.state != &quot;complete&quot; or self.job.results is None:
+            return
+        run_id = datetime.datetime.now().strftime(&quot;%Y%m%d-%H%M%S&quot;)
+        await save_run(self._storage(), self.job.results, config, run_id)
+        self.job.results = None
+
+    async def html_annual(self, request):
+        &quot;&quot;&quot;Render the Annual tab: the form, then the selected run's results.&quot;&quot;&quot;
+        self.web.default_page = &quot;./annual&quot;
+        config = self.load_config()
+
+        text = self.web.get_header(&quot;Predbat Annual&quot;)
+        text += &quot;&lt;body&gt;\n&quot;
+        text += self.render_css()
+        text += self.render_form(config, errors=self.last_error)
+        text += self.render_progress()
+
+        storage = self._storage()
+        runs = await list_runs(storage)
+        selected = request.query.get(&quot;run&quot;) or (runs[0][&quot;id&quot;] if runs else None)
+        results = await load_run(storage, selected) if selected else None
+        text += self.render_results(results, runs, selected)
+        text += self.render_script()
+        text += &quot;&lt;/body&gt;&lt;/html&gt;\n&quot;
+        return web.Response(content_type=&quot;text/html&quot;, text=text)
+
+    async def html_annual_post(self, request):
+        &quot;&quot;&quot;Save the configuration without running.&quot;&quot;&quot;
+        postdata = await request.post()
+        config = self.config_from_post(postdata)
+        self.last_error = self.validation_error(config)
+        if not self.last_error:
+            self.save_config(config)
+        return await self.html_annual(request)
+
+    async def html_annual_run(self, request):
+        &quot;&quot;&quot;Validate, save, and spawn the run.&quot;&quot;&quot;
+        postdata = await request.post()
+        config = self.config_from_post(postdata)
+        self.last_error = self.validation_error(config)
+        if self.last_error:
+            return await self.html_annual(request)
+
+        self.save_config(config)
+        self._running_config = config
+        started = await self.job.start(self.cli_command(self._config_path()))
+        if not started and self.job.state != &quot;running&quot;:
+            self.last_error = self.job.status().get(&quot;error&quot;) or &quot;The run could not be started&quot;
+        return await self.html_annual(request)
+
+    async def html_annual_status(self, request):
+        &quot;&quot;&quot;Return the job status as JSON for the page to poll.&quot;&quot;&quot;
+        if self.job.state == &quot;complete&quot; and self.job.results is not None:
+            await self._store_completed_run(getattr(self, &quot;_running_config&quot;, self.load_config()))
+        return web.json_response(await self.status_payload())
+
+    async def html_annual_cancel(self, request):
+        &quot;&quot;&quot;Cancel a running job.&quot;&quot;&quot;
+        await self.job.cancel()
+        return web.json_response(self.job.status())
+
+    async def html_annual_download(self, request):
+        &quot;&quot;&quot;Return one stored run's raw results document as a JSON download.&quot;&quot;&quot;
+        run_id = request.query.get(&quot;run&quot;)
+        results = await load_run(self._storage(), run_id)
+        if results is None:
+            return web.json_response({&quot;error&quot;: &quot;No stored run with id {}&quot;.format(run_id)}, status=404)
+        return web.json_response(results, headers={&quot;Content-Disposition&quot;: 'attachment; filename=&quot;annual-{}.json&quot;'.format(run_id)})
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Add the progress, CSS and script fragments</strong></li>
+</ul>
+<p>Note the <code>render_results</code> placeholder below: <code>html_annual</code> calls it, so the module
+would not render without one. The results task replaces it wholesale — replace it,
+do not add a second definition.</p>
+<p>Append to <code>AnnualPage</code>:</p>
+<pre><code class="language-python">    def render_results(self, results, runs, selected_id):
+        &quot;&quot;&quot;Placeholder replaced in full by the results task; keeps the page renderable.&quot;&quot;&quot;
+        return &quot;&lt;p&gt;No results yet — fill in the form above and press Run.&lt;/p&gt;\n&quot;
+
+    def render_css(self):
+        &quot;&quot;&quot;Return the scoped styles for the tab.&quot;&quot;&quot;
+        return &quot;&quot;&quot;&lt;style&gt;
+.annual-form-wrap fieldset { border: 1px solid var(--md-border, #cbd5e1); margin-bottom: 1rem; padding: 0.75rem; }
+.annual-form-wrap legend { font-weight: 600; }
+.annual-field { margin: 0.35rem 0; }
+.annual-field label { display: inline-block; min-width: 20rem; }
+.annual-subgroup { margin-left: 1.5rem; }
+.annual-note { font-size: 0.85rem; opacity: 0.8; }
+.annual-banner { border-left: 4px solid #D55E00; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
+.annual-error { border-left: 4px solid #b00020; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
+.annual-progress { margin: 1rem 0; }
+.annual-bar { height: 1.25rem; border: 1px solid var(--md-border, #cbd5e1); }
+.annual-bar-fill { height: 100%; background: #0072B2; width: 0%; }
+.annual-caveats li { margin-bottom: 0.35rem; }
+.annual-unavailable { opacity: 0.6; font-style: italic; }
+&lt;/style&gt;
+&quot;&quot;&quot;
+
+    def render_progress(self):
+        &quot;&quot;&quot;Return the progress area, hidden until a run starts.&quot;&quot;&quot;
+        return &quot;&quot;&quot;&lt;div class=&quot;annual-progress&quot; id=&quot;annual-progress&quot; style=&quot;display:none&quot;&gt;
+  &lt;div class=&quot;annual-bar&quot;&gt;&lt;div class=&quot;annual-bar-fill&quot; id=&quot;annual-bar-fill&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+  &lt;p id=&quot;annual-progress-text&quot;&gt;&lt;/p&gt;
+  &lt;button type=&quot;button&quot; onclick=&quot;annualCancel()&quot;&gt;Cancel&lt;/button&gt;
+&lt;/div&gt;
+&quot;&quot;&quot;
+
+    def render_script(self):
+        &quot;&quot;&quot;Return the polling and tariff-picker script.&quot;&quot;&quot;
+        return &quot;&quot;&quot;&lt;script&gt;
+function annualTariffChanged() {
+  var select = document.getElementById('tariff_id');
+  var option = select.options[select.selectedIndex];
+  document.getElementById('tariff_import_url').value = option.getAttribute('data-import') || '';
+  document.getElementById('tariff_export_url').value = option.getAttribute('data-export') || '';
+}
+function annualCancel() { fetch('./annual_cancel', {method: 'POST'}); }
+function annualPoll() {
+  fetch('./annual_status').then(function (r) { return r.json(); }).then(function (s) {
+    var box = document.getElementById('annual-progress');
+    var button = document.getElementById('annual-run-button');
+    if (s.state === 'running') {
+      box.style.display = 'block';
+      if (button) { button.disabled = true; }
+      var pct = s.total ? Math.round((s.completed / s.total) * 100) : 0;
+      document.getElementById('annual-bar-fill').style.width = pct + '%';
+      document.getElementById('annual-progress-text').textContent = s.message + ' — ' + pct + '% (' + s.elapsed + 's)';
+    } else {
+      if (button) { button.disabled = false; }
+      if (s.state === 'complete') { window.location = './annual'; return; }
+      if (s.state === 'failed' || s.state === 'cancelled') {
+        box.style.display = 'block';
+        document.getElementById('annual-progress-text').textContent = s.state + (s.error ? ': ' + s.error : '');
+        return;
+      }
+      box.style.display = 'none';
+    }
+    setTimeout(annualPoll, 1000);
+  }).catch(function () { setTimeout(annualPoll, 5000); });
+}
+annualPoll();
+&lt;/script&gt;
+&quot;&quot;&quot;
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Wire it into <code>apps/predbat/web.py</code></strong></li>
+</ul>
+<p>Add the import beside the other web module imports (near <code>from web_metrics_dashboard import ...</code>):</p>
+<pre><code class="language-python">from web_annual import AnnualPage
+</code></pre>
+<p>In <code>WebInterface.__init__</code>, after the other attribute setup, create the page:</p>
+<pre><code class="language-python">        self.annual_page = AnnualPage(self)
+</code></pre>
+<p>Register the routes beside the existing <code>app.router.add_get("/compare", ...)</code> lines:</p>
+<pre><code class="language-python">        app.router.add_get(&quot;/annual&quot;, self.annual_page.html_annual)
+        app.router.add_post(&quot;/annual&quot;, self.annual_page.html_annual_post)
+        app.router.add_post(&quot;/annual_run&quot;, self.annual_page.html_annual_run)
+        app.router.add_get(&quot;/annual_status&quot;, self.annual_page.html_annual_status)
+        app.router.add_post(&quot;/annual_cancel&quot;, self.annual_page.html_annual_cancel)
+        app.router.add_get(&quot;/annual_download&quot;, self.annual_page.html_annual_download)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Add the nav link in <code>apps/predbat/web_helper.py</code></strong></li>
+</ul>
+<p>Find <code>&lt;a href='./compare'&gt;Compare&lt;/a&gt;</code> and add immediately after it:</p>
+<pre><code class="language-html">&lt;a href='./annual'&gt;Annual&lt;/a&gt;
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 7: Run the tests</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k web_annual &gt; /tmp/w7.txt 2&gt;&amp;1; grep -E "ERROR|Traceback" /tmp/w7.txt</code></p>
+<p>Then the existing web tests, since <code>web.py</code> changed:</p>
+<p>Run: <code>./run_all -k web_ &gt; /tmp/w7b.txt 2&gt;&amp;1; grep -E "ERROR|FAILED|Traceback" /tmp/w7b.txt</code></p>
+<p>Expected: no output from either.</p>
+<ul>
+<li>[ ] <strong>Step 8: Run pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/web_annual.py apps/predbat/web.py apps/predbat/web_helper.py apps/predbat/tests/test_web_annual.py apps/predbat/unit_test.py
+coverage/venv/bin/pre-commit run --files apps/predbat/web_annual.py apps/predbat/web.py apps/predbat/web_helper.py apps/predbat/tests/test_web_annual.py apps/predbat/unit_test.py
+git commit -m &quot;feat(annual): wire the Annual tab routes and navigation&quot;
+</code></pre>
+<hr />
+<h2 id="task-8-results-chart-and-run-selector">Task 8: Results, chart and run selector</h2>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/web_annual.py</code>
+- Modify: <code>apps/predbat/tests/test_web_annual.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>annual_store.list_runs</code>, <code>load_run</code>.
+- Produces: <code>AnnualPage.render_results(results, runs, selected_id) -&gt; str</code></p>
+<p><strong>The palette is fixed and validated. Do not substitute.</strong> Predbat's house chart trio was measured and fails: green↔orange is ΔE 3.6 under protanopia, so roughly 1 in 12 men could not tell "Without Predbat" from "With Predbat". These three pass every check in both light and dark mode:</p>
+<table>
+<thead>
+<tr>
+<th>Series</th>
+<th>Colour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No PV/Battery</td>
+<td><code>#0072B2</code></td>
+</tr>
+<tr>
+<td>Without Predbat</td>
+<td><code>#D55E00</code></td>
+</tr>
+<tr>
+<td>With Predbat</td>
+<td><code>#009E73</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/tests/test_web_annual.py</code>:</p>
+<pre><code class="language-python">def sample_run_results():
+    &quot;&quot;&quot;Return a results document covering an ok, a degraded and an unavailable month.&quot;&quot;&quot;
+    scenarios = {
+        &quot;no_pvbat&quot;: {&quot;cost_p&quot;: 18000.0, &quot;import_kwh&quot;: 400.0, &quot;export_kwh&quot;: 0.0, &quot;pv_generated_kwh&quot;: 0.0, &quot;battery_throughput_kwh&quot;: 0.0, &quot;export_credit_p_estimate&quot;: 0.0, &quot;self_consumed_kwh&quot;: 0.0, &quot;self_consumed_kwh_meaningful&quot;: True},
+        &quot;without_predbat&quot;: {&quot;cost_p&quot;: 9000.0, &quot;import_kwh&quot;: 300.0, &quot;export_kwh&quot;: 20.0, &quot;pv_generated_kwh&quot;: 120.0, &quot;battery_throughput_kwh&quot;: 90.0, &quot;export_credit_p_estimate&quot;: 300.0, &quot;self_consumed_kwh&quot;: 100.0, &quot;self_consumed_kwh_meaningful&quot;: True},
+        &quot;with_predbat&quot;: {&quot;cost_p&quot;: 6600.0, &quot;import_kwh&quot;: 280.0, &quot;export_kwh&quot;: 145.0, &quot;pv_generated_kwh&quot;: 120.0, &quot;battery_throughput_kwh&quot;: 140.0, &quot;export_credit_p_estimate&quot;: 675.0, &quot;self_consumed_kwh&quot;: 0.0, &quot;self_consumed_kwh_meaningful&quot;: False},
+    }
+    return {
+        &quot;year&quot;: 2025,
+        &quot;months&quot;: [
+            {&quot;month&quot;: 1, &quot;status&quot;: &quot;ok&quot;, &quot;days&quot;: 31, &quot;sampled_days&quot;: [&quot;2025-01-08&quot;, &quot;2025-01-24&quot;], &quot;standing_charge_p&quot;: 1860.0, &quot;scenarios&quot;: scenarios},
+            {&quot;month&quot;: 2, &quot;status&quot;: &quot;degraded&quot;, &quot;days&quot;: 28, &quot;failed_days&quot;: [&quot;2025-02-14&quot;], &quot;standing_charge_p&quot;: 1680.0, &quot;scenarios&quot;: scenarios},
+            {&quot;month&quot;: 3, &quot;status&quot;: &quot;unavailable&quot;, &quot;reason&quot;: &quot;no rate data available&quot;, &quot;days&quot;: 31, &quot;standing_charge_p&quot;: 1860.0},
+        ],
+        &quot;annual&quot;: {&quot;scenarios&quot;: scenarios, &quot;standing_charge_p&quot;: 3540.0, &quot;savings&quot;: {&quot;pv_battery_vs_none_p&quot;: 9000.0, &quot;predbat_vs_baseline_p&quot;: 2400.0}, &quot;months_included&quot;: 2, &quot;months_excluded&quot;: [3]},
+        &quot;caveats&quot;: [&quot;An example caveat about the P10 fallback.&quot;],
+    }
+
+
+def test_web_annual_results(my_predbat):
+    &quot;&quot;&quot;Verify the results view: totals, chart series, month statuses, caveats, selector.&quot;&quot;&quot;
+    failed = False
+    print(&quot;**** Testing web_annual results ****&quot;)
+
+    page = make_page(my_predbat)
+    runs = [{&quot;id&quot;: &quot;20260726-101500&quot;, &quot;label&quot;: &quot;9.5kWh battery · 5.6kWp · Agile&quot;, &quot;months_included&quot;: 12}, {&quot;id&quot;: &quot;20260725-090000&quot;, &quot;label&quot;: &quot;no battery · 5.6kWp · Agile&quot;, &quot;months_included&quot;: 12}]
+    html = page.render_results(sample_run_results(), runs, &quot;20260726-101500&quot;)
+
+    print(&quot;Test: the annual savings figures are shown&quot;)
+    if &quot;90.00&quot; not in html:
+        print(&quot;  ERROR: the PV/battery saving (9000p = £90.00) should be shown&quot;)
+        failed = True
+    if &quot;24.00&quot; not in html:
+        print(&quot;  ERROR: the Predbat saving (2400p = £24.00) should be shown&quot;)
+        failed = True
+
+    print(&quot;Test: the validated colourblind-safe palette is used, not the house trio&quot;)
+    for colour in [&quot;#0072B2&quot;, &quot;#D55E00&quot;, &quot;#009E73&quot;]:
+        if colour not in html:
+            print(&quot;  ERROR: expected the validated colour {} in the chart&quot;.format(colour))
+            failed = True
+    for banned in [&quot;#4CAF50&quot;, &quot;#FF9800&quot;, &quot;#2196F3&quot;]:
+        if banned in html:
+            print(&quot;  ERROR: {} fails CVD separation for this chart and must not be used&quot;.format(banned))
+            failed = True
+
+    print(&quot;Test: an unavailable month is marked, never drawn as zero&quot;)
+    if &quot;unavailable&quot; not in html.lower():
+        print(&quot;  ERROR: the unavailable month should be marked as such&quot;)
+        failed = True
+    if &quot;no rate data available&quot; not in html:
+        print(&quot;  ERROR: the reason for exclusion should be shown&quot;)
+        failed = True
+
+    print(&quot;Test: a degraded month is shown with its cost and flagged as partial&quot;)
+    if &quot;degraded&quot; not in html.lower():
+        print(&quot;  ERROR: the degraded month should be flagged&quot;)
+        failed = True
+
+    print(&quot;Test: months_included is stated so the annual figure's coverage is clear&quot;)
+    if &quot;2 of 12&quot; not in html:
+        print(&quot;  ERROR: the annual figure should say how many months it covers&quot;)
+        failed = True
+
+    print(&quot;Test: caveats are displayed, not buried in the JSON&quot;)
+    if &quot;An example caveat about the P10 fallback.&quot; not in html:
+        print(&quot;  ERROR: caveats must be shown to the user&quot;)
+        failed = True
+
+    print(&quot;Test: self_consumed_kwh is qualified when it is not meaningful&quot;)
+    if &quot;not meaningful&quot; not in html.lower():
+        print(&quot;  ERROR: a non-meaningful self-consumption figure should be qualified, not shown bare&quot;)
+        failed = True
+
+    print(&quot;Test: the run selector lists every stored run and marks the selected one&quot;)
+    for run in runs:
+        if run[&quot;label&quot;] not in html:
+            print(&quot;  ERROR: run {} should appear in the selector&quot;.format(run[&quot;id&quot;]))
+            failed = True
+    if &quot;selected&quot; not in html:
+        print(&quot;  ERROR: the selected run should be marked in the dropdown&quot;)
+        failed = True
+
+    print(&quot;Test: a download link is offered for the selected run&quot;)
+    if &quot;annual_download?run=20260726-101500&quot; not in html:
+        print(&quot;  ERROR: the selected run should be downloadable as JSON&quot;)
+        failed = True
+
+    print(&quot;Test: with no runs at all the view says so rather than rendering an empty chart&quot;)
+    empty = page.render_results(None, [], None)
+    if &quot;apexcharts&quot; in empty.lower() and &quot;series&quot; in empty.lower():
+        print(&quot;  ERROR: no chart should be drawn when there are no results&quot;)
+        failed = True
+    if &quot;no results&quot; not in empty.lower():
+        print(&quot;  ERROR: the empty state should say there are no results yet&quot;)
+        failed = True
+
+    return failed
+</code></pre>
+<p>Register it:</p>
+<pre><code class="language-python">from tests.test_web_annual import test_web_annual, test_web_annual_form, test_web_annual_results, test_web_annual_routes
+</code></pre>
+<pre><code class="language-python">        (&quot;web_annual_results&quot;, test_web_annual_results, &quot;Annual web tab results tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test web_annual_results &gt; /tmp/w8.txt 2&gt;&amp;1; grep -E "ERROR|AttributeError" /tmp/w8.txt</code></p>
+<p>Expected: FAIL — <code>AnnualPage</code> has no <code>render_results</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add the results view to <code>apps/predbat/web_annual.py</code></strong></li>
+</ul>
+<p>Add near the top of the module:</p>
+<pre><code class="language-python">import calendar
+import json
+
+# Validated with the dataviz palette checker in BOTH light and dark mode, all pairs.
+# Predbat's house chart trio (#2196F3/#FF9800/#4CAF50) FAILS here: green vs orange is
+# only deltaE 3.6 under protanopia, so roughly one man in twelve could not tell
+# &quot;Without Predbat&quot; from &quot;With Predbat&quot; - the exact comparison this chart exists to
+# make. Do not substitute without re-running the validator.
+SCENARIO_COLOURS = {&quot;no_pvbat&quot;: &quot;#0072B2&quot;, &quot;without_predbat&quot;: &quot;#D55E00&quot;, &quot;with_predbat&quot;: &quot;#009E73&quot;}
+SCENARIO_LABELS = {&quot;no_pvbat&quot;: &quot;No PV/Battery&quot;, &quot;without_predbat&quot;: &quot;Without Predbat&quot;, &quot;with_predbat&quot;: &quot;With Predbat&quot;}
+SCENARIO_ORDER = [&quot;no_pvbat&quot;, &quot;without_predbat&quot;, &quot;with_predbat&quot;]
+</code></pre>
+<p>Then append to <code>AnnualPage</code>:</p>
+<pre><code class="language-python">    @staticmethod
+    def _pounds(pence):
+        &quot;&quot;&quot;Return a pence value formatted as pounds with an explicit unit.&quot;&quot;&quot;
+        try:
+            return &quot;£{:.2f}&quot;.format(float(pence) / 100.0)
+        except (TypeError, ValueError):
+            return &quot;n/a&quot;
+
+    def render_results(self, results, runs, selected_id):
+        &quot;&quot;&quot;Return the results view: selector, totals, chart, monthly table, caveats.&quot;&quot;&quot;
+        text = '&lt;div class=&quot;annual-results&quot;&gt;\n'
+        text += self._render_selector(runs, selected_id)
+
+        if not results:
+            text += &quot;&lt;p&gt;No results yet — fill in the form above and press Run.&lt;/p&gt;\n&lt;/div&gt;\n&quot;
+            return text
+
+        annual = results.get(&quot;annual&quot;, {}) or {}
+        scenarios = annual.get(&quot;scenarios&quot;)
+        included = annual.get(&quot;months_included&quot;, 0)
+
+        text += &quot;&lt;h2&gt;Annual totals for {}&lt;/h2&gt;\n&quot;.format(results.get(&quot;year&quot;, &quot;&quot;))
+        if not scenarios:
+            text += &quot;&lt;p&gt;No month produced a usable result, so there is no annual figure.&lt;/p&gt;\n&quot;
+        else:
+            text += &quot;&lt;table class='comparison-table'&gt;&lt;tr&gt;&lt;th&gt;Scenario&lt;/th&gt;&lt;th&gt;Cost&lt;/th&gt;&lt;th&gt;Import&lt;/th&gt;&lt;th&gt;Export&lt;/th&gt;&lt;/tr&gt;\n&quot;
+            for key in SCENARIO_ORDER:
+                entry = scenarios.get(key, {})
+                text += &quot;&lt;tr&gt;&lt;td&gt;{}&lt;/td&gt;&lt;td&gt;{}&lt;/td&gt;&lt;td&gt;{} kWh&lt;/td&gt;&lt;td&gt;{} kWh&lt;/td&gt;&lt;/tr&gt;\n&quot;.format(
+                    SCENARIO_LABELS[key], self._pounds(entry.get(&quot;cost_p&quot;)), round(entry.get(&quot;import_kwh&quot;, 0), 1), round(entry.get(&quot;export_kwh&quot;, 0), 1)
+                )
+            text += &quot;&lt;/table&gt;\n&quot;
+            savings = annual.get(&quot;savings&quot;, {}) or {}
+            text += &quot;&lt;p&gt;&lt;strong&gt;PV and battery save {}&lt;/strong&gt; against no system.&lt;/p&gt;\n&quot;.format(self._pounds(savings.get(&quot;pv_battery_vs_none_p&quot;, 0)))
+            text += &quot;&lt;p&gt;&lt;strong&gt;Predbat saves a further {}&lt;/strong&gt; against a timer-controlled battery.&lt;/p&gt;\n&quot;.format(self._pounds(savings.get(&quot;predbat_vs_baseline_p&quot;, 0)))
+            text += &quot;&lt;p&gt;Standing charge (identical in every scenario): {}&lt;/p&gt;\n&quot;.format(self._pounds(annual.get(&quot;standing_charge_p&quot;, 0)))
+
+        text += &quot;&lt;p&gt;Based on {} of 12 months.&quot;.format(included)
+        excluded = annual.get(&quot;months_excluded&quot;) or []
+        if excluded:
+            text += &quot; Excluded: {}.&quot;.format(&quot;, &quot;.join(calendar.month_abbr[month] for month in excluded))
+        text += &quot;&lt;/p&gt;\n&quot;
+
+        text += self._render_chart(results)
+        text += self._render_month_table(results)
+        text += self._render_caveats(results)
+        if selected_id:
+            text += '&lt;p&gt;&lt;a href=&quot;./annual_download?run={}&quot;&gt;Download this run as JSON&lt;/a&gt;&lt;/p&gt;\n'.format(selected_id)
+        text += &quot;&lt;/div&gt;\n&quot;
+        return text
+
+    def _render_selector(self, runs, selected_id):
+        &quot;&quot;&quot;Return the run selector, or nothing when there are no stored runs.&quot;&quot;&quot;
+        if not runs:
+            return &quot;&quot;
+        text = '&lt;form action=&quot;./annual&quot; method=&quot;get&quot; class=&quot;annual-selector&quot;&gt;&lt;label for=&quot;run&quot;&gt;Run&lt;/label&gt;&lt;select id=&quot;run&quot; name=&quot;run&quot; onchange=&quot;this.form.submit()&quot;&gt;\n'
+        for run in runs:
+            text += '&lt;option value=&quot;{}&quot; {}&gt;{} — {}&lt;/option&gt;\n'.format(run[&quot;id&quot;], &quot;selected&quot; if run[&quot;id&quot;] == selected_id else &quot;&quot;, run.get(&quot;label&quot;, run[&quot;id&quot;]), run[&quot;id&quot;])
+        text += &quot;&lt;/select&gt;&lt;/form&gt;\n&quot;
+        return text
+
+    def _render_chart(self, results):
+        &quot;&quot;&quot;Return the grouped monthly bar chart.
+
+        Only months with a usable result contribute a bar. An unavailable month is
+        left out of the series entirely rather than plotted as zero - a zero-height
+        bar reads as free electricity, which is the opposite of what happened.
+        &quot;&quot;&quot;
+        categories = []
+        series = {key: [] for key in SCENARIO_ORDER}
+        for entry in results.get(&quot;months&quot;, []):
+            if entry.get(&quot;status&quot;) not in (&quot;ok&quot;, &quot;degraded&quot;):
+                continue
+            categories.append(calendar.month_abbr[entry[&quot;month&quot;]])
+            for key in SCENARIO_ORDER:
+                series[key].append(round(entry.get(&quot;scenarios&quot;, {}).get(key, {}).get(&quot;cost_p&quot;, 0) / 100.0, 2))
+
+        if not categories:
+            return &quot;&lt;p&gt;No month produced a usable result, so there is nothing to chart.&lt;/p&gt;\n&quot;
+
+        payload = {
+            &quot;chart&quot;: {&quot;type&quot;: &quot;bar&quot;, &quot;height&quot;: 400, &quot;toolbar&quot;: {&quot;show&quot;: False}},
+            &quot;series&quot;: [{&quot;name&quot;: SCENARIO_LABELS[key], &quot;data&quot;: series[key]} for key in SCENARIO_ORDER],
+            &quot;colors&quot;: [SCENARIO_COLOURS[key] for key in SCENARIO_ORDER],
+            &quot;xaxis&quot;: {&quot;categories&quot;: categories},
+            &quot;yaxis&quot;: {&quot;title&quot;: {&quot;text&quot;: &quot;Cost (£)&quot;}},
+            &quot;plotOptions&quot;: {&quot;bar&quot;: {&quot;columnWidth&quot;: &quot;70%&quot;, &quot;borderRadius&quot;: 4, &quot;borderRadiusApplication&quot;: &quot;end&quot;}},
+            &quot;stroke&quot;: {&quot;show&quot;: True, &quot;width&quot;: 2, &quot;colors&quot;: [&quot;transparent&quot;]},
+            &quot;dataLabels&quot;: {&quot;enabled&quot;: False},
+            &quot;legend&quot;: {&quot;position&quot;: &quot;top&quot;},
+            &quot;tooltip&quot;: {&quot;y&quot;: {&quot;formatter&quot;: None}},
+        }
+        text = '&lt;div id=&quot;annual-chart&quot;&gt;&lt;/div&gt;\n'
+        text += '&lt;script src=&quot;https://cdn.jsdelivr.net/npm/apexcharts&quot;&gt;&lt;/script&gt;\n'
+        text += &quot;&lt;script&gt;\nvar annualOptions = {};\n&quot;.format(json.dumps(payload))
+        text += &quot;annualOptions.tooltip.y = {formatter: function (v) { return '£' + v.toFixed(2); }};\n&quot;
+        text += &quot;new ApexCharts(document.querySelector('#annual-chart'), annualOptions).render();\n&lt;/script&gt;\n&quot;
+        return text
+
+    def _render_month_table(self, results):
+        &quot;&quot;&quot;Return the per-month energy breakdown, marking degraded and unavailable months.&quot;&quot;&quot;
+        text = &quot;&lt;h2&gt;By month&lt;/h2&gt;\n&lt;table class='comparison-table'&gt;\n&quot;
+        text += &quot;&lt;tr&gt;&lt;th&gt;Month&lt;/th&gt;&lt;th&gt;Scenario&lt;/th&gt;&lt;th&gt;Cost&lt;/th&gt;&lt;th&gt;Import&lt;/th&gt;&lt;th&gt;Export&lt;/th&gt;&lt;th&gt;PV&lt;/th&gt;&lt;th&gt;Self-consumed&lt;/th&gt;&lt;th&gt;Battery&lt;/th&gt;&lt;/tr&gt;\n&quot;
+        for entry in results.get(&quot;months&quot;, []):
+            name = calendar.month_abbr[entry[&quot;month&quot;]]
+            if entry.get(&quot;status&quot;) not in (&quot;ok&quot;, &quot;degraded&quot;):
+                text += &quot;&lt;tr class='annual-unavailable'&gt;&lt;td&gt;{}&lt;/td&gt;&lt;td colspan='7'&gt;unavailable — {}&lt;/td&gt;&lt;/tr&gt;\n&quot;.format(name, entry.get(&quot;reason&quot;, &quot;no result&quot;))
+                continue
+            suffix = &quot; (degraded — {} sampled day(s) failed)&quot;.format(len(entry.get(&quot;failed_days&quot;, []))) if entry.get(&quot;status&quot;) == &quot;degraded&quot; else &quot;&quot;
+            for key in SCENARIO_ORDER:
+                scenario = entry.get(&quot;scenarios&quot;, {}).get(key, {})
+                if scenario.get(&quot;self_consumed_kwh_meaningful&quot;, True):
+                    self_consumed = &quot;{} kWh&quot;.format(round(scenario.get(&quot;self_consumed_kwh&quot;, 0), 1))
+                else:
+                    self_consumed = &quot;&lt;span class='annual-unavailable' title='The battery exported more than the PV generated, so this figure is not meaningful'&gt;not meaningful&lt;/span&gt;&quot;
+                text += &quot;&lt;tr&gt;&lt;td&gt;{}{}&lt;/td&gt;&lt;td&gt;{}&lt;/td&gt;&lt;td&gt;{}&lt;/td&gt;&lt;td&gt;{} kWh&lt;/td&gt;&lt;td&gt;{} kWh&lt;/td&gt;&lt;td&gt;{} kWh&lt;/td&gt;&lt;td&gt;{}&lt;/td&gt;&lt;td&gt;{} kWh&lt;/td&gt;&lt;/tr&gt;\n&quot;.format(
+                    name if key == SCENARIO_ORDER[0] else &quot;&quot;,
+                    suffix if key == SCENARIO_ORDER[0] else &quot;&quot;,
+                    SCENARIO_LABELS[key],
+                    self._pounds(scenario.get(&quot;cost_p&quot;)),
+                    round(scenario.get(&quot;import_kwh&quot;, 0), 1),
+                    round(scenario.get(&quot;export_kwh&quot;, 0), 1),
+                    round(scenario.get(&quot;pv_generated_kwh&quot;, 0), 1),
+                    self_consumed,
+                    round(scenario.get(&quot;battery_throughput_kwh&quot;, 0), 1),
+                )
+        text += &quot;&lt;/table&gt;\n&quot;
+        return text
+
+    def _render_caveats(self, results):
+        &quot;&quot;&quot;Return the caveats the engine attached to this run.&quot;&quot;&quot;
+        caveats = results.get(&quot;caveats&quot;) or []
+        if not caveats:
+            return &quot;&quot;
+        text = &quot;&lt;h2&gt;Caveats&lt;/h2&gt;\n&lt;ul class='annual-caveats'&gt;\n&quot;
+        for caveat in caveats:
+            text += &quot;&lt;li&gt;{}&lt;/li&gt;\n&quot;.format(caveat)
+        text += &quot;&lt;/ul&gt;\n&quot;
+        return text
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k web_annual &gt; /tmp/w8.txt 2&gt;&amp;1; grep -E "ERROR|Traceback" /tmp/w8.txt</code></p>
+<p>Expected: no output.</p>
+<ul>
+<li>[ ] <strong>Step 5: Look at the rendered page</strong></li>
+</ul>
+<p>The validator checks colour, not layout. Start Predbat's web interface (or render <code>render_results(sample_run_results(), runs, id)</code> to a file and open it) and check the chart for label collisions, bar overflow and legend placement in <strong>both</strong> light and dark mode. Report what you saw — "it rendered" is not an observation.</p>
+<ul>
+<li>[ ] <strong>Step 6: Run pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/web_annual.py apps/predbat/tests/test_web_annual.py apps/predbat/unit_test.py
+coverage/venv/bin/pre-commit run --files apps/predbat/web_annual.py apps/predbat/tests/test_web_annual.py apps/predbat/unit_test.py
+git commit -m &quot;feat(annual): add the Annual tab results view and monthly chart&quot;
+</code></pre>
+<hr />
+<h2 id="task-9-documentation">Task 9: Documentation</h2>
+<p><strong>Files:</strong>
+- Modify: <code>docs/annual-prediction.md</code>
+- Modify: <code>.cspell/custom-dictionary-workspace.txt</code> (only if pre-commit flags a word)</p>
+<ul>
+<li>[ ] <strong>Step 1: Add a "Using the web interface" section to <code>docs/annual-prediction.md</code></strong></li>
+</ul>
+<p>Insert before the existing "Running it" section, which covers the CLI. Cover:</p>
+<ul>
+<li>Where the tab is (the <strong>Annual</strong> entry in the navigation) and that it needs no Home Assistant and no configured Predbat.</li>
+<li>That the form prefills from your existing setup where it can, and shows example values otherwise — and that the banner tells you which you are looking at.</li>
+<li>The tariff dropdown, including that your own <code>compare_list</code> entries appear in it if you have any, and that picking one fills in the URL fields which stay editable.</li>
+<li>That a run takes one to three minutes, or two to six with a car configured, and shows a progress bar; that it keeps running if you navigate away; and that Cancel stops it.</li>
+<li>That the last five runs are kept and can be switched between with the selector, so you can compare a 5 kWh battery against a 10 kWh one without re-running either.</li>
+<li>That the chart omits unavailable months rather than drawing them as zero.</li>
+</ul>
+<p>Keep the existing CLI documentation — both interfaces are supported.</p>
+<ul>
+<li>[ ] <strong>Step 2: Verify the docs build</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files docs/annual-prediction.md
+cd coverage &amp;&amp; ./venv/bin/mkdocs build --strict -f ../mkdocs.yml &gt; /tmp/w9.txt 2&gt;&amp;1; grep -iE &quot;error|warning&quot; /tmp/w9.txt
+</code></pre>
+<p>Expected: no errors for <code>annual-prediction.md</code>. If cspell flags a word, add it to <code>.cspell/custom-dictionary-workspace.txt</code>, re-run pre-commit, and <strong>re-stage</strong> that file — a hook sorts it.</p>
+<ul>
+<li>[ ] <strong>Step 3: Run the full test suite</strong></li>
+</ul>
+<p>The tab touches <code>web.py</code>, which the whole web test suite depends on.</p>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all &gt; /tmp/w9full.txt 2&gt;&amp;1; grep -E &quot;FAILED|All tests passed|tests failed&quot; /tmp/w9full.txt | tail -5
+</code></pre>
+<p>Expected: "All tests passed", around 250-300 seconds. Read the file.</p>
+<ul>
+<li>[ ] <strong>Step 4: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add docs/annual-prediction.md .cspell/custom-dictionary-workspace.txt
+coverage/venv/bin/pre-commit run --files docs/annual-prediction.md .cspell/custom-dictionary-workspace.txt
+git commit -m &quot;docs: document the Annual prediction web tab&quot;
+</code></pre>
+<hr />
+<h2 id="notes-for-the-implementer">Notes for the implementer</h2>
+<p><strong>The chart palette is not a style preference.</strong> It was measured. If you find yourself wanting Predbat's usual green/orange/blue because it looks more consistent, re-read Task 8's opening: that trio is ΔE 3.6 apart under protanopia for the two series the whole tool exists to compare. Consistency that hides the answer from one reader in twelve is not consistency worth having.</p>
+<p><strong>Three properties must survive from the engine into the UI.</strong> They were hard-won during the engine work and are easy to undo here:
+1. An unavailable month is never a zero-height bar or a <code>£0.00</code> cell.
+2. <code>self_consumed_kwh</code> is qualified when <code>self_consumed_kwh_meaningful</code> is false.
+3. Caveats are on screen, not only in the JSON.</p>
+<p><strong>The unconfigured case is the acceptance criterion</strong>, not a nicety. <code>test_web_annual</code>'s first assertion is the one that proves it. If it starts failing, something has made the tab depend on a configured Predbat, which breaks the prospective-buyer path the tool exists for.</p>
+<p><strong>Do not read <code>apps.yaml</code> from disk anywhere.</strong> Everything comes from <code>get_arg()</code>.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
