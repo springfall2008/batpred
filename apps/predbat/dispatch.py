@@ -97,6 +97,18 @@ class InverterDispatch:
             self.inv.write_and_poll_option("dispatch_control_mode", mode_entity, mode)
             self.last_mode = mode
 
+        # Master enable FIRST, unconditionally: never trust the HA switch state for
+        # the master. The inverter clears 44100 itself on failsafe expiry or block
+        # reset while Home Assistant keeps reporting the switch as "on" (optimistic
+        # local state), and a stale-on read makes write_and_poll_switch skip the
+        # write entirely - after which every realtime block write is silently
+        # discarded by the master-gated inverter (dispatch no-ops with no error).
+        # A forced turn_on is idempotent on the inverter (re-arms 44100), so always
+        # issuing it costs one harmless switch write per cycle.
+        master_entity = self._entity("dispatch_master")
+        if master_entity:
+            self.base.call_service_wrapper("switch/turn_on", entity_id=master_entity)
+
         # Stage the signed power (discharge negative)
         self._write_and_poll("dispatch_power", power_entity, int(power_w), required_unit="W")
 
@@ -109,16 +121,13 @@ class InverterDispatch:
             soc_max_entity = self._entity("dispatch_soc_max")
             if soc_max_entity:
                 self._write_and_poll("dispatch_soc_max", soc_max_entity, int(soc_max), required_unit="%")
-        # Failsafe interval: once at first apply, keep staged thereafter (cheap no-op
-        # writes skipped by write_and_poll)
+        # Failsafe interval: every apply while the dispatch is not yet active, so it
+        # re-arms after failsafe expiry. Scattered single-register writes only commit
+        # while the master is enabled, so this must come after the master force
+        # above. Cheap: write_and_poll skips it once the value is staged and active.
         failsafe_entity = self._entity("dispatch_failsafe_interval")
         if failsafe_entity and not self.active:
             self._write_and_poll("dispatch_failsafe_interval", failsafe_entity, 10, required_unit="min")
-
-        # Master enable (present on Solis; integrations without one skip this)
-        master_entity = self._entity("dispatch_master")
-        if master_entity:
-            self.inv.write_and_poll_switch("dispatch_master", master_entity, True)
 
         # Apply the block
         apply_entity = self._entity("dispatch_apply_button")
@@ -145,6 +154,14 @@ class InverterDispatch:
             self._press_button("dispatch disable", disable_entity)
         elif master_entity:
             self.inv.write_and_poll_switch("dispatch_master", master_entity, False)
+        # Always force the master off via HA too: the disable button clears the
+        # inverter-side block without updating the HA switch, leaving it optimistically
+        # "on" while the register reads 0 - the exact stale-on state that makes the
+        # next apply's write_and_poll_switch skip the master write and silently kill
+        # the dispatch. An explicit turn_off both stops any inverter-side dispatch and
+        # re-syncs the HA state so the next apply re-arms unconditionally.
+        if master_entity:
+            self.base.call_service_wrapper("switch/turn_off", entity_id=master_entity)
         self.active = False
         self.last_power_w = None
         self.log("Inverter {} dispatch: disabled".format(self.inv.id))

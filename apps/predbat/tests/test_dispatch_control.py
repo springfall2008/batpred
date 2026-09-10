@@ -142,6 +142,16 @@ def test_dispatch_enabled_routes_export_through_dispatch(my_predbat=None):
     pressed_apply = any(s[0] == "button/press" and s[1] == "button.solax_apply_remote_dispatch" for s in services)
     power_write = [s for s in services if s[0] == "number/set_value" and s[1] == "number.solax_dispatch_power"]
     soc_min_write = [s for s in services if s[0] == "number/set_value" and s[1] == "number.solax_dispatch_soc_min"]
+    master_on = [s for s in services if s[0] == "switch/turn_on" and s[1] == "switch.solax_dispatch_master"]
+    master_write_poll = [c for c in base.calls if c[0] == "set_state" and c[1] == "switch.solax_dispatch_master"]
+    # The order in which the master is enabled must precede the staged power write:
+    # scattered single-register writes only commit while the master is enabled.
+    if master_on:
+        master_idx = base.calls.index(("service", "switch/turn_on", "switch.solax_dispatch_master", None))
+        power_idx = next(i for i, c in enumerate(base.calls) if c[0] == "service" and c[1] == "number/set_value" and c[2] == "number.solax_dispatch_power")
+        master_before_power = master_idx < power_idx
+    else:
+        master_before_power = False
 
     if not pressed_apply:
         print("ERROR: apply button was not pressed")
@@ -152,6 +162,15 @@ def test_dispatch_enabled_routes_export_through_dispatch(my_predbat=None):
     if not soc_min_write or soc_min_write[0][2] != 20:
         print("ERROR: expected dispatch soc_min {} (reserve floor), got {}".format(20, soc_min_write[0][2] if soc_min_write else None))
         failed = True
+    if not master_on:
+        print("ERROR: master switch was not turned on")
+        failed = True
+    elif master_write_poll:
+        print("ERROR: master was written through write_and_poll_switch, which can silently skip the write when HA optimistically reports the switch as on")
+        failed = True
+    if master_on and not master_before_power:
+        print("ERROR: master turn_on must precede the staged power write (scattered writes only commit with master enabled)")
+        failed = True
     # Slot entities must NOT be written by the dispatch path
     slot_write = [s for s in services if s[1] in (STOCK_ARGS["discharge_start_time"], STOCK_ARGS["scheduled_discharge_enable"])]
     if slot_write:
@@ -159,7 +178,7 @@ def test_dispatch_enabled_routes_export_through_dispatch(my_predbat=None):
         failed = True
 
     if not failed:
-        print("PASS: dispatch applied with power -3600, soc_min 20, no slot writes")
+        print("PASS: dispatch applied with power -3600, soc_min 20, forced master on before staging, no slot writes")
     return 1 if failed else 0
 
 
@@ -229,9 +248,13 @@ def test_dispatch_disable_is_idempotent(my_predbat=None):
     if disable_presses != 1:
         print("ERROR: expected exactly 1 disable press after deactivation, got {}".format(disable_presses))
         failed = True
+    master_off = [c for c in base.calls if c[0] == "service" and c[1] == "switch/turn_off" and c[2] == "switch.solax_dispatch_master"]
+    if len(master_off) != 1:
+        print("ERROR: expected exactly 1 master turn_off alongside the disable press, got {}".format(len(master_off)))
+        failed = True
 
     if not failed:
-        print("PASS: disable is idempotent")
+        print("PASS: disable is idempotent and force-offs the master")
     return 1 if failed else 0
 
 
