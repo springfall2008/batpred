@@ -116,7 +116,12 @@ class SolarAPI(ComponentBase):
         # one of "solcast"/"forecast_solar"/"open_meteo"/"ha_sensors", or None before the first
         # successful fetch. Set in fetch_pv_forecast() itself, beside its own log_source_change()
         # call, only once pv_forecast_data is non-empty - see build_discovery()'s own docstring for
-        # why this is what answers "which one actually fed the plan".
+        # why this is what answers "which one actually fed the plan". Deliberately NOT the same as
+        # that method's own configured_source local in its two primary/fallback branches
+        # (forecast_solar_open_meteo_first, forecast_solar_open_meteo_backup): configured_source
+        # keeps naming the primary even once a fallback has served the data, so this is tracked via
+        # a second local, active_source, that fetch_pv_forecast() corrects inside each fallback arm
+        # - see that method's own comments.
         self.active_forecast_source = None
         # The (sites, forecast_solar, open_meteo, ha-sensor-entities, active source) snapshot
         # build_discovery() was last successfully reported against - see
@@ -1603,6 +1608,14 @@ class SolarAPI(ComponentBase):
         pv_forecast_total_sensor = 0
         create_pv10 = False
         configured_source = None
+        # Which provider genuinely returned pv_forecast_data this call - see the comment where this
+        # feeds self.active_forecast_source below. Equal to configured_source in every branch
+        # except the two with an internal primary/fallback pair immediately below, where a fallback
+        # that actually serves the data must override the primary named by configured_source.
+        # configured_source itself is deliberately left untouched by this - it still names the
+        # primary for log_source_change()'s settling-period message, a separate, pre-existing
+        # concern this task does not change.
+        active_source = None
         max_kwh = 9999
         using_ha_data = False
 
@@ -1613,34 +1626,45 @@ class SolarAPI(ComponentBase):
             divide_by = 30.0
             create_pv10 = True
             configured_source = "open_meteo"
+            active_source = "open_meteo"
             if not pv_forecast_data:
                 self.log("Warn: SolarAPI: Open-Meteo returned no data, falling back to Forecast Solar")
                 pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
+                if pv_forecast_data:
+                    # The fallback is what actually served this fetch, not the primary named above.
+                    active_source = "forecast_solar"
         elif self.forecast_solar:
             self.log("SolarAPI: Obtaining solar forecast from Forecast Solar API")
             pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
             divide_by = 30.0
             create_pv10 = True
             configured_source = "forecast_solar"
+            active_source = "forecast_solar"
             if not pv_forecast_data and self.forecast_solar_open_meteo_backup:
                 self.log("SolarAPI: Forecast Solar returned no data, falling back to Open-Meteo backup")
                 backup_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
                 pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=backup_configs)
+                if pv_forecast_data:
+                    # The backup is what actually served this fetch, not the primary named above.
+                    active_source = "open_meteo"
         elif self.open_meteo_forecast:
             self.log("SolarAPI: Obtaining solar forecast from Open-Meteo API")
             pv_forecast_data, max_kwh = await self.download_open_meteo_data()
             divide_by = 30.0
             create_pv10 = True
             configured_source = "open_meteo"
+            active_source = "open_meteo"
         elif self.solcast_host and self.solcast_api_key:
             self.log("SolarAPI: Obtaining solar forecast from Solcast API")
             pv_forecast_data = await self.download_solcast_data()
             divide_by = 30.0
             configured_source = "solcast"
+            active_source = "solcast"
         else:
             self.log("SolarAPI: Using Solcast integration from inside HA for solar forecast")
             using_ha_data = True
             configured_source = "ha_sensors"
+            active_source = "ha_sensors"
 
             # Fetch data from each sensor
             for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
@@ -1681,8 +1705,10 @@ class SolarAPI(ComponentBase):
             # Recorded only on a successful fetch (this branch), never on the empty-data branch
             # below - a transient failure must not overwrite the last known-good answer to "which
             # provider is actually feeding the plan" - see build_discovery()'s own docstring and
-            # this attribute's own comment in initialize().
-            self.active_forecast_source = configured_source
+            # this attribute's own comment in initialize(). active_source, not configured_source:
+            # in the two primary/fallback branches above, a fallback that actually served the data
+            # has already overridden it away from the primary configured_source still names.
+            self.active_forecast_source = active_source
             await self.log_source_change(configured_source)
 
             # Detect the actual period of the forecast data (e.g. 15 or 30 minutes)

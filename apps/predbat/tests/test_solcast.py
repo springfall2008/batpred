@@ -5487,6 +5487,77 @@ def test_fetch_pv_forecast_sets_active_forecast_source_only_on_success(my_predba
     return failed
 
 
+def test_fetch_pv_forecast_active_forecast_source_follows_the_fallback_not_the_primary(my_predbat):
+    """
+    Task 9 review, second follow-up: when forecast.solar (the primary) returns no data and
+    forecast_solar_open_meteo_backup is configured, Open-Meteo is what actually serves the fetch -
+    active_forecast_source must name the fallback that served the data, not the primary that
+    failed, even though fetch_pv_forecast()'s own configured_source local (used only for
+    log_source_change()'s unrelated settling-period message - a separate, pre-existing concern
+    this task does not touch) keeps naming the primary throughout. Reuses the exact mocked-fetch
+    fixture from test_fetch_pv_forecast_forecast_solar_open_meteo_backup_on_failure, which already
+    proves the fallback itself fires; this test adds the active_forecast_source assertion.
+    """
+    print("  - test_fetch_pv_forecast_active_forecast_source_follows_the_fallback_not_the_primary")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        solar.forecast_solar_open_meteo_backup = True
+        # Configured separately from forecast_solar (real usage: a user who wants automatic backup
+        # sets both) - required for build_discovery() to have an "open_meteo" record to mark active
+        # at all under its own "when enabled" (self.open_meteo_forecast truthy) rule; without this
+        # the backup call still borrows forecast_solar's own coordinates internally (see
+        # fetch_pv_forecast()'s backup_configs fallback), which is a real, narrower case noted in
+        # the task report rather than asserted on here.
+        solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "kwp": 3.0}]
+        solar.open_meteo_forecast_max_age = 1.0
+        # forecast.solar (the primary) fails outright - download_forecast_solar_data returns ([], 0)
+        test_api.set_mock_response("forecast.solar", {"error": "server error"}, 500)
+        # Open-Meteo (the fallback) returns valid hourly data and is what actually serves the fetch
+        test_api.set_mock_response(
+            "api.open-meteo.com",
+            {
+                "hourly": {
+                    "time": ["2025-06-15T12:00", "2025-06-15T13:00", "2025-06-15T14:00"],
+                    "global_tilted_irradiance": [500.0, 600.0, 550.0],
+                    "temperature_2m": [25.0, 25.0, 25.0],
+                    "wind_speed_10m": [1.0, 1.0, 1.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            "ensemble-api.open-meteo.com",
+            {"hourly": {"time": ["2025-06-15T12:00", "2025-06-15T13:00", "2025-06-15T14:00"], "global_tilted_irradiance_member01": [400.0, 480.0, 440.0]}},
+        )
+
+        def create_mock_session(*args, **kwargs):
+            """Return the test harness's mocked aiohttp session, ignoring the real constructor args."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(solar.fetch_pv_forecast())
+
+        if solar.active_forecast_source != "open_meteo":
+            print(f"ERROR: expected active_forecast_source 'open_meteo' (the fallback that actually served the data), got {solar.active_forecast_source!r}")
+            failed = True
+
+        # Consuming this via build_discovery() should mark the open_meteo record active, not
+        # forecast_solar, even though both are configured.
+        report = solar.build_discovery()
+        active_devices = [record["device_id"] for record in report["forecasts"] if record.get("ratings", {}).get("active") is True]
+        if active_devices != ["open_meteo"]:
+            print(f"ERROR: expected build_discovery() to mark only open_meteo active after the fallback served the fetch, got {active_devices}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 def test_discovered_sites_append_only_and_deduplicated(my_predbat):
     """
     self.discovered_sites accumulates across repeated site-fetch cycles without duplicating an
@@ -5952,6 +6023,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_build_discovery_active_marks_every_solcast_site(my_predbat)
     failed |= test_build_discovery_no_active_marker_before_first_successful_fetch(my_predbat)
     failed |= test_fetch_pv_forecast_sets_active_forecast_source_only_on_success(my_predbat)
+    failed |= test_fetch_pv_forecast_active_forecast_source_follows_the_fallback_not_the_primary(my_predbat)
     failed |= test_discovered_sites_append_only_and_deduplicated(my_predbat)
     failed |= test_refresh_discovery_report_skips_repeat_calls_when_unchanged(my_predbat)
     failed |= test_refresh_discovery_report_failure_contained_and_retried(my_predbat)
