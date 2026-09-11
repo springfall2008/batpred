@@ -29,6 +29,13 @@ def run_test_plan_scenario_summary(my_predbat):
     print("**** Running plan scenario_summary_state tests ****")
     failed = False
 
+    # Imported here rather than at module scope: unit_test imports this module, so a top level
+    # import would be circular. This regression mutates the full planning fixture, so run it on a
+    # throwaway PredBat instance rather than leaking scenario state into the shared suite fixture.
+    from unit_test import create_predbat
+
+    my_predbat = create_predbat()
+
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
     reset_inverter(my_predbat)
