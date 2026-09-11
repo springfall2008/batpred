@@ -112,9 +112,15 @@ class SolarAPI(ComponentBase):
         # id already reported keeps its position even if a later cycle's site list comes back
         # shorter (a transient API hiccup must not make a previously-discovered site vanish).
         self.discovered_sites = []
-        # The (sites, forecast_solar, open_meteo, ha-sensor-entities) snapshot build_discovery()
-        # was last successfully reported against - see _refresh_discovery_report(). None until the
-        # first successful report.
+        # Which provider genuinely served the most recent SUCCESSFUL fetch_pv_forecast() call -
+        # one of "solcast"/"forecast_solar"/"open_meteo"/"ha_sensors", or None before the first
+        # successful fetch. Set in fetch_pv_forecast() itself, beside its own log_source_change()
+        # call, only once pv_forecast_data is non-empty - see build_discovery()'s own docstring for
+        # why this is what answers "which one actually fed the plan".
+        self.active_forecast_source = None
+        # The (sites, forecast_solar, open_meteo, ha-sensor-entities, active source) snapshot
+        # build_discovery() was last successfully reported against - see
+        # _refresh_discovery_report(). None until the first successful report.
         self.discovery_reported_for = None
 
     async def run(self, seconds, first):
@@ -705,6 +711,25 @@ class SolarAPI(ComponentBase):
             entities[name] = descriptor
         return entities
 
+    def _discovery_capacity_kw(self, configs):
+        """
+        Sum the configured kwp across every plane of a forecast.solar/Open-Meteo config, or None if nothing is genuinely known.
+
+        Mirrors the exact per-plane default (3.0) download_forecast_solar_data() and
+        download_open_meteo_data() themselves fall back to for a plane with no kwp given, and the
+        same "a single dict or a list of dicts" flexibility those two methods already normalise -
+        so the reported capacity always matches what a fetch this cycle would actually use. Unlike
+        Solcast (whose site payload carries no plane capacity this component ever reads), kwp is a
+        real, already-configured fact here - see the design spec's own placement of capacity_kw in
+        this section's ratings container.
+        """
+        if not configs:
+            return None
+        if not isinstance(configs, list):
+            configs = [configs]
+        total = sum(config.get("kwp", 3.0) for config in configs if isinstance(config, dict))
+        return dp2(total) if total > 0 else None
+
     def build_discovery(self):
         """
         Describe the solar forecast providers actually used for the discovery catalogue's forecasts section.
@@ -725,7 +750,10 @@ class SolarAPI(ComponentBase):
           endpoint returns by default - see SOLCAST_DISCOVERY_COVERAGE). Deliberately never the
           site's own "name" field: Solcast site names are user-chosen free text, which the spec
           excludes from the catalogue outright (it can contain anything, a person's name or address
-          included) - see the design doc's "Never included" class.
+          included) - see the design doc's "Never included" class. No `ratings.capacity_kw` either:
+          unlike forecast.solar/Open-Meteo below, nothing this component reads from Solcast's site
+          or forecast payloads ever carries a plane's declared capacity, so there is no genuine
+          figure to report - see _discovery_capacity_kw()'s own docstring for the contrast.
         - One record each for forecast.solar (device_id "forecast_solar") and Open-Meteo (device_id
           "open_meteo") when their apps.yaml config is set, each with its own coverage: Predbat
           retains/publishes self.forecast_days days of forecast from every source uniformly (see
@@ -733,7 +761,9 @@ class SolarAPI(ComponentBase):
           resolution_minutes is plan_interval_minutes for forecast.solar and a fixed 60 for
           Open-Meteo - both documented, not guessed, by fetch_pv_forecast()'s own comment on why
           divide_by is recalculated per source ("Forecast.Solar uses plan_interval_minutes,
-          Open-Meteo is hourly").
+          Open-Meteo is hourly"). ratings.capacity_kw is the sum of each configured plane's own kwp
+          (_discovery_capacity_kw()) - a real, already-configured fact (annual.py and web_annual.py
+          read the very same field), not a guess.
         - One record (device_id "ha_sensors", matching fetch_pv_forecast()'s own configured_source
           value for this path) carrying whichever of pv_forecast_today/tomorrow/d3/d4 are both
           configured and actually exist in the state store (_discovery_forecast_entities()) - the
@@ -742,10 +772,19 @@ class SolarAPI(ComponentBase):
           claimed for it: unlike the other three providers, Predbat has no way to know what
           published these entities.
 
-        No `ratings.capacity_kw` is reported for any provider: this component's own PV array size
-        (max_kwh - see fetch_pv_forecast()/pv_calibration()) is a fact about the property's panels,
-        not about the forecast SERVICE this section describes, and inventing one here would
-        conflate the two.
+        ratings.active: True marks whichever record(s) match self.active_forecast_source - the
+        provider that genuinely served the most recent SUCCESSFUL fetch_pv_forecast() call (set
+        there, beside its own log_source_change() call, only once pv_forecast_data is non-empty, so
+        a failed attempt never overwrites the last known-good answer). Every Solcast record is
+        marked together when active_forecast_source is "solcast", since a Solcast fetch aggregates
+        every discovered site in one cycle - there is no finer-grained "which site" answer to give.
+        This is deliberately independent of "when enabled" above: a record can exist (the provider
+        is configured) without being active (it is not the one currently feeding the plan) - e.g.
+        leftover pv_forecast_today config alongside a live Solcast setup produces an "ha_sensors"
+        record with no ratings.active at all, rather than either vanishing (requirement 2 forbids
+        suppressing a real record) or being wrongly marked live. This is exactly the fact the design
+        spec calls out this section as needing: "it is invisible which one actually fed the plan
+        when several are configured."
 
         Reporting is unconditional rather than gated on any automatic-style flag: this component
         has none (solar forecast sourcing is a plain apps.yaml choice between Solcast/forecast.solar
@@ -753,42 +792,67 @@ class SolarAPI(ComponentBase):
         GE Cloud's provisioning do), so there is nothing to record in the report's own "automatic"
         key and it is left at its default.
         """
+        active_source = self.active_forecast_source
         forecasts = []
 
         for resource_id in self.discovered_sites:
-            record = {"device_id": "solcast:{}".format(resource_id), "kind": "solar", "account_ids": {"site_id": resource_id}, "info": {"vendor": "Solcast"}, "coverage": dict(SOLCAST_DISCOVERY_COVERAGE)}
+            # dict(...) alone would only shallow-copy SOLCAST_DISCOVERY_COVERAGE, leaving every
+            # record's "variants" list pointing at the very same shared list object - harmless
+            # today (nothing mutates it), but a deep copy removes the footgun for good.
+            coverage = dict(SOLCAST_DISCOVERY_COVERAGE, variants=list(SOLCAST_DISCOVERY_COVERAGE["variants"]))
+            record = {"device_id": "solcast:{}".format(resource_id), "kind": "solar", "account_ids": {"site_id": resource_id}, "info": {"vendor": "Solcast"}, "coverage": coverage}
+            if active_source == "solcast":
+                record["ratings"] = {"active": True}
             forecasts.append(record)
 
         if self.forecast_solar:
-            forecasts.append(
-                {
-                    "device_id": "forecast_solar",
-                    "kind": "solar",
-                    "info": {"vendor": "Forecast.Solar"},
-                    "coverage": {"horizon_hours": self.forecast_days * 24, "resolution_minutes": self.plan_interval_minutes},
-                }
-            )
+            ratings = {}
+            capacity_kw = self._discovery_capacity_kw(self.forecast_solar)
+            if capacity_kw is not None:
+                ratings["capacity_kw"] = capacity_kw
+            if active_source == "forecast_solar":
+                ratings["active"] = True
+            record = {
+                "device_id": "forecast_solar",
+                "kind": "solar",
+                "info": {"vendor": "Forecast.Solar"},
+                "coverage": {"horizon_hours": self.forecast_days * 24, "resolution_minutes": self.plan_interval_minutes},
+            }
+            if ratings:
+                record["ratings"] = ratings
+            forecasts.append(record)
 
         if self.open_meteo_forecast:
-            forecasts.append(
-                {
-                    "device_id": "open_meteo",
-                    "kind": "solar",
-                    "info": {"vendor": "Open-Meteo"},
-                    "coverage": {"horizon_hours": self.forecast_days * 24, "resolution_minutes": 60},
-                }
-            )
+            ratings = {}
+            capacity_kw = self._discovery_capacity_kw(self.open_meteo_forecast)
+            if capacity_kw is not None:
+                ratings["capacity_kw"] = capacity_kw
+            if active_source == "open_meteo":
+                ratings["active"] = True
+            record = {
+                "device_id": "open_meteo",
+                "kind": "solar",
+                "info": {"vendor": "Open-Meteo"},
+                "coverage": {"horizon_hours": self.forecast_days * 24, "resolution_minutes": 60},
+            }
+            if ratings:
+                record["ratings"] = ratings
+            forecasts.append(record)
 
         ha_entities = self._discovery_forecast_entities()
         if ha_entities:
-            forecasts.append({"device_id": "ha_sensors", "kind": "solar", "entities": ha_entities})
+            record = {"device_id": "ha_sensors", "kind": "solar", "entities": ha_entities}
+            if active_source == "ha_sensors":
+                record["ratings"] = {"active": True}
+            forecasts.append(record)
 
         return {"forecasts": forecasts}
 
     def _discovery_state_key(self):
         """
         A snapshot of what build_discovery() depends on: the discovered Solcast sites, whether
-        forecast.solar/Open-Meteo are configured, and which HA-sensor forecast entities currently exist.
+        forecast.solar/Open-Meteo are configured, which HA-sensor forecast entities currently exist,
+        and which provider actually served the most recent successful fetch.
 
         Deliberately narrower than the forecast DATA itself (pv_forecast_minute and friends, which
         churn every fetch cycle) - keying on those would make _refresh_discovery_report() re-report
@@ -797,9 +861,12 @@ class SolarAPI(ComponentBase):
         pv_forecast_today etc are configured) so that an entity appearing in the state store for the
         first time - the external integration publishing it later than this component starts -
         is picked up as a change, not silently missed forever because the config value itself never
-        moved.
+        moved. self.active_forecast_source is included too: two providers can both stay configured
+        (and so contribute no change on their own) while which one is actually active flips between
+        cycles - forecast.solar's Open-Meteo fallback/primary settings are exactly this case - and
+        that flip is itself a change the catalogue must pick up.
         """
-        return (tuple(self.discovered_sites), bool(self.forecast_solar), bool(self.open_meteo_forecast), tuple(sorted(self._discovery_forecast_entities())))
+        return (tuple(self.discovered_sites), bool(self.forecast_solar), bool(self.open_meteo_forecast), tuple(sorted(self._discovery_forecast_entities())), self.active_forecast_source)
 
     def _refresh_discovery_report(self):
         """
@@ -1611,6 +1678,11 @@ class SolarAPI(ComponentBase):
                 self.log("SolarAPI: PV Forecast today adds up to {} and total sensors add up to {} kWh - detected forecast data is in {} (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, units, factor))
 
         if pv_forecast_data:
+            # Recorded only on a successful fetch (this branch), never on the empty-data branch
+            # below - a transient failure must not overwrite the last known-good answer to "which
+            # provider is actually feeding the plan" - see build_discovery()'s own docstring and
+            # this attribute's own comment in initialize().
+            self.active_forecast_source = configured_source
             await self.log_source_change(configured_source)
 
             # Detect the actual period of the forecast data (e.g. 15 or 30 minutes)

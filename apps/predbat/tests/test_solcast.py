@@ -5278,14 +5278,18 @@ def test_build_discovery_no_ha_sensors_record_when_nothing_exists(my_predbat):
     return failed
 
 
-def test_build_discovery_no_ratings_invented(my_predbat):
+def test_build_discovery_capacity_kw_only_for_forecast_solar_and_open_meteo(my_predbat):
     """
-    Requirement 6: never invent a fact. No forecast provider record ever carries a ratings
-    container - this component has no genuine capacity_kw figure for the forecast SERVICE itself
-    (max_kwh describes the property's own panels, not the provider), so inventing one would
-    conflate the two.
+    Requirement 6 revisited (task 9 review, finding 1): never invent a fact - but also never
+    withhold a genuinely known one. forecast.solar and Open-Meteo carry a real, already-configured
+    kwp per plane (the same field annual.py/web_annual.py read), so their records DO carry
+    ratings.capacity_kw. Solcast has no such source anywhere in this component's own site or
+    forecast payloads, and ha_sensors describes an external integration whose panel size Predbat
+    was never told, so neither carries a ratings container at all here (no active_forecast_source
+    is set in this test, so ratings.active plays no part either - see the dedicated active-marker
+    tests below).
     """
-    print("  - test_build_discovery_no_ratings_invented")
+    print("  - test_build_discovery_capacity_kw_only_for_forecast_solar_and_open_meteo")
     failed = False
 
     test_api = create_test_solar_api()
@@ -5298,10 +5302,184 @@ def test_build_discovery_no_ratings_invented(my_predbat):
         test_api.set_mock_ha_state("sensor.solcast_pv_forecast_today", "5.5")
 
         report = solar.build_discovery()
-        for record in report["forecasts"]:
-            if "ratings" in record:
-                print(f"ERROR: {record['device_id']} carries a ratings container that was never genuinely known: {record['ratings']}")
-                failed = True
+        by_device = {record["device_id"]: record for record in report["forecasts"]}
+
+        if "ratings" in by_device.get("solcast:site-one", {}):
+            print(f"ERROR: the Solcast record carries a ratings container that was never genuinely known: {by_device['solcast:site-one'].get('ratings')}")
+            failed = True
+        if "ratings" in by_device.get("ha_sensors", {}):
+            print(f"ERROR: the ha_sensors record carries a ratings container that was never genuinely known: {by_device['ha_sensors'].get('ratings')}")
+            failed = True
+        if by_device.get("forecast_solar", {}).get("ratings") != {"capacity_kw": 4.0}:
+            print(f"ERROR: expected forecast_solar ratings == {{'capacity_kw': 4.0}}, got {by_device.get('forecast_solar', {}).get('ratings')}")
+            failed = True
+        if by_device.get("open_meteo", {}).get("ratings") != {"capacity_kw": 4.0}:
+            print(f"ERROR: expected open_meteo ratings == {{'capacity_kw': 4.0}}, got {by_device.get('open_meteo', {}).get('ratings')}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_capacity_kw_sums_across_planes(my_predbat):
+    """
+    ratings.capacity_kw is the sum of every configured plane's own kwp, defaulting a plane with no
+    kwp given to 3.0 - the same default download_forecast_solar_data()/download_open_meteo_data()
+    themselves fall back to, so the reported figure matches what a real fetch would use.
+    """
+    print("  - test_build_discovery_capacity_kw_sums_across_planes")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}, {"latitude": 51.6, "longitude": -0.2}]  # second plane has no kwp - defaults to 3.0
+
+        report = solar.build_discovery()
+        by_device = {record["device_id"]: record for record in report["forecasts"]}
+
+        expected = 4.0 + 3.0
+        actual = by_device.get("forecast_solar", {}).get("ratings", {}).get("capacity_kw")
+        if actual != expected:
+            print(f"ERROR: expected summed capacity_kw {expected}, got {actual}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_active_marks_the_serving_provider(my_predbat):
+    """
+    Task 9 review, finding 2: ratings.active: True marks whichever record's provider actually
+    served the most recent successful fetch (self.active_forecast_source), answering the design
+    spec's own stated reason for this section - "it is invisible which one actually fed the plan
+    when several are configured". With two providers configured, exactly one record is marked
+    active, and it is the one fetch_pv_forecast()'s own precedence actually selects.
+    """
+    print("  - test_build_discovery_active_marks_the_serving_provider")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.discovered_sites = ["site-one"]  # leftover Solcast discovery, not this cycle's source
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
+        solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
+        # forecast_solar wins fetch_pv_forecast()'s own if/elif precedence over open_meteo_forecast
+        # and solcast_host/api_key whenever it is configured - see that method's own branch order.
+        solar.active_forecast_source = "forecast_solar"
+
+        report = solar.build_discovery()
+        active_devices = [record["device_id"] for record in report["forecasts"] if record.get("ratings", {}).get("active") is True]
+
+        if active_devices != ["forecast_solar"]:
+            print(f"ERROR: expected exactly ['forecast_solar'] marked active, got {active_devices}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_active_marks_every_solcast_site(my_predbat):
+    """
+    A Solcast fetch aggregates every discovered site in one cycle, so there is no finer-grained
+    "which site actually served the fetch" answer - every solcast:* record is marked active
+    together when self.active_forecast_source is "solcast".
+    """
+    print("  - test_build_discovery_active_marks_every_solcast_site")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.discovered_sites = ["site-one", "site-two"]
+        solar.active_forecast_source = "solcast"
+
+        report = solar.build_discovery()
+        active_devices = sorted(record["device_id"] for record in report["forecasts"] if record.get("ratings", {}).get("active") is True)
+
+        if active_devices != ["solcast:site-one", "solcast:site-two"]:
+            print(f"ERROR: expected both Solcast records marked active, got {active_devices}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_no_active_marker_before_first_successful_fetch(my_predbat):
+    """
+    Before fetch_pv_forecast() has ever succeeded, self.active_forecast_source is None (its
+    initialize()-time default), so no record is marked active - the catalogue must never guess.
+    """
+    print("  - test_build_discovery_no_active_marker_before_first_successful_fetch")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.discovered_sites = ["site-one"]
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
+
+        report = solar.build_discovery()
+        active_devices = [record["device_id"] for record in report["forecasts"] if "ratings" in record and record["ratings"].get("active") is True]
+
+        if active_devices:
+            print(f"ERROR: expected no record marked active before any successful fetch, got {active_devices}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_sets_active_forecast_source_only_on_success(my_predbat):
+    """
+    fetch_pv_forecast() itself sets self.active_forecast_source, and only on the branch where data
+    was actually returned - a failed/empty fetch must leave the last known-good answer alone rather
+    than clearing it, since "no data this cycle" is not evidence that the provider stopped serving
+    the plan.
+    """
+    print("  - test_fetch_pv_forecast_sets_active_forecast_source_only_on_success")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0, "efficiency": 0.9}]
+
+        forecast_response = {
+            "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+            "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+        }
+        test_api.set_mock_response("forecast.solar", forecast_response, 200)
+
+        def create_mock_session(*args, **kwargs):
+            """Return the test harness's mocked aiohttp session, ignoring the real constructor args."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(solar.fetch_pv_forecast())
+
+        if solar.active_forecast_source != "forecast_solar":
+            print(f"ERROR: expected active_forecast_source 'forecast_solar' after a successful fetch, got {solar.active_forecast_source}")
+            failed = True
+
+        # A second, failing fetch (no mock response registered this time) must not clear it.
+        test_api.mock_responses.clear()
+        run_async(solar.fetch_pv_forecast())
+
+        if solar.active_forecast_source != "forecast_solar":
+            print(f"ERROR: a failed fetch must not overwrite the last known-good active_forecast_source, got {solar.active_forecast_source}")
+            failed = True
 
     finally:
         test_api.cleanup()
@@ -5569,6 +5747,9 @@ def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predba
         # site: lower-cased, "-" swapped for "_" - see the docstring above.
         solar.pv_forecast_today = "sensor.solcast_forecast_abcd_1234_efgh_today"
         test_api.set_mock_ha_state(solar.pv_forecast_today, "5.5")
+        # Task 9 review, finding 2: proves ratings.active and ratings.capacity_kw (both added by
+        # the same review) survive the round-trip alongside everything checked before.
+        solar.active_forecast_source = "forecast_solar"
 
         report = solar.build_discovery()
 
@@ -5597,8 +5778,16 @@ def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predba
                 "the coverage variants list (the numbers/booleans/vocabulary-token widening) did not survive validation: {}".format(solcast_record.get("coverage")),
             )
 
-        check("forecast_solar" in by_device, "the forecast_solar record was dropped by validation")
-        check("open_meteo" in by_device, "the open_meteo record was dropped by validation")
+        fs_record = by_device.get("forecast_solar")
+        check(fs_record is not None, "the forecast_solar record was dropped by validation")
+        if fs_record:
+            check(fs_record.get("ratings", {}).get("capacity_kw") == 4.0, "capacity_kw dropped or altered by validation: {}".format(fs_record.get("ratings")))
+            check(fs_record.get("ratings", {}).get("active") is True, "ratings.active dropped or altered by validation: {}".format(fs_record.get("ratings")))
+        om_record = by_device.get("open_meteo")
+        check(om_record is not None, "the open_meteo record was dropped by validation")
+        if om_record:
+            check(om_record.get("ratings", {}).get("capacity_kw") == 4.0, "open_meteo capacity_kw dropped or altered by validation: {}".format(om_record.get("ratings")))
+            check("active" not in om_record.get("ratings", {}), "open_meteo must not be marked active when forecast_solar is the one serving the fetch: {}".format(om_record.get("ratings")))
         ha_record = by_device.get("ha_sensors")
         check(ha_record is not None, "the ha_sensors record was dropped by validation")
         if ha_record:
@@ -5608,7 +5797,8 @@ def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predba
             )
 
         coordinator.assemble()
-        catalogue_text = str(coordinator.catalogue())
+        catalogue = coordinator.catalogue()
+        catalogue_text = str(catalogue)
 
         check(resource_id not in catalogue_text, "the raw Solcast resource id appears in the clear in the redacted catalogue")
         # The transformed form a real HACS Solcast integration would fold into its own entity id -
@@ -5619,6 +5809,15 @@ def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predba
         check("Solcast" in catalogue_text, "the vendor should survive in the clear, but is missing from the redacted catalogue")
         check("forecast_solar" in catalogue_text, "the forecast_solar device id should survive in the clear, but is missing from the redacted catalogue")
         check("pv10" in catalogue_text and "pv90" in catalogue_text, "the coverage variants should survive redaction in the clear, but are missing from the redacted catalogue")
+
+        # ratings.capacity_kw and ratings.active (task 9 review, finding 1/2) are plain numbers and
+        # booleans - not identifier-shaped - so they must survive redaction completely untouched,
+        # checked structurally here rather than as text (a bare "True"/"4.0" substring check would
+        # be too fragile to mean anything).
+        redacted_by_device = {record["device_id"]: record for record in catalogue.get("forecasts", [])}
+        redacted_fs = redacted_by_device.get("forecast_solar", {})
+        check(redacted_fs.get("ratings", {}).get("capacity_kw") == 4.0, "capacity_kw did not survive redaction unchanged: {}".format(redacted_fs.get("ratings")))
+        check(redacted_fs.get("ratings", {}).get("active") is True, "ratings.active did not survive redaction unchanged: {}".format(redacted_fs.get("ratings")))
 
         if failed:
             print("FAIL: build_discovery round-trip through the real Coordinator and Redactor found problems above")
@@ -5747,7 +5946,12 @@ def run_solcast_tests(my_predbat):
     failed |= test_build_discovery_ha_sensor_entities_only_when_exist(my_predbat)
     failed |= test_build_discovery_ha_sensors_all_four_entities(my_predbat)
     failed |= test_build_discovery_no_ha_sensors_record_when_nothing_exists(my_predbat)
-    failed |= test_build_discovery_no_ratings_invented(my_predbat)
+    failed |= test_build_discovery_capacity_kw_only_for_forecast_solar_and_open_meteo(my_predbat)
+    failed |= test_build_discovery_capacity_kw_sums_across_planes(my_predbat)
+    failed |= test_build_discovery_active_marks_the_serving_provider(my_predbat)
+    failed |= test_build_discovery_active_marks_every_solcast_site(my_predbat)
+    failed |= test_build_discovery_no_active_marker_before_first_successful_fetch(my_predbat)
+    failed |= test_fetch_pv_forecast_sets_active_forecast_source_only_on_success(my_predbat)
     failed |= test_discovered_sites_append_only_and_deduplicated(my_predbat)
     failed |= test_refresh_discovery_report_skips_repeat_calls_when_unchanged(my_predbat)
     failed |= test_refresh_discovery_report_failure_contained_and_retried(my_predbat)
