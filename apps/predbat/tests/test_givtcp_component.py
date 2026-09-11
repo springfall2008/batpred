@@ -2197,6 +2197,7 @@ def test_build_discovery_shape(my_predbat=None):
     base, component = _make_component(rest_urls=["http://a:6345"])
     component.rest[0].inverter.rest_data = _rest_data_blob()
     _mark_discovered(component)
+    run_async(component.publish_data())
     report = component.build_discovery()
     assert report["automatic"] is True
     record = report["inverters"][0]
@@ -2218,6 +2219,7 @@ def test_build_discovery_uses_device_rate_max(my_predbat=None):
     base, component = _make_component(rest_urls=["http://a:6345"])
     component.rest[0].inverter.rest_data = _rest_data_blob()
     _mark_discovered(component)
+    run_async(component.publish_data())
     component.rest[0].max_battery_rate = lambda: 3600
     assert component.build_discovery()["inverters"][0]["entities"]["charge_rate"]["max"] == 3600
     print("PASS: per-device rate maximum used")
@@ -2229,6 +2231,7 @@ def test_build_discovery_only_discovered_endpoints(my_predbat=None):
     base, component = _make_component(rest_urls=["http://a:6345", "http://b:6345"])
     component.rest[0].inverter.rest_data = _rest_data_blob()
     _mark_discovered(component, indices=[0])
+    run_async(component.publish_data())
     assert len(component.build_discovery()["inverters"]) == 1
     print("PASS: only discovered endpoints reported")
     return 0
@@ -2239,6 +2242,7 @@ def test_build_discovery_reports_regardless_of_automatic(my_predbat=None):
     base, component = _make_component(rest_urls=["http://a:6345"], automatic=False)
     component.rest[0].inverter.rest_data = _rest_data_blob()
     _mark_discovered(component)
+    run_async(component.publish_data())
     report = component.build_discovery()
     assert report["automatic"] is False
     assert len(report["inverters"]) == 1
@@ -2251,6 +2255,7 @@ def test_build_discovery_falls_back_to_rest_api_without_a_serial(my_predbat=None
     base, component = _make_component(rest_urls=["http://a:6345"])
     component.rest[0].inverter.rest_data = _rest_data_blob()
     _mark_discovered(component)
+    run_async(component.publish_data())
     record = component.build_discovery()["inverters"][0]
     assert record["device_id"] == "givtcp:http://a:6345"
     assert "hardware_ids" not in record
@@ -2263,17 +2268,53 @@ def test_build_discovery_capabilities_follow_the_same_probes_as_automatic_config
     base, component = _make_component(rest_urls=["http://a:6345"])
     component.rest[0].inverter.rest_data = _rest_data_blob(version="2.4.0")
     _mark_discovered(component)
+    run_async(component.publish_data())
     v2_capabilities = component.build_discovery()["inverters"][0]["capabilities"]
     assert "rest_v3" not in v2_capabilities
     assert "pause_mode" not in v2_capabilities
     assert "discharge_target" not in v2_capabilities
 
     component.rest[0].inverter.rest_data = _rest_data_blob(version="3.0.4")
+    run_async(component.publish_data())
     v3_capabilities = component.build_discovery()["inverters"][0]["capabilities"]
     assert "rest_v3" in v3_capabilities
     assert "pause_mode" in v3_capabilities
     assert "discharge_target" in v3_capabilities
     print("PASS: capabilities mirror automatic_config()'s own v3/register probes")
+    return 0
+
+
+def test_build_discovery_entities_omit_what_v2_never_publishes(my_predbat=None):
+    """
+    The catalogue never lists an entity as present when publish_data() did not actually create it.
+
+    v2 GivTCP has no /setBatteryPauseMode or /setDischargeTarget endpoint, so publish_data()
+    withholds pause_mode/pause_start_time/pause_end_time and discharge_target_soc entirely on a v2
+    capture - listing them in the catalogue as live rw controls would tell a maintainer reading a
+    v2 user's debug dump that an entity exists which Home Assistant has never seen.
+    """
+    base, component = _rest_from_fixture("cases/rest_v2.json")
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    entities = component.build_discovery()["inverters"][0]["entities"]
+    for name in ("pause_mode", "pause_start_time", "pause_end_time", "discharge_target_soc"):
+        assert name not in entities, "{} should be absent on v2, got a descriptor".format(name)
+    # Entities v2 does publish are still there - this isn't just an empty entities dict
+    assert "charge_rate" in entities
+    assert "soc_kw" in entities
+    print("PASS: v2 catalogue omits entities publish_data() never created")
+    return 0
+
+
+def test_build_discovery_entities_include_what_v3_actually_publishes(my_predbat=None):
+    """The v3 counterpart of the omission test above: a fleet with full register support does report these."""
+    base, component = _rest_from_fixture("cases/rest_v3.json")
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    entities = component.build_discovery()["inverters"][0]["entities"]
+    for name in ("pause_mode", "pause_start_time", "pause_end_time", "discharge_target_soc"):
+        assert name in entities, "{} should be present on this fully-featured v3 capture".format(name)
+    print("PASS: v3 catalogue includes entities publish_data() actually published")
     return 0
 
 
@@ -2290,6 +2331,7 @@ def test_build_discovery_round_trips_through_the_coordinator(my_predbat=None):
 
     base, component = _rest_from_fixture("cases/rest_v3.json")
     _mark_discovered(component)
+    run_async(component.publish_data())
     report = component.build_discovery()
     original = report["inverters"][0]
 
@@ -2316,6 +2358,35 @@ def test_build_discovery_round_trips_through_the_coordinator(my_predbat=None):
     assert record["entities"]["charge_start_time"]["format"] == "HH:MM:SS"
     assert "options" not in record["entities"]["charge_start_time"]
     print("PASS: build_discovery() round-trips through the real Coordinator with nothing dropped")
+    return 0
+
+
+def test_report_discovery_failure_does_not_degrade_component_health(my_predbat=None):
+    """
+    A bug in build_discovery() must not propagate out of run() or withhold the success timestamp.
+
+    An observer must never be able to degrade the health of the thing it observes: without the
+    guard in run(), an exception here would skip update_success_timestamp() below it and retry -
+    failing identically - every single cycle, eventually pushing an otherwise-healthy component
+    towards unhealthy over a bug in a side-channel report. self.reported_for is deliberately left
+    unset on failure so the next cycle still retries, exactly as it would without the guard.
+    """
+    base, component = _make_component()
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.build_discovery = MagicMock(side_effect=Exception("boom"))
+
+    result = run_async(component.run(seconds=0, first=True))
+
+    assert result is True, "a discovery-reporting bug must not fail the whole run() call"
+    assert component.reported_for == [], "a failed report must not be marked as reported"
+    assert component.last_updated_time() is not None, "the success timestamp must still be recorded"
+    assert base.had_errors is True, "the failure should still be counted as a non-fatal error"
+
+    # Once the bug is fixed, the very next cycle retries and succeeds - nothing was permanently lost
+    del component.build_discovery
+    run_async(component.run(seconds=1, first=False))
+    assert component.reported_for == [0], "the retried report should now succeed"
+    print("PASS: a build_discovery() failure is contained and retried, not left to degrade the component")
     return 0
 
 
@@ -2427,7 +2498,10 @@ def test_givtcp_component(my_predbat=None):
         ("discovery_regardless_of_automatic", test_build_discovery_reports_regardless_of_automatic, "build_discovery reports with automatic off"),
         ("discovery_serial_fallback", test_build_discovery_falls_back_to_rest_api_without_a_serial, "device_id falls back to the REST URL"),
         ("discovery_capabilities", test_build_discovery_capabilities_follow_the_same_probes_as_automatic_config, "capabilities follow automatic_config()'s own probes"),
+        ("discovery_entities_v2_omit", test_build_discovery_entities_omit_what_v2_never_publishes, "v2 catalogue omits entities never published"),
+        ("discovery_entities_v3_include", test_build_discovery_entities_include_what_v3_actually_publishes, "v3 catalogue includes entities actually published"),
         ("discovery_round_trip", test_build_discovery_round_trips_through_the_coordinator, "build_discovery round-trips through the real Coordinator"),
+        ("discovery_report_failure_contained", test_report_discovery_failure_does_not_degrade_component_health, "a build_discovery failure is contained, not left to degrade health"),
     ]
 
     passed = 0

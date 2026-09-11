@@ -490,9 +490,21 @@ class GivTCPComponent(ComponentBase):
         # hardware is physically there, not whether this component wired Predbat's apps.yaml to
         # it - that distinction is recorded in the report's own "automatic" flag, not acted on
         # here as a gate on reporting at all.
+        #
+        # Exception-guarded like publish_data()'s per-inverter work, unlike the automatic_config()
+        # call above: an observer must never be able to degrade the health of the thing it
+        # observes. Without this, a bug in build_discovery() would propagate out of run() itself,
+        # withholding update_success_timestamp() below and retrying - identically failing - every
+        # cycle, eventually pushing an otherwise-healthy component toward unhealthy. self.reported_for
+        # is deliberately left unset on failure, so the next cycle still retries the report once the
+        # bug is fixed, exactly as it would have without this guard.
         if self.discovered != self.reported_for:
-            self.report_discovery(self.build_discovery())
-            self.reported_for = list(self.discovered)
+            try:
+                self.report_discovery(self.build_discovery())
+                self.reported_for = list(self.discovered)
+            except Exception as e:
+                self.log("Warn: GivTCP: failed to report discovery for the catalogue: {}".format(e))
+                self.non_fatal_error_occurred()
 
         # Deliberately still True: a failed poll should not tear the component down and restart it
         # over a transient blip. Withholding the timestamp lets ComponentManager's staleness check
@@ -841,14 +853,23 @@ class GivTCPComponent(ComponentBase):
 
     def _discovery_descriptor(self, n, name, domain, access, attrs, max_battery_rate):
         """
-        One entity descriptor for the discovery catalogue, built from a GIVTCP_CONTROLS/GIVTCP_SENSORS entry.
+        One entity descriptor for the discovery catalogue, or None if this entity was never published.
+
+        Checked against the state store (get_state_wrapper()) rather than against
+        publish_data()'s own gating conditions a second time here: discharge_target_soc, the pause
+        entities, charge_limit_enable, the two scheduled_*_enable switches and most of the
+        discovery sensors are each conditional there on GivTCP version, register support or a
+        non-None reading, and duplicating those conditions in this file's second half would
+        eventually drift out of step with the first. publish_data() always runs earlier in the same
+        run() cycle before this is called, so an entity's presence in the state store already IS
+        the ground truth for whether it was actually published - no separate bookkeeping needed.
 
         Draws from the same attribute table publish_data() already turns into this entity's HA
-        attributes, so the catalogue can never describe an entity this component does not actually
-        publish. charge_rate/discharge_rate get the per-device rate maximum from
-        rest.max_battery_rate() in place of the generic ceiling, exactly as publish_data() does -
-        or no "max" at all when GivTCP has not reported one, rather than a generic figure claiming
-        a battery capability that may not exist.
+        attributes, so a descriptor that IS produced can never disagree with what was published.
+        charge_rate/discharge_rate get the per-device rate maximum from rest.max_battery_rate() in
+        place of the generic ceiling, exactly as publish_data() does - or no "max" at all when
+        GivTCP has not reported one, rather than a generic figure claiming a battery capability
+        that may not exist.
 
         A time-of-day select's option list (charge/discharge/pause start and end time) is recorded
         as format="HH:MM:SS" rather than its 1440 discrete minute values: the catalogue's option
@@ -856,7 +877,10 @@ class GivTCPComponent(ComponentBase):
         "00:00:00".."04:15:00" - every afternoon and evening slot lost from the document. This
         matches the design's own convention for a time-valued select.
         """
-        descriptor = {"entity_id": self._entity_id(domain, n, name), "domain": domain, "access": access}
+        entity_id = self._entity_id(domain, n, name)
+        if self.get_state_wrapper(entity_id) is None:
+            return None
+        descriptor = {"entity_id": entity_id, "domain": domain, "access": access}
         if "unit_of_measurement" in attrs:
             descriptor["unit"] = attrs["unit_of_measurement"]
         for field in ("device_class", "min", "max", "step"):
@@ -884,9 +908,15 @@ class GivTCPComponent(ComponentBase):
         "givtcp:{rest_api}" when the inverter reports no serial - the same fallback identity
         publish_data()'s own identity entities would show as "Unknown".
 
-        Entity descriptors are built from GIVTCP_CONTROLS/GIVTCP_SENSORS, so the catalogue can never
-        describe an entity this component does not actually publish. capabilities records the same
-        probes automatic_config() gates its own auto-configuration decisions on.
+        Entity descriptors are built from GIVTCP_CONTROLS/GIVTCP_SENSORS, but only for an entity
+        publish_data() actually published this run (see _discovery_descriptor) - many of them are
+        conditional there on GivTCP version, register support or a non-None reading (the pause
+        entities and discharge_target_soc need rest_v3 and, for the latter, a supported model;
+        charge_limit_enable and the two scheduled_*_enable switches need their register reported at
+        all; most of the discovery/energy sensors are published only when GivTCP actually reports
+        that field), so the catalogue never lists a control or sensor as present when no such HA
+        entity exists. capabilities records the same probes automatic_config() gates its own
+        auto-configuration decisions on.
 
         Reporting is independent of self.automatic: the catalogue records what hardware is
         physically there, not whether this component wired Predbat's apps.yaml to it - that
@@ -902,9 +932,13 @@ class GivTCPComponent(ComponentBase):
             max_battery_rate = rest.max_battery_rate()
             entities = {}
             for name, (domain, _, attrs) in GIVTCP_CONTROLS.items():
-                entities[name] = self._discovery_descriptor(n, name, domain, "rw", attrs, max_battery_rate)
+                descriptor = self._discovery_descriptor(n, name, domain, "rw", attrs, max_battery_rate)
+                if descriptor is not None:
+                    entities[name] = descriptor
             for name, attrs in GIVTCP_SENSORS.items():
-                entities[name] = self._discovery_descriptor(n, name, "sensor", "r", attrs, max_battery_rate)
+                descriptor = self._discovery_descriptor(n, name, "sensor", "r", attrs, max_battery_rate)
+                if descriptor is not None:
+                    entities[name] = descriptor
 
             # Same probes automatic_config() gates its own decisions on - see
             # GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS/PAUSE_MODE_KEYS/PAUSE_SLOT_KEYS/SCALING_KEYS/
