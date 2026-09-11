@@ -21,14 +21,16 @@ import os
 import tempfile
 from datetime import datetime, timedelta
 
+import agent_tools
 import web
-import web_mcp
 from web import WebInterface
 from web_mcp import (
     MCPServerWrapper,
     LOG_FILTER_TYPES,
     MCP_LOG_DEFAULT_LINES,
     MCP_LOG_MAX_LINES,
+    MCP_LOG_MAX_LINE_CHARS,
+    MCP_LOG_DEFAULT_MAX_BYTES,
     parse_bool_argument,
     json_safe_value,
     summarise_state_value,
@@ -313,6 +315,62 @@ def test_mcp_get_apps(my_predbat):
     return failed
 
 
+def test_mcp_get_apps_config(my_predbat):
+    """get_apps_config reads one apps.yaml key at a time, redacting a credential-like value with
+    no way to opt out, reporting a clean error for a key that is not present, and never mutating
+    the live args (#4768 follow-up: apps.yaml read/write tools).
+
+    Unlike get_apps there is deliberately no 'masked' argument to bypass here at all - see
+    PredbatTools._execute_get_apps_config's docstring in agent_tools.py for why a single-key read
+    has no legitimate use for an unmasked credential the way a full-configuration review does.
+    """
+    failed = False
+    print("**** Testing MCP get_apps_config ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_args = my_predbat.args
+    try:
+        my_predbat.args = {"ha_key": "supersecret", "battery_rate_max_charge": 3.0, "inverter_type": "GE"}
+
+        result, _ = _call_tool(mcp, "get_apps_config", {"key": "ha_key"})
+        if not result.get("success"):
+            print("  ERROR: get_apps_config failed for an existing credential key: {}".format(result.get("error")))
+            failed = True
+        data = result.get("data") or {}
+        if data.get("value") != "xxx":
+            print("  ERROR: expected the credential value to be redacted, got {!r}".format(data))
+            failed = True
+        if result.get("masked") is not True:
+            print("  ERROR: expected the response to report masked=True for a credential key")
+            failed = True
+        if my_predbat.args["ha_key"] != "supersecret":
+            print("  ERROR: get_apps_config mutated the live args")
+            failed = True
+
+        print("Test: an ordinary key is returned unmasked")
+        result, _ = _call_tool(mcp, "get_apps_config", {"key": "battery_rate_max_charge"})
+        data = result.get("data") or {}
+        if data.get("value") != 3.0 or result.get("masked") is not False:
+            print("  ERROR: expected the ordinary value unmasked, got {!r} masked={}".format(data, result.get("masked")))
+            failed = True
+
+        print("Test: an unknown key is a clean failure, not an exception")
+        result, _ = _call_tool(mcp, "get_apps_config", {"key": "not_a_real_apps_yaml_config_item"})
+        if result.get("success"):
+            print("  ERROR: an unknown key was reported as found: {}".format(result))
+            failed = True
+
+        print("Test: a missing key argument is a clean failure")
+        result, is_error = _call_tool(mcp, "get_apps_config", {})
+        if result.get("success"):
+            print("  ERROR: a missing 'key' argument was accepted")
+            failed = True
+    finally:
+        my_predbat.args = saved_args
+
+    return failed
+
+
 def test_mcp_get_log(my_predbat):
     """get_log filters by level, search term and age, caps the number of lines returned, and
     reports the log oldest-first (#4768).
@@ -321,9 +379,9 @@ def test_mcp_get_log(my_predbat):
     print("**** Testing MCP get_log ****")
 
     mcp = _make_mcp(my_predbat)
-    saved_reader = web_mcp.read_predbat_log
+    saved_reader = agent_tools.read_predbat_log
     try:
-        web_mcp.read_predbat_log = lambda: _sample_log()
+        agent_tools.read_predbat_log = lambda: _sample_log()
 
         print("Test: the default warnings view returns warnings and errors only")
         result, _ = _call_tool(mcp, "get_log")
@@ -413,7 +471,7 @@ def test_mcp_get_log(my_predbat):
             failed = True
 
         print("Test: an empty log is reported as success with no lines")
-        web_mcp.read_predbat_log = lambda: ""
+        agent_tools.read_predbat_log = lambda: ""
         result, _ = _call_tool(mcp, "get_log", {"filter": "all"})
         if not result.get("success") or result["data"]["returned_lines"] != 0:
             print("  ERROR: expected an empty but successful result, got {}".format(result))
@@ -425,13 +483,13 @@ def test_mcp_get_log(my_predbat):
             """Stand-in reader that fails the way an unreadable log file would."""
             raise IOError("log file unreadable")
 
-        web_mcp.read_predbat_log = _boom
+        agent_tools.read_predbat_log = _boom
         result, _ = _call_tool(mcp, "get_log")
         if result.get("success") or "unreadable" not in (result.get("error") or ""):
             print("  ERROR: expected a failure result naming the error, got {}".format(result))
             failed = True
     finally:
-        web_mcp.read_predbat_log = saved_reader
+        agent_tools.read_predbat_log = saved_reader
 
     return failed
 
@@ -776,10 +834,10 @@ def test_mcp_argument_validation(my_predbat):
     print("Test: every filtering tool reports a bad regex the same way")
     mcp = _make_mcp(my_predbat)
     saved_args = my_predbat.args
-    saved_reader = web_mcp.read_predbat_log
+    saved_reader = agent_tools.read_predbat_log
     try:
         my_predbat.args = {"battery_rate_max_charge": 3.0}
-        web_mcp.read_predbat_log = lambda: _sample_log()
+        agent_tools.read_predbat_log = lambda: _sample_log()
         for tool in ["get_apps", "get_config", "get_entities", "get_state"]:
             result, _ = _call_tool(mcp, tool, {"filter": "[unclosed"})
             if result.get("success"):
@@ -809,7 +867,7 @@ def test_mcp_argument_validation(my_predbat):
             failed = True
     finally:
         my_predbat.args = saved_args
-        web_mcp.read_predbat_log = saved_reader
+        agent_tools.read_predbat_log = saved_reader
 
     return failed
 
@@ -967,7 +1025,14 @@ def run_web_mcp_tests(my_predbat):
     failed |= test_read_predbat_log(my_predbat)
     failed |= test_log_filter_helpers(my_predbat)
     failed |= test_mcp_get_apps(my_predbat)
+    failed |= test_mcp_get_apps_config(my_predbat)
     failed |= test_mcp_get_log(my_predbat)
+    failed |= test_mcp_get_log_pattern(my_predbat)
+    failed |= test_mcp_get_log_time_bounds(my_predbat)
+    failed |= test_mcp_get_log_truncates_long_lines(my_predbat)
+    failed |= test_mcp_get_log_line_number_read_back(my_predbat)
+    failed |= test_mcp_get_log_byte_budget(my_predbat)
+    failed |= test_mcp_get_log_ignores_the_trailing_newline(my_predbat)
     failed |= test_state_value_helpers(my_predbat)
     failed |= test_debug_excluded_keys(my_predbat)
     failed |= test_mcp_get_state(my_predbat)
@@ -975,4 +1040,400 @@ def run_web_mcp_tests(my_predbat):
     failed |= test_log_encoding(my_predbat)
     failed |= test_mcp_tools_list(my_predbat)
     failed |= test_web_api_log_unchanged(my_predbat)
+    return failed
+
+
+def _dated_log(now):
+    """Return a synthetic predbat.log with absolute stamps, for exercising the start/end bounds.
+
+    Takes `now` from the caller rather than reading the clock itself: the test builds its bound
+    strings from the same instant, and a run crossing midnight between the two calls would leave
+    the log's idea of "today" and the bounds' idea disagreeing by a day.
+    """
+    today = now.replace(microsecond=0)
+    yesterday = today - timedelta(days=1)
+    lines = [
+        "{}: Warn: yesterday early".format(yesterday.replace(hour=1, minute=0, second=0)),
+        "{}: Warn: yesterday late".format(yesterday.replace(hour=23, minute=30, second=0)),
+        "{}: Error: today midday failure".format(today.replace(hour=12, minute=0, second=0)),
+        "Traceback (most recent call last):",  # continuation of the line above, no stamp of its own
+        "{}: Warn: today afternoon".format(today.replace(hour=14, minute=0, second=0)),
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def test_mcp_get_log_pattern(my_predbat):
+    """get_log's pattern argument filters by regex, ANDs with the other filters, and rejects bad patterns."""
+    failed = False
+    print("**** Testing MCP get_log pattern ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_reader = agent_tools.read_predbat_log
+    try:
+        agent_tools.read_predbat_log = lambda: _sample_log()
+
+        print("Test: a regex with alternation matches across lines that no single substring would")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "pattern": "(iboost|Octopus) "})
+        if not result.get("success"):
+            print("  ERROR: get_log with a pattern failed: {}".format(result.get("error")))
+            return True
+        lines = [line["line"] for line in result["data"]["lines"]]
+        if len(lines) != 2:
+            print("  ERROR: expected 2 lines matching the alternation, got {}".format(lines))
+            failed = True
+
+        print("Test: pattern is case-insensitive, like search")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "pattern": "IBOOST"})
+        if result["data"]["returned_lines"] != 1:
+            print("  ERROR: expected a case-insensitive match, got {}".format(result["data"]["returned_lines"]))
+            failed = True
+
+        print("Test: pattern ANDs with filter and search rather than replacing them")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "errors", "pattern": "iboost"})
+        if result["data"]["returned_lines"] != 0:
+            print("  ERROR: an errors-only view should not return the iboost warning, got {}".format(result["data"]["lines"]))
+            failed = True
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "search": "iboost", "pattern": "Octopus"})
+        if result["data"]["returned_lines"] != 0:
+            print("  ERROR: search and pattern should AND, got {}".format(result["data"]["lines"]))
+            failed = True
+
+        print("Test: the pattern is echoed back so the caller can see what was applied")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "pattern": "iboost"})
+        if result["data"].get("pattern") != "iboost":
+            print("  ERROR: expected the pattern echoed in data, got {}".format(result["data"].get("pattern")))
+            failed = True
+
+        print("Test: an invalid regex is reported as a named argument error, not a traceback")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "pattern": "Warn(["})
+        if result.get("success") or "pattern" not in (result.get("error") or ""):
+            print("  ERROR: expected an error naming the pattern argument, got {}".format(result))
+            failed = True
+
+        print("Test: a pathological pattern is rejected before it can be compiled")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "pattern": "(a+)+$"})
+        if result.get("success"):
+            print("  ERROR: expected a nested-quantifier pattern to be rejected")
+            failed = True
+    finally:
+        agent_tools.read_predbat_log = saved_reader
+
+    if not failed:
+        print("✓ Test passed: get_log pattern")
+    return failed
+
+
+def test_mcp_get_log_time_bounds(my_predbat):
+    """get_log's start/end bounds accept a date, a time or both, and combine with hours."""
+    failed = False
+    print("**** Testing MCP get_log start/end bounds ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_reader = agent_tools.read_predbat_log
+    today = datetime.now()
+    yesterday = today - timedelta(days=1)
+    try:
+        agent_tools.read_predbat_log = lambda: _dated_log(today)
+
+        print("Test: a bare date as end covers the whole of that day, not midnight")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "end": yesterday.strftime("%Y-%m-%d")})
+        if not result.get("success"):
+            print("  ERROR: get_log with an end bound failed: {}".format(result.get("error")))
+            return True
+        lines = [line["line"] for line in result["data"]["lines"]]
+        if len(lines) != 2 or not any("yesterday late" in line for line in lines):
+            print("  ERROR: expected both of yesterday's lines including the 23:30 one, got {}".format(lines))
+            failed = True
+
+        print("Test: a bare date as start begins at the start of that day")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "start": today.strftime("%Y-%m-%d")})
+        lines = [line["line"] for line in result["data"]["lines"]]
+        if any("yesterday" in line for line in lines):
+            print("  ERROR: expected yesterday's lines excluded, got {}".format(lines))
+            failed = True
+
+        print("Test: a bare time means that time today")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "start": "13:00"})
+        lines = [line["line"] for line in result["data"]["lines"]]
+        if len(lines) != 1 or "afternoon" not in lines[0]:
+            print("  ERROR: expected only the 14:00 line, got {}".format(lines))
+            failed = True
+
+        print("Test: date and time together bound both ends")
+        result, _ = _call_tool(
+            mcp,
+            "get_log",
+            {"filter": "all", "start": today.strftime("%Y-%m-%d") + " 11:00", "end": today.strftime("%Y-%m-%d") + " 13:00"},
+        )
+        lines = [line["line"] for line in result["data"]["lines"]]
+        if not any("midday failure" in line for line in lines) or any("afternoon" in line for line in lines):
+            print("  ERROR: expected only the midday entry inside the window, got {}".format(lines))
+            failed = True
+
+        print("Test: a continuation line is kept with the stamped entry above it inside a window")
+        if not any("Traceback" in line for line in lines):
+            print("  ERROR: expected the traceback to travel with its parent entry, got {}".format(lines))
+            failed = True
+
+        print("Test: start and hours combine, with the narrower lower bound winning")
+        # _sample_log()'s stamps are relative to now, so this exercises the intersection without
+        # depending on what time of day the suite happens to run. The start bound is deliberately
+        # wide (two days back); hours=4 is the narrower of the two and should win.
+        agent_tools.read_predbat_log = lambda: _sample_log()
+        two_days_back = (today - timedelta(days=2)).strftime("%Y-%m-%d")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "start": two_days_back, "hours": 4})
+        lines = [line["line"] for line in result["data"]["lines"]]
+        if any("two days ago" in line or "before the window" in line for line in lines):
+            print("  ERROR: hours should narrow the wider start bound, got {}".format(lines))
+            failed = True
+        if len(lines) != 6:
+            print("  ERROR: expected the same 6 lines the hours filter alone returns, got {}".format(len(lines)))
+            failed = True
+        agent_tools.read_predbat_log = lambda: _dated_log(today)
+
+        print("Test: the bounds are echoed back so the caller can see what was applied")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "start": "13:00"})
+        if not result["data"].get("start"):
+            print("  ERROR: expected start echoed in data, got {}".format(result["data"]))
+            failed = True
+
+        print("Test: an unparseable bound is a named argument error")
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "start": "last tuesday"})
+        if result.get("success") or "start" not in (result.get("error") or ""):
+            print("  ERROR: expected an error naming the start argument, got {}".format(result))
+            failed = True
+    finally:
+        agent_tools.read_predbat_log = saved_reader
+
+    if not failed:
+        print("✓ Test passed: get_log start/end bounds")
+    return failed
+
+
+def _fat_log(now):
+    """Return a log whose entries include one very long line, as a GraphQL dump produces.
+
+    Takes `now` from the caller for the same reason as _dated_log().
+    """
+    stamp = now.replace(microsecond=0)
+    lines = [
+        "{}: Info: short line before".format(stamp - timedelta(minutes=3)),
+        "{}: OctopusAPI: Fetched saving sessions data from GraphQL API: {}".format(stamp - timedelta(minutes=2), "x" * 20000),
+        "{}: Info: short line after".format(stamp - timedelta(minutes=1)),
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def test_mcp_get_log_truncates_long_lines(my_predbat):
+    """A single huge log line is cut to a budget and says how much was left off (#4840)."""
+    failed = False
+    print("**** Testing MCP get_log long-line truncation ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_reader = agent_tools.read_predbat_log
+    now = datetime.now()
+    try:
+        agent_tools.read_predbat_log = lambda: _fat_log(now)
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all"})
+        if not result.get("success"):
+            print("  ERROR: get_log failed: {}".format(result.get("error")))
+            return True
+        lines = result["data"]["lines"]
+
+        print("Test: the whole response is bounded, not just the line count")
+        size = len(json.dumps(result["data"]))
+        if size > MCP_LOG_DEFAULT_MAX_BYTES + 4096:
+            print("  ERROR: expected the response under the byte budget, got {} bytes".format(size))
+            failed = True
+
+        fat = [line for line in lines if "GraphQL" in line["line"]]
+        if len(fat) != 1:
+            print("  ERROR: expected the long line to still be present, got {}".format(len(fat)))
+            return True
+        fat = fat[0]
+
+        print("Test: the long line is cut to the per-line budget")
+        if len(fat["line"]) > MCP_LOG_MAX_LINE_CHARS + 200:
+            print("  ERROR: expected the line cut to ~{} chars, got {}".format(MCP_LOG_MAX_LINE_CHARS, len(fat["line"])))
+            failed = True
+
+        print("Test: it says how many characters were left off, and how to get them")
+        if fat.get("truncated_chars", 0) <= 0:
+            print("  ERROR: expected truncated_chars to be set, got {}".format(fat.get("truncated_chars")))
+            failed = True
+        if "line_number" not in fat["line"]:
+            print("  ERROR: expected the marker to name the read-back argument, got {!r}".format(fat["line"][-120:]))
+            failed = True
+
+        print("Test: a short line is untouched and carries no truncation field")
+        short = [line for line in lines if "short line before" in line["line"]][0]
+        if "truncated_chars" in short:
+            print("  ERROR: an intact line should carry no truncated_chars, got {}".format(short))
+            failed = True
+        if not short["line"].endswith("short line before"):
+            print("  ERROR: expected the short line intact, got {!r}".format(short["line"]))
+            failed = True
+    finally:
+        agent_tools.read_predbat_log = saved_reader
+
+    if not failed:
+        print("✓ Test passed: get_log long-line truncation")
+    return failed
+
+
+def test_mcp_get_log_line_number_read_back(my_predbat):
+    """A truncated line can be fetched in full afterwards by its line number (#4840)."""
+    failed = False
+    print("**** Testing MCP get_log line_number read-back ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_reader = agent_tools.read_predbat_log
+    now = datetime.now()
+    try:
+        agent_tools.read_predbat_log = lambda: _fat_log(now)
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all"})
+        fat = [line for line in result["data"]["lines"] if "GraphQL" in line["line"]][0]
+        target = fat["line_number"]
+
+        print("Test: reading that line number back returns it in full")
+        result, _ = _call_tool(mcp, "get_log", {"line_number": target})
+        if not result.get("success"):
+            print("  ERROR: read-back failed: {}".format(result.get("error")))
+            return True
+        lines = result["data"]["lines"]
+        if len(lines) != 1:
+            print("  ERROR: expected exactly the one line, got {}".format(len(lines)))
+            failed = True
+        elif len(lines[0]["line"]) < 20000:
+            print("  ERROR: expected the untruncated line, got {} chars".format(len(lines[0]["line"])))
+            failed = True
+        elif lines[0].get("truncated_chars"):
+            print("  ERROR: a read-back line should not be marked truncated, got {}".format(lines[0].get("truncated_chars")))
+            failed = True
+
+        print("Test: context returns the neighbouring lines too")
+        result, _ = _call_tool(mcp, "get_log", {"line_number": target, "context": 1})
+        lines = result["data"]["lines"]
+        if len(lines) != 3:
+            print("  ERROR: expected 3 lines with context=1, got {}".format(len(lines)))
+            failed = True
+        elif not any("short line before" in line["line"] for line in lines) or not any("short line after" in line["line"] for line in lines):
+            print("  ERROR: expected both neighbours, got {}".format([line["line"][:40] for line in lines]))
+            failed = True
+
+        print("Test: the filters are ignored on a read-back, so the line always comes back")
+        result, _ = _call_tool(mcp, "get_log", {"line_number": target, "filter": "errors", "search": "nothing-matches-this"})
+        if result["data"]["returned_lines"] != 1:
+            print("  ERROR: expected the read-back to ignore the filters, got {}".format(result["data"]["returned_lines"]))
+            failed = True
+
+        print("Test: an out-of-range line number is a named argument error")
+        result, _ = _call_tool(mcp, "get_log", {"line_number": 999999})
+        if result.get("success") or "line_number" not in (result.get("error") or ""):
+            print("  ERROR: expected an error naming line_number, got {}".format(result))
+            failed = True
+    finally:
+        agent_tools.read_predbat_log = saved_reader
+
+    if not failed:
+        print("✓ Test passed: get_log line_number read-back")
+    return failed
+
+
+def test_mcp_get_log_byte_budget(my_predbat):
+    """The response stops at a total byte budget even when max_lines would allow more (#4840)."""
+    failed = False
+    print("**** Testing MCP get_log byte budget ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_reader = agent_tools.read_predbat_log
+    try:
+        # Every line sits just under the per-line cap, so only the total budget can stop this.
+        stamp = datetime.now().replace(microsecond=0)
+        many = ["{}: Info: {}".format(stamp - timedelta(minutes=i), "y" * (MCP_LOG_MAX_LINE_CHARS - 100)) for i in range(400, 0, -1)]
+        agent_tools.read_predbat_log = lambda: "\n".join(many) + "\n"
+
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all", "max_lines": 400})
+        data = result["data"]
+        size = len(json.dumps(data))
+        if size > MCP_LOG_DEFAULT_MAX_BYTES + 8192:
+            print("  ERROR: expected the response bounded by the byte budget, got {} bytes".format(size))
+            failed = True
+        if data["returned_lines"] >= 400:
+            print("  ERROR: expected the budget to stop accumulation before max_lines, got {}".format(data["returned_lines"]))
+            failed = True
+        if not data.get("truncated"):
+            print("  ERROR: expected truncated to be flagged when the budget stops it")
+            failed = True
+        if data.get("truncated_reason") != "max_bytes":
+            print("  ERROR: expected truncated_reason max_bytes, got {}".format(data.get("truncated_reason")))
+            failed = True
+
+        print("Test: matched_lines still counts every match, not just the ones that fitted")
+        # The description says "the most recent X of Y matching lines". Stopping the count at the
+        # budget makes Y a tally of what fitted rather than what matched, which understates how
+        # much was left out - the opposite of what that sentence is for. max_lines already keeps
+        # counting past its cap, so the two truncation paths must agree.
+        if data["matched_lines"] != 400:
+            print("  ERROR: expected all 400 matches counted, got {}".format(data["matched_lines"]))
+            failed = True
+
+        print("Test: the newest lines are the ones kept")
+        if "Info:" not in data["lines"][-1]["line"]:
+            print("  ERROR: unexpected last line {!r}".format(data["lines"][-1]["line"][:60]))
+            failed = True
+    finally:
+        agent_tools.read_predbat_log = saved_reader
+
+    if not failed:
+        print("✓ Test passed: get_log byte budget")
+    return failed
+
+
+def test_mcp_get_log_ignores_the_trailing_newline(my_predbat):
+    """The two log-reading paths agree on line numbering, and neither invents a final blank line.
+
+    predbat.log ends with a newline. A plain split leaves a trailing empty string, so total_lines
+    counted a line that does not exist and the last line number read back as "". More importantly
+    the scan and the line_number read-back must split the log the SAME way: they briefly did not
+    (#4855 review), which would hand back a different line than the one the marker pointed at.
+    """
+    failed = False
+    print("**** Testing get_log ignores the trailing newline ****")
+
+    mcp = _make_mcp(my_predbat)
+    saved_reader = agent_tools.read_predbat_log
+    try:
+        stamp = datetime.now().replace(microsecond=0)
+        agent_tools.read_predbat_log = lambda: "{}: Info: first\n{}: Info: second\n".format(stamp - timedelta(minutes=2), stamp - timedelta(minutes=1))
+
+        result, _ = _call_tool(mcp, "get_log", {"filter": "all"})
+        if result["data"]["total_lines"] != 2:
+            print("  ERROR: expected total_lines to count 2 real lines, got {}".format(result["data"]["total_lines"]))
+            failed = True
+
+        print("Test: the last line number is a real line, not the trailing empty string")
+        last = result["data"]["total_lines"] - 1
+        back, _ = _call_tool(mcp, "get_log", {"line_number": last})
+        if not back.get("success"):
+            print("  ERROR: reading the last line back failed: {}".format(back.get("error")))
+            failed = True
+        elif "second" not in back["data"]["lines"][0]["line"]:
+            print("  ERROR: expected the last real line, got {!r}".format(back["data"]["lines"][0]["line"]))
+            failed = True
+
+        print("Test: every line the scan returns reads back as the same line by its own number")
+        for entry in result["data"]["lines"]:
+            back, _ = _call_tool(mcp, "get_log", {"line_number": entry["line_number"]})
+            if not back.get("success"):
+                print("  ERROR: line {} did not read back: {}".format(entry["line_number"], back.get("error")))
+                failed = True
+            elif back["data"]["lines"][0]["line"] != entry["line"]:
+                print("  ERROR: line {} scanned as {!r} but read back as {!r}".format(entry["line_number"], entry["line"], back["data"]["lines"][0]["line"]))
+                failed = True
+    finally:
+        agent_tools.read_predbat_log = saved_reader
+
+    if not failed:
+        print("✓ Test passed: get_log ignores the trailing newline")
     return failed

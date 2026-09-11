@@ -35,8 +35,11 @@ PREFIX = "predbat"
 # handing them to minute_data_import_export()
 INDIRECT_HISTORY_ENTITIES = ["{}.rates".format(PREFIX), "{}.rates_export".format(PREFIX)]
 
-# First argument of a get_history_wrapper() call, i.e. the entity being asked for
-HISTORY_CALL_RE = re.compile(r"get_history_wrapper\(\s*(?:entity_id\s*=\s*)?([^,)]+)")
+# First argument of a history call, i.e. the entity being asked for. Both readers count:
+# get_history_with_now_attrs() wraps get_history_wrapper() but is written as its own call, so
+# scanning only the inner name silently misses every chart that uses the wrapper - which is how
+# predbat.soc_kw_best came to be read without being recorded.
+HISTORY_CALL_RE = re.compile(r"get_history_(?:wrapper|with_now_attrs)\(\s*(?:entity_id\s*=\s*)?([^,)]+)")
 # Predbat's own entities, written as self.prefix + ".name" / "sensor." + self.prefix + "_name"
 OWN_DOMAIN_RE = re.compile(r'self\.prefix\s*\+\s*"\.([a-z0-9_]+)"')
 OWN_SENSOR_RE = re.compile(r'"sensor\."\s*\+\s*self\.prefix\s*\+\s*"_([a-z0-9_]+)"')
@@ -44,7 +47,7 @@ OWN_SENSOR_RE = re.compile(r'"sensor\."\s*\+\s*self\.prefix\s*\+\s*"_([a-z0-9_]+
 
 def _load_recorder_example():
     """Return the recorder filter example from the FAQ as a dict, or None if it isn't there."""
-    with open(FAQ_PATH, "r") as handle:
+    with open(FAQ_PATH, "r", encoding="utf-8") as handle:
         text = handle.read()
     for block in re.findall(r"```yaml\n(.*?)```", text, re.S):
         parsed = yaml.safe_load(block)
@@ -59,7 +62,7 @@ def _entities_read_from_history():
     for name in sorted(os.listdir(SOURCE_DIR)):
         if not name.endswith(".py"):
             continue
-        with open(os.path.join(SOURCE_DIR, name), "r") as handle:
+        with open(os.path.join(SOURCE_DIR, name), "r", encoding="utf-8") as handle:
             source = handle.read()
         for argument in HISTORY_CALL_RE.findall(source):
             for match in OWN_DOMAIN_RE.findall(argument):

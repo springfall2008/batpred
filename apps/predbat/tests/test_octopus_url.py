@@ -54,13 +54,13 @@ def test_octopus_url(my_predbat=None):
         try:
             result = test_func(my_predbat)
             if result:
-                print(f"FAIL: FAILED: {key}")
+                print(f"✗ FAILED: {key}")
                 failed += 1
             else:
-                print(f"PASS: PASSED: {key}")
+                print(f"✓ PASSED: {key}")
                 passed += 1
         except Exception as e:
-            print(f"FAIL: EXCEPTION in {key}: {e}")
+            print(f"✗ EXCEPTION in {key}: {e}")
             import traceback
 
             traceback.print_exc()

@@ -27,8 +27,8 @@ from datetime import datetime, timedelta
 
 import pytz
 
-from const import PREDICT_STEP
-from output import yesterday_slot_is_exporting
+from const import PREDICT_STEP, EXPORT_LIMIT_FREEZE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from output import yesterday_slot_is_exporting, more_active_slot_status
 from tests.test_infra import reset_rates, reset_inverter
 
 UTC = pytz.UTC
@@ -417,7 +417,7 @@ def _test_car_slot_subtraction(my_predbat, failed):
     in_car_slot returns 1.2 kW = 0.1 kWh per 5-min step).  The
     step_data_history mock returns FLAT_LOAD_KWH (0.1 kWh) for every step.
 
-    After the fix (kW -> kWh/step conversion):
+    After the fix (kW → kWh/step conversion):
       - Inside-slot steps: max(0.1 - 1.2 * 5/60, 0) = max(0.0, 0) = 0.0
       - Outside-slot steps: unchanged at FLAT_LOAD_KWH
 
@@ -432,7 +432,7 @@ def _test_car_slot_subtraction(my_predbat, failed):
     # calculate_yesterday will NOT re-run load_octopus_slots; it will use
     # whatever we put in car_charging_slots directly.
     my_predbat.num_cars = 1
-    # Slot: minute 60..180, 2.4 kWh total over 2 hours -> 1.2 kW = 0.1 kWh/step
+    # Slot: minute 60..180, 2.4 kWh total over 2 hours → 1.2 kW = 0.1 kWh/step
     car_slot = {"start": 60, "end": 180, "kwh": 2.4, "average": 20}
     my_predbat.car_charging_slots[0] = [car_slot]
     car_charging_slots_before = copy.deepcopy(my_predbat.car_charging_slots)
@@ -443,7 +443,7 @@ def _test_car_slot_subtraction(my_predbat, failed):
     my_predbat.car_charging_limit = [80.0, 100.0, 100.0, 100.0]
     car_charging_soc_before = list(my_predbat.car_charging_soc)
 
-    # octopus_intelligent_slot not configured -> entity_id_list is empty
+    # octopus_intelligent_slot not configured → entity_id_list is empty
     # so the re-load loop in calculate_yesterday is skipped
     my_predbat.args["octopus_intelligent_slot"] = None
 
@@ -513,11 +513,11 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
 
     No octopus_intelligent_slot is configured and car_charging_slots starts empty.
     The car_charging_energy sensor records 1.5 kWh in the 30-minute window
-    starting at minute 60 of yesterday.  yesterday_reconstruct_car_slots should
+    starting at minute 600 of yesterday.  yesterday_reconstruct_car_slots should
     synthesise a slot for that window and subtract the corresponding kWh from the
     load step data before handing it to the Prediction.
 
-    Slot: start=60, end=90, kwh=1.5 -> load rate = 1.5/0.5h = 3.0 kW
+    Slot: start=600, end=630, kwh=1.5 → load rate = 1.5/0.5h = 3.0 kW
     Subtraction per 5-min step: 3.0 * 5/60 = 0.25 kWh > FLAT_LOAD_KWH (0.1)
     Expected inside-slot value: max(0.1 - 0.25, 0) = 0.0
 
@@ -538,22 +538,38 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
     my_predbat.car_charging_limit = [80.0, 100.0, 100.0, 100.0]
     car_charging_soc_before = list(my_predbat.car_charging_soc)
 
-    # No octopus slot configured -> entity_id_list is empty, octopus path skipped.
+    # No octopus slot configured → entity_id_list is empty, octopus path skipped.
     my_predbat.args["octopus_intelligent_slot"] = None
     my_predbat.octopus_slots = [[], [], [], []]
     my_predbat.octopus_intelligent_consider_full = False
 
-    # Inside calculate_yesterday, minutes_now is set to 0 before calling
-    # yesterday_reconstruct_car_slots, so the lookup formula becomes:
-    #   minute_previous = 0 + 1440 - minute
-    # For start_minute=60 the inner scan covers minutes 60..89.
-    # At minute=60: minute_previous = 1380.
-    # get_from_incrementing(data, 1380) = max(data[1380] - data[1381], 0).
-    # Correct representation of an incrementing kWh sensor: the sensor reads
-    # 1.5 kWh at minute 60 (index 1380) and all more-recent times (lower indices),
-    # and 0 at earlier times (indices > 1380).  The telescoping sum over the
-    # 30-minute window yields data[1351] - data[1381] = 1.5 - 0 = 1.5 kWh.
-    my_predbat.car_charging_energy = {k: 1.5 for k in range(0, 1381)}
+    # calculate_yesterday fakes self.minutes_now to 0, but car_charging_energy is
+    # indexed in minutes before the REAL now, so the lookup is
+    #   minute_previous = real_minutes_now + 1440 - minute      (#5004)
+    # Record the session at plan-axis minute 600 (yesterday 10:00) and derive its
+    # sensor index from that, rather than hardcoding the faked-axis value.
+    real_minutes_now = my_predbat.minutes_now  # 360
+    # Use a session AFTER the real clock time so the broken lookup lands on a
+    # plan minute the reconstruction loop actually visits.  With the session at
+    # 60 the buggy index (1380) sits past the sensor's step edge, so the bug
+    # merely drops the slot and no ghost band exists to assert on.
+    car_session_minute = 600
+    plan_iv = my_predbat.plan_interval_minutes  # 30
+    # An incrementing kWh sensor that accrues ONLY across the session window:
+    # flat 1.5 at older indices, ramping down through the window, 0 after it.
+    # Bounding it this way means a mis-indexed lookup reads a genuinely
+    # different band rather than silently summing to zero.
+    session_start_index = real_minutes_now + 24 * 60 - car_session_minute
+    session_end_index = session_start_index - plan_iv
+    my_predbat.car_charging_energy = {}
+    for k in range(0, 24 * 60 + real_minutes_now + plan_iv + 1):
+        if k > session_start_index:
+            value = 0.0
+        elif k <= session_end_index:
+            value = 1.5
+        else:
+            value = 1.5 * (session_start_index - k) / plan_iv
+        my_predbat.car_charging_energy[k] = value
 
     captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
 
@@ -565,18 +581,31 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
         failed = True
     else:
         load_step = captured_load[0]
-        plan_iv = my_predbat.plan_interval_minutes  # 30 by default
-        slot_end = 60 + plan_iv
+        slot_end = car_session_minute + plan_iv
 
         # Inside-slot steps: max(0.1 - 3.0*5/60, 0) = max(0.1 - 0.25, 0) = 0.0
-        for inside_min in range(60, slot_end, PREDICT_STEP):
+        for inside_min in range(car_session_minute, slot_end, PREDICT_STEP):
             val = load_step.get(inside_min, -1)
             if abs(val) > 1e-9:
                 print("ERROR: step {} (inside energy-sensor slot) should be 0.0 but got {}".format(inside_min, val))
                 failed = True
 
+        # The bug (#5004) read the faked minutes_now (0) instead of the real one,
+        # so for plan minute m it computed sensor index 1440 - m instead of
+        # real_minutes_now + 1440 - m.  The session's data therefore surfaced at
+        # the plan minute whose buggy index matches the session's real index:
+        # 1440 - m = real_minutes_now + 1440 - car_session_minute, i.e.
+        # m = car_session_minute - real_minutes_now, painting a ghost slot
+        # real_minutes_now EARLIER on the plan axis.  Assert that band is clean.
+        ghost_minute = car_session_minute - real_minutes_now
+        for ghost_step in range(ghost_minute, ghost_minute + plan_iv, PREDICT_STEP):
+            val = load_step.get(ghost_step, None)
+            if val is not None and abs(val - FLAT_LOAD_KWH) > 1e-9:
+                print("ERROR: step {} is outside the real session but was altered: {} (#5004 ghost band)".format(ghost_step, val))
+                failed = True
+
         # Outside-slot steps should be unchanged at FLAT_LOAD_KWH.
-        for outside_min in [0, 5, 55, slot_end, slot_end + 5, 300]:
+        for outside_min in [0, 5, 55, 300, slot_end, slot_end + 5]:
             val = load_step.get(outside_min, -1)
             if abs(val - FLAT_LOAD_KWH) > 1e-9:
                 print("ERROR: step {} (outside energy-sensor slot) should be {} but got {}".format(outside_min, FLAT_LOAD_KWH, val))
@@ -650,6 +679,14 @@ def _test_reconstruct_car_slots(my_predbat, failed):
         load_octopus_slots is called and replaces car_charging_slots for that
         car.
     """
+    # unit_test.py hands the same PredBat instance to every registry test, so any
+    # config these subcases change has to be put back exactly as it was found.
+    # Snapshot BEFORE the first subcase mutates anything: taking these later
+    # (e.g. at 5g) would capture 5d-5f's own values and leak them onward.
+    entry_reported_load = my_predbat.car_energy_reported_load
+    entry_charging_loss = my_predbat.car_charging_loss
+    entry_octopus_arg = my_predbat.args.get("octopus_intelligent_slot", None)
+
     # -----------------------------------------------------------------------
     # 5a – non-octopus slot synthesised from car_charging_energy
     # -----------------------------------------------------------------------
@@ -676,7 +713,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     end_record = 24 * 60  # 1440 minutes
     yesterday_load_step = {m: FLAT_LOAD_KWH for m in range(0, end_record, PREDICT_STEP)}
 
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step, 0)
 
     # Exactly one slot should have been added
     slots = my_predbat.car_charging_slots[0]
@@ -693,7 +730,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
             failed = True
         # With car_energy_reported_load=True, the slot kwh is capped to load_reported
         # * car_charging_loss.  load_reported = plan_iv/PREDICT_STEP * FLAT_LOAD_KWH
-        # = 6 * 0.1 = 0.6 kWh; car_charging_loss=1.0 -> expected kwh = 0.6.
+        # = 6 * 0.1 = 0.6 kWh; car_charging_loss=1.0 → expected kwh = 0.6.
         load_steps_in_slot = plan_iv // PREDICT_STEP
         expected_slot_kwh = load_steps_in_slot * FLAT_LOAD_KWH * my_predbat.car_charging_loss
         if abs(slot.get("kwh", -1) - expected_slot_kwh) > 1e-9:
@@ -704,7 +741,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
             failed = True
 
     # Steps inside the slot [60, 90) should be zeroed out.
-    # slot kwh adjusted to 0.6 -> rate = 0.6/0.5h = 1.2 kW; 1.2*5/60 = 0.1 kWh/step = FLAT_LOAD_KWH -> max(0.1-0.1,0)=0.0
+    # slot kwh adjusted to 0.6 → rate = 0.6/0.5h = 1.2 kW; 1.2*5/60 = 0.1 kWh/step = FLAT_LOAD_KWH → max(0.1-0.1,0)=0.0
     slot_end = 60 + my_predbat.plan_interval_minutes
     for inside_min in range(60, slot_end, PREDICT_STEP):
         val = yesterday_load_step.get(inside_min, -1)
@@ -734,7 +771,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_energy = {k: 1.2 for k in range(0, 1381)}  # same energy as 5a
 
     yesterday_load_step = {m: FLAT_LOAD_KWH for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step, 0)
 
     if len(my_predbat.car_charging_slots[0]) != 1:
         print("ERROR 5b: expected 1 slot (no duplicate), got {}".format(len(my_predbat.car_charging_slots[0])))
@@ -771,7 +808,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.load_octopus_slots = _mock_load_octopus_slots
 
     yesterday_load_step = {m: FLAT_LOAD_KWH for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step, 0)
 
     my_predbat.load_octopus_slots = original_load_octopus_slots
 
@@ -811,22 +848,22 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_energy = {}
 
     plan_iv = my_predbat.plan_interval_minutes  # 30
-    # A slot claiming 3.0 kWh -> kwh_drain = 3.0 kWh; needs load ≥ 0.3 kWh to survive.
-    # Provide only 0.01 kWh per step -> load_reported = 6 * 0.01 = 0.06 kWh.
-    # 0.06 * 10 = 0.6 < 3.0 -> slot should be cancelled (kwh set to 0).
+    # A slot claiming 3.0 kWh → kwh_drain = 3.0 kWh; needs load ≥ 0.3 kWh to survive.
+    # Provide only 0.01 kWh per step → load_reported = 6 * 0.01 = 0.06 kWh.
+    # 0.06 * 10 = 0.6 < 3.0 → slot should be cancelled (kwh set to 0).
     TINY_LOAD = 0.01
     cancelled_slot = {"start": 60, "end": 60 + plan_iv, "kwh": 3.0, "octopus": True}
     my_predbat.car_charging_slots = [[cancelled_slot], [], [], []]
 
     yesterday_load_step_5d = {m: TINY_LOAD for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5d)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5d, 0)
 
     # The slot kwh should have been zeroed out.
     if cancelled_slot.get("kwh") != 0:
         print("ERROR 5d: slot kwh should be 0 after cancellation, got {}".format(cancelled_slot.get("kwh")))
         failed = True
 
-    # Because kwh=0, subtract_amount=0 -> load values should be completely unchanged.
+    # Because kwh=0, subtract_amount=0 → load values should be completely unchanged.
     for m in range(60, 60 + plan_iv, PREDICT_STEP):
         val = yesterday_load_step_5d.get(m, -1)
         if abs(val - TINY_LOAD) > 1e-9:
@@ -848,8 +885,8 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_energy = {}
 
     plan_iv = my_predbat.plan_interval_minutes  # 30
-    # Slot claims 2.4 kWh -> kwh_drain = 2.4; load = 6 * 0.2 = 1.2 kWh.
-    # 1.2 * 10 = 12.0 ≥ 2.4 -> adjusted: slot["kwh"] = 1.2 * 1.0 = 1.2 kWh.
+    # Slot claims 2.4 kWh → kwh_drain = 2.4; load = 6 * 0.2 = 1.2 kWh.
+    # 1.2 * 10 = 12.0 ≥ 2.4 → adjusted: slot["kwh"] = 1.2 * 1.0 = 1.2 kWh.
     # Subtraction: 1.2 kWh / 0.5 h = 2.4 kW; 2.4 * 5/60 = 0.2 kWh/step.
     # After subtraction: max(0.2 - 0.2, 0) = 0.0 inside slot.
     MEDIUM_LOAD = 0.2
@@ -857,7 +894,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_slots = [[adjusted_slot], [], [], []]
 
     yesterday_load_step_5e = {m: MEDIUM_LOAD for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5e)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5e, 0)
 
     expected_adj_kwh = (plan_iv // PREDICT_STEP) * MEDIUM_LOAD * my_predbat.car_charging_loss  # 6 * 0.2 * 1.0 = 1.2
     if abs(adjusted_slot.get("kwh", -1) - expected_adj_kwh) > 1e-9:
@@ -892,20 +929,20 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.args["octopus_intelligent_slot"] = None
     my_predbat.car_charging_energy = {}
 
-    plan_iv = my_predbat.plan_interval_minutes  # 30 minutes -> 6 steps
+    plan_iv = my_predbat.plan_interval_minutes  # 30 minutes → 6 steps
     # Load: 0.2 kWh/step × 6 steps = 1.2 kWh total in the window.
-    # Car 0: kwh=0.6, kwh_drain=0.6 -> load 1.2 ≥ 0.6 -> no scaling.
-    #   subtract: 0.6/0.5h × 5/60 = 0.1 kWh/step -> residual = 0.1 kWh/step.
-    # Car 1: kwh=0.9, kwh_drain=0.9 -> load 6×0.1=0.6 < 0.9.
-    #   0.6×10=6.0 ≥ 0.9 -> adjusted to 0.6 kWh.
-    #   subtract: 0.6/0.5h × 5/60 = 0.1 kWh/step -> residual = 0.0.
+    # Car 0: kwh=0.6, kwh_drain=0.6 → load 1.2 ≥ 0.6 → no scaling.
+    #   subtract: 0.6/0.5h × 5/60 = 0.1 kWh/step → residual = 0.1 kWh/step.
+    # Car 1: kwh=0.9, kwh_drain=0.9 → load 6×0.1=0.6 < 0.9.
+    #   0.6×10=6.0 ≥ 0.9 → adjusted to 0.6 kWh.
+    #   subtract: 0.6/0.5h × 5/60 = 0.1 kWh/step → residual = 0.0.
     TWO_CAR_LOAD = 0.2
     slot_car0 = {"start": 60, "end": 60 + plan_iv, "kwh": 0.6, "octopus": True}
     slot_car1 = {"start": 60, "end": 60 + plan_iv, "kwh": 0.9, "octopus": True}
     my_predbat.car_charging_slots = [[slot_car0], [slot_car1], [], []]
 
     yesterday_load_step_5f = {m: TWO_CAR_LOAD for m in range(0, end_record, PREDICT_STEP)}
-    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5f)
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5f, 0)
 
     # Car 0 should be unchanged (load was sufficient).
     if abs(slot_car0.get("kwh", -1) - 0.6) > 1e-9:
@@ -918,7 +955,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
         print("ERROR 5f: car 1 slot kwh should be {} after scaling, got {}".format(expected_car1_kwh, slot_car1.get("kwh")))
         failed = True
 
-    # Both cars have subtracted their full amounts -> inside-slot load should be 0.
+    # Both cars have subtracted their full amounts → inside-slot load should be 0.
     for m in range(60, 60 + plan_iv, PREDICT_STEP):
         val = yesterday_load_step_5f.get(m, -1)
         if abs(val) > 1e-9:
@@ -933,6 +970,79 @@ def _test_reconstruct_car_slots(my_predbat, failed):
             failed = True
 
     # Restore
+    my_predbat.num_cars = 0
+    my_predbat.car_charging_slots = [[] for _ in range(4)]
+    my_predbat.car_charging_energy = {}
+
+    # -----------------------------------------------------------------------
+    print("calculate_yesterday: Test 5g - reconstruction follows the passed minutes_now, not the faked one (#5004)")
+
+    _setup_base(my_predbat, minutes_now=0)
+
+    my_predbat.num_cars = 1
+    my_predbat.car_energy_reported_load = True
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.octopus_intelligent_consider_full = False
+    my_predbat.octopus_slots = [[], [], [], []]
+    my_predbat.args["octopus_intelligent_slot"] = None
+    my_predbat.car_charging_slots = [[], [], [], []]
+
+    # self.minutes_now is 0 (as calculate_yesterday leaves it), but the caller
+    # passes the real value - the session must be found on the real axis.
+    real_minutes_now = 360
+    session_start = 600
+    session_index = real_minutes_now + 24 * 60 - session_start
+    my_predbat.car_charging_energy = {k: 1.5 for k in range(0, session_index + 1)}
+
+    yesterday_load_step_5g = {m: 0.2 for m in range(0, end_record, PREDICT_STEP)}
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5g, real_minutes_now)
+
+    slots_5g = my_predbat.car_charging_slots[0]
+    if len(slots_5g) != 1:
+        print("ERROR 5g: expected exactly 1 reconstructed slot, got {}: {}".format(len(slots_5g), slots_5g))
+        failed = True
+    elif slots_5g[0]["start"] != session_start:
+        print("ERROR 5g: slot should start at {} (the real axis), got {} - reconstruction read the faked minutes_now".format(session_start, slots_5g[0]["start"]))
+        failed = True
+
+    # -----------------------------------------------------------------------
+    print("calculate_yesterday: Test 5h - car_energy_reported_load False takes no subtraction")
+
+    _setup_base(my_predbat, minutes_now=0)
+    my_predbat.num_cars = 1
+    # The charger is outside the CT clamp, so its energy was never in the load
+    # figures and must NOT be subtracted from them (config.py car_energy_reported_load).
+    my_predbat.car_energy_reported_load = False
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.octopus_intelligent_consider_full = False
+    my_predbat.octopus_slots = [[], [], [], []]
+    my_predbat.args["octopus_intelligent_slot"] = None
+    my_predbat.car_charging_energy = {}
+
+    UNREPORTED_LOAD = 0.2
+    slot_5h = {"start": 60, "end": 60 + plan_iv, "kwh": 0.6, "octopus": True}
+    my_predbat.car_charging_slots = [[slot_5h], [], [], []]
+
+    yesterday_load_step_5h = {m: UNREPORTED_LOAD for m in range(0, end_record, PREDICT_STEP)}
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5h, 0)
+
+    # The slot keeps its full energy - no capping against the load.
+    if abs(slot_5h.get("kwh", -1) - 0.6) > 1e-9:
+        print("ERROR 5h: slot kwh should be untouched at 0.6, got {}".format(slot_5h.get("kwh")))
+        failed = True
+
+    # Every load step, inside the slot included, is left alone.
+    for m in range(0, 60 + 2 * plan_iv, PREDICT_STEP):
+        val = yesterday_load_step_5h.get(m, -1)
+        if abs(val - UNREPORTED_LOAD) > 1e-9:
+            print("ERROR 5h: step {} should be unchanged at {}, got {} - subtraction ran with car_energy_reported_load False".format(m, UNREPORTED_LOAD, val))
+            failed = True
+
+    # Restore everything 5g/5h changed, including the flags the earlier
+    # sub-cases leave set on the shared instance.
+    my_predbat.car_energy_reported_load = entry_reported_load
+    my_predbat.car_charging_loss = entry_charging_loss
+    my_predbat.args["octopus_intelligent_slot"] = entry_octopus_arg
     my_predbat.num_cars = 0
     my_predbat.car_charging_slots = [[] for _ in range(4)]
     my_predbat.car_charging_energy = {}
@@ -958,7 +1068,7 @@ def _test_soc_not_mutated_and_override_passed(my_predbat, failed):
 
     # soc_yesterday is read from the HA entity prefix+".savings_total_soc".
     # No entity is registered in the test dummy store, so get_state_wrapper
-    # returns the default 0.0 -> soc_yesterday == 0.0.
+    # returns the default 0.0 → soc_yesterday == 0.0.
     expected_soc_yesterday = 0.0
 
     # Capture (base_soc_kw, prediction_soc_kw, prediction_soc_max) for each
@@ -1000,7 +1110,7 @@ def _test_soc_not_mutated_and_override_passed(my_predbat, failed):
         failed = True
     else:
         # Every call: base soc_kw/soc_max must equal the original values.
-        for idx, (base_soc, base_max, pred_soc, pred_max) in enumerate(captured_soc):
+        for idx, (base_soc, base_max, _pred_soc, _pred_max) in enumerate(captured_soc):
             if base_soc != original_soc_kw:
                 print("ERROR: call {}: base soc_kw was mutated to {} (expected {})".format(idx, base_soc, original_soc_kw))
                 failed = True
@@ -1185,6 +1295,575 @@ def _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed):
         if len(captured["export_window_best"]) != len(captured["export_limits_best"]):
             print("ERROR: rebuilt {} export windows but {} export limits - they must stay in step".format(len(captured["export_window_best"]), len(captured["export_limits_best"])))
             failed = True
+        # A window is only rebuilt if it covers real time. Asserting the list is merely non-empty
+        # let a list of zero-width windows count as a fix for years - see the dedicated test below.
+        empty = [window for window in captured["export_window_best"] if window["start"] >= window["end"]]
+        if empty:
+            print("ERROR: {} rebuilt export windows cover no time at all, e.g. {!r}".format(len(empty), empty[0]))
+            failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_slot_status_read_at_the_right_minute(my_predbat, failed):
+    """The status for a plan minute must be read from that minute, not its mirror image (#4843).
+
+    predbat_status is keyed by minutes AGO, so the status for plan-minute (minute + slot_offset)
+    lives at (minute_offset - slot_offset). The lookup used to ADD slot_offset instead, which agrees
+    only at slot_offset == 15 - the slot midpoint - and reflects about it everywhere else, walking
+    each slot from its latest minute to its earliest and attributing every status to the wrong
+    minute.
+
+    Exports for exactly five minutes at plan-minutes 1205-1210, deliberately off-centre in the
+    1200-1230 slot. Read correctly that is found at slot_offset 5-10 and the window starts at 1200
+    (offset 5 pulls the start back by 5). Read mirrored it is found at slot_offset 20-24 instead and
+    the window starts at 1220 - twenty minutes after the export actually happened.
+    """
+    print("calculate_yesterday: Test - a slot's status is read at the matching minute, not its mirror (#4843)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    # minutes_now=360 and end_record=1440, so the reconstruction covers 1800 minutes ending now and
+    # plan-minute m is (1800 - m) minutes ago.
+    export_from_plan_minute = 1205
+    export_to_plan_minute = 1210
+    start = now_utc - timedelta(minutes=1800)
+    status_points = []
+    for step in range(0, 1800, 5):
+        exporting = export_from_plan_minute <= step < export_to_plan_minute
+        stamp = start + timedelta(minutes=step)
+        status_points.append({"state": "Exporting" if exporting else "Demand", "last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S+00:00"), "attributes": {"p/kWh": "0.0"}})
+    status_hist = [status_points]
+
+    def _history_with_one_export(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        return ("", "{}")
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_one_export
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    windows = captured.get("export_window_best")
+    if not windows:
+        print("ERROR: a five minute Exporting history should rebuild one export window, got none")
+        failed = True
+    elif len(windows) != 1:
+        print("ERROR: expected exactly one rebuilt export window, got {}: {}".format(len(windows), windows))
+        failed = True
+    elif windows[0]["start"] != 1200:
+        print("ERROR: export at plan-minutes {}-{} rebuilt as starting at {} - the status was read from the mirror-image minute within the slot".format(export_from_plan_minute, export_to_plan_minute, windows[0]["start"]))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_more_active_slot_status(my_predbat, failed):
+    """Unit tests for the slot-status collapse rule (#4843).
+
+    Statuses arrive lower-cased and must be matched exactly, not by substring - "freeze exporting"
+    contains "exporting", so a substring test would rank every export sub-state as a full export.
+    """
+    print("calculate_yesterday: Test - more_active_slot_status ranking (#4843)")
+
+    checks = [
+        # (current, candidate, precedence, expected, why)
+        ("", "freeze exporting", EXPORT_STATE_PRECEDENCE, "freeze exporting", "first status seen is always taken"),
+        ("freeze exporting", "exporting", EXPORT_STATE_PRECEDENCE, "exporting", "a real export beats a freeze seen earlier"),
+        ("exporting", "freeze exporting", EXPORT_STATE_PRECEDENCE, "exporting", "the #4840 case - a later freeze must not erase the export"),
+        ("hold exporting", "freeze exporting", EXPORT_STATE_PRECEDENCE, "freeze exporting", "freeze beats hold"),
+        ("freeze exporting", "hold exporting", EXPORT_STATE_PRECEDENCE, "freeze exporting", "hold does not beat freeze"),
+        ("exporting", "exporting", EXPORT_STATE_PRECEDENCE, "exporting", "equal states keep the incumbent"),
+        ("exporting", "demand", EXPORT_STATE_PRECEDENCE, "exporting", "an unranked status never wins"),
+        ("freeze exporting", "cross-charging", EXPORT_STATE_PRECEDENCE, "cross-charging", "cross-charging outranks every sub-state"),
+        ("cross-charging", "exporting", EXPORT_STATE_PRECEDENCE, "cross-charging", "cross-charging is not displaced by a plain export"),
+        ("freeze charging", "charging", CHARGE_STATE_PRECEDENCE, "charging", "same rule applies on the charge side"),
+        ("charging", "hold charging", CHARGE_STATE_PRECEDENCE, "charging", "charge side keeps the most active too"),
+    ]
+    for current, candidate, precedence, expected, why in checks:
+        result = more_active_slot_status(current, candidate, precedence)
+        if result != expected:
+            print("ERROR: more_active_slot_status({!r}, {!r}) should be {!r} got {!r} - {}".format(current, candidate, expected, result, why))
+            failed = True
+
+    return failed
+
+
+def _test_mixed_slot_keeps_most_active_state(my_predbat, failed):
+    """Regression for #4843, through the real calculate_yesterday() reconstruction path.
+
+    A 30-minute slot can hold more than one state - Predbat re-runs every few minutes and a manual
+    override can land on any minute - but the reconstruction emits a single window for it. It used
+    to assign unconditionally as it scanned, so whichever state the walk happened to visit LAST won
+    and a real force export could be collapsed to a freeze, regardless of how much of the slot each
+    state actually held. The cell must instead show whichever state dominated the slot's minutes.
+
+    The history here freezes for exactly the first half of every slot and force exports for exactly
+    the second - a dead-even split, so neither state dominates on minutes alone and the choice falls
+    to the most-active tie-break, which favours the real export over the freeze. Every rebuilt window
+    must come back as a real export target rather than EXPORT_LIMIT_FREEZE, and must be marked as
+    having held more than one state.
+    """
+    print("calculate_yesterday: Test - a slot holding two equally-sized states keeps the more active one (#4843)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    # Walk back 2 days at 5-minute resolution, freezing for the first half of each half-hour slot
+    # and force exporting for the second - a dead-even 15/15 split, so the tie-break decides.
+    start = now_utc - timedelta(days=2)
+    status_points = []
+    for step in range(0, 2 * 24 * 60, 5):
+        stamp = start + timedelta(minutes=step)
+        state = "Freeze exporting" if (stamp.hour * 60 + stamp.minute) % 30 < 15 else "Exporting"
+        status_points.append({"state": state, "last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S+00:00"), "attributes": {"p/kWh": "0.0"}})
+    status_hist = [status_points]
+
+    def _history_with_split_slots(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
+        return ("", "{}")
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_split_slots
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    if "export_limits_best" not in captured:
+        print("ERROR: publish_html_plan was never called - could not observe the reconstructed windows")
+        failed = True
+    elif not captured["export_window_best"]:
+        print("ERROR: an Exporting history should rebuild export windows, got none")
+        failed = True
+    else:
+        frozen = [limit for limit in captured["export_limits_best"] if limit == EXPORT_LIMIT_FREEZE]
+        if frozen:
+            print("ERROR: {} of {} rebuilt export slots came back as freeze - on a dead-even split the tie-break should favour the real export".format(len(frozen), len(captured["export_limits_best"])))
+            failed = True
+        if len(captured["export_window_best"]) != len(captured["export_limits_best"]):
+            print("ERROR: rebuilt {} export windows but {} export limits - they must stay in step".format(len(captured["export_window_best"]), len(captured["export_limits_best"])))
+            failed = True
+        unmarked = [window for window in captured["export_window_best"] if len(window.get("mixed", [])) < 2]
+        if unmarked:
+            print("ERROR: {} of {} rebuilt export slots held two states but were not marked as mixed".format(len(unmarked), len(captured["export_window_best"])))
+            failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_short_export_inside_a_freeze_slot(my_predbat, failed):
+    """The reporter's own slot from #4840: freeze, a short force export, then freeze again.
+
+    Predbat replanned five minutes into the 17:00-17:30 slot and started force exporting, and the
+    reporter manually overrode it back to freeze export twelve minutes later - so the export sat in
+    the middle of the slot with a freeze either side: 18 minutes of freeze against 12 of export.
+
+    The window boundaries cannot express it - export_start_minute latches on the first state that is
+    any kind of export, and "Freeze exporting" counts, so the window spans the whole slot rather than
+    the twelve minutes that actually exported. And a slot carries one headline state, so
+    freeze/export/freeze collapses to one. Freeze genuinely held the slot for longer, so it is the
+    dominant state and the correct headline; what must not happen is the twelve minutes of export
+    vanishing with no trace, so the window must still be marked as having held more than one state.
+
+    This is a deliberate change from the slot's old headline of "export": the old rule showed
+    whichever state ranked more *active*, which meant a brief force export could outrank a freeze
+    that held most of the slot. The reporter's actual complaint was that the export disappeared with
+    no record of it anywhere, not that freeze was shown - and that is what the "mixed" marker now
+    guarantees, regardless of which state ends up as the headline.
+    """
+    print("calculate_yesterday: Test - a short export between two freezes in one slot (#4840)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    # minutes_now=360 and end_record=1440, so plan-minute m is (1800 - m) minutes ago. Put the slot
+    # at plan-minutes 1200-1230 and force export for 1205-1217, freeze exporting either side.
+    slot_start = 1200
+    start = now_utc - timedelta(minutes=1800)
+    status_points = []
+    for step in range(0, 1800, 1):
+        if slot_start <= step < slot_start + 30:
+            state = "Exporting" if 5 <= (step - slot_start) < 17 else "Freeze exporting"
+        else:
+            state = "Demand"
+        stamp = start + timedelta(minutes=step)
+        status_points.append({"state": state, "last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S+00:00"), "attributes": {"p/kWh": "0.0"}})
+    status_hist = [status_points]
+
+    def _history_with_short_export(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
+        return ("", "{}")
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_short_export
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    windows = captured.get("export_window_best")
+    limits = captured.get("export_limits_best")
+    if not windows:
+        print("ERROR: a freeze/export/freeze slot should rebuild an export window, got none")
+        failed = True
+    elif len(windows) != 1:
+        print("ERROR: expected exactly one rebuilt export window for the slot, got {}: {}".format(len(windows), windows))
+        failed = True
+    else:
+        if limits[0] != EXPORT_LIMIT_FREEZE:
+            print("ERROR: freeze held 18 of the slot's 30 minutes against 12 for export and should be the dominant headline state, got a real export target instead")
+            failed = True
+        if sorted(windows[0].get("mixed", [])) != ["exporting", "freeze exporting"]:
+            print("ERROR: a slot holding both a freeze and a force export should be marked with both so the export is not lost, got {!r}".format(windows[0].get("mixed")))
+            failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_full_edge_state_counts_toward_the_dominant_tally(my_predbat, failed):
+    """A state occupying a full 5-minute slot edge is a real state, not edge noise (#4843 follow-up).
+
+    calculate_yesterday() ignores a slot's first/last 5 minutes when they don't hold one state
+    throughout - that guards against Predbat's reported status lagging a slot boundary by a minute or
+    two while it catches up to a replan. But a status occupying the *whole* edge window is
+    indistinguishable from a genuine replan landing right at the boundary, so it must still count: it
+    should show up in "mixed" even when it does not dominate the slot, rather than being silently
+    discarded just for sitting in the trimmed part of the scan.
+
+    The slot here force exports for its first 5 minutes exactly, then freeze exports for the
+    remaining 25 - freeze dominates on minutes, but the export must still be visible in "mixed".
+    """
+    print("calculate_yesterday: Test - a state holding a full slot edge counts, not just interior minutes (#4843)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    slot_start = 1200
+    start = now_utc - timedelta(minutes=1800)
+    status_points = []
+    for step in range(0, 1800, 1):
+        if slot_start <= step < slot_start + 30:
+            state = "Exporting" if (step - slot_start) < 5 else "Freeze exporting"
+        else:
+            state = "Demand"
+        stamp = start + timedelta(minutes=step)
+        status_points.append({"state": state, "last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S+00:00"), "attributes": {"p/kWh": "0.0"}})
+    status_hist = [status_points]
+
+    def _history_with_edge_export(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
+        return ("", "{}")
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_edge_export
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    windows = captured.get("export_window_best")
+    limits = captured.get("export_limits_best")
+    if not windows:
+        print("ERROR: an export that fully occupies the slot's first 5 minutes should still rebuild an export window, got none")
+        failed = True
+    elif limits[0] != EXPORT_LIMIT_FREEZE:
+        print("ERROR: freeze held 25 of the slot's 30 minutes and should be the dominant headline state")
+        failed = True
+    elif sorted(windows[0].get("mixed", [])) != ["exporting", "freeze exporting"]:
+        print("ERROR: the 5 minutes of real export at the slot edge should still show up in mixed, got {!r}".format(windows[0].get("mixed")))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_brief_edge_blip_is_not_counted(my_predbat, failed):
+    """A one-minute status blip at a slot's edge must not be treated as a real state (#4843 follow-up).
+
+    Only the slot's very first minute briefly reports "Exporting" - a leftover echo of the previous
+    slot's status before Predbat's real status for this slot, "Charging", takes over. That single
+    minute does not hold the whole first-5-minutes edge window, so it must be discarded as noise
+    rather than spawning a spurious export window or appearing in the charge window's "mixed" list.
+    """
+    print("calculate_yesterday: Test - a one-minute status blip at a slot edge is discarded, not counted (#4843)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    slot_start = 1200
+    start = now_utc - timedelta(minutes=1800)
+    status_points = []
+    for step in range(0, 1800, 1):
+        if slot_start <= step < slot_start + 30:
+            state = "Exporting" if step == slot_start else "Charging"
+        else:
+            state = "Demand"
+        stamp = start + timedelta(minutes=step)
+        status_points.append({"state": state, "last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S+00:00"), "attributes": {"p/kWh": "0.0"}})
+    status_hist = [status_points]
+
+    def _history_with_edge_blip(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
+        return ("", "{}")
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_edge_blip
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    export_windows = captured.get("export_window_best") or []
+    charge_windows = captured.get("charge_window_best") or []
+    if export_windows:
+        print("ERROR: a one-minute Exporting blip at the slot edge should not rebuild an export window, got {}".format(export_windows))
+        failed = True
+    if not charge_windows:
+        print("ERROR: the slot should still rebuild a charge window from its 29 Charging minutes, got none")
+        failed = True
+    elif charge_windows[0].get("mixed"):
+        print("ERROR: the one-minute blip should not appear in the charge window's mixed list, got {!r}".format(charge_windows[0].get("mixed")))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_edge_only_state_still_gets_real_window_bounds(my_predbat, failed):
+    """A state that holds a slot edge and nothing else must still get real window bounds (#4872).
+
+    The dominant-state tally trusts a slot's first/last 5 minutes when they hold one state
+    throughout, but the scan that works out where the window starts and ends only ever walked the
+    slot's interior minutes. A state living *only* in a trusted edge was therefore counted by the
+    tally - producing a charge or export window - while the scan never saw it, so the window was
+    appended with start/end still None. in_charge_window() then compared an int against None:
+
+        TypeError: '>=' not supported between instances of 'int' and 'NoneType'
+
+    which took down the whole update_pred() cycle, not just the History view. Both edges are
+    covered here: one slot charges for exactly its first 5 minutes, a later one exports for exactly
+    its last 5 minutes, and each must be rebuilt with bounds that lie inside its own slot.
+    """
+    print("calculate_yesterday: Test - a state holding only a slot edge still gets real window bounds (#4872)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    charge_slot_start = 1200
+    export_slot_start = 1260
+    start = now_utc - timedelta(minutes=1800)
+    status_points = []
+    for step in range(0, 1800, 1):
+        state = "Demand"
+        if charge_slot_start <= step < charge_slot_start + 5:
+            state = "Charging"
+        elif export_slot_start + 25 <= step < export_slot_start + 30:
+            state = "Exporting"
+        stamp = start + timedelta(minutes=step)
+        status_points.append({"state": state, "last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S+00:00"), "attributes": {"p/kWh": "0.0"}})
+    status_hist = [status_points]
+
+    def _history_with_edge_only_states(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        return ("", "{}")
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_edge_only_states
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    for label, windows, slot_start in (
+        ("charge", captured.get("charge_window_best") or [], charge_slot_start),
+        ("export", captured.get("export_window_best") or [], export_slot_start),
+    ):
+        if len(windows) != 1:
+            print("ERROR: a state holding a full slot edge should rebuild exactly one {} window, got {}".format(label, windows))
+            failed = True
+            continue
+        window = windows[0]
+        if window["start"] is None or window["end"] is None:
+            print("ERROR: the {} window was rebuilt with unset bounds {!r}, which crashes in_charge_window()".format(label, window))
+            failed = True
+        elif not (window["start"] < window["end"]):
+            print("ERROR: the {} window bounds are not ordered: {!r}".format(label, window))
+            failed = True
+
+    # The bounds must also survive the real in_charge_window()/in_window scan rather than merely
+    # being non-None, since that is where the reported crash landed.
+    charge_windows = captured.get("charge_window_best") or []
+    if charge_windows and charge_windows[0]["start"] is not None:
+        if my_predbat.in_charge_window(charge_windows[0:1], charge_windows[0]["start"]) != 0:
+            print("ERROR: the rebuilt charge window does not contain its own start minute: {!r}".format(charge_windows[0]))
+            failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_cross_charging_export_window_covers_the_slot(my_predbat, failed):
+    """A cross-charging slot's export window must cover the slot, not collapse to zero width (#4466).
+
+    Cross-charging charges and exports at the same time, so calculate_yesterday() detects both sides
+    at the same minute of the slot. The charge/export handoff - "whichever side starts second ends
+    the one that started first" - then closed the export window at its own start minute, giving
+    {"start": N, "end": N}. Such a window is in the list but covers no time: in_charge_window()'s
+    "start <= minute < end" can never be true for it, so it renders as nothing and contributes
+    nothing to the simulated cost. The export half of cross-charging was therefore still missing from
+    the History view even after #4466 restored it to the list, because
+    _test_cross_charging_reconstructed_as_both_windows only asserted the list was non-empty.
+
+    Starting at the same minute is an overlap, not a handoff: both sides must run the whole slot.
+    """
+    print("calculate_yesterday: Test - a Cross-charging slot's export window covers the whole slot (#4466)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    status_hist = _make_constant_history("Cross-charging", now_utc)
+
+    def _history_with_cross_charging(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        return ("", "{}")
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_cross_charging
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    export_windows = captured.get("export_window_best") or []
+    charge_windows = captured.get("charge_window_best") or []
+    interval = my_predbat.plan_interval_minutes
+
+    if not export_windows:
+        print("ERROR: a Cross-charging history should rebuild export windows, got none")
+        failed = True
+    else:
+        # Cross-charging holds every minute, so each side should cover a full slot, and the two
+        # sides should line up with each other rather than one being a sliver of the other.
+        wrong = [window for window in export_windows if (window["end"] - window["start"]) != interval]
+        if wrong:
+            print("ERROR: {} of {} Cross-charging export windows do not cover their whole {}-minute slot, e.g. {!r}".format(len(wrong), len(export_windows), interval, wrong[0]))
+            failed = True
+        if charge_windows and export_windows[0] != charge_windows[0]:
+            print("ERROR: Cross-charging runs both sides over the same minutes, but the first export window {!r} does not match the first charge window {!r}".format(export_windows[0], charge_windows[0]))
+            failed = True
+
+    # A zero-width window is invisible to the scan that renders the plan, which is what made the
+    # missing export half so hard to spot - check through the real lookup, not just the bounds.
+    if export_windows:
+        window = export_windows[0]
+        if my_predbat.in_charge_window(export_windows[0:1], window["start"]) != 0:
+            print("ERROR: the rebuilt Cross-charging export window {!r} is invisible to in_charge_window()".format(window))
+            failed = True
 
     _restore_methods(my_predbat, original_run_pred)
     my_predbat.savings_last_updated = None
@@ -1247,6 +1926,62 @@ def _test_missing_cost_today_history(my_predbat, failed):
     return failed
 
 
+def _test_carbon_yesterday(my_predbat, failed):
+    """Test: with carbon_enable on, carbon_yesterday is read back from predbat.carbon_today's
+    own history (#2830) the same way cost_yesterday reads predbat.cost_today, and published as
+    predbat.carbon_yesterday. With carbon_enable off, neither is computed nor published."""
+    print("calculate_yesterday: Test - carbon_yesterday read back from carbon_today history")
+    now_utc = _setup_base(my_predbat)
+    my_predbat.carbon_enable = True
+
+    carbon_hist = _make_constant_history(456.0, now_utc)
+    base_history = _make_history_mock(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
+
+    def _get_history_wrapper(entity_id, days=30, required=True, tracked=True):
+        if entity_id == my_predbat.prefix + ".carbon_today":
+            return carbon_hist
+        return base_history(entity_id, days=days, required=required, tracked=tracked)
+
+    captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
+    my_predbat.get_history_wrapper = _get_history_wrapper
+
+    my_predbat.calculate_yesterday()
+
+    if my_predbat.carbon_yesterday != 456.0:
+        print("ERROR: carbon_yesterday should be 456.0, got {}".format(my_predbat.carbon_yesterday))
+        failed = True
+
+    entity_id = my_predbat.prefix + ".carbon_yesterday"
+    state = my_predbat.get_state_wrapper(entity_id)
+    if state != 456.0:
+        print("ERROR: entity {} should be 456.0, got {}".format(entity_id, state))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+
+    # Now with carbon_enable off - carbon_yesterday must not be recomputed from the (still
+    # present) mock history, and the entity must not be published.
+    my_predbat.carbon_enable = False
+    my_predbat.carbon_yesterday = 0.0
+    captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
+    my_predbat.get_history_wrapper = _get_history_wrapper
+
+    my_predbat.calculate_yesterday()
+
+    if my_predbat.carbon_yesterday != 0.0:
+        print("ERROR: carbon_yesterday should stay 0.0 with carbon_enable off, got {}".format(my_predbat.carbon_yesterday))
+        failed = True
+    if my_predbat.get_state_wrapper(entity_id) is not None:
+        print("ERROR: entity {} should not be published with carbon_enable off".format(entity_id))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
 def _test_yesterday_slot_is_exporting(my_predbat, failed):
     """Test: yesterday_slot_is_exporting() recognises Cross-charging as export activity.
 
@@ -1298,7 +2033,16 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)
     failed = _test_soc_kw_h0_fallback(my_predbat, failed)
     failed = _test_missing_cost_today_history(my_predbat, failed)
+    failed = _test_carbon_yesterday(my_predbat, failed)
     failed = _test_yesterday_slot_is_exporting(my_predbat, failed)
     failed = _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed)
+    failed = _test_slot_status_read_at_the_right_minute(my_predbat, failed)
+    failed = _test_mixed_slot_keeps_most_active_state(my_predbat, failed)
+    failed = _test_more_active_slot_status(my_predbat, failed)
+    failed = _test_short_export_inside_a_freeze_slot(my_predbat, failed)
+    failed = _test_full_edge_state_counts_toward_the_dominant_tally(my_predbat, failed)
+    failed = _test_brief_edge_blip_is_not_counted(my_predbat, failed)
+    failed = _test_edge_only_state_still_gets_real_window_bounds(my_predbat, failed)
+    failed = _test_cross_charging_export_window_covers_the_slot(my_predbat, failed)
 
     return failed

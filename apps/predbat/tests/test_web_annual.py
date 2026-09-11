@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 from aiohttp import web as aiohttp_web
 
-from annual import AnnualConfigError, validate_config
+from annual import AnnualConfigError, config_warnings, validate_config
 from annual_store import list_runs, load_run, save_run
 from tariff_catalogue import BASELINE_DEFAULT_IMPORT_ID, CUSTOM_ID, EXPORT_TARIFFS, IMPORT_TARIFFS, NO_EXPORT_ID, PRICE_CAP_IMPORT_P
 from web import WebInterface
@@ -483,6 +483,18 @@ def test_web_annual_form(my_predbat):
             if not row or "annual-field-wide" not in row.group(0):
                 print("  ERROR: {} should be rendered as a wide field".format(field))
                 failed = True
+
+        print("Test: the Octopus API key is masked like a password field")
+        # It is a secret credential, so it should not be readable as plain text
+        # over someone's shoulder or in a screen share, unlike the account id.
+        key_row = re.search(r'<label for="load_octopus_api_key".*?</div>', wide_form, re.S)
+        if not key_row or 'type="password"' not in key_row.group(0) or 'autocomplete="off"' not in key_row.group(0):
+            print('  ERROR: load_octopus_api_key should render as type="password" with autocomplete="off"')
+            failed = True
+        account_row = re.search(r'<label for="load_octopus_account_id".*?</div>', wide_form, re.S)
+        if not account_row or 'type="text"' not in account_row.group(0) or "autocomplete" in account_row.group(0):
+            print('  ERROR: load_octopus_account_id should still render as a plain type="text" field, unaffected by the API key masking')
+            failed = True
 
         print("Test: selecting a basic-rates tariff uses THAT tariff, not the price-cap default")
         # The bug this pins: the dropdown only ever populated the URL boxes, and
@@ -980,6 +992,57 @@ def test_web_annual_form(my_predbat):
             failed = True
         if 'value="3800"' not in html_with_error.replace("'", '"'):
             print("  ERROR: the form should stay populated when an error is shown")
+            failed = True
+
+        print("Test: an oversized kWp figure renders a warning; a sane figure renders none")
+        # The Wp-instead-of-kWp mix-up (GH#4858) is shown as a non-blocking note: the
+        # value stands as typed and the form stays runnable.
+        oversized = copy.deepcopy(config)
+        oversized["solar"] = [{"kwp": 6000}]
+        warning_html = page.render_form(oversized, errors=None, warnings=config_warnings(oversized))
+        if "annual-warning" not in warning_html or "6 kWp" not in warning_html:
+            print("  ERROR: an oversized kWp array should render a warning naming the kWp conversion")
+            failed = True
+        if "6000 kWp" not in warning_html:
+            print("  ERROR: the warning should echo the entered figure, got no 6000 kWp in the form")
+            failed = True
+        calm_html = page.render_form(config, warnings=config_warnings(config))
+        if "annual-warning" in calm_html:
+            print("  ERROR: a sane system size should not render a warning")
+            failed = True
+        if page.render_form(config) != page.render_form(config, warnings=None):
+            print("  ERROR: render_form with no warnings should render identically to the no-warnings default")
+            failed = True
+
+        print("Test: dict-form solar (a single saved mapping) renders instead of crashing the page")
+        # validate_config accepts a lone array as a bare mapping; the form used to walk
+        # its keys and raise AttributeError on the first string it met.
+        dict_form = copy.deepcopy(config)
+        dict_form["solar"] = {"kwp": 6000}
+        dict_html = page.render_form(dict_form, errors=None, warnings=config_warnings(dict_form))
+        if "annual-warning" not in dict_html or 'id="solar_kwp_0"' not in dict_html:
+            print("  ERROR: dict-form solar should render one array with its warning, not crash")
+            failed = True
+
+        print("Test: the script injects the server's soft limit and thresholds each kWp field")
+        # The live hint exists only through these lines: the injected constant and the
+        # per-array check. Asserting both pins them against a refactor that drops the
+        # concatenation (a missing constant would ReferenceError in every browser while
+        # every test stayed green).
+        script = page.render_script()
+        if "var ANNUAL_SOLAR_KWP_SOFT_LIMIT = 100" not in script:
+            print("  ERROR: render_script should inject the server's SOLAR_KWP_SOFT_LIMIT into the page")
+            failed = True
+        if "kwpValue > ANNUAL_SOLAR_KWP_SOFT_LIMIT" not in script or "Array ' + (index + 1)" not in script:
+            print("  ERROR: the live hint should threshold each kWp field and name its 1-based array")
+            failed = True
+
+        print("Test: html_annual passes config_warnings through to the rendered page")
+        # The only production call site for config_warnings: if this stops being wired
+        # up, the form silently loses the warning while every unit test above stays green.
+        response = asyncio.run(page.html_annual(FakeRequest(), config=copy.deepcopy(oversized)))
+        if "annual-warning" not in response.text:
+            print("  ERROR: the annual page should render the warning from the config it was handed")
             failed = True
 
         print("Test: config_from_post rebuilds a config the engine accepts")

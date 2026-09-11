@@ -422,10 +422,15 @@ class HAInterface(ComponentBase):
                 self.log("Info: Using SQL Lite database as primary data source, no HA interface available")
 
         if self.ha_key:
-            # Get the current addon info, but suppress warning message if the API call fails as non-HAOS installs won't have supervisor running
+            # Get the current app info, but suppress warning message if the API call fails as non-HAOS installs won't have supervisor running
+            #
+            # HA changed terminology from 'addons' to 'apps' in HA 2026.2 but retained the old service calls for transition
+            #
+            # At present have not changed Predbat API call in order to not break installations that are still using an older HA supervisor
+            # Propose in Feb 2027 that Predbat be changed to use the new service call
             res = self.api_call("/addons/self/info", core=False, silent=True)
             if res:
-                # get app slug name which is the actual directory name under /addon_configs that /config is mounted to
+                # get app slug name which is the actual directory name under /app_configs that /config is mounted to
                 self.slug = res["data"]["slug"]
                 self.log("Info: App slug is {}".format(self.slug))
 
@@ -756,7 +761,7 @@ class HAInterface(ComponentBase):
 
                 # Fail all pending requests on connection drop
                 with self.ws_pending_lock:
-                    for req_id, req_info in list(self.ws_pending_requests.items()):
+                    for _req_id, req_info in list(self.ws_pending_requests.items()):
                         req_info["result_holder"]["error"] = "connection_lost"
                         req_info["result_holder"]["success"] = False
                         req_info["event"].set()
@@ -968,15 +973,15 @@ class HAInterface(ComponentBase):
                         continue
                     history.append(item)
             cursor = window_end
-            if cursor < end:
-                time.sleep(0.5)  # Backoff to avoid flooding HA SQLite and causing 502s
 
         return [history] if history else None
 
-    async def set_state_external(self, entity_id, state, attributes={}):
+    async def set_state_external(self, entity_id, state, attributes=None):
         """
         Used for external changes to Predbat state data
         """
+        if attributes is None:
+            attributes = {}
         new_value = state
         new_state = {"entity_id": entity_id, "state": state, "attributes": attributes}
         old_value = self.get_state(entity_id)
@@ -1059,10 +1064,12 @@ class HAInterface(ComponentBase):
         if (old_value is None) or (new_value != old_value):
             await self.base.trigger_watch_list(entity_id, attributes, old_state, new_state)
 
-    def set_state(self, entity_id, state, attributes={}):
+    def set_state(self, entity_id, state, attributes=None):
         """
         Set the state of an entity in Home Assistant.
         """
+        if attributes is None:
+            attributes = {}
         self.db_mirror_list[entity_id] = True
 
         if self.db_enable and (self.db_mirror_ha or self.db_primary):
@@ -1127,47 +1134,37 @@ class HAInterface(ComponentBase):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        data = None
-        for attempt in range(4):  # 0, 1, 2, 3
-            try:
-                if post:
-                    if data_in:
-                        response = requests.post(url, headers=headers, json=data_in, timeout=TIMEOUT)
-                    else:
-                        response = requests.post(url, headers=headers, timeout=TIMEOUT)
+        try:
+            if post:
+                if data_in:
+                    response = requests.post(url, headers=headers, json=data_in, timeout=TIMEOUT)
                 else:
-                    if data_in:
-                        response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
-                    else:
-                        response = requests.get(url, headers=headers, timeout=TIMEOUT)
+                    response = requests.post(url, headers=headers, timeout=TIMEOUT)
+            else:
+                if data_in:
+                    response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
+                else:
+                    response = requests.get(url, headers=headers, timeout=TIMEOUT)
+            data = response.json()
+            self.api_errors = 0
+        except requests.exceptions.JSONDecodeError:
+            if not silent:  # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)
+                self.log("Warn: Failed to decode response {} from {}".format(response, url))
+                self.api_errors += 1
 
-                if response.status_code in [502, 503, 504]:
-                    if not silent:
-                        self.log("Warn: {} from {}, retrying...".format(response.status_code, url))
-                    raise requests.exceptions.ConnectionError("{} Server Error".format(response.status_code))
-
-                data = response.json()
-                self.api_errors = 0
-                break
-            except requests.exceptions.JSONDecodeError:
-                if not silent:  # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)
-                    self.log("Warn: Failed to decode response {} from {}".format(response, url))
-                self.api_errors += 1
-            except (requests.Timeout, requests.exceptions.ReadTimeout):
-                self.log("Warn: Timeout from {}".format(url))
-                self.api_errors += 1
-            except requests.exceptions.ConnectionError as e:
-                if not silent:
-                    self.log("Warn: Connection error from {}: {}".format(url, e))
-                self.api_errors += 1
-            
-            if attempt < 3:
-                time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+            data = None
+        except (requests.Timeout, requests.exceptions.ReadTimeout):
+            self.log("Warn: Timeout from {}".format(url))
+            self.api_errors += 1
+            data = None
+        except requests.exceptions.ConnectionError as e:
+            if not silent:
+                self.log("Warn: Connection error from {}: {}".format(url, e))
+            self.api_errors += 1
+            data = None
 
         if self.api_errors >= 10:
-            self.log("Error: Too many API errors (>=10). Resting and resetting counter to avoid permanent fatal error and websocket drop.")
-            self.api_errors = 0
-            time.sleep(10)
-            # Intentionally NOT calling self.fatal_error_occurred() here to allow HA WebSocket to recover
+            self.log("Error: Too many API errors, stopping")
+            self.fatal_error_occurred()
 
         return data

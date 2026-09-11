@@ -21,6 +21,7 @@ from sigenergy import (
     SIGENERGY_ACTIVE_MODE_SELF,
     SIGENERGY_CODE_IN_OTHER_VPP,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
+    SIGENERGY_LOG_REDACT_KEYS,
     SIGENERGY_MODE_MSC,
     SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
@@ -144,7 +145,7 @@ class MockSigenergyAPI(SigenergyAPI):
         # ComponentBase attributes not set by initialize() — wire them manually
         self.api_started = False
         self.api_stop = False
-        # Skip mode-switch -> command delay in unit tests
+        # Skip mode-switch → command delay in unit tests
         self._command_delay = 0
         # ComponentBase.storage looks at self.base.components, which this mock doesn't set up —
         # override it directly so tests can plug in a FakeStorage via self._mock_storage.
@@ -211,15 +212,15 @@ def test_sigenergy_helper_functions(my_predbat):
     # _safe_float
     assert _safe_float(3.14) == 3.14, "_safe_float: float passthrough"
     assert _safe_float("2.5") == 2.5, "_safe_float: string to float"
-    assert _safe_float(None) == 0.0, "_safe_float: None -> 0.0"
-    assert _safe_float("abc") == 0.0, "_safe_float: invalid string -> 0.0"
+    assert _safe_float(None) == 0.0, "_safe_float: None → 0.0"
+    assert _safe_float("abc") == 0.0, "_safe_float: invalid string → 0.0"
     assert _safe_float(None, default=99.0) == 99.0, "_safe_float: None with custom default"
 
     # _safe_int
     assert _safe_int(42) == 42, "_safe_int: int passthrough"
     assert _safe_int("7") == 7, "_safe_int: string to int"
-    assert _safe_int(None) == 0, "_safe_int: None -> 0"
-    assert _safe_int("bad") == 0, "_safe_int: invalid -> 0"
+    assert _safe_int(None) == 0, "_safe_int: None → 0"
+    assert _safe_int("bad") == 0, "_safe_int: invalid → 0"
     assert _safe_int(None, default=5) == 5, "_safe_int: None with custom default"
 
     return failed
@@ -257,7 +258,7 @@ def test_sigenergy_system_slug(my_predbat):
     failed = False
     api = MockSigenergyAPI()
 
-    # Long ID -> last 12 chars
+    # Long ID → last 12 chars
     slug = api._system_slug("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
     assert len(slug) <= 12, "Slug max 12 chars: {}".format(slug)
 
@@ -578,10 +579,10 @@ def test_sigenergy_apply_service_to_toggle(my_predbat):
     failed = False
     api = MockSigenergyAPI()
 
-    assert api._apply_service_to_toggle(False, "turn_on") is True, "turn_on -> True"
-    assert api._apply_service_to_toggle(True, "turn_off") is False, "turn_off -> False"
-    assert api._apply_service_to_toggle(False, "toggle") is True, "toggle False -> True"
-    assert api._apply_service_to_toggle(True, "toggle") is False, "toggle True -> False"
+    assert api._apply_service_to_toggle(False, "turn_on") is True, "turn_on → True"
+    assert api._apply_service_to_toggle(True, "turn_off") is False, "turn_off → False"
+    assert api._apply_service_to_toggle(False, "toggle") is True, "toggle False → True"
+    assert api._apply_service_to_toggle(True, "toggle") is False, "toggle True → False"
     assert api._apply_service_to_toggle(True, "unknown") is True, "unknown keeps current"
 
     return failed
@@ -1343,6 +1344,113 @@ def test_sigenergy_publish_mqtt_success(my_predbat):
     return failed
 
 
+def test_sigenergy_redact(my_predbat):
+    """Test redact masks credential keys at any depth and leaves the rest alone."""
+    failed = False
+
+    redacted = SigenergyAPI.redact({"accessToken": "live-token", "systemId": "SIG1"})
+    assert redacted["accessToken"] == "<redacted>", "accessToken masked"
+    assert redacted["systemId"] == "SIG1", "Non-credential key untouched"
+
+    # Nested inside a list, as the battery command payload nests its commands
+    nested = SigenergyAPI.redact({"commands": [{"systemId": "SIG1", "password": "hunter2"}]})
+    assert nested["commands"][0]["password"] == "<redacted>", "Credential masked inside a nested list"
+    assert nested["commands"][0]["systemId"] == "SIG1", "Nested non-credential key untouched"
+
+    # Nested inside a dict, exercising the dict-value recursion branch
+    nested_dict = SigenergyAPI.redact({"outer": {"accessToken": "live-token", "systemId": "SIG1"}})
+    assert nested_dict["outer"]["accessToken"] == "<redacted>", "Credential masked inside a nested dict"
+    assert nested_dict["outer"]["systemId"] == "SIG1", "Nested-dict non-credential key untouched"
+
+    # Every documented credential key is covered — iterate the constant so keys added
+    # to SIGENERGY_LOG_REDACT_KEYS later are automatically tested too
+    for key in SIGENERGY_LOG_REDACT_KEYS:
+        assert SigenergyAPI.redact({key: "secret"})[key] == "<redacted>", "Key {} masked".format(key)
+
+    # json.dumps() serialises tuples as arrays, so redaction must cover them or a
+    # tuple-shaped payload would be published as JSON yet logged unmasked
+    nested_tuple = SigenergyAPI.redact({"commands": ({"password": "hunter2"},)})
+    assert nested_tuple["commands"][0]["password"] == "<redacted>", "Credential masked inside a nested tuple"
+
+    # Scalars and lists of scalars pass straight through
+    assert SigenergyAPI.redact("plain") == "plain", "String passthrough"
+    assert SigenergyAPI.redact([1, 2]) == [1, 2], "List passthrough"
+    assert SigenergyAPI.redact(None) is None, "None passthrough"
+
+    return failed
+
+
+def test_sigenergy_publish_mqtt_redacts_token(my_predbat):
+    """Test _publish_mqtt keeps the live token on the wire but masks it in the log (#4920)."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "tok123"
+    api.mqtt_host = "openapi-eu.sigencloud.com" # cspell:disable-line
+    api.mqtt_port = 8883
+
+    mock_client = _make_mock_aiomqtt_client()
+    # The nested command carries a credential too, mirroring the shape of the #4920 leak:
+    # a top-level-only redaction would mask accessToken but still leak the nested password
+    payload = {"accessToken": "live-secret-token", "commands": [{"systemId": "SIG1", "activeMode": "charge", "password": "nested-secret"}]}
+
+    with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+        with patch("sigenergy.aiomqtt.Client", return_value=mock_client):
+            ok = run_async(SigenergyAPI._publish_mqtt(api, "openapi/instruction/command", payload))
+
+    assert ok is True, "_publish_mqtt should return True on success"
+
+    # The broker still receives the real token — redaction is log-only
+    topic, wire_payload = mock_client.publishes[0]
+    import json
+
+    assert topic == "openapi/instruction/command", "Published to the command topic"
+    assert json.loads(wire_payload)["accessToken"] == "live-secret-token", "Real token still published to the broker"
+    assert json.loads(wire_payload)["commands"][0]["password"] == "nested-secret", "Nested credential still published to the broker"
+
+    published_logs = [m for m in api.log_messages if "MQTT published" in m]
+    assert len(published_logs) == 1, "Exactly one publish log line expected"
+    assert "live-secret-token" not in published_logs[0], "Token must not appear in the log"
+    assert "nested-secret" not in published_logs[0], "Nested credential must not appear in the log"
+    assert "<redacted>" in published_logs[0], "Token replaced with the redaction marker"
+    assert "SIG1" in published_logs[0], "Non-credential payload content still logged"
+
+    # The caller's payload dict is not mutated by redaction
+    assert payload["accessToken"] == "live-secret-token", "Caller payload left unmodified"
+
+    return failed
+
+
+def test_sigenergy_request_log_redacts_credentials(my_predbat):
+    """Test _request masks credential-bearing keys in its request and response log lines."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.get_access_token = AsyncMock(return_value="tok123")
+
+    fake_response = {"code": 0, "msg": "ok", "data": {"accessToken": "resp-token", "systemId": "SIG1"}}
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.SIGENERGY_MIN_REQUEST_INTERVAL", 0):
+        with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+            result = run_async(SigenergyAPI._request(api, "POST", "/openapi/test", params={"token": "query-secret"}, json_data={"password": "hunter2", "systemId": "SIG1"}))
+
+    assert result == {"accessToken": "resp-token", "systemId": "SIG1"}, "Response data returned unchanged"
+
+    request_logs = [m for m in api.log_messages if "Requesting" in m]
+    assert len(request_logs) == 1, "Exactly one request log line expected"
+    assert "query-secret" not in request_logs[0], "params credential must not appear in the request log"
+    assert "hunter2" not in request_logs[0], "json_data credential must not appear in the request log"
+    assert "SIG1" in request_logs[0], "Non-credential request content still logged"
+
+    response_logs = [m for m in api.log_messages if "Response from" in m]
+    assert len(response_logs) == 1, "Exactly one response log line expected"
+    assert "resp-token" not in response_logs[0], "Response credential must not appear in the response log"
+    assert "SIG1" in response_logs[0], "Non-credential response content still logged"
+
+    return failed
+
+
 def test_sigenergy_publish_mqtt_failure(my_predbat):
     """Test _publish_mqtt returns False when the broker connection raises."""
     failed = False
@@ -1833,9 +1941,9 @@ def test_sigenergy_fetch_inverter_realtime(my_predbat):
             "deviceType": "Inverter",
             "realTimeInfo": {
                 "batSoc": 72.0,
-                "batPower": 3.0,   # discharging -> batteryPower should be -3.0
+                "batPower": 3.0,   # discharging → batteryPower should be -3.0
                 "pvPower": 5.0,
-                "activePower": 1.5,  # export -> gridPower = 1.5
+                "activePower": 1.5,  # export → gridPower = 1.5
                 "pvEnergyDaily": 12.5,
             },
         },
@@ -1978,22 +2086,22 @@ def test_sigenergy_get_inverter_serial(my_predbat):
     failed = False
     api = MockSigenergyAPI()
 
-    # No devices -> None
+    # No devices → None
     api.devices["SYS1"] = []
     assert api._get_inverter_serial("SYS1") is None, "Empty device list returns None"
 
-    # Only battery -> None
+    # Only battery → None
     api.devices["SYS1"] = [{"deviceType": "Battery", "serialNumber": "BAT001"}]
     assert api._get_inverter_serial("SYS1") is None, "Battery-only list returns None"
 
-    # Inverter type -> found
+    # Inverter type → found
     api.devices["SYS1"] = [
         {"deviceType": "Battery", "serialNumber": "BAT001"},
         {"deviceType": "Inverter", "serialNumber": "INV001"},
     ]
     assert api._get_inverter_serial("SYS1") == "INV001", "Inverter serial returned"
 
-    # AIO type -> found
+    # AIO type → found
     api.devices["SYS2"] = [{"deviceType": "AIO", "serialNumber": "AIO001"}]
     assert api._get_inverter_serial("SYS2") == "AIO001", "AIO serial returned"
 
@@ -2100,7 +2208,7 @@ def _make_api_with_system(system_id="SIG001"):
 
 
 def test_sigenergy_manage_vpp_registration_switch_to_msc(my_predbat):
-    """Readonly=True + VPP active -> set_operating_mode(MSC) called, returns False."""
+    """Readonly=True + VPP active → set_operating_mode(MSC) called, returns False."""
     from sigenergy import SIGENERGY_MODE_MSC
     failed = False
     sid = "SIG001"
@@ -2125,7 +2233,7 @@ def test_sigenergy_manage_vpp_registration_switch_to_msc(my_predbat):
 
 
 def test_sigenergy_manage_vpp_registration_switch_to_vpp(my_predbat):
-    """Readonly=False + not VPP -> set_operating_mode(VPP) called, returns False (activating async)."""
+    """Readonly=False + not VPP → set_operating_mode(VPP) called, returns False (activating async)."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2149,7 +2257,7 @@ def test_sigenergy_manage_vpp_registration_switch_to_vpp(my_predbat):
 
 
 def test_sigenergy_onboard_systems_pending_per_item(my_predbat):
-    """onboard_systems: real API per-item response result=False codeList=[1116] -> returns None and logs warning."""
+    """onboard_systems: real API per-item response result=False codeList=[1116] → returns None and logs warning."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2170,7 +2278,7 @@ def test_sigenergy_onboard_systems_pending_per_item(my_predbat):
 
 
 def test_sigenergy_onboard_systems_other_vpp(my_predbat):
-    """onboard_systems: per-item codeList=[1103] (other VPP) -> returns False and logs warning."""
+    """onboard_systems: per-item codeList=[1103] (other VPP) → returns False and logs warning."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2190,7 +2298,7 @@ def test_sigenergy_onboard_systems_other_vpp(my_predbat):
 
 
 def test_sigenergy_manage_vpp_registration_ready(my_predbat):
-    """Readonly=False + VPP active -> no onboard/offboard, returns True."""
+    """Readonly=False + VPP active → no onboard/offboard, returns True."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2217,7 +2325,7 @@ def test_sigenergy_manage_vpp_registration_ready(my_predbat):
 
 
 def test_sigenergy_manage_vpp_registration_readonly_no_vpp(my_predbat):
-    """Readonly=True + VPP not active -> nothing to do, returns False."""
+    """Readonly=True + VPP not active → nothing to do, returns False."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2384,7 +2492,7 @@ def test_sigenergy_offboard_toggle_in_vpp(my_predbat):
 
 
 def test_sigenergy_offboard_toggle_not_in_vpp(my_predbat):
-    """offboard=True + not in VPP -> return False, no mode switch."""
+    """offboard=True + not in VPP → return False, no mode switch."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2641,14 +2749,14 @@ def test_sigenergy_onboard_status(my_predbat):
     api = MockSigenergyAPI()
     assert api.onboard_status == {}, "onboard_status starts empty"
 
-    # Pending approval (1116) -> pending_approval, returns None
+    # Pending approval (1116) → pending_approval, returns None
     api._request = AsyncMock(return_value=None)
     api._last_api_code = SIGENERGY_CODE_SYSTEM_PENDING_REVIEW
     result = run_async(api.onboard_systems(["sys-1"]))
     assert result is None, "pending review returns None"
     assert api.onboard_status["sys-1"] == "pending_approval", "pending_approval status set"
 
-    # Registered to another VPP (1103) -> in_other_vpp, returns False
+    # Registered to another VPP (1103) → in_other_vpp, returns False
     api2 = MockSigenergyAPI()
     api2._request = AsyncMock(return_value=None)
     api2._last_api_code = SIGENERGY_CODE_IN_OTHER_VPP
@@ -2731,7 +2839,7 @@ def test_sigenergy_run_derives_onboard_status(my_predbat):
         api.apply_controls = AsyncMock()
         return api
 
-    # System in VPP mode -> active
+    # System in VPP mode → active
     api_active = _make_api(SIGENERGY_MODE_VPP)
     ok = run_async(api_active.run(seconds=300, first=False))
     assert ok is True, "run() returns True on success"
@@ -2740,13 +2848,13 @@ def test_sigenergy_run_derives_onboard_status(my_predbat):
     assert api_active.dashboard_items[sensor_key]["state"] == "active", "active sensor published"
     assert api_active.dashboard_items[sensor_key]["attributes"]["in_vpp"] is True
 
-    # System in MSC mode, not offboarded -> pending_approval
+    # System in MSC mode, not offboarded → pending_approval
     api_pending = _make_api(SIGENERGY_MODE_MSC)
     run_async(api_pending.run(seconds=300, first=False))
     assert api_pending.onboard_status[sid] == "pending_approval", "pending_approval derived from MSC mode"
     assert api_pending.dashboard_items[sensor_key]["state"] == "pending_approval"
 
-    # Offboard COMPLETED -> offboarded regardless of mode.
+    # Offboard COMPLETED → offboarded regardless of mode.
     api_offboard = _make_api(SIGENERGY_MODE_VPP, offboard_on=True)
     api_offboard._offboard_done.add(sid)
     run_async(api_offboard.run(seconds=300, first=False))
@@ -3047,6 +3155,9 @@ def run_sigenergy_tests(my_predbat):
         ("apply_controls_deduplication", test_sigenergy_apply_controls_deduplication),
         ("apply_controls_export_mode", test_sigenergy_apply_controls_export_mode),
         ("publish_mqtt_success", test_sigenergy_publish_mqtt_success),
+        ("redact", test_sigenergy_redact),
+        ("publish_mqtt_redacts_token", test_sigenergy_publish_mqtt_redacts_token),
+        ("request_log_redacts_credentials", test_sigenergy_request_log_redacts_credentials),
         ("publish_mqtt_failure", test_sigenergy_publish_mqtt_failure),
         ("send_battery_command_mqtt", test_sigenergy_send_battery_command_mqtt),
         ("send_battery_command_no_token", test_sigenergy_send_battery_command_no_token),

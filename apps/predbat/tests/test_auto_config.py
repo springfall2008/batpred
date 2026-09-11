@@ -63,6 +63,34 @@ def run_auto_config_tests(my_predbat):
         else:
             print("PASS: Final=True moved unmatched arg correctly.")
 
+        # Test 4: Final=True disables unmatched list items
+        print("\n=== Test 4: Final=True disables unmatched list items ===")
+        my_predbat.args = {"pv_forecast_raw": ["sensor.inv1", "re:.*inv2_missing"]}
+        my_predbat.unmatched_args = {}
+
+        my_predbat.auto_config(final=True)
+
+        val = my_predbat.args.get("pv_forecast_raw")
+        if val != ["sensor.inv1", None]:
+            print(f"FAIL: List regex matching failed to disable item on final=True. Got {val}")
+            failed = True
+        else:
+            print("PASS: List regex item disabled on final=True.")
+
+        # Test 5: Final=True disables unmatched dict items
+        print("\n=== Test 5: Final=True disables unmatched dict items ===")
+        my_predbat.args = {"my_dict": {"foo": "sensor.foo", "bar": "re:.*bar_missing"}}
+        my_predbat.unmatched_args = {}
+
+        my_predbat.auto_config(final=True)
+
+        val = my_predbat.args.get("my_dict")
+        if val != {"foo": "sensor.foo", "bar": None}:
+            print(f"FAIL: Dict regex matching failed to disable item on final=True. Got {val}")
+            failed = True
+        else:
+            print("PASS: Dict regex item disabled on final=True.")
+
     finally:
         my_predbat.args = original_args
         my_predbat.unmatched_args = original_unmatched
