@@ -281,6 +281,15 @@ def test_ge_cloud(my_predbat=None):
         ("publish_registers", _test_publish_registers, "Publish registers"),
         ("publish_evc_data", _test_publish_evc_data, "Publish EVC data"),
         ("automatic_config", _test_async_automatic_config, "Automatic config"),
+        ("discovery_direct", _test_build_discovery_battery_only_direct, "build_discovery: single battery, direct composition"),
+        ("discovery_gateway", _test_build_discovery_gateway_composition, "build_discovery: gateway fronting multiple batteries"),
+        ("discovery_ems", _test_build_discovery_ems_composition, "build_discovery: EMS composition"),
+        ("discovery_pv_only", _test_build_discovery_pv_only_devices, "build_discovery: sensor-only PV devices"),
+        ("discovery_shared_meter", _test_build_discovery_shared_meter, "build_discovery: shared-CT meter cross-link"),
+        ("discovery_unique_meters", _test_build_discovery_unique_meters, "build_discovery: distinct meter cross-links"),
+        ("discovery_regardless_of_automatic", _test_build_discovery_reports_regardless_of_automatic, "build_discovery reports with automatic off"),
+        ("discovery_round_trip", _test_build_discovery_round_trips_through_the_coordinator, "build_discovery round-trips through the real Coordinator"),
+        ("discovery_report_failure_contained", _test_report_discovery_failure_does_not_degrade_component_health, "a build_discovery failure is contained, not left to degrade health"),
         ("publish_evc_device", _test_publish_evc_device, "Publish EVC device status"),
         ("automatic_config_evc", _test_async_automatic_config_evc, "Automatic config for EV chargers"),
         ("evc_control", _test_evc_control, "EV charger control from the car plan"),
@@ -4440,6 +4449,358 @@ def _test_async_automatic_config(my_predbat):
         return 0
 
     return run_async(test())
+
+
+def _discovery_component(devices, settings=None, info=None, automatic=True):
+    """
+    A MockGECloudDirect wired so a real `run(seconds=0, first=True)` cycle exercises the real
+    build_discovery()/report_discovery() call inside run()'s one-shot block, without touching the
+    network - mirroring `_test_run_method`'s mocking of every API-facing call. This drives an
+    actual run() cycle rather than calling build_discovery() directly, since exercising only the
+    ordering between self.settings/self.info being populated and the discovery report firing is
+    exactly what a direct call would sidestep (the ordering bug the GivTCP reporter hit).
+
+    Callers run the cycle themselves (`run_async(component.run(seconds=0, first=True))`) so a
+    test can install further overrides - a failing build_discovery(), say - before it runs.
+    """
+    settings = settings or {}
+    info = info or {}
+    ge = MockGECloudDirect()
+    ge.automatic = automatic
+
+    async def mock_get_account():
+        """Stand in for the account fetch - the discovery report does not depend on it."""
+        return {}
+
+    async def mock_publish_account(account):
+        """No-op account publish."""
+        return None
+
+    async def mock_get_devices():
+        """Return the fixture's devices dict, standing in for the real GE Cloud device scan."""
+        return devices
+
+    async def mock_get_evc_devices():
+        """No EV chargers in these fixtures."""
+        return []
+
+    async def mock_get_inverter_status(device, previous):
+        """No live status needed for the discovery report."""
+        return {}
+
+    async def mock_publish_status(device, status):
+        """No-op status publish."""
+        return None
+
+    async def mock_get_inverter_meter(device, previous):
+        """No live meter reading needed for the discovery report."""
+        return {}
+
+    async def mock_publish_meter(device, meter):
+        """No-op meter publish."""
+        return None
+
+    async def mock_get_device_info(device, previous):
+        """Return this device's fixture info blob, the same shape self.info[device] holds for real."""
+        return info.get(device, {})
+
+    async def mock_publish_info(device, device_info):
+        """No-op info publish."""
+        return None
+
+    async def mock_get_inverter_settings(device, first=False, previous=None):
+        """Return this device's fixture register settings, the same shape self.settings[device] holds for real."""
+        return settings.get(device, {})
+
+    async def mock_publish_registers(device, registers):
+        """No-op register publish."""
+        return None
+
+    async def mock_automatic_config(devices_dict):
+        """No-op automatic_config - out of scope for a discovery-reporting test."""
+        return None
+
+    async def mock_enable_default_options(device, registers):
+        """No-op default-options reset - out of scope for a discovery-reporting test."""
+        return False
+
+    ge.async_get_account = mock_get_account
+    ge.publish_account = mock_publish_account
+    ge.async_get_devices = mock_get_devices
+    ge.async_get_evc_devices = mock_get_evc_devices
+    ge.async_get_inverter_status = mock_get_inverter_status
+    ge.publish_status = mock_publish_status
+    ge.async_get_inverter_meter = mock_get_inverter_meter
+    ge.publish_meter = mock_publish_meter
+    ge.async_get_device_info = mock_get_device_info
+    ge.publish_info = mock_publish_info
+    ge.async_get_inverter_settings = mock_get_inverter_settings
+    ge.publish_registers = mock_publish_registers
+    ge.async_automatic_config = mock_automatic_config
+    ge.enable_default_options = mock_enable_default_options
+    return ge
+
+
+def _test_build_discovery_battery_only_direct(my_predbat):
+    """A single battery with no gateway or EMS yields one direct-composition inverter record."""
+    devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": [], "battery_meters": {}}
+    settings = {"battery001": {"reg1": {"name": "Battery_Charge_Power"}, "reg2": {"name": "Battery_Discharge_Power"}}}
+    info = {"battery001": {"info": {"model": "GIV-HY5.0", "max_charge_rate": 3600, "battery": {"nominal_capacity": 100, "nominal_voltage": 51.2}}, "firmware_version": {"ARM": 616, "DSP": 616}}}
+    ge = _discovery_component(devices, settings=settings, info=info)
+    reports = []
+    ge.report_discovery = lambda report: reports.append(report)
+
+    result = run_async(ge.run(seconds=0, first=True))
+
+    assert result is True, "run() should succeed"
+    assert len(reports) == 1, "Expected exactly one discovery report from the first run() cycle, got {}".format(len(reports))
+    report = reports[0]
+    assert report["automatic"] is True
+    assert len(report["inverters"]) == 1, "Expected exactly one inverter record"
+    record = report["inverters"][0]
+    assert record["device_id"] == "gecloud:battery001"
+    assert record["composition"] == "direct"
+    assert record["inverter_type"] == "GEC"
+    assert set(record["functions"]) == {"solar", "battery"}, "functions should be solar and battery"
+    assert record["hardware_ids"] == {"serial": "battery001"}
+    assert "charge_rate_power" in record["capabilities"], "the direct power registers should be sniffed as a capability"
+    assert record["info"]["model"] == "GIV-HY5.0"
+    assert record["ratings"]["max_charge_w"] == 3600
+    assert "measures_meter" not in record, "no meter serial was reported for this device"
+    print("PASS: battery-only fixture yields one direct-composition inverter record")
+    return 0
+
+
+def _test_build_discovery_gateway_composition(my_predbat):
+    """A gateway fronting two batteries collapses to one gateway record, with both battery serials in `serials`."""
+    devices = {"ems": None, "gateway": "gateway001", "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {}}
+    settings = {"gateway001": {"reg1": {"name": "Pause_Battery"}}}
+    ge = _discovery_component(devices, settings=settings)
+    reports = []
+    ge.report_discovery = lambda report: reports.append(report)
+
+    result = run_async(ge.run(seconds=0, first=True))
+
+    assert result is True
+    assert len(reports) == 1
+    inverters = reports[0]["inverters"]
+    assert len(inverters) == 1, "The gateway should collapse both batteries into one record, got {}".format(inverters)
+    record = inverters[0]
+    assert record["device_id"] == "gecloud:gateway001"
+    assert record["composition"] == "gateway"
+    assert record["serials"] == ["battery001", "battery002"], "the fronted battery serials should be recorded structurally"
+    assert "pause_mode" in record["capabilities"], "capabilities should be sniffed from the gateway's own settings"
+    print("PASS: a gateway fronting multiple batteries yields one gateway-composition record")
+    return 0
+
+
+def _test_build_discovery_ems_composition(my_predbat):
+    """An EMS device yields one record per original battery, each carrying composition 'ems' and inverter_type 'GEE'."""
+    devices = {"ems": "ems001", "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {}}
+    settings = {"battery001": {}, "battery002": {}}
+    ge = _discovery_component(devices, settings=settings)
+    reports = []
+    ge.report_discovery = lambda report: reports.append(report)
+
+    result = run_async(ge.run(seconds=0, first=True))
+
+    assert result is True
+    inverters = reports[0]["inverters"]
+    assert len(inverters) == 2, "EMS composition does not collapse the per-battery records"
+    for record in inverters:
+        assert record["composition"] == "ems"
+        assert record["inverter_type"] == "GEE"
+        assert "serials" not in record, "EMS composition does not front other serials the way gateway does"
+    print("PASS: an EMS device yields one 'ems'-composition record per original battery")
+    return 0
+
+
+def _test_build_discovery_pv_only_devices(my_predbat):
+    """A sensor-only PV device yields a record with functions == ['solar'] and no inverter_type."""
+    devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": ["pv001"], "battery_meters": {}}
+    settings = {"battery001": {}}
+    info = {"pv001": {"info": {"model": "GIV-PV"}}}
+    ge = _discovery_component(devices, settings=settings, info=info, automatic=False)
+    # ge_cloud_automatic_split_pv only changes whether async_automatic_config() wires the PV
+    # device's entities into apps.yaml - build_discovery() reports it regardless, since the
+    # catalogue describes hardware that is physically there, not how apps.yaml happens to be
+    # wired. Set here purely to match the real-world scenario the brief describes.
+    ge.config_args["ge_cloud_automatic_split_pv"] = True
+    reports = []
+    ge.report_discovery = lambda report: reports.append(report)
+
+    result = run_async(ge.run(seconds=0, first=True))
+
+    assert result is True
+    inverters = reports[0]["inverters"]
+    assert len(inverters) == 2, "Expected one battery record and one PV-only record"
+    pv_record = next(record for record in inverters if record["device_id"] == "gecloud:pv001")
+    assert pv_record["functions"] == ["solar"], "a PV-only device should carry only the solar function"
+    assert "inverter_type" not in pv_record, "a PV-only device has no inverter_type"
+    assert pv_record["composition"] == "direct"
+    assert pv_record["info"]["model"] == "GIV-PV"
+    battery_record = next(record for record in inverters if record["device_id"] == "gecloud:battery001")
+    assert battery_record["functions"] == ["solar", "battery"]
+    print("PASS: a PV-only device yields a solar-only record with no inverter_type")
+    return 0
+
+
+def _test_build_discovery_shared_meter(my_predbat):
+    """Two devices sharing a meter serial both carry the same measures_meter, and the meter is reported once."""
+    devices = {
+        "ems": None,
+        "gateway": None,
+        "battery": ["battery001", "battery002"],
+        "pv": [],
+        "battery_meters": {"battery001": [9999], "battery002": [9999]},
+    }
+    settings = {"battery001": {}, "battery002": {}}
+    ge = _discovery_component(devices, settings=settings)
+    reports = []
+    ge.report_discovery = lambda report: reports.append(report)
+
+    result = run_async(ge.run(seconds=0, first=True))
+
+    assert result is True
+    report = reports[0]
+    inverters = report["inverters"]
+    assert len(inverters) == 2
+    measures = {record["device_id"]: record.get("measures_meter") for record in inverters}
+    assert measures["gecloud:battery001"] == measures["gecloud:battery002"], "shared-CT devices should report the same meter"
+    assert measures["gecloud:battery001"] == "gecloud:meter:9999"
+    assert report["meters"] == [{"device_id": "gecloud:meter:9999", "hardware_ids": {"serial": "9999"}}], "the shared meter should be reported once, not twice"
+    print("PASS: two devices sharing a meter serial carry the same measures_meter, reported once")
+    return 0
+
+
+def _test_build_discovery_unique_meters(my_predbat):
+    """Two devices with distinct dedicated meter serials get distinct measures_meter cross-links."""
+    devices = {
+        "ems": None,
+        "gateway": None,
+        "battery": ["battery001", "battery002"],
+        "pv": [],
+        "battery_meters": {"battery001": [1001], "battery002": [1002]},
+    }
+    settings = {"battery001": {}, "battery002": {}}
+    ge = _discovery_component(devices, settings=settings)
+    reports = []
+    ge.report_discovery = lambda report: reports.append(report)
+
+    result = run_async(ge.run(seconds=0, first=True))
+
+    assert result is True
+    report = reports[0]
+    measures = {record["device_id"]: record.get("measures_meter") for record in report["inverters"]}
+    assert measures["gecloud:battery001"] == "gecloud:meter:1001"
+    assert measures["gecloud:battery002"] == "gecloud:meter:1002"
+    assert {meter["device_id"] for meter in report["meters"]} == {"gecloud:meter:1001", "gecloud:meter:1002"}
+    print("PASS: distinct meter serials yield distinct measures_meter cross-links")
+    return 0
+
+
+def _test_build_discovery_reports_regardless_of_automatic(my_predbat):
+    """The discovery report fires whether or not self.automatic is set, and records the flag either way."""
+    devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": [], "battery_meters": {}}
+    settings = {"battery001": {}}
+    automatic_calls = []
+
+    ge = _discovery_component(devices, settings=settings, automatic=False)
+
+    async def mock_automatic_config(devices_dict):
+        """Track whether async_automatic_config() actually ran."""
+        automatic_calls.append(devices_dict)
+
+    ge.async_automatic_config = mock_automatic_config
+    reports = []
+    ge.report_discovery = lambda report: reports.append(report)
+
+    result = run_async(ge.run(seconds=0, first=True))
+
+    assert result is True
+    assert automatic_calls == [], "async_automatic_config() must not run when self.automatic is False"
+    assert len(reports) == 1, "the discovery report must still fire when self.automatic is False"
+    assert reports[0]["automatic"] is False
+    assert len(reports[0]["inverters"]) == 1
+    print("PASS: build_discovery() reports regardless of self.automatic, recording the flag")
+    return 0
+
+
+def _test_build_discovery_round_trips_through_the_coordinator(my_predbat):
+    """
+    Feeding build_discovery()'s real run()-cycle output through the real Coordinator keeps every
+    field it was meant to carry - nothing intended for a typed container is silently dropped by
+    validation.
+    """
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": [], "battery_meters": {"battery001": [9999]}}
+    settings = {
+        "battery001": {
+            "reg1": {"name": "Battery_Charge_Power"},
+            "reg2": {"name": "Battery_Discharge_Power"},
+            "reg3": {"name": "Pause_Battery"},
+            "reg4": {"name": "Pause_Battery_Start_Time"},
+            "reg5": {"name": "DC_Discharge_1_Lower_SOC_Percent_Limit"},
+        }
+    }
+    info = {"battery001": {"info": {"model": "GIV-HY5.0", "max_charge_rate": 3600, "battery": {"nominal_capacity": 100, "nominal_voltage": 51.2}}, "firmware_version": {"ARM": 616, "DSP": 616}}}
+    ge = _discovery_component(devices, settings=settings, info=info)
+    reports = []
+    ge.report_discovery = lambda report: reports.append(report)
+
+    result = run_async(ge.run(seconds=0, first=True))
+    assert result is True
+    report = reports[0]
+    original = report["inverters"][0]
+
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.report("gecloud", report)
+    cleaned = coordinator.reports["gecloud"]
+    record = cleaned["inverters"][0]
+
+    # Nothing intended for a typed container was silently dropped by validation.
+    assert record["device_id"] == original["device_id"] == "gecloud:battery001"
+    assert record["inverter_type"] == "GEC"
+    assert record["composition"] == "direct"
+    assert set(record["functions"]) == {"solar", "battery"}
+    assert set(record["capabilities"]) == set(original["capabilities"]) == {"charge_rate_power", "pause_mode", "pause_slots", "discharge_target"}
+    assert record["hardware_ids"] == {"serial": "battery001"}
+    assert record["info"]["model"] == "GIV-HY5.0"
+    assert record["info"]["firmware"] == "ARM 616 DSP 616"
+    assert record["ratings"]["battery_kwh"] == original["ratings"]["battery_kwh"]
+    assert record["ratings"]["max_charge_w"] == 3600
+    assert record["measures_meter"] == "gecloud:meter:9999"
+    assert len(cleaned["meters"]) == 1
+    assert cleaned["meters"][0]["device_id"] == "gecloud:meter:9999"
+    assert cleaned["meters"][0]["hardware_ids"] == {"serial": "9999"}
+    print("PASS: build_discovery() round-trips through the real Coordinator with nothing dropped")
+    return 0
+
+
+def _test_report_discovery_failure_does_not_degrade_component_health(my_predbat):
+    """
+    A bug in build_discovery() must not propagate out of run() or withhold the success timestamp.
+
+    An observer must never be able to degrade the health of the thing it observes: without the
+    guard in run(), an exception here would skip update_success_timestamp() below it and leave
+    self.api_started False for the whole cycle, pushing an otherwise-healthy component towards
+    unhealthy over a bug in a side-channel report.
+    """
+    devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": [], "battery_meters": {}}
+    settings = {"battery001": {}}
+    ge = _discovery_component(devices, settings=settings)
+    ge.build_discovery = MagicMock(side_effect=Exception("boom"))
+
+    result = run_async(ge.run(seconds=0, first=True))
+
+    assert result is True, "a discovery-reporting bug must not fail the whole run() call"
+    assert ge.last_success_timestamp is not None, "the success timestamp must still be recorded"
+    assert any("failed to report discovery" in message for message in ge.log_messages), "the failure should be logged"
+    assert getattr(ge.base, "had_errors", False) is True, "the failure should still be counted as a non-fatal error"
+    print("PASS: a build_discovery() failure is contained, not left to degrade the component")
+    return 0
 
 
 def _test_publish_evc_device(my_predbat):

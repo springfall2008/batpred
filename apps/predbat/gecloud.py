@@ -225,6 +225,21 @@ GE_SETTING_RETRY_CODES = [code for code, info in GE_SETTING_ERROR_CODES.items() 
 # The endpoints whose "value" carries a result code rather than a reading
 GE_SETTING_ENDPOINTS = [GE_API_INVERTER_READ_SETTING, GE_API_INVERTER_WRITE_SETTING]
 
+# Register-name substrings the discovery catalogue checks to decide each device's own
+# capabilities, mirroring async_automatic_config()'s own register sniffing (its
+# has_charge_rate/has_discharge_rate/has_charge_power_percent/... locals) but scoped to one
+# device's own self.settings entry rather than ORed across every battery in the fleet, and
+# consolidated onto the catalogue's five capability tokens - a capability the catalogue
+# records for a device it never actually saw on that device's own settings would misdescribe
+# hardware that was never confirmed.
+GE_CLOUD_CAPABILITY_SUBSTRINGS = (
+    ("charge_rate_power", ("battery_charge_power", "battery_discharge_power")),
+    ("charge_rate_percent", ("inverter_charge_power_percentage", "charge_power_rate", "inverter_discharge_power_percentage", "discharge_power_rate")),
+    ("pause_mode", ("pause_battery",)),
+    ("pause_slots", ("pause_battery_start_time",)),
+    ("discharge_target", ("dc_discharge_1_lower_soc_percent_limit",)),
+)
+
 
 def ge_code_message(data, code):
     """Describe a GivEnergy result code, preferring the plain-English message the API returned."""
@@ -1356,6 +1371,153 @@ class GECloudDirect(ComponentBase):
 
         self.log("GECloud: Automatic configuration complete")
 
+    def _device_capabilities(self, device):
+        """
+        Vocabulary tokens for the control registers this device's own settings actually report.
+
+        Mirrors async_automatic_config()'s register-name sniffing (see
+        GE_CLOUD_CAPABILITY_SUBSTRINGS) but scoped to this one device's own self.settings entry
+        rather than ORed across every battery in the fleet, so the catalogue never claims a
+        capability for a device that was never actually seen to report the register for it.
+        """
+        names = {regname_to_ha(setting.get("name", "")) for setting in self.settings.get(device, {}).values()}
+        return [token for token, substrings in GE_CLOUD_CAPABILITY_SUBSTRINGS if any(substring in name for name in names for substring in substrings)]
+
+    def _device_info_and_ratings(self, device):
+        """
+        The `info` and `ratings` discovery containers for one device, from its own device info blob.
+
+        Drawn from the same self.info[device] blob publish_info() already turns into HA
+        attributes, so a fact reported here can never disagree with what was published.
+        Firmware is reported there as a per-board {"ARM": n, "DSP": n} dict; the `info`
+        container only accepts strings, so it is flattened into one descriptive string here
+        rather than silently dropped by the catalogue's validator.
+        """
+        device_info = self.info.get(device, {}) or {}
+        fields = device_info.get("info", {}) or {}
+        info = {}
+        model = fields.get("model")
+        if isinstance(model, str) and model:
+            info["model"] = model
+        firmware = device_info.get("firmware_version")
+        if isinstance(firmware, dict) and firmware:
+            info["firmware"] = " ".join("{} {}".format(board, version) for board, version in sorted(firmware.items()))
+
+        ratings = {}
+        max_charge_rate = fields.get("max_charge_rate")
+        if isinstance(max_charge_rate, (int, float)) and not isinstance(max_charge_rate, bool):
+            ratings["max_charge_w"] = max_charge_rate
+        battery = fields.get("battery", {}) or {}
+        capacity, voltage = battery.get("nominal_capacity"), battery.get("nominal_voltage")
+        if isinstance(capacity, (int, float)) and isinstance(voltage, (int, float)) and not isinstance(capacity, bool) and not isinstance(voltage, bool):
+            ratings["battery_kwh"] = dp2(capacity * voltage / 1000.0)
+        return info, ratings
+
+    def _device_meter_serial(self, devices, device):
+        """The first CT/meter serial GE Cloud's own device-connections data reports for this device, or None."""
+        meter_serials = (devices.get("battery_meters") or {}).get(device) or []
+        return meter_serials[0] if meter_serials else None
+
+    def _apply_meter_cross_link(self, devices, device, record, meters_by_id):
+        """
+        Set `record["measures_meter"]` and add its meter to `meters_by_id`, when this device's CT/meter serial is known.
+
+        `meters_by_id` is keyed by meter device_id so two devices sharing one physical CT
+        clamp serial (the shared-CT case gecloud.py's own automatic_config() detects) collapse
+        onto the SAME meter record, rather than the catalogue describing one physical meter
+        twice. Devices GE Cloud never reported a meter serial for (PV-only devices, a gateway
+        or EMS device fronting others) are simply left without a measures_meter cross-link.
+        """
+        meter_serial = self._device_meter_serial(devices, device)
+        if meter_serial is None:
+            return
+        meter_device_id = "gecloud:meter:{}".format(meter_serial)
+        record["measures_meter"] = meter_device_id
+        meters_by_id.setdefault(meter_device_id, {"device_id": meter_device_id, "hardware_ids": {"serial": str(meter_serial)}})
+
+    def build_discovery(self, devices):
+        """
+        Describe the discovered GE Cloud devices for the discovery catalogue.
+
+        One inverter record per controlled battery device plus one per sensor-only PV device in
+        `devices["pv"]` (`functions: ["solar"]`, no `inverter_type` - these are the extra devices
+        `ge_cloud_automatic_split_pv` optionally wires in, but the catalogue reports them
+        regardless of that flag, since it describes what is physically there, not how Predbat's
+        apps.yaml happens to be wired).
+
+        `composition` mirrors the exact precedence async_automatic_config() applies (its own
+        `devices["ems"]` / `devices["gateway"]` checks at the top of that method, not
+        re-implemented differently here): "ems" when an EMS device is present, "gateway" when a
+        gateway fronts more than one battery - collapsing those battery records into one for the
+        gateway itself, with the fronted serials recorded in the structural `serials` field -
+        else "direct". async_automatic_config() itself is not called or modified.
+
+        `measures_meter` is set from the device's own CT/meter serial where GE Cloud's device
+        connections data reports one (see _apply_meter_cross_link) - the same data
+        async_automatic_config()'s shared-CT detection reads - so two devices sharing a meter
+        serial show up in the catalogue as two inverters measuring the same meter.
+
+        Reporting is independent of self.automatic: the catalogue records what hardware GE Cloud
+        found, not whether this component wired Predbat's apps.yaml to it - that distinction is
+        what the report's own "automatic" flag is for.
+        """
+        devices = devices or {}
+        battery_devices = list(devices.get("battery") or [])
+        gateway = devices.get("gateway")
+        ems = devices.get("ems")
+
+        composition = "direct"
+        fronted_serials = None
+        controlled = battery_devices
+        if ems:
+            composition = "ems"
+        elif gateway and len(battery_devices) > 1:
+            composition = "gateway"
+            fronted_serials = list(battery_devices)
+            controlled = [gateway]
+
+        inverter_type = "GEE" if composition == "ems" else "GEC"
+
+        inverters = []
+        meters_by_id = {}
+
+        for device in controlled:
+            info, ratings = self._device_info_and_ratings(device)
+            record = {
+                "device_id": "gecloud:{}".format(device),
+                "inverter_type": inverter_type,
+                "composition": composition,
+                "functions": ["solar", "battery"],
+                "hardware_ids": {"serial": device},
+            }
+            if fronted_serials:
+                record["serials"] = fronted_serials
+            capabilities = self._device_capabilities(device)
+            if capabilities:
+                record["capabilities"] = capabilities
+            self._apply_meter_cross_link(devices, device, record, meters_by_id)
+            if info:
+                record["info"] = info
+            if ratings:
+                record["ratings"] = ratings
+            inverters.append(record)
+
+        for device in devices.get("pv") or []:
+            info, ratings = self._device_info_and_ratings(device)
+            record = {
+                "device_id": "gecloud:{}".format(device),
+                "composition": "direct",
+                "functions": ["solar"],
+                "hardware_ids": {"serial": device},
+            }
+            if info:
+                record["info"] = info
+            if ratings:
+                record["ratings"] = ratings
+            inverters.append(record)
+
+        return {"automatic": self.automatic, "inverters": inverters, "meters": list(meters_by_id.values())}
+
     def evc_control_enable(self):
         """Decide whether Predbat-led charger control should run, and say why when it will not.
 
@@ -1692,6 +1854,24 @@ class GECloudDirect(ComponentBase):
                     await self.async_automatic_config(self.devices_dict)
                 if self.automatic_evc:
                     await self.async_automatic_config_evc()
+
+                # Independent of self.automatic: the catalogue describes what hardware GE Cloud
+                # found, not whether this component wired Predbat's apps.yaml to it - that
+                # distinction is recorded in the report's own "automatic" flag, not acted on here
+                # as a gate on reporting at all. Placed after both settings (populated for every
+                # device in self.device_list, above, since seconds == 0 on this very first pass)
+                # and self.info (populated earlier this same cycle, in the seconds % 120 block)
+                # are in hand, so build_discovery()'s capabilities/info/ratings never see stale
+                # or empty data. Exception-guarded like publish_data()'s per-inverter work in
+                # GivTCP: an observer must never be able to degrade the health of the component it
+                # observes - without this, a bug in build_discovery() would propagate out of
+                # run() itself and withhold update_success_timestamp() below, retrying -
+                # identically failing - every cycle instead of just being logged once.
+                try:
+                    self.report_discovery(self.build_discovery(self.devices_dict))
+                except Exception as e:
+                    self.log("Warn: GECloud: failed to report discovery for the catalogue: {}".format(e))
+                    self.non_fatal_error_occurred()
 
             now_utc = self.now_utc_exact
             options_due = self.default_options_stamp is None or (now_utc - self.default_options_stamp) >= timedelta(hours=24)
