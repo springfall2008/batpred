@@ -693,8 +693,17 @@ class SolarAPI(ComponentBase):
             total_dayCL[day] = 0
             forecast_day[day] = []
 
-        midnight_today = self.midnight_utc
+        # Derived from now_utc rather than read from self.midnight_utc, which
+        # calculate_yesterday() rewrites to yesterday's midnight for the duration of the savings
+        # calculation. Those writes land on the shared PredBat instance, so this publish - running
+        # on its own thread, independent of calculate_yesterday()'s schedule - could otherwise read
+        # a midnight a day behind and bucket every forecast entry one day late, emptying "today"
+        # until calculate_yesterday() finishes and restores the real value (GH#4804). now_utc is
+        # never touched by calculate_yesterday() (only midnight_utc/minutes_now/forecast_minutes
+        # and the rate/car fields are faked), the same pattern already used for the equivalent
+        # race on the manual-override decode path (userinterface.py's manual_time_origin(), #4900).
         now = self.now_utc_exact
+        midnight_today = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
 
         power_scale = 60 / period  # Scale kwh to power
         power_now = 0
