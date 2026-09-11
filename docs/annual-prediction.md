@@ -442,10 +442,32 @@ sample day, a car-charging shortfall - are never suppressed, `--quiet` or not: f
 stay visible. A human-readable table is always printed to stdout; `--out` additionally
 writes the full results document as JSON.
 
+`--months` restricts the run to a comma-separated list of month numbers (e.g. `--months 7`
+or `--months 6,7`), the same as the config file's `annual.months` below — useful for a quick
+single-month check without waiting for a full year. `--year` plans a specific year instead
+of the config's default (the most recent complete calendar year); combine it with `--months`
+to model a recent, still-partially-in-progress year, since a bounded window may reach into
+the current year once each month it names is far enough past the archive lag to be complete
+(see [Planning a month subset](#planning-a-month-subset) below). Both flags override
+whatever the config file has.
+
+`--export-compare` evaluates the three built-in Octopus export products (Outgoing Fixed,
+Outgoing Prime and Agile Outgoing) against otherwise identical inputs in one run — the same
+sweep `annual.export_tariffs` configures below, with `sampling: weekday_spread` and
+`samples_per_month: 5` set automatically (see [How car charging is spread across the
+year](#how-car-charging-is-spread-across-the-year) for why sampling strategy matters on a
+tariff that varies by day of week) and fast mode forced off. The results document then
+carries a `by_export` block — one card per tariff, plus a comparison table — instead of a
+single set of scenarios; `annual_cli.py`'s table renders both shapes. See
+[`docs/annual/export-compare.yaml`](annual/export-compare.yaml) for a complete, runnable
+example config, including the equivalent flag-only invocation in its header comment.
+
 A run takes roughly one to three minutes with the default two samples per month: 24 plan
 calculations (12 months × 2 samples) plus the weather, tariff and (if configured)
 Octopus consumption downloads, which are cached between runs in `--work-dir`. With
-`--fast` it is 8 plan calculations instead of 24, so roughly 30 to 90 seconds.
+`--fast` it is 8 plan calculations instead of 24, so roughly 30 to 90 seconds. `--months`
+scales this down roughly in proportion to how many months it names, and `--export-compare`
+multiplies it by three tariffs (at 5 samples a month rather than the default two).
 
 ## Advanced: the configuration file
 
@@ -458,6 +480,7 @@ annual:
   location:
     postcode: "SW1A 1AA"        # or latitude/longitude
   year: 2025                     # defaults to the most recent complete calendar year
+  months: [7]                    # omit to plan all twelve; see "Planning a month subset" below
 
   solar:                         # omit for a battery-only run
     - kwp: 5.6
@@ -495,13 +518,67 @@ annual:
       - rate: 4.1
 
   samples_per_month: 2
+  sampling: percentile           # percentile (default) | weekday_spread, see below
   fast_mode: false               # plan 4 months and estimate the rest, see Fast mode
   debug: false                   # keep each sampled day's plan, see Debugging a run
+
+  # Optional: sweep several export products against the same import side, standing
+  # charge, weather and sampled days — see "Comparing export tariffs" below. Omit for a
+  # normal single-tariff run, which is what every config written before this existed means.
+  export_tariffs:
+    - id: outgoing_fixed
+      name: Octopus Outgoing Fixed
+      export_octopus_url: "https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/"
+    - id: seg
+      name: SEG fixed rate
+      rates_export:
+        - rate: 4.1
 ```
 
 At least one of `solar` or `battery` must be given — with neither there is nothing to
 evaluate. `annual.location` needs either `postcode` or both `latitude` and `longitude`;
 if both are given, latitude/longitude wins.
+
+### Planning a month subset
+
+`annual.months` (equivalently, `--months` on the command line) restricts the run to an
+explicit list of month numbers rather than the whole year — useful for a quick check of one
+month, or for automating a run just after that month's data becomes available. Each month
+named must have ended long enough ago for Open-Meteo's archive to be complete for it — at
+least eight days, between the archive's own ~5 day lag and the two extra days the weather
+window fetches past a month's end (see `year`'s rejection rule further below, which this
+uses the same reasoning as); with no explicit subset the cap instead stays at the last
+complete *calendar year*, since a whole-year weather download cannot tell a truncated
+in-progress year from a finished one and would cache it that way permanently. This is also
+why `--year` on the command line matters once you use `--months`: with no explicit
+`--year`/`year`, the run defaults to *last* year, which is wrong for anything modelling a
+tariff that only exists this year (Outgoing Prime, for example, launched 23 June 2026).
+
+A month subset forces `fast_mode` off — there is nothing to interpolate in a handful of
+months, and no full-year solar curve to fit them against — and the results document carries
+an extra `months_requested` field so the table and the web UI can say "based on 1 of 1
+requested month(s)" rather than misreport a deliberate subset as ten failed months.
+
+### Comparing export tariffs
+
+`annual.export_tariffs` (equivalently, `--export-compare` on the command line, which fills
+this in from the built-in catalogue automatically) evaluates several export products in one
+run, each priced against the same import side, standing charge, weather and sampled days as
+everything else — the only thing that varies between cards is the export tariff, so the
+comparison isolates that one variable. Each entry needs a unique `id`, a `name` for display,
+and either an `export_octopus_url` or a fixed `rates_export` list, exactly like the export
+side of `annual.tariff` itself.
+
+The results document gains a `by_export` block — one card per entry, keyed by `id`, each
+shaped like a normal single-tariff document plus a `rates_synthesised` flag — instead of a
+single set of scenarios, and `annual_cli.py`'s table renders a per-tariff table for each
+plus a side-by-side comparison summary. A sweep also forces `fast_mode` off, for the same
+reason a month subset does. `annual.sampling` defaults to `percentile` (see [How it
+works](#how-it-works)) but is worth setting to `weekday_spread` for a sweep against a
+day-of-week-varying export tariff (Agile Outgoing, most obviously): it spreads the sampled
+days across distinct weekdays instead of ranking purely by irradiance, which buys rate
+variation that a purely PV-ranked sample would not reliably capture. `--export-compare`
+sets this automatically, along with `samples_per_month: 5`.
 
 Octopus product codes are region-suffixed. If your tariff URL contains `{dno_region}`
 you must also set `dno_region` to your region letter (`A` for Eastern England, and so

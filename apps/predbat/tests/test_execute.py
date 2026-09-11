@@ -158,11 +158,11 @@ class ActiveTestInverter:
 def run_execute_test(
     my_predbat,
     name,
-    charge_window_best=[],
-    charge_limit_best=[],
-    export_window_best=[],
-    export_limits_best=[],
-    car_slot=[],
+    charge_window_best=None,
+    charge_limit_best=None,
+    export_window_best=None,
+    export_limits_best=None,
+    car_slot=None,
     soc_kw=0,
     soc_max=10,
     car_charging_from_battery=False,
@@ -222,10 +222,22 @@ def run_execute_test(
     assert_reserve_array=None,
     car_soc=0,
     battery_temperature=20,
-    assert_immediate_charge_soc_freeze_array=[],
+    assert_immediate_charge_soc_freeze_array=None,
     pv_forecast=0.0,
     set_charge_freeze_only=False,
 ):
+    if assert_immediate_charge_soc_freeze_array is None:
+        assert_immediate_charge_soc_freeze_array = []
+    if car_slot is None:
+        car_slot = []
+    if export_limits_best is None:
+        export_limits_best = []
+    if export_window_best is None:
+        export_window_best = []
+    if charge_limit_best is None:
+        charge_limit_best = []
+    if charge_window_best is None:
+        charge_window_best = []
     print("> Run scenario {}".format(name))
     my_predbat.log("> Run scenario {}".format(name))
     failed = False
@@ -415,7 +427,7 @@ def run_execute_test(
             if inverter.immediate_charge_soc_freeze != assert_immediate_charge_soc_freeze_array[inverter.id]:
                 print("ERROR: Inverter {} Immediate charge SOC freeze should be {} got {}".format(inverter.id, assert_immediate_charge_soc_freeze_array[inverter.id], inverter.immediate_charge_soc_freeze))
                 failed = True
-        elif assert_status in ["Freeze charging"] and inverter.immediate_charge_soc_freeze != True:
+        elif assert_status in ["Freeze charging"] and inverter.immediate_charge_soc_freeze is not True:
             print("ERROR: Inverter {} Immediate charge SOC freeze should be True got {}".format(inverter.id, inverter.immediate_charge_soc_freeze))
             failed = True
         if assert_immediate_discharge_soc_target_array:
@@ -427,7 +439,7 @@ def run_execute_test(
         if inverter.immediate_discharge_soc_target != assert_soc_target_force_dis:
             print("ERROR: Inverter {} Immediate export SOC target should be {} got {}".format(inverter.id, assert_soc_target_force_dis, inverter.immediate_discharge_soc_target))
             failed = True
-        if assert_status in ["Freeze exporting"] and inverter.immediate_discharge_soc_freeze != True:
+        if assert_status in ["Freeze exporting"] and inverter.immediate_discharge_soc_freeze is not True:
             print("ERROR: Inverter {} Immediate export SOC freeze should be True got {}".format(inverter.id, inverter.immediate_discharge_soc_freeze))
             failed = True
 
@@ -3141,6 +3153,28 @@ def run_execute_tests(my_predbat):
 
     if my_predbat.quick_inverter_data_update() is not True:
         print("ERROR: quick_inverter_data_update should return True")
+        failed = True
+    if failed:
+        return failed
+
+    # Template mode (#4965): update_pred() early-returns before fetch_config_options(), so the
+    # attributes update_status() reads were never created - the quick update must skip rather
+    # than AttributeError every 120 seconds. Deleting the attribute reproduces that state.
+    saved_template = my_predbat.args.get("template")
+    had_skew = "inverter_clock_skew_discharge_start" in my_predbat.__dict__
+    saved_skew = my_predbat.__dict__.pop("inverter_clock_skew_discharge_start", None)
+    my_predbat.args["template"] = True
+    try:
+        result = my_predbat.quick_inverter_data_update()
+    finally:
+        if had_skew:
+            my_predbat.inverter_clock_skew_discharge_start = saved_skew
+        if saved_template is None:
+            my_predbat.args.pop("template", None)
+        else:
+            my_predbat.args["template"] = saved_template
+    if result is not False:
+        print("ERROR: quick_inverter_data_update should return False in template mode")
         failed = True
     if failed:
         return failed

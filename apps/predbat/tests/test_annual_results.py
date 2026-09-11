@@ -245,6 +245,27 @@ def test_annual_results(my_predbat):
         print("  ERROR: expected the caveat to name 2025-12 but not the spill month 2026-01, got {!r}".format(caveats[0]))
         failed = True
 
+    print("Test: _p10_fallback_caveat filters an all-months fallback set down to the requested subset")
+    # AnnualWeather._derive_p10_ratios always iterates the full calendar (see annual_weather.py),
+    # so on a real run with annual.months: [7] this set covers every one of the 12 months, not
+    # just the one requested - _p10_fallback_caveat is what stops that being reported verbatim.
+    caveat = AnnualPredictor._p10_fallback_caveat(set(range(1, 13)), [7], 0.7)
+    if caveat is None or "Months [7]" not in caveat:
+        print("  ERROR: expected the caveat to name only the requested month 7, got {!r}".format(caveat))
+        failed = True
+
+    print("Test: _p10_fallback_caveat returns None (no caveat at all) when none of the requested months fell back")
+    caveat = AnnualPredictor._p10_fallback_caveat({1, 2, 3}, [7], 0.7)
+    if caveat is not None:
+        print("  ERROR: expected no caveat when none of the requested months fell back, got {!r}".format(caveat))
+        failed = True
+
+    print("Test: _p10_fallback_caveat is unchanged for a full-year request")
+    caveat = AnnualPredictor._p10_fallback_caveat({3, 9}, list(range(1, 13)), 0.7)
+    if caveat is None or "Months [3, 9]" not in caveat:
+        print("  ERROR: expected months 3 and 9 named unchanged for a full-year request, got {!r}".format(caveat))
+        failed = True
+
     print("Test: the annual block carries a cost breakdown")
     predictor = make_predictor()
     months = [make_month_row(month, {"no_pvbat": 1000.0, "pv_only": 700.0, "without_predbat": 600.0, "with_predbat": 400.0}) for month in range(1, 13)]
@@ -271,6 +292,13 @@ def test_annual_results(my_predbat):
             print("  ERROR: payback should include {}, got {}".format(key, list(payback)))
             failed = True
 
+    print("Test: a full twelve month document carries no months_requested key at all")
+    # Load-bearing for default-off (see _build_results' docstring): an existing full-year
+    # document/caller must gain no new key from this.
+    if "months_requested" in result:
+        print("  ERROR: a full twelve month document should not carry months_requested, got {!r}".format(result.get("months_requested")))
+        failed = True
+
     print("Test: a partial year refuses payback rather than extrapolating")
     partial_months = [make_month_row(month, {"no_pvbat": 1000.0, "pv_only": 700.0, "without_predbat": 600.0, "with_predbat": 400.0}) for month in range(1, 12)]
     partial_months.append(make_unavailable_row(12))
@@ -280,6 +308,45 @@ def test_annual_results(my_predbat):
         failed = True
     if partial["annual"]["costs"]["total_gbp"] <= 0:
         print("  ERROR: costs should still be reported even when payback cannot be")
+        failed = True
+    partial_reason = str(partial["annual"]["payback"].get("reason", ""))
+    if "could be modelled" not in partial_reason or "missing months are named in the caveats" not in partial_reason.lower():
+        print("  ERROR: a genuine full-year shortfall should keep the original 'only N of 12 months could be modelled' wording, got {!r}".format(partial_reason))
+        failed = True
+    if "deliberately covered" in partial_reason:
+        print("  ERROR: a genuine full-year shortfall must not use the deliberate-subset wording, got {!r}".format(partial_reason))
+        failed = True
+
+    print("Test: a deliberate single-month run's payback caveat says so, not that months are missing")
+    # From a real acceptance run of annual.months: [7]: build_payback used to say "only 1 of
+    # 12 months could be modelled. The missing months are named in the caveats." - which reads
+    # as a broken model on the hosted page, when in fact only one month was ever requested.
+    subset_config = base_config()
+    subset_config["months"] = [7]
+    subset_predictor = AnnualPredictor(subset_config)
+    subset_months = [make_month_row(7, {"no_pvbat": 1000.0, "pv_only": 700.0, "without_predbat": 600.0, "with_predbat": 400.0})]
+    subset_result = subset_predictor._build_results(subset_months)
+    if subset_result["annual"]["payback"].get("available") is not False:
+        print("  ERROR: a single modelled month should still refuse payback, got {}".format(subset_result["annual"]["payback"]))
+        failed = True
+    subset_reason = str(subset_result["annual"]["payback"].get("reason", ""))
+    if "deliberately covered" not in subset_reason or "1" not in subset_reason:
+        print("  ERROR: expected the payback reason to say this run deliberately covered 1 month, got {!r}".format(subset_reason))
+        failed = True
+    if "could not be modelled" in subset_reason or "missing" in subset_reason.lower():
+        print("  ERROR: a deliberate single-month run's payback reason must not describe it as a failure to model months, got {!r}".format(subset_reason))
+        failed = True
+    matching_run_wide_caveats = [caveat for caveat in subset_predictor.caveats if "deliberately covered" in caveat]
+    if len(matching_run_wide_caveats) != 1:
+        print("  ERROR: expected exactly one run-wide caveat naming the deliberate subset, got {}".format(subset_predictor.caveats))
+        failed = True
+
+    print("Test: a plain single-tariff document from an explicit month subset carries months_requested")
+    # This is what actually fixes the "Based on 1 of 12 months." / "this run deliberately
+    # covered 1 of 12 month(s)." contradiction above: annual_cli._format_single_table only
+    # switches wording once the document itself names how many months were requested.
+    if subset_result.get("months_requested") != [7]:
+        print("  ERROR: a --months [7] document should carry months_requested=[7], got {!r}".format(subset_result.get("months_requested")))
         failed = True
 
     print("Test: INCLUDED_STATUSES covers planned, degraded and interpolated months")

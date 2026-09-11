@@ -24,6 +24,13 @@ import asyncio
 import time
 import traceback
 
+# Components typically come up in milliseconds, so the previous 1s poll spent nearly all of a
+# start-up wait asleep after the component was already live. Polling ten times a second makes
+# start-up feel immediate for no meaningful cost - one cheap flag check per tick. The wait is
+# bounded by a monotonic deadline rather than by counting ticks, so `timeout` stays honest in
+# seconds however often the flag is checked.
+API_START_POLL_SECONDS = 0.1
+
 
 class ComponentBase(ABC):
     """
@@ -93,20 +100,38 @@ class ComponentBase(ABC):
         """
         return self.base.set_arg(arg, value)
 
-    def set_arg_auto(self, arg, value):
+    def set_arg_auto(self, arg, value, overwrite=True):
         """
         Like set_arg(), but for auto-discovery code (typically automatic_config()) binding an
-        apps.yaml key to an auto-discovered entity/value. Auto-discovery still always wins - this
-        does not change that - but if the user had already set this key explicitly in apps.yaml,
-        silently discarding it left no way to notice (issue #4494 follow-up discussion, PR #4500).
-        Logs a one-time note per key when that happens, then behaves exactly like set_arg().
+        apps.yaml key to an auto-discovered entity/value.
+
+        With overwrite=True (the default) auto-discovery wins and replaces whatever the user set,
+        which is what every caller did before this option existed. Silently discarding an explicit
+        apps.yaml entry left no way to notice (issue #4494 follow-up discussion, PR #4500), so a
+        one-time note per key is logged when that happens.
+
+        With overwrite=False the user's own apps.yaml entry wins and is left exactly as written;
+        auto-discovery still fills the key in when the user set nothing. Callers use this for keys
+        whose recorder HISTORY Predbat reads rather than just their current state - repointing one
+        of those at a sensor Predbat has only just created throws that history away, which for the
+        daily energy totals the load model is built from means planning against no history at all
+        until the days build back up.
+
+        Either way the decision is per key, and neither message repeats for the same key.
         """
         raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
         raw_value = raw_args.get(arg)
+        user_configured = raw_value is not None and raw_value != value
         warned = getattr(self.base, "apps_yaml_override_warned", None)
-        if raw_value is not None and raw_value != value and warned is not None and arg not in warned:
+        if user_configured and warned is not None and arg not in warned:
             warned.add(arg)
-            self.log(f"Note: apps.yaml sets '{arg}: {raw_value}' but auto-discovery is using '{value}' instead - auto-discovery always wins currently; remove the apps.yaml entry to avoid this message")
+            if overwrite:
+                self.log(f"Note: apps.yaml sets '{arg}: {raw_value}' but auto-discovery is using '{value}' instead - auto-discovery wins for this setting; remove the apps.yaml entry to avoid this message")
+            else:
+                self.log(f"Info: apps.yaml sets '{arg}: {raw_value}' - keeping your apps.yaml setting rather than auto-discovering '{value}'")
+        if user_configured and not overwrite:
+            # Deliberately not calling set_arg() at all - the user's own value is already in self.args
+            return None
         return self.set_arg(arg, value)
 
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
@@ -310,10 +335,12 @@ class ComponentBase(ABC):
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         return self.base.get_state_wrapper(entity_id, default=default, attribute=attribute, refresh=refresh, required_unit=required_unit, raw=raw)
 
-    def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
+    def set_state_wrapper(self, entity_id, state, attributes=None, required_unit=None):
+        if attributes is None:
+            attributes = {}
         return self.base.set_state_wrapper(entity_id, state, attributes=attributes, required_unit=required_unit)
 
-    async def set_state_external(self, entity_id, state, attributes={}):
+    async def set_state_external(self, entity_id, state, attributes=None):
         """Change one of Predbat's OWN entities as if a user had, updating its CONFIG_ITEMS value.
 
         Distinct from set_state_wrapper, which only writes the entity state: components use this when
@@ -321,6 +348,8 @@ class ComponentBase(ABC):
         for an AC-coupled Powerwall), where writing the state alone would move the displayed entity
         without changing the value the planner reads.
         """
+        if attributes is None:
+            attributes = {}
         return await self.base.ha_interface.set_state_external(entity_id, state, attributes=attributes)
 
     def call_notify(self, message):
@@ -337,10 +366,9 @@ class ComponentBase(ABC):
             bool: True if component started successfully, False if timeout
         """
         self.log(f"{self.__class__.__name__}: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < timeout:
-            time.sleep(1)
-            count += 1
+        deadline = time.monotonic() + timeout
+        while not self.api_started and time.monotonic() < deadline:
+            time.sleep(API_START_POLL_SECONDS)
         if not self.api_started:
             self.log(f"Warn: {self.__class__.__name__}: Failed to start")
             return False

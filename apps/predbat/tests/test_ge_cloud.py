@@ -10,7 +10,8 @@
 # fmt on
 
 from gecloud import GECloudDirect, GECloudData, regname_to_ha
-from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND
+from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
+from gecloud import GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
 from utils import dp4
 import asyncio
 import json
@@ -63,6 +64,7 @@ class MockGECloudDirect(GECloudDirect):
         self.pending_writes = {}
         self.register_entity_map = {}
         self.polling_mode = False
+        self.last_success_timestamp = None
         self.devices_dict = {}
         self.evc_devices_dict = []
         self.ems_device = None
@@ -77,18 +79,30 @@ class MockGECloudDirect(GECloudDirect):
         self.account_timezone_name = None
         self.account_stamp = None
         self.account_fetch_stamp = None
+        self.site = {}
+        self.site_id = None
+        self.site_export_limit = None
+        self.site_inverters = []
+        self.site_stamp = None
+        self.site_fetch_stamp = None
 
         class MockHAInterface:
             def __init__(self):
                 self.external_states = {}
 
-            async def set_state_external(self, entity_id, state, attributes={}):
+            async def set_state_external(self, entity_id, state, attributes=None):
+                if attributes is None:
+                    attributes = {}
                 self.external_states[entity_id] = state
 
         class MockBase:
             def __init__(self):
                 self.ha_interface = MockHAInterface()
                 self.num_cars = 0
+                # What the user actually wrote in apps.yaml, which set_arg_auto uses to decide
+                # whether auto-discovery may replace a setting
+                self.args_from_apps_yaml = {}
+                self.apps_yaml_override_warned = set()
 
         self.base = MockBase()
 
@@ -122,8 +136,8 @@ class MockGECloudDirect(GECloudDirect):
         return self.entity_states.get(entity_id, default)
 
     def update_success_timestamp(self):
-        """Mock update_success_timestamp"""
-        pass
+        """Mock update_success_timestamp - records the time, as the real component does"""
+        self.last_success_timestamp = datetime.now(timezone.utc)
 
     @property
     def storage(self):
@@ -236,6 +250,7 @@ def test_ge_cloud(my_predbat=None):
         ("register_time_no_timezone", _test_register_time_no_timezone, "Time registers unchanged with no account timezone"),
         ("devices_ems", _test_async_get_devices_with_ems, "Get devices with EMS"),
         ("devices_gateway", _test_async_get_devices_with_gateway, "Get devices with Gateway"),
+        ("site_export_limit", _test_site_export_limit, "Site export limit discovery, caching, publication and overrides"),
         ("devices_batteries", _test_async_get_devices_with_batteries, "Get devices with batteries"),
         ("devices_legacy_battery", _test_async_get_devices_legacy_battery, "Get devices with legacy battery (empty connections)"),
         ("devices_empty", _test_async_get_devices_empty, "Get empty devices"),
@@ -264,6 +279,11 @@ def test_ge_cloud(my_predbat=None):
         ("read_errors", _test_async_read_inverter_setting_error_codes, "Read inverter setting error codes"),
         ("write_success", _test_async_write_inverter_setting_success, "Write inverter setting success"),
         ("write_failure", _test_async_write_inverter_setting_failure, "Write inverter setting failure"),
+        ("api_locked", _test_async_get_inverter_data_inverter_locked, "Inverter locked body is a failure, not a success"),
+        ("api_body_retryable", _test_async_get_inverter_data_retryable_body_failure, "Retryable body failure returns None"),
+        ("write_locked", _test_async_write_inverter_setting_locked, "Write aborts on a terminal failure"),
+        ("api_bare_code", _test_async_get_inverter_data_terminal_code_without_success_flag, "Terminal code without a success flag is a failure"),
+        ("api_negative_value", _test_async_get_inverter_data_negative_value_other_endpoint, "Negative value outside the setting endpoints is data"),
         ("switch_event", _test_switch_event, "Switch event handler"),
         ("number_event", _test_number_event, "Number event handler"),
         ("select_event", _test_select_event, "Select event handler"),
@@ -280,6 +300,7 @@ def test_ge_cloud(my_predbat=None):
         ("hybrid_detection", _test_hybrid_detection, "Hybrid inverter detection"),
         ("enable_defaults", _test_enable_default_options, "Enable default options"),
         ("enable_defaults_skip_target", _test_enable_default_options_skips_discharge_target, "Enable defaults skips the discharge target register"),
+        ("force_charge_control", _test_force_charge_control, "Force charge is the scheduled charge control when both charge switches exist"),
         ("enable_defaults_read_only", _test_run_read_only_skips_reset, "Enable defaults skipped in read-only mode"),
         ("enable_defaults_after_read_only", _test_run_enables_reset_after_read_only, "Enable defaults on first non-read-only run"),
         ("enable_defaults_24h", _test_run_enables_reset_after_24h, "Enable defaults re-runs after 24 hours"),
@@ -306,13 +327,13 @@ def test_ge_cloud(my_predbat=None):
         try:
             result = test_func(my_predbat)
             if result:
-                print(f"FAIL: FAILED: {key}")
+                print(f"✗ FAILED: {key}")
                 failed += 1
             else:
-                print(f"PASS: PASSED: {key}")
+                print(f"✓ PASSED: {key}")
                 passed += 1
         except Exception as e:
-            print(f"FAIL: EXCEPTION in {key}: {e}")
+            print(f"✗ EXCEPTION in {key}: {e}")
             import traceback
 
             traceback.print_exc()
@@ -1573,7 +1594,7 @@ def _test_async_get_devices_empty(my_predbat):
 
             result = await ge_cloud.async_get_devices()
 
-            if result != {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": []}:
+            if result != {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": [], "site_ids": {}}:
                 print("ERROR: Expected empty result dict, got {}".format(result))
                 return 1
         return 0
@@ -1863,7 +1884,7 @@ def _test_async_send_evc_command(my_predbat):
             if result != mock_success_response:
                 print("ERROR: Expected success response {}, got {}".format(mock_success_response, result))
                 return 1
-            if result["success"] != True:
+            if result["success"] is not True:
                 print("ERROR: Expected success=True in response")
                 return 1
 
@@ -2157,7 +2178,7 @@ def _test_async_get_evc_device(my_predbat):
             if result["serial_number"] != "EVC123456":
                 print(f"ERROR: Expected serial_number EVC123456, got {result['serial_number']}")
                 return 1
-            if result["online"] != True:
+            if result["online"] is not True:
                 print(f"ERROR: Expected online True, got {result['online']}")
                 return 1
             if result["status"] != "charging":
@@ -2186,7 +2207,7 @@ def _test_async_get_evc_device(my_predbat):
 
             result = await ge_cloud.async_get_evc_device(test_uuid, {})
 
-            if result["online"] != False:
+            if result["online"] is not False:
                 print(f"ERROR: Expected online False, got {result['online']}")
                 return 1
             if result["went_offline_at"] != "2025-12-24T10:30:00Z":
@@ -3202,7 +3223,12 @@ def _test_async_get_inverter_settings_success(my_predbat):
 
         ge_cloud.async_read_inverter_setting = mock_read_setting
 
-        result = await ge_cloud.async_get_inverter_settings("test123")
+        # async_get_inverter_settings paces itself with a 0.2s sleep per setting so a large
+        # register list does not burst the GE Cloud rate limit. The reads here are local mocks
+        # with no rate limit to respect, so the pacing is skipped - as the retry/backoff tests
+        # in this file already do.
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            result = await ge_cloud.async_get_inverter_settings("test123")
 
         # Result structure: {sid: {"name": ..., "value": ..., "validation_rules": ..., "validation": ...}}
         if 1 not in result or result[1]["value"] != "75":
@@ -3239,7 +3265,9 @@ def _test_async_get_inverter_settings_partial_failure(my_predbat):
 
         # Provide previous data - previous dict structure matches result structure
         previous = {2: {"name": "charge_power", "value": "2500", "validation": {}, "validation_rules": {}}}
-        result = await ge_cloud.async_get_inverter_settings("test123", previous=previous)
+        # Local mocks, so skip the rate-limit pacing - see the success case above.
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            result = await ge_cloud.async_get_inverter_settings("test123", previous=previous)
 
         if result[1]["value"] != "75":
             print("ERROR: Expected setting 1 value='75', got {}".format(result.get(1)))
@@ -3282,28 +3310,55 @@ def _test_async_read_inverter_setting_success(my_predbat):
 
 
 def _test_async_read_inverter_setting_error_codes(my_predbat):
-    """Test error code handling in read inverter setting"""
+    """Test error code handling in read inverter setting
+
+    async_get_inverter_data unwraps the outer "data" envelope, so the handler sees the result
+    body directly. GivEnergy documents -3/-4/-7 as never succeeding on a repeat attempt, so
+    those must give up on the first response while -1/-2/-5/-6 keep the full retry budget.
+    """
 
     async def test():
-        ge_cloud = MockGECloudDirect()
+        for code in [-3, -4, -7]:
+            ge_cloud = MockGECloudDirect()
+            call_count = [0]
 
-        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            # Test fatal error code (-3)
             async def mock_get_data_fatal(*args, **kwargs):
-                return {"data": {"value": -3}}
+                call_count[0] += 1
+                raise GECloudTerminalError(code, "Inverter Locked", "inverter_locked")
 
-            ge_cloud.async_get_inverter_data = mock_get_data_fatal
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                ge_cloud.async_get_inverter_data = mock_get_data_fatal
+
+                result = await ge_cloud.async_read_inverter_setting("test123", 77)
+
+                if result is not None:
+                    print("ERROR: Expected None for fatal code {}, got {}".format(code, result))
+                    return 1
+                if call_count[0] != 1:
+                    print("ERROR: Expected code {} to give up after 1 attempt, got {}".format(code, call_count[0]))
+                    return 1
+                if mock_sleep.call_count != 0:
+                    print("ERROR: Expected no backoff for terminal code {}, slept {} times".format(code, mock_sleep.call_count))
+                    return 1
+
+        # A retryable code still uses the whole retry budget
+        ge_cloud = MockGECloudDirect()
+        retry_count = [0]
+
+        async def mock_get_data_retryable(*args, **kwargs):
+            retry_count[0] += 1
+            return {"value": -5, "success": False, "message": "There was a server error"}
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data = mock_get_data_retryable
 
             result = await ge_cloud.async_read_inverter_setting("test123", 77)
 
-            # Returns None for fatal errors after trying all retries
             if result is not None:
-                print("ERROR: Expected None for fatal error, got {}".format(result))
+                print("ERROR: Expected None for retryable code -5, got {}".format(result))
                 return 1
-
-            # Should have retried MAX_RETRIES times (default 3)
-            if mock_sleep.call_count == 0:
-                print("ERROR: Expected retries with sleeps, sleep called 0 times")
+            if retry_count[0] != 10:
+                print("ERROR: Expected 10 attempts for retryable code -5, got {}".format(retry_count[0]))
                 return 1
 
         return 0
@@ -3412,6 +3467,195 @@ def _test_async_write_inverter_setting_failure(my_predbat):
     return run_async(test())
 
 
+def _test_async_get_inverter_data_inverter_locked(my_predbat):
+    """A 200 response carrying success:false must be counted as a failure, not a success
+
+    GivEnergy answers a write to a locked inverter with HTTP 200 and a body of
+    {"value": -7, "success": false, "message": "Inverter Locked"}. Taking the 200 at face
+    value refreshed the component health timestamp and recorded a successful API call for a
+    write that never reached the inverter (issue #4896).
+    """
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"data": {"value": -7, "success": False, "message": "Inverter Locked"}})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        recorded = []
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                with patch("gecloud.record_api_call", side_effect=lambda *args, **kwargs: recorded.append(args)):
+                    mock_session_class.return_value = mock_session
+
+                    try:
+                        result = await ge_cloud.async_get_inverter_data(GE_API_INVERTER_WRITE_SETTING, "test123", 72, post=True, datain={"value": "10"})
+                        print("ERROR: Expected GECloudTerminalError for a locked inverter, got {}".format(result))
+                        return 1
+                    except GECloudTerminalError as exc:
+                        if exc.code != -7:
+                            print("ERROR: Expected code -7, got {}".format(exc.code))
+                            return 1
+                        if exc.reason != "inverter_locked":
+                            print("ERROR: Expected reason 'inverter_locked', got {}".format(exc.reason))
+                            return 1
+                        if "Inverter Locked" not in str(exc):
+                            print("ERROR: Expected the GivEnergy message in the exception, got {}".format(exc))
+                            return 1
+
+        if ge_cloud.last_success_timestamp is not None:
+            print("ERROR: Expected last_success_timestamp to stay unset for a rejected write")
+            return 1
+        if ge_cloud.failures_total != 1:
+            print("ERROR: Expected failures_total=1, got {}".format(ge_cloud.failures_total))
+            return 1
+        if recorded != [("givenergy", False, "inverter_locked")]:
+            print("ERROR: Expected the failure recorded as inverter_locked, got {}".format(recorded))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_inverter_data_retryable_body_failure(my_predbat):
+    """A retryable success:false body returns None so the caller's retry loop still runs"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"data": {"value": -5, "success": False, "message": "There was a server error"}})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        recorded = []
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                with patch("gecloud.record_api_call", side_effect=lambda *args, **kwargs: recorded.append(args)):
+                    mock_session_class.return_value = mock_session
+
+                    result = await ge_cloud.async_get_inverter_data(GE_API_INVERTER_WRITE_SETTING, "test123", 72, post=True, datain={"value": "10"})
+
+        if result != {"value": -5, "success": False, "message": "There was a server error"}:
+            print("ERROR: Expected the body returned so the caller can retry on the code, got {}".format(result))
+            return 1
+        if ge_cloud.last_success_timestamp is not None:
+            print("ERROR: Expected last_success_timestamp to stay unset for a failed call")
+            return 1
+        if recorded != [("givenergy", False, "server_error")]:
+            print("ERROR: Expected the failure recorded as server_error, got {}".format(recorded))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_write_inverter_setting_locked(my_predbat):
+    """A terminal failure aborts the write on the first response instead of retrying 10 times"""
+
+    async def test():
+        for code in [-3, -4, -7]:
+            ge_cloud = MockGECloudDirect()
+            ge_cloud.pending_writes["test123"] = []
+            call_count = [0]
+
+            async def mock_get_data(*args, **kwargs):
+                call_count[0] += 1
+                raise GECloudTerminalError(code, "Inverter Locked", "inverter_locked")
+
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                ge_cloud.async_get_inverter_data = mock_get_data
+
+                result = await ge_cloud.async_write_inverter_setting("test123", 72, "10")
+
+                if result is not None:
+                    print("ERROR: Expected None for a rejected write, got {}".format(result))
+                    return 1
+                if call_count[0] != 1:
+                    print("ERROR: Expected code {} to abort the write after 1 attempt, got {}".format(code, call_count[0]))
+                    return 1
+                if mock_sleep.call_count != 0:
+                    print("ERROR: Expected no retry backoff for code {}, slept {} times".format(code, mock_sleep.call_count))
+                    return 1
+
+            if ge_cloud.pending_writes["test123"]:
+                print("ERROR: Expected no pending write to be recorded for a rejected write")
+                return 1
+            if not any("Inverter Locked" in message and str(code) in message for message in ge_cloud.log_messages):
+                print("ERROR: Expected the GivEnergy message and code {} to be logged, got {}".format(code, ge_cloud.log_messages))
+                return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_inverter_data_terminal_code_without_success_flag(my_predbat):
+    """A terminal result code is a failure even when the body omits the success flag
+
+    Some setting read/write responses carry the negative code without also setting
+    success=false. Keying the classification on that flag alone let those bodies refresh the
+    component health timestamp and count as a successful API call (PR #4902 review).
+    """
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"data": {"value": -7, "message": "Inverter Locked"}})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        recorded = []
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                with patch("gecloud.record_api_call", side_effect=lambda *args, **kwargs: recorded.append(args)):
+                    mock_session_class.return_value = mock_session
+
+                    try:
+                        result = await ge_cloud.async_get_inverter_data(GE_API_INVERTER_WRITE_SETTING, "test123", 72, post=True, datain={"value": "10"})
+                        print("ERROR: Expected GECloudTerminalError for a bare terminal code, got {}".format(result))
+                        return 1
+                    except GECloudTerminalError as exc:
+                        if exc.code != -7 or exc.reason != "inverter_locked":
+                            print("ERROR: Expected code -7 / inverter_locked, got {} / {}".format(exc.code, exc.reason))
+                            return 1
+
+        if ge_cloud.last_success_timestamp is not None:
+            print("ERROR: Expected last_success_timestamp to stay unset for a rejected write")
+            return 1
+        if recorded != [("givenergy", False, "inverter_locked")]:
+            print("ERROR: Expected the failure recorded as inverter_locked, got {}".format(recorded))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_inverter_data_negative_value_other_endpoint(my_predbat):
+    """Outside the setting endpoints a negative "value" is data, not a result code"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"data": {"value": -7}})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session
+
+                result = await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
+
+        if result != {"value": -7}:
+            print("ERROR: Expected the body returned unchanged, got {}".format(result))
+            return 1
+        if ge_cloud.last_success_timestamp is None:
+            print("ERROR: Expected a successful call to update last_success_timestamp")
+            return 1
+        return 0
+
+    return run_async(test())
+
+
 # =============================================================================
 # Event Handler Tests
 # =============================================================================
@@ -3446,7 +3690,7 @@ def _test_switch_event(my_predbat):
             if len(write_calls) != 1:
                 print("ERROR: Expected 1 write call, got {}".format(len(write_calls)))
                 return 1
-            if write_calls[0]["value"] != True:
+            if write_calls[0]["value"] is not True:
                 print("ERROR: Expected value=True for turn_on, got {}".format(write_calls[0]["value"]))
                 return 1
 
@@ -3456,7 +3700,7 @@ def _test_switch_event(my_predbat):
             if len(write_calls) != 2:
                 print("ERROR: Expected 2 write calls, got {}".format(len(write_calls)))
                 return 1
-            if write_calls[1]["value"] != False:
+            if write_calls[1]["value"] is not False:
                 print("ERROR: Expected value=False for turn_off, got {}".format(write_calls[1]["value"]))
                 return 1
 
@@ -4503,6 +4747,206 @@ def _test_hybrid_detection(my_predbat):
     return run_async(test())
 
 
+def _test_force_charge_control(my_predbat):
+    """GH#5040: on devices exposing both charge switches, Force Charge is the scheduled charge control and AC Charge is held on"""
+
+    async def test():
+        # --- Part A: async_automatic_config binds the right switch as scheduled_charge_enable ---
+
+        ge = MockGECloudDirect()
+
+        # A device exposing both charge switches (the 3-phase GEC register family) must bind
+        # enable_force_charge, as that is the switch that actually gates the timed grid charge.
+        ge.config_args = {}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_AC_Charge"}, "reg2": {"name": "Enable_Force_Charge"}, "reg3": {"name": "Enable_Force_Discharge"}}}
+        await ge.async_automatic_config({"ems": None, "gateway": None, "battery": ["battery001"]})
+
+        expect = ["switch.predbat_gecloud_battery001_enable_force_charge"]
+        if ge.config_args.get("scheduled_charge_enable") != expect:
+            print("ERROR: Both switches present should bind enable_force_charge, got {}".format(ge.config_args.get("scheduled_charge_enable")))
+            return 1
+        if not any("force charge: True" in message for message in ge.log_messages):
+            print("ERROR: Expected the detected-features log to report force charge: True")
+            return 1
+
+        # The detected-features flag is a substring match, so a suffixed spelling still reports it.
+        ge.config_args = {}
+        ge.log_messages = []
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_AC_Charge"}, "reg2": {"name": "Enable_Force_Charge_2"}}}
+        await ge.async_automatic_config({"ems": None, "gateway": None, "battery": ["battery001"]})
+
+        if not any("force charge: True" in message for message in ge.log_messages):
+            print("ERROR: A suffixed force charge register should still report force charge: True")
+            return 1
+
+        # A standard device with only enable_ac_charge is unchanged by the new precedence.
+        ge.config_args = {}
+        ge.settings = {"battery002": {"reg1": {"name": "Enable_AC_Charge"}}}
+        await ge.async_automatic_config({"ems": None, "gateway": None, "battery": ["battery002"]})
+
+        expect = ["switch.predbat_gecloud_battery002_enable_ac_charge"]
+        if ge.config_args.get("scheduled_charge_enable") != expect:
+            print("ERROR: enable_ac_charge alone should still bind enable_ac_charge, got {}".format(ge.config_args.get("scheduled_charge_enable")))
+            return 1
+
+        # ac_charge_enable still wins over enable_ac_charge when there is no force charge register.
+        ge.config_args = {}
+        ge.settings = {"battery003": {"reg1": {"name": "AC_Charge_Enable"}, "reg2": {"name": "Enable_AC_Charge"}}}
+        await ge.async_automatic_config({"ems": None, "gateway": None, "battery": ["battery003"]})
+
+        expect = ["switch.predbat_gecloud_battery003_ac_charge_enable"]
+        if ge.config_args.get("scheduled_charge_enable") != expect:
+            print("ERROR: ac_charge_enable should still take precedence over enable_ac_charge, got {}".format(ge.config_args.get("scheduled_charge_enable")))
+            return 1
+
+        # Register sets can differ between inverters on one site, so the choice is made per device.
+        ge.config_args = {}
+        ge.settings = {
+            "battery001": {"reg1": {"name": "Enable_AC_Charge"}, "reg2": {"name": "Enable_Force_Charge"}},
+            "battery002": {"reg1": {"name": "Enable_AC_Charge"}},
+        }
+        await ge.async_automatic_config({"ems": None, "gateway": None, "battery": ["battery001", "battery002"]})
+
+        expect = ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_ac_charge"]
+        if ge.config_args.get("scheduled_charge_enable") != expect:
+            print("ERROR: Mixed register sets should bind per device, got {}".format(ge.config_args.get("scheduled_charge_enable")))
+            return 1
+
+        # --- Part B: enable_default_options holds enable_ac_charge on as the static enable ---
+
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.settings = {"test123": {}}
+
+        write_calls = []
+
+        async def mock_write(device, key, value):
+            write_calls.append({"device": device, "key": key, "value": value})
+            return {"value": value}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        ge_cloud.async_write_inverter_setting = mock_write
+        ge_cloud.publish_registers = mock_publish
+
+        # Force charge present and AC charge off — AC charge must be turned on and left on.
+        registers = {
+            200: {"name": "Enable_AC_Charge", "value": False, "validation_rules": []},
+            201: {"name": "Enable_Force_Charge", "value": False, "validation_rules": []},
+        }
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if len(write_calls) != 1 or write_calls[0]["key"] != 200 or write_calls[0]["value"] is not True:
+            print("ERROR: Expected a single write enabling Enable_AC_Charge, got {}".format(write_calls))
+            return 1
+        if not result:
+            print("ERROR: enable_default_options should report a change when enabling AC charge")
+            return 1
+        if registers[200]["value"] is not True:
+            print("ERROR: Enable_AC_Charge register should be updated to True, got {}".format(registers[200]["value"]))
+            return 1
+        # The scheduled charge control itself is Predbat's to drive per slot, so it is never written here.
+        if registers[201]["value"] is not False:
+            print("ERROR: Enable_Force_Charge must be left for Predbat to drive, got {}".format(registers[201]["value"]))
+            return 1
+
+        # Already on — nothing to write.
+        write_calls.clear()
+        registers = {
+            200: {"name": "Enable_AC_Charge", "value": True, "validation_rules": []},
+            201: {"name": "Enable_Force_Charge", "value": True, "validation_rules": []},
+        }
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if write_calls:
+            print("ERROR: Should not write when Enable_AC_Charge is already on, got {}".format(write_calls))
+            return 1
+        if result:
+            print("ERROR: enable_default_options should report no change when Enable_AC_Charge is already on")
+            return 1
+
+        # No force charge register — enable_ac_charge is itself the scheduled charge control on this
+        # device, so Predbat must not force it on.
+        write_calls.clear()
+        registers = {200: {"name": "Enable_AC_Charge", "value": False, "validation_rules": []}}
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if write_calls:
+            print("ERROR: Should not touch Enable_AC_Charge without a force charge register, got {}".format(write_calls))
+            return 1
+        if result:
+            print("ERROR: enable_default_options should report no change on a standard device")
+            return 1
+        if registers[200]["value"] is not False:
+            print("ERROR: Enable_AC_Charge should be untouched on a standard device, got {}".format(registers[200]["value"]))
+            return 1
+
+        # The AC charge upper limit switch shares the enable_ac_charge prefix and is a different
+        # control, so none of its known spellings may be force-enabled. Enable_AC_Charge_Upper_Limit
+        # is the one the pre-existing "enable_" guard above does not catch, so it pins the exclusion.
+        for limit_name in ("Enable_AC_Charge_Upper_Percent_Limit", "Enable_AC_Charge_1_Upper_SOC_Percent_Limit", "Enable_AC_Charge_Upper_Limit"):
+            write_calls.clear()
+            registers = {
+                202: {"name": limit_name, "value": False, "validation_rules": []},
+                201: {"name": "Enable_Force_Charge", "value": False, "validation_rules": []},
+            }
+            result = await ge_cloud.enable_default_options("test123", registers)
+
+            if write_calls:
+                print("ERROR: {} should not be force-enabled, got {}".format(limit_name, write_calls))
+                return 1
+            if registers[202]["value"] is not False:
+                print("ERROR: {} should be left untouched, got {}".format(limit_name, registers[202]["value"]))
+                return 1
+            if result:
+                print("ERROR: enable_default_options should report no change for {}".format(limit_name))
+                return 1
+
+        # A firmware that names the switch with a suffix is still matched, as the register family is
+        # spelled inconsistently across GE devices.
+        write_calls.clear()
+        registers = {
+            203: {"name": "Enable_AC_Charge_2", "value": False, "validation_rules": []},
+            201: {"name": "Enable_Force_Charge", "value": False, "validation_rules": []},
+        }
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if len(write_calls) != 1 or write_calls[0]["key"] != 203 or write_calls[0]["value"] is not True:
+            print("ERROR: A suffixed Enable_AC_Charge register should still be enabled, got {}".format(write_calls))
+            return 1
+        if not result:
+            print("ERROR: enable_default_options should report a change when a suffixed register is enabled")
+            return 1
+
+        # A rejected write is reported and does not count as a change.
+        async def mock_write_fail(device, key, value):
+            write_calls.append({"device": device, "key": key, "value": value})
+            return None
+
+        write_calls.clear()
+        ge_cloud.log_messages = []
+        ge_cloud.async_write_inverter_setting = mock_write_fail
+        registers = {
+            200: {"name": "Enable_AC_Charge", "value": False, "validation_rules": []},
+            201: {"name": "Enable_Force_Charge", "value": False, "validation_rules": []},
+        }
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if len(write_calls) != 1:
+            print("ERROR: Expected one attempted write on the failure path, got {}".format(write_calls))
+            return 1
+        if result:
+            print("ERROR: A failed write should not report a change")
+            return 1
+        if not any("Failed to enable AC charge" in message for message in ge_cloud.log_messages):
+            print("ERROR: Expected a warning when the AC charge write fails, got {}".format(ge_cloud.log_messages))
+            return 1
+
+        return 0
+
+    return asyncio.run(test())
+
+
 def _test_enable_default_options_skips_discharge_target(my_predbat):
     """enable_default_options must not reset the register Predbat drives as discharge_target_soc"""
 
@@ -4682,10 +5126,10 @@ def _test_enable_default_options(my_predbat):
         if not result:
             print("ERROR: enable_default_options should return True when enabling real-time control")
             return 1
-        if write_calls[0]["value"] != True:
+        if write_calls[0]["value"] is not True:
             print("ERROR: Expected value=True for real-time control, got {}".format(write_calls[0]["value"]))
             return 1
-        if registers[105]["value"] != True:
+        if registers[105]["value"] is not True:
             print("ERROR: Register value should be updated to True, got {}".format(registers[105]["value"]))
             return 1
 
@@ -5756,3 +6200,235 @@ def _test_get_max_inverter_rate_from_model(my_predbat):
             print("OK {}: got {}".format(description, result))
 
     return 1 if failed else 0
+
+
+def _test_site_export_limit(my_predbat):
+    """Site discovery, caching, publication and auto-configuration of the grid export limit."""
+
+    def make_ge(sites, site_response, gateway=False, override=None, storage=None):
+        """Build a mock component whose device list and site read return the given data."""
+        ge = MockGECloudDirect()
+        if storage is not None:
+            ge._mock_storage = storage
+        if override is not None:
+            ge.config_args["export_limit"] = override
+            ge.base.args_from_apps_yaml["export_limit"] = override
+
+        devices = []
+        for index, site in enumerate(sites):
+            serial = "BAT{}".format(index)
+            inverter = {"serial": serial, "info": {"model": "All-In-One", "battery": {"nominal_capacity": 52}}, "connections": {"batteries": [{}]}}
+            devices.append({"site_id": site, "inverter": inverter})
+            ge.info[serial.lower()] = inverter
+        if gateway:
+            devices.append({"site_id": sites[0], "inverter": {"serial": "GW", "info": {"model": "Gateway"}}})
+
+        ge.site_calls = []
+
+        async def fetch(endpoint, *args, **kwargs):
+            """Answer the two endpoints this flow uses and nothing else."""
+            if endpoint == GE_API_DEVICES:
+                return devices
+            if endpoint == GE_API_SITE:
+                ge.site_calls.append(kwargs.get("uuid", None))
+                return site_response
+            return None
+
+        ge.async_get_inverter_data_retry = fetch
+        return ge
+
+    async def configure(ge, first=True):
+        """Run the startup path: discover devices, read the site, publish, then auto-configure."""
+        ge.devices_dict = await ge.async_get_devices()
+        await ge.update_site(first)
+        inverters, _ = ge.logical_inverters(ge.devices_dict)
+        for device in inverters + ge.devices_dict["pv"]:
+            await ge.publish_site_export_limit(device)
+        await ge.async_automatic_config(ge.devices_dict)
+        return ge
+
+    def published(ge, device):
+        """Return the published export limit state for one device, or None when there is no sensor."""
+        item = ge.dashboard_items.get("sensor.predbat_gecloud_{}_export_limit".format(device), None)
+        return item["state"] if item else None
+
+    async def check():
+        """Run the synthetic site scenarios without contacting GivEnergy."""
+        # The published API schema records that a site carries import/export limits but not how an
+        # enabled one is encoded, so every plausible shape has to resolve to the same limit.
+        for limits in [
+            {"export": {"enabled": True, "power": {"watts": 8000}}},
+            {"export": {"enabled": True, "power": {"value": 8000}}},
+            {"export": {"enabled": True, "watts": 8000}},
+            {"export": {"enabled": True, "power": 8000}},
+            {"export": {"enabled": "true", "value": "8000"}},
+            {"export": {"power": {"watts": 8000}}},
+            {"export": {"enabled": True, "limit": 8000.0}},
+            {"export": 8000},
+            {"export": " 8000 "},
+        ]:
+            assert parse_site_export_limit(limits) == (8000.0, ""), limits
+
+        # The live payload from a 200A supply whose export really is curtailed to 4.5kW
+        live = {"import": {"enabled": False, "power": {"watts": 46000, "amps": 200}}, "export": {"enabled": True, "power": {"watts": 4500, "amps": 19.565217391304348}}}
+        assert parse_site_export_limit(live) == (4500.0, ""), parse_site_export_limit(live)
+
+        # A site with no usable limit must say so rather than invent one
+        for limits in [
+            None,
+            [],
+            {},
+            {"export": None},
+            {"import": {"enabled": True, "power": {"watts": 8000}}},
+            # A disabled limit states the connection's declared capacity, not a curtailment, so it
+            # is no restriction on Predbat - this is the live payload from such a site
+            {"import": {"enabled": False, "power": {"watts": 23000, "amps": 100}}, "export": {"enabled": False, "power": {"watts": 6000, "amps": 26.08695652173913}}},
+            {"export": {"enabled": "false", "power": {"watts": 8000}}},
+            {"export": {"enabled": 0, "power": {"watts": 8000}}},
+            {"export": {"enabled": True}},
+            {"export": {"enabled": True, "power": None}},
+            {"export": {"enabled": True, "power": {"watts": -1}}},
+            {"export": {"enabled": True, "power": {"watts": True}}},
+            {"export": {"enabled": True, "power": {"watts": float("nan")}}},
+            {"export": {"enabled": True, "power": {"watts": float("inf")}}},
+            {"export": []},
+            {"export": "eight thousand"},
+        ]:
+            watts, reason = parse_site_export_limit(limits)
+            assert watts is None and reason, limits
+
+        # An enforced zero is a real zero-export connection - a site with no limit reports a null export
+        for limits in [{"export": {"enabled": True, "power": {"watts": 0}}}, {"export": 0}, {"export": {"power": {"watts": 0.0}}}]:
+            assert parse_site_export_limit(limits) == (0.0, ""), limits
+
+        enabled = {"limits": {"export": {"enabled": True, "power": {"watts": 8000}}}, "id": 42}
+
+        # A single inverter takes the whole site budget
+        ge = await configure(make_ge([42], enabled))
+        assert ge.config_args["export_limit"] == ["sensor.predbat_gecloud_bat0_export_limit"], ge.config_args["export_limit"]
+        assert published(ge, "bat0") == 8000, published(ge, "bat0")
+        assert ge.site_calls == [42], ge.site_calls
+
+        # Two inverters share it, so the sum Predbat forms is still the site limit
+        ge = await configure(make_ge([42, 42], enabled))
+        assert ge.config_args["export_limit"] == ["sensor.predbat_gecloud_bat0_export_limit", "sensor.predbat_gecloud_bat1_export_limit"]
+        assert published(ge, "bat0") == 4000 and published(ge, "bat1") == 4000
+        assert ge.config_args["num_inverters"] == 2
+
+        # A Gateway in front of both batteries is one logical inverter, so it takes the whole budget
+        ge = await configure(make_ge([42, 42], enabled, gateway=True))
+        assert ge.config_args["export_limit"] == ["sensor.predbat_gecloud_gw_export_limit"], ge.config_args["export_limit"]
+        assert published(ge, "gw") == 8000, published(ge, "gw")
+        assert published(ge, "bat0") is None
+        assert ge.config_args["num_inverters"] == 1
+
+        # A site that blocks export entirely is applied as zero, not treated as unset
+        ge = await configure(make_ge([42], {"limits": {"export": {"enabled": True, "power": {"watts": 0}}}}))
+        assert ge.config_args["export_limit"] == ["sensor.predbat_gecloud_bat0_export_limit"]
+        assert published(ge, "bat0") == 0
+
+        # An explicit export_limit wins, including a zero one, but the site is still read and published
+        for override in [3000, 0, [2000, 3000]]:
+            ge = await configure(make_ge([42, 42], enabled, override=override))
+            assert ge.config_args["export_limit"] == override, (override, ge.config_args["export_limit"])
+            assert published(ge, "bat0") == 4000
+            assert any("keeping your apps.yaml setting" in message for message in ge.log_messages), override
+
+        # A configured limit with a site that reports none of its own is left alone quietly, rather
+        # than the log telling the user to set the export_limit they have already set
+        ge = await configure(make_ge([42], {"limits": {"export": None}}, override=5000))
+        assert ge.config_args["export_limit"] == 5000
+        assert not any("No site grid export limit" in message for message in ge.log_messages), ge.log_messages
+
+        # Nothing is wired or published when the site reports no limit, or cannot be read at all
+        for response in [
+            None,
+            {},
+            {"limits": None},
+            {"limits": {"export": None}},
+            {"limits": {"export": {"enabled": True}}},
+            {"limits": {"export": {"enabled": False, "power": {"watts": 8000, "amps": 34.8}}}},
+        ]:
+            ge = await configure(make_ge([42], response))
+            assert "export_limit" not in ge.config_args, response
+            assert published(ge, "bat0") is None, response
+            assert ge.site_calls == [42], response
+
+        # An unknown or split site mapping must not pick a site, so no read is made at all
+        for sites in [[None], [42, None], [42, 43]]:
+            ge = await configure(make_ge(sites, enabled))
+            assert "export_limit" not in ge.config_args, sites
+            assert ge.site_calls == [], sites
+
+        # The site id also comes from the datalog when the device does not carry one directly
+        ge = MockGECloudDirect()
+        devices = [{"inverter": {"serial": "BAT0", "info": {"battery": {}}, "connections": {"batteries": [{}], "datalog": {"site_id": 42}}}}]
+        ge.async_get_inverter_data_retry = AsyncMock(return_value=devices)
+        discovered = await ge.async_get_devices()
+        assert discovered["site_ids"] == {"bat0": 42}, discovered["site_ids"]
+
+        return 0
+
+    async def check_storage():
+        """The site details are cached, restored on restart and re-read once they go stale."""
+        enabled = {"limits": {"export": {"enabled": True, "power": {"watts": 8000}}}, "id": 42}
+
+        # A successful read is written to the cache
+        storage = _make_async_storage_mock()
+        ge = await configure(make_ge([42], enabled, storage=storage))
+        site_saves = [call for call in storage.save_calls if call["filename"] == "site"]
+        assert len(site_saves) == 1 and site_saves[0]["data"] == enabled, storage.save_calls
+        assert site_saves[0]["module"] == "gecloud"
+
+        # A restart with a fresh cache applies the limit without an API call
+        ge = await configure(make_ge([42], enabled, storage=storage))
+        assert ge.site_calls == [], ge.site_calls
+        assert ge.site_export_limit == 8000
+        assert ge.config_args["export_limit"] == ["sensor.predbat_gecloud_bat0_export_limit"]
+
+        # Once the cache passes its retention it is re-read, and a failed re-read keeps the cached limit
+        storage.age_overrides[("gecloud", "site")] = SITE_MAX_AGE_MINUTES + 1
+        ge = await configure(make_ge([42], None, storage=storage))
+        assert ge.site_calls == [42], ge.site_calls
+        assert ge.site_export_limit == 8000
+        assert ge.config_args["export_limit"] == ["sensor.predbat_gecloud_bat0_export_limit"]
+
+        # A cache belonging to a different site is not applied to this one
+        storage.age_overrides.clear()
+        ge = await configure(make_ge([43], None, storage=storage))
+        assert ge.site_calls == [43], ge.site_calls
+        assert "export_limit" not in ge.config_args
+        assert ge.site_export_limit is None
+
+        # Within the retry window a failed read is not repeated on every tick
+        ge = make_ge([42], None, storage=None)
+        ge.devices_dict = await ge.async_get_devices()
+        await ge.update_site(True)
+        await ge.update_site(False)
+        assert ge.site_calls == [42], ge.site_calls
+
+        return 0
+
+    async def check_auth():
+        """A denied site read must not disturb the authentication state of the inverter endpoints."""
+        for original_auth in [False, True]:
+            ge = MockGECloudDirect()
+            ge.api_auth_failed = original_auth
+
+            async def denied(*args, **kwargs):
+                """Simulate the auth side effect of a site-read denial."""
+                ge.api_auth_failed = not original_auth
+                return None
+
+            ge.async_get_inverter_data_retry = AsyncMock(side_effect=denied)
+            ge.devices_dict = {"battery": ["bat"], "pv": [], "site_ids": {"bat": 42}}
+            await ge.update_site(True)
+            assert ge.api_auth_failed == original_auth
+            assert ge.site_export_limit is None
+        return 0
+
+    async def run_all():
+        """Run every part of the site export limit suite."""
+        return await check() + await check_storage() + await check_auth()
+
+    return run_async(run_all())

@@ -77,8 +77,10 @@ pred_bat:
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 0
   #
-  # If not using REST then instead set the Control here (one for each inverter)
-  # - you can delete this section if using REST
+  # Set the Control here, one entry for each inverter. REST is not involved in this setup - that is
+  # the GivTCP template (givenergy_givtcp.yaml), where Predbat configures itself from the local
+  # REST API instead of the cloud.
+  # With ge_cloud_automatic: True these are discovered for you and this section can be deleted.
   charge_rate:
     - number.ge_inverter_{geserial}_battery_charge_power
   #  - number.ge_inverter_{geserial2}_battery_charge_power

@@ -17,7 +17,9 @@ from tests.test_infra import reset_rates, reset_inverter
 from prediction import Prediction
 
 
-def run_window_sort_test(name, my_predbat, charge_window_best, export_window_best, expected=[], inverter_loss=1.0, metric_battery_cycle=0.0, battery_loss=1.0, battery_loss_discharge=1.0):
+def run_window_sort_test(name, my_predbat, charge_window_best, export_window_best, expected=None, inverter_loss=1.0, metric_battery_cycle=0.0, battery_loss=1.0, battery_loss_discharge=1.0):
+    if expected is None:
+        expected = []
     failed = False
     end_record = my_predbat.forecast_minutes
     my_predbat.calculate_best_charge = True

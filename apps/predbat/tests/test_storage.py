@@ -106,7 +106,7 @@ def test_storage(my_predbat=None):
         # 12. age() returns None for a missing file
         assert run_async(storage.age("mod", "nonexistent_age")) is None, "age() should return None for missing file"
 
-        # fetch_cached: miss -> calls fetch_fn once, stores, returns
+        # fetch_cached: miss → calls fetch_fn once, stores, returns
         calls = {"n": 0}
 
         async def _fetch():
@@ -117,12 +117,12 @@ def test_storage(my_predbat=None):
         assert first == {"v": 1}, "fetch_cached miss should fetch: {}".format(first)
         assert calls["n"] == 1, "fetch_fn should be called exactly once on miss"
 
-        # fetch_cached: fresh hit -> does NOT call fetch_fn again
+        # fetch_cached: fresh hit → does NOT call fetch_fn again
         second = run_async(storage.fetch_cached("fc", "k", _fetch, fresh_minutes=30, stale_minutes=35, format="json"))
         assert second == {"v": 1}, "fresh hit should return cached value: {}".format(second)
         assert calls["n"] == 1, "fetch_fn must not be called on a fresh hit"
 
-        # fetch_cached: with fresh_minutes=0 every existing entry is "stale" -> refresh path runs once
+        # fetch_cached: with fresh_minutes=0 every existing entry is "stale" → refresh path runs once
         calls2 = {"n": 0}
 
         async def _fetch2():
@@ -134,13 +134,13 @@ def test_storage(my_predbat=None):
         assert out == {"w": 1}, "stale path should refresh and return fresh data: {}".format(out)
         assert calls2["n"] == 1, "stale path should call fetch_fn once"
 
-        # fetch_cached: fetch_fn returning None on a hard miss -> returns None, no crash
+        # fetch_cached: fetch_fn returning None on a hard miss → returns None, no crash
         async def _fetch_none():
             return None
 
         assert run_async(storage.fetch_cached("fc3", "missing", _fetch_none, format="json")) is None
 
-        # fetch_cached: stale window + fetch_fn returns None -> serve cached stale value
+        # fetch_cached: stale window + fetch_fn returns None → serve cached stale value
         run_async(storage.save("fc4", "k", {"w": 0}, format="json"))
 
         async def _fetch_none_stale():
@@ -149,7 +149,7 @@ def test_storage(my_predbat=None):
         out = run_async(storage.fetch_cached("fc4", "k", _fetch_none_stale, fresh_minutes=0, stale_minutes=999999, format="json"))
         assert out == {"w": 0}, "stale path with None fetch should return cached stale: {}".format(out)
 
-        # fetch_cached: stale window + fetch_fn RAISES -> serve cached stale value, do not propagate
+        # fetch_cached: stale window + fetch_fn RAISES → serve cached stale value, do not propagate
         run_async(storage.save("fc5", "k", {"w": 7}, format="json"))
 
         async def _fetch_raise():
@@ -158,9 +158,35 @@ def test_storage(my_predbat=None):
         out = run_async(storage.fetch_cached("fc5", "k", _fetch_raise, fresh_minutes=0, stale_minutes=999999, format="json"))
         assert out == {"w": 7}, "stale path with raising fetch should return cached stale: {}".format(out)
 
-        # fetch_cached: hard miss + fetch_fn RAISES -> return None, do not propagate
+        # fetch_cached: hard miss + fetch_fn RAISES → return None, do not propagate
         out = run_async(storage.fetch_cached("fc6", "missing", _fetch_raise, fresh_minutes=30, stale_minutes=35, format="json"))
         assert out is None, "hard miss with raising fetch should return None: {}".format(out)
+
+        # save_debug_copy() writes a plain file straight into config_root/debug/, not cache/ (#4720)
+        assert run_async(storage.save_debug_copy("predbat_debug_20260101-000000.yaml", "raw: text\n")) is True
+        debug_dir = os.path.join(tmpdir, "debug")
+        debug_copy_path = os.path.join(debug_dir, "predbat_debug_20260101-000000.yaml")
+        assert os.path.exists(debug_copy_path), "save_debug_copy should create config_root/debug/<filename>"
+        with open(debug_copy_path, "r") as f:
+            assert f.read() == "raw: text\n", "debug copy should hold the text verbatim, with no format envelope"
+        assert not os.path.exists(os.path.join(debug_dir, "predbat_debug_20260101-000000.meta")), "debug copy should have no metadata sidecar"
+
+        # load_debug_copy() reads it straight back, verbatim
+        assert run_async(storage.load_debug_copy("predbat_debug_20260101-000000.yaml")) == "raw: text\n"
+
+        # load_debug_copy() on a file that was never written returns None rather than raising
+        assert run_async(storage.load_debug_copy("never_written.yaml")) is None
+
+        # delete_debug_copy() removes it; a second call on an already-missing file must not raise
+        run_async(storage.delete_debug_copy("predbat_debug_20260101-000000.yaml"))
+        assert not os.path.exists(debug_copy_path), "delete_debug_copy should remove the file"
+        run_async(storage.delete_debug_copy("predbat_debug_20260101-000000.yaml"))
+        assert run_async(storage.load_debug_copy("predbat_debug_20260101-000000.yaml")) is None, "a deleted debug copy should no longer load"
+
+        # a path-separator-bearing filename is confined to debug/, not written outside it
+        run_async(storage.save_debug_copy("../escape.yaml", "x"))
+        assert os.path.exists(os.path.join(debug_dir, "escape.yaml")), "save_debug_copy should strip any directory component from filename"
+        assert not os.path.exists(os.path.join(tmpdir, "escape.yaml")), "save_debug_copy must not write outside config_root/debug/"
 
         print("All storage tests passed!")
     finally:

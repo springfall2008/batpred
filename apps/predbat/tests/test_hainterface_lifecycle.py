@@ -46,7 +46,7 @@ def test_hainterface_initialize_ha_only(my_predbat=None):
         print("ERROR: websocket_active should be False initially")
         failed += 1
     else:
-        print("PASS: Initialized with HA only correctly")
+        print("✓ Initialized with HA only correctly")
 
     return failed
 
@@ -76,13 +76,13 @@ def test_hainterface_initialize_db_primary(my_predbat=None):
         print("ERROR: db_primary should be True")
         failed += 1
     else:
-        print("PASS: Initialized with DB primary correctly")
+        print("✓ Initialized with DB primary correctly")
 
     if not any("SQL Lite database as primary" in log for log in mock_base.log_messages):
         print("ERROR: Should log DB primary mode")
         failed += 1
     else:
-        print("PASS: DB primary mode logged")
+        print("✓ DB primary mode logged")
 
     return failed
 
@@ -105,7 +105,7 @@ def test_hainterface_initialize_no_key_no_db(my_predbat=None):
         print("ERROR: Should raise ValueError")
         failed += 1
     except ValueError:
-        print("PASS: ValueError raised correctly")
+        print("✓ ValueError raised correctly")
 
     return failed
 
@@ -124,7 +124,7 @@ def test_hainterface_initialize_api_check_failed(my_predbat=None):
     ha_interface.api_stop = False
 
     with patch("ha.requests.get") as mock_get:
-        # First call (addon check) returns None, second call (services check) returns None
+        # First call (app check) returns None, second call (services check) returns None
         mock_get.return_value = create_mock_requests_response(500, None)
 
         try:
@@ -132,13 +132,13 @@ def test_hainterface_initialize_api_check_failed(my_predbat=None):
             print("ERROR: Should raise ValueError")
             failed += 1
         except ValueError:
-            print("PASS: ValueError raised on API check failure")
+            print("✓ ValueError raised on API check failure")
 
     if not any("Unable to connect" in log for log in mock_base.log_messages):
         print("ERROR: Should log connection failure")
         failed += 1
     else:
-        print("PASS: Connection failure logged")
+        print("✓ Connection failure logged")
 
     return failed
 
@@ -167,7 +167,7 @@ def test_hainterface_initialize_db_mirror(my_predbat=None):
         print("ERROR: db_mirror_ha should be True")
         failed += 1
     else:
-        print("PASS: DB mirroring enabled correctly")
+        print("✓ DB mirroring enabled correctly")
 
     return failed
 
@@ -185,7 +185,7 @@ def test_hainterface_is_alive_not_started(my_predbat=None):
         print("ERROR: Should return False when not started")
         failed += 1
     else:
-        print("PASS: Returns False when not started")
+        print("✓ Returns False when not started")
 
     return failed
 
@@ -204,7 +204,7 @@ def test_hainterface_is_alive_no_websocket(my_predbat=None):
         print("ERROR: Should return False with ha_key but no websocket")
         failed += 1
     else:
-        print("PASS: Returns False without websocket")
+        print("✓ Returns False without websocket")
 
     return failed
 
@@ -222,7 +222,7 @@ def test_hainterface_is_alive_websocket_active(my_predbat=None):
         print("ERROR: Should return True with websocket active")
         failed += 1
     else:
-        print("PASS: Returns True with websocket active")
+        print("✓ Returns True with websocket active")
 
     return failed
 
@@ -240,7 +240,7 @@ def test_hainterface_is_alive_db_only(my_predbat=None):
         print("ERROR: Should return True in DB-only mode")
         failed += 1
     else:
-        print("PASS: Returns True in DB-only mode")
+        print("✓ Returns True in DB-only mode")
 
     return failed
 
@@ -262,7 +262,7 @@ def test_hainterface_wait_api_started_success(my_predbat=None):
         print("ERROR: Should return True when already started")
         failed += 1
     else:
-        print("PASS: Returns True when API started")
+        print("✓ Returns True when API started")
 
     return failed
 
@@ -292,19 +292,19 @@ def test_hainterface_wait_api_started_timeout(my_predbat=None):
         print("ERROR: Should return False on timeout")
         failed += 1
     else:
-        print("PASS: Returns False on timeout")
+        print("✓ Returns False on timeout")
 
     if not any("Failed to start" in log for log in mock_base.log_messages):
         print("ERROR: Should log timeout warning")
         failed += 1
     else:
-        print("PASS: Timeout warning logged")
+        print("✓ Timeout warning logged")
 
     return failed
 
 
 def test_hainterface_get_slug(my_predbat=None):
-    """Test get_slug() returns addon slug"""
+    """Test get_slug() returns app slug"""
     print("\n=== Testing HAInterface get_slug() ===")
     failed = 0
 
@@ -316,8 +316,12 @@ def test_hainterface_get_slug(my_predbat=None):
     ha_interface.api_stop = False
 
     with patch("ha.requests.get") as mock_get:
-        # Mock addon info response
+        # Mock app info response
         def mock_get_side_effect(url, *args, **kwargs):
+            # HA changed terminology from 'addons' to 'apps' in HA 2026.2 but retained the old service calls for transition
+            #
+            # At present have not changed Predbat API call in order to not break installations that are still using an older HA supervisor
+            # Propose in Feb 2027 that Predbat be changed to use the new service call
             if "/addons/self/info" in url:
                 return create_mock_requests_response(200, {"data": {"slug": "predbat_addon"}})
             else:
@@ -333,7 +337,7 @@ def test_hainterface_get_slug(my_predbat=None):
         print(f"ERROR: Expected slug 'predbat_addon', got '{slug}'")
         failed += 1
     else:
-        print("PASS: Slug retrieved correctly")
+        print("✓ Slug retrieved correctly")
 
     return failed
 
@@ -361,31 +365,31 @@ def test_hainterface_start_with_websocket(my_predbat=None):
         print("ERROR: socketLoop should be called")
         failed += 1
     else:
-        print("PASS: socketLoop called")
+        print("✓ socketLoop called")
 
-    if ha_interface.websocket_active != True:
+    if ha_interface.websocket_active is not True:
         print("ERROR: websocket_active should be True")
         failed += 1
     else:
-        print("PASS: websocket_active set to True")
+        print("✓ websocket_active set to True")
 
-    if ha_interface.api_started != False:
+    if ha_interface.api_started is not False:
         print("ERROR: api_started should be False after exit")
         failed += 1
     else:
-        print("PASS: api_started set to False on exit")
+        print("✓ api_started set to False on exit")
 
     if not any("Starting HA interface" in log for log in mock_base.log_messages):
         print("ERROR: Should log 'Starting HA interface'")
         failed += 1
     else:
-        print("PASS: Startup message logged")
+        print("✓ Startup message logged")
 
     if not any("HA interface stopped" in log for log in mock_base.log_messages):
         print("ERROR: Should log 'HA interface stopped'")
         failed += 1
     else:
-        print("PASS: Stop message logged")
+        print("✓ Stop message logged")
 
     return failed
 
@@ -413,25 +417,25 @@ def test_hainterface_start_dummy_mode(my_predbat=None):
         print("ERROR: Should log 'Starting Dummy HA interface'")
         failed += 1
     else:
-        print("PASS: Dummy startup message logged")
+        print("✓ Dummy startup message logged")
 
-    if ha_interface.api_started != False:
+    if ha_interface.api_started is not False:
         print("ERROR: api_started should be False after exit")
         failed += 1
     else:
-        print("PASS: api_started set to False on exit")
+        print("✓ api_started set to False on exit")
 
     if sleep_count[0] < 3:
         print(f"ERROR: Expected at least 3 sleep calls, got {sleep_count[0]}")
         failed += 1
     else:
-        print(f"PASS: Sleep called {sleep_count[0]} times")
+        print(f"✓ Sleep called {sleep_count[0]} times")
 
     if not any("HA interface stopped" in log for log in mock_base.log_messages):
         print("ERROR: Should log 'HA interface stopped'")
         failed += 1
     else:
-        print("PASS: Stop message logged")
+        print("✓ Stop message logged")
 
     return failed
 
@@ -460,9 +464,9 @@ def run_hainterface_lifecycle_tests(my_predbat):
 
     print("\n" + "=" * 80)
     if failed == 0:
-        print("PASS: All HAInterface lifecycle tests passed!")
+        print("✅ All HAInterface lifecycle tests passed!")
     else:
-        print(f"ERROR: {failed} HAInterface lifecycle test(s) failed")
+        print(f"❌ {failed} HAInterface lifecycle test(s) failed")
     print("=" * 80)
 
     return failed

@@ -4,7 +4,7 @@
 # Copyright Trefor Southwell 2026 - All Rights Reserved
 # -----------------------------------------------------------------------------
 # Build the C++ prediction kernel as a shared library for local testing or
-# inside the addon Docker image. Falls back to the Python engine when absent.
+# inside the app Docker image. Falls back to the Python engine when absent.
 #
 # Usage: bash apps/predbat/build_kernel.sh [output.so]
 set -e

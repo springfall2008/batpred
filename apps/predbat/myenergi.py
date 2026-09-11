@@ -761,12 +761,20 @@ MAX_POLL_SECONDS = 30 * 60
 class MyEnergiAPI(ComponentBase, OAuthMixin):
     """myenergi component providing Zappi and Eddi monitoring and boost control."""
 
-    def initialize(self, auth_method=None, hub_serial=None, api_key=None, key=None, token_expires_at=None, token_hash=None, automatic=True, enable_controls=True, poll_seconds=60, zappi_control=False):
+    def initialize(self, auth_method=None, hub_serial=None, api_key=None, key=None, token_expires_at=None, token_hash=None, automatic=True, enable_controls=True, poll_seconds=60, zappi_control=False, automatic_zappi=True, automatic_eddi=True):
         """Select a transport from the configured credentials and set up component state."""
         configured_auth_method = (auth_method or "direct").lower()
         self.hub_serial = hub_serial
         self.api_key = api_key
         self.automatic = automatic
+        # Both halves are kept apart from automatic so either device kind can be left out
+        # on its own: an Eddi owner who charges their car with something else sets
+        # automatic_zappi false, and a Zappi owner whose hot water diverter is handled
+        # elsewhere sets automatic_eddi false. Each defaults on, unlike ge_cloud_automatic_evc,
+        # because myenergi already wires both device kinds under automatic and an upgrade
+        # must not silently take that away from existing users.
+        self.automatic_zappi = automatic_zappi
+        self.automatic_eddi = automatic_eddi
         self.enable_controls = enable_controls
         self.zappi_control = bool(zappi_control)
         # ComponentBase.start() calls run() on a fixed 60 second cadence, so the poll
@@ -838,6 +846,11 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
 
         The Zappi live power sensors go to car_charging_power, which is display-only: it feeds
         the web power flow diagram and the predbat.car_charging_power sensor, never the plan.
+
+        The two halves are gated separately: a Zappi is an EV charger and an Eddi is a hot
+        water diverter, so automatic_zappi off leaves the Eddi wiring in place while
+        contributing no car inputs, and automatic_eddi off does the reverse, for an account
+        that owns only one of the two things it does.
         """
         zappi_energy_entities = []
         zappi_power_entities = []
@@ -845,11 +858,11 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         eddi_entity = None
         for device in sorted(self.devices.values(), key=lambda item: item.serial):
             prefix = self.entity_prefix(device)
-            if device.kind == DEVICE_KIND_ZAPPI:
+            if device.kind == DEVICE_KIND_ZAPPI and self.automatic_zappi:
                 zappi_energy_entities.append("sensor.{}_session_energy".format(prefix))
                 zappi_power_entities.append("sensor.{}_power".format(prefix))
                 zappi_plug_entities.append("sensor.{}_plug_status".format(prefix))
-            elif device.kind == DEVICE_KIND_EDDI and eddi_entity is None:
+            elif device.kind == DEVICE_KIND_EDDI and self.automatic_eddi and eddi_entity is None:
                 eddi_entity = "sensor.{}_session_energy".format(prefix)
 
         if zappi_energy_entities:
@@ -903,6 +916,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
             return
         if not self.automatic:
             self.log("Warn: myenergi: myenergi_zappi_control needs myenergi_automatic to map each Zappi to a car, Zappi control is disabled")
+            return
+        if not self.automatic_zappi:
+            self.log("Warn: myenergi: myenergi_zappi_control needs myenergi_automatic_zappi to map each Zappi to a car, Zappi control is disabled")
             return
         if not self.enable_controls:
             self.log("Warn: myenergi: myenergi_zappi_control is ignored while myenergi_enable_controls is off")

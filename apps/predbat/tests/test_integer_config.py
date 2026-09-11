@@ -46,7 +46,7 @@ def test_integer_config_entities(my_predbat):
 
     assert isinstance(ha_value, int), f"Value 2.0 with step=1 should convert to int, got {type(ha_value)}"
     assert ha_value == 2, f"Value should be 2, got {ha_value}"
-    print(f"PASS: Float 2.0 with step=1 converts to integer 2")
+    print(f"✓ Float 2.0 with step=1 converts to integer 2")
 
     # Test 2: String integer like "3" should convert to int
     ha_value = "3"
@@ -57,7 +57,7 @@ def test_integer_config_entities(my_predbat):
 
     assert isinstance(ha_value, int), f"Value '3' with step=1 should convert to int, got {type(ha_value)}"
     assert ha_value == 3, f"Value should be 3, got {ha_value}"
-    print(f"PASS: String '3' with step=1 converts to integer 3")
+    print(f"✓ String '3' with step=1 converts to integer 3")
 
     # Test 3: String float like "4.0" should convert to int for integer step
     ha_value = "4.0"
@@ -68,7 +68,7 @@ def test_integer_config_entities(my_predbat):
 
     assert isinstance(ha_value, int), f"Value '4.0' with step=1 should convert to int, got {type(ha_value)}"
     assert ha_value == 4, f"Value should be 4, got {ha_value}"
-    print(f"PASS: String '4.0' with step=1 converts to integer 4")
+    print(f"✓ String '4.0' with step=1 converts to integer 4")
 
     # Test 4: Float with decimal part should stay as float even for integer step
     ha_value = 4.5
@@ -79,7 +79,7 @@ def test_integer_config_entities(my_predbat):
 
     assert isinstance(ha_value, float), f"Value 4.5 should remain float, got {type(ha_value)}"
     assert ha_value == 4.5, f"Value should be 4.5, got {ha_value}"
-    print(f"PASS: Float 4.5 stays as float 4.5 (has fractional part)")
+    print(f"✓ Float 4.5 stays as float 4.5 (has fractional part)")
 
     # Test 5: Test with decimal step - should always stay as float
     # Find an entity with decimal step
@@ -101,7 +101,7 @@ def test_integer_config_entities(my_predbat):
 
         # With decimal step, conversion shouldn't happen
         assert isinstance(ha_value, float), f"Value 5.0 with step={decimal_step} should stay float, got {type(ha_value)}"
-        print(f"PASS: Float 5.0 with step={decimal_step} stays as float")
+        print(f"✓ Float 5.0 with step={decimal_step} stays as float")
     else:
         print("! No decimal step entity found to test")
 
@@ -124,9 +124,9 @@ def test_integer_config_entities(my_predbat):
 
     assert isinstance(ha_value, int), f"set_reserve_min 27.0 should convert to int, got {type(ha_value)}"
     assert ha_value == 27, f"Value should be 27, got {ha_value}"
-    print(f"PASS: set_reserve_min: Float 27.0 with step=1 converts to integer 27")
+    print(f"✓ set_reserve_min: Float 27.0 with step=1 converts to integer 27")
 
-    print("PASS: Test passed: Integer conversion logic works correctly")
+    print("✓ Test passed: Integer conversion logic works correctly")
     return False
 
 
@@ -149,7 +149,7 @@ def test_expose_config_preserves_integer(my_predbat):
     # State should be integer 5, not float 5.0
     assert isinstance(state_value, int), f"Exposed state should be int, got {type(state_value)}: {state_value}"
     assert state_value == 5, f"Exposed state should be 5, got {state_value}"
-    print(f"PASS: expose_config correctly writes integer 5")
+    print(f"✓ expose_config correctly writes integer 5")
 
     # Test with set_reserve_min
     my_predbat.expose_config("set_reserve_min", 30, force_ha=True)
@@ -162,7 +162,7 @@ def test_expose_config_preserves_integer(my_predbat):
 
     assert isinstance(state_value, int), f"Exposed set_reserve_min should be int, got {type(state_value)}: {state_value}"
     assert state_value == 30, f"Exposed set_reserve_min should be 30, got {state_value}"
-    print(f"PASS: expose_config correctly writes integer 30 for set_reserve_min")
+    print(f"✓ expose_config correctly writes integer 30 for set_reserve_min")
 
     # Test with a float value to ensure floats still work
     # Find an entity with decimal step
@@ -186,7 +186,7 @@ def test_expose_config_preserves_integer(my_predbat):
 
         assert isinstance(state_value, float), f"Exposed {decimal_name} should be float, got {type(state_value)}: {state_value}"
         assert state_value == 12.75, f"Exposed {decimal_name} should be 12.75, got {state_value}"
-        print(f"PASS: expose_config correctly writes float 12.75 for {decimal_name}")
+        print(f"✓ expose_config correctly writes float 12.75 for {decimal_name}")
     else:
         print("! No decimal step entity found to test")
 
@@ -194,7 +194,7 @@ def test_expose_config_preserves_integer(my_predbat):
     for item in my_predbat.CONFIG_ITEMS:
         my_predbat.expose_config(item.get("name"), item.get("default"), force_ha=True)
 
-    print("PASS: Test passed: expose_config preserves type correctly")
+    print("✓ Test passed: expose_config preserves type correctly")
     return False
 
 
@@ -436,4 +436,45 @@ def test_metric_battery_cycle_fractional_value_not_truncated(my_predbat):
         my_predbat.expose_config("expert_mode", original_expert_mode, force_ha=True)
 
     print("✓ Test passed: a fractional metric_battery_cycle value is not truncated")
+    return False
+
+
+def test_metric_battery_value_scaling_step_resolves_export_margin(my_predbat):
+    """
+    Regression test for #4840: metric_battery_value_scaling's step must be fine enough to express
+    values inside the margin that stops Predbat exporting the battery at a loss.
+
+    compute_metric() credits leftover SoC at battery_value_rate(), the replacement cost of a stored
+    kWh. Exporting beats holding once that credit drops below what exporting earns, so the whole
+    protective margin is (export realised / replacement cost) - only about 1% on a flat export
+    tariff close to the cheapest import rate. A coarse step means the smallest reduction below the
+    1.0 default lands well past that flip point, so the planner churns the battery for a real loss
+    with no way for the user to nudge the setting gently (#4840 used 0.9 on 10.54p import / 12p
+    export, where the flip point is ~0.987).
+    """
+    print("**** test_metric_battery_value_scaling_step_resolves_export_margin ****")
+
+    item = my_predbat.config_index["metric_battery_value_scaling"]
+    step = item.get("step")
+
+    # The worked case from #4840: Octopus Cosy 10.54p cheapest import against a flat 12p export,
+    # with this system's inverter/battery losses. Anything below flip_point makes exporting the
+    # battery look profitable to the planner when it actually loses money.
+    inverter_loss, battery_loss, battery_loss_discharge = 0.96, 0.97, 0.97
+    replacement_cost = 10.54 / inverter_loss / battery_loss
+    export_realised = 12.0 * inverter_loss * battery_loss_discharge
+    flip_point = export_realised / replacement_cost
+
+    first_nudge = 1.0 - step
+    assert first_nudge >= flip_point, "one step below the 1.0 default is {:.4f}, past the {:.4f} flip point - metric_battery_value_scaling step {} still sends the planner into exporting at a loss on a near-parity tariff".format(
+        first_nudge, flip_point, step
+    )
+
+    # Every value reachable on the previous 0.1 step must still be selectable, so an existing user's
+    # stored setting stays valid rather than being rejected or snapped to a neighbouring value.
+    for tenth in range(0, 21):
+        previous_value = tenth / 10.0
+        assert abs(round(previous_value / step) * step - previous_value) < 1e-9, "value {} reachable on the old 0.1 step is not a multiple of the new step {}".format(previous_value, step)
+
+    print("✓ Test passed: metric_battery_value_scaling step {} keeps the first nudge ({:.4f}) clear of the {:.4f} flip point and keeps old 0.1-step values valid".format(step, first_nudge, flip_point))
     return False

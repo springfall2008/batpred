@@ -513,7 +513,7 @@ CONFIG_ITEMS = [
         "type": "input_number",
         "min": 0,
         "max": 2.0,
-        "step": 0.1,
+        "step": 0.01,
         "unit": "*",
         "icon": "mdi:multiplication",
         "enable": "expert_mode",
@@ -1138,6 +1138,24 @@ CONFIG_ITEMS = [
         "type": "switch",
         "default": False,
         "reset_inverter_force": True,
+    },
+    {
+        "name": "chat_confirm_writes",
+        "friendly_name": "Chat confirm before changing settings",
+        "type": "switch",
+        "default": True,
+    },
+    {
+        "name": "chat_web_search",
+        "friendly_name": "Chat web search (costs per request)",
+        "type": "switch",
+        "default": False,
+    },
+    {
+        "name": "ai_ha_state_enable",
+        "friendly_name": "AI: allow reading Home Assistant state",
+        "type": "switch",
+        "default": True,
     },
     {
         "name": "balance_inverters_enable",
@@ -2152,7 +2170,6 @@ INVERTER_DEF = {
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_ge_eco_toggle": False,
-        "has_fox_inverter_mode": True,
         "time_button_press": True,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
@@ -2183,7 +2200,6 @@ INVERTER_DEF = {
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_ge_eco_toggle": False,
-        "has_fox_inverter_mode": False,
         "time_button_press": True,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
@@ -2212,7 +2228,6 @@ INVERTER_DEF = {
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_ge_eco_toggle": False,
-        "has_fox_inverter_mode": False,
         "time_button_press": True,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
@@ -2241,7 +2256,6 @@ INVERTER_DEF = {
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_ge_eco_toggle": False,
-        "has_fox_inverter_mode": False,
         "time_button_press": True,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
@@ -2274,7 +2288,6 @@ INVERTER_DEF = {
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_ge_eco_toggle": False,
-        "has_fox_inverter_mode": False,
         "time_button_press": True,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
@@ -2314,7 +2327,6 @@ INVERTER_DEF = {
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_ge_eco_toggle": False,
-        "has_fox_inverter_mode": False,
         "time_button_press": True,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
@@ -2345,7 +2357,6 @@ INVERTER_DEF = {
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_ge_eco_toggle": False,
-        "has_fox_inverter_mode": False,
         "time_button_press": False,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
@@ -2377,7 +2388,6 @@ INVERTER_DEF = {
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_ge_eco_toggle": False,
-        "has_fox_inverter_mode": False,
         "time_button_press": False,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
@@ -2410,7 +2420,6 @@ INVERTER_DEF = {
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_ge_eco_toggle": False,
-        "has_fox_inverter_mode": False,
         "time_button_press": False,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
@@ -2497,6 +2506,31 @@ APPS_SCHEMA = {
     "ha_key": {"type": "string", "empty": False},
     "load_filter_threshold": {"type": "integer"},
     "web_port": {"type": "integer"},
+    # The chat agent's LLM endpoint. Named chat_api_* rather than openrouter_* because the
+    # endpoint no longer has to be OpenRouter: any OpenAI-compatible API works, including a local
+    # Ollama. The openrouter_* names are still accepted so an existing apps.yaml keeps working.
+    # A block of named LLM endpoints, so more than one can be configured at once and chosen from
+    # the Chat tab. Each entry is {type?, url?, api_key?} keyed by a name of the user's choosing:
+    #   chat:
+    #     openrouter: {api_key: !secret openrouter_key}
+    #     ollama:     {url: 'http://localhost:11434/v1'}
+    # The flat chat_api_* and openrouter_* keys below still work and are read as a single unnamed
+    # provider when no block is present.
+    # Everything the chat agent is configured with lives in one block, rather than a dozen
+    # chat_-prefixed keys scattered through the file. Providers sit under their own sub-key so a
+    # provider named "model" cannot collide with the model setting:
+    #
+    #   chat:
+    #     providers:
+    #       openrouter: {api_key: !secret openrouter_key}
+    #       ollama:     {url: 'http://localhost:11434/v1'}
+    #     model: openai/gpt-4o-mini
+    #     turn_timeout: 1800
+    #
+    # Validated as a dict here; ChatAgent applies the per-setting defaults and ignores anything it
+    # does not recognise. The switches that control chat at runtime (chat_confirm_writes and
+    # friends) are CONFIG_ITEMS entities, not apps.yaml, and are unaffected.
+    "chat": {"type": "dict"},
     "load_today": {"type": "sensor|sensor_list", "sensor_type": "float", "required": True},
     "import_today": {
         "type": "sensor|sensor_list",
@@ -2531,6 +2565,7 @@ APPS_SCHEMA = {
     "validate_config_retries": {"type": "integer", "zero": True},
     "validate_config_retry_minutes": {"type": "integer", "zero": True},
     "givtcp_rest": {"type": "string_list", "entries": "num_inverters"},
+    "givtcp_automatic": {"type": "boolean"},
     "charge_rate": {"type": "sensor_list", "sensor_type": "float", "modify": True, "entries": "num_inverters"},
     "discharge_rate": {"type": "sensor_list", "sensor_type": "float", "modify": True, "entries": "num_inverters"},
     "battery_power": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
@@ -2550,6 +2585,10 @@ APPS_SCHEMA = {
     "discharge_start_time": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
     "discharge_end_time": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
     "battery_temperature": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
+    # Optional. When the entity reports the battery is being calibrated, Predbat disables itself for
+    # that inverter - a calibration cycle deliberately drives the battery outside its normal SoC
+    # range, so any plan made during one is wrong. Absent (the default) means "never calibrating".
+    "battery_calibration": {"type": "sensor_list", "sensor_type": "none|string", "entries": "num_inverters"},
     "pause_mode": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
     "pause_start_time": {"type": "sensor_list", "sensor_type": "none|string", "modify": True, "entries": "num_inverters"},
     "pause_end_time": {"type": "sensor_list", "sensor_type": "none|string", "modify": True, "entries": "num_inverters"},
@@ -2577,6 +2616,10 @@ APPS_SCHEMA = {
     "solcast_poll_hours": {"type": "float", "zero": False},
     "solcast_sites": {"type": "string_list"},
     "pv_forecast_today": {"type": "sensor", "sensor_type": "float"},
+    # DC array size in kWp, capping how far the p90 cloud model may extrapolate above the forecast.
+    # Auto-detected from the forecast_solar / open_meteo_forecast arrays; set here only for sources
+    # that declare no array size, such as Solcast and the HA integrations.
+    "pv_array_kwp": {"type": "float"},
     "pv_forecast_tomorrow": {"type": "sensor", "sensor_type": "float"},
     "pv_forecast_d3": {"type": "sensor", "sensor_type": "float"},
     "pv_forecast_d4": {"type": "sensor", "sensor_type": "float"},
@@ -2627,6 +2670,8 @@ APPS_SCHEMA = {
     "myenergi_token_expires_at": {"type": "string", "empty": False},
     "myenergi_token_hash": {"type": "string", "empty": False},
     "myenergi_automatic": {"type": "boolean"},
+    "myenergi_automatic_zappi": {"type": "boolean"},
+    "myenergi_automatic_eddi": {"type": "boolean"},
     "myenergi_enable_controls": {"type": "boolean"},
     "myenergi_poll_seconds": {"type": "integer", "zero": False},
     "myenergi_zappi_control": {"type": "boolean"},
@@ -2676,6 +2721,7 @@ APPS_SCHEMA = {
     "teslemetry_site_id": {"type": "string|string_list"},
     "teslemetry_base_url": {"type": "string", "empty": False},
     "teslemetry_automatic": {"type": "boolean"},
+    "teslemetry_tbc_control": {"type": "boolean"},
     "teslemetry_auth_method": {"type": "string", "empty": False},
     "teslemetry_token_expires_at": {"type": "string", "empty": False},
     "teslemetry_token_hash": {"type": "string", "empty": False},

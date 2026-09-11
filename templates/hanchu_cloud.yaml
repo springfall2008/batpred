@@ -57,7 +57,6 @@ pred_bat:
     soc_units: "%"
     num_load_entities: 1
     has_ge_inverter_mode: false
-    has_fox_inverter_mode: false
     time_button_press: false
     clock_time_format: "%d-%m-%y %H:%M:%S"
     write_and_poll_sleep: 2

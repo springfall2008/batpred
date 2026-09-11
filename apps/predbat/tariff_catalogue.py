@@ -229,3 +229,17 @@ def merged_import_catalogue(compare_list=None):
 def merged_export_catalogue(compare_list=None):
     """Return the export dropdown's entries: built-ins, then the user's own, then Custom."""
     return _merged(EXPORT_TARIFFS, ["export_octopus_url", "rates_export"], compare_list, "Custom - enter URL below")
+
+
+# The three Octopus export products the export-comparison flow evaluates, in presentation
+# order. Outgoing Fixed is the baseline the other two are quoted against, so it stays first.
+EXPORT_COMPARE_TARIFF_IDS = ("outgoing_fixed", "outgoing_prime", "agile_outgoing")
+
+
+def export_compare_tariffs():
+    """Return the three export-comparison catalogue entries, in fixed order."""
+    by_id = {entry["id"]: entry for entry in merged_export_catalogue()}
+    missing = [tariff_id for tariff_id in EXPORT_COMPARE_TARIFF_IDS if tariff_id not in by_id]
+    if missing:
+        raise KeyError("export-compare tariff ids missing from catalogue: {}".format(", ".join(missing)))
+    return [dict(by_id[tariff_id]) for tariff_id in EXPORT_COMPARE_TARIFF_IDS]

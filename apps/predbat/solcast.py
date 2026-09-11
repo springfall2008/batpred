@@ -1483,6 +1483,11 @@ class SolarAPI(ComponentBase):
             else:
                 pv_forecast_minute90 = dict(pv_forecast_minute)
 
+            # Settle the DC array size for the p90 cloud ceiling. max_kwh is already the summed
+            # array capacity of whichever provider actually served this fetch, so there is no risk
+            # of double-counting a site configured against two providers.
+            self.base.resolve_pv_array_kwp(max_kwh)
+
             # Run calibration on the data
             pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data = self.pv_calibration(
                 pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period

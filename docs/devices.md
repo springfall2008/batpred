@@ -22,7 +22,7 @@ For plugged-in detection on V2 models, see guidance <https://springfall2008.gith
     - 'charging'
 ```
 
-Note: **sensor.hypervolt_session_energy_total_increasing** defaults to 'unknown' between charging sessions; [create a template sensor](car-charging.md#configure-appsyaml-for-your-car-charging) to wrap around the hypervolt sensor to resolve predbat complaining about this.
+Note: **sensor.hypervolt_session_energy_total_increasing** defaults to 'unknown' between charging sessions; [create a template sensor](car-charging.md#configure-appsyaml-for-your-car-charging) to wrap around the hypervolt sensor to resolve Predbat complaining about this.
 
 **Agile Tariff**
 

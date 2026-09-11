@@ -10,11 +10,12 @@
 """Tests for the annual prediction Open-Meteo weather module."""
 
 import asyncio
+import hashlib
 from datetime import date, datetime, timedelta
 
 import pytz
 
-from annual_weather import AnnualWeather, percentile
+from annual_weather import ARCHIVE_URL, AnnualWeather, percentile
 
 ARRAYS = [{"kwp": 5.0, "declination": 35, "azimuth": 180, "efficiency": 0.95}]
 TWO_ARRAYS = [
@@ -266,7 +267,6 @@ def test_annual_weather(my_predbat):
 
     print("Test: a cache entry poisoned before this guard existed is discarded and re-fetched, not trusted forever")
     poisoned_storage = FakeAnnualStorage()
-    poisoned_storage.cache[("annual", "weather_actual_2025_0_51.5_-0.1")] = truncated_payload
     recovering_calls = {"n": 0}
 
     async def recovering_fetch(url):
@@ -275,6 +275,13 @@ def test_annual_weather(my_predbat):
         return actual_payload if "archive-api" in url else forecast_payload
 
     recovering_weather = AnnualWeather(ARRAYS, latitude=51.5, longitude=-0.1, log=print, storage=poisoned_storage, fetch_json=recovering_fetch)
+    # Derived from the same _window/_build_url + hash the production code uses, not a
+    # hand-written literal - a literal silently stops matching (and this test silently stops
+    # exercising the discard path) the moment the cache key derivation changes, exactly as
+    # happened here.
+    poisoned_start, poisoned_end = recovering_weather._window(2025)
+    poisoned_key = "weather_actual_2025_0_{}".format(hashlib.sha256(recovering_weather._build_url(ARCHIVE_URL, ARRAYS[0], poisoned_start, poisoned_end).encode()).hexdigest()[:16])
+    poisoned_storage.cache[("annual", poisoned_key)] = truncated_payload
     recovering_year = asyncio.run(recovering_weather.fetch(2025))
     if not recovering_year.has_actual(date(2025, 1, 10)):
         print("  ERROR: a poisoned cache entry should be discarded and re-fetched rather than trusted forever")
@@ -317,6 +324,119 @@ def test_annual_weather(my_predbat):
     partial_actual_year = asyncio.run(partial_actual_weather.fetch(2025))
     if partial_actual_year.has_actual(date(2025, 1, 10)):
         print("  ERROR: the actual series should be empty when one of several arrays fails to parse")
+        failed = True
+
+    return failed
+
+
+def test_annual_weather_orientation_cache(my_predbat):
+    """Two runs differing only in orientation must not share a weather cache entry."""
+    failed = False
+
+    print("Test: a different azimuth produces a different cache key")
+    storage = FakeAnnualStorage()
+    urls = []
+
+    async def fake_fetch(url):
+        """Record the URL and return a payload whose value encodes which URL produced it."""
+        urls.append(url)
+        return {
+            "hourly": {
+                "time": ["2025-06-01T00:00", "2025-06-01T01:00"],
+                "global_tilted_irradiance": [float(len(urls)), float(len(urls))],
+                "temperature_2m": [15.0, 15.0],
+                "wind_speed_10m": [2.0, 2.0],
+            }
+        }
+
+    south = AnnualWeather([{"kwp": 5.0, "declination": 35, "azimuth": 180, "efficiency": 0.95}], latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    west = AnnualWeather([{"kwp": 5.0, "declination": 35, "azimuth": 270, "efficiency": 0.95}], latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+
+    asyncio.run(south._fetch_series("https://example.test/archive", 2025, "actual"))
+    downloads_after_south = len(urls)
+    asyncio.run(west._fetch_series("https://example.test/archive", 2025, "actual"))
+
+    if len(urls) == downloads_after_south:
+        print("  ERROR: the west-facing array was served the south-facing array's cached payload")
+        failed = True
+    if len(set(storage.saved_keys)) < 2:
+        print("  ERROR: expected two distinct cache keys, got {}".format(sorted(set(storage.saved_keys))))
+        failed = True
+
+    print("Test: a different declination also produces a different cache key")
+    storage = FakeAnnualStorage()
+    urls = []
+    flat = AnnualWeather([{"kwp": 5.0, "declination": 10, "azimuth": 180, "efficiency": 0.95}], latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    steep = AnnualWeather([{"kwp": 5.0, "declination": 60, "azimuth": 180, "efficiency": 0.95}], latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    asyncio.run(flat._fetch_series("https://example.test/archive", 2025, "actual"))
+    downloads_after_flat = len(urls)
+    asyncio.run(steep._fetch_series("https://example.test/archive", 2025, "actual"))
+    if len(urls) == downloads_after_flat:
+        print("  ERROR: the steep array was served the shallow array's cached payload")
+        failed = True
+
+    print("Test: an identical array still hits the cache")
+    storage = FakeAnnualStorage()
+    urls = []
+    first = AnnualWeather([{"kwp": 5.0, "declination": 35, "azimuth": 180, "efficiency": 0.95}], latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    second = AnnualWeather([{"kwp": 5.0, "declination": 35, "azimuth": 180, "efficiency": 0.95}], latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    asyncio.run(first._fetch_series("https://example.test/archive", 2025, "actual"))
+    downloads_after_first = len(urls)
+    asyncio.run(second._fetch_series("https://example.test/archive", 2025, "actual"))
+    if len(urls) != downloads_after_first:
+        print("  ERROR: an identical array re-downloaded instead of hitting the cache")
+        failed = True
+
+    return failed
+
+
+def test_annual_weather_window(my_predbat):
+    """A month-windowed fetch requests only that window and cannot collide with a full year."""
+    failed = False
+    urls = []
+
+    async def fake_fetch(url):
+        """Record the URL and return a minimal usable payload."""
+        urls.append(url)
+        return {
+            "hourly": {
+                "time": ["2026-07-01T00:00", "2026-07-01T01:00"],
+                "global_tilted_irradiance": [100.0, 120.0],
+                "temperature_2m": [18.0, 19.0],
+                "wind_speed_10m": [2.0, 2.0],
+            }
+        }
+
+    print("Test: months=None keeps the whole-year window")
+    storage = FakeAnnualStorage()
+    client = AnnualWeather(ARRAYS, latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    asyncio.run(client._fetch_series("https://example.test/archive", 2025, "actual"))
+    if "start_date=2025-01-01" not in urls[-1] or "end_date=2026-01-01" not in urls[-1]:
+        print("  ERROR: a full-year fetch should still span 2025-01-01 to 2026-01-01, got {}".format(urls[-1]))
+        failed = True
+
+    print("Test: a single-month window requests that month plus a two day buffer")
+    urls.clear()
+    storage = FakeAnnualStorage()
+    client = AnnualWeather(ARRAYS, latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch, months=[7])
+    asyncio.run(client._fetch_series("https://example.test/archive", 2026, "actual"))
+    if "start_date=2026-07-01" not in urls[-1]:
+        print("  ERROR: a July window should start on 2026-07-01, got {}".format(urls[-1]))
+        failed = True
+    if "end_date=2026-08-02" not in urls[-1]:
+        print("  ERROR: a July window should end on 2026-08-02 (31 July plus a two day buffer), got {}".format(urls[-1]))
+        failed = True
+
+    print("Test: a windowed entry cannot be served from a full-year entry")
+    storage = FakeAnnualStorage()
+    urls.clear()
+    full = AnnualWeather(ARRAYS, latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    windowed = AnnualWeather(ARRAYS, latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch, months=[7])
+    asyncio.run(full._fetch_series("https://example.test/archive", 2026, "actual"))
+    downloads_after_full = len(urls)
+    asyncio.run(windowed._fetch_series("https://example.test/archive", 2026, "actual"))
+    if len(urls) == downloads_after_full:
+        print("  ERROR: the windowed fetch was served the full-year cache entry")
         failed = True
 
     return failed

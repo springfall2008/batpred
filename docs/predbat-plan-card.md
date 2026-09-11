@@ -53,9 +53,9 @@ Rate symbols (import and export):
 
 - ? &#8518; - Rate that has been modified based on **input_number.predbat_metric_future_rate_offset_import** or **input_number.predbat_metric_future_rate_offset_export**
 - ? &#x2696; - Rate that has been estimated using future rate estimation data (e.g. Nordpool)
-- &#61; - Rate that has been overridden by the user's apps.yaml
-- &#177; - Rate that has been adjusted with a rate offset in the user's apps.yaml
-- &dollar; - Rate that has been adjusted for an Octopus Saving session
+- &#61; - Rate that has been overridden by the user's `apps.yaml`
+- &#177; - Rate that has been adjusted with a rate offset in the user's `apps.yaml`
+- &dollar; - Rate that has been adjusted for an Octopus Saving session or Axle event
 - ? - Rate that has not yet been defined and the previous day's data was used instead
 
 Battery SoC symbols:

@@ -84,7 +84,7 @@ def test_hainterface_socketloop_auth_ok(my_predbat=None):
             print(f"ERROR: Expected access_token 'test_key'")
             failed += 1
         else:
-            print("PASS: Auth message sent correctly")
+            print("✓ Auth message sent correctly")
 
         # Check subscriptions
         if len(mock_ws.send_json.call_args_list) < 3:
@@ -99,14 +99,14 @@ def test_hainterface_socketloop_auth_ok(my_predbat=None):
                 print(f"ERROR: Expected state_changed event_type")
                 failed += 1
             else:
-                print("PASS: State subscription sent correctly")
+                print("✓ State subscription sent correctly")
 
             subscribe_service = mock_ws.send_json.call_args_list[2][0][0]
             if subscribe_service.get("event_type") != "call_service":
                 print(f"ERROR: Expected call_service event_type")
                 failed += 1
             else:
-                print("PASS: Service subscription sent correctly")
+                print("✓ Service subscription sent correctly")
 
     # Note: api_started is set after subscriptions, but since we exit early with api_stop,
     # it may not be set in test environment. In real operation, socketLoop continues running.
@@ -161,13 +161,13 @@ def test_hainterface_socketloop_auth_invalid(my_predbat=None):
         print("ERROR: Should log auth failure")
         failed += 1
     else:
-        print("PASS: Auth failure logged")
+        print("✓ Auth failure logged")
 
     if ha_interface.websocket_active:
         print("ERROR: websocket_active should be False after auth failure")
         failed += 1
     else:
-        print("PASS: websocket_active set to False")
+        print("✓ websocket_active set to False")
 
     return failed
 
@@ -239,7 +239,7 @@ def test_hainterface_socketloop_state_changed(my_predbat=None):
             print(f"ERROR: Expected state '200', got '{state.get('state')}'")
             failed += 1
         else:
-            print("PASS: State updated correctly")
+            print("✓ State updated correctly")
 
     if not mock_base.trigger_watch_list_calls:
         print("ERROR: trigger_watch_list should be called")
@@ -253,7 +253,7 @@ def test_hainterface_socketloop_state_changed(my_predbat=None):
             print(f"ERROR: Expected new_state '200'")
             failed += 1
         else:
-            print("PASS: trigger_watch_list called correctly")
+            print("✓ trigger_watch_list called correctly")
 
     return failed
 
@@ -329,7 +329,7 @@ def test_hainterface_socketloop_call_service(my_predbat=None):
             print(f"ERROR: Expected service 'turn_on'")
             failed += 1
         else:
-            print("PASS: trigger_callback called correctly")
+            print("✓ trigger_callback called correctly")
 
     return failed
 
@@ -385,7 +385,7 @@ def test_hainterface_socketloop_result_failed(my_predbat=None):
         print("ERROR: Should log result failure")
         failed += 1
     else:
-        print("PASS: Result failure logged")
+        print("✓ Result failure logged")
 
     return failed
 
@@ -438,7 +438,7 @@ def test_hainterface_socketloop_message_closed(my_predbat=None):
         print("ERROR: Should log reconnect attempt")
         failed += 1
     else:
-        print("PASS: Reconnect attempt logged")
+        print("✓ Reconnect attempt logged")
 
     return failed
 
@@ -493,14 +493,14 @@ def test_hainterface_socketloop_error_limit(my_predbat=None):
         print("ERROR: Should log error messages")
         failed += 1
     else:
-        print("PASS: Error logging present")
+        print("✓ Error logging present")
 
     # fatal_error_occurred is called when error_count reaches 10
     if not mock_base.fatal_error_occurred_called:
         print("WARN: fatal_error_occurred not called (may exit before check)")
         # Don't fail on this - timing dependent
     else:
-        print("PASS: fatal_error_occurred called")
+        print("✓ fatal_error_occurred called")
 
     return failed
 
@@ -547,21 +547,21 @@ def test_hainterface_socketloop_error_count_limit(my_predbat=None):
         print(f"Logs: {[log for log in mock_base.log_messages if 'fail' in log.lower()]}")
         failed += 1
     else:
-        print("PASS: 'failed 10 times' logged")
+        print("✓ 'failed 10 times' logged")
 
     # Check that fatal_error_occurred was called
     if not mock_base.fatal_error_occurred_called:
         print("ERROR: fatal_error_occurred should be called")
         failed += 1
     else:
-        print("PASS: fatal_error_occurred called")
+        print("✓ fatal_error_occurred called")
 
     # Verify it made around 10 connection attempts
     if connection_attempts[0] < 9:
         print(f"ERROR: Expected ~10 connection attempts, got {connection_attempts[0]}")
         failed += 1
     else:
-        print(f"PASS: Made {connection_attempts[0]} connection attempts")
+        print(f"✓ Made {connection_attempts[0]} connection attempts")
 
     return failed
 
@@ -614,7 +614,7 @@ def test_hainterface_socketloop_exception_in_loop(my_predbat=None):
         print("ERROR: Should log exception")
         failed += 1
     else:
-        print("PASS: Exception logged")
+        print("✓ Exception logged")
 
     return failed
 
@@ -651,7 +651,7 @@ def test_hainterface_socketloop_exception_in_startup(my_predbat=None):
         print("ERROR: Should log startup exception")
         failed += 1
     else:
-        print("PASS: Startup exception logged")
+        print("✓ Startup exception logged")
 
     return failed
 
@@ -700,7 +700,7 @@ def test_hainterface_socketloop_update_pending(my_predbat=None):
         print("ERROR: update_pending should be True after connection")
         failed += 1
     else:
-        print("PASS: update_pending set to True")
+        print("✓ update_pending set to True")
 
     return failed
 
@@ -767,28 +767,28 @@ def test_hainterface_socketloop_connection_drop_unblocks_queued_command(my_predb
         print("ERROR: threading.Event for queued command was not set after connection drop")
         failed += 1
     else:
-        print("PASS: threading.Event set when connection dropped with command in queue")
+        print("✓ threading.Event set when connection dropped with command in queue")
 
     # The error must be 'connection_lost'
     if pre_queued_result.get("error") != "connection_lost":
         print(f"ERROR: Expected error='connection_lost', got {pre_queued_result.get('error')!r}")
         failed += 1
     else:
-        print("PASS: result_holder error set to 'connection_lost'")
+        print("✓ result_holder error set to 'connection_lost'")
 
     # success must be False
     if pre_queued_result.get("success") is not False:
         print(f"ERROR: Expected success=False, got {pre_queued_result.get('success')!r}")
         failed += 1
     else:
-        print("PASS: result_holder success set to False")
+        print("✓ result_holder success set to False")
 
     # The queue must be empty after cleanup
     if ha_interface.ws_command_queue:
         print("ERROR: ws_command_queue should be empty after connection drop cleanup")
         failed += 1
     else:
-        print("PASS: ws_command_queue cleared after connection drop")
+        print("✓ ws_command_queue cleared after connection drop")
 
     return failed
 
@@ -935,7 +935,7 @@ def test_hainterface_socketloop_service_register(my_predbat=None):
         print("ERROR: service_registered event should be fired")
         failed += 1
     else:
-        print("PASS: service_registered event fired")
+        print("✓ service_registered event fired")
 
     return failed
 
@@ -1049,9 +1049,9 @@ def run_hainterface_websocket_tests(my_predbat):
 
     print("\n" + "=" * 80)
     if failed == 0:
-        print("PASS: All HAInterface websocket tests passed!")
+        print("✅ All HAInterface websocket tests passed!")
     else:
-        print(f"ERROR: {failed} HAInterface websocket test(s) failed")
+        print(f"❌ {failed} HAInterface websocket test(s) failed")
     print("=" * 80)
 
     return failed

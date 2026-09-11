@@ -32,7 +32,7 @@ sed -n '<start>,<end>p' <scratch>/predbat.log     # context around an interestin
 
 The log gives you error/traceback context; the debug yaml gives you the reporter's actual configuration (grep it for the specific keys you care about if it is large). The reporter's Predbat version is usually in the first few lines of the log — quote the version you actually confirmed, not the one in the issue template.
 
-A `predbat_debug.yaml` can also be replayed against current main to reproduce their plan and list every setting they have changed from default — see [references/debug-journal.md](references/debug-journal.md).
+A `predbat_debug.yaml` can also be replayed against current main to reproduce their plan and list every setting they have changed from default — see [tools/debug-journal.md](../../../tools/debug-journal.md).
 
 ## 3. Classify the type
 
@@ -54,7 +54,7 @@ Search existing issues (`gh issue list --search ...`, both open and closed) for 
   git describe --tags        # the version you are investigating against
   ```
 
-- Read [references/debug-journal.md](references/debug-journal.md) before forming a hypothesis. It maps common symptoms to modules, records known per-integration behaviour from past investigations, and lists the traps that have wasted time before. Its entries are dated observations, not current truth — confirm anything you rely on against the working tree.
+- Read [tools/debug-journal.md](../../../tools/debug-journal.md) before forming a hypothesis. It maps common symptoms to modules, records known per-integration behaviour from past investigations, and lists the traps that have wasted time before. Its entries are dated observations, not current truth — confirm anything you rely on against the working tree.
 - Read the relevant source area for the reported symptom (e.g. `apps/predbat/fetch.py` for rate issues, `apps/predbat/inverter.py` for a named inverter).
 - Check `git log` / `git blame` on that area for recent related changes — the issue may already be fixed on main since the version the reporter is using.
 - If the issue clearly maps to an existing test module (`apps/predbat/tests/test_<feature>.py`, listed in `TEST_REGISTRY` in `unit_test.py`), run just that test with the wrapper, from the repo root:

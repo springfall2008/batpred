@@ -40,12 +40,54 @@ class FakeComponents:
     def is_alive(self, name):
         return self.alive_map[name]
 
+    def load_error(self, name):
+        """Every fake component loaded; the load-failure path is covered in test_components."""
+        return None
+
     def get_error_count(self, name):
         return 0 if self.alive_map[name] else 1
 
     def get_component(self, name):
         """Return a fake component with the configured calculation state."""
         return FakeComponent(self.calculating_map.get(name, False))
+
+
+def test_record_status_state_clamped(my_predbat):
+    """
+    Verify record_status() clamps the state written to the status sensor at 255 characters, the
+    most Home Assistant will accept, while current_status keeps the full text.
+
+    Motivated by #4990: the window warnings list every configured inverter component, so three or
+    more push the message past 255 and an unclamped write would fail, leaving the dashboard with a
+    stale status on exactly the cycles the warning matters.
+    """
+    print("*** Running test: record_status clamps the status sensor state at 255 characters")
+    failed = 0
+
+    try:
+        long_message = "Warn: Inverter 0 unable to read charge window time - " + "x" * 300
+        my_predbat.current_status = ""
+        my_predbat.record_status(long_message, had_errors=True)
+
+        state = my_predbat.dashboard_values.get(my_predbat.prefix + ".status", {}).get("state", None)
+        if state is None:
+            print("ERROR: status sensor was not published at all")
+            failed = 1
+        elif len(state) > 255:
+            print("ERROR: status state is {} characters, Home Assistant rejects anything over 255".format(len(state)))
+            failed = 1
+        elif not state.startswith("Warn: Inverter 0 unable to read charge window time"):
+            print("ERROR: clamped state lost the start of the message: {}".format(state[:80]))
+            failed = 1
+        elif len(my_predbat.current_status) <= 255:
+            print("ERROR: current_status should keep the full unclamped message for the log, got {} characters".format(len(my_predbat.current_status)))
+            failed = 1
+        else:
+            print("OK: state clamped to 255 characters ({}), full text kept in current_status ({})".format(len(state), len(my_predbat.current_status)))
+    finally:
+        my_predbat.current_status = ""
+
+    return failed
 
 
 def test_component_health_status(my_predbat):

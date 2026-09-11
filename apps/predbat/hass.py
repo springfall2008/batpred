@@ -87,7 +87,7 @@ def collect_watch_files(roots, apps_file_path):
     py_files = []
     seen_files = set()
     for root_dir in roots:
-        for root, dirs, files in os.walk(root_dir):
+        for root, _dirs, files in os.walk(root_dir):
             for file in files:
                 if file.startswith("."):
                     continue
@@ -133,6 +133,11 @@ async def main():
     #
 
     # List of root directories to search
+    # HA changed terminology from 'addons' to 'apps' in HA 2026.2 with 'addon_configs' becoming 'app_configs' but retained
+    # the old directory names for transition
+    #
+    # At present have not changed Predbat directory call in order to not break installations that are still using an older HA supervisor
+    # Propose in Feb 2027 that Predbat be changed to use the new directory call
     roots = [".", "/addon"]
 
     # Find all .py files in the directory hierarchy, plus the one real apps.yaml this

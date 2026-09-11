@@ -13,12 +13,13 @@
 """
 
 import asyncio
+import os
 import tempfile
 import shutil
 from types import SimpleNamespace
 
 from web import WebInterface
-from debug_history import capture_snapshot
+from debug_history import _legacy_snapshot_filename, capture_snapshot, snapshot_filename
 from storage import StorageLocalFiles
 
 
@@ -123,6 +124,11 @@ def test_web_debug_history_routes(my_predbat):
         if first_id not in resp.headers.get("Content-Disposition", ""):
             print("  ERROR: expected first_id in the Content-Disposition filename, got {!r}".format(resp.headers.get("Content-Disposition")))
             failed = True
+        # GitHub refuses a bare .yaml attachment, so a snapshot that arrives named .yaml has to be
+        # renamed before it can go on a bug report - the whole point of #4932.
+        if not resp.headers.get("Content-Disposition", "").endswith(".yaml.txt"):
+            print("  ERROR: expected the single-snapshot download to be named .yaml.txt (#4932), got {!r}".format(resp.headers.get("Content-Disposition")))
+            failed = True
 
         print("Test: 'latest' (explicit and omitted) resolves to the newest snapshot, id and data match (#4438 review item 4)")
         resp = asyncio.run(w.html_debug_history_download(FakeRequest(query={"id": "latest"})))
@@ -137,13 +143,44 @@ def test_web_debug_history_routes(my_predbat):
             print("  ERROR: expected omitting id entirely to behave the same as id=latest")
             failed = True
 
+        print("Test: a snapshot that only exists on disk under the pre-rename .yaml name still downloads, named .yaml.txt (#4932 fallback)")
+        legacy_only_id = asyncio.run(capture_snapshot(storage, "marker: legacy only\n", now - datetime.timedelta(hours=6), max_count=15))
+        os.rename(os.path.join(tmpdir, "debug", snapshot_filename(legacy_only_id)), os.path.join(tmpdir, "debug", _legacy_snapshot_filename(legacy_only_id)))  # simulate the pre-upgrade on-disk name
+        resp = asyncio.run(w.html_debug_history_download(FakeRequest(query={"id": legacy_only_id})))
+        if resp.status != 200 or resp.body != b"marker: legacy only\n":
+            print("  ERROR: expected the legacy-only snapshot to serve its data via the filename fallback, got status={} body={!r}".format(resp.status, resp.body))
+            failed = True
+        if not resp.headers.get("Content-Disposition", "").endswith(".yaml.txt"):
+            print("  ERROR: expected the legacy-only snapshot's disposition to still be named .yaml.txt, got {!r}".format(resp.headers.get("Content-Disposition")))
+            failed = True
+
         print("Test: download-all bundles every retained snapshot into one archive")
         resp = asyncio.run(w.html_debug_history_download_all(FakeRequest()))
-        if resp.status != 200 or resp.content_type != "application/gzip":
-            print("  ERROR: expected a 200 gzip response from download-all, got status={} content_type={}".format(resp.status, resp.content_type))
+        if resp.status != 200:
+            print("  ERROR: expected a 200 response from download-all, got status={}".format(resp.status))
             failed = True
         if not resp.body or len(resp.body) == 0:
             print("  ERROR: expected a non-empty archive body")
+            failed = True
+
+        print("Test: download-all is served as opaque binary so browsers don't decompress it to a .tar")
+        if resp.content_type != "application/octet-stream":
+            print("  ERROR: a gzip content type gets the body decompressed on save by some browsers, leaving a .tar GitHub will not accept - got {}".format(resp.content_type))
+            failed = True
+        if resp.headers.get("X-Content-Type-Options") != "nosniff":
+            print("  ERROR: expected nosniff so the content type cannot be sniffed back to gzip, got {!r}".format(resp.headers.get("X-Content-Type-Options")))
+            failed = True
+        # Browsers that unarchive do it by extension, so a name ending .tgz arrives as a bare .tar - a type
+        # GitHub will not accept, at a size (~32MB for a real 15-snapshot history) over its 25MB
+        # limit. The trailing .dmp is what keeps the archive compressed on the way down.
+        disposition = resp.headers.get("Content-Disposition", "")
+        if not disposition.endswith('.tgz.dmp"'):
+            print("  ERROR: expected the filename to end .tgz.dmp so browsers leave it packed, got {!r}".format(disposition))
+            failed = True
+
+        print("Test: the archive body really is gzip, whatever content type it is served under")
+        if resp.body[:2] != b"\x1f\x8b":
+            print("  ERROR: expected a gzip magic number at the start of the archive body, got {!r}".format(resp.body[:2]))
             failed = True
 
     finally:

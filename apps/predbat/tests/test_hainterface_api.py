@@ -4,7 +4,7 @@ HAInterface API Tests
 
 Tests for HAInterface API-related methods:
 - api_call() - GET/POST requests with error handling
-- initialize() - Addon/services checks
+- initialize() - App/services checks
 - get_history() - Historical data fetching
 """
 
@@ -42,14 +42,14 @@ def test_hainterface_api_call_get(my_predbat=None):
                 print("ERROR: Authorization header missing")
                 failed += 1
             else:
-                print("PASS: GET request made correctly")
+                print("✓ GET request made correctly")
 
         # Verify result
         if result != {"result": "success"}:
             print(f"ERROR: Wrong result: {result}")
             failed += 1
         else:
-            print("PASS: Result returned correctly")
+            print("✓ Result returned correctly")
 
     return failed
 
@@ -80,14 +80,14 @@ def test_hainterface_api_call_post(my_predbat=None):
                 print("ERROR: Wrong JSON data")
                 failed += 1
             else:
-                print("PASS: POST request made correctly")
+                print("✓ POST request made correctly")
 
         # Verify result
         if result != {"status": "ok"}:
             print(f"ERROR: Wrong result: {result}")
             failed += 1
         else:
-            print("PASS: Result returned correctly")
+            print("✓ Result returned correctly")
 
     return failed
 
@@ -106,7 +106,7 @@ def test_hainterface_api_call_no_key(my_predbat=None):
         print(f"ERROR: Should return None, got {result}")
         failed += 1
     else:
-        print("PASS: Returned None when no API key")
+        print("✓ Returned None when no API key")
 
     return failed
 
@@ -139,7 +139,7 @@ def test_hainterface_api_call_supervisor(my_predbat=None):
                 print("ERROR: Supervisor token not used")
                 failed += 1
             else:
-                print("PASS: Supervisor endpoint called correctly")
+                print("✓ Supervisor endpoint called correctly")
 
     return failed
 
@@ -166,14 +166,14 @@ def test_hainterface_api_call_json_decode_error(my_predbat=None):
             print(f"ERROR: Should return None on JSON error, got {result}")
             failed += 1
         else:
-            print("PASS: Returned None on JSON decode error")
+            print("✓ Returned None on JSON decode error")
 
         # Verify error count incremented
         if ha_interface.api_errors != 1:
             print(f"ERROR: api_errors should be 1, got {ha_interface.api_errors}")
             failed += 1
         else:
-            print("PASS: api_errors incremented")
+            print("✓ api_errors incremented")
 
     return failed
 
@@ -197,14 +197,14 @@ def test_hainterface_api_call_timeout(my_predbat=None):
             print(f"ERROR: Should return None on timeout, got {result}")
             failed += 1
         else:
-            print("PASS: Returned None on timeout")
+            print("✓ Returned None on timeout")
 
         # Verify error count incremented
         if ha_interface.api_errors != 1:
             print(f"ERROR: api_errors should be 1, got {ha_interface.api_errors}")
             failed += 1
         else:
-            print("PASS: api_errors incremented")
+            print("✓ api_errors incremented")
 
     return failed
 
@@ -228,14 +228,14 @@ def test_hainterface_api_call_read_timeout(my_predbat=None):
             print(f"ERROR: Should return None on read timeout, got {result}")
             failed += 1
         else:
-            print("PASS: Returned None on ReadTimeout")
+            print("✓ Returned None on ReadTimeout")
 
         # Verify error count incremented
         if ha_interface.api_errors != 1:
             print(f"ERROR: api_errors should be 1, got {ha_interface.api_errors}")
             failed += 1
         else:
-            print("PASS: api_errors incremented")
+            print("✓ api_errors incremented")
 
     return failed
 
@@ -273,7 +273,7 @@ def test_hainterface_api_call_silent_mode(my_predbat=None):
             print("ERROR: Warning should be suppressed in silent mode")
             failed += 1
         else:
-            print("PASS: Warning suppressed in silent mode")
+            print("✓ Warning suppressed in silent mode")
 
     return failed
 
@@ -303,7 +303,7 @@ def test_hainterface_api_call_error_limit(my_predbat=None):
             print("ERROR: fatal_error_occurred should be called at 10 errors")
             failed += 1
         else:
-            print("PASS: fatal_error_occurred called at error limit")
+            print("✓ fatal_error_occurred called at error limit")
 
     return failed
 
@@ -327,23 +327,23 @@ def test_hainterface_api_call_error_reset(my_predbat=None):
             print(f"ERROR: api_errors should be reset to 0, got {ha_interface.api_errors}")
             failed += 1
         else:
-            print("PASS: api_errors reset on success")
+            print("✓ api_errors reset on success")
 
     return failed
 
 
-def test_hainterface_initialize_addon_check(my_predbat=None):
-    """Test initialize() checks for addon/services"""
-    print("\n=== Testing HAInterface initialize() addon check ===")
+def test_hainterface_initialize_app_check(my_predbat=None):
+    """Test initialize() checks for app/services"""
+    print("\n=== Testing HAInterface initialize() app check ===")
     failed = 0
 
     mock_base = MockBase()
 
-    # Mock both addon info and services calls in initialize()
+    # Mock both app info and services calls in initialize()
     with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get:
         mock_env.return_value = "test_supervisor_token"  # Mock SUPERVISOR_TOKEN
         mock_get.side_effect = [
-            create_mock_requests_response(200, {"data": {"slug": "predbat_addon"}}),  # addon info
+            create_mock_requests_response(200, {"data": {"slug": "predbat_app"}}),  # app info
             create_mock_requests_response(200, [{"domain": "homeassistant"}]),  # services
         ]
 
@@ -363,18 +363,18 @@ def test_hainterface_initialize_addon_check(my_predbat=None):
         ha_interface.initialize("http://test:8123", "test_key", False, False, False)
 
         # Verify slug set
-        if ha_interface.slug != "predbat_addon":
-            print(f"ERROR: Slug should be 'predbat_addon', got {ha_interface.slug}")
+        if ha_interface.slug != "predbat_app":
+            print(f"ERROR: Slug should be 'predbat_app', got {ha_interface.slug}")
             failed += 1
         else:
-            print("PASS: Addon slug detected correctly")
+            print("✓ App slug detected correctly")
 
     return failed
 
 
-def test_hainterface_initialize_no_addon(my_predbat=None):
-    """Test initialize() handles missing addon gracefully"""
-    print("\n=== Testing HAInterface initialize() no addon ===")
+def test_hainterface_initialize_no_app(my_predbat=None):
+    """Test initialize() handles missing app gracefully"""
+    print("\n=== Testing HAInterface initialize() no app ===")
     failed = 0
 
     mock_base = MockBase()
@@ -382,9 +382,9 @@ def test_hainterface_initialize_no_addon(my_predbat=None):
     with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get:
         # Mock supervisor token
         mock_env.return_value = "test_supervisor_token"
-        # Mock addon call returns None (supervisor timeout), services call success
+        # Mock app call returns None (supervisor timeout), services call success
         mock_get.side_effect = [
-            requests.Timeout("Supervisor timeout"),  # addon info fails with timeout
+            requests.Timeout("Supervisor timeout"),  # app info fails with timeout
             create_mock_requests_response(200, [{"domain": "homeassistant"}]),  # services succeeds
         ]
 
@@ -408,7 +408,7 @@ def test_hainterface_initialize_no_addon(my_predbat=None):
             print(f"ERROR: Slug should be None, got {ha_interface.slug}")
             failed += 1
         else:
-            print("PASS: Missing addon handled gracefully")
+            print("✓ Missing app handled gracefully")
 
     return failed
 
@@ -444,7 +444,7 @@ def test_hainterface_get_history_basic(my_predbat=None):
             print("ERROR: API should be called")
             failed += 1
         else:
-            print("PASS: API called")
+            print("✓ API called")
 
         # Verify result structure - get_history returns the list directly
         if not isinstance(result, list):
@@ -457,7 +457,7 @@ def test_hainterface_get_history_basic(my_predbat=None):
             print(f"ERROR: History array should have 10 items, got {len(result[0])}")
             failed += 1
         else:
-            print("PASS: History data returned correctly")
+            print("✓ History data returned correctly")
 
     return failed
 
@@ -482,7 +482,7 @@ def test_hainterface_get_history_no_key(my_predbat=None):
         print(f"ERROR: Should return empty list from DB, got {result}")
         failed += 1
     else:
-        print("PASS: Used database when no API key")
+        print("✓ Used database when no API key")
 
     return failed
 
@@ -505,7 +505,7 @@ def test_hainterface_get_history_api_error(my_predbat=None):
             print(f"ERROR: Should return None on API error, got {result}")
             failed += 1
         else:
-            print("PASS: Returned None on API error")
+            print("✓ Returned None on API error")
 
     return failed
 
@@ -539,7 +539,7 @@ def test_hainterface_get_history_from_time(my_predbat=None):
                 print(f"ERROR: from_time {expected_time_str} not in URL: {url}")
                 failed += 1
             else:
-                print("PASS: from_time parameter used correctly")
+                print("✓ from_time parameter used correctly")
 
     return failed
 
@@ -561,8 +561,8 @@ def run_hainterface_api_tests(my_predbat):
     failed += test_hainterface_api_call_silent_mode(my_predbat)
     failed += test_hainterface_api_call_error_limit(my_predbat)
     failed += test_hainterface_api_call_error_reset(my_predbat)
-    failed += test_hainterface_initialize_addon_check(my_predbat)
-    failed += test_hainterface_initialize_no_addon(my_predbat)
+    failed += test_hainterface_initialize_app_check(my_predbat)
+    failed += test_hainterface_initialize_no_app(my_predbat)
     failed += test_hainterface_get_history_basic(my_predbat)
     failed += test_hainterface_get_history_no_key(my_predbat)
     failed += test_hainterface_get_history_api_error(my_predbat)
@@ -570,9 +570,9 @@ def run_hainterface_api_tests(my_predbat):
 
     print("\n" + "=" * 80)
     if failed == 0:
-        print("PASS: All HAInterface API tests passed!")
+        print("✅ All HAInterface API tests passed!")
     else:
-        print(f"ERROR: {failed} HAInterface API test(s) failed")
+        print(f"❌ {failed} HAInterface API test(s) failed")
     print("=" * 80)
 
     return failed
