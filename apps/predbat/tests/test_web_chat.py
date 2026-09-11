@@ -30,6 +30,7 @@ import web_chat
 from chat import AgentNotReadyError, PROVIDER_DEFAULT_URLS
 from components import Components
 from tests.test_chat import _make_agent
+from utils import compile_log_secret_pattern
 from web import WebInterface
 from web_chat import WebChat, format_sse_event
 
@@ -2909,6 +2910,44 @@ def test_provider_save_keeps_a_key_the_dialog_never_saw(my_predbat):
     return failed
 
 
+def test_provider_save_invalidates_log_secret_cache(my_predbat):
+    """Saving a provider block must invalidate log()'s cached redaction pattern (#5053 review).
+
+    The block can carry a nested api_key (test_provider_save_keeps_a_key_the_dialog_never_saw
+    above shows one is routinely written), but this route writes straight to
+    self.base.args["chat"] rather than through set_arg() or the web apps.yaml editor's batch
+    apply - both of which already invalidate the cache - so it was its own separate gap: a saved
+    provider key would keep leaking into the log under the stale pattern until restart.
+    """
+    failed = False
+    print("**** Testing that saving a provider invalidates the cached log redaction pattern ****")
+
+    path = _apps_yaml_fixture(APPS_YAML_WITH_PROVIDERS)
+    original = web_chat.APPS_YAML_PATH
+    web_chat.APPS_YAML_PATH = path
+    saved_cache = my_predbat._log_secret_pattern_cache
+    try:
+        agent = _run_inline_on_agent(_make_agent(my_predbat, providers={"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "sk-or-secret-value", "model": "a/model"}}))
+        page = _make_web(my_predbat, agent=agent).chat_page
+
+        # A stale value built the real way, not an arbitrary sentinel - matches the convention in
+        # test_web_apps_edit.py's equivalent cache-invalidation test.
+        stale_cache_marker = compile_log_secret_pattern({"stale-pattern-marker-5053xx": "marker"})
+        my_predbat._log_secret_pattern_cache = stale_cache_marker
+
+        status, body = _save_providers(page, [{"name": "openrouter", "type": "openrouter", "url": "https://openrouter.ai/api/v1", "model": "b/model", "api_key": "sk-or-new-secret", "original_name": "openrouter"}], active="openrouter")
+        if status != 200 or not body.get("ok"):
+            print("ERROR: saving a provider failed: {} {}".format(status, body))
+            failed = True
+        if my_predbat._log_secret_pattern_cache is stale_cache_marker:
+            print("ERROR: a successful provider save left the cached log redaction pattern stale")
+            failed = True
+    finally:
+        web_chat.APPS_YAML_PATH = original
+        my_predbat._log_secret_pattern_cache = saved_cache
+    return failed
+
+
 def test_provider_save_does_not_rewrap_long_values(my_predbat):
     """A long API key stays on its own line rather than being folded onto the next one.
 
@@ -3969,6 +4008,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_retry_status_element_takes_its_colour_from_theme_variables(my_predbat)
     failed |= test_provider_list_route_never_hands_a_key_to_the_browser(my_predbat)
     failed |= test_provider_save_keeps_a_key_the_dialog_never_saw(my_predbat)
+    failed |= test_provider_save_invalidates_log_secret_cache(my_predbat)
     failed |= test_provider_save_does_not_rewrap_long_values(my_predbat)
     failed |= test_provider_save_migrates_the_loose_block_without_losing_its_key(my_predbat)
     failed |= test_provider_save_refuses_bad_input_before_touching_the_file(my_predbat)
