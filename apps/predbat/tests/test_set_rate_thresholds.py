@@ -186,6 +186,61 @@ def test_set_rate_thresholds_ignores_saving_boost_in_automatic_mode(my_predbat):
     return failed
 
 
+def test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode(my_predbat):
+    """The export side and manual-threshold mode (rate_high_threshold > 0) were both untested -
+    every prior test here used rate_import_replicated only and left rate_high_threshold at 0
+    (automatic mode) (Copilot review on #5052). This branch (fetch.py's
+    "rate_export_cost_threshold = dp2(rate_export_average * self.rate_high_threshold)") multiplies
+    by rate_export_average directly, so a boosted export minute contaminating that average would
+    not be masked by the automatic-mode rate_export_max/rate_export_min comparisons the other
+    tests already cover.
+
+    Flat 15p export tariff, +50p Axle export-side event over 2h out of 24 (rate_export_replicated
+    tagged "saving", mirroring load_axle_slot()'s export branch): the contaminated average is
+    ~19.17p, the clean one is 15.0p exactly. rate_high_threshold=1.0 makes the threshold equal
+    whichever average was used, so the two are trivially distinguishable.
+    """
+    print("**** test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode ****")
+    failed = False
+
+    my_predbat.minutes_now = 0
+    my_predbat.forecast_minutes = 24 * 60
+
+    rate_import = {minute: 20.0 for minute in range(0, 48 * 60)}
+    rate_export = {minute: 15.0 for minute in range(0, 48 * 60)}
+    rate_export_replicated = {}
+    for minute in range(600, 720):
+        rate_export[minute] += 50.0
+        rate_export_replicated[minute] = "saving"
+
+    my_predbat.rate_import = rate_import
+    my_predbat.rate_import_replicated = {}
+    my_predbat.rate_export = rate_export
+    my_predbat.rate_export_replicated = rate_export_replicated
+    my_predbat.rate_min, my_predbat.rate_max, my_predbat.rate_average, _, _ = my_predbat.rate_minmax(rate_import)
+    my_predbat.rate_export_min, my_predbat.rate_export_max, my_predbat.rate_export_average, _, _ = my_predbat.rate_minmax(rate_export)
+    my_predbat.rate_low_threshold = 0
+    my_predbat.rate_high_threshold = 1.0  # manual mode: threshold = rate_export_average * rate_high_threshold
+    my_predbat.alert_active_keep = {}
+    my_predbat.manual_soc_keep = {}
+    my_predbat.num_cars = 0
+
+    my_predbat.set_rate_thresholds()
+
+    if abs(my_predbat.rate_export_average - 19.17) > 0.01:
+        print("ERROR: test setup sanity check failed - contaminated rate_export_average should be ~19.17, got {}".format(my_predbat.rate_export_average))
+        failed = True
+
+    expected_threshold = 15.0
+    if abs(my_predbat.rate_export_cost_threshold - expected_threshold) > 0.01:
+        print("ERROR: rate_export_cost_threshold should be {} (clean export average x 1.0), got {} - a boosted export event contaminated the manual-mode threshold".format(expected_threshold, my_predbat.rate_export_cost_threshold))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
 _SNAPSHOT_FIELDS = (
     "minutes_now",
     "forecast_minutes",
@@ -225,6 +280,7 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_rate_minmax_excluding_saving_keeps_genuine_free_slots(my_predbat)
         failed |= test_rate_minmax_excluding_saving_falls_back_when_everything_is_tagged(my_predbat)
         failed |= test_set_rate_thresholds_ignores_saving_boost_in_automatic_mode(my_predbat)
+        failed |= test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode(my_predbat)
         return failed
     finally:
         for field, value in snapshot.items():
