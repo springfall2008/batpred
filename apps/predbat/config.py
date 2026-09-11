@@ -2793,4 +2793,18 @@ APPS_SCHEMA = {
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},
     "gateway_mqtt_token": {"type": "string", "empty": False},
+    # User-maintained log/debug redaction denylist (GH#4770): literal strings to mask wherever a
+    # value appears in predbat.log or a debug dump, for anything Predbat cannot recognise as a
+    # credential from its own config - an MPAN or account number surfaced by a third-party HA
+    # integration's entity state/attributes, say, which Predbat has no schema for and so cannot
+    # infer is sensitive. `!secret` references resolve here the same as anywhere else in
+    # apps.yaml, so the values themselves need not be written out in the clear either. Each
+    # redacted occurrence is masked generically as <redact_strings> - use redact_strings_labelled
+    # for a name of your own choosing back in the log.
+    "redact_strings": {"type": "string_list"},
+    # Labelled form of redact_strings: a name -> value mapping, so a masked occurrence reads as
+    # <your_label> instead of the generic <redact_strings>, the same way a built-in credential is
+    # labelled by its own apps.yaml key name - e.g. "my_landlords_mpan: '1234567890123'" redacts
+    # as <my_landlords_mpan> rather than every entry collapsing into one indistinguishable label.
+    "redact_strings_labelled": {"type": "dict"},
 }

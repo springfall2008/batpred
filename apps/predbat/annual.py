@@ -23,6 +23,7 @@ from annual_costs import build_costs, build_payback, resolve_costs
 from annual_interpolate import ANCHOR_MONTHS, FAST_MODE_MAX_RATE_CV, build_interpolated_rows, rate_variability
 from annual_load import build_load_forecast, OctopusConsumptionLoadProfile, SyntheticLoadProfile
 from annual_tariff import AnnualTariff
+from utils import mask_secret_args
 from annual_weather import AnnualWeather, resolve_postcode
 from const import MINUTE_WATT, PREDICT_STEP
 from prediction import Prediction
@@ -77,9 +78,6 @@ MINIMUM_YEAR = 1940
 # arrive here and be rejected.
 WEATHER_ARCHIVE_LAG_DAYS = 8
 
-# Substrings that mark a config value as secret and therefore scrubbable
-SECRET_MARKERS = ["_key", "password", "token", "secret"]
-
 
 class AnnualConfigError(ValueError):
     """Raised when the annual prediction config is invalid or self-contradictory."""
@@ -88,20 +86,15 @@ class AnnualConfigError(ValueError):
 def scrub_secrets(config):
     """Return a deep copy of the config with secret-looking values replaced by "xxx".
 
-    Mirrors the redaction ``create_debug_yaml()`` applies, so a results document or
-    debug dump can never carry an API key.
+    Delegates to utils.mask_secret_args() - the one redaction implementation
+    create_debug_yaml(), web.py and the MCP config routes all share - rather than keeping a
+    second, independent credential-key list here. This used to duplicate that list
+    (SECRET_MARKERS) with only the original four substrings and no access to the growable
+    per-component "secret": True registry (account numbers, serial numbers, etc, GH#4770) that
+    list has since grown into; a key the registry newly flags would have kept leaking through
+    this path even after being fixed everywhere else.
     """
-    if isinstance(config, dict):
-        scrubbed = {}
-        for key, value in config.items():
-            if any(marker in str(key).lower() for marker in SECRET_MARKERS):
-                scrubbed[key] = "xxx"
-            else:
-                scrubbed[key] = scrub_secrets(value)
-        return scrubbed
-    if isinstance(config, list):
-        return [scrub_secrets(item) for item in config]
-    return config
+    return mask_secret_args(config)
 
 
 def _require_number(value, field, minimum=None, maximum=None, integer=False, exclusive_minimum=False):

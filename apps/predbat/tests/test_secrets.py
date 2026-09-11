@@ -166,10 +166,247 @@ pred_bat:
     return failed
 
 
+def test_collect_log_secret_values():
+    """collect_log_secret_values() gathers {value: label} from args, secrets.yaml, the user's
+    bare redact_strings denylist and the labelled redact_strings_labelled mapping, from nested
+    structures, and leaves non-credential values out (GH#4770)."""
+    from utils import collect_log_secret_values
+
+    failed = False
+    print("**** Testing collect_log_secret_values ****")
+
+    args = {
+        "octopus_api_key": "REAL-OCTOPUS-KEY",
+        "octopus_api_account": "A-REAL-ACCOUNT",  # registry-flagged (account number), not name-matched
+        "battery_size": 9.5,  # not a credential - must not be collected
+        "forecast_solar": [{"api_key": "REAL-NESTED-KEY"}],  # nested one level down
+    }
+    secrets = {"ha_token": "REAL-SECRETS-YAML-VALUE"}
+    redact_strings = ["THIRD-PARTY-MPAN-1234567890123"]
+    redact_strings_labelled = {"my_landlords_mpan": "LANDLORD-MPAN-9876543210987"}
+
+    found = collect_log_secret_values(args, secrets, redact_strings, redact_strings_labelled)
+
+    expected_labels = {
+        "REAL-OCTOPUS-KEY": "octopus_api_key",
+        "A-REAL-ACCOUNT": "octopus_api_account",
+        "REAL-NESTED-KEY": "forecast_solar.api_key",
+        "REAL-SECRETS-YAML-VALUE": "ha_token",
+        "THIRD-PARTY-MPAN-1234567890123": "redact_strings",
+        "LANDLORD-MPAN-9876543210987": "my_landlords_mpan",
+    }
+    for value, label in expected_labels.items():
+        if value not in found:
+            print("ERROR: {} missing from collected secret values: {}".format(value, found))
+            failed = True
+        elif found[value] != label:
+            print("ERROR: {} labelled {}, expected {}".format(value, found[value], label))
+            failed = True
+
+    if 9.5 in found or "9.5" in found:
+        print("ERROR: a non-credential value was collected: {}".format(found))
+        failed = True
+
+    # Short values are dropped - a 1-2 char "secret" would false-positive-redact ordinary text.
+    if "x" in collect_log_secret_values({"password": "x"}, {}):
+        print("ERROR: a short value was collected despite the length floor")
+        failed = True
+
+    # Missing/None args, secrets, redact_strings and redact_strings_labelled must not raise -
+    # log() calls this on every line, including ones written before apps.yaml/secrets.yaml load.
+    if collect_log_secret_values(None, None, None, None) != {}:
+        print("ERROR: collect_log_secret_values(None, None, None) should return an empty dict")
+        failed = True
+
+    if not failed:
+        print("**** test_collect_log_secret_values PASSED ****")
+    return failed
+
+
+def test_compile_log_secret_pattern_and_redact_log_line():
+    """compile_log_secret_pattern() + redact_log_line() replace every known secret value in a
+    log line with a labelled mask, e.g. "<octopus_api_key>", and leave everything else
+    untouched (GH#4770). The label identifies which credential was found without exposing it.
+
+    Regex-special characters in a secret value (a plausible API key shape: '+', '/', '=' are all
+    valid base64 alphabet) must be escaped before compiling, or a value containing one either
+    fails to match its own literal text or matches unrelated text the value never appears in.
+    """
+    from utils import compile_log_secret_pattern, redact_log_line
+
+    failed = False
+    print("**** Testing compile_log_secret_pattern + redact_log_line ****")
+
+    found = {"REAL-KEY-VALUE": "octopus_api_key", "REAL-PASSWORD-VALUE": "ha_password", "REAL+KEY/WITH=SPECIALS": "gateway_mqtt_token"}
+    pattern = compile_log_secret_pattern(found)
+
+    redacted = redact_log_line("OctopusAPI: using REAL-KEY-VALUE for auth, retry with REAL-PASSWORD-VALUE", pattern)
+    if "REAL-KEY-VALUE" in redacted or "REAL-PASSWORD-VALUE" in redacted:
+        print("ERROR: a known secret value survived redact_log_line: {}".format(redacted))
+        failed = True
+    if "<octopus_api_key>" not in redacted or "<ha_password>" not in redacted:
+        print("ERROR: redacted text is missing its credential label: {}".format(redacted))
+        failed = True
+
+    regex_special = redact_log_line("Warn: auth failed with REAL+KEY/WITH=SPECIALS", pattern)
+    if "REAL+KEY/WITH=SPECIALS" in regex_special:
+        print("ERROR: a secret value containing regex-special characters survived redaction: {}".format(regex_special))
+        failed = True
+    if "<gateway_mqtt_token>" not in regex_special:
+        print("ERROR: the regex-special-character value was not labelled correctly: {}".format(regex_special))
+        failed = True
+
+    # A longer value that shares a prefix with a shorter one must match in full - the shorter
+    # value pre-empting the match would leave the rest of the longer one exposed in the line.
+    overlap_found = {"sk_live_abcdef": "short_key", "sk_live_abcdef_extended_token": "long_token"}
+    overlap_pattern = compile_log_secret_pattern(overlap_found)
+    overlap_redacted = redact_log_line("Info: using sk_live_abcdef_extended_token for the call", overlap_pattern)
+    if "sk_live_abcdef_extended_token" in overlap_redacted or "_extended_token" in overlap_redacted:
+        print("ERROR: the shorter value pre-empted the longer one, leaving part of it exposed: {}".format(overlap_redacted))
+        failed = True
+    if "<long_token>" not in overlap_redacted:
+        print("ERROR: the longer, more specific value should have matched: {}".format(overlap_redacted))
+        failed = True
+
+    # A line with nothing secret in it must come back byte-identical.
+    clean_line = "Info: battery_size is 9.5 today"
+    if redact_log_line(clean_line, pattern) != clean_line:
+        print("ERROR: a clean line was altered: {}".format(redact_log_line(clean_line, pattern)))
+        failed = True
+
+    # An empty value dict compiles to None (nothing to redact) - must be a no-op, not an error.
+    empty_pattern = compile_log_secret_pattern({})
+    if empty_pattern is not None:
+        print("ERROR: compile_log_secret_pattern({{}}) should return None, got {}".format(empty_pattern))
+        failed = True
+    if redact_log_line(clean_line, empty_pattern) != clean_line:
+        print("ERROR: an empty pattern altered the line")
+        failed = True
+    if redact_log_line(clean_line, None) != clean_line:
+        print("ERROR: redact_log_line(line, None) should be a no-op")
+        failed = True
+
+    if not failed:
+        print("**** test_compile_log_secret_pattern_and_redact_log_line PASSED ****")
+    return failed
+
+
+def test_log_redacts_at_write_time():
+    """Hass.log() must redact a known secret value BEFORE it reaches predbat.log on disk, not
+    only when the log is later served over HTTP/MCP.
+
+    Some users copy predbat.log directly off a Samba share exposing the addon's config
+    directory, bypassing every download/serve endpoint entirely - a scrub applied only at those
+    endpoints would leave the on-disk file itself holding the plaintext value (GH#4770).
+    """
+    failed = False
+    print("**** Testing Hass.log() redacts secrets at write time ****")
+
+    secrets_data = {"my_octopus_key": "REAL-WRITE-TIME-SECRET"}
+    with open("secrets.yaml", "w") as f:
+        yaml.dump(secrets_data, f)
+    with open("test_apps.yaml", "w") as f:
+        f.write("pred_bat:\n")
+        f.write("  module: predbat\n")
+        f.write("  class: PredBat\n")
+        f.write("  octopus_api_key: !secret my_octopus_key\n")
+        f.write("  ordinary_setting: not_a_secret\n")
+        f.write("  redact_strings:\n")
+        f.write("    - THIRD-PARTY-MPAN-1234567890123\n")
+        f.write("  redact_strings_labelled:\n")
+        f.write("    my_landlords_mpan: LANDLORD-MPAN-9876543210987\n")
+
+    os.environ["PREDBAT_APPS_FILE"] = "test_apps.yaml"
+    try:
+        h = Hass()
+        h.log("Info: connecting with REAL-WRITE-TIME-SECRET to Octopus", quiet=False)
+        h.log("Info: ordinary_setting is not_a_secret today", quiet=False)
+        h.log("Warn: sensor exposed THIRD-PARTY-MPAN-1234567890123 in its state", quiet=False)
+        h.log("Warn: sensor exposed LANDLORD-MPAN-9876543210987 in its state", quiet=False)
+        h.logfile.close()
+
+        with open("predbat.log") as f:
+            content = f.read()
+
+        if "REAL-WRITE-TIME-SECRET" in content:
+            print("ERROR: secret value present in predbat.log on disk:\n{}".format(content))
+            failed = True
+        if "THIRD-PARTY-MPAN-1234567890123" in content:
+            print("ERROR: a redact_strings entry (user denylist, GH#4770) survived to disk:\n{}".format(content))
+            failed = True
+        if "LANDLORD-MPAN-9876543210987" in content:
+            print("ERROR: a redact_strings_labelled entry survived to disk:\n{}".format(content))
+            failed = True
+        # Labelled by the secrets.yaml key (my_octopus_key), not the apps.yaml key
+        # (octopus_api_key): secrets.yaml is checked first in collect_log_secret_values(), and
+        # this value was resolved through a !secret reference so it is found there.
+        if "<my_octopus_key>" not in content:
+            print("ERROR: the write-time redaction lost its credential label:\n{}".format(content))
+            failed = True
+        if "<redact_strings>" not in content:
+            print("ERROR: the redact_strings entry was not labelled as such:\n{}".format(content))
+            failed = True
+        if "<my_landlords_mpan>" not in content:
+            print("ERROR: the redact_strings_labelled entry did not get the user's own label:\n{}".format(content))
+            failed = True
+        if "not_a_secret" not in content:
+            print("ERROR: an ordinary log line was altered/lost:\n{}".format(content))
+            failed = True
+    finally:
+        del os.environ["PREDBAT_APPS_FILE"]
+        for name in ("test_apps.yaml", "secrets.yaml", "predbat.log"):
+            if os.path.exists(name):
+                os.remove(name)
+
+    if not failed:
+        print("**** test_log_redacts_at_write_time PASSED ****")
+    return failed
+
+
+def test_redact_strings_masked_in_debug_dump():
+    """redact_strings/redact_strings_labelled are themselves the user's lists of values to
+    redact (GH#4770), so mask_secret_args() - what create_debug_yaml() applies to args before
+    writing a debug yaml - must mask both wholesale rather than leaving their contents (the
+    sensitive values, and for the labelled form the user's own possibly-revealing label names
+    too) sitting in the clear next to them."""
+    from utils import mask_secret_args
+
+    failed = False
+    print("**** Testing redact_strings/redact_strings_labelled are masked in a debug dump ****")
+
+    args = {
+        "redact_strings": ["THIRD-PARTY-MPAN-1234567890123"],
+        "redact_strings_labelled": {"my_landlords_mpan": "LANDLORD-MPAN-9876543210987"},
+        "ordinary_setting": "keep_me",
+    }
+    masked = mask_secret_args(args)
+
+    if masked["redact_strings"] != "xxx":
+        print("ERROR: redact_strings should be masked wholesale, got {}".format(masked["redact_strings"]))
+        failed = True
+    if masked["redact_strings_labelled"] != "xxx":
+        print("ERROR: redact_strings_labelled should be masked wholesale, got {}".format(masked["redact_strings_labelled"]))
+        failed = True
+    if masked["ordinary_setting"] != "keep_me":
+        print("ERROR: an unrelated key was altered by masking redact_strings: {}".format(masked))
+        failed = True
+    if args["redact_strings"] != ["THIRD-PARTY-MPAN-1234567890123"] or args["redact_strings_labelled"] != {"my_landlords_mpan": "LANDLORD-MPAN-9876543210987"}:
+        print("ERROR: mask_secret_args must not mutate its input")
+        failed = True
+
+    if not failed:
+        print("**** test_redact_strings_masked_in_debug_dump PASSED ****")
+    return failed
+
+
 def run_secrets_tests(my_predbat=None):
     """
     Run all secrets tests
     """
     failed = test_secrets_loading()
     failed |= test_mask_secret_yaml_text()
+    failed |= test_collect_log_secret_values()
+    failed |= test_compile_log_secret_pattern_and_redact_log_line()
+    failed |= test_log_redacts_at_write_time()
+    failed |= test_redact_strings_masked_in_debug_dump()
     return failed

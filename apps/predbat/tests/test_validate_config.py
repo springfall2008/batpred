@@ -186,6 +186,18 @@ def test_validate_config(my_predbat):
     _run(my_predbat, {"alerts": ["not_a_dict"]}, expect_errors=["alerts"])
 
     # ==========================================================================
+    # redact_strings / redact_strings_labelled  (GH#4770 log/debug redaction denylist)
+    # ==========================================================================
+    print("  [string_list] redact_strings list of strings passes")
+    _run(my_predbat, {"redact_strings": ["some-mpan-1234567890"]}, expect_clean=["redact_strings"])
+
+    print("  [dict] redact_strings_labelled name->value mapping passes")
+    _run(my_predbat, {"redact_strings_labelled": {"my_landlords_mpan": "1234567890123"}}, expect_clean=["redact_strings_labelled"])
+
+    print("  [dict] redact_strings_labelled rejects a non-dict value")
+    _run(my_predbat, {"redact_strings_labelled": "not_a_dict"}, expect_errors=["redact_strings_labelled"])
+
+    # ==========================================================================
     # DICT_LIST type  (rates_import: {"type": "dict_list"})
     # ==========================================================================
     print("  [dict_list] list of dicts passes")
