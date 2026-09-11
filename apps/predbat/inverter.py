@@ -638,7 +638,7 @@ class Inverter:
             self.create_missing_arg("discharge_rate", max_discharge)
             self.base.args["charge_rate"][id] = self.create_entity("charge_rate", max_charge, uom="W", device_class="power")
             self.base.args["discharge_rate"][id] = self.create_entity("discharge_rate", max_discharge, uom="W", device_class="power")
-        elif not self.inverter_source_active() and self.inv_needs_charge_rate_entity:
+        elif self.inv_needs_charge_rate_entity:
             # "power" mode inverters normally write the rate straight to the inverter (REST/cloud
             # API) with no HA entity involved, so charge_rate is usually left for the user to
             # configure only if they want one (e.g. GE's "if not using REST" apps.yaml comment) -
