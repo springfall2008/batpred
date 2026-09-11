@@ -12,6 +12,7 @@ import os
 import yaml
 import tempfile
 from hass import Hass
+from utils import load_apps_yaml
 
 
 def test_secrets_loading():
@@ -172,4 +173,49 @@ def run_secrets_tests(my_predbat=None):
     """
     failed = test_secrets_loading()
     failed |= test_mask_secret_yaml_text()
+    failed |= test_load_apps_yaml_resolves_secrets()
+    return failed
+
+
+def test_load_apps_yaml_resolves_secrets():
+    """
+    Test load_apps_yaml reads a given apps.yaml and resolves its !secret references
+
+    fox.py's --config option loads credentials through this rather than carrying its own parser,
+    so !secret keeps working for a standalone CLI run exactly as it does for Predbat itself.
+    """
+    print("**** Running test_load_apps_yaml_resolves_secrets ****")
+    failed = False
+
+    saved_secrets_env = os.environ.get("PREDBAT_SECRETS_FILE")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        secrets_path = os.path.join(tmpdir, "secrets.yaml")
+        with open(secrets_path, "w") as handle:
+            yaml.dump({"fox_api_key": "secret-fox-key"}, handle)
+
+        apps_path = os.path.join(tmpdir, "apps.yaml")
+        with open(apps_path, "w") as handle:
+            handle.write("pred_bat:\n  fox_key: !secret fox_api_key\n  fox_automatic: True\n  num_inverters: 1\n")
+
+        os.environ["PREDBAT_SECRETS_FILE"] = secrets_path
+        try:
+            args, secrets = load_apps_yaml(apps_path)
+        finally:
+            if saved_secrets_env is None:
+                os.environ.pop("PREDBAT_SECRETS_FILE", None)
+            else:
+                os.environ["PREDBAT_SECRETS_FILE"] = saved_secrets_env
+
+    if args.get("fox_key") != "secret-fox-key":
+        print("ERROR: expected the !secret reference to resolve, got {}".format(args.get("fox_key")))
+        failed = True
+    if args.get("fox_automatic") is not True:
+        print("ERROR: expected fox_automatic True, got {}".format(args.get("fox_automatic")))
+        failed = True
+    if secrets.get("fox_api_key") != "secret-fox-key":
+        print("ERROR: expected the secrets dict to be returned, got {}".format(secrets))
+        failed = True
+
+    if not failed:
+        print("**** test_load_apps_yaml_resolves_secrets PASSED ****")
     return failed

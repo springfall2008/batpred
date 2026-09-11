@@ -211,6 +211,82 @@ def _mask_secrets_in_place(value):
             _mask_secrets_in_place(entry)
 
 
+def load_secrets(log=None):
+    """
+    Load secrets from secrets.yaml file
+    Priority: PREDBAT_SECRETS_FILE env var, ./secrets.yaml, /config/secrets.yaml
+    """
+    import yaml
+
+    log = log or (lambda message, **kwargs: print(message))
+    secrets = {}
+    secrets_file = None
+
+    # Try loading from different locations in priority order
+    possible_locations = [
+        os.getenv("PREDBAT_SECRETS_FILE"),
+        "secrets.yaml",
+        "/homeassistant/secrets.yaml",
+        "/conf/secrets.yaml",
+        "/config/secrets.yaml",
+    ]
+
+    for location in possible_locations:
+        if location and os.path.isfile(location):
+            secrets_file = location
+            break
+
+    if secrets_file:
+        log(f"Loading secrets from {secrets_file}", quiet=False)
+        try:
+            with open(secrets_file, "r") as stream:
+                secrets = yaml.safe_load(stream) or {}
+                # Check for debug logging option
+                if secrets.get("logger") == "debug":
+                    log(f"Info: Secrets loaded from {secrets_file}", quiet=False)
+        except yaml.YAMLError as exc:
+            log(f"Error: Failed to load secrets from {secrets_file}: {exc}", quiet=False)
+        except Exception as exc:
+            log(f"Error: Failed to open secrets file {secrets_file}: {exc}", quiet=False)
+    else:
+        log("Info: No secrets.yaml file found", quiet=False)
+
+    return secrets
+
+
+def load_apps_yaml(apps_file=None, log=None):
+    """
+    Load an apps.yaml-format file and return its pred_bat section, with !secret references resolved
+
+    Shared so anything reading Predbat's configuration reads it the same way - Predbat's own
+    startup below, and fox.py's --config option for a standalone CLI run. Raises yaml.YAMLError
+    for a malformed file and KeyError when the pred_bat section is missing, leaving the caller to
+    decide whether that is fatal.
+
+    Returns (args, secrets).
+    """
+    import yaml
+
+    log = log or (lambda message, **kwargs: print(message))
+    secrets = load_secrets(log=log)
+
+    def secret_constructor(loader, node):
+        """YAML constructor for the !secret tag, resolving against the secrets just loaded."""
+        secret_key = loader.construct_scalar(node)
+        if secret_key in secrets:
+            return secrets[secret_key]
+        log(f"Warn: Secret '{secret_key}' not found in secrets.yaml")
+        return None
+
+    yaml.add_constructor("!secret", secret_constructor, Loader=yaml.SafeLoader)
+
+    apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+    log(f"Loading {apps_file}", quiet=False)
+    with open(apps_file, "r") as stream:
+        config = yaml.safe_load(stream)
+    return config["pred_bat"], secrets
+
+
 def mask_secret_args(args):
     """
     Return a deep copy of an apps.yaml-style args dict with credential-like keys redacted.

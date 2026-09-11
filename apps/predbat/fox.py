@@ -17,6 +17,7 @@ Feedin), real-time monitoring, and device settings via the Fox ESS Cloud API.
 import asyncio
 from datetime import datetime, timedelta, timezone
 import os
+import yaml
 import time
 import hashlib
 from predbat_metrics import record_api_call
@@ -27,7 +28,7 @@ import random
 from component_base import ComponentBase
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
-from utils import dp2
+from utils import dp2, load_apps_yaml
 
 # Define TIME_FORMAT_HA locally to avoid dependency issues
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
@@ -2482,6 +2483,75 @@ async def test_fox_api(sn, api_key, token_hash, token_expires, supabase_url, sup
     print("Run completed successfully")
 
 
+# Fox credentials as they appear in apps.yaml, mapped to the command line fields they stand in
+# for, so --config can supply them instead. Written out by hand rather than read from
+# COMPONENT_LIST: components.py pulls predbat in behind it, and fox.py is imported by components
+# itself. test_fox_cli_credential_keys_match_component keeps this in step with what the component
+# actually declares.
+FOX_CLI_CREDENTIAL_KEYS = {
+    "api_key": "fox_key",
+    "token_hash": "fox_token_hash",
+    "token_expires": "fox_token_expires_at",
+    "serial": "fox_inverter_sn",
+}
+
+# The OAuth refresh settings, which are not Fox component args: oauth_mixin reads
+# SUPABASE_URL/SUPABASE_KEY from the environment and user_id from base.args. Without them an
+# OAuth run cannot refresh its token and every request comes back 401, so --config reads them
+# too rather than making the caller export environment variables alongside the file.
+FOX_CLI_OAUTH_KEYS = {
+    "user_id": "user_id",
+    "supabase_url": "supabase_url",
+    "supabase_key": "supabase_key",
+}
+
+
+def merge_fox_credentials(cli, config, report=False):
+    """
+    Fill in any Fox credential not given on the command line from an apps.yaml-format config
+
+    An explicit command line value always wins, so a one-off run against a different key or
+    inverter does not mean editing apps.yaml.
+
+    A config carrying both an API key and an OAuth token hash is ambiguous, so fox_auth_method
+    decides - the same field the component itself uses to pick between them. With neither
+    declared, whatever is present is used, preferring the key (the component's own default).
+
+    With report=True, returns (merged, used) where used lists the config keys actually taken, so
+    the caller can show them - a key the CLI does not look for otherwise fails silently, with a
+    401 several lines later as its only symptom.
+    """
+    merged = dict(cli)
+    used = []
+
+    auth_method = config.get("fox_auth_method")
+    skip = set()
+    if auth_method == "oauth":
+        skip.add("api_key")
+    elif auth_method == "api_key":
+        skip.add("token_hash")
+        skip.add("token_expires")
+    elif config.get("fox_key") and config.get("fox_token_hash"):
+        skip.add("token_hash")
+        skip.add("token_expires")
+
+    for mapping in (FOX_CLI_CREDENTIAL_KEYS, FOX_CLI_OAUTH_KEYS):
+        for cli_name, config_key in mapping.items():
+            if merged.get(cli_name) or cli_name in skip:
+                continue
+            value = config.get(config_key)
+            # fox_inverter_sn is "string|string_list" in APPS_SCHEMA, but the CLI drives one device
+            if isinstance(value, list):
+                value = value[0] if value else None
+            if value:
+                merged[cli_name] = value
+                used.append(config_key)
+
+    if report:
+        return merged, used
+    return merged
+
+
 async def _await_schedule(fox_api, serial, expected, timeout=90, interval=5):  # pragma: no cover
     """
     Read the scheduler back until it agrees with expected, or the timeout runs out
@@ -2708,9 +2778,14 @@ def main():  # pragma: no cover
     """
     parser = argparse.ArgumentParser(description="Test Fox API")
     parser.add_argument("--serial", action="store", default=None, help="Fox API serial number")
-    auth_group = parser.add_mutually_exclusive_group(required=True)
+    auth_group = parser.add_mutually_exclusive_group()
     auth_group.add_argument("--api-key", help="Fox API key")
     auth_group.add_argument("--token-hash", action="store", help="Fox API OAuth token hash")
+    parser.add_argument(
+        "--config",
+        action="store",
+        help="Load credentials from an apps.yaml-format file instead of passing them here, resolving !secret as Predbat does. Reads fox_key, fox_auth_method, fox_token_hash, fox_token_expires_at, fox_inverter_sn, and for an OAuth refresh supabase_url, supabase_key and user_id. Anything also given on the command line wins",
+    )
     parser.add_argument("--token-expires", action="store", help="Fox API OAuth token expiry timestamp")
     parser.add_argument("--supabase-url", action="store", help="Supabase URL for OAuth token refresh")
     parser.add_argument("--supabase-key", action="store", help="Supabase anon key for OAuth token refresh")
@@ -2728,6 +2803,29 @@ def main():  # pragma: no cover
     supabase_url = args.supabase_url
     supabase_key = args.supabase_key
     user_id = args.user_id
+
+    if args.config:
+        try:
+            config, _ = load_apps_yaml(args.config)
+        except (yaml.YAMLError, KeyError, OSError) as exc:
+            parser.error(f"could not read Fox credentials from {args.config}: {exc}")
+        cli_values = {"api_key": api_key, "token_hash": token_hash, "token_expires": token_expires, "serial": serial, "user_id": user_id, "supabase_url": supabase_url, "supabase_key": supabase_key}
+        credentials, used = merge_fox_credentials(cli_values, config, report=True)
+        api_key = credentials["api_key"]
+        token_hash = credentials["token_hash"]
+        token_expires = credentials["token_expires"]
+        serial = credentials["serial"]
+        user_id = credentials["user_id"]
+        supabase_url = credentials["supabase_url"]
+        supabase_key = credentials["supabase_key"]
+        # Name what was taken: a key the CLI does not look for leaves its credential unset, and
+        # the only other symptom is a 401 much further down
+        print("Read from {}: {}".format(args.config, ", ".join(used) if used else "nothing - no keys the CLI looks for"))
+        if token_hash and not (supabase_url and supabase_key):
+            print("Warning: an OAuth token cannot be refreshed without supabase_url and supabase_key - expect 401s once it expires")
+
+    if not api_key and not token_hash:
+        parser.error("no Fox credentials: pass --api-key or --token-hash, or --config pointing at an apps.yaml holding fox_key or fox_token_hash")
 
     # Run the test
     if args.write_schedule:
