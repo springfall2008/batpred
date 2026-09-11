@@ -3531,7 +3531,6 @@ The following template can be used as a starting point:
     support_charge_freeze: False
     support_discharge_freeze: False
     has_ge_inverter_mode: False
-    has_fox_inverter_mode: False
     has_idle_time: False
     has_time_window: False
     charge_time_format: "S"
@@ -3779,10 +3778,6 @@ to `false` disables it regardless.
 ### has_ge_inverter_mode
 
 When True, the inverter supports the GivEnergy inverter modes (ECO, Timed Export etc).
-
-### has_fox_inverter_mode
-
-When True, the inverter supports Fox inverter modes, i.e. Eco (Paused) is treated the same as Eco mode and the inverter mode is always set to "SelfUse" as all charging and discharging is controlled by schedule, not inverter modes.
 
 ### has_idle_time
 

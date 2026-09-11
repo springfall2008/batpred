@@ -60,6 +60,14 @@ INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
 INVERTER_WRITE_POLL_INTERVAL = 0.25  # Seconds before the second look, doubling after each miss
 INVERTER_WRITE_POLL_MAX_INTERVAL = 2.0  # Ceiling for that backoff
 INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST commands
+# Inverter clock skew bands, measured as (inverter time - Predbat computer time) in minutes.
+# At or above the restart threshold Predbat warns loudly and triggers auto_restart. Between the warn
+# and restart thresholds nothing used to be said at all, yet the drift still shifts every charge and
+# export slot Predbat writes (compensation via inverter_clock_skew_* is manual only), so a moderate
+# steady skew showed up only as expensive grid import at the edges of every window - see #4989/#4927.
+INVERTER_CLOCK_SKEW_RESTART_MINUTES = 30
+INVERTER_CLOCK_SKEW_WARN_MINUTES = 5
+INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES = 60  # Minimum gap between repeats of the moderate-skew warning, per inverter, so it doesn't fire every 5-minute cycle
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
 PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
