@@ -185,6 +185,16 @@ class Hass:
     # rebuild (recompute the value set, recompile) on every single log() call instead of caching.
     _LOG_SECRET_PATTERN_UNSET = object()
 
+    def _invalidate_log_secret_pattern(self):
+        """
+        Mark the cached redaction pattern stale so the next log() call rebuilds it from the
+        current args/secrets (GH#4770). Every call site that mutates self.args or self.secrets
+        after startup must call this - see _log_secret_pattern()'s docstring for why a missed
+        site is a real leak, not just a staleness bug.
+        """
+        with self._log_secret_pattern_lock:
+            self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
+
     def _log_secret_pattern(self):
         """
         Return the cached compiled redaction pattern log() must apply, rebuilding it the first
@@ -194,14 +204,24 @@ class Hass:
         args/secrets only change on startup and on a config reload, so rebuilding the value set
         and recompiling the pattern that rarely - rather than on every call - keeps the
         redaction check to a single compiled-regex scan per line on the hot path.
+
+        Guarded by a lock, not just the sentinel check: log() runs from component threads as well
+        as the main thread (create_task()), so two threads can both observe the sentinel and race
+        to rebuild. Without the lock, a thread that started building from stale args right before
+        another thread invalidates the cache (a credential just added via set_arg()) can finish
+        second and overwrite the fresh invalidation with its stale, already-out-of-date pattern -
+        silently keeping the just-added credential unredacted until something invalidates the
+        cache again. The lock makes "read sentinel, build, store" one atomic step so a build that
+        started before an invalidation can never win a race against it.
         """
-        if self._log_secret_pattern_cache is self._LOG_SECRET_PATTERN_UNSET:
-            args = getattr(self, "args", None)
-            redact_strings = args.get("redact_strings") if args else None
-            redact_strings_labelled = args.get("redact_strings_labelled") if args else None
-            values = collect_log_secret_values(args, getattr(self, "secrets", None), redact_strings, redact_strings_labelled)
-            self._log_secret_pattern_cache = compile_log_secret_pattern(values)
-        return self._log_secret_pattern_cache
+        with self._log_secret_pattern_lock:
+            if self._log_secret_pattern_cache is self._LOG_SECRET_PATTERN_UNSET:
+                args = getattr(self, "args", None)
+                redact_strings = args.get("redact_strings") if args else None
+                redact_strings_labelled = args.get("redact_strings_labelled") if args else None
+                values = collect_log_secret_values(args, getattr(self, "secrets", None), redact_strings, redact_strings_labelled)
+                self._log_secret_pattern_cache = compile_log_secret_pattern(values)
+            return self._log_secret_pattern_cache
 
     def log(self, msg, quiet=True):
         """
@@ -281,6 +301,7 @@ class Hass:
         self.threads = []
         self.fatal_error = False
         self.hass_api_version = 2
+        self._log_secret_pattern_lock = threading.Lock()
         self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
 
         self.logfile = open("predbat.log", "a")
@@ -294,7 +315,7 @@ class Hass:
 
         # Both args and secrets have just been populated, so the redaction pattern built from them
         # (GH#4770) is stale - drop it so the next log() call rebuilds from the loaded config.
-        self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
+        self._invalidate_log_secret_pattern()
 
     def run_every(self, callback, next_time, run_every, **kwargs):
         """
