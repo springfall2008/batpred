@@ -32,7 +32,7 @@ from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 5
-KERNEL_PARITY_REVISION = 10
+KERNEL_PARITY_REVISION = 11
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -135,6 +135,7 @@ class PkContext(ctypes.Structure):
         ("iboost_on_export", ctypes.c_int32),
         ("has_rate_gas", ctypes.c_int32),
         ("has_iboost_plan", ctypes.c_int32),
+        ("pv_forecast_peak", ctypes.POINTER(ctypes.c_double)),
     ]
 
 
@@ -148,6 +149,7 @@ class PkScenario(ctypes.Structure):
         ("export_limits", ctypes.POINTER(ctypes.c_double)),
         ("export_start", ctypes.POINTER(ctypes.c_int32)),
         ("export_end", ctypes.POINTER(ctypes.c_int32)),
+        ("export_flags", ctypes.POINTER(ctypes.c_int32)),
         ("soc_out", ctypes.POINTER(ctypes.c_double)),
         ("n_charge", ctypes.c_int32),
         ("n_export", ctypes.c_int32),
@@ -191,6 +193,7 @@ class PkBatchJob(ctypes.Structure):
         ("export_limits", ctypes.POINTER(ctypes.c_double)),
         ("export_start", ctypes.POINTER(ctypes.c_int32)),
         ("export_end", ctypes.POINTER(ctypes.c_int32)),
+        ("export_flags", ctypes.POINTER(ctypes.c_int32)),
         ("soc_out", ctypes.POINTER(ctypes.c_double)),
         ("n_charge", ctypes.c_int32),
         ("n_export", ctypes.c_int32),
@@ -531,6 +534,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
     pv = []
     pv10 = []
     pv90 = []
+    pv_peak = []
     temp_charge_cap = []
     temp_discharge_cap = []
     carbon = []
@@ -553,6 +557,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
         pv.append(pred.pv_forecast_minute_step[minute])
         pv10.append(pred.pv_forecast_minute10_step[minute])
         pv90.append(pred.pv_forecast_minute90_step[minute])
+        pv_peak.append(pred.pv_forecast_peak_step.get(minute, 0) if getattr(pred, "pv_forecast_peak_step", None) else 0.0)
         # Pre-compute the temperature rate cap base (before the min against the max rate,
         # which the kernel applies per lookup) - mirrors utils.py find_battery_temperature_cap
         battery_temperature = pred.battery_temperature_prediction.get(minute, pred.battery_temperature)
@@ -579,7 +584,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
     charge_curve = [get_curve_value(pred.battery_charge_power_curve, percent, 1.0) for percent in range(101)]
     discharge_curve = [get_curve_value(pred.battery_discharge_power_curve, percent, 1.0) for percent in range(101)]
 
-    return (rate_import, rate_export, alert_keep, io_flag, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve)
+    return (rate_import, rate_export, alert_keep, io_flag, pv, pv10, pv90, pv_peak, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve)
 
 
 def create_kernel_context(pred, static_cache=None):
@@ -628,7 +633,7 @@ def create_kernel_context(pred, static_cache=None):
             static = (shape, build_static_context_arrays(pred, n_steps, minutes_now, num_cars))
             if static_cache is not None:
                 static_cache["arrays"] = static
-        (rate_import, rate_export, alert_keep, io_flag, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve) = static[1]
+        (rate_import, rate_export, alert_keep, io_flag, pv, pv10, pv90, pv_peak, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve) = static[1]
 
         ctx = PkContext()
         ctx.rate_import = double_array(rate_import)
@@ -719,6 +724,7 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_on_export = 1 if pred.iboost_on_export else 0
         ctx.has_rate_gas = 1 if pred.rate_gas else 0
         ctx.has_iboost_plan = 1 if pred.iboost_plan else 0
+        ctx.pv_forecast_peak = double_array(pv_peak)
 
         handle = lib.pk_context_create(ctypes.byref(ctx))
         if handle:
@@ -830,13 +836,14 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
         """Marshal a window list's start/end arrays, reusing an earlier job's arrays where possible"""
         entry = window_cache.get(id(windows))
         if entry is None:
-            entry = (int32_array([window["start"] for window in windows]), int32_array([window["end"] for window in windows]), windows)
+            flags = int32_array([1 if "clipping_target_soc_pct" in window else 0 for window in windows])
+            entry = (int32_array([window["start"] for window in windows]), int32_array([window["end"] for window in windows]), flags, windows)
             window_cache[id(windows)] = entry
         return entry
 
     for index, job in enumerate(jobs):
-        charge_start, charge_end, _ = window_arrays(job.charge_window)
-        export_start, export_end, _ = window_arrays(job.export_window)
+        charge_start, charge_end, _, _ = window_arrays(job.charge_window)
+        export_start, export_end, export_flags, _ = window_arrays(job.export_window)
         charge_limit = double_array(job.charge_limit)
         export_limits = double_array(job.export_limits)
         buffers.append((charge_limit, export_limits))
@@ -848,6 +855,7 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
         pk_job.export_limits = export_limits
         pk_job.export_start = export_start
         pk_job.export_end = export_end
+        pk_job.export_flags = export_flags
         pk_job.soc_out = None
         pk_job.n_charge = len(job.charge_window)
         pk_job.n_export = len(job.export_window)
@@ -901,6 +909,7 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     scenario.charge_start, scenario.charge_end = window_bound_arrays(charge_window)
     scenario.export_limits = double_array(export_limits)
     scenario.export_start, scenario.export_end = window_bound_arrays(export_window)
+    scenario.export_flags = int32_array([1 if "clipping_target_soc_pct" in window else 0 for window in export_window])
     # A cached run discards the per-minute SoC series (see the `if not cache` block below), so the
     # buffer is not allocated and the kernel is told to skip filling it. That skips a round_py per
     # step, which is snprintf+strtod and the single most expensive thing in the kernel's hot loop -
