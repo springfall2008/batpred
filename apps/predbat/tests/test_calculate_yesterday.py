@@ -387,6 +387,11 @@ def _test_savings_today_predbat_matches_published_adjusted_value(my_predbat, fai
     print("calculate_yesterday: Test - savings_today_predbat matches the published saving_adjusted, not saving_real (#3894)")
     now_utc = _setup_base(my_predbat)
 
+    # unit_test.py runs every registered test against the same shared PredBat instance
+    # (see create_predbat()), so an earlier test could have left soc_kwh_history non-empty -
+    # save it, rather than assuming/resetting to {} unconditionally on cleanup, so this test
+    # does not discard state it did not itself put there (Copilot review on #5061).
+    soc_kwh_history_before = my_predbat.soc_kwh_history
     minutes_back = my_predbat.minutes_now + 1
     my_predbat.soc_kwh_history = {minutes_back: 2.0}  # differs from the mock's FIXED_FINAL_SOC (5.0)
 
@@ -411,7 +416,7 @@ def _test_savings_today_predbat_matches_published_adjusted_value(my_predbat, fai
             )
             failed = True
 
-    my_predbat.soc_kwh_history = {}
+    my_predbat.soc_kwh_history = soc_kwh_history_before
     _restore_methods(my_predbat, original_run_pred)
     my_predbat.savings_last_updated = None
     return failed
