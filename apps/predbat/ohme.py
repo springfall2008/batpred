@@ -67,7 +67,7 @@ POWER_WATTS_ENTITY = "sensor.predbat_ohme_power_watts"
 CONTROL_INTERVAL_SECONDS = 60
 
 # The charger-facing entities for the discovery catalogue's chargers record - see
-# OhmeAPI.build_discovery(). name -> (entity_id, domain, access). All four are published
+# OhmeAPI.build_discovery(). name -> (entity_id, domain, access). All three are published
 # unconditionally by publish_data(), so once it has run once every one of these exists.
 CHARGER_DISCOVERY_ENTITY_SPEC = {
     "car_charging_planned": ("binary_sensor.predbat_ohme_connected", "binary_sensor", "r"),

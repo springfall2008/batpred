@@ -326,6 +326,7 @@ def test_ohme(my_predbat=None):
         ("discovery_failure_retry", _test_ohme_discovery_report_failure_contained_and_retried, "a build_discovery failure is contained and retried"),
         ("discovery_run_unconditional", _test_ohme_discovery_report_retried_via_unconditional_run_call, "a first-cycle failure is retried by run()'s unconditional call"),
         ("discovery_automatic_false_run", _test_ohme_discovery_report_produced_when_automatic_false, "run() reports to the catalogue even when ohme_automatic is False"),
+        ("discovery_no_serial_yet", _test_ohme_discovery_report_skipped_before_serial_known, "run() does not report before the client's serial is known"),
         ("discovery_round_trip", _test_ohme_build_discovery_round_trips_through_coordinator_and_redaction, "build_discovery round-trips through the real Coordinator and Redactor"),
         ("discovery_no_email_leak", _test_ohme_build_discovery_never_leaks_login_email, "the Ohme login email never enters the discovery report in any form"),
     ]
@@ -3189,6 +3190,19 @@ def _known_vehicle():
     }
 
 
+async def _discovery_async_noop(*args, **kwargs):
+    """Stand in for a network-facing async call whose real return value a run()-level discovery test does not depend on."""
+    return None
+
+
+def _stub_run_network_calls(api):
+    """Replace run()'s network-facing async calls with no-ops, so a discovery test can drive a real run() cycle without touching the network."""
+    api.client.async_update_device_info = _discovery_async_noop
+    api.client.async_get_charge_session = _discovery_async_noop
+    api.publish_data = _discovery_async_noop
+    api.update_success_timestamp = lambda: None
+
+
 def _test_ohme_build_discovery_charger_and_car_split(my_predbat=None):
     """One charger record and one car record are produced, cross-linked in both directions"""
     print("**** Running test_ohme_build_discovery_charger_and_car_split ****")
@@ -3425,15 +3439,7 @@ def _test_ohme_discovery_report_retried_via_unconditional_run_call(my_predbat=No
     api = MockOhmeAPI()
     api.client.serial = "TEST-SERIAL-123"
     _stage_all_discovery_entities(api)
-
-    async def _async_noop(*args, **kwargs):
-        """Stand in for a network-facing async call whose real return value this test does not depend on."""
-        return None
-
-    api.client.async_update_device_info = _async_noop
-    api.client.async_get_charge_session = _async_noop
-    api.publish_data = _async_noop
-    api.update_success_timestamp = lambda: None
+    _stub_run_network_calls(api)
 
     real_build_discovery = api.build_discovery
     api.build_discovery = MagicMock(side_effect=Exception("boom"))
@@ -3469,15 +3475,7 @@ def _test_ohme_discovery_report_produced_when_automatic_false(my_predbat=None):
     api.client.serial = "TEST-SERIAL-123"
     api.ohme_automatic = False
     _stage_all_discovery_entities(api)
-
-    async def _async_noop(*args, **kwargs):
-        """Stand in for a network-facing async call whose real return value this test does not depend on."""
-        return None
-
-    api.client.async_update_device_info = _async_noop
-    api.client.async_get_charge_session = _async_noop
-    api.publish_data = _async_noop
-    api.update_success_timestamp = lambda: None
+    _stub_run_network_calls(api)
     automatic_config_calls = []
 
     async def _mock_automatic_config():
@@ -3497,6 +3495,39 @@ def _test_ohme_discovery_report_produced_when_automatic_false(my_predbat=None):
     assert api.discovery_reported_for is not None, "The marker should have advanced once the report succeeded"
 
     print("PASS: run() reports to the discovery catalogue even when ohme_automatic is False")
+    return 0
+
+
+def _test_ohme_discovery_report_skipped_before_serial_known(my_predbat=None):
+    """
+    A real run() cycle with no serial yet - the charger's very first cycle, before
+    async_update_device_info() has ever identified it - must not report at all: neither
+    build_discovery() nor report_discovery() is called, and no charger record with a missing
+    serial reaches the coordinator.
+
+    _refresh_discovery_report() now runs unconditionally every cycle rather than only inside "if
+    first and self.client.serial:" (see run()'s comment on why), so this pins that its own falsy-
+    serial guard is what stops it firing too early - not the gate it now sits outside.
+    MockOhmeApiClient's serial defaults to "" (OhmeApiClient.__init__), matching the real state
+    before the account has ever been fetched, so this test deliberately never sets it.
+    """
+    print("**** Running test_ohme_discovery_report_skipped_before_serial_known ****")
+
+    api = MockOhmeAPI()
+    assert not api.client.serial, f"Expected the client to start with no serial, got {api.client.serial!r}"
+    _stub_run_network_calls(api)
+    api.build_discovery = MagicMock(side_effect=AssertionError("build_discovery() should not be called before the serial is known"))
+    reports = []
+    api.report_discovery = lambda report: reports.append(report)
+
+    result = run_async(api.run(seconds=0, first=True))
+
+    assert result is True, "run() should still succeed on a cycle with no serial yet"
+    assert not api.build_discovery.called, "build_discovery() must not be called before the client has a serial"
+    assert not reports, f"No report should reach the coordinator before the serial is known, got {reports}"
+    assert api.discovery_reported_for is None, "The marker must not advance before the serial is known"
+
+    print("PASS: run() does not report to the discovery catalogue before the client's serial is known")
     return 0
 
 
