@@ -593,18 +593,30 @@ def test_legitimate_long_float_survives_unchanged_and_still_numeric():
     float whose repr carries that many digits after the decimal point gets pseudonymised - and a
     numbers-only container silently starts handing consumers a str. An efficiency, a percentage or
     a unit conversion routinely produces exactly such a float. The guard must judge a NUMERIC
-    value on its INTEGER PART's digit count, not its full stringified repr."""
+    value on its INTEGER PART's digit count, not its full stringified repr. Also asserts a genuine
+    identifier on the SAME record WAS redacted, so this is not a false pass against a no-op
+    redact() - the same defect fixed in the timestamp test, applied here too."""
     base, coordinator = _redacting_coordinator()
     coordinator.report(
         "givtcp",
-        {"inverters": [{"device_id": "givtcp:inv1", "ratings": {"third": 1 / 3, "long_division": 700 / 11, "precise": 17 / 6, "float_sum": 0.1 + 0.2, "big_but_legit": 123456789.0}}]},
+        {
+            "inverters": [
+                {
+                    "device_id": "givtcp:inv1",
+                    "account_ids": {"owner_ref": "1234567890123"},
+                    "ratings": {"third": 1 / 3, "long_division": 700 / 11, "precise": 17 / 6, "float_sum": 0.1 + 0.2, "big_but_legit": 123456789.0},
+                }
+            ]
+        },
     )
     catalogue = coordinator.catalogue()
-    ratings = catalogue["inverters"][0]["ratings"]
+    inverter = catalogue["inverters"][0]
+    ratings = inverter["ratings"]
     for key, expected in (("third", 1 / 3), ("long_division", 700 / 11), ("precise", 17 / 6), ("float_sum", 0.1 + 0.2), ("big_but_legit", 123456789.0)):
         assert ratings[key] == expected, (key, ratings[key])
         assert isinstance(ratings[key], float), "a numbers-only container must still hand back a number, not a str"
-    print("PASS: a legitimate long float survives unchanged and stays numeric")
+    assert inverter["account_ids"]["owner_ref"] != "1234567890123" and inverter["account_ids"]["owner_ref"].startswith("#"), "redaction must still be doing real work on the same record"
+    print("PASS: a legitimate long float survives unchanged and stays numeric, while real redaction still happens")
     return 0
 
 
@@ -758,7 +770,9 @@ def test_device_id_without_identity_data_never_corrupts_unrelated_text():
     to contain the same word, however common it is. (See NEW-5 below for the complementary case:
     a device_id that IS identity-derived, because its own record carries account_ids, is deliberately
     substring-eligible, since its identity comes from a real identifier and under-redacting it
-    would make its token trivially correlatable.)"""
+    would make its token trivially correlatable.) Also asserts a genuine identity-derived device_id
+    ELSEWHERE in the same catalogue WAS redacted, so this is not a false pass against a no-op
+    redact() - the same defect fixed in the timestamp test, applied here too."""
     base, coordinator = _redacting_coordinator()
     coordinator.report(
         "ohme",
@@ -767,12 +781,14 @@ def test_device_id_without_identity_data_never_corrupts_unrelated_text():
             "cars": [{"device_id": "ohme:v1", "entities": {"status": {"entity_id": "sensor.ohme_charger_status", "domain": "sensor", "access": "r"}}}],
         },
     )
+    coordinator.report("octopus", {"meters": [{"device_id": "octopus:m", "direction": "import", "account_ids": {"mpan": "1234567890123"}}]})
     catalogue = coordinator.catalogue()
     charger = catalogue["chargers"][0]
     assert charger["device_id"] == "charger", "no account_ids on this record, so nothing marks device_id as identity-derived"
     assert charger["info"]["model"] == "charger v2", "an unrelated string containing the word must not be corrupted"
     assert catalogue["cars"][0]["entities"]["status"]["entity_id"] == "sensor.ohme_charger_status", "an unrelated entity_id containing the word must not be corrupted either"
-    print("PASS: a device_id with no account_ids alongside it never corrupts unrelated text")
+    assert catalogue["meters"][0]["device_id"] != "octopus:m", "redaction must still be doing real work elsewhere in the same catalogue"
+    print("PASS: a device_id with no account_ids alongside it never corrupts unrelated text, while real redaction still happens elsewhere")
     return 0
 
 
@@ -807,6 +823,42 @@ def test_identity_derived_device_id_substituted_wherever_it_is_echoed():
     return 0
 
 
+# --- Review round 4: ITEM 1 - the identity-derived precondition only checked the record's own top-level keys ---
+
+
+def test_pseudonym_container_nested_in_sub_record_still_marks_device_id_identity_derived():
+    """ITEM 1 (the substantive finding of this round): _walk's device_id precondition tested
+    `any(name in node for name in PSEUDONYM_CONTAINERS)` against the SAME dict only, so a record
+    whose account_ids sits inside a sub-record (tariff, which _validate_record structurally
+    accepts even though v1's own Octopus reporter puts account_ids at meter level) never had its
+    device_id noted at all - neither whole-string nor substring. The device_id itself, a
+    free-text echo of it, and a cross-link pointing at it all published raw. Fixed by recursing
+    the precondition (_has_pseudonym_container) into every nested dict/list, not just node's own
+    keys."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "octopus",
+        {
+            "meters": [
+                {
+                    "device_id": "A-AAAA1111",
+                    "direction": "import",
+                    "tariff": {"account_ids": {"contract": "1234567890123"}},
+                    "info": {"note": "for A-AAAA1111"},
+                }
+            ],
+            "programmes": [{"device_id": "axle:site1", "kind": "vpp", "meter": "A-AAAA1111"}],
+        },
+    )
+    catalogue = coordinator.catalogue()
+    meter = catalogue["meters"][0]
+    assert meter["device_id"] != "A-AAAA1111", "device_id must be identity-derived even when account_ids sits inside a sub-record, not just a direct sibling"
+    assert "A-AAAA1111" not in meter["info"]["note"], meter["info"]["note"]
+    assert catalogue["programmes"][0]["meter"] == meter["device_id"], "the cross-link must still resolve"
+    print("PASS: a pseudonym container nested in a sub-record still marks device_id identity-derived")
+    return 0
+
+
 def test_substitution_does_not_touch_the_catalogue_timestamp():
     """generated is the catalogue's own timestamp, stamped by assemble() itself rather than any
     component, so a short account identifier that coincidentally matches digits inside it must not
@@ -833,17 +885,40 @@ def test_shorter_original_does_not_fragment_a_longer_one():
     shorter token spliced into the middle. The previous version of this test used two identifiers
     that both tripped the shape guard directly (both had an embedded 13-digit run), so it passed
     even with the sort removed and insertion order used instead - this repro is the one that
-    actually exercises the substitution ordering fix and nothing else."""
+    actually exercises the substitution ordering fix and nothing else.
+
+    Detection-power note: production behaviour (redact()'s `sorted(self.substring_ok, key=len,
+    reverse=True)`) is fully deterministic regardless of set-iteration order, since the four
+    originals below have four DISTINCT lengths - a stable sort on an all-distinct key has only one
+    possible output. What is NOT fully deterministic is whether *reverting* that sort (falling
+    back to raw `set` iteration) gets caught by this test: CPython's per-string hashing is
+    PYTHONHASHSEED-randomised, so an unsorted mutant's output depends on the salt-of-the-run, not
+    on anything this test controls. A 2-original chain (as this test used to be) is "accidentally"
+    passed by an unsorted mutant whenever the longer original happens to iterate first - a
+    coin-flip, empirically caught in only about half of sampled hash seeds. Chaining FOUR nested
+    originals instead of two cuts that accidental-pass probability roughly to 1-in-4 (only the
+    longest happening to iterate first defeats detection, regardless of the other three's
+    relative order) - a cheap, meaningful improvement, but still not a deterministic guarantee.
+    """
     base, coordinator = _redacting_coordinator()
     coordinator.report(
         "octopus",
-        {"meters": [{"device_id": "octopus:m", "direction": "import", "account_ids": {"short": "abcdef", "long": "xxabcdefyy"}, "info": {"note": "ref xxabcdefyy end"}}]},
+        {
+            "meters": [
+                {
+                    "device_id": "octopus:m",
+                    "direction": "import",
+                    "account_ids": {"a": "abcdef", "b": "xxabcdefyy", "c": "wwxxabcdefyyzz", "d": "vvwwxxabcdefyyzzuu"},
+                    "info": {"note": "ref vvwwxxabcdefyyzzuu end"},
+                }
+            ]
+        },
     )
     catalogue = coordinator.catalogue()
     note = catalogue["meters"][0]["info"]["note"]
     assert "abcdef" not in note, note
     assert note.startswith("ref #") and note.endswith(" end"), note
-    print("PASS: the longer original is substituted before a shorter one that is its substring")
+    print("PASS: the longest original is substituted before any shorter one that is its substring")
     return 0
 
 
@@ -964,6 +1039,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_structural_scalar_shape_guard_catches_bare_identifier_device_id()
     failures += test_device_id_without_identity_data_never_corrupts_unrelated_text()
     failures += test_identity_derived_device_id_substituted_wherever_it_is_echoed()
+    failures += test_pseudonym_container_nested_in_sub_record_still_marks_device_id_identity_derived()
     failures += test_substitution_does_not_touch_the_catalogue_timestamp()
     failures += test_shorter_original_does_not_fragment_a_longer_one()
     failures += test_misfiled_identifier_used_as_a_container_key_caught()

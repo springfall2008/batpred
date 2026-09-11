@@ -324,27 +324,46 @@ class Redactor:
             self.log("Warn: Coordinator: {} key '{}' looks like an identifier - pseudonymised".format(container, name))
         return self._note(name, substring=True)
 
+    def _has_pseudonym_container(self, node):
+        """Whether a pseudonym container (account_ids) sits anywhere in this record - the record
+        itself, or a nested sub-record (a meter's tariff, say) - not only its own top-level keys.
+
+        _validate_record accepts account_ids inside any sub-record CONTAINER_SPEC recognises, so
+        a component reporting its account identifier one level down (structurally legal even
+        though v1's own reporters put Octopus's account_ids at meter level) must still mark that
+        record's device_id as identity-derived - checking only node's direct keys left such a
+        device_id, and any free-text echo or cross-link pointing at it, published raw.
+        """
+        if isinstance(node, dict):
+            if any(name in node for name in PSEUDONYM_CONTAINERS):
+                return True
+            return any(self._has_pseudonym_container(value) for value in node.values())
+        if isinstance(node, list):
+            return any(self._has_pseudonym_container(entry) for entry in node)
+        return False
+
     def _walk(self, node, container=None):
         """Recursively redact a node: pseudonym containers by class, clear containers via the shape guard.
 
-        A record carrying a pseudonym container (account_ids) also has its own device_id noted as
-        an original, alongside that container's values. Nothing here has to know that "meter" or
-        "measures_meter" are cross-link field names: the later substitution pass rewrites any
-        string equal to (or, since the id is identity-derived, containing) a noted original
-        wherever it appears, so noting the owning record's device_id is what lets a cross-link
-        field resolve to the same token as the record it points to, even when that field merely
-        repeats the device_id rather than embedding the account identifier itself - and what
-        catches the SAME device_id text left in the clear elsewhere in that record (an entity_id,
-        a free-text note) rather than just tokenising the one place it was noted. A device_id with
-        no pseudonym container alongside it is never noted at all, so an ordinary word used as one
-        still cannot corrupt unrelated text it happens to share a substring with. Every scalar
-        reached through the generic else branch - structural fields (device_id, serials, meter,
-        measures_meter, ...) included - is routed through the same shape guard as a clear
-        container's values, since a misfiled identifier does not stop being one just because it
-        landed outside CONTAINER_SPEC.
+        A record carrying a pseudonym container (account_ids), anywhere in it - see
+        _has_pseudonym_container - also has its own device_id noted as an original, alongside that
+        container's values. Nothing here has to know that "meter" or "measures_meter" are
+        cross-link field names: the later substitution pass rewrites any string equal to (or,
+        since the id is identity-derived, containing) a noted original wherever it appears, so
+        noting the owning record's device_id is what lets a cross-link field resolve to the same
+        token as the record it points to, even when that field merely repeats the device_id rather
+        than embedding the account identifier itself - and what catches the SAME device_id text
+        left in the clear elsewhere in that record (an entity_id, a free-text note) rather than
+        just tokenising the one place it was noted. A device_id with no pseudonym container
+        anywhere in its record is never noted at all, so an ordinary word used as one still cannot
+        corrupt unrelated text it happens to share a substring with. Every scalar reached through
+        the generic else branch - structural fields (device_id, serials, meter, measures_meter,
+        ...) included - is routed through the same shape guard as a clear container's values,
+        since a misfiled identifier does not stop being one just because it landed outside
+        CONTAINER_SPEC.
         """
         if isinstance(node, dict):
-            if isinstance(node.get("device_id"), str) and any(name in node for name in PSEUDONYM_CONTAINERS):
+            if isinstance(node.get("device_id"), str) and self._has_pseudonym_container(node):
                 self._note(node["device_id"], substring=True)
             out = {}
             for key, value in node.items():
