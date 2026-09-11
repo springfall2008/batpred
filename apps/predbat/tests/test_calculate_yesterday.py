@@ -1155,11 +1155,19 @@ def _test_reconstruct_car_slots_called_with_widened_end_record(my_predbat, faile
     my_predbat.num_cars = 0
     my_predbat.car_charging_energy = {}
 
+    # Fix (Copilot review on #5048): expected was previously read from my_predbat.minutes_now
+    # AFTER calculate_yesterday() returns, but that call fakes minutes_now to 0 during execution
+    # and only restores it at the end - so a regression breaking both the call site and the
+    # restore together would make captured_end_record[0] and expected drift identically and pass
+    # vacuously (confirmed by reverting both at once). Capture the real value up front instead.
+    real_minutes_now = my_predbat.minutes_now
     captured_end_record = []
+    captured_minutes_now = []
     real_reconstruct = my_predbat.yesterday_reconstruct_car_slots
 
     def fake_reconstruct(end_record, yesterday_load_step, minutes_now):
         captured_end_record.append(end_record)
+        captured_minutes_now.append(minutes_now)
         return real_reconstruct(end_record, yesterday_load_step, minutes_now)
 
     my_predbat.yesterday_reconstruct_car_slots = fake_reconstruct
@@ -1170,13 +1178,17 @@ def _test_reconstruct_car_slots_called_with_widened_end_record(my_predbat, faile
         my_predbat.yesterday_reconstruct_car_slots = real_reconstruct
         _restore_methods(my_predbat, original_run_pred)
 
-    expected = 24 * 60 + my_predbat.minutes_now
+    expected = 24 * 60 + real_minutes_now
     if not captured_end_record:
         print("ERROR: yesterday_reconstruct_car_slots was not called")
         failed = True
-    elif captured_end_record[0] != expected:
-        print("ERROR: calculate_yesterday called yesterday_reconstruct_car_slots with end_record={}, expected {} (24*60 + minutes_now)".format(captured_end_record[0], expected))
-        failed = True
+    else:
+        if captured_minutes_now[0] != real_minutes_now:
+            print("ERROR: calculate_yesterday called yesterday_reconstruct_car_slots with minutes_now={}, expected the real {} - it read the faked value instead".format(captured_minutes_now[0], real_minutes_now))
+            failed = True
+        if captured_end_record[0] != expected:
+            print("ERROR: calculate_yesterday called yesterday_reconstruct_car_slots with end_record={}, expected {} (24*60 + real minutes_now)".format(captured_end_record[0], expected))
+            failed = True
 
     my_predbat.savings_last_updated = None
     if not failed:
