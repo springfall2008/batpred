@@ -314,7 +314,7 @@ class Inverter:
         if not isinstance(values, list) or self.id >= len(values):
             return False
         value = values[self.id]
-        return isinstance(value, str) and "." in value
+return is_entity_id(values[self.id])
 
     def __init__(self, base, id=0, quiet=False):
         """
