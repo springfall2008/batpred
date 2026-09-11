@@ -1848,6 +1848,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return
 
         self.validate_config_retries_remaining -= 1
+        started_time = getattr(self, "started_time", None) or getattr(self, "now_utc_real", None) or self.now_utc
+        now = getattr(self, "now_utc_real", None) or self.now_utc
+        time_since_start = (now - started_time).total_seconds() / 60.0
+        self.auto_config(final=(time_since_start > 10))
         errors = self.validate_config()
         if errors == 0:
             self.log("Info: Config validation retry succeeded, previous errors have now cleared")
@@ -2060,6 +2064,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.prediction_started = True
             try:
                 self.load_user_config()
+                started_time = getattr(self, "started_time", None) or getattr(self, "now_utc_real", None) or self.now_utc
+                now = getattr(self, "now_utc_real", None) or self.now_utc
+                time_since_start = (now - started_time).total_seconds() / 60.0
+                self.auto_config(final=(time_since_start > 10))
                 self.validate_config_schedule_retry(self.validate_config())
                 self.update_pred(scheduled=False)
                 self.create_entity_list()
@@ -2136,12 +2144,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     self.update_pending = False
                     self.ha_interface.update_states()
                     self.load_user_config()
-                    self.validate_config_schedule_retry(self.validate_config())
                     config_changed = True
 
                 # Retry auto config (and finalise after 10 minutes from startup)
-                time_since_start = (self.now_utc_real - self.started_time).total_seconds() / 60.0
+                started_time = getattr(self, "started_time", None) or getattr(self, "now_utc_real", None) or self.now_utc
+                now = getattr(self, "now_utc_real", None) or self.now_utc
+                time_since_start = (now - started_time).total_seconds() / 60.0
                 self.auto_config(final=(time_since_start > 10))
+
+                if config_changed:
+                    self.validate_config_schedule_retry(self.validate_config())
 
                 # Run the prediction
                 self.update_pred(scheduled=True)
