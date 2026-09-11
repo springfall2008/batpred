@@ -36,6 +36,20 @@ Solcast class deals with fetching solar predictions, processing the data and pub
 PV_CALIBRATION_LOWEST = 0.20
 PV_CALIBRATION_HIGHEST = 4.0
 
+# apps.yaml args pointing at solar forecast entities an EXTERNAL integration publishes (typically
+# the HACS "Solcast PV Forecast" integration, when fetch_pv_forecast() falls back to reading HA
+# sensors directly rather than calling any cloud API itself - see that method's final "else"
+# branch, configured_source "ha_sensors") - not entities this component publishes, unlike every
+# other discovery reporter's own entity specs. Used by SolarAPI._discovery_forecast_entities().
+FORECAST_ENTITY_ARGS = ("pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4")
+
+# Solcast's forecasts endpoint is always called with "hours": 168 (see download_solcast_data()) -
+# a fixed, genuinely-requested horizon, unlike forecast.solar/Open-Meteo below whose horizon is
+# bounded by however many days this component retains (self.forecast_days) rather than by a fixed
+# request parameter. Solcast's own API returns pv_estimate/pv_estimate10/pv_estimate90 for every
+# period by default, hence the fixed variant list.
+SOLCAST_DISCOVERY_COVERAGE = {"horizon_hours": 168, "resolution_minutes": 30, "variants": ["pv10", "pv50", "pv90"]}
+
 
 class SolarAPI(ComponentBase):
     """
@@ -92,6 +106,16 @@ class SolarAPI(ComponentBase):
         self.forecast_solar_rate_limit_until = None
         self.last_fetched_timestamp = None
         self.forecast_days = 4
+        # Solcast resource ids seen across every site-fetch cycle so far, in the order first
+        # encountered - append-only (see download_solcast_data()'s site loop) so build_discovery()
+        # can report one forecasts record per site without re-walking the API response, and so an
+        # id already reported keeps its position even if a later cycle's site list comes back
+        # shorter (a transient API hiccup must not make a previously-discovered site vanish).
+        self.discovered_sites = []
+        # The (sites, forecast_solar, open_meteo, ha-sensor-entities) snapshot build_discovery()
+        # was last successfully reported against - see _refresh_discovery_report(). None until the
+        # first successful report.
+        self.discovery_reported_for = None
 
     async def run(self, seconds, first):
         """
@@ -107,6 +131,17 @@ class SolarAPI(ComponentBase):
             await self.fetch_pv_forecast()
         elif not same_day or (fetch_age > 60):  # If data is older than 60 minutes or it's a new day, fetch new data
             await self.fetch_pv_forecast()
+
+        # Unconditional and outside both fetch conditions above, exactly like Ohme's and Octopus's
+        # own run()-level call: a build_discovery() failure on any one cycle is swallowed inside
+        # _refresh_discovery_report() (so a discovery observer can never degrade this component's
+        # own health) and must not be lost for the life of the process just because a later cycle
+        # happens not to call fetch_pv_forecast() again - the common steady-state case once the
+        # cached forecast is still fresh (see fetch_age/same_day above). self.discovered_sites and
+        # the forecast.solar/Open-Meteo/HA-sensor config are already whatever the most recent
+        # successful fetch left them as, so this reflects the current state correctly whether or
+        # not THIS cycle actually re-fetched anything - see that method's own docstring.
+        self._refresh_discovery_report()
         return True
 
     async def cache_get_url(self, url, params, max_age=8 * 60):
@@ -575,6 +610,15 @@ class SolarAPI(ComponentBase):
                 if resource_id:
                     self.log("SolarAPI: Fetch data for resource id {}".format(resource_id))
 
+                    # Record every resource id this site loop walks, for the discovery catalogue's
+                    # forecasts section (see build_discovery()) - append-only and de-duplicated so
+                    # a resource id already known keeps its position across cycles, and a site
+                    # returned again is never reported twice. Deliberately NOT the site's own
+                    # "name" field: that is user-authored free text (see build_discovery()'s
+                    # docstring) and the catalogue must never carry it.
+                    if resource_id not in self.discovered_sites:
+                        self.discovered_sites.append(resource_id)
+
                     params = {"format": "json", "api_key": api_key.strip(), "hours": 168}
                     url = f"{host}/rooftop_sites/{resource_id}/forecasts"
                     data = await self.cache_get_url(url, params, max_age=max_age)
@@ -635,6 +679,162 @@ class SolarAPI(ComponentBase):
 
         self.log("SolarAPI: Solcast returned {} data points".format(len(sorted_data)))
         return sorted_data
+
+    def _discovery_forecast_entities(self):
+        """
+        Entity descriptors for the configured pv_forecast_* args that actually exist in the state store.
+
+        Unlike every other discovery reporter's own entity specs, these entity ids are not
+        published by this component at all - they are user-configured apps.yaml values naming an
+        entity an EXTERNAL integration publishes (see FORECAST_ENTITY_ARGS). "Exists" is still
+        checked the same way every other reporter checks it though: get_state_wrapper() against the
+        actual state store, since a configured-but-never-seen entity_id (a stale or mistyped
+        apps.yaml value, or an external integration that has not started yet) must not be claimed
+        as discovered just because a value is set in apps.yaml. The domain is read back off the
+        entity id itself, since - unlike a fixed entity spec - there is no way to know it in advance
+        for an arbitrary externally-configured entity.
+        """
+        entities = {}
+        for name in FORECAST_ENTITY_ARGS:
+            entity_id = getattr(self, name, None)
+            if not entity_id or self.get_state_wrapper(entity_id) is None:
+                continue
+            descriptor = {"entity_id": entity_id, "access": "r"}
+            if "." in entity_id:
+                descriptor["domain"] = entity_id.split(".", 1)[0]
+            entities[name] = descriptor
+        return entities
+
+    def build_discovery(self):
+        """
+        Describe the solar forecast providers actually used for the discovery catalogue's forecasts section.
+
+        Up to four records, one per provider, each reported independently of the others being
+        configured ("when enabled", not "when it wins fetch_pv_forecast()'s own fallback chain" -
+        forecast.solar and Open-Meteo can each be configured as the other's fallback source, so
+        reporting only the branch that happened to win this particular cycle would make the
+        catalogue flicker between what is genuinely a stable, fully-known configuration):
+
+        - One `solar` record per Solcast resource id seen so far (self.discovered_sites, populated
+          by download_solcast_data()'s site loop - see that method). device_id "solcast:{resource
+          id}"; the resource id goes in account_ids (site and plant ids are registry-flagged
+          credentials - see docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md), never
+          in info, so the redactor pseudonymises it; info.vendor "Solcast"; coverage describing the
+          service itself (the "hours": 168 this component actually requests from Solcast's
+          forecasts endpoint, its 30-minute native resolution, and the pv10/pv50/pv90 variants the
+          endpoint returns by default - see SOLCAST_DISCOVERY_COVERAGE). Deliberately never the
+          site's own "name" field: Solcast site names are user-chosen free text, which the spec
+          excludes from the catalogue outright (it can contain anything, a person's name or address
+          included) - see the design doc's "Never included" class.
+        - One record each for forecast.solar (device_id "forecast_solar") and Open-Meteo (device_id
+          "open_meteo") when their apps.yaml config is set, each with its own coverage: Predbat
+          retains/publishes self.forecast_days days of forecast from every source uniformly (see
+          fetch_pv_forecast()'s own minute_data() calls), so horizon_hours is that figure for both;
+          resolution_minutes is plan_interval_minutes for forecast.solar and a fixed 60 for
+          Open-Meteo - both documented, not guessed, by fetch_pv_forecast()'s own comment on why
+          divide_by is recalculated per source ("Forecast.Solar uses plan_interval_minutes,
+          Open-Meteo is hourly").
+        - One record (device_id "ha_sensors", matching fetch_pv_forecast()'s own configured_source
+          value for this path) carrying whichever of pv_forecast_today/tomorrow/d3/d4 are both
+          configured and actually exist in the state store (_discovery_forecast_entities()) - the
+          user's own external HA integration, reported independently of whether it is this cycle's
+          winning fallback for the same reason as forecast.solar/Open-Meteo above. No vendor is
+          claimed for it: unlike the other three providers, Predbat has no way to know what
+          published these entities.
+
+        No `ratings.capacity_kw` is reported for any provider: this component's own PV array size
+        (max_kwh - see fetch_pv_forecast()/pv_calibration()) is a fact about the property's panels,
+        not about the forecast SERVICE this section describes, and inventing one here would
+        conflate the two.
+
+        Reporting is unconditional rather than gated on any automatic-style flag: this component
+        has none (solar forecast sourcing is a plain apps.yaml choice between Solcast/forecast.solar
+        /Open-Meteo/HA sensors, never something Predbat auto-wires the way Ohme's ohme_automatic or
+        GE Cloud's provisioning do), so there is nothing to record in the report's own "automatic"
+        key and it is left at its default.
+        """
+        forecasts = []
+
+        for resource_id in self.discovered_sites:
+            record = {"device_id": "solcast:{}".format(resource_id), "kind": "solar", "account_ids": {"site_id": resource_id}, "info": {"vendor": "Solcast"}, "coverage": dict(SOLCAST_DISCOVERY_COVERAGE)}
+            forecasts.append(record)
+
+        if self.forecast_solar:
+            forecasts.append(
+                {
+                    "device_id": "forecast_solar",
+                    "kind": "solar",
+                    "info": {"vendor": "Forecast.Solar"},
+                    "coverage": {"horizon_hours": self.forecast_days * 24, "resolution_minutes": self.plan_interval_minutes},
+                }
+            )
+
+        if self.open_meteo_forecast:
+            forecasts.append(
+                {
+                    "device_id": "open_meteo",
+                    "kind": "solar",
+                    "info": {"vendor": "Open-Meteo"},
+                    "coverage": {"horizon_hours": self.forecast_days * 24, "resolution_minutes": 60},
+                }
+            )
+
+        ha_entities = self._discovery_forecast_entities()
+        if ha_entities:
+            forecasts.append({"device_id": "ha_sensors", "kind": "solar", "entities": ha_entities})
+
+        return {"forecasts": forecasts}
+
+    def _discovery_state_key(self):
+        """
+        A snapshot of what build_discovery() depends on: the discovered Solcast sites, whether
+        forecast.solar/Open-Meteo are configured, and which HA-sensor forecast entities currently exist.
+
+        Deliberately narrower than the forecast DATA itself (pv_forecast_minute and friends, which
+        churn every fetch cycle) - keying on those would make _refresh_discovery_report() re-report
+        on every cycle instead of only when the discovered SET has actually changed, exactly what
+        the design brief asks for. The HA-sensor entity set is part of the key (not just whether
+        pv_forecast_today etc are configured) so that an entity appearing in the state store for the
+        first time - the external integration publishing it later than this component starts -
+        is picked up as a change, not silently missed forever because the config value itself never
+        moved.
+        """
+        return (tuple(self.discovered_sites), bool(self.forecast_solar), bool(self.open_meteo_forecast), tuple(sorted(self._discovery_forecast_entities())))
+
+    def _refresh_discovery_report(self):
+        """
+        Report the current forecast-provider snapshot to the discovery catalogue, if it has moved on from the last report that both succeeded and was complete.
+
+        Called unconditionally, once per run() cycle, from OUTSIDE both of run()'s own fetch
+        conditions - see run()'s own comment for why: the try/except below (correctly) swallows a
+        build_discovery() failure so run() still succeeds, and without an out-of-band marker
+        compared on every call (rather than on some one-shot "first" flag) a single transient
+        failure would otherwise be lost for the life of the process - the exact bug GE Cloud and
+        Octopus both shipped and had to fix.
+
+        self.discovery_reported_for is left unmoved, so the very next call retries, on two kinds
+        of incompleteness: a build_discovery() failure, and a report whose "ha_sensors" record does
+        not yet carry every pv_forecast_* entity that IS configured (get_state_wrapper() has not
+        seen it published yet) - a report built one cycle too early would otherwise be marked done
+        and the catalogue would permanently describe an incomplete HA-sensor source. Solcast/
+        forecast.solar/Open-Meteo have no equivalent partial state to guard: a site, once it has
+        ever been seen by the site loop, is never un-seen (self.discovered_sites is append-only),
+        and the forecast.solar/Open-Meteo records depend only on static apps.yaml config, not on
+        anything that can be "discovered but not yet visible".
+        """
+        state_key = self._discovery_state_key()
+        if state_key == self.discovery_reported_for:
+            return
+        try:
+            report = self.build_discovery()
+            self.report_discovery(report)
+            configured = sum(1 for name in FORECAST_ENTITY_ARGS if getattr(self, name, None))
+            reported = sum(len(record.get("entities", {})) for record in report["forecasts"] if record["device_id"] == "ha_sensors")
+            if reported == configured:
+                self.discovery_reported_for = state_key
+        except Exception as e:
+            self.log("Warn: SolarAPI: failed to report discovery for the catalogue: {}".format(e))
+            self.non_fatal_error_occurred()
 
     def fetch_pv_datapoints(self, argname, entity_id):
         """
