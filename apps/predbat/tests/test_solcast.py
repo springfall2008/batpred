@@ -5286,7 +5286,7 @@ def test_build_discovery_capacity_kw_only_for_forecast_solar_and_open_meteo(my_p
     ratings.capacity_kw. Solcast has no such source anywhere in this component's own site or
     forecast payloads, and ha_sensors describes an external integration whose panel size Predbat
     was never told, so neither carries a ratings container at all here (no active_forecast_source
-    is set in this test, so ratings.active plays no part either - see the dedicated active-marker
+    is set in this test, so coverage.active plays no part either - see the dedicated active-marker
     tests below).
     """
     print("  - test_build_discovery_capacity_kw_only_for_forecast_solar_and_open_meteo")
@@ -5354,11 +5354,13 @@ def test_build_discovery_capacity_kw_sums_across_planes(my_predbat):
 
 def test_build_discovery_active_marks_the_serving_provider(my_predbat):
     """
-    Task 9 review, finding 2: ratings.active: True marks whichever record's provider actually
+    Task 9 review, finding 2: coverage.active: True marks whichever record's provider actually
     served the most recent successful fetch (self.active_forecast_source), answering the design
     spec's own stated reason for this section - "it is invisible which one actually fed the plan
     when several are configured". With two providers configured, exactly one record is marked
-    active, and it is the one fetch_pv_forecast()'s own precedence actually selects.
+    active, and it is the one fetch_pv_forecast()'s own precedence actually selects. Carried in
+    coverage rather than ratings (final review: ratings is specced for physical quantities, and a
+    status flag does not fit that).
     """
     print("  - test_build_discovery_active_marks_the_serving_provider")
     failed = False
@@ -5374,7 +5376,7 @@ def test_build_discovery_active_marks_the_serving_provider(my_predbat):
         solar.active_forecast_source = "forecast_solar"
 
         report = solar.build_discovery()
-        active_devices = [record["device_id"] for record in report["forecasts"] if record.get("ratings", {}).get("active") is True]
+        active_devices = [record["device_id"] for record in report["forecasts"] if record.get("coverage", {}).get("active") is True]
 
         if active_devices != ["forecast_solar"]:
             print(f"ERROR: expected exactly ['forecast_solar'] marked active, got {active_devices}")
@@ -5402,7 +5404,7 @@ def test_build_discovery_active_marks_every_solcast_site(my_predbat):
         solar.active_forecast_source = "solcast"
 
         report = solar.build_discovery()
-        active_devices = sorted(record["device_id"] for record in report["forecasts"] if record.get("ratings", {}).get("active") is True)
+        active_devices = sorted(record["device_id"] for record in report["forecasts"] if record.get("coverage", {}).get("active") is True)
 
         if active_devices != ["solcast:site-one", "solcast:site-two"]:
             print(f"ERROR: expected both Solcast records marked active, got {active_devices}")
@@ -5429,7 +5431,7 @@ def test_build_discovery_no_active_marker_before_first_successful_fetch(my_predb
         solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
 
         report = solar.build_discovery()
-        active_devices = [record["device_id"] for record in report["forecasts"] if "ratings" in record and record["ratings"].get("active") is True]
+        active_devices = [record["device_id"] for record in report["forecasts"] if record.get("coverage", {}).get("active") is True]
 
         if active_devices:
             print(f"ERROR: expected no record marked active before any successful fetch, got {active_devices}")
@@ -5547,7 +5549,7 @@ def test_fetch_pv_forecast_active_forecast_source_follows_the_fallback_not_the_p
         # Consuming this via build_discovery() should mark the open_meteo record active, not
         # forecast_solar, even though both are configured.
         report = solar.build_discovery()
-        active_devices = [record["device_id"] for record in report["forecasts"] if record.get("ratings", {}).get("active") is True]
+        active_devices = [record["device_id"] for record in report["forecasts"] if record.get("coverage", {}).get("active") is True]
         if active_devices != ["open_meteo"]:
             print(f"ERROR: expected build_discovery() to mark only open_meteo active after the fallback served the fetch, got {active_devices}")
             failed = True
@@ -5821,8 +5823,9 @@ def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predba
         # site: lower-cased, "-" swapped for "_" - see the docstring above.
         solar.pv_forecast_today = "sensor.solcast_forecast_abcd_1234_efgh_today"
         test_api.set_mock_ha_state(solar.pv_forecast_today, "5.5")
-        # Task 9 review, finding 2: proves ratings.active and ratings.capacity_kw (both added by
-        # the same review) survive the round-trip alongside everything checked before.
+        # Task 9 review, finding 2: proves coverage.active and ratings.capacity_kw (both added by
+        # the same review; final review moved active from ratings into coverage) survive the
+        # round-trip alongside everything checked before.
         solar.active_forecast_source = "forecast_solar"
 
         report = solar.build_discovery()
@@ -5856,12 +5859,12 @@ def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predba
         check(fs_record is not None, "the forecast_solar record was dropped by validation")
         if fs_record:
             check(fs_record.get("ratings", {}).get("capacity_kw") == 4.0, "capacity_kw dropped or altered by validation: {}".format(fs_record.get("ratings")))
-            check(fs_record.get("ratings", {}).get("active") is True, "ratings.active dropped or altered by validation: {}".format(fs_record.get("ratings")))
+            check(fs_record.get("coverage", {}).get("active") is True, "coverage.active dropped or altered by validation: {}".format(fs_record.get("coverage")))
         om_record = by_device.get("open_meteo")
         check(om_record is not None, "the open_meteo record was dropped by validation")
         if om_record:
             check(om_record.get("ratings", {}).get("capacity_kw") == 4.0, "open_meteo capacity_kw dropped or altered by validation: {}".format(om_record.get("ratings")))
-            check("active" not in om_record.get("ratings", {}), "open_meteo must not be marked active when forecast_solar is the one serving the fetch: {}".format(om_record.get("ratings")))
+            check("active" not in om_record.get("coverage", {}), "open_meteo must not be marked active when forecast_solar is the one serving the fetch: {}".format(om_record.get("coverage")))
         ha_record = by_device.get("ha_sensors")
         check(ha_record is not None, "the ha_sensors record was dropped by validation")
         if ha_record:
@@ -5884,14 +5887,14 @@ def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predba
         check("forecast_solar" in catalogue_text, "the forecast_solar device id should survive in the clear, but is missing from the redacted catalogue")
         check("pv10" in catalogue_text and "pv90" in catalogue_text, "the coverage variants should survive redaction in the clear, but are missing from the redacted catalogue")
 
-        # ratings.capacity_kw and ratings.active (task 9 review, finding 1/2) are plain numbers and
-        # booleans - not identifier-shaped - so they must survive redaction completely untouched,
-        # checked structurally here rather than as text (a bare "True"/"4.0" substring check would
-        # be too fragile to mean anything).
+        # ratings.capacity_kw and coverage.active (task 9 review, finding 1/2; final review moved
+        # active from ratings into coverage) are plain numbers and booleans - not identifier-shaped
+        # - so they must survive redaction completely untouched, checked structurally here rather
+        # than as text (a bare "True"/"4.0" substring check would be too fragile to mean anything).
         redacted_by_device = {record["device_id"]: record for record in catalogue.get("forecasts", [])}
         redacted_fs = redacted_by_device.get("forecast_solar", {})
         check(redacted_fs.get("ratings", {}).get("capacity_kw") == 4.0, "capacity_kw did not survive redaction unchanged: {}".format(redacted_fs.get("ratings")))
-        check(redacted_fs.get("ratings", {}).get("active") is True, "ratings.active did not survive redaction unchanged: {}".format(redacted_fs.get("ratings")))
+        check(redacted_fs.get("coverage", {}).get("active") is True, "coverage.active did not survive redaction unchanged: {}".format(redacted_fs.get("coverage")))
 
         if failed:
             print("FAIL: build_discovery round-trip through the real Coordinator and Redactor found problems above")

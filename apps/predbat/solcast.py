@@ -777,7 +777,7 @@ class SolarAPI(ComponentBase):
           claimed for it: unlike the other three providers, Predbat has no way to know what
           published these entities.
 
-        ratings.active: True marks whichever record(s) match self.active_forecast_source - the
+        coverage.active: True marks whichever record(s) match self.active_forecast_source - the
         provider that genuinely served the most recent SUCCESSFUL fetch_pv_forecast() call (set
         there, beside its own log_source_change() call, only once pv_forecast_data is non-empty, so
         a failed attempt never overwrites the last known-good answer). Every Solcast record is
@@ -786,16 +786,20 @@ class SolarAPI(ComponentBase):
         This is deliberately independent of "when enabled" above: a record can exist (the provider
         is configured) without being active (it is not the one currently feeding the plan) - e.g.
         leftover pv_forecast_today config alongside a live Solcast setup produces an "ha_sensors"
-        record with no ratings.active at all, rather than either vanishing (requirement 2 forbids
+        record with no coverage.active at all, rather than either vanishing (requirement 2 forbids
         suppressing a real record) or being wrongly marked live. This is exactly the fact the design
         spec calls out this section as needing: "it is invisible which one actually fed the plan
-        when several are configured."
+        when several are configured." Carried in coverage, not ratings: ratings is specced for
+        physical quantities (capacity, efficiency, ...) and coverage's own container type already
+        accepts a boolean fact (see coordinator.py's _clean_measure_or_tokens), so a status flag
+        like this belongs there rather than in a container reserved for measurements.
 
         Reporting is unconditional rather than gated on any automatic-style flag: this component
         has none (solar forecast sourcing is a plain apps.yaml choice between Solcast/forecast.solar
         /Open-Meteo/HA sensors, never something Predbat auto-wires the way Ohme's ohme_automatic or
-        GE Cloud's provisioning do), so there is nothing to record in the report's own "automatic"
-        key and it is left at its default.
+        GE Cloud's provisioning do), so the report's own "automatic" key is omitted entirely -
+        Coordinator.validate_report() only ever carries it through when a component actually
+        provides one, rather than defaulting a component with no such concept to `automatic: true`.
         """
         active_source = self.active_forecast_source
         forecasts = []
@@ -805,9 +809,9 @@ class SolarAPI(ComponentBase):
             # record's "variants" list pointing at the very same shared list object - harmless
             # today (nothing mutates it), but a deep copy removes the footgun for good.
             coverage = dict(SOLCAST_DISCOVERY_COVERAGE, variants=list(SOLCAST_DISCOVERY_COVERAGE["variants"]))
-            record = {"device_id": "solcast:{}".format(resource_id), "kind": "solar", "account_ids": {"site_id": resource_id}, "info": {"vendor": "Solcast"}, "coverage": coverage}
             if active_source == "solcast":
-                record["ratings"] = {"active": True}
+                coverage["active"] = True
+            record = {"device_id": "solcast:{}".format(resource_id), "kind": "solar", "account_ids": {"site_id": resource_id}, "info": {"vendor": "Solcast"}, "coverage": coverage}
             forecasts.append(record)
 
         if self.forecast_solar:
@@ -815,13 +819,14 @@ class SolarAPI(ComponentBase):
             capacity_kw = self._discovery_capacity_kw(self.forecast_solar)
             if capacity_kw is not None:
                 ratings["capacity_kw"] = capacity_kw
+            coverage = {"horizon_hours": self.forecast_days * 24, "resolution_minutes": self.plan_interval_minutes}
             if active_source == "forecast_solar":
-                ratings["active"] = True
+                coverage["active"] = True
             record = {
                 "device_id": "forecast_solar",
                 "kind": "solar",
                 "info": {"vendor": "Forecast.Solar"},
-                "coverage": {"horizon_hours": self.forecast_days * 24, "resolution_minutes": self.plan_interval_minutes},
+                "coverage": coverage,
             }
             if ratings:
                 record["ratings"] = ratings
@@ -832,13 +837,14 @@ class SolarAPI(ComponentBase):
             capacity_kw = self._discovery_capacity_kw(self.open_meteo_forecast)
             if capacity_kw is not None:
                 ratings["capacity_kw"] = capacity_kw
+            coverage = {"horizon_hours": self.forecast_days * 24, "resolution_minutes": 60}
             if active_source == "open_meteo":
-                ratings["active"] = True
+                coverage["active"] = True
             record = {
                 "device_id": "open_meteo",
                 "kind": "solar",
                 "info": {"vendor": "Open-Meteo"},
-                "coverage": {"horizon_hours": self.forecast_days * 24, "resolution_minutes": 60},
+                "coverage": coverage,
             }
             if ratings:
                 record["ratings"] = ratings
@@ -848,7 +854,7 @@ class SolarAPI(ComponentBase):
         if ha_entities:
             record = {"device_id": "ha_sensors", "kind": "solar", "entities": ha_entities}
             if active_source == "ha_sensors":
-                record["ratings"] = {"active": True}
+                record["coverage"] = {"active": True}
             forecasts.append(record)
 
         return {"forecasts": forecasts}
