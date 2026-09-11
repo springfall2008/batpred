@@ -4111,6 +4111,12 @@ chart.render();
                 # self.base.args) never reflects a partially applied batch
                 self.args.clear()
                 self.args.update(live_args)
+                # A credential value or the redact_strings/redact_strings_labelled denylists
+                # themselves can change in this batch, so log()'s cached redaction pattern
+                # (hass.py, held on self.base - the PredBat instance, not this web component)
+                # must be rebuilt on next use, or a newly added/changed secret keeps leaking into
+                # the log under the stale pattern until the restart below completes (GH#4770 review).
+                self.base._log_secret_pattern_cache = self.base._LOG_SECRET_PATTERN_UNSET
 
                 change_count = len(updated_args)
                 self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")

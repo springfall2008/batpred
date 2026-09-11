@@ -207,9 +207,43 @@ def test_collect_log_secret_values():
         print("ERROR: a non-credential value was collected: {}".format(found))
         failed = True
 
-    # Short values are dropped - a 1-2 char "secret" would false-positive-redact ordinary text.
+    # Short values are dropped from args/secrets - a 1-2 char "secret" picked up by the key-name
+    # heuristic would false-positive-redact ordinary text constantly.
     if "x" in collect_log_secret_values({"password": "x"}, {}):
         print("ERROR: a short value was collected despite the length floor")
+        failed = True
+
+    # The floor does NOT apply to redact_strings/redact_strings_labelled - those are the user's
+    # own deliberate denylist entries, not an automatic key-name match, so a short one must still
+    # be redacted (Copilot review on #5053: PR originally applied the floor everywhere).
+    short_found = collect_log_secret_values({}, {}, ["ab"], {"short_pin": "99"})
+    if "ab" not in short_found or short_found["ab"] != "redact_strings":
+        print("ERROR: a short redact_strings entry should still be collected, got {}".format(short_found))
+        failed = True
+    if "99" not in short_found or short_found["99"] != "short_pin":
+        print("ERROR: a short redact_strings_labelled entry should still be collected, got {}".format(short_found))
+        failed = True
+
+    # A secret-flagged key holding a LIST (teslemetry_site_id, sigenergy_system_id are
+    # "string|string_list") must collect each element individually, not drop the whole list
+    # (Copilot review on #5053).
+    list_found = collect_log_secret_values({"teslemetry_site_id": ["SITE-VALUE-ONE-123456", "SITE-VALUE-TWO-654321"]}, {})
+    for site_value in ("SITE-VALUE-ONE-123456", "SITE-VALUE-TWO-654321"):
+        if site_value not in list_found or list_found[site_value] != "teslemetry_site_id":
+            print("ERROR: {} from a secret-flagged list key should be collected and labelled teslemetry_site_id, got {}".format(site_value, list_found))
+            failed = True
+
+    # A malformed redact_strings_labelled (the shape APPS_SCHEMA's own validator rejects) must
+    # degrade to "nothing from this source", not crash - log() runs before validation has had a
+    # chance to run at all (Copilot review on #5053: AttributeError on .items() froze startup).
+    try:
+        malformed_found = collect_log_secret_values({}, {}, "not_a_list", "not_a_dict")
+    except (AttributeError, TypeError) as e:
+        print("ERROR: malformed redact_strings/redact_strings_labelled crashed instead of degrading: {}".format(e))
+        failed = True
+        malformed_found = {}
+    if malformed_found:
+        print("ERROR: malformed redact_strings/redact_strings_labelled should collect nothing, got {}".format(malformed_found))
         failed = True
 
     # Missing/None args, secrets, redact_strings and redact_strings_labelled must not raise -
@@ -316,6 +350,11 @@ def test_log_redacts_at_write_time():
         f.write("  redact_strings_labelled:\n")
         f.write("    my_landlords_mpan: LANDLORD-MPAN-9876543210987\n")
 
+    # Save/restore rather than an unconditional del: the suite runs every registered test in one
+    # shared process, so blindly deleting a var this test did not itself set would drop a value a
+    # caller or another test left in place, rather than restoring the environment it found.
+    had_apps_file = "PREDBAT_APPS_FILE" in os.environ
+    saved_apps_file = os.environ.get("PREDBAT_APPS_FILE")
     os.environ["PREDBAT_APPS_FILE"] = "test_apps.yaml"
     try:
         h = Hass()
@@ -353,7 +392,10 @@ def test_log_redacts_at_write_time():
             print("ERROR: an ordinary log line was altered/lost:\n{}".format(content))
             failed = True
     finally:
-        del os.environ["PREDBAT_APPS_FILE"]
+        if had_apps_file:
+            os.environ["PREDBAT_APPS_FILE"] = saved_apps_file
+        else:
+            del os.environ["PREDBAT_APPS_FILE"]
         for name in ("test_apps.yaml", "secrets.yaml", "predbat.log"):
             if os.path.exists(name):
                 os.remove(name)
@@ -399,6 +441,53 @@ def test_redact_strings_masked_in_debug_dump():
     return failed
 
 
+def test_set_arg_invalidates_log_secret_cache(my_predbat):
+    """set_arg() must invalidate log()'s cached redaction pattern (Copilot review on #5053).
+
+    The pattern is cached on first use and only invalidated in Hass.__init__ - but self.args is
+    mutated after startup too, via set_arg() and (separately, in web.py) the apps.yaml web
+    editor's batch clear()/update(). A credential added or changed through either path would
+    otherwise keep leaking into the log under the stale pre-change pattern until Predbat
+    restarts. This covers set_arg(); the web.py batch path shares the same
+    _log_secret_pattern_cache invalidation but isn't reachable from this test's fixture.
+    """
+    if my_predbat is None:
+        return False
+    print("**** Testing set_arg() invalidates the cached log redaction pattern ****")
+    failed = False
+
+    import io
+
+    saved_args = my_predbat.args.copy()
+    saved_logfile = my_predbat.logfile
+    saved_cache = my_predbat._log_secret_pattern_cache
+    try:
+        my_predbat.args.pop("test_marker_secret_key_xyz", None)
+        my_predbat._log_secret_pattern_cache = my_predbat._LOG_SECRET_PATTERN_UNSET
+        my_predbat.logfile = io.StringIO()
+
+        my_predbat.log("Info: nothing secret published yet")
+        my_predbat.set_arg("test_marker_secret_key_xyz", "NEWLY-ADDED-SECRET-VALUE-123456")
+        my_predbat.log("Info: now using NEWLY-ADDED-SECRET-VALUE-123456")
+
+        content = my_predbat.logfile.getvalue()
+        if "NEWLY-ADDED-SECRET-VALUE-123456" in content:
+            print("ERROR: a secret added via set_arg() after the cache was built still leaked into the log: {}".format(content))
+            failed = True
+        if "<test_marker_secret_key_xyz>" not in content:
+            print("ERROR: the newly-added secret was not redacted with a label: {}".format(content))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.logfile = saved_logfile
+        my_predbat._log_secret_pattern_cache = saved_cache
+
+    if not failed:
+        print("**** test_set_arg_invalidates_log_secret_cache PASSED ****")
+    return failed
+
+
 def run_secrets_tests(my_predbat=None):
     """
     Run all secrets tests
@@ -409,4 +498,5 @@ def run_secrets_tests(my_predbat=None):
     failed |= test_compile_log_secret_pattern_and_redact_log_line()
     failed |= test_log_redacts_at_write_time()
     failed |= test_redact_strings_masked_in_debug_dump()
+    failed |= test_set_arg_invalidates_log_secret_cache(my_predbat)
     return failed

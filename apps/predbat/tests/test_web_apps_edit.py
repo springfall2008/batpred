@@ -22,6 +22,7 @@ import tempfile
 from ruamel.yaml import YAML
 
 from web import WebInterface
+from utils import compile_log_secret_pattern
 from web_helper import get_apps_js
 
 APPS_YAML_FIXTURE = """pred_bat:
@@ -128,6 +129,26 @@ def run_web_apps_edit_tests(my_predbat):
         if "# Tariffs to compare against the current one" not in raw:
             print("  ERROR: expected the apps.yaml comment to survive the round trip, got:\n{}".format(raw))
             failed += 1
+
+        # ---------------------------------------------------------------------
+        print("Test: a successful batch apply invalidates the log redaction pattern cache (GH#5053)")
+        web_interface = _reset_fixture(my_predbat)
+        # A stale value built the real way (compile_log_secret_pattern()), not an arbitrary
+        # sentinel: html_apps_post's own log() call in the success path runs it through
+        # redact_log_line(), which expects a genuine (compiled pattern, labels) pair or None.
+        stale_cache_marker = compile_log_secret_pattern({"stale-pattern-marker-5053xx": "marker"})
+        my_predbat._log_secret_pattern_cache = stale_cache_marker
+        result = _post_changes(web_interface, {"compare_list[1]": _delete("compare_list[1]")})
+        if not result.get("success"):
+            print("  ERROR: expected the delete to succeed, got: {}".format(result))
+            failed += 1
+        # html_apps_post's self.args here is web_interface's own copy (this fixture does not alias
+        # it to my_predbat.args the way ComponentBase normally does) - the invalidation under test
+        # writes to self.base._log_secret_pattern_cache regardless, so it must still have changed.
+        if my_predbat._log_secret_pattern_cache is stale_cache_marker:
+            print("  ERROR: a successful batch apply left the cached log redaction pattern stale - a credential added/changed through the apps.yaml editor would keep leaking under the old pattern until restart")
+            failed += 1
+        my_predbat._log_secret_pattern_cache = my_predbat._LOG_SECRET_PATTERN_UNSET
 
         # ---------------------------------------------------------------------
         print("Test: deleting two profiles at once is not confused by the shifting indices")

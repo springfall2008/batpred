@@ -247,8 +247,18 @@ def _collect_secret_values(value, found, label_prefix=""):
     if isinstance(value, dict):
         for key, item in value.items():
             if is_secret_key(key):
+                key_label = (label_prefix + "." + key) if label_prefix else key
                 if isinstance(item, str) and item and item not in found:
-                    found[item] = (label_prefix + "." + key) if label_prefix else key
+                    found[item] = key_label
+                elif isinstance(item, list):
+                    # A secret-flagged key can itself hold a list (e.g. teslemetry_site_id,
+                    # sigenergy_system_id are "string|string_list") - collect each element
+                    # individually rather than dropping the whole list, since a log line needs
+                    # each real value recognised on its own, not the list masked as one blob the
+                    # way mask_secret_args()'s debug-dump redaction is allowed to.
+                    for entry in item:
+                        if isinstance(entry, str) and entry and entry not in found:
+                            found[entry] = key_label
             else:
                 nested_prefix = label_prefix
                 if isinstance(item, (dict, list)):
@@ -284,9 +294,18 @@ def collect_log_secret_values(args, secrets, redact_strings=None, redact_strings
     redact_strings entry does not, so a more specific label wins when both would otherwise apply
     to the same value.
 
-    Short values (len < 6) are dropped from every source - a one- or two-character secret is
-    either a placeholder/empty default or would false-positive-redact ordinary log text
-    constantly, and is not a credential worth the noise either way.
+    Short values (len < 6) are dropped from the secrets.yaml and args sources - a one- or
+    two-character secret is either a placeholder/empty default or would false-positive-redact
+    ordinary log text constantly, and is not a credential worth the noise either way. Not applied
+    to redact_strings/redact_strings_labelled: those are the user's own deliberate denylist, not
+    a key-name heuristic that could coincidentally catch an ordinary word, so a short entry is
+    still exactly what was asked to be redacted.
+
+    redact_strings/redact_strings_labelled are type-checked (list/dict) before use, not just
+    trusted: log() calls this on the very first startup log line, before APPS_SCHEMA validation
+    has run at all, so a malformed value here (the string APPS_SCHEMA's own validator would
+    later reject) must degrade to "nothing from this source" rather than crash the whole of
+    Predbat's startup on a config typo, before the user ever sees the validation warning.
     """
     found = {}
     if secrets:
@@ -299,13 +318,18 @@ def collect_log_secret_values(args, secrets, redact_strings=None, redact_strings
         for value, label in collected.items():
             if len(value) >= 6 and value not in found:
                 found[value] = label
-    if redact_strings_labelled:
+    # No length floor below this point: redact_strings/redact_strings_labelled are entries the
+    # user put there deliberately, not something Predbat inferred from a key-name heuristic that
+    # could coincidentally catch an ordinary short word - the false-positive risk the floor
+    # exists to avoid above is the user's own call to accept here, and a short denylisted value
+    # (a 4-digit PIN, say) is still exactly what they asked to have redacted.
+    if isinstance(redact_strings_labelled, dict):
         for label, value in redact_strings_labelled.items():
-            if isinstance(value, str) and len(value) >= 6 and value not in found:
+            if isinstance(value, str) and value and value not in found:
                 found[value] = str(label)
-    if redact_strings:
+    if isinstance(redact_strings, list):
         for value in redact_strings:
-            if isinstance(value, str) and len(value) >= 6 and value not in found:
+            if isinstance(value, str) and value and value not in found:
                 found[value] = "redact_strings"
     return found
 
