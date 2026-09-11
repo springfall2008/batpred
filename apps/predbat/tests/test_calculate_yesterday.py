@@ -1038,7 +1038,59 @@ def _test_reconstruct_car_slots(my_predbat, failed):
             print("ERROR 5h: step {} should be unchanged at {}, got {} - subtraction ran with car_energy_reported_load False".format(m, UNREPORTED_LOAD, val))
             failed = True
 
-    # Restore everything 5g/5h changed, including the flags the earlier
+    # -----------------------------------------------------------------------
+    # 5i - a session today (past midnight, before the real minutes_now) is
+    # reconstructed when end_record is widened to reach it, and is not when
+    # end_record stops at yesterday midnight (#5004 follow-up: the merged fix
+    # widened yesterday_load_step to cover today-so-far, but left the
+    # reconstruction loop capped at 24*60, so today's sessions stayed in the
+    # raw load band until the next day's run rolled them into "yesterday").
+    # -----------------------------------------------------------------------
+    print("calculate_yesterday: Test 5i - a today session is only reconstructed when end_record reaches it (#5004 follow-up)")
+
+    _setup_base(my_predbat, minutes_now=0)
+    my_predbat.num_cars = 1
+    my_predbat.car_energy_reported_load = True
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.octopus_intelligent_consider_full = False
+    my_predbat.octopus_slots = [[], [], [], []]
+    my_predbat.args["octopus_intelligent_slot"] = None
+
+    real_minutes_now = 360
+    # Plan-axis minute 1500 = 1440 (midnight) + 60 = today 01:00, well inside the
+    # 24*60 + real_minutes_now axis calculate_yesterday builds yesterday_load_step over.
+    today_session_start = 1500
+    session_index = real_minutes_now + 24 * 60 - today_session_start
+    my_predbat.car_charging_energy = {k: 1.5 for k in range(0, session_index + 1)}
+    full_axis_end = 24 * 60 + real_minutes_now
+
+    # Bare end_record (yesterday only) must NOT reach the today session.
+    my_predbat.car_charging_slots = [[], [], [], []]
+    yesterday_load_step_5i_narrow = {m: 0.2 for m in range(0, full_axis_end, PREDICT_STEP)}
+    my_predbat.yesterday_reconstruct_car_slots(end_record, yesterday_load_step_5i_narrow, real_minutes_now)
+    if my_predbat.car_charging_slots[0]:
+        print("ERROR 5i: bare end_record={} should not reach today's session at {}, got slots {}".format(end_record, today_session_start, my_predbat.car_charging_slots[0]))
+        failed = True
+    if abs(yesterday_load_step_5i_narrow.get(today_session_start, -1) - 0.2) > 1e-9:
+        print("ERROR 5i: load at today's session should be untouched with bare end_record, got {}".format(yesterday_load_step_5i_narrow.get(today_session_start)))
+        failed = True
+
+    # Widened end_record (matching calculate_yesterday's fixed call) DOES reach it.
+    my_predbat.car_charging_slots = [[], [], [], []]
+    yesterday_load_step_5i_wide = {m: 0.2 for m in range(0, full_axis_end, PREDICT_STEP)}
+    my_predbat.yesterday_reconstruct_car_slots(full_axis_end, yesterday_load_step_5i_wide, real_minutes_now)
+    slots_5i = my_predbat.car_charging_slots[0]
+    if len(slots_5i) != 1:
+        print("ERROR 5i: widened end_record={} should reconstruct today's session, got {} slots: {}".format(full_axis_end, len(slots_5i), slots_5i))
+        failed = True
+    elif slots_5i[0]["start"] != today_session_start:
+        print("ERROR 5i: reconstructed slot should start at {}, got {}".format(today_session_start, slots_5i[0]["start"]))
+        failed = True
+    if yesterday_load_step_5i_wide.get(today_session_start, -1) >= 0.2:
+        print("ERROR 5i: load at today's session should have been reduced by the reconstructed slot, got {}".format(yesterday_load_step_5i_wide.get(today_session_start)))
+        failed = True
+
+    # Restore everything 5g/5h/5i changed, including the flags the earlier
     # sub-cases leave set on the shared instance.
     my_predbat.car_energy_reported_load = entry_reported_load
     my_predbat.car_charging_loss = entry_charging_loss
@@ -1047,6 +1099,49 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_slots = [[] for _ in range(4)]
     my_predbat.car_charging_energy = {}
 
+    return failed
+
+
+def _test_reconstruct_car_slots_called_with_widened_end_record(my_predbat, failed):
+    """calculate_yesterday must call yesterday_reconstruct_car_slots with end_record widened by
+    minutes_now, not the bare yesterday-only end_record (#5004 follow-up).
+
+    Test 5i above pins the function's own behaviour at both widths directly; this pins the call
+    site itself, so a future call-site regression (end_record passed bare again) is caught even
+    though yesterday_reconstruct_car_slots' own defaults would still look correct in isolation.
+    """
+    print("calculate_yesterday: Test - yesterday_reconstruct_car_slots is called with end_record + minutes_now (#5004 follow-up)")
+
+    now_utc = _setup_base(my_predbat)  # minutes_now = 360
+    my_predbat.num_cars = 0
+    my_predbat.car_charging_energy = {}
+
+    captured_end_record = []
+    real_reconstruct = my_predbat.yesterday_reconstruct_car_slots
+
+    def fake_reconstruct(end_record, yesterday_load_step, minutes_now):
+        captured_end_record.append(end_record)
+        return real_reconstruct(end_record, yesterday_load_step, minutes_now)
+
+    my_predbat.yesterday_reconstruct_car_slots = fake_reconstruct
+    captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
+    try:
+        my_predbat.calculate_yesterday()
+    finally:
+        my_predbat.yesterday_reconstruct_car_slots = real_reconstruct
+        _restore_methods(my_predbat, original_run_pred)
+
+    expected = 24 * 60 + my_predbat.minutes_now
+    if not captured_end_record:
+        print("ERROR: yesterday_reconstruct_car_slots was not called")
+        failed = True
+    elif captured_end_record[0] != expected:
+        print("ERROR: calculate_yesterday called yesterday_reconstruct_car_slots with end_record={}, expected {} (24*60 + minutes_now)".format(captured_end_record[0], expected))
+        failed = True
+
+    my_predbat.savings_last_updated = None
+    if not failed:
+        print("PASS")
     return failed
 
 
@@ -2030,6 +2125,7 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_car_slot_from_energy_sensor(my_predbat, failed)
     failed = _test_early_exit_respects_day_rollover(my_predbat, failed)
     failed = _test_reconstruct_car_slots(my_predbat, failed)
+    failed = _test_reconstruct_car_slots_called_with_widened_end_record(my_predbat, failed)
     failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)
     failed = _test_soc_kw_h0_fallback(my_predbat, failed)
     failed = _test_missing_cost_today_history(my_predbat, failed)

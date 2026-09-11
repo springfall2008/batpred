@@ -3012,9 +3012,13 @@ class Output:
         self.dashboard_item("binary_sensor." + self.prefix + "_demand", state="on" if isDemand else "off", attributes={"friendly_name": "Predbat is in demand mode", "icon": "mdi:battery-arrow-up"})
 
     def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step, minutes_now):
-        """Rebuild yesterday's car charging slots and subtract them from the load band.
+        """Rebuild car charging slots for yesterday and today-so-far, and subtract them from the load band.
 
-        :param end_record: last plan-axis minute to reconstruct, 0 = yesterday midnight.
+        :param end_record: last plan-axis minute to reconstruct. calculate_yesterday widens
+            yesterday_load_step to cover today-so-far too (0 = yesterday midnight, up to
+            24*60 + minutes_now = now), so this must be passed the same width - reconstructing
+            only the first 24*60 minutes leaves today's sessions in the raw, unsplit load band
+            until the next day's run rolls them into the now-covered "yesterday" range (#5004).
         :param yesterday_load_step: load per PREDICT_STEP, keyed on that same plan axis.
         :param minutes_now: real minutes_now of the live plan. calculate_yesterday fakes
             self.minutes_now to 0 before calling this, but car_charging_energy is still
@@ -3296,8 +3300,11 @@ class Output:
 
         # re-construct car charging slots from non-octopus using the sensor
         # Pass the real minutes_now: self.minutes_now has been faked to 0 above, but the car
-        # energy history is still indexed from the real now (#5004).
-        self.yesterday_reconstruct_car_slots(end_record, yesterday_load_step, minutes_now)
+        # energy history is still indexed from the real now (#5004). Pass end_record + minutes_now,
+        # not the bare yesterday-only end_record, so the reconstruction reaches as far into today
+        # as yesterday_load_step itself already does - otherwise today's sessions are left in the
+        # raw load band until the next day's run (#5004 follow-up).
+        self.yesterday_reconstruct_car_slots(end_record + minutes_now, yesterday_load_step, minutes_now)
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, soc_kw=soc_yesterday)
