@@ -2272,6 +2272,37 @@ class Fetch:
 
         return dp2(rate_min), dp2(rate_max), dp2(rate_average), rate_min_minute, rate_max_minute
 
+    def rate_minmax_excluding_saving(self, rates, rate_replicate):
+        """
+        Work out min/max/average over the forecast window, skipping any minute rate_replicate tags
+        "saving" - a saving session / Axle VPP event reward baked into the rate table by
+        load_saving_slot()/load_axle_slot() (GH#5050). Those minutes are a synthetic one-off price,
+        not the tariff's own rate, so including them in the automatic threshold stats (rate_max used
+        by set_rate_thresholds() to pick rate_max - 0.5) can push the threshold above every genuine
+        tariff rate: rate_scan_window() then classifies the whole ordinary-price day as "low rate".
+
+        Falls back to the plain (unfiltered) min/max/average when every minute in range is tagged
+        "saving" - an event that covers the whole forecast window leaves no genuine tariff minute to
+        scan, and a 99999/0/0 result would make every downstream comparison in set_rate_thresholds()
+        behave as if there were no data at all, which is worse than the boosted-but-real numbers.
+        """
+        rate_min = 99999
+        rate_max = 0
+        rate_total = 0
+        rate_n = 0
+
+        for minute in range(self.minutes_now, self.forecast_minutes + self.minutes_now):
+            if minute in rates and rate_replicate.get(minute) != "saving":
+                rate = rates[minute]
+                rate_min = min(rate_min, rate)
+                rate_max = max(rate_max, rate)
+                rate_total += rate
+                rate_n += 1
+
+        if rate_n:
+            return dp2(rate_min), dp2(rate_max), dp2(rate_total / rate_n)
+        return self.rate_minmax(rates)[:3]
+
     def rate_base_min_max(self, rates):
         """
         Gap-fill `rates` into a "base" import curve (replicated, but without IO-slot/saving-session/
@@ -2357,14 +2388,22 @@ class Fetch:
         car_planning_on_rates = self.num_cars > 0 and not self.octopus_intelligent_charging
         car_charging_max_price = max(self.car_charging_plan_max_price[: self.num_cars]) if car_planning_on_rates else 0.0
 
+        # Threshold stats are computed over the tariff's own rates, excluding minutes a saving
+        # session / Axle VPP event boosted (GH#5050) - self.rate_min/rate_max/rate_average (and the
+        # export equivalents) include those synthetic minutes and are used elsewhere (dashboard
+        # sensors, graph scaling, plan.py pricing) where the real boosted price is exactly what is
+        # wanted, so this is a separate, narrower scan rather than a change to those.
+        rate_min, rate_max, rate_average = self.rate_minmax_excluding_saving(self.rate_import, self.rate_import_replicated)
+        rate_export_min, rate_export_max, rate_export_average = self.rate_minmax_excluding_saving(self.rate_export, self.rate_export_replicated)
+
         if self.rate_low_threshold > 0:
-            self.rate_import_cost_threshold = dp2(self.rate_average * self.rate_low_threshold)
+            self.rate_import_cost_threshold = dp2(rate_average * self.rate_low_threshold)
         else:
             # In automatic mode select the only rate or everything but the most expensive
-            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts or have_manual_soc:
-                self.rate_import_cost_threshold = self.rate_max + 0.1
+            if (rate_max == rate_min) or (rate_export_max > rate_max) or have_alerts or have_manual_soc:
+                self.rate_import_cost_threshold = rate_max + 0.1
             else:
-                self.rate_import_cost_threshold = self.rate_max - 0.5
+                self.rate_import_cost_threshold = rate_max - 0.5
 
         # When we plan car on the rates we need to include all the rates up to the max car price
         if car_planning_on_rates:
@@ -2372,13 +2411,13 @@ class Fetch:
 
         # Compute the export rate threshold
         if self.rate_high_threshold > 0:
-            self.rate_export_cost_threshold = dp2(self.rate_export_average * self.rate_high_threshold)
+            self.rate_export_cost_threshold = dp2(rate_export_average * self.rate_high_threshold)
         else:
             # In automatic mode select the only rate or everything but the most cheapest
-            if (self.rate_export_max == self.rate_export_min) or (self.rate_export_min > self.rate_min) or have_alerts:
-                self.rate_export_cost_threshold = self.rate_export_min - 0.1
+            if (rate_export_max == rate_export_min) or (rate_export_min > rate_min) or have_alerts:
+                self.rate_export_cost_threshold = rate_export_min - 0.1
             else:
-                self.rate_export_cost_threshold = self.rate_export_min + 0.5
+                self.rate_export_cost_threshold = rate_export_min + 0.5
 
         self.log(
             "Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(
