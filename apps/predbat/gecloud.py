@@ -1680,6 +1680,7 @@ class GECloudDirect(ComponentBase):
         self.set_arg_auto("car_charging_planned", connected_entities)
         self.log("GECloud: Setting car_charging_power to {}".format(power_entities))
         self.set_arg_auto("car_charging_power", power_entities)
+        self.set_arg_auto("num_chargers", len(power_entities))
 
     async def run(self, seconds, first):
         """

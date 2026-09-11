@@ -1496,8 +1496,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 required_entries = None
                 matches = False
                 if entries is not None:
+                    entries_key_present = True
                     if isinstance(entries, str):
                         required_entries = self.get_arg(entries, 0, indirect=False)
+                        # required_entries > 0 below tells "key simply unset" apart from a real
+                        # count - but an explicitly configured 0 (a count key can be "zero": True,
+                        # e.g. num_chargers) looks identical to that default. entries_key_present
+                        # is the actual signal: unset only when the count key is absent from args,
+                        # not when it is present and happens to be 0 (Copilot review on #4880).
+                        entries_key_present = entries in self.args
                     else:
                         required_entries = int(entries)
 
@@ -1524,7 +1531,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                         # key here has always tolerated extras, and newly rejecting them would fail
                         # working installs; but for a list that is summed rather than indexed, an
                         # extra entry silently inflates the total instead of being ignored (#4879).
-                        elif len(value) > required_entries and required_entries > 0 and spec.get("entries_exact", False):
+                        # entries_key_present (not "required_entries > 0") is what distinguishes
+                        # "count key unset" from an explicit zero, which must still reject a
+                        # non-empty list (Copilot review on #4880).
+                        elif len(value) > required_entries and entries_key_present and spec.get("entries_exact", False):
                             self.log("Warn: Validation of apps.yaml found configuration item '{}' has {} entries, expected exactly {} based on {}".format(name, len(value), required_entries, entries))
                             self.arg_errors[name] = "Too many entries, expected exactly {}".format(required_entries)
                             errors += 1

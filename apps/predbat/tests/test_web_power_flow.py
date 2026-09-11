@@ -487,6 +487,24 @@ def run_web_power_flow_tests(my_predbat):
         print(f"  ERROR: two chargers declared and two listed should validate, error count moved by {errors_two_chargers - baseline_errors}")
         failed += 1
 
+    # Regression for a Copilot review finding on #4880: an explicit num_chargers: 0 looked
+    # identical to the key being simply unset (both default required_entries to 0 via
+    # get_arg(entries, 0)), so a real "I have zero chargers" declaration silently skipped the
+    # exact-count check instead of rejecting a non-empty car_charging_power list.
+    print("Test: num_chargers explicitly 0 still rejects a non-empty car_charging_power list")
+    my_predbat.args["num_chargers"] = 0
+    my_predbat.args["car_charging_power"] = ["sensor.car_charger_power", "sensor.car_charger_power"]
+    errors_zero_chargers = my_predbat.validate_config()
+    if errors_zero_chargers <= baseline_errors:
+        print("  ERROR: num_chargers=0 with a non-empty car_charging_power list should be a configuration error")
+        failed += 1
+    if my_predbat.arg_errors.get("car_charging_power") is None:
+        print("  ERROR: num_chargers=0 with entries should record an arg_error")
+        failed += 1
+    # Restore the num_chargers=2 state the following tests build on - this block's own point is
+    # that 0 behaves differently from unset, not to leave 0 as the ambient value for what follows.
+    my_predbat.args["num_chargers"] = 2
+
     print("Test: fewer entries than chargers warns but is not an error")
     # A charger with no live power sensor is a real, documented setup, so a short list must not
     # force a false num_chargers - but an entry deleted by accident under-reports just as quietly

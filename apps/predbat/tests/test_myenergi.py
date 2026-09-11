@@ -1605,6 +1605,13 @@ def test_automatic_config_wires_car_charging_power():
     ], component.base.args["car_charging_power"]
     print("  ✓ Automatic configuration wires the Zappi power sensors for the flow diagram")
 
+    # Regression for a Copilot review finding on #4880: apps.yaml ships num_chargers: 1 by
+    # default, so two auto-discovered Zappis with num_chargers never touched would trip
+    # car_charging_power's entries_exact check (2 > 1) and report a spurious configuration
+    # error on a correct multi-charger setup.
+    assert component.base.args["num_chargers"] == 2, component.base.args.get("num_chargers")
+    print("  ✓ Automatic configuration also sets num_chargers to match the discovered count")
+
 
 def test_automatic_config_eddi_only_leaves_car_charging_power_alone():
     """An Eddi is not a car charger, so it must not appear as car charging power."""

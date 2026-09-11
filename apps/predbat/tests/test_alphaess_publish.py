@@ -345,6 +345,20 @@ def test_alphaess_car_charging_power_mapped_for_serials_with_a_charger():
     if "car_charging_power" in no_charger.base.args:
         print(f"ERROR: car_charging_power mapped with no charger: {no_charger.base.args.get('car_charging_power')}")
         failed = True
+
+    # Regression for a Copilot review finding on #4880: apps.yaml ships num_chargers: 1 by
+    # default, so two auto-discovered chargers with num_chargers never touched would trip
+    # car_charging_power's entries_exact check (2 > 1) and report a spurious configuration
+    # error on a correct multi-charger setup.
+    two_chargers = _ready_client()
+    for sn in two_chargers.device_list:
+        two_chargers._ev_present[sn] = True
+        two_chargers.device_energy[sn]["ev_energy_today"] = 4.2
+    run_async_local(two_chargers.automatic_config())
+    if two_chargers.base.args.get("num_chargers") != len(two_chargers.device_list):
+        print(f"ERROR: num_chargers {two_chargers.base.args.get('num_chargers')} != {len(two_chargers.device_list)} discovered chargers")
+        failed = True
+
     assert not failed, "test_alphaess_car_charging_power_mapped_for_serials_with_a_charger"
 
 

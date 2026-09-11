@@ -827,6 +827,7 @@ class AlphaESSAPI(ComponentBase):
             # The live power reading of the same chargers. Display only - it feeds the web power
             # flow diagram and the predbat.car_charging_power sensor, never the plan.
             self.set_arg_auto("car_charging_power", [self._sensor_name(sn, "ev_power") for sn in ev_devices])
+            self.set_arg_auto("num_chargers", len(ev_devices))
         else:
             self.log("Info: AlphaESS found no EV charger on any inverter, so car_charging_energy is left unset")
 
