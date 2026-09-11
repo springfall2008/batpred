@@ -159,6 +159,15 @@ that one careless call to the generic masker silently destroys the whole documen
 | `capabilities` | vocabulary | Recorded not acted on: `schedule`, `pause_mode`, `pause_slots`, `target_soc`, `discharge_target`, `charge_rate_power`, `charge_rate_percent`, `soh` |
 | `entities` | `entities` | Keyed by Predbat standard name |
 
+**Cross-links may dangle, and a component must never invent a record to resolve one.**
+`measures_meter`, `serves_cars`, `charged_by` and `programmes[].meter` name a record that may not
+exist — typically because the component holding the link knows a hardware serial while no
+component has reported the thing it belongs to. A dangling link is an honest record of what is
+known; resolving it is the observation layer's job, not the reporter's. In particular a component
+with no genuine supply point to describe reports no `meters` records at all: a CT clamp attached
+to an inverter is measurement hardware, not a billing point, and giving it a `meters` record would
+let it collide with real supply points in the `multiple_import_meters` detector.
+
 **`chargers`** — an EVSE. `serial` in `hardware_ids`; `vendor` and `model` in `info`;
 `max_power_kw` and `phases` in `ratings`; `serves_cars` cross-links to `cars`. Its
 `entities` carry the charger facts: `car_charging_planned`, `car_charging_energy`,
