@@ -619,11 +619,36 @@ class Coordinator:
         return self.assembled or self.assemble()
 
     def publish(self):
-        """Publish the redacted catalogue as an entity, for the web viewer and HA users."""
+        """Publish a SUMMARY of the redacted catalogue as an entity, for HA users to glance at.
+
+        Deliberately not the full catalogue: folding every section straight into the entity's
+        attributes (as an earlier version of this method did via attributes.update(catalogue))
+        puts every inverter's full entity-descriptor map into a Home Assistant entity's
+        attributes, which the recorder stores to disk - tens of kilobytes of JSON per snapshot
+        for an install with only a few inverters, bloating the user's database for data nothing
+        reads back out of the entity. The full document already reaches its intended consumer
+        through the debug dump (create_debug_yaml() -> coordinator.catalogue()); the web viewer
+        that will eventually want the whole thing is out of scope for this release and, when
+        built, should ask the coordinator directly rather than parse it back out of an HA
+        entity's attributes - the better coupling anyway. Do not "helpfully" restore the section
+        record lists here.
+
+        The state is still the total record count, and the attributes still carry enough to be
+        useful at a glance: schema_version, generated, a per-section count map, the components
+        status map (small, and the first thing worth checking), and observations.conflicts
+        (small, and the thing a maintainer most wants to spot) - never a section's record list.
+        """
         catalogue = self.catalogue()
         counts = {section: len(catalogue.get(section, [])) for section in SECTION_SPEC}
-        attributes = {"friendly_name": "Predbat discovery", "icon": "mdi:sitemap"}
-        attributes.update(catalogue)
+        attributes = {
+            "friendly_name": "Predbat discovery",
+            "icon": "mdi:sitemap",
+            "schema_version": catalogue.get("schema_version"),
+            "generated": catalogue.get("generated"),
+            "counts": counts,
+            "components": catalogue.get("components", {}),
+            "observations": {"conflicts": catalogue.get("observations", {}).get("conflicts", [])},
+        }
         self.base.dashboard_item("sensor.{}_discovery".format(self.base.prefix), state=sum(counts.values()), attributes=attributes)
 
 

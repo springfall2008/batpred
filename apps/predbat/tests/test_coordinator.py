@@ -5,7 +5,7 @@
 from datetime import datetime
 
 from mock_base import MockBase
-from coordinator import Coordinator, Redactor, SCHEMA_VERSION
+from coordinator import Coordinator, Redactor, SCHEMA_VERSION, SECTION_SPEC
 
 
 def _coordinator():
@@ -1065,13 +1065,38 @@ def test_report_discovery_helper():
 
 
 def test_publish_writes_sensor():
-    """The catalogue is published as an entity for the web viewer to read later."""
+    """publish() writes a SUMMARY to the entity, not the full catalogue.
+
+    Two inverters sharing a serial gives the test a real observations.conflicts entry to check
+    threads through, and a hardware_ids container on each record gives it real per-section
+    payload that must NOT leak into the entity's attributes - a test that only checked presence
+    would not notice a regression back to the full attributes.update(catalogue) dump.
+    """
     base, coordinator = _redacting_coordinator()
-    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:A", "inverter_type": "GE"}]})
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:A", "inverter_type": "GE", "hardware_ids": {"serial": "SA2242G123"}}]})
+    coordinator.report("gecloud", {"inverters": [{"device_id": "gecloud:b", "inverter_type": "GEC", "hardware_ids": {"serial": "SA2242G123"}}]})
     coordinator.assemble()
     coordinator.publish()
-    assert base.entities.get("sensor.predbat_discovery"), base.entities
-    print("PASS: discovery sensor published")
+    entity = base.entities.get("sensor.predbat_discovery")
+    assert entity, base.entities
+    attributes = entity["attributes"]
+
+    # Summary half: present and correct
+    assert attributes["friendly_name"] == "Predbat discovery"
+    assert attributes["icon"] == "mdi:sitemap"
+    assert attributes["schema_version"] == SCHEMA_VERSION
+    assert attributes["generated"]
+    assert attributes["counts"]["inverters"] == 2, attributes["counts"]
+    assert attributes["components"]["givtcp"]["status"] == "ok", attributes["components"]
+    conflicts = attributes["observations"]["conflicts"]
+    assert any(entry["kind"] == "duplicate_serial" for entry in conflicts), conflicts
+    assert entity["state"] == sum(attributes["counts"].values())
+
+    # NOT-present half: no section record list anywhere in the attributes
+    for section in SECTION_SPEC:
+        assert section not in attributes, "{} record list must not reach the entity - it bloats the HA recorder".format(section)
+
+    print("PASS: discovery sensor carries a summary (counts, components, conflicts), never the full catalogue")
     return 0
 
 
