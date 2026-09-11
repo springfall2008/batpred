@@ -3043,7 +3043,17 @@ class Output:
         if self.num_cars > 0 and self.car_charging_energy:
             for start_minute in range(0, end_record, self.plan_interval_minutes):
                 car_energy = 0
-                for minute in range(start_minute, start_minute + self.plan_interval_minutes):
+                # end_record is minutes_now + 24*60 - the real "now" on this widened axis - but
+                # end_record is not generally a multiple of plan_interval_minutes (minutes_now is
+                # only rounded to PREDICT_STEP, 5 minutes, not to the 30-minute plan interval), so
+                # the last bucket can run past it. get_historical_base()'s minute_previous
+                # (minutes_now + 24*60) - minute then goes negative for those extra minutes, and
+                # get_from_incrementing() silently wraps a negative index by +24*60 - reading
+                # yesterday's data at roughly the same clock time instead of "nothing yet", and
+                # miscounting it into today's final bucket (the ghost-slot mechanism #5004 was
+                # fixed for elsewhere, review on #5048). Clamp the inner scan to end_record so it
+                # never reads past the real "now" this function was asked to reconstruct up to.
+                for minute in range(start_minute, min(start_minute + self.plan_interval_minutes, end_record)):
                     car_energy += self.get_historical_base(self.car_charging_energy, minute, minutes_now + 24 * 60)
                 if car_energy > 0.1:
                     # Only add the slot if there isn't already one covering this time period

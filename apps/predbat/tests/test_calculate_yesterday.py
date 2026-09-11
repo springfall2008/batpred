@@ -1090,7 +1090,46 @@ def _test_reconstruct_car_slots(my_predbat, failed):
         print("ERROR 5i: load at today's session should have been reduced by the reconstructed slot, got {}".format(yesterday_load_step_5i_wide.get(today_session_start)))
         failed = True
 
-    # Restore everything 5g/5h/5i changed, including the flags the earlier
+    # -----------------------------------------------------------------------
+    # 5j - the last bucket must not read past end_record into wrapped (yesterday)
+    # data when minutes_now isn't a multiple of plan_interval_minutes (Copilot
+    # review on #5048: minutes_now is only rounded to PREDICT_STEP - 5 minutes -
+    # not to the 30-minute plan interval, so end_record = minutes_now + 24*60 is
+    # not generally a bucket boundary. The unclamped inner loop then scans a few
+    # minutes past the real "now", where get_historical_base's minute_previous
+    # goes negative and get_from_incrementing() wraps it by +24*60 - silently
+    # reading yesterday's data at roughly the same clock time and miscounting it
+    # into today's final, still-in-progress bucket).
+    # -----------------------------------------------------------------------
+    print("calculate_yesterday: Test 5j - the final bucket does not wrap into yesterday when minutes_now is not 30-aligned (#5048 review)")
+
+    _setup_base(my_predbat, minutes_now=0)
+    my_predbat.num_cars = 1
+    my_predbat.car_energy_reported_load = True
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.octopus_intelligent_consider_full = False
+    my_predbat.octopus_slots = [[], [], [], []]
+    my_predbat.args["octopus_intelligent_slot"] = None
+    my_predbat.car_charging_slots = [[], [], [], []]
+
+    plan_iv = my_predbat.plan_interval_minutes  # 30
+    real_minutes_now_5j = 365  # 06:05 - a multiple of PREDICT_STEP (5) but not of plan_iv (30)
+    full_axis_end_5j = 24 * 60 + real_minutes_now_5j  # 1805, the real "now" on this axis
+    last_bucket_start_5j = (full_axis_end_5j // plan_iv) * plan_iv  # 1800 - the bucket end_record sits inside
+
+    # An incrementing sensor that steps up well before "now" - inside the wrapped-index range
+    # the unclamped last bucket [1800, 1830) would read for minute_previous < 0 - and is flat
+    # (unchanged) from there through the rest of the axis, i.e. genuinely nothing charged today.
+    my_predbat.car_charging_energy = {k: (3.0 if k <= 1425 else 0.0) for k in range(0, full_axis_end_5j + 60)}
+
+    my_predbat.yesterday_reconstruct_car_slots(full_axis_end_5j, {}, real_minutes_now_5j)
+
+    ghost_slots = [slot for slot in my_predbat.car_charging_slots[0] if slot["start"] == last_bucket_start_5j]
+    if ghost_slots:
+        print("ERROR 5j: the in-progress final bucket [{}, {}) should not have a slot yet (nothing has happened there), got {}".format(last_bucket_start_5j, last_bucket_start_5j + plan_iv, ghost_slots))
+        failed = True
+
+    # Restore everything 5g/5h/5i/5j changed, including the flags the earlier
     # sub-cases leave set on the shared instance.
     my_predbat.car_energy_reported_load = entry_reported_load
     my_predbat.car_charging_loss = entry_charging_loss
