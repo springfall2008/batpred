@@ -4795,7 +4795,9 @@ def _test_report_discovery_failure_does_not_degrade_component_health(my_predbat)
     An observer must never be able to degrade the health of the thing it observes: without the
     guard in run(), an exception here would skip update_success_timestamp() below it and leave
     self.api_started False for the whole cycle, pushing an otherwise-healthy component towards
-    unhealthy over a bug in a side-channel report.
+    unhealthy over a bug in a side-channel report. It also must never reach base.had_errors: that
+    flag makes update_pred() skip record_status() and suppress the run notification, so a bug in
+    this purely observational side channel must be visible only in the log.
     """
     devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": [], "battery_meters": {}}
     settings = {"battery001": {}}
@@ -4807,7 +4809,7 @@ def _test_report_discovery_failure_does_not_degrade_component_health(my_predbat)
     assert result is True, "a discovery-reporting bug must not fail the whole run() call"
     assert ge.last_success_timestamp is not None, "the success timestamp must still be recorded"
     assert any("failed to report discovery" in message for message in ge.log_messages), "the failure should be logged"
-    assert getattr(ge.base, "had_errors", False) is True, "the failure should still be counted as a non-fatal error"
+    assert getattr(ge.base, "had_errors", False) is False, "a discovery-reporting bug must not degrade Predbat's own status - see update_pred()'s had_errors branch"
     assert ge.discovery_reported_for is None, "a failed report must not be marked as reported"
     print("PASS: a build_discovery() failure is contained, not left to degrade the component")
     return 0

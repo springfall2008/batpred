@@ -498,14 +498,17 @@ class GivTCPComponent(ComponentBase):
         # withholding update_success_timestamp() below and retrying - identically failing - every
         # cycle, eventually pushing an otherwise-healthy component toward unhealthy. self.reported_for
         # is deliberately left unset on failure, so the next cycle still retries the report once the
-        # bug is fixed, exactly as it would have without this guard.
+        # bug is fixed, exactly as it would have without this guard. Logged only, not
+        # non_fatal_error_occurred(): that sets base.had_errors, which makes update_pred() skip
+        # record_status() and suppress the run notification - a purely observational side channel
+        # must never be able to change Predbat's user-visible status this way (see solis.py's own
+        # comment on the same trap).
         if self.discovered != self.reported_for:
             try:
                 self.report_discovery(self.build_discovery())
                 self.reported_for = list(self.discovered)
             except Exception as e:
                 self.log("Warn: GivTCP: failed to report discovery for the catalogue: {}".format(e))
-                self.non_fatal_error_occurred()
 
         if rediscover:
             await self.rediscover()

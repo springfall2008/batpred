@@ -1547,7 +1547,11 @@ class OctopusAPI(ComponentBase):
         car slot.
 
         Exception-guarded like the other discovery reporters (GivTCP, GE Cloud): an observer must
-        never be able to degrade the health of the component it observes.
+        never be able to degrade the health of the component it observes. Logged only, not
+        non_fatal_error_occurred(): that sets base.had_errors, which makes update_pred() skip
+        record_status() and suppress the run notification - a purely observational side channel
+        must never be able to change Predbat's user-visible status this way (see solis.py's own
+        comment on the same trap).
         """
         state_key = self._discovery_state_key()
         if state_key == self.discovery_reported_for:
@@ -1559,7 +1563,6 @@ class OctopusAPI(ComponentBase):
                 self.discovery_reported_for = state_key
         except Exception as e:
             self.log("Warn: OctopusAPI: failed to report discovery for the catalogue: {}".format(e))
-            self.non_fatal_error_occurred()
 
     async def async_get_saving_sessions(self, account_id):
         """

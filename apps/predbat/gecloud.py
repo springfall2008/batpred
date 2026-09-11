@@ -1894,14 +1894,16 @@ class GECloudDirect(ComponentBase):
             # never be able to degrade the health of the component it observes - without this, a bug
             # in build_discovery() would propagate out of run() itself and withhold
             # update_success_timestamp() below, retrying - identically failing - every cycle instead
-            # of just being logged once.
+            # of just being logged once. Logged only, not non_fatal_error_occurred(): that sets
+            # base.had_errors, which makes update_pred() skip record_status() and suppress the run
+            # notification - a purely observational side channel must never be able to change
+            # Predbat's user-visible status this way (see solis.py's own comment on the same trap).
             if self.devices_dict != self.discovery_reported_for:
                 try:
                     self.report_discovery(self.build_discovery(self.devices_dict))
                     self.discovery_reported_for = self.devices_dict
                 except Exception as e:
                     self.log("Warn: GECloud: failed to report discovery for the catalogue: {}".format(e))
-                    self.non_fatal_error_occurred()
 
             now_utc = self.now_utc_exact
             options_due = self.default_options_stamp is None or (now_utc - self.default_options_stamp) >= timedelta(hours=24)

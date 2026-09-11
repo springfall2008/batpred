@@ -5635,7 +5635,10 @@ def test_refresh_discovery_report_failure_contained_and_retried(my_predbat):
     """
     Requirement 5: a build_discovery() failure is swallowed and logged, the marker is left
     unmoved so the very next call retries, and the component's own health is not degraded by a
-    broken observer - matching every other discovery reporter's own contract.
+    broken observer - matching every other discovery reporter's own contract. "Not degraded"
+    includes base.had_errors: that flag makes update_pred() skip record_status() and suppress the
+    run notification, so a bug in this purely observational side channel must be visible only in
+    the log, never by changing Predbat's own reported status.
     """
     print("  - test_refresh_discovery_report_failure_contained_and_retried")
     failed = False
@@ -5666,8 +5669,8 @@ def test_refresh_discovery_report_failure_contained_and_retried(my_predbat):
         if reports:
             print(f"ERROR: no report should reach the coordinator on a failed cycle, got {reports}")
             failed = True
-        if not getattr(test_api.mock_base, "had_errors", False):
-            print("ERROR: a failed discovery report should record a non-fatal error")
+        if getattr(test_api.mock_base, "had_errors", False):
+            print("ERROR: a failed discovery report must not degrade Predbat's own status - see update_pred()'s had_errors branch")
             failed = True
 
         solar._refresh_discovery_report()  # cycle 2: succeeds, retried

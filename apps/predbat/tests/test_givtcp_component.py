@@ -2369,7 +2369,10 @@ def test_report_discovery_failure_does_not_degrade_component_health(my_predbat=N
     guard in run(), an exception here would skip update_success_timestamp() below it and retry -
     failing identically - every single cycle, eventually pushing an otherwise-healthy component
     towards unhealthy over a bug in a side-channel report. self.reported_for is deliberately left
-    unset on failure so the next cycle still retries, exactly as it would without the guard.
+    unset on failure so the next cycle still retries, exactly as it would without the guard. This
+    also proves the failure never reaches base.had_errors: that flag makes update_pred() skip
+    record_status() and suppress the run notification, so a bug in this purely observational side
+    channel must be visible only in the log, never by changing Predbat's own reported status.
     """
     base, component = _make_component()
     component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
@@ -2380,7 +2383,7 @@ def test_report_discovery_failure_does_not_degrade_component_health(my_predbat=N
     assert result is True, "a discovery-reporting bug must not fail the whole run() call"
     assert component.reported_for == [], "a failed report must not be marked as reported"
     assert component.last_updated_time() is not None, "the success timestamp must still be recorded"
-    assert base.had_errors is True, "the failure should still be counted as a non-fatal error"
+    assert getattr(base, "had_errors", False) is False, "a discovery-reporting bug must not degrade Predbat's own status - see update_pred()'s had_errors branch"
 
     # Once the bug is fixed, the very next cycle retries and succeeds - nothing was permanently lost
     del component.build_discovery

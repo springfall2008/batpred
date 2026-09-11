@@ -905,8 +905,11 @@ class SolarAPI(ComponentBase):
             if reported == configured:
                 self.discovery_reported_for = state_key
         except Exception as e:
+            # Logged only, not non_fatal_error_occurred(): that sets base.had_errors, which makes
+            # update_pred() skip record_status() and suppress the run notification - a purely
+            # observational side channel must never be able to change Predbat's user-visible status
+            # this way (see solis.py's own comment on the same trap).
             self.log("Warn: SolarAPI: failed to report discovery for the catalogue: {}".format(e))
-            self.non_fatal_error_occurred()
 
     def fetch_pv_datapoints(self, argname, entity_id):
         """
