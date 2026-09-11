@@ -21,6 +21,7 @@ def test_octopus_intelligent_devices_wrapper(my_predbat):
     failed += test_discovery_report_not_advanced_while_car_entities_incomplete(my_predbat)
     failed += test_discovery_report_failure_contained_and_retried(my_predbat)
     failed += test_build_discovery_round_trips_through_coordinator_and_redaction(my_predbat)
+    failed += test_build_discovery_car_uuid_device_id_not_published_in_clear(my_predbat)
     failed += test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_failure(my_predbat)
     failed += test_discovery_report_produced_when_automatic_is_false(my_predbat)
     return failed
@@ -979,6 +980,35 @@ def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predba
     if failed == 0:
         print("PASS: build_discovery() round-trips through the real Coordinator and Redactor - MPAN/account pseudonymised (byte-exact AND case/separator-transformed), tariff/product codes kept in the clear")
     return failed
+
+
+def test_build_discovery_car_uuid_device_id_not_published_in_clear(my_predbat):
+    """Final review, Ruling R43: the car record's device_id ("octopus:{uuid}") carried no
+    account_ids, so _has_pseudonym_container was False and it was never noted - a UUID-shaped
+    Intelligent device id has no 10-digit run for the shape guard to catch either, so it reached
+    the redacted catalogue verbatim. Solcast pseudonymises its own provider id on exactly this
+    reasoning (an account/site-specific identifier, not a public one), so Octopus's car record now
+    carries the same device id in account_ids too, letting the existing machinery tokenise it."""
+    api = _make_discovery_api(my_predbat, "cars-uuid-device-id")
+    device_id = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"
+    api.intelligent_devices = {device_id: {"suspended": False}}
+
+    report = api.build_discovery()
+    car_record = report["cars"][0]
+    assert car_record["device_id"] == "octopus:{}".format(device_id)
+    assert car_record.get("account_ids", {}).get("intelligent_device_id") == device_id, "the raw device id must be carried in account_ids so the redactor tokenises it: {}".format(car_record)
+
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.report("octopus", report)
+    coordinator.assemble()
+    catalogue_text = str(coordinator.catalogue())
+
+    assert device_id not in catalogue_text, "the raw UUID-shaped Intelligent device id must not survive redaction"
+    print("PASS: a UUID-shaped Intelligent device id is pseudonymised, not published in the clear")
+    return 0
 
 
 def _stub_run_dependencies(api):

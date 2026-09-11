@@ -1431,7 +1431,11 @@ class OctopusAPI(ComponentBase):
         async_intelligent_update_sensor() publishes them per device, never as a fixed set, so the
         catalogue must not claim one exists that Home Assistant has never seen. Vehicle battery
         size and charge-point power are reported in ratings where Octopus's own vehicle/charger
-        catalogue lookup found them.
+        catalogue lookup found them. The Intelligent device id itself is carried in account_ids
+        (not left as a bare structural device_id) since it is a UUID unique to this account's
+        vehicle enrolment, not a public identifier - without a pseudonym container present, this
+        record's device_id would have nothing to mark it as identity-derived and would publish the
+        raw UUID verbatim (see coordinator.py's _has_pseudonym_container).
 
         Reporting is independent of self.automatic: it records what Octopus's own account
         describes, not whether this component wired Predbat's apps.yaml to it - that distinction is
@@ -1486,7 +1490,13 @@ class OctopusAPI(ComponentBase):
         for device_id in self.get_active_intelligent_device_ids():
             device = self.intelligent_devices.get(device_id, {})
             index_suffix = self.device_id_to_index_suffix(device_id)
-            record = {"device_id": "octopus:{}".format(device_id)}
+            # account_ids carries the Intelligent device id itself: it is a UUID assigned by
+            # Octopus to this specific account's vehicle enrolment, not a public identifier like a
+            # tariff or product code, so it belongs in the pseudonymised container on the same
+            # reasoning the meter records above apply to mpan/account - see _has_pseudonym_container.
+            # Without it the record's device_id ("octopus:{uuid}") has no pseudonym container
+            # anywhere in it and is never noted at all, publishing the raw UUID verbatim.
+            record = {"device_id": "octopus:{}".format(device_id), "account_ids": {"intelligent_device_id": device_id}}
 
             ratings = {}
             battery_size = device.get("vehicle_battery_size_in_kwh")

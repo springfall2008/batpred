@@ -33,9 +33,14 @@ deliberately **not** in the entity's attributes; Home Assistant's recorder write
 change to disk, and the full catalogue is tens of kilobytes even on a modest install. Read the debug
 dump for the complete picture.
 
-The catalogue is assembled once, from a "discovery barrier" straight after every component has
-started or timed out - it is a snapshot of what was found at startup, not a live view that tracks
-configuration changes made afterwards. Restart Predbat to refresh it.
+Every report a component has ever filed is kept, and the catalogue is re-assembled fresh each time
+it is actually read. A debug dump always reflects the latest state, including anything reported
+*after* Predbat started - a rediscovered inverter, a changed tariff, a newly-discovered forecast
+site, a retry that succeeded on a later cycle - not only what was known at the "discovery barrier"
+(the point straight after every component has started or timed out). `sensor.predbat_discovery` is
+different: its summary is *published* only once, at that same discovery barrier, and does not
+refresh itself afterwards even though the underlying document it was built from keeps moving -
+restart Predbat, or read a fresh debug dump, to see anything reported later than startup.
 
 ## What each section describes
 
@@ -46,6 +51,11 @@ configuration changes made afterwards. Restart Predbat to refresh it.
 | `cars` | Electric vehicles, cross-linked to the charger that charges them |
 | `meters` | Electricity (and gas) supply points, each with a direction (`import`/`export`) and, where known, a nested tariff record |
 | `forecasts` | Solar forecast providers (Solcast, forecast.solar, Open-Meteo, or your own HA sensors) and what each one covers |
+| `programmes` | Flexibility enrolments (a VPP, a saving session, a free-electricity event) that emit events and may constrain Predbat, cross-linked to the meter they apply to |
+
+No v1 reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast) populates `programmes` yet - it is part of
+the schema for a future Axle/VPP-style reporter - so today it is always present as an empty list
+rather than missing from the document.
 
 Every record carries a `source` field naming the component that reported it, a `device_id` unique
 within that component, and whichever typed containers below the component chose to populate. Two
@@ -84,14 +94,22 @@ salt generated once per installation, so the *same* identifier always maps to th
 within one install's dumps (letting you correlate two records that share an account), but a
 different installation's token for the identical MPAN is completely unrelated - there is nothing to
 compare across users. Anywhere that identifier would otherwise be echoed elsewhere in the document -
-inside an entity id, a free-text note - is caught and replaced too, including a case-folded or
-`-`/`_`-swapped form the same value can appear in.
+inside an entity id, a free-text note - is caught and replaced too, including a case- or
+`-`/`_`-folded form the same value can appear in (either direction: an upper-cased echo of a
+lower-cased original is caught exactly as a lower-cased echo of an upper-cased one is). This
+echo-substitution only fires for an original of six characters or more - anything shorter would
+corrupt more ordinary text as a false-positive substring match than it would ever hide, so a very
+short identifier is only ever replaced where it appears whole, not embedded inside a longer string.
 
 **Kept readable, deliberately** - a hardware serial number, a firmware version string, a device
 model name, and a tariff or product code. None of these identify *you*; they identify a public
 product or a specific physical device, and stripping them would make a bug report undiagnosable -
 "my GivEnergy inverter won't discharge" is a much harder bug to chase without knowing which
-inverter, which firmware, or which tariff is in play.
+inverter, which firmware, or which tariff is in play. **Entity ids are published verbatim too** -
+exactly the `sensor.`/`number.`/... id Home Assistant knows the entity by - since that is what lets
+you match a catalogue record back to something you can see on your own dashboard; a component is
+expected to build its entity ids from public naming, never from a value this catalogue treats as
+sensitive (and where one is, the redactor still catches it - see the guards below).
 
 A handful of further guards run regardless of which container a value landed in: anything that
 looks like a credential by its field name (`api_key`, `password`, `token`, ...) is refused outright,

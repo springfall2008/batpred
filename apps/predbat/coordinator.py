@@ -33,9 +33,6 @@ VOCAB_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 # Containers whose value is a list of vocabulary tokens
 VOCAB_CONTAINERS = ("functions", "capabilities", "flags", "effects")
 
-# Descriptor attributes carried through; anything else on a descriptor is dropped
-DESCRIPTOR_FIELDS = ("entity_id", "domain", "access", "unit", "device_class", "min", "max", "step", "options", "format", "precision")
-
 SECTION_SPEC = {
     "inverters": {"structural": ("device_id", "inverter_type", "control", "composition", "measures_meter", "serials"), "sub_records": ()},
     "chargers": {"structural": ("device_id", "serves_cars"), "sub_records": ()},
@@ -152,6 +149,12 @@ CONTAINER_SPEC = {
 CLEAR_CONTAINERS = tuple(name for name, (redaction_class, _) in CONTAINER_SPEC.items() if redaction_class == "clear")
 PSEUDONYM_CONTAINERS = tuple(name for name, (redaction_class, _) in CONTAINER_SPEC.items() if redaction_class == "pseudonym")
 
+# Key names _substitute_key must never rewrite, however coincidentally a component's account_ids
+# value equals one of them: Predbat's own document structure (section names, container names, the
+# two fleet-wide keys), not user data, so an exact-match rewrite here would make the whole section
+# or container silently vanish from the published catalogue rather than merely hide one value.
+PROTECTED_KEY_NAMES = frozenset(SECTION_SPEC) | frozenset(CONTAINER_SPEC) | {"components", "observations"}
+
 # A clear-container value shaped like an identifier rather than a measurement, once separators a
 # component might have used to format one are stripped: unanchored so it matches an identifier
 # embedded in a longer string ("MPAN 1234567890123"), not only a value that is nothing else.
@@ -212,6 +215,16 @@ class Redactor:
     def _note(self, value, substring=False):
         """Record an original so it can later be swapped for its token wherever it appears.
 
+        Builds the FULL variant set (see _numeric_variants/_identifier_variants) before minting
+        anything, then reuses whichever token, if any, a previous _note() call already assigned to
+        one of those variants - only minting a fresh token when none of them has been seen before.
+        Without this, the same identifier noted twice in different textual forms (a string MPAN
+        then its float echo; "AB-12CD34" then "ab_12cd34") derived its token from whichever form
+        happened to be handed to THIS call and blindly overwrote any mapping an earlier call had
+        already made for a shared variant - two calls for one real-world identifier then produced
+        two different, order-dependent tokens, defeating the stability a maintainer relies on to
+        correlate records within one dump and across successive dumps from the same installation.
+
         Registers every numeric variant of the value (see _numeric_variants) and every
         case-folded / separator-swapped variant (see _identifier_variants), composed together -
         every combination of the two axes - so an identifier noted once resolves to the same
@@ -227,10 +240,11 @@ class Redactor:
         that floor - see _exact_match/_substitute_text.
         """
         text = str(value)
-        token = self.token(text)
         variants = {text} | self._numeric_variants(text)
         for variant in list(variants):
             variants |= self._identifier_variants(variant)
+        existing = next((self.originals[variant] for variant in variants if variant in self.originals), None)
+        token = existing if existing is not None else self.token(text)
         for variant in variants:
             self.originals[variant] = token
             if substring:
@@ -243,13 +257,17 @@ class Redactor:
         A helper shaped like Octopus's get_entity_name() - and Solcast's own entity naming embeds
         a site id the same way - lower-cases an identifier and replaces "-" with "_" when folding
         it into an entity id, so "A-1234ABCD" becomes "a_1234abcd": a string that is neither equal
-        to, nor contains as a literal substring, the noted original. Registering the lower-cased
-        form, both separator directions and their combination closes that gap once, in shared
-        code, rather than as a per-component workaround.
+        to, nor contains as a literal substring, the noted original. Both fold directions are
+        registered, not just lower-casing: the canonical original noted first can itself be
+        lower-case (an entity_id, say), and a component elsewhere echoes an UPPER-cased form of the
+        same identifier (a account number as a user typed it) - folding down alone would leave that
+        upper-cased echo unmatched, since it is a case OTHER than the one that got registered.
+        Registering the lower-cased form, the upper-cased form, both separator directions and every
+        combination of the two axes closes that gap once, in shared code, rather than as a
+        per-component workaround.
         """
-        lowered = text.lower()
-        variants = {text, lowered}
-        for source in (text, lowered):
+        variants = {text, text.lower(), text.upper()}
+        for source in list(variants):
             variants.add(source.replace("-", "_"))
             variants.add(source.replace("_", "-"))
         return variants
@@ -345,11 +363,16 @@ class Redactor:
         A component could key its data by a raw identifier-shaped string (hardware_ids keyed by
         the serial itself, say) rather than only ever putting one in a value; being a dict key
         rather than a value does not make it any less publishable.
+
+        Logs only the container name, never `name` itself - unlike a field label, the key here IS
+        the value being hidden, so writing it into the log would republish, in Predbat's own log
+        file, exactly what this guard exists to keep out of the debug dump attached to the same
+        public issue. Matches _guard_scalar, which never logs the raw value it pseudonymises either.
         """
         if not self._misfiled(name, strict_numeric=(container == "hardware_ids")):
             return name
         if self.log:
-            self.log("Warn: Coordinator: {} key '{}' looks like an identifier - pseudonymised".format(container, name))
+            self.log("Warn: Coordinator: {} key looks like an identifier - pseudonymised".format(container))
         return self._note(name, substring=True)
 
     def _has_pseudonym_container(self, node):
@@ -455,7 +478,22 @@ class Redactor:
         vanishing from the document. _guard_key (applied earlier, during _walk) is what catches a
         key that IS ITSELF shaped like a misfiled identifier; this pass only catches a key that
         happens to equal a noted original in full.
+
+        PROTECTED_KEY_NAMES is checked first for the same reason, one step further: an account_ids
+        value does not even need to be identifier-shaped to collide here, only to equal a structural
+        name byte-for-byte ("chargers", "account_ids", "observations", ...) - exact match alone
+        would still rewrite it away, deleting that whole section or container rather than a value.
+        Excluding Predbat's own structural vocabulary from rewriting closes that regardless of what
+        a component ever reports as an identifier.
+
+        Residual, deliberately accepted: an identifier embedded as a SUBSTRING of a
+        component-chosen key (an entities key like "pv_abcdef123456_today") is not substituted -
+        only whole-key equality is ever rewritten, keys are never substring-matched the way values
+        are (see above). The identifier still appears tokenised in the record's device_id/
+        account_ids, so nothing is lost that could not already be found there.
         """
+        if key in PROTECTED_KEY_NAMES:
+            return key
         exact = self._exact_match(key)
         return exact if exact is not None else key
 
@@ -515,6 +553,10 @@ class Coordinator:
         # self.reports rather than folded into the cleaned report dict, since it describes when
         # the coordinator heard from the component, not anything the component itself reported.
         self.reported_at = {}
+        # The most recently assembled document, kept for in-process introspection only - neither
+        # catalogue() nor catalogue_raw() read this any more, since both re-assemble on every call
+        # (see catalogue()'s docstring for why a frozen snapshot missed every report filed after
+        # the original startup-barrier assemble() call).
         self.assembled = None
         self.salt = None
 
@@ -530,8 +572,12 @@ class Coordinator:
     def assemble(self):
         """Merge every report into one catalogue, with a status per component and the observation layer.
 
-        Unredacted: catalogue() is what consumers get. Called after phase-1 startup, which is
-        the point at which every component has started or timed out.
+        Unredacted: catalogue() is what consumers get. Cheap - a merge over a handful of dicts
+        under a lock briefly held just to copy self.reports/self.reported_at - so it is safe to
+        call on every catalogue()/catalogue_raw() request, not only once at the startup barrier
+        (predbat.py, straight after every component has started or timed out): a component keeps
+        reporting for the rest of the process's life (a retry, a rediscovered device, a changed
+        tariff), and only re-assembling on every read lets that later work ever reach a dump.
         """
         with self.lock:
             reports = {name: report for name, report in self.reports.items()}
@@ -556,7 +602,11 @@ class Coordinator:
         at all, so "no_report" has to read differently from "started but never answered".
         reported_at is a component-name -> ISO-8601 UTC timestamp snapshot, taken under the same
         lock as reports so the two agree with each other; it is only ever populated for a status
-        "ok" component - one the coordinator has actually heard from.
+        "ok" component - one the coordinator has actually heard from. "automatic" is included only
+        when the component's own report actually carried one (see validate_report()) - a component
+        with no such concept (Solcast: solar-forecast sourcing is a plain apps.yaml choice, never
+        something this catalogue auto-wires) must not have the catalogue claim `automatic: true`
+        for it just because every OTHER field here defaults to something.
         """
         components = getattr(self.base, "components", None)
         names = components.get_all() if components else sorted(reports)
@@ -565,7 +615,8 @@ class Coordinator:
             entry = {"status": "not_configured", "reported_at": None}
             if name in reports:
                 entry["status"] = "ok"
-                entry["automatic"] = reports[name].get("automatic", True)
+                if "automatic" in reports[name]:
+                    entry["automatic"] = reports[name]["automatic"]
                 entry["counts"] = {section: len(reports[name][section]) for section in SECTION_SPEC if reports[name].get(section)}
                 entry["reported_at"] = reported_at.get(name)
             elif components and components.load_error(name):
@@ -639,12 +690,25 @@ class Coordinator:
         return self.salt
 
     def catalogue(self):
-        """The assembled catalogue, redacted. This is what every consumer gets."""
-        return Redactor(self.load_salt(), log=self.log).redact(self.assembled or self.assemble())
+        """The assembled catalogue, redacted. This is what every consumer gets.
+
+        Re-assembles on every call rather than reusing whatever self.assembled last held. A report
+        arrives from a component's own thread at any point in the process's life - a retry after a
+        transient failure, a rediscovered inverter, a changed tariff or vehicle, a newly-discovered
+        forecast site - and assemble() was previously called exactly once, at the startup barrier
+        (see predbat.py), so none of that later work could ever reach a dump: catalogue() returned
+        the same frozen document for the rest of the run. assemble() is a merge over a handful of
+        dicts under a lock briefly held to copy self.reports, so redoing it on every debug dump or
+        publish() call - its only two callers - costs milliseconds, not a measurable resource.
+        """
+        return Redactor(self.load_salt(), log=self.log).redact(self.assemble())
 
     def catalogue_raw(self):
-        """The assembled catalogue, unredacted. In-process diagnostics only - never write this anywhere."""
-        return self.assembled or self.assemble()
+        """The assembled catalogue, unredacted. In-process diagnostics only - never write this anywhere.
+
+        Re-assembles on every call, consistent with catalogue() - see its docstring.
+        """
+        return self.assemble()
 
     def publish(self):
         """Publish a SUMMARY of the redacted catalogue as an entity, for HA users to glance at.
@@ -757,11 +821,19 @@ def _validate_record(record, section, component_name, log):
 
 
 def validate_report(report, component_name, log):
-    """Return a cleaned copy of one component's report - never raises, drops what does not fit."""
+    """Return a cleaned copy of one component's report - never raises, drops what does not fit.
+
+    "automatic" is carried through only when the raw report actually provided one - a component
+    with no such concept (Solcast) omits the key entirely rather than have it default to True, so
+    the catalogue never claims an auto-config relationship for a component that has none. See
+    _component_status(), the only other place this key is read.
+    """
     if not isinstance(report, dict):
         log("Warn: Coordinator: {} report is a {}, not a dict - treated as empty".format(component_name, type(report).__name__))
         report = {}
-    cleaned = {"schema_version": SCHEMA_VERSION, "automatic": bool(report.get("automatic", True))}
+    cleaned = {"schema_version": SCHEMA_VERSION}
+    if "automatic" in report:
+        cleaned["automatic"] = bool(report["automatic"])
     for section in SECTION_SPEC:
         records = []
         for record in report.get(section, []) or []:

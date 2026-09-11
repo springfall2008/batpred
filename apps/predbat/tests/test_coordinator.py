@@ -146,13 +146,35 @@ def test_coverage_accepts_numbers_booleans_and_vocabulary_lists():
 
 
 def test_validate_report_never_raises_on_non_dict():
-    """A non-dict report (None, a list, ...) never raises - it is treated as empty, per the 'never raises' contract."""
+    """A non-dict report (None, a list, ...) never raises - it is treated as empty, per the 'never
+    raises' contract. "automatic" is absent, not defaulted to True: an empty/broken report carries
+    no evidence the component has any such concept, matching validate_report()'s "only carry
+    'automatic' through when the raw report actually provided one" rule."""
     base, coordinator = _coordinator()
     coordinator.report("broken", None)
-    assert coordinator.reports["broken"] == {"schema_version": SCHEMA_VERSION, "automatic": True}
+    assert coordinator.reports["broken"] == {"schema_version": SCHEMA_VERSION}
     coordinator.report("broken2", ["not", "a", "dict"])
-    assert coordinator.reports["broken2"] == {"schema_version": SCHEMA_VERSION, "automatic": True}
+    assert coordinator.reports["broken2"] == {"schema_version": SCHEMA_VERSION}
     print("PASS: non-dict report never raises")
+    return 0
+
+
+def test_automatic_field_absent_when_component_omits_it():
+    """A component with no automatic-config concept (Solcast: solar-forecast sourcing is a plain
+    apps.yaml choice, never something this catalogue auto-wires) omits "automatic" from its report
+    entirely, and neither the cleaned report nor the assembled catalogue's component status may
+    default it to True on its behalf - that would claim an auto-config relationship that does not
+    exist. A component that DOES report it (every other v1 reporter) keeps whatever value it sent,
+    explicit False included."""
+    base, coordinator = _coordinator()
+    coordinator.report("solar", {"forecasts": [{"device_id": "solcast:site1", "kind": "solar"}]})
+    coordinator.report("ohme", {"chargers": [{"device_id": "ohme:CH1"}], "automatic": False})
+    assert "automatic" not in coordinator.reports["solar"], coordinator.reports["solar"]
+    assert coordinator.reports["ohme"]["automatic"] is False
+    components = coordinator.assemble()["components"]
+    assert "automatic" not in components["solar"], components["solar"]
+    assert components["ohme"]["automatic"] is False
+    print("PASS: automatic is absent when a component's report never provided it, and preserved otherwise")
     return 0
 
 
@@ -261,6 +283,30 @@ def test_assemble_merges_sections_and_tags_source():
     return 0
 
 
+def test_catalogue_reassembles_so_a_post_assembly_report_reaches_it():
+    """Final review, Ruling R42: catalogue() used to return `self.assembled or self.assemble()`,
+    and assemble() was only ever called once, at the startup barrier - so a report filed AFTER
+    that point (a retry, a rediscovered device, a changed tariff or vehicle, a later-discovered
+    forecast site) could never reach a dump, no matter how many times catalogue() was called
+    afterwards. catalogue() must re-assemble on every call so later work is always reflected."""
+    base, coordinator = _coordinator()
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:A", "inverter_type": "GE"}]})
+    coordinator.assemble()
+    first = coordinator.catalogue()
+    assert len(first["inverters"]) == 1, first["inverters"]
+
+    # A second inverter is reported AFTER assemble() has already run once - simulating GivTCP's own
+    # rediscovery, GE Cloud's retry, or any report arriving after the startup barrier.
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:A", "inverter_type": "GE"}, {"device_id": "givtcp:B", "inverter_type": "GE"}]})
+    second = coordinator.catalogue()
+    assert len(second["inverters"]) == 2, "a report filed after assemble() already ran must still reach a later catalogue() call: {}".format(second["inverters"])
+
+    # catalogue_raw() must behave identically - see its own docstring.
+    assert len(coordinator.catalogue_raw()["inverters"]) == 2
+    print("PASS: catalogue() re-assembles on every call, so a post-assembly report reaches it")
+    return 0
+
+
 def test_assemble_component_status():
     """Every registry entry gets a status, distinguishing silent from timed out from failed from absent."""
     base, coordinator = _coordinator()
@@ -360,6 +406,55 @@ def test_account_ids_pseudonymised_and_stable():
     # the cross-link still resolves to the same meter
     assert catalogue["programmes"][0]["meter"] == meter["device_id"]
     print("PASS: account ids pseudonymised, cross-link preserved")
+    return 0
+
+
+def test_account_id_noted_in_two_forms_across_records_resolves_to_one_token():
+    """Final review, Ruling R41: _note() used to derive the token from whichever textual form it
+    was handed and overwrite any mapping an earlier call had already made for a shared variant, so
+    the SAME real-world identifier noted twice in different forms produced two different,
+    order-dependent tokens - defeating the stability a maintainer relies on to correlate records
+    within one dump. Reproduces the review's own two verified cases in one test: an MPAN reported
+    as a string by one component and as a float by another, and an account id reported in two
+    case/separator forms by two components - each pair must resolve to exactly one token."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report("octopus", {"meters": [{"device_id": "octopus:1234567890123", "direction": "import", "account_ids": {"mpan": "1234567890123"}}]})
+    coordinator.report("kraken", {"meters": [{"device_id": "kraken:1234567890123", "direction": "import", "account_ids": {"mpan": 1234567890123.0}}]})
+    coordinator.report("ohme", {"chargers": [{"device_id": "ohme:CH1", "account_ids": {"account": "AB-12CD34"}}]})
+    coordinator.report("solis", {"inverters": [{"device_id": "solis:INV1", "account_ids": {"account": "ab_12cd34"}}]})
+
+    catalogue = coordinator.catalogue()
+
+    mpan_tokens = {record["source"]: record["account_ids"]["mpan"] for record in catalogue["meters"]}
+    assert mpan_tokens["octopus"] == mpan_tokens["kraken"], "a string mpan and its float echo must resolve to one token: {}".format(mpan_tokens)
+
+    account_tokens = {record["source"]: record["account_ids"]["account"] for record in catalogue["chargers"] + catalogue["inverters"] if "account_ids" in record}
+    assert account_tokens["ohme"] == account_tokens["solis"], "'AB-12CD34' and 'ab_12cd34' noted in different records must resolve to one token: {}".format(account_tokens)
+    print("PASS: an identifier noted in two different textual forms across two records resolves to exactly one token")
+    return 0
+
+
+def test_note_returns_same_token_when_called_twice_with_different_variants():
+    """Redactor._note() unit-level: calling it a second time with a DIFFERENT textual form of an
+    already-noted value must return the SAME token, not mint a fresh one - the fix builds the full
+    variant set before minting anything and reuses whatever token any variant already maps to.
+    Covers both axes _note() composes: numeric (string vs float) and identifier (case/separator)."""
+    redactor = Redactor("test-salt-0001")
+    token_a = redactor._note("1234567890123", substring=True)
+    token_b = redactor._note(1234567890123.0, substring=True)
+    assert token_a == token_b, "a string and its float echo must mint/reuse the same token: {} != {}".format(token_a, token_b)
+
+    token_c = redactor._note("AB-12CD34", substring=True)
+    token_d = redactor._note("ab_12cd34", substring=True)
+    assert token_c == token_d, "case/separator variants must mint/reuse the same token: {} != {}".format(token_c, token_d)
+
+    # And the reverse order - the variant noted FIRST here was noted SECOND above - to prove this
+    # is genuinely order-independent, not merely "the second call wins" restated.
+    redactor2 = Redactor("test-salt-0001")
+    token_e = redactor2._note(1234567890123.0, substring=True)
+    token_f = redactor2._note("1234567890123", substring=True)
+    assert token_e == token_f, "order must not matter: {} != {}".format(token_e, token_f)
+    print("PASS: _note() reuses one token across different textual forms of an identifier, regardless of call order")
     return 0
 
 
@@ -731,6 +826,36 @@ def test_account_ids_value_does_not_corrupt_structural_or_descriptor_keys():
     return 0
 
 
+def test_account_ids_value_equal_to_a_structural_name_does_not_delete_it():
+    """Final review (carried from Task 7): an account_ids value equal to a structural name did not
+    even need to be a substring coincidence (the test above) - EXACT equality alone was enough,
+    since _substitute_key rewrote any key equal to a noted original with nothing excluding
+    Predbat's own vocabulary from that match. account_ids: {"acct": "chargers"} deleted the entire
+    top-level "chargers" section; account_ids: {"acct": "account_ids"} deleted the account_ids
+    container out from under its own record. PROTECTED_KEY_NAMES closes this for every SECTION_SPEC
+    and CONTAINER_SPEC key name plus "components"/"observations"."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "ohme",
+        {"chargers": [{"device_id": "ohme:CH1", "account_ids": {"acct": "chargers"}, "info": {"model": "Home Pro"}}]},
+    )
+    coordinator.report(
+        "solis",
+        {"inverters": [{"device_id": "solis:INV1", "account_ids": {"acct": "account_ids"}, "info": {"model": "S6"}}]},
+    )
+    catalogue = coordinator.catalogue()
+
+    assert "chargers" in catalogue and len(catalogue["chargers"]) == 1, "the top-level chargers section must survive: {}".format(list(catalogue.keys()))
+    assert catalogue["chargers"][0]["info"]["model"] == "Home Pro"
+    assert catalogue["chargers"][0]["account_ids"]["acct"] != "chargers", "the value itself is still pseudonymised"
+
+    inverter = catalogue["inverters"][0]
+    assert "account_ids" in inverter, "the account_ids container must survive a value equal to its own container name: {}".format(inverter)
+    assert inverter["account_ids"]["acct"] != "account_ids", "the value itself is still pseudonymised"
+    print("PASS: an account_ids value equal to a section or container name does not delete it")
+    return 0
+
+
 def test_int_identifier_echoed_outside_guarded_container_is_substituted():
     """A non-string scalar (an int) that exactly repeats an account identifier elsewhere in the
     catalogue is rewritten too - substitution previously only ever looked at strings, so an
@@ -960,6 +1085,20 @@ def test_misfiled_identifier_used_as_a_container_key_caught():
     return 0
 
 
+def test_guard_key_does_not_log_the_raw_value():
+    """Final review: _guard_key logged the raw key text it had just decided to pseudonymise -
+    Predbat's log file is attached to the same public issues a debug dump is, so writing the
+    unredacted form into a log line republishes exactly what this guard exists to hide. Must match
+    _guard_scalar, which already logs only the container label, never the value it hides."""
+    messages = []
+    redactor = Redactor("test-salt-0001", log=messages.append)
+    redactor._guard_key("hardware_ids", "1234567890123")
+    assert any("hardware_ids" in message for message in messages), "expected a warning naming the container: {}".format(messages)
+    assert not any("1234567890123" in message for message in messages), "the raw identifier must never reach the log: {}".format(messages)
+    print("PASS: _guard_key logs only the container, never the raw key text it is hiding")
+    return 0
+
+
 # --- Review round 3: Task 7 review - a case/separator-transformed echo of a pseudonymised value ---
 
 
@@ -977,6 +1116,21 @@ def test_identifier_variants_registered_for_case_and_separator_transforms():
         assert redactor.originals.get(variant) == token, "{} should map to the same token".format(variant)
         assert variant in redactor.substring_ok, "{} should be substring-eligible, matching the original's own substring=True".format(variant)
     print("PASS: _note registers case-folded and separator-swapped variants, all mapping to the same token")
+    return 0
+
+
+def test_identifier_variants_fold_up_as_well_as_down():
+    """Final review: _identifier_variants() previously folded DOWN only (lower-casing), so an
+    UPPER-cased echo of a lower-cased CANONICAL identifier survived - the reverse of the case every
+    other test here exercises, where the noted original happens to already be upper/mixed case.
+    Noting a lower-case original (an entity_id-shaped id, say) must still catch an upper-cased echo
+    of it elsewhere, exactly as noting an upper-case original already caught a lower-cased echo."""
+    redactor = Redactor("test-salt-0001")
+    token = redactor._note("a-1234abcd", substring=True)
+    for variant in ("a-1234abcd", "A-1234ABCD", "a_1234abcd", "A_1234ABCD"):
+        assert redactor.originals.get(variant) == token, "{} should map to the same token".format(variant)
+        assert variant in redactor.substring_ok, "{} should be substring-eligible, matching the original's own substring=True".format(variant)
+    print("PASS: _note registers fold-UP variants too, not just fold-down, from a lower-case original")
     return 0
 
 
@@ -1165,18 +1319,22 @@ def test_coordinator_all(my_predbat=None):
     failures += test_entities_options_preserves_realistic_values()
     failures += test_coverage_accepts_numbers_booleans_and_vocabulary_lists()
     failures += test_validate_report_never_raises_on_non_dict()
+    failures += test_automatic_field_absent_when_component_omits_it()
     failures += test_unknown_container_dropped()
     failures += test_record_without_device_id_dropped()
     failures += test_report_is_idempotent_and_versioned()
     failures += test_meter_sub_record_validated()
     failures += test_credential_guard_fires_inside_sub_record_container()
     failures += test_assemble_merges_sections_and_tags_source()
+    failures += test_catalogue_reassembles_so_a_post_assembly_report_reaches_it()
     failures += test_assemble_component_status()
     failures += test_component_status_reported_at_set_only_for_ok()
     failures += test_observations_duplicate_serial()
     failures += test_observations_contested_cars_and_meters()
     failures += test_observations_resulting_config()
     failures += test_account_ids_pseudonymised_and_stable()
+    failures += test_account_id_noted_in_two_forms_across_records_resolves_to_one_token()
+    failures += test_note_returns_same_token_when_called_twice_with_different_variants()
     failures += test_cross_link_resolves_without_coincidental_substring()
     failures += test_measures_meter_cross_link_resolves()
     failures += test_pseudonym_differs_across_salts()
@@ -1195,6 +1353,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_hardware_ids_only_flags_all_digit_values_not_prefixed_serials()
     failures += test_pseudonymised_value_substituted_inside_entity_id_value()
     failures += test_account_ids_value_does_not_corrupt_structural_or_descriptor_keys()
+    failures += test_account_ids_value_equal_to_a_structural_name_does_not_delete_it()
     failures += test_int_identifier_echoed_outside_guarded_container_is_substituted()
     failures += test_numeric_identifier_echo_substituted_regardless_of_int_float_or_string_form()
     failures += test_structural_scalar_shape_guard_catches_bare_identifier_device_id()
@@ -1204,7 +1363,9 @@ def test_coordinator_all(my_predbat=None):
     failures += test_substitution_does_not_touch_the_catalogue_timestamp()
     failures += test_shorter_original_does_not_fragment_a_longer_one()
     failures += test_misfiled_identifier_used_as_a_container_key_caught()
+    failures += test_guard_key_does_not_log_the_raw_value()
     failures += test_identifier_variants_registered_for_case_and_separator_transforms()
+    failures += test_identifier_variants_fold_up_as_well_as_down()
     failures += test_pseudonymised_value_hidden_when_case_folded_and_separator_swapped_in_entity_id()
     failures += test_load_salt_fallback_without_storage()
     failures += test_load_salt_round_trips_through_storage()

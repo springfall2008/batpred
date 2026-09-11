@@ -292,11 +292,28 @@ def test_create_debug_yaml_file_matches_the_string(my_predbat=None):
 
 
 class _DiscoveryComponentsStub:
-    """Minimal stand-in for Components exposing only .coordinator, as create_debug_yaml() expects."""
+    """Minimal stand-in for Components: .coordinator plus the registry surface
+    Coordinator._component_status() reads on every assemble() call, as create_debug_yaml() expects."""
 
     def __init__(self, coordinator):
-        """Hold the coordinator."""
+        """Hold the coordinator; every reported component is treated as known, active and alive."""
         self.coordinator = coordinator
+
+    def get_all(self):
+        """Every component name the registry knows about - just whoever has reported, here."""
+        return sorted(self.coordinator.reports)
+
+    def is_active(self, name):
+        """Whether the named component was constructed - always, in this stub."""
+        return True
+
+    def is_alive(self, name):
+        """Whether the named component is running and fresh - always, in this stub."""
+        return True
+
+    def load_error(self, name):
+        """Why the named component failed to construct - never, in this stub."""
+        return None
 
 
 def test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat=None):
@@ -305,24 +322,23 @@ def test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat=None):
     and a seeded MPAN must not appear in it - the same reachability contract this module enforces
     for every other member, now extended to the discovery catalogue coordinator.py adds.
 
-    The coordinator is assembled while my_predbat.components is forced to None (regardless of
-    what the shared fixture is carrying - another test in this suite, test_github.py's
+    catalogue() re-assembles on every call (final review: a frozen assemble()-once snapshot would
+    have missed anything reported after the startup barrier - see coordinator.py's catalogue()
+    docstring), so create_debug_yaml()'s own call to it exercises _component_status()'s registry
+    reads for real; _DiscoveryComponentsStub supplies them rather than a bare .coordinator
+    attribute. my_predbat.components is restored afterwards regardless of what the shared fixture
+    was carrying beforehand - another test in this suite, test_github.py's
     _MockComponentsWithStorage, sets my_predbat.components and never restores it, so by the time
-    tests run in full-suite order this can already be some unrelated registry stub) so
-    assemble()'s "components = getattr(self.base, 'components', None)" branch does not need a
-    full Components double; only afterwards is my_predbat.components swapped for a stub exposing
-    just .coordinator, which is all create_debug_yaml() itself reads.
+    tests run in full-suite order this can already be some unrelated registry stub.
     """
     failed = False
     print("**** Testing create_debug_yaml() includes the redacted discovery catalogue ****")
 
     original_components = my_predbat.components
     try:
-        my_predbat.components = None
         coordinator = Coordinator(my_predbat)
         coordinator.salt = "test-salt-debug-yaml-scope"
         coordinator.report("octopus", {"meters": [{"device_id": "octopus:m", "direction": "import", "account_ids": {"mpan": "1234567890123"}}]})
-        coordinator.assemble()
         my_predbat.components = _DiscoveryComponentsStub(coordinator)
 
         text = my_predbat.create_debug_yaml(write_file=False)
