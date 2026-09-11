@@ -298,6 +298,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.check_and_refresh_oauth_token = _types.MethodType(_KrakenAuthMixin.check_and_refresh_oauth_token, self)
             self.handle_oauth_401 = _types.MethodType(_KrakenAuthMixin.handle_oauth_401, self)
             self._kraken_token_request = _types.MethodType(_KrakenAuthMixin._kraken_token_request, self)
+            # check_and_refresh_oauth_token calls these, so they must be bound too - binding
+            # only the entry points leaves it reaching for attributes this instance lacks.
+            self.start_token_mint_backoff = _types.MethodType(_KrakenAuthMixin.start_token_mint_backoff, self)
+            self.log_token_mint_backoff = _types.MethodType(_KrakenAuthMixin.log_token_mint_backoff, self)
+            self.clear_token_mint_backoff = _types.MethodType(_KrakenAuthMixin.clear_token_mint_backoff, self)
         elif hasattr(self, "_init_oauth"):
             self._init_oauth(auth_method, key, token_expires_at, "kraken")
             self.token_hash = token_hash or ""

@@ -121,7 +121,7 @@ If you see `Forward temperature/rate forecast ran out for N of 576 rollout steps
 - Validates on the last 24 hours of data
 - Saves model to disk: `predbat_ml_model.npz`
 
-**Regularization:**
+**Regularisation:**
 
 - **Weight Decay**: L2 penalty (0.01) applied to network weights to prevent overfitting
 - **Dropout**: 10% of hidden neurons are randomly dropped during each training forward pass (inverted dropout — no scaling needed at inference). Reduces over-reliance on any single neuron.
@@ -302,6 +302,7 @@ Before enabling ML load prediction:
 2. Optionally configure `pv_today` if you have solar panels
 3. **Recommended**: Enable the Temperature component (Temperature Component in components documentation)
 4. Ensure you have at least 1 day of historical data (7+ days recommended); the database will accumulate history over time beyond what HA retains
+5. Ensure that the computer (or VM) that is running your Home Assistant has sufficient memory. LoadML is quite resource intensive and it's recommended that your HA computer has at least 3 GB of memory allocated. If Predbat doesn't have sufficient memory then it can crash with few diagnostics.
 
 ### Step 2: Enable the Component
 

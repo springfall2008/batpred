@@ -16,7 +16,7 @@ reserve level adjustments, and multi-inverter balancing.
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import timedelta, datetime
-from const import MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
 from predbat_metrics import metrics
 from inverter import Inverter
@@ -26,12 +26,8 @@ import time
 Execute Predbat plan
 """
 
-# Per-inverter core charge/export states, used to resolve one headline status across a multi-inverter
-# fleet instead of letting whichever inverter is processed last silently win. Precedence lists are
-# ordered most-active-first so the most informative sub-state is shown when inverters within the same
-# side disagree (e.g. one still actively Charging while another has already reached Hold charging).
-CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
-EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
+# The precedence lists themselves live in const.py, as output.py's history reconstruction needs the
+# same most-active-first ordering to collapse a slot that changed state part way through (#4843).
 CHARGE_SIDE_STATES = set(CHARGE_STATE_PRECEDENCE)
 EXPORT_SIDE_STATES = set(EXPORT_STATE_PRECEDENCE)
 
@@ -587,7 +583,13 @@ class Execute:
                                     if resetDischarge:
                                         inverter.adjust_discharge_rate(0)
                                         resetDischarge = False
-                                    if self.set_reserve_enable:
+                                    # Not while actually charging: the battery is being filled from the grid, so it
+                                    # cannot be feeding the car, and pinning reserve just above a rising SoC costs a
+                                    # write for every 1% of the climb (#3899). Left to reset below for the duration,
+                                    # and latched at the SoC reached once charging stops - which is the point the
+                                    # inverter returns to demand and the hold starts to mean something. The sibling
+                                    # iBoost hold below already sits out a charge for the same reason.
+                                    if self.set_reserve_enable and status != "Charging":
                                         inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                                         resetReserve = False
                                 carHolding = True
@@ -1062,10 +1064,27 @@ class Execute:
         self.publish_inverter_config()
         return True
 
+    def is_template_mode(self):
+        """
+        True while the apps.yaml template is unedited ('Template: True'), so the plan must not run
+        """
+        return self.get_arg("template", False)
+
     def quick_inverter_data_update(self):
         """
         Quick update of inverter data for dashboard
         """
+        # While template mode is set update_pred() early-returns before fetch_config_options(), so
+        # the attributes update_status() reads (e.g. inverter_clock_skew_discharge_start) were
+        # never created - running it would AttributeError every cycle, and for inverters without
+        # has_charge_enable_time it would reach write_and_poll_switch("scheduled_charge_enable")
+        # and write the real device with no plan in place (#4965)
+        if self.is_template_mode():
+            # fetch_inverter_data() and the plan run never stamp this in template mode, so without
+            # a stamp here the 120s throttle in update_pred() would pass on every tick of
+            # update_time_loop instead of once per INVERTER_QUICK_UPDATE_SECONDS
+            self.inverter_data_last_fetch = datetime.now()
+            return False
         if self.inverters is None:
             return False
         # Its own control-ledger cycle. This runs every 120s and reaches update_status(), which

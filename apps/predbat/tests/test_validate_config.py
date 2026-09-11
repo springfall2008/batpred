@@ -27,6 +27,9 @@ Types covered (see APPS_SCHEMA in config.py):
   sensor_list (with entries, modify, none|string sensor_type)
 """
 
+import os
+import tempfile
+
 
 def _run(my_predbat, extra_args, extra_states=None, expect_errors=(), expect_clean=()):
     """Inject args/states, run validate_config, assert per-field expectations.
@@ -390,7 +393,109 @@ def test_validate_config(my_predbat):
         print(f"  [transient_ok] {name} pointing at an entity that does not exist still fails")
         _run(my_predbat, {name: "sensor.test_charger_typo"}, expect_errors=[name])
 
+    # ==========================================================================
+    # car_charging_battery_size  (#2172)
+    #
+    # A fixed battery size is written as a list with one entry per car, the form
+    # every apps.yaml template uses. A bare number on the same line as the key
+    # is not accepted: the sensor branch wraps a scalar into a list only when it
+    # is a string (predbat.py), so a numeric scalar never reaches the "fixed
+    # float values are allowed" check. The car-charging docs used to describe
+    # that failing form ("must be entered with one decimal place, e.g. 50.0"),
+    # which is what #2172 reported.
+    # ==========================================================================
+    print("  [sensor float] car_charging_battery_size as a one-entry list passes")
+    _run(my_predbat, {"car_charging_battery_size": [77.4], "num_cars": 1}, expect_clean=["car_charging_battery_size"])
+
+    print("  [sensor float] car_charging_battery_size as a whole number in a list passes (templates use '- 75')")
+    _run(my_predbat, {"car_charging_battery_size": [75], "num_cars": 1}, expect_clean=["car_charging_battery_size"])
+
+    print("  [sensor float] car_charging_battery_size written inline as a number fails (#2172)")
+    _run(my_predbat, {"car_charging_battery_size": 77.4, "num_cars": 1}, expect_errors=["car_charging_battery_size"])
+
+    # A string scalar IS wrapped into a list, so it validates - the docs must not
+    # claim a list is the only accepted form, only that an inline number fails.
+    print("  [sensor float] car_charging_battery_size as an entity name still passes (scalar strings are wrapped)")
+    _run(
+        my_predbat,
+        {"car_charging_battery_size": "sensor.test_car_battery_size", "num_cars": 1},
+        extra_states={"sensor.test_car_battery_size": 77.4},
+        expect_clean=["car_charging_battery_size"],
+    )
+
+    # entries is "num_cars", so the list must have one entry per car. With two
+    # cars an inline number fails earlier, as the wrong type rather than the
+    # wrong sensor, so the reported error differs from the one-car case above.
+    print("  [sensor float] car_charging_battery_size needs one entry per car")
+    _run(my_predbat, {"car_charging_battery_size": [77.4, 64.0], "num_cars": 2}, expect_clean=["car_charging_battery_size"])
+    _run(my_predbat, {"car_charging_battery_size": 77.4, "num_cars": 2}, expect_errors=["car_charging_battery_size"])
+
     print("**** test_validate_config PASSED ****")
+    return False
+
+
+def test_validate_config_secrets(my_predbat):
+    """
+    Tests check_apps_yaml_secrets() (#4787) - re-reads apps.yaml with the ruamel round-trip
+    loader and flags credential-like values that are stored in plain text rather than
+    referenced via the '!secret' mechanism.
+
+    Writes a real temp apps.yaml so the round-trip loader has something genuine to parse:
+    provenance (whether a value came from a '!secret' tag or was written inline) only
+    survives in the raw file, not in self.args, which is why the check has to re-read it
+    rather than working off the already-resolved config the rest of validate_config() uses.
+    check_apps_yaml_secrets() takes an explicit path so this is independent of
+    PREDBAT_APPS_FILE and the working directory the test suite happens to run from.
+    """
+    print("**** test_validate_config_secrets ****")
+
+    apps_yaml_content = """
+pred_bat:
+  module: predbat
+  class: PredBat
+  mcp_secret: !secret my_mcp_secret
+  ohme_password: plaintext_password
+  kraken_key: ""
+  forecast_solar:
+    api_key: plaintext_nested_key
+  gateway_mqtt_host: mqtt.example.com
+  rates_import:
+    - start: "00:00"
+      end: "05:00"
+      rate: 0.07
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        temp_path = f.name
+        f.write(apps_yaml_content)
+
+    try:
+        my_predbat.check_apps_yaml_secrets(apps_yaml_path=temp_path)
+        warnings = my_predbat.arg_warnings
+
+        print("  Inline credential value is flagged")
+        assert "ohme_password" in warnings, f"Expected inline ohme_password to be flagged, got {warnings}"
+
+        print("  Nested inline credential value is flagged")
+        assert "forecast_solar.api_key" in warnings, f"Expected nested forecast_solar.api_key to be flagged, got {warnings}"
+
+        print("  '!secret'-referenced value is not flagged")
+        assert "mcp_secret" not in warnings, f"'!secret'-referenced mcp_secret must not be flagged, got {warnings}"
+
+        print("  Empty credential-like value is not flagged")
+        assert "kraken_key" not in warnings, f"Empty string value must not be flagged, got {warnings}"
+
+        print("  Non-credential key is not flagged")
+        assert "gateway_mqtt_host" not in warnings, f"Non-credential key must not be flagged, got {warnings}"
+        assert not any(w.startswith("rates_import") for w in warnings), f"Non-credential nested list must not be flagged, got {warnings}"
+    finally:
+        os.remove(temp_path)
+
+    print("  A missing apps.yaml is handled without error")
+    my_predbat.check_apps_yaml_secrets(apps_yaml_path="/tmp/does_not_exist_predbat_test_4787.yaml")
+    assert my_predbat.arg_warnings == {}, f"Expected no warnings for a missing file, got {my_predbat.arg_warnings}"
+
+    print("**** test_validate_config_secrets PASSED ****")
     return False
 
 

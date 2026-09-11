@@ -20,7 +20,7 @@ call to the C++ prediction kernel, which is where the threading now lives.
 
 from datetime import datetime, timedelta
 from multiprocessing import cpu_count
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import CLOUD_FACTOR_PV10, CLOUD_WINDOW_MINUTES, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
 
 from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
 from prediction import Prediction
@@ -34,11 +34,59 @@ import time
 PLAN_PASS_WINDOW_BUDGET = 8
 
 
+def available_cpu_count():
+    """Return how many CPUs this process may actually use.
+
+    cpu_count() reports the machine's cores, which is the wrong number inside a container. A Docker
+    --cpus or a Kubernetes CPU limit is a cgroup bandwidth quota, and the host's full core count
+    stays visible through both cpu_count() and sched_getaffinity() - so 'auto' sizes the pool to the
+    host and the CFS scheduler then throttles it. Measured on a Kubernetes pod with a 4-core limit on
+    a 12-core node: cpu_count() reports 12, cpu.max reports "400000 100000", and the pod sat pegged
+    at its quota with twelve lanes contending for four cores.
+
+    Falls back to cpu_count() on bare metal, in a container with no limit set, and on any platform
+    without cgroups, so behaviour outside a constrained container is unchanged.
+    """
+    quota = None
+
+    # cgroup v2: "$MAX $PERIOD", where $MAX is the string "max" when unlimited.
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as handle:
+            field_max, field_period = handle.read().split()
+        if field_max != "max":
+            period = int(field_period)
+            if period > 0:
+                quota = int(field_max) / period
+    except (OSError, ValueError):
+        pass
+
+    # cgroup v1: a quota of -1 means unlimited.
+    if quota is None:
+        try:
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as handle:
+                cfs_quota = int(handle.read())
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as handle:
+                cfs_period = int(handle.read())
+            if cfs_quota > 0 and cfs_period > 0:
+                quota = cfs_quota / cfs_period
+        except (OSError, ValueError):
+            pass
+
+    host_count = max(cpu_count() or 1, 1)
+    if quota is None:
+        return host_count
+
+    # Round down - a 3.5-core quota sustains three fully-busy lanes - but never below one, and never
+    # above what the host actually has.
+    return max(1, min(host_count, int(quota)))
+
+
 def resolve_batch_threads(threads, cpu_count_value):
     """Map the threads setting onto how many kernel lanes one batch may use.
 
-    'auto' takes the core count and is deliberately not capped. On a fast machine the curve is very
-    flat and peaks slightly below the core count - measured on the 20-scenario benchmark, best of 3:
+    'auto' takes the usable core count - see available_cpu_count(), which is the host's cores except
+    inside a container with a CPU limit - and is deliberately not capped beyond that. On a fast
+    machine the curve is very flat and peaks slightly below the core count - measured on the 20-scenario benchmark, best of 3:
     serial 26.33s, 4 threads 24.89s, 6 threads 24.71s, 8 threads 24.91s, 16 threads 25.04s - so a cap
     looks attractive. But re-running with each job made eight times dearer, which is how a machine
     where the kernel dominates behaves, the curve stops turning over entirely: 48.92s serial, 32.03s
@@ -182,6 +230,37 @@ class Plan:
                         self.log("Dynamic load adjust sees car {} charging now slot {}-{}, previous car slot {}".format(car_n, slot["start"], slot["end"], self.load_last_car_slot))
         self.load_last_car_slot = load_car_slot
         self.dynamic_load_baseline = {}
+
+        # Dynamic load baselines are stored as kWh per PREDICT_STEP. When the car is inside the
+        # inverter CT clamp, remove its measured energy from the most recent load period before
+        # carrying a high-load observation into the next plan slot. The car-energy sensor is an
+        # incrementing kWh series, so sum its per-minute increments over the same period as
+        # load_last_period. If the sensor has no current increment, retain the planned-slot fallback
+        # below for a charger whose energy sensor is lagging.
+        load_last_period_energy = self.load_last_period / 60 * PREDICT_STEP
+        # Planned car energy is also an upper-bound estimate for a sensor that has not caught up
+        # yet. Calculate it over the same trailing period as load_last_period, including partial
+        # slot overlaps, then convert the per-minute kW values to kWh.
+        car_load_planned = 0.0
+        if self.car_energy_reported_load:
+            for minute in range(self.minutes_now - PREDICT_STEP, self.minutes_now):
+                car_load_planned += sum(in_car_slot(minute, self.num_cars, self.car_charging_slots)[0]) / 60
+
+        car_energy_sensor_used = False
+        if self.car_energy_reported_load and self.car_charging_hold and self.car_charging_energy:
+            car_energy_last_period = sum(self.get_from_incrementing(self.car_charging_energy, minute) for minute in range(PREDICT_STEP))
+            if car_energy_last_period > 0:
+                car_energy_to_exclude = max(car_energy_last_period, car_load_planned)
+                load_last_period_energy = max(load_last_period_energy - car_energy_to_exclude, 0)
+                car_energy_sensor_used = True
+                self.log("Dynamic load adjust excluded {:.2f}kWh car energy from the last {} minutes".format(car_energy_last_period, PREDICT_STEP))
+                if car_load_planned > car_energy_last_period:
+                    self.log("Dynamic load adjust used planned car energy {:.2f}kWh because the sensor reported only {:.2f}kWh".format(car_load_planned, car_energy_last_period))
+
+        # If measured car energy was unavailable, use the planned trailing-period energy as a fallback.
+        if self.car_energy_reported_load and not car_energy_sensor_used:
+            load_last_period_energy = max(load_last_period_energy - car_load_planned, 0)
+
         if self.metric_dynamic_load_adjust:
             minutes_now = self.minutes_now
             minutes_end_slot = int((self.minutes_now + self.plan_interval_minutes) / self.plan_interval_minutes) * self.plan_interval_minutes
@@ -207,19 +286,13 @@ class Plan:
                     # Load has been high for two consecutive checks, so also predict it will continue
                     # into the following slot to keep the plan up to date across the slot boundary
                     minutes_end_baseline = minutes_end_slot + self.plan_interval_minutes
+                load_baseline = load_last_period_energy
                 for minute_absolute in range(minutes_now, minutes_end_baseline, PREDICT_STEP):
-                    if not self.car_energy_reported_load:
-                        # If car energy is not reported as load then we should not attempt to adjust the load prediction based on car load.
-                        car_load = 0
-                    else:
-                        car_load = sum(in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)[0])
-                    load_last_period = self.load_last_period / 60 * PREDICT_STEP
-                    load_last_period = max(load_last_period - car_load, 0)
-                    if load_last_period > 0:
+                    if load_baseline > 0:
                         if not have_printed:
-                            self.log("Dynamic load adjust is setting load minimum {:.2f}kW at {}".format(load_last_period, self.time_abs_str(minute_absolute)))
+                            self.log("Dynamic load adjust is setting load minimum {:.2f}kWh at {}".format(load_baseline, self.time_abs_str(minute_absolute)))
                             have_printed = True
-                        self.dynamic_load_baseline[minute_absolute] = load_last_period
+                        self.dynamic_load_baseline[minute_absolute] = load_baseline
             if prev_last_load_status != self.load_last_status:
                 self.log("Dynamic load status changed from {} to {}".format(prev_last_load_status, self.load_last_status))
                 return True
@@ -862,7 +935,6 @@ class Plan:
             soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
             soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
             soc_percent_max = max(soc_percent, soc_percent_end)
-            soc_percent_min = min(soc_percent, soc_percent_end)
 
             if charge_window_n >= 0 and export_window_n >= 0:
                 value = "Chrg/Exp"
@@ -1400,10 +1472,32 @@ class Plan:
             load_adjust=self.manual_load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
-        pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
-        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None, flip=True)
+        # The p90 refresh has to happen before the p50 series is stepped, not after it: the envelope
+        # model modulates p50 toward p90, so a stale or missing p90 would silently pick the
+        # amplitude for the central scenario.
         self.refresh_pv_forecast_minute90()
-        pv_forecast_minute90_step = self.step_data_history(self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
+
+        # Each scenario reaches for the next percentile up - p10 toward p50, p50 toward p90 - and
+        # p90 toward an extrapolation of its own band, capped at what the array can produce. The
+        # duty cycle comes from the band's asymmetry so peaks and troughs reach both edges at once;
+        # p10 takes the complementary duty with flip, so it lowers exactly where p50 raises.
+        cloud_duty = self.get_cloud_duty(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90) if self.metric_cloud_coverage else None
+        if cloud_duty:
+            n_up, n_down = cloud_duty
+            self.log("PV cloud model: envelope, {} of every {} steps raised per {} minute window".format(n_up, n_up + n_down, CLOUD_WINDOW_MINUTES))
+            pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_ceiling=self.pv_forecast_minute90, cloud_duty=cloud_duty)
+            pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_ceiling=self.pv_forecast_minute, cloud_duty=(n_down, n_up), flip=True)
+            pv_forecast_minute90_step = self.step_data_history(
+                self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_ceiling=self.get_pv90_cloud_ceiling(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute90), cloud_duty=cloud_duty
+            )
+        else:
+            # No usable p90 band (a forecast source that publishes none falls back to a copy of the
+            # p50), so keep the legacy proportional model rather than losing the cloud model.
+            if self.metric_cloud_coverage:
+                self.log("PV cloud model: proportional fallback, no PV90 data to modulate toward - check your solar forecast source publishes a PV90 estimate (pv_estimate90)")
+            pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
+            pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if self.metric_cloud_coverage else None, flip=True)
+            pv_forecast_minute90_step = self.step_data_history(self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
 
         # Save step data for debug
         self.load_minutes_step = load_minutes_step
@@ -1422,7 +1516,7 @@ class Plan:
         # The kernel spreads one batched fan-out across threads with the GIL released for the whole
         # call, so these are real cores - unlike a Python ThreadPool, which peaked at 1.15x on two
         # threads and then degraded below serial (perf/threadpool-prototype).
-        self.prediction.batch_threads = resolve_batch_threads(self.get_arg("threads", "auto"), cpu_count())
+        self.prediction.batch_threads = resolve_batch_threads(self.get_arg("threads", "auto"), available_cpu_count())
         self.log("Prediction batch using {} kernel thread(s)".format(self.prediction.batch_threads))
         kernel_message, kernel_is_warning = kernel_status_summary(self.prediction)
         self.log("{}Prediction kernel: {}".format("Warn: " if kernel_is_warning else "", kernel_message))
@@ -3414,7 +3508,6 @@ class Plan:
                         window_start_orig = self.export_window_best[window_n].get("start_orig", window_start)
                         window_start_from_now = max(window_start, self.minutes_now)
                         window_length = self.export_window_best[window_n]["end"] - window_start_from_now
-                        window_length_orig = self.export_window_best[window_n]["end"] - window_start_orig
                         export_limit = self.export_limits_best[window_n]
                         window_day = self.export_window_best[window_n]["start"] // 1440
 
@@ -4066,7 +4159,6 @@ class Plan:
             self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows], calculate_import_low_export=self.calculate_import_low_export, calculate_export_high_import=self.calculate_export_high_import
         )
 
-        best_soc = self.soc_max
         best_cost = best_metric
         best_keep = metric_keep
         best_cycle = 0
@@ -4311,7 +4403,17 @@ class Plan:
                     else:
                         self.export_limits_best[window_n] = 0.0
                 elif self.export_window_best[window_n]["start"] in self.manual_freeze_export_times:
-                    self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
+                    if not self.set_export_freeze:
+                        # set_export_freeze is False either because execute.py forced it off for an
+                        # inverter whose INVERTER_DEF says support_discharge_freeze is False, or because
+                        # the user turned off the non-expert "Set Export Freeze" switch - but this
+                        # override wrote a freeze anyway, so the plan assumed a hold that will not
+                        # happen. Drop to demand rather than a forced export: the user asked to hold
+                        # the battery, and exporting it is the opposite of that request (GH#4892).
+                        self.log("Warn: Manual freeze export time {} dropped to demand as set_export_freeze is disabled (inverter capability or user setting)".format(self.time_abs_str(self.export_window_best[window_n]["start"])))
+                        self.export_limits_best[window_n] = EXPORT_LIMIT_IDLE
+                    else:
+                        self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
 
     def prefill_charge_limit_best(self):
         """
@@ -4695,6 +4797,14 @@ class Plan:
                         "soc_now": dp3(self.soc_kw),
                         "soc_max": dp3(self.soc_max),
                         "soc_now_percent": dp2(calc_percent_limit(self.soc_kw, self.soc_max)),
+                        # What this plan expects the battery to hold one and eight hours out. Recorded as
+                        # plain attributes so Home Assistant keeps them in history: results/today are
+                        # rewritten every cycle, so the forecast made for a given moment is gone by the
+                        # time that moment arrives and there is nothing left to score the plan against.
+                        # Read back with a matching time offset these sit alongside the measured SoC and
+                        # show whether the model tracks the hardware.
+                        "soc_h1": dp3(self.predict_soc_best.get(60, final_soc)),
+                        "soc_h8": dp3(self.predict_soc_best.get(60 * 8, final_soc)),
                     },
                 )
                 self.dashboard_item(
@@ -5122,8 +5232,8 @@ class Plan:
             slot_length = 0
             slot_count = 0
             for slot_start in range(minute, minute + iboost_min_length, self.plan_interval_minutes):
-                import_rate += self.rate_import.get(minute, self.rate_min)
-                export_rate += self.rate_export.get(minute, 0)
+                import_rate += self.rate_import.get(slot_start, self.rate_min)
+                export_rate += self.rate_export.get(slot_start, 0)
                 slot_length += self.plan_interval_minutes
                 slot_count += 1
             if slot_count:

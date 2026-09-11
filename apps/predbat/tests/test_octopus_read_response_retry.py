@@ -200,7 +200,7 @@ async def test_octopus_read_response_retry(my_predbat):
         failed = True
     else:
         call_kwargs = api.async_read_response.call_args[1]
-        if "ignore_errors" not in call_kwargs or call_kwargs["ignore_errors"] != True:
+        if "ignore_errors" not in call_kwargs or call_kwargs["ignore_errors"] is not True:
             print(f"ERROR: ignore_errors=True not passed through correctly")
             failed = True
         else:

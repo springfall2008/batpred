@@ -18,6 +18,7 @@ import aiohttp
 import asyncio
 import json
 from datetime import datetime, timezone, timedelta
+from utils import is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 
 
 class KrakenAuthMixin:
@@ -34,6 +35,39 @@ class KrakenAuthMixin:
         self.token_expires_at = None
         self.oauth_failed = False
         self._refresh_in_progress = False
+        # Set by _kraken_token_request when the mint is refused by a CDN/WAF rather than by
+        # Kraken itself - see check_and_refresh_oauth_token
+        self.token_mint_edge_blocked = False
+        self.token_mint_blocked_until = None
+        self.token_mint_block_count = 0
+        self.token_mint_backoff_logged_at = None
+
+    def start_token_mint_backoff(self):
+        """Back off from the token mint after a CDN/WAF block.
+
+        Each consecutive block doubles the wait, capped by token_mint_backoff_seconds().
+        """
+        self.token_mint_block_count += 1
+        delay = token_mint_backoff_seconds(self.token_mint_block_count)
+        now = datetime.now(timezone.utc)
+        self.token_mint_blocked_until = now + timedelta(seconds=delay)
+        self.token_mint_backoff_logged_at = now
+        self.log(f"Warn: Kraken: Token mint edge/WAF blocked (block {self.token_mint_block_count}) - this is rate limiting, not a bad credential. Backing off for {delay}s")
+
+    def log_token_mint_backoff(self, now):
+        """Repeat the backoff reason occasionally so it stays visible in a short log window"""
+        if self.token_mint_backoff_logged_at and (now - self.token_mint_backoff_logged_at).total_seconds() < TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS:
+            return
+        self.token_mint_backoff_logged_at = now
+        self.log(f"Warn: Kraken: Token mint still edge/WAF blocked (block {self.token_mint_block_count}) - suppressing mints until {self.token_mint_blocked_until}")
+
+    def clear_token_mint_backoff(self):
+        """Clear the mint backoff after a successful token mint"""
+        if self.token_mint_block_count:
+            self.log(f"Kraken: Token mint recovered after {self.token_mint_block_count} edge/WAF block(s)")
+        self.token_mint_block_count = 0
+        self.token_mint_blocked_until = None
+        self.token_mint_backoff_logged_at = None
 
     async def check_and_refresh_oauth_token(self):
         """Ensure a valid access token is available, refreshing or re-obtaining as needed.
@@ -50,8 +84,18 @@ class KrakenAuthMixin:
             if self.token_expires_at > now + timedelta(minutes=5):
                 return True
 
+        # Re-minting while the mint is edge blocked would only be refused again. A token inside
+        # the five minute proactive refresh window has NOT actually expired, so keep using it
+        # rather than manufacturing an outage the block itself would not have caused.
+        if self.token_mint_blocked_until and now < self.token_mint_blocked_until:
+            if self.access_token and self.token_expires_at and self.token_expires_at > now:
+                return True
+            self.log_token_mint_backoff(now)
+            return False
+
         self._refresh_in_progress = True
         try:
+            self.token_mint_edge_blocked = False
             if self.refresh_token:
                 result = await self._kraken_token_request({"refreshToken": self.refresh_token})
             elif self.auth_method == "api_key" and self._api_key:
@@ -66,15 +110,28 @@ class KrakenAuthMixin:
                 self.access_token = result["token"]
                 self.refresh_token = result["refreshToken"]
                 self.token_expires_at = datetime.fromtimestamp(result["exp"], tz=timezone.utc)
+                self.clear_token_mint_backoff()
                 return True
-            else:
-                if self.refresh_token:
-                    # Refresh token is stale — clear it and retry with primary credentials
-                    self.refresh_token = None
-                    self._refresh_in_progress = False
-                    return await self.check_and_refresh_oauth_token()
-                self.oauth_failed = True
-                return False
+
+            if self.token_mint_edge_blocked:
+                # A CDN block says nothing about the credential, so do NOT set oauth_failed:
+                # that latch is only cleared on re-initialise, so treating rate limiting as a
+                # permanent auth failure disables the provider until the process restarts.
+                # Retrying with primary credentials would just hit the same block, so back off
+                # instead and keep whatever token we still hold.
+                self.start_token_mint_backoff()
+                # Re-read the clock: `now` was sampled before the request, which may have taken
+                # long enough for a token that was valid then to have expired by now. Returning
+                # True here promises the caller a usable token.
+                return bool(self.access_token and self.token_expires_at and self.token_expires_at > datetime.now(timezone.utc))
+
+            if self.refresh_token:
+                # Refresh token is stale — clear it and retry with primary credentials
+                self.refresh_token = None
+                self._refresh_in_progress = False
+                return await self.check_and_refresh_oauth_token()
+            self.oauth_failed = True
+            return False
         finally:
             self._refresh_in_progress = False
 
@@ -112,6 +169,14 @@ class KrakenAuthMixin:
                     headers={"Content-Type": "application/json"},
                 ) as response:
                     if response.status != 200:
+                        # A 403 carrying a CDN block page is rate limiting, not a rejected
+                        # credential. Kraken reports genuine auth problems as HTTP 200 with a
+                        # GraphQL error body, so a non-JSON 403 comes from the edge.
+                        body = await response.text()
+                        if response.status == 403 and is_edge_block_body(body):
+                            self.token_mint_edge_blocked = True
+                        else:
+                            self.log(f"Warn: Kraken: Token request failed with HTTP {response.status}")
                         return None
                     data = await response.json()
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
