@@ -377,11 +377,17 @@ def _test_savings_today_predbat_matches_published_adjusted_value(my_predbat, fai
     soc_kwh_history to a closing SoC that differs from run_prediction's mocked final_soc gives
     the real and baseline sides different battery-value adjustments, so the two figures only
     match here if the code is actually reading the adjusted value.
+
+    The key soc_kwh_history is read back from is minutes_now + 1 (output.py's
+    "minutes_back = self.minutes_now + 1"), not minutes_now - keyed at minutes_now this
+    fixture's actual_final_soc silently fell through to the 0.0 default instead of the injected
+    value, and the test still passed (against the 0.0-vs-mocked-5.0 divergence that produced by
+    accident, not the one the docstring above describes) - caught by Copilot review on #5061.
     """
     print("calculate_yesterday: Test - savings_today_predbat matches the published saving_adjusted, not saving_real (#3894)")
     now_utc = _setup_base(my_predbat)
 
-    minutes_back = my_predbat.minutes_now
+    minutes_back = my_predbat.minutes_now + 1
     my_predbat.soc_kwh_history = {minutes_back: 2.0}  # differs from the mock's FIXED_FINAL_SOC (5.0)
 
     captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
