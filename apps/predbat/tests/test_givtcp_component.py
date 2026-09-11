@@ -2053,6 +2053,138 @@ def test_energy_today_keys_not_claimed_when_unreported(my_predbat=None):
     return 1 if failed else 0
 
 
+def test_automatic_config_keeps_a_manually_configured_inverter(my_predbat=None):
+    """
+    Auto-config never shrinks the fleet below what apps.yaml asked for (#5029).
+
+    A mixed fleet - a GivEnergy inverter on GivTCP REST plus a second inverter of another make
+    driven some other way - is configured as num_inverters: 2 by hand. Only the GivTCP endpoint can
+    ever answer discovery here, so writing the discovered count over num_inverters dropped the
+    second inverter out of the fleet entirely, and overwriting every per-inverter list with just
+    this component's own entities took its entity configuration with it. Predbat then planned and
+    executed against half the battery, which is exactly what the reporter saw on v9.0.1 and not on
+    v8.55.0, where no component touched num_inverters.
+
+    The discovered inverters take the leading slots; everything past them is left as apps.yaml
+    wrote it.
+    """
+    failed = False
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    # Endpoint 1 is the shipped template's placeholder URL - nothing answers there. Inverter 1 is
+    # the user's second-make inverter, configured by hand.
+    _mark_discovered(component, indices=[0])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    apps_yaml = {
+        "num_inverters": 2,
+        "inverter_type": ["GE", "GS"],
+        "soc_kw": ["sensor.givtcp_soc_kwh", "sensor.solis_battery_soc_kwh"],
+        "charge_rate": ["number.givtcp_charge_rate", "number.solis_charge_rate"],
+        "battery_scaling": 1.0,
+    }
+    base.args_from_apps_yaml = dict(apps_yaml)
+    base.apps_yaml_override_warned = set()
+    base.args.update(apps_yaml)
+
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    if base.args.get("num_inverters") != 2:
+        print("ERROR: num_inverters was shrunk to {} - the manually configured inverter is dropped from the fleet".format(base.args.get("num_inverters")))
+        failed = True
+    if base.args.get("inverter_type") != ["GE", "GS"]:
+        print("ERROR: expected inverter_type ['GE', 'GS'], got {}".format(base.args.get("inverter_type")))
+        failed = True
+    # Slot 0 is this component's entity, slot 1 is left as the user wrote it
+    if base.args.get("soc_kw") != ["sensor.predbat_givtcp_0_soc_kw", "sensor.solis_battery_soc_kwh"]:
+        print("ERROR: expected soc_kw to keep the user's second entry, got {}".format(base.args.get("soc_kw")))
+        failed = True
+    if base.args.get("charge_rate") != ["number.predbat_givtcp_0_charge_rate", "number.solis_charge_rate"]:
+        print("ERROR: expected charge_rate to keep the user's second entry, got {}".format(base.args.get("charge_rate")))
+        failed = True
+    # A scalar apps.yaml value applies to every inverter, so it fills the tail rather than vanishing
+    # (battery_scaling is only claimed when every inverter reports a design capacity, so the tail
+    # handling is checked directly rather than through a key this fixture may not claim)
+    scaled = component._keep_configured_tail("battery_scaling", ["sensor.predbat_givtcp_0_battery_dod_soh"], 2)
+    if scaled != ["sensor.predbat_givtcp_0_battery_dod_soh", 1.0]:
+        print("ERROR: expected the user's scalar battery_scaling to fill the tail, got {}".format(scaled))
+        failed = True
+
+    if not failed:
+        print("PASS: automatic_config leaves a manually configured inverter in the fleet")
+    return 1 if failed else 0
+
+
+def test_automatic_config_leaves_the_undiscovered_slot_untouched(my_predbat=None):
+    """
+    The slots past the discovered inverters keep whatever is already configured for them, whether
+    that came from apps.yaml or from another component that ran first.
+
+    "Leave it alone" has to mean the args a later get_arg() will actually read, not just the
+    apps.yaml snapshot: with two vendor components in one fleet, the second one to run would
+    otherwise wipe out what the first configured. Nothing is invented for a slot nobody has
+    configured either - a made-up entity or type for an inverter this component knows nothing about
+    is how the wrong inverter gets driven, and Inverter creates its own dummy entities for the keys
+    that need one.
+    """
+    failed = False
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    _mark_discovered(component, indices=[0])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    # num_inverters and inverter_type came from apps.yaml; charge_rate's second slot was written by
+    # something else after apps.yaml was read, and soc_kw was never configured at all
+    base.args_from_apps_yaml = {"num_inverters": 2, "inverter_type": ["GE", "GS"]}
+    base.apps_yaml_override_warned = set()
+    base.args.update({"num_inverters": 2, "inverter_type": ["GE", "GS"], "charge_rate": ["number.givtcp_charge_rate", "number.solis_charge_rate"]})
+
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    if base.args.get("charge_rate") != ["number.predbat_givtcp_0_charge_rate", "number.solis_charge_rate"]:
+        print("ERROR: expected the live args entry for inverter 1 to be kept, got {}".format(base.args.get("charge_rate")))
+        failed = True
+    # Nothing was configured for soc_kw past the discovered inverter, so nothing is invented for it
+    if base.args.get("soc_kw") != ["sensor.predbat_givtcp_0_soc_kw"]:
+        print("ERROR: expected soc_kw to stop at the discovered inverter, got {}".format(base.args.get("soc_kw")))
+        failed = True
+
+    if not failed:
+        print("PASS: automatic_config leaves the undiscovered slots as they were configured")
+    return 1 if failed else 0
+
+
+def test_automatic_config_still_grows_the_fleet(my_predbat=None):
+    """
+    The floor only ever raises the fleet size - discovering more inverters than apps.yaml declares
+    still configures them all.
+
+    The shipped apps.yaml pairs num_inverters: 1 with a two-entry givtcp_rest list, so a genuine
+    two-inverter GivTCP setup relies on auto-config raising the count; a floor that clamped the
+    other way would leave the second inverter unconfigured.
+    """
+    failed = False
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    _mark_discovered(component)
+    base.args_from_apps_yaml = {"num_inverters": 1}
+    base.apps_yaml_override_warned = set()
+    base.args["num_inverters"] = 1
+
+    run_async(component.automatic_config())
+
+    if base.args.get("num_inverters") != 2:
+        print("ERROR: expected num_inverters to grow to 2, got {}".format(base.args.get("num_inverters")))
+        failed = True
+    if base.args.get("inverter_type") != ["GE", "GE"]:
+        print("ERROR: expected inverter_type ['GE', 'GE'], got {}".format(base.args.get("inverter_type")))
+        failed = True
+    if base.args.get("charge_rate") != ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"]:
+        print("ERROR: expected both inverters to be configured, got {}".format(base.args.get("charge_rate")))
+        failed = True
+
+    if not failed:
+        print("PASS: automatic_config still grows the fleet past the apps.yaml count")
+    return 1 if failed else 0
+
+
 def test_automatic_config_can_be_turned_off(my_predbat=None):
     """
     givtcp_automatic: False publishes the entities but leaves apps.yaml alone.
@@ -2294,6 +2426,9 @@ def test_givtcp_component(my_predbat=None):
         ("energy_today_user_wins", test_energy_today_keys_keep_the_users_own_sensors, "an apps.yaml energy sensor wins over auto-config"),
         ("energy_extra", test_extra_energy_figures_are_published_but_not_claimed, "battery flows and lifetime totals published, not claimed"),
         ("automatic_off", test_automatic_config_can_be_turned_off, "givtcp_automatic can be turned off"),
+        ("fleet_no_shrink", test_automatic_config_keeps_a_manually_configured_inverter, "num_inverters is never shrunk (#5029)"),
+        ("fleet_grows", test_automatic_config_still_grows_the_fleet, "num_inverters still grows past apps.yaml"),
+        ("fleet_tail_untouched", test_automatic_config_leaves_the_undiscovered_slot_untouched, "slots past discovery are left as configured"),
     ]
 
     passed = 0
