@@ -19,6 +19,7 @@ however the catalogue grows, so components add facts freely by choosing a contai
 
 import re
 import threading
+from datetime import datetime, timezone
 
 from utils import is_secret_key
 
@@ -156,6 +157,7 @@ class Coordinator:
         self.log = base.log
         self.lock = threading.Lock()
         self.reports = {}
+        self.assembled = None
 
     def report(self, component_name, report):
         """Validate and store one component's discovery report, replacing any previous one."""
@@ -164,6 +166,77 @@ class Coordinator:
             self.reports[component_name] = cleaned
         counts = ", ".join("{} {}".format(len(cleaned.get(section, [])), section) for section in SECTION_SPEC if cleaned.get(section))
         self.log("Coordinator: {} reported {}".format(component_name, counts or "nothing"))
+
+    def assemble(self):
+        """Merge every report into one catalogue, with a status per component and the observation layer.
+
+        Unredacted: catalogue() is what consumers get. Called after phase-1 startup, which is
+        the point at which every component has started or timed out.
+        """
+        with self.lock:
+            reports = {name: report for name, report in self.reports.items()}
+        catalogue = {"schema_version": SCHEMA_VERSION, "generated": datetime.now(timezone.utc).isoformat(), "components": self._component_status(reports)}
+        for section in SECTION_SPEC:
+            merged = []
+            for name in sorted(reports):
+                for record in reports[name].get(section, []):
+                    entry = {"source": name}
+                    entry.update(record)
+                    merged.append(entry)
+            catalogue[section] = merged
+        catalogue["observations"] = {"conflicts": self._conflicts(catalogue), "resulting_config": self._resulting_config()}
+        self.assembled = catalogue
+        return catalogue
+
+    def _component_status(self, reports):
+        """A status for every component the registry knows, not only those that reported.
+
+        A component that never reports is not an error: in this version only a handful report
+        at all, so "no_report" has to read differently from "started but never answered".
+        """
+        components = getattr(self.base, "components", None)
+        names = components.get_all() if components else sorted(reports)
+        out = {}
+        for name in names:
+            entry = {"status": "not_configured", "reported_at": None}
+            if name in reports:
+                entry["status"] = "ok"
+                entry["automatic"] = reports[name].get("automatic", True)
+                entry["counts"] = {section: len(reports[name][section]) for section in SECTION_SPEC if reports[name].get(section)}
+            elif components and components.load_error(name):
+                entry["status"] = "load_error"
+                entry["error"] = components.load_error(name)
+            elif components and components.is_active(name):
+                entry["status"] = "no_report" if components.is_alive(name) else "not_started"
+            out[name] = entry
+        return out
+
+    def _conflicts(self, catalogue):
+        """Collisions that today resolve silently by component ordering - recorded, never resolved."""
+        conflicts = []
+        serials = {}
+        for record in catalogue["inverters"]:
+            serial = record.get("hardware_ids", {}).get("serial")
+            if serial:
+                serials.setdefault(str(serial).casefold(), set()).add(record["source"])
+        for serial, sources in sorted(serials.items()):
+            if len(sources) > 1:
+                conflicts.append({"kind": "duplicate_serial", "serial": serial, "claimed_by": sorted(sources)})
+        inverter_sources = sorted({record["source"] for record in catalogue["inverters"]})
+        if len(inverter_sources) > 1:
+            conflicts.append({"kind": "multiple_inverter_sources", "claimed_by": inverter_sources})
+        import_sources = sorted({record["source"] for record in catalogue["meters"] if record.get("direction") == "import"})
+        if len(import_sources) > 1:
+            conflicts.append({"kind": "multiple_import_meters", "claimed_by": import_sources})
+        charger_sources = {record["source"] for record in catalogue["chargers"]}
+        car_sources = {record["source"] for record in catalogue["cars"]}
+        if charger_sources and (car_sources - charger_sources):
+            conflicts.append({"kind": "contested_car_slots", "claimed_by": sorted(car_sources | charger_sources)})
+        return conflicts
+
+    def _resulting_config(self):
+        """What apps.yaml actually ended up as, so every dump compares discovered against configured."""
+        return {key: self.base.get_arg(key, None) for key in ("num_inverters", "num_cars", "inverter_type")}
 
 
 def _validate_container(container_name, value, component_name, section, log):

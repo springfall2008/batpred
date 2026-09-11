@@ -213,6 +213,101 @@ def test_credential_guard_fires_inside_sub_record_container():
     return 0
 
 
+class _StubRegistry:
+    """Stands in for Components so assemble() can derive a status for every registry entry."""
+
+    def __init__(self, active=(), alive=(), errors=None, all_names=()):
+        """Record which component names are active, alive, failed to load, and known at all."""
+        self._active = set(active)
+        self._alive = set(alive)
+        self._errors = errors or {}
+        self._all = list(all_names)
+
+    def get_all(self):
+        """Every component name the registry knows."""
+        return list(self._all)
+
+    def is_active(self, name):
+        """Whether the component was constructed."""
+        return name in self._active
+
+    def is_alive(self, name):
+        """Whether the component is running and fresh."""
+        return name in self._alive
+
+    def load_error(self, name):
+        """Why the component failed to construct, or None."""
+        return self._errors.get(name)
+
+
+def test_assemble_merges_sections_and_tags_source():
+    """Records from several components merge into one list per section, each tagged with its source."""
+    base, coordinator = _coordinator()
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:A", "inverter_type": "GE"}]})
+    coordinator.report("gecloud", {"inverters": [{"device_id": "gecloud:b", "inverter_type": "GEC"}]})
+    catalogue = coordinator.assemble()
+    sources = sorted(record["source"] for record in catalogue["inverters"])
+    assert sources == ["gecloud", "givtcp"], sources
+    assert catalogue["schema_version"] == SCHEMA_VERSION
+    assert catalogue["generated"]
+    print("PASS: sections merged and tagged with source")
+    return 0
+
+
+def test_assemble_component_status():
+    """Every registry entry gets a status, distinguishing silent from timed out from failed from absent."""
+    base, coordinator = _coordinator()
+    base.components = _StubRegistry(active=["givtcp", "octopus", "gecloud"], alive=["givtcp", "octopus"],
+                                    errors={"fox": "No module named 'protobuf'"},
+                                    all_names=["givtcp", "octopus", "gecloud", "fox", "solis"])
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:A"}]})
+    components = coordinator.assemble()["components"]
+    assert components["givtcp"]["status"] == "ok"
+    assert components["octopus"]["status"] == "no_report"      # alive, simply does not report yet
+    assert components["gecloud"]["status"] == "not_started"    # active but not alive
+    assert components["fox"]["status"] == "load_error"
+    assert components["solis"]["status"] == "not_configured"
+    print("PASS: component statuses derived")
+    return 0
+
+
+def test_observations_duplicate_serial():
+    """The same serial claimed by two components is recorded, not resolved."""
+    base, coordinator = _coordinator()
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:SN1", "hardware_ids": {"serial": "SA2242"}}]})
+    coordinator.report("gecloud", {"inverters": [{"device_id": "gecloud:sn1", "hardware_ids": {"serial": "sa2242"}}]})
+    conflicts = coordinator.assemble()["observations"]["conflicts"]
+    duplicate = [entry for entry in conflicts if entry["kind"] == "duplicate_serial"]
+    assert duplicate and sorted(duplicate[0]["claimed_by"]) == ["gecloud", "givtcp"]
+    assert any(entry["kind"] == "multiple_inverter_sources" for entry in conflicts)
+    print("PASS: duplicate serial and multiple sources observed")
+    return 0
+
+
+def test_observations_contested_cars_and_meters():
+    """A charger component and an intelligent-device component both claiming cars is recorded, as are two import meters."""
+    base, coordinator = _coordinator()
+    coordinator.report("ohme", {"chargers": [{"device_id": "ohme:CH1"}], "cars": [{"device_id": "ohme:v1"}]})
+    coordinator.report("octopus", {"cars": [{"device_id": "octopus:d1"}], "meters": [{"device_id": "octopus:m1", "direction": "import"}]})
+    coordinator.report("kraken", {"meters": [{"device_id": "kraken:m1", "direction": "import"}]})
+    conflicts = coordinator.assemble()["observations"]["conflicts"]
+    kinds = {entry["kind"] for entry in conflicts}
+    assert "contested_car_slots" in kinds and "multiple_import_meters" in kinds, kinds
+    print("PASS: contested cars and multiple import meters observed")
+    return 0
+
+
+def test_observations_resulting_config():
+    """The config discovery did NOT set is recorded alongside it, for comparison."""
+    base, coordinator = _coordinator()
+    base.args.update({"num_inverters": 2, "num_cars": 1, "inverter_type": ["GE", "GEC"]})
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:A"}]})
+    resulting = coordinator.assemble()["observations"]["resulting_config"]
+    assert resulting["num_inverters"] == 2 and resulting["inverter_type"] == ["GE", "GEC"]
+    print("PASS: resulting config recorded")
+    return 0
+
+
 def test_coordinator_all(my_predbat=None):
     """Run every coordinator test, returning the number of failures."""
     failures = 0
@@ -231,4 +326,9 @@ def test_coordinator_all(my_predbat=None):
     failures += test_report_is_idempotent_and_versioned()
     failures += test_meter_sub_record_validated()
     failures += test_credential_guard_fires_inside_sub_record_container()
+    failures += test_assemble_merges_sections_and_tags_source()
+    failures += test_assemble_component_status()
+    failures += test_observations_duplicate_serial()
+    failures += test_observations_contested_cars_and_meters()
+    failures += test_observations_resulting_config()
     return failures
