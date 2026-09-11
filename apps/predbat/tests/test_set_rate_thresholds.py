@@ -90,6 +90,44 @@ def test_rate_minmax_excluding_saving_skips_the_boosted_minutes(my_predbat):
     return failed
 
 
+def test_rate_minmax_excluding_saving_keeps_genuine_free_slots(my_predbat):
+    """A "saving"-tagged minute that is CHEAPER than the tariff, not more expensive, must still
+    count towards rate_min - the "saving" tag also marks free/discounted Octopus sessions
+    (load_free_slot()) and Axle import discounts, not only event boosts (Copilot review on
+    #5052).
+
+    With a flat 20p tariff and one free (0p) slot tagged "saving", excluding every tagged minute
+    regardless of direction previously left only the flat rate - rate_max == rate_min - which
+    made set_rate_thresholds() take its "everything but the most expensive" branch and set the
+    threshold ABOVE every rate, so the entire ordinary-price day read as low-rate. Reproduced
+    with this exact scenario before fixing.
+    """
+    print("**** Testing rate_minmax_excluding_saving keeps a genuine free slot ****")
+    failed = False
+
+    my_predbat.minutes_now = 0
+    my_predbat.forecast_minutes = 24 * 60
+    rate_import = {minute: 20.0 for minute in range(0, 24 * 60)}
+    rate_import[100] = 0.0
+    rate_import_replicated = {100: "saving"}
+
+    rate_min, rate_max, rate_average = my_predbat.rate_minmax_excluding_saving(rate_import, rate_import_replicated)
+
+    if rate_min != 0.0:
+        print("ERROR: the free slot's 0.0p should still set rate_min, got {}".format(rate_min))
+        failed = True
+    if rate_max != 20.0:
+        print("ERROR: rate_max should be the flat tariff rate 20.0, got {}".format(rate_max))
+        failed = True
+    if rate_max == rate_min:
+        print("ERROR: rate_max == rate_min - the free slot was excluded along with the rest of the flat tariff, which would push the automatic threshold above every rate")
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
 def test_rate_minmax_excluding_saving_falls_back_when_everything_is_tagged(my_predbat):
     """If an event covers the whole forecast window there is no genuine tariff minute to scan -
     fall back to the plain min/max/average rather than returning a 99999/0/0 that would make every
@@ -148,10 +186,46 @@ def test_set_rate_thresholds_ignores_saving_boost_in_automatic_mode(my_predbat):
     return failed
 
 
+_SNAPSHOT_FIELDS = (
+    "minutes_now",
+    "forecast_minutes",
+    "rate_import",
+    "rate_import_replicated",
+    "rate_export",
+    "rate_export_replicated",
+    "rate_min",
+    "rate_max",
+    "rate_average",
+    "rate_export_min",
+    "rate_export_max",
+    "rate_export_average",
+    "rate_low_threshold",
+    "rate_high_threshold",
+    "alert_active_keep",
+    "manual_soc_keep",
+    "num_cars",
+)
+
+
 def run_set_rate_thresholds_tests(my_predbat):
-    """Run the set_rate_thresholds / rate_minmax_excluding_saving tests"""
-    failed = False
-    failed |= test_rate_minmax_excluding_saving_skips_the_boosted_minutes(my_predbat)
-    failed |= test_rate_minmax_excluding_saving_falls_back_when_everything_is_tagged(my_predbat)
-    failed |= test_set_rate_thresholds_ignores_saving_boost_in_automatic_mode(my_predbat)
-    return failed
+    """Run the set_rate_thresholds / rate_minmax_excluding_saving tests.
+
+    _setup_two_rate_tariff() overwrites minutes_now, the rate tables/statistics, thresholds and
+    num_cars directly on the shared my_predbat fixture, and unit_test.py passes that same
+    instance through the whole registry - left unrestored, a later test would inherit this
+    group's synthetic 48h tariff and faked midnight instead of the fixture's own noon state,
+    making the suite order-dependent (Copilot review on #5052). Snapshot/restore around the
+    whole group rather than per sub-test, since every sub-test here uses the same helper and
+    they already run back-to-back with no fixture-clean test expected in between.
+    """
+    snapshot = {field: getattr(my_predbat, field) for field in _SNAPSHOT_FIELDS}
+    try:
+        failed = False
+        failed |= test_rate_minmax_excluding_saving_skips_the_boosted_minutes(my_predbat)
+        failed |= test_rate_minmax_excluding_saving_keeps_genuine_free_slots(my_predbat)
+        failed |= test_rate_minmax_excluding_saving_falls_back_when_everything_is_tagged(my_predbat)
+        failed |= test_set_rate_thresholds_ignores_saving_boost_in_automatic_mode(my_predbat)
+        return failed
+    finally:
+        for field, value in snapshot.items():
+            setattr(my_predbat, field, value)

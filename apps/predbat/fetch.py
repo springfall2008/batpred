@@ -2274,34 +2274,62 @@ class Fetch:
 
     def rate_minmax_excluding_saving(self, rates, rate_replicate):
         """
-        Work out min/max/average over the forecast window, skipping any minute rate_replicate tags
-        "saving" - a saving session / Axle VPP event reward baked into the rate table by
-        load_saving_slot()/load_axle_slot() (GH#5050). Those minutes are a synthetic one-off price,
-        not the tariff's own rate, so including them in the automatic threshold stats (rate_max used
-        by set_rate_thresholds() to pick rate_max - 0.5) can push the threshold above every genuine
-        tariff rate: rate_scan_window() then classifies the whole ordinary-price day as "low rate".
+        Work out min/max/average over the forecast window, excluding only "saving"-tagged
+        minutes that are inflated relative to the tariff's own rates - not every minute the
+        "saving" tag touches.
+
+        "saving" (set by load_saving_slot()/load_axle_slot()/load_free_slot()) marks two
+        economically opposite things with the same string: a saving-session/Axle event REWARD,
+        added on top of the tariff rate (GH#5050 - a synthetic one-off high that should not be
+        allowed to raise the automatic threshold above every genuine tariff rate), and a
+        free/discounted import session, which SUBTRACTS from or floors the rate (a genuinely
+        cheap slot the automatic threshold should be free to pick as "low rate"). Excluding every
+        "saving" minute regardless of direction throws the cheap ones away too - with a flat
+        tariff plus one free slot, that leaves only the flat rate, rate_max == rate_min, and
+        set_rate_thresholds() takes its rate_max + 0.1 branch, which sets the threshold above
+        every rate and makes the whole ordinary-price day read as "low" (Copilot review on
+        #5052 - reproduced with exactly that scenario before fixing).
+
+        Two passes: the first pass over the untagged minutes alone sets a baseline max. The
+        second pass then excludes a "saving"-tagged minute only if its rate exceeds that
+        baseline max - the one shape (a reward) that can distort the automatic threshold - and
+        admits every other minute, tagged or not, including a "saving"-tagged discount at or
+        below the baseline: a lower rate never inflates rate_max, and rate_min existing to reach
+        it is the whole point of a free/discount session.
 
         Falls back to the plain (unfiltered) min/max/average when every minute in range is tagged
         "saving" - an event that covers the whole forecast window leaves no genuine tariff minute to
         scan, and a 99999/0/0 result would make every downstream comparison in set_rate_thresholds()
         behave as if there were no data at all, which is worse than the boosted-but-real numbers.
         """
+        baseline_max = 0
+        baseline_n = 0
+
+        for minute in range(self.minutes_now, self.forecast_minutes + self.minutes_now):
+            if minute in rates and rate_replicate.get(minute) != "saving":
+                baseline_max = max(baseline_max, rates[minute])
+                baseline_n += 1
+
+        if baseline_n == 0:
+            return self.rate_minmax(rates)[:3]
+
         rate_min = 99999
         rate_max = 0
         rate_total = 0
         rate_n = 0
 
         for minute in range(self.minutes_now, self.forecast_minutes + self.minutes_now):
-            if minute in rates and rate_replicate.get(minute) != "saving":
-                rate = rates[minute]
-                rate_min = min(rate_min, rate)
-                rate_max = max(rate_max, rate)
-                rate_total += rate
-                rate_n += 1
+            if minute not in rates:
+                continue
+            rate = rates[minute]
+            if rate_replicate.get(minute) == "saving" and rate > baseline_max:
+                continue
+            rate_min = min(rate_min, rate)
+            rate_max = max(rate_max, rate)
+            rate_total += rate
+            rate_n += 1
 
-        if rate_n:
-            return dp2(rate_min), dp2(rate_max), dp2(rate_total / rate_n)
-        return self.rate_minmax(rates)[:3]
+        return dp2(rate_min), dp2(rate_max), dp2(rate_total / rate_n)
 
     def rate_base_min_max(self, rates):
         """
