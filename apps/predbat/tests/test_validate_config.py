@@ -197,6 +197,25 @@ def test_validate_config(my_predbat):
     print("  [dict] redact_strings_labelled rejects a non-dict value")
     _run(my_predbat, {"redact_strings_labelled": "not_a_dict"}, expect_errors=["redact_strings_labelled"])
 
+    print("  [dict, scalar_value_dict] redact_strings_labelled warns (not errors) on a numeric value")
+    # An unquoted numeric MPAN (my_mpan: 1234567890123) loads from YAML as an int. It passed this
+    # branch silently before - the dict-type check only looks at the mapping itself, never its
+    # values - even though the collector that actually redacts log lines only matched strings, so
+    # the value would go unredacted with no warning at all (#5053 review). Warn, not error: the
+    # value is still usable once collect_log_secret_values() coerces it to a string.
+    saved_args = my_predbat.args.copy()
+    saved_log = my_predbat.log
+    captured = []
+    try:
+        my_predbat.log = lambda msg, quiet=True: captured.append(msg)
+        my_predbat.args.update({"redact_strings_labelled": {"my_mpan": 1234567890123}})
+        my_predbat.validate_config()
+        assert "redact_strings_labelled" not in my_predbat.arg_errors, "a numeric redact_strings_labelled value should warn, not error: {}".format(my_predbat.arg_errors.get("redact_strings_labelled"))
+        assert any("my_mpan" in msg and "not a string" in msg for msg in captured), "expected a 'not a string' warning naming my_mpan, got {}".format(captured)
+    finally:
+        my_predbat.args = saved_args
+        my_predbat.log = saved_log
+
     # ==========================================================================
     # DICT_LIST type  (rates_import: {"type": "dict_list"})
     # ==========================================================================

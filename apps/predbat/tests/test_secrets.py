@@ -99,6 +99,38 @@ def test_secrets_loading():
     os.remove("test_apps.yaml")
     os.remove("secrets.yaml")
 
+    # Test 6: secrets.yaml that is valid YAML but the wrong shape (a bare scalar/list, not a
+    # mapping) must not crash Predbat's startup entirely. yaml.safe_load() raises nothing for
+    # this - it is valid YAML - so without an explicit shape check, load_secrets() would
+    # reassign its local `secrets` to that scalar/list right before the very next line's
+    # secrets.get("logger") call throws AttributeError. The generic except then logs the crash,
+    # but the reassignment had already happened and is never undone, so load_secrets() still
+    # returned the malformed value - and the next log() call would reach
+    # collect_log_secret_values()'s secrets.items(), raising unhandled and aborting startup
+    # entirely (#5053 review).
+    print("  Test 6: Malformed secrets.yaml (bare scalar, not a mapping)")
+    with open("secrets.yaml", "w") as f:
+        f.write("just_a_plain_string_not_a_mapping\n")
+    with open("test_apps.yaml", "w") as f:
+        f.write("pred_bat:\n")
+        f.write("  module: predbat\n")
+        f.write("  class: PredBat\n")
+
+    os.environ["PREDBAT_APPS_FILE"] = "test_apps.yaml"
+    try:
+        h = Hass()
+        assert h.secrets == {}, f"Expected malformed secrets.yaml to degrade to {{}}, got {h.secrets}"
+        # The crash this guards against happens on the NEXT log() call after load_secrets()
+        # returns, not inside load_secrets() itself - so a log() call here is the real assertion.
+        h.log("Info: Predbat started despite the malformed secrets.yaml")
+    finally:
+        del os.environ["PREDBAT_APPS_FILE"]
+        os.remove("test_apps.yaml")
+        os.remove("secrets.yaml")
+        if os.path.exists("predbat.log"):
+            os.remove("predbat.log")
+    print("    PASS - Malformed secrets.yaml degrades to {} instead of crashing startup")
+
     print("**** test_secrets_loading PASSED ****")
     return False  # False = success in Predbat test framework
 
@@ -252,6 +284,45 @@ def test_collect_log_secret_values():
         print("ERROR: collect_log_secret_values(None, None, None) should return an empty dict")
         failed = True
 
+    # An unquoted numeric MPAN/account ID loads from YAML as an int, not a str - both
+    # secrets.yaml entries and redact_strings_labelled values must be coerced to string and
+    # collected rather than silently dropped by an isinstance(value, str) check, since log()
+    # serializes every message with str(msg) and the value would otherwise reach the log in the
+    # clear (#5053 review).
+    numeric_found = collect_log_secret_values({}, {"landlord_mpan": 1234567890123}, None, {"my_mpan": 9876543210987})
+    if "1234567890123" not in numeric_found or numeric_found["1234567890123"] != "landlord_mpan":
+        print("ERROR: a numeric secrets.yaml value should be collected as a string, got {}".format(numeric_found))
+        failed = True
+    if "9876543210987" not in numeric_found or numeric_found["9876543210987"] != "my_mpan":
+        print("ERROR: a numeric redact_strings_labelled value should be collected as a string, got {}".format(numeric_found))
+        failed = True
+
+    # redact_strings is itself secret-flagged (SECRET_KEY_EXPLICIT_NAMES) so mask_secret_args()'s
+    # debug-dump masking hides it wholesale - but that same flag made the generic args traversal
+    # in _collect_secret_values() pick up redact_strings as an ordinary secret-valued key too,
+    # labelling its values generically as "redact_strings" BEFORE the dedicated
+    # redact_strings_labelled pass ran. For a value present in both denylist forms, that broke
+    # the documented priority (a specific label should win): the generic label from the args pass
+    # was already in `found` by the time the more specific pass got to it (#5053 review).
+    priority_found = collect_log_secret_values({"redact_strings": ["SHARED-DENYLIST-VALUE-123456"]}, {}, ["SHARED-DENYLIST-VALUE-123456"], {"my_landlords_mpan": "SHARED-DENYLIST-VALUE-123456"})
+    if priority_found.get("SHARED-DENYLIST-VALUE-123456") != "my_landlords_mpan":
+        print("ERROR: a value present in both redact_strings and redact_strings_labelled should keep the more specific label, got {}".format(priority_found))
+        failed = True
+
+    # A key merely named "redact_strings" nested somewhere other than the true top level is not
+    # this denylist and must still be collected normally, labelled by its own key/prefix.
+    nested_found = collect_log_secret_values({"some_component": {"redact_strings": "NESTED-VALUE-123456"}}, {})
+    if nested_found.get("NESTED-VALUE-123456") != "some_component.redact_strings":
+        print("ERROR: a nested (non-top-level) key merely named redact_strings should still be collected normally, got {}".format(nested_found))
+        failed = True
+
+    # A bool is technically an int subclass in Python - a stray "some_flag: true" secrets.yaml
+    # entry must not be coerced to the string "True" and start matching that word everywhere.
+    bool_found = collect_log_secret_values({}, {"some_flag": True})
+    if bool_found:
+        print("ERROR: a boolean secrets.yaml value should not be collected, got {}".format(bool_found))
+        failed = True
+
     if not failed:
         print("**** test_collect_log_secret_values PASSED ****")
     return failed
@@ -300,6 +371,31 @@ def test_compile_log_secret_pattern_and_redact_log_line():
         failed = True
     if "<long_token>" not in overlap_redacted:
         print("ERROR: the longer, more specific value should have matched: {}".format(overlap_redacted))
+        failed = True
+
+    # Two secrets can overlap starting at DIFFERENT positions, not just share a common prefix -
+    # e.g. "sec1" and "c123x" both appear in "sec123x". Sorting alternatives longest-first only
+    # helps when both could match at the same starting position; pattern.sub() still finds "sec1"
+    # first (the only one that CAN match at position 0) and resumes scanning after it, so
+    # "c123x" starting at position 1 is never considered and "23x" leaks in the clear (#5053
+    # review, confirmed leaking before this fix).
+    diff_position_found = {"sec1": "short_secret", "c123x": "long_secret"}
+    diff_position_pattern = compile_log_secret_pattern(diff_position_found)
+    diff_position_redacted = redact_log_line("the value is sec123x here", diff_position_pattern)
+    if "23x" in diff_position_redacted:
+        print("ERROR: part of a longer secret overlapping a shorter one at a different start position leaked: {}".format(diff_position_redacted))
+        failed = True
+    if "sec1" in diff_position_redacted or "c123x" in diff_position_redacted:
+        print("ERROR: an overlapping secret value survived redaction: {}".format(diff_position_redacted))
+        failed = True
+
+    # A three-way overlap chain (v1/1v2/v2345 all present in "v1v2345") must extend through
+    # every overlap, not just the first one found.
+    chain_found = {"v1": "l1", "1v2": "l2", "v2345": "l3"}
+    chain_pattern = compile_log_secret_pattern(chain_found)
+    chain_redacted = redact_log_line("value v1v2345 end", chain_pattern)
+    if "v1v2345" in chain_redacted or "2345" in chain_redacted or "v2345" in chain_redacted:
+        print("ERROR: a chained overlap was not fully covered: {}".format(chain_redacted))
         failed = True
 
     # A line with nothing secret in it must come back byte-identical.
@@ -488,6 +584,86 @@ def test_set_arg_invalidates_log_secret_cache(my_predbat):
     return failed
 
 
+def test_log_secret_pattern_build_is_not_racy(my_predbat):
+    """_log_secret_pattern() must not let a build started before an invalidation overwrite that
+    invalidation once it finishes (#5053 review).
+
+    log() runs from component threads as well as the main thread, so two threads can both
+    observe the UNSET sentinel and race to rebuild. Without a lock around "read sentinel, build,
+    store" as one atomic step, this interleaving is possible: thread A sees UNSET and starts
+    building from the current (stale) args; thread B changes a credential and invalidates the
+    cache; thread A finishes and stores its pattern - built from args that predate B's change -
+    clobbering B's fresh invalidation. The credential B just added would then stay unredacted
+    until something invalidates the cache again.
+
+    Reproduced deterministically (not by timing) by pausing thread A's build midway with an Event
+    and having the invalidation happen while it is paused, then resuming it.
+    """
+    import threading as _threading
+
+    if my_predbat is None:
+        return False
+    print("**** Testing _log_secret_pattern() build is not racy against a concurrent invalidation ****")
+    failed = False
+
+    import hass as hass_module
+
+    saved_cache = my_predbat._log_secret_pattern_cache
+    saved_collect = hass_module.collect_log_secret_values
+    build_started = _threading.Event()
+    release_build = _threading.Event()
+
+    def paused_collect(*args, **kwargs):
+        build_started.set()
+        release_build.wait(timeout=5)
+        return saved_collect(*args, **kwargs)
+
+    try:
+        my_predbat._log_secret_pattern_cache = my_predbat._LOG_SECRET_PATTERN_UNSET
+        hass_module.collect_log_secret_values = paused_collect
+
+        builder = _threading.Thread(target=my_predbat._log_secret_pattern)
+        builder.start()
+        if not build_started.wait(timeout=5):
+            print("ERROR: the build thread never reached collect_log_secret_values")
+            failed = True
+
+        # The build thread holds the lock while paused inside collect_log_secret_values(), so an
+        # invalidation attempted right now would itself block on the same lock rather than run
+        # concurrently - which is exactly the property under test: the lock turns "read sentinel,
+        # build, store" into one atomic step, so an invalidation can only ever happen cleanly
+        # before a build starts or after it finishes, never interleaved with it. Fire the
+        # invalidation from a second thread and confirm it is still blocked while the build is
+        # paused, then release the build and confirm the invalidation completes immediately after.
+        invalidator = _threading.Thread(target=my_predbat._invalidate_log_secret_pattern)
+        invalidator.start()
+        invalidator.join(timeout=0.3)
+        if not invalidator.is_alive():
+            print("ERROR: the invalidation completed while the build thread was still paused mid-build - the lock did not serialize them")
+            failed = True
+
+        release_build.set()
+        builder.join(timeout=5)
+        invalidator.join(timeout=5)
+        if invalidator.is_alive():
+            print("ERROR: the invalidation never completed after the build was released")
+            failed = True
+
+        # The invalidation ran after the build finished and stored its pattern, so the cache must
+        # end up UNSET (the invalidation's effect), not a stale pattern built from pre-change
+        # args - that would be exactly the leak this fix closes.
+        if my_predbat._log_secret_pattern_cache is not my_predbat._LOG_SECRET_PATTERN_UNSET:
+            print("ERROR: a build that started before an invalidation was allowed to overwrite that invalidation's result")
+            failed = True
+    finally:
+        hass_module.collect_log_secret_values = saved_collect
+        my_predbat._log_secret_pattern_cache = saved_cache
+
+    if not failed:
+        print("**** test_log_secret_pattern_build_is_not_racy PASSED ****")
+    return failed
+
+
 def run_secrets_tests(my_predbat=None):
     """
     Run all secrets tests
@@ -499,4 +675,5 @@ def run_secrets_tests(my_predbat=None):
     failed |= test_log_redacts_at_write_time()
     failed |= test_redact_strings_masked_in_debug_dump()
     failed |= test_set_arg_invalidates_log_secret_cache(my_predbat)
+    failed |= test_log_secret_pattern_build_is_not_racy(my_predbat)
     return failed

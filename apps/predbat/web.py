@@ -4116,7 +4116,7 @@ chart.render();
                 # (hass.py, held on self.base - the PredBat instance, not this web component)
                 # must be rebuilt on next use, or a newly added/changed secret keeps leaking into
                 # the log under the stale pattern until the restart below completes (GH#4770 review).
-                self.base._log_secret_pattern_cache = self.base._LOG_SECRET_PATTERN_UNSET
+                self.base._invalidate_log_secret_pattern()
 
                 change_count = len(updated_args)
                 self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")

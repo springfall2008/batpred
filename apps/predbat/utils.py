@@ -246,6 +246,18 @@ def _collect_secret_values(value, found, label_prefix=""):
     """
     if isinstance(value, dict):
         for key, item in value.items():
+            # redact_strings/redact_strings_labelled are secret-flagged here (via
+            # SECRET_KEY_EXPLICIT_NAMES in is_secret_key()) so mask_secret_args()'s debug-dump
+            # masking hides them wholesale - but collect_log_secret_values() already gathers
+            # both explicitly afterward, in a specific order (a more specific label wins over
+            # the generic "redact_strings" one for the same value). Collecting them here too,
+            # at the top level, would race that ordering: this pass runs first, so a value
+            # present in both would keep this pass's generic "redact_strings" label instead of
+            # the more specific one redact_strings_labelled would have given it (#5053 review).
+            # Only exempt the true top-level keys (label_prefix empty) - an unrelated nested key
+            # that happens to share the name is not these denylists and should still collect.
+            if not label_prefix and key.lower() in SECRET_KEY_EXPLICIT_NAMES:
+                continue
             if is_secret_key(key):
                 key_label = (label_prefix + "." + key) if label_prefix else key
                 if isinstance(item, str) and item and item not in found:
@@ -306,12 +318,19 @@ def collect_log_secret_values(args, secrets, redact_strings=None, redact_strings
     has run at all, so a malformed value here (the string APPS_SCHEMA's own validator would
     later reject) must degrade to "nothing from this source" rather than crash the whole of
     Predbat's startup on a config typo, before the user ever sees the validation warning.
+
+    Scalar (str/int/float) secrets.yaml and redact_strings_labelled values are coerced to string
+    before matching - an unquoted numeric MPAN or account ID (e.g. landlord_mpan: 1234567890123)
+    loads from YAML as an int, and log() serializes every message with str(msg), so a value
+    dropped here for not already being a str would reach the log in the clear (#5053 review).
     """
     found = {}
     if secrets:
         for key, value in secrets.items():
-            if isinstance(value, str) and len(value) >= 6 and value not in found:
-                found[value] = key
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                value = str(value)
+                if len(value) >= 6 and value not in found:
+                    found[value] = key
     if args:
         collected = {}
         _collect_secret_values(args, collected)
@@ -325,8 +344,10 @@ def collect_log_secret_values(args, secrets, redact_strings=None, redact_strings
     # (a 4-digit PIN, say) is still exactly what they asked to have redacted.
     if isinstance(redact_strings_labelled, dict):
         for label, value in redact_strings_labelled.items():
-            if isinstance(value, str) and value and value not in found:
-                found[value] = str(label)
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                value = str(value)
+                if value and value not in found:
+                    found[value] = str(label)
     if isinstance(redact_strings, list):
         for value in redact_strings:
             if isinstance(value, str) and value and value not in found:
@@ -372,11 +393,43 @@ def redact_log_line(line, secret_pattern):
 
     Takes the already-compiled (pattern, labels) pair from compile_log_secret_pattern(), not the
     raw value map, so log() never pays compilation cost on the hot path.
+
+    Two secrets can overlap as substrings starting at different offsets (e.g. "sec1" and "c123x"
+    both present in "sec123x") - pattern.sub() alone only ever finds the first alternative that
+    matches at the earliest position ("sec1"), then resumes scanning after it, so it never
+    considers "c123x" starting one character in and leaves "23x" exposed. Extend each match to
+    the longest secret that starts anywhere inside it before emitting the mask, so a longer
+    secret overlapping a shorter one is always fully covered.
     """
     if secret_pattern is None or not line:
         return line
     pattern, labels = secret_pattern
-    return pattern.sub(lambda m: "<{}>".format(labels.get(m.group(0), SECRET_MASK)), line)
+    out = []
+    pos = 0
+    for match in pattern.finditer(line):
+        start, end = match.span()
+        if start < pos:
+            # Already covered by the extended span of a previous match.
+            continue
+        value = match.group(0)
+        # Look for a longer secret starting at each position within this match's span and extend
+        # to cover it - finditer() itself won't report an overlapping match once it has already
+        # consumed the earlier one, so each candidate start position must be probed directly with
+        # match(). Repeat in case the extension is itself overlapped by a still-longer secret.
+        extended = True
+        while extended:
+            extended = False
+            for probe in range(start + 1, end):
+                rescan = pattern.match(line, probe)
+                if rescan and rescan.end() > end:
+                    end = rescan.end()
+                    value = line[start:end]
+                    extended = True
+        out.append(line[pos:start])
+        out.append("<{}>".format(labels.get(value, SECRET_MASK)))
+        pos = end
+    out.append(line[pos:])
+    return "".join(out)
 
 
 def find_unmasked_secret_paths(node, path=""):

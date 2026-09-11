@@ -2806,5 +2806,5 @@ APPS_SCHEMA = {
     # <your_label> instead of the generic <redact_strings>, the same way a built-in credential is
     # labelled by its own apps.yaml key name - e.g. "my_landlords_mpan: '1234567890123'" redacts
     # as <my_landlords_mpan> rather than every entry collapsing into one indistinguishable label.
-    "redact_strings_labelled": {"type": "dict"},
+    "redact_strings_labelled": {"type": "dict", "scalar_value_dict": True},
 }
