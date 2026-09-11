@@ -615,7 +615,7 @@ def test_debug_excluded_keys(my_predbat):
     failed = False
     print("**** Testing is_debug_excluded_key ****")
 
-    for key in ["ha_interface", "components", "secrets", "octopus_url_cache", "github_url_cache", "inverters", "CONFIG_ITEMS", "logfile"]:
+    for key in ["ha_interface", "components", "coordinator", "secrets", "octopus_url_cache", "github_url_cache", "inverters", "CONFIG_ITEMS", "logfile"]:
         if not is_debug_excluded_key(key):
             print("  ERROR: expected {} to be excluded".format(key))
             failed = True

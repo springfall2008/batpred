@@ -3,7 +3,7 @@
 """Unit tests for the discovery catalogue coordinator (coordinator.py) - container validation and report collection."""
 
 from mock_base import MockBase
-from coordinator import Coordinator, SCHEMA_VERSION
+from coordinator import Coordinator, Redactor, SCHEMA_VERSION
 
 
 def _coordinator():
@@ -214,14 +214,15 @@ def test_credential_guard_fires_inside_sub_record_container():
 
 
 class _StubRegistry:
-    """Stands in for Components so assemble() can derive a status for every registry entry."""
+    """Stands in for Components so assemble() can derive a status for every registry entry, and load_salt() can find a stub Storage."""
 
-    def __init__(self, active=(), alive=(), errors=None, all_names=()):
-        """Record which component names are active, alive, failed to load, and known at all."""
+    def __init__(self, active=(), alive=(), errors=None, all_names=(), components=None):
+        """Record which component names are active, alive, failed to load, known at all, and any stub components (e.g. storage) registered by name."""
         self._active = set(active)
         self._alive = set(alive)
         self._errors = errors or {}
         self._all = list(all_names)
+        self._components = components or {}
 
     def get_all(self):
         """Every component name the registry knows."""
@@ -238,6 +239,10 @@ class _StubRegistry:
     def load_error(self, name):
         """Why the component failed to construct, or None."""
         return self._errors.get(name)
+
+    def get_component(self, name):
+        """The stub component registered under this name, or None."""
+        return self._components.get(name)
 
 
 def test_assemble_merges_sections_and_tags_source():
@@ -369,6 +374,7 @@ def test_measures_meter_cross_link_resolves():
     )
     catalogue = coordinator.catalogue()
     meter = catalogue["meters"][0]
+    assert meter["device_id"] != "givtcp:m1", "this test is only load-bearing if device_id actually changed - it must not stay equal by both sides going unredacted"
     assert catalogue["inverters"][0]["measures_meter"] == meter["device_id"]
     print("PASS: measures_meter cross-link resolves")
     return 0
@@ -494,6 +500,276 @@ def test_catalogue_raw_is_unredacted():
     return 0
 
 
+# --- Review round 2: root cause A - the shape guard's digit detection was too narrow ---
+
+
+def test_misfiled_float_identifier_caught():
+    """str(1234567890123.0) is '1234567890123.0', which an anchored ^\\d{10,}$ pattern rejects even
+    though _clean_number accepts floats happily - any component that passes an API number through
+    float() must not be able to launder an identifier that way."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report("octopus", {"meters": [{"device_id": "octopus:m", "direction": "import", "ratings": {"standing_charge_p": 47.5, "supply_number": 1234567890123.0}}]})
+    catalogue = coordinator.catalogue()
+    assert "1234567890123" not in str(catalogue)
+    assert catalogue["meters"][0]["ratings"]["standing_charge_p"] == 47.5
+    print("PASS: a misfiled identifier reported as a float is still caught")
+    return 0
+
+
+def test_misfiled_identifier_embedded_or_separated_caught():
+    """An identifier does not have to be a bare digit string to leak: embedded in prose ("MPAN
+    1234567890123"), broken up by formatting separators ("1234-5678-90123"), or written as a phone
+    number ("+447700900123") - only whitespace was stripped before, so all three previously
+    survived."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "octopus",
+        {
+            "meters": [
+                {"device_id": "octopus:m1", "direction": "import", "info": {"supply": "MPAN 1234567890123"}},
+                {"device_id": "octopus:m2", "direction": "import", "info": {"ref": "1234-5678-90123"}},
+                {"device_id": "octopus:m3", "direction": "import", "info": {"contact": "+447700900123"}},
+            ]
+        },
+    )
+    text = str(coordinator.catalogue())
+    assert "1234567890123" not in text
+    assert "1234-5678-90123" not in text and "5678" not in text
+    assert "447700900123" not in text
+    print("PASS: an embedded, separator-formatted or phone-shaped identifier is caught")
+    return 0
+
+
+def test_misfiled_identifier_grouped_by_underscore_or_comma_caught():
+    """Adversarial pass: an identifier grouped with "_" (a Python-style numeric literal) or ","
+    (thousands separators) reads identically to a human as the same identifier, but was found to
+    survive redaction untouched when only whitespace/hyphen/slash/dot were stripped before the
+    digit-run search - fixed by widening the stripped separator set rather than narrowing this
+    test to only the separators already handled."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "octopus",
+        {
+            "meters": [
+                {"device_id": "octopus:m1", "direction": "import", "info": {"ref": "1_234_567_890_123"}},
+                {"device_id": "octopus:m2", "direction": "import", "info": {"ref": "1,234,567,890,123"}},
+            ]
+        },
+    )
+    text = str(coordinator.catalogue())
+    assert "1_234_567_890_123" not in text and "1,234,567,890,123" not in text
+    assert "1234567890123" not in text
+    print("PASS: an underscore- or comma-grouped identifier is caught")
+    return 0
+
+
+def test_location_shaped_key_pseudonymised_regardless_of_value_shape():
+    """latitude/longitude cannot be recognised as a pair from one value, so the guard checks the
+    KEY NAME instead - this sidesteps the pair problem entirely and cannot false-positive on an
+    ordinary rating like battery_kwh: 9.5."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report("solar", {"forecasts": [{"device_id": "solcast:site1", "kind": "solar", "ratings": {"latitude": 51.5074, "longitude": -0.1278, "horizon_hours": 168}}]})
+    catalogue = coordinator.catalogue()
+    ratings = catalogue["forecasts"][0]["ratings"]
+    assert str(ratings["latitude"]).startswith("#") and ratings["latitude"] != 51.5074
+    assert str(ratings["longitude"]).startswith("#") and ratings["longitude"] != -0.1278
+    assert ratings["horizon_hours"] == 168, "an ordinary rating under an unrelated key name is untouched"
+    print("PASS: a location-named key is pseudonymised regardless of its value's shape")
+    return 0
+
+
+# --- Review round 2: root cause B - the substitution pass was too narrow and too broad ---
+
+
+def test_pseudonymised_value_substituted_inside_dict_keys():
+    """A site id embedded in a component-authored dict KEY (not just a value) is also hidden -
+    "keyed by Predbat's standard name" is a convention, and conventions are what this guard exists
+    to distrust."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "solar",
+        {
+            "forecasts": [
+                {
+                    "device_id": "solcast:site1",
+                    "kind": "solar",
+                    "account_ids": {"site_id": "abcdef123456"},
+                    "entities": {"pv_abcdef123456_today": {"entity_id": "sensor.pv_abcdef123456_today", "domain": "sensor", "access": "r"}},
+                }
+            ]
+        },
+    )
+    catalogue = coordinator.catalogue()
+    entities = catalogue["forecasts"][0]["entities"]
+    assert "abcdef123456" not in str(entities), entities
+    assert not any("abcdef123456" in key for key in entities), list(entities.keys())
+    print("PASS: pseudonymised value substituted inside a dict key")
+    return 0
+
+
+def test_int_identifier_echoed_outside_guarded_container_is_substituted():
+    """A non-string scalar (an int) that exactly repeats an account identifier elsewhere in the
+    catalogue is rewritten too - substitution previously only ever looked at strings, so an
+    identifier echoed as a bare int survived untouched."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "octopus",
+        {"meters": [{"device_id": "octopus:m", "direction": "import", "account_ids": {"customer": "123456"}, "ratings": {"customer_ref": 123456}}]},
+    )
+    catalogue = coordinator.catalogue()
+    meter = catalogue["meters"][0]
+    assert meter["ratings"]["customer_ref"] == meter["account_ids"]["customer"]
+    assert meter["ratings"]["customer_ref"] != 123456
+    print("PASS: an int identifier echoed outside its guarded container is substituted")
+    return 0
+
+
+def test_structural_scalar_shape_guard_catches_bare_identifier_device_id():
+    """A meter reported with a raw MPAN AS its device_id, and no account_ids container at all,
+    still gets caught - structural fields sit outside CONTAINER_SPEC, but that must not exempt
+    them from the same shape guard clear-container values get."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report("octopus", {"meters": [{"device_id": "1234567890123", "direction": "import"}]})
+    catalogue = coordinator.catalogue()
+    assert "1234567890123" not in str(catalogue)
+    print("PASS: a bare identifier reported directly as a structural field is still caught")
+    return 0
+
+
+def test_device_id_only_matches_whole_string_not_as_a_substring():
+    """A device_id that is itself an ordinary short word (not identifier-shaped) must only ever be
+    matched by whole-string equality, never as a substring - otherwise a device_id like "charger"
+    corrupts every unrelated string that happens to contain that word, and a repeated token would
+    misread as a cross-link that does not exist."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "ohme",
+        {
+            "chargers": [{"device_id": "charger", "info": {"model": "charger v2"}, "account_ids": {"mpan": "1234567890123"}}],
+            "cars": [{"device_id": "ohme:v1", "entities": {"status": {"entity_id": "sensor.ohme_charger_status", "domain": "sensor", "access": "r"}}}],
+        },
+    )
+    catalogue = coordinator.catalogue()
+    charger = catalogue["chargers"][0]
+    assert charger["device_id"] != "charger", "device_id of a record with account_ids must still be pseudonymised"
+    assert charger["info"]["model"] == "charger v2", "an unrelated string containing the word must not be corrupted"
+    assert catalogue["cars"][0]["entities"]["status"]["entity_id"] == "sensor.ohme_charger_status", "an unrelated entity_id containing the word must not be corrupted either"
+    print("PASS: device_id substitution never corrupts unrelated text containing the same word")
+    return 0
+
+
+def test_substitution_does_not_touch_the_catalogue_timestamp():
+    """generated is the catalogue's own timestamp, stamped by assemble() itself rather than any
+    component, so a short account identifier that coincidentally matches digits inside it must not
+    corrupt it. Constructed directly against Redactor so the collision is deterministic rather than
+    depending on the real clock."""
+    redactor = Redactor("test-salt-0001")
+    catalogue = {
+        "schema_version": SCHEMA_VERSION,
+        "generated": "2026-09-11T12:34:56.123456+00:00",
+        "meters": [{"source": "octopus", "device_id": "octopus:m", "direction": "import", "account_ids": {"customer": "123456"}}],
+    }
+    redacted = redactor.redact(catalogue)
+    assert redacted["generated"] == "2026-09-11T12:34:56.123456+00:00"
+    print("PASS: a coincidental digit collision does not corrupt the catalogue's own timestamp")
+    return 0
+
+
+def test_shorter_original_does_not_fragment_a_longer_one():
+    """When one noted original is a substring of a longer one (an MSN inside an MPAN), the longer
+    original must be substituted whole rather than leaving digit fragments of it exposed around a
+    shorter token spliced into the middle - insertion-order substitution let the shorter original
+    fire first and break the longer one apart."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "octopus",
+        {
+            "meters": [
+                {
+                    "device_id": "octopus:m",
+                    "direction": "import",
+                    "account_ids": {"msn": "567890", "mpan": "1234567890123"},
+                    "entities": {"mpan": {"entity_id": "sensor.mpan_1234567890123_import", "domain": "sensor", "access": "r"}},
+                }
+            ]
+        },
+    )
+    text = str(coordinator.catalogue())
+    assert "1234567890123" not in text
+    assert "567890" not in text, "a fragment of the longer identifier must not survive around a mis-ordered shorter replacement"
+    print("PASS: the longer original is substituted before a shorter one that is its substring")
+    return 0
+
+
+# --- Review round 2: adversarial pass - a raw identifier used as a dict key, not a value ---
+
+
+def test_misfiled_identifier_used_as_a_container_key_caught():
+    """Adversarial: a component keys hardware_ids by the serial itself instead of naming the field.
+    Before this fix only VALUES were shape-guarded and only NOTED originals were substituted into
+    keys, so a raw identifier that a component used AS a dict key - never a value anywhere -
+    reached the published catalogue untouched by either pass."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:inv1", "hardware_ids": {"1234567890123": "primary"}}]})
+    catalogue = coordinator.catalogue()
+    assert "1234567890123" not in str(catalogue)
+    print("PASS: an identifier used as a clear-container key is caught")
+    return 0
+
+
+# --- Review round 2: test gaps ---
+
+
+class _StubStorage:
+    """A minimal async Storage stand-in, recording save() calls and replaying them from load()."""
+
+    def __init__(self):
+        """Start with nothing stored."""
+        self.saved = {}
+
+    async def load(self, module, filename):
+        """Return the previously saved payload for this module/filename, or None."""
+        return self.saved.get((module, filename))
+
+    async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
+        """Record a payload under its module/filename key."""
+        self.saved[(module, filename)] = data
+
+
+def test_load_salt_fallback_without_storage():
+    """Without a Storage component (MockBase.components is None), load_salt() falls back to a
+    fresh per-process salt rather than running unsalted or reusing a fixed value - previously
+    every test set coordinator.salt directly, so this branch had zero coverage."""
+    base1, coordinator1 = _coordinator()
+    salt1 = coordinator1.load_salt()
+    assert len(salt1) == 32 and all(c in "0123456789abcdef" for c in salt1)
+    base2, coordinator2 = _coordinator()
+    salt2 = coordinator2.load_salt()
+    assert salt2 != salt1, "two installations must not somehow end up with the same fallback salt"
+    print("PASS: load_salt falls back to a fresh random salt without Storage")
+    return 0
+
+
+def test_load_salt_round_trips_through_storage():
+    """With a Storage component available, load_salt() persists the salt and a second coordinator
+    sharing that Storage loads the SAME salt rather than minting a new one - the other half of
+    load_salt()'s contract that setting coordinator.salt directly in every other test never
+    exercised."""
+    base1, coordinator1 = _coordinator()
+    storage = _StubStorage()
+    base1.components = _StubRegistry(components={"storage": storage})
+    salt1 = coordinator1.load_salt()
+
+    base2, coordinator2 = _coordinator()
+    base2.components = _StubRegistry(components={"storage": storage})
+    salt2 = coordinator2.load_salt()
+
+    assert salt1 == salt2, "a second coordinator must load the persisted salt, not mint a new one"
+    assert ("coordinator", "salt") in storage.saved
+    print("PASS: load_salt persists through Storage and a fresh coordinator reuses it")
+    return 0
+
+
 def test_coordinator_all(my_predbat=None):
     """Run every coordinator test, returning the number of failures."""
     failures = 0
@@ -528,4 +804,17 @@ def test_coordinator_all(my_predbat=None):
     failures += test_misfiled_email_inside_entity_id_caught()
     failures += test_misfiled_identifier_inside_vocabulary_list_caught()
     failures += test_catalogue_raw_is_unredacted()
+    failures += test_misfiled_float_identifier_caught()
+    failures += test_misfiled_identifier_embedded_or_separated_caught()
+    failures += test_misfiled_identifier_grouped_by_underscore_or_comma_caught()
+    failures += test_location_shaped_key_pseudonymised_regardless_of_value_shape()
+    failures += test_pseudonymised_value_substituted_inside_dict_keys()
+    failures += test_int_identifier_echoed_outside_guarded_container_is_substituted()
+    failures += test_structural_scalar_shape_guard_catches_bare_identifier_device_id()
+    failures += test_device_id_only_matches_whole_string_not_as_a_substring()
+    failures += test_substitution_does_not_touch_the_catalogue_timestamp()
+    failures += test_shorter_original_does_not_fragment_a_longer_one()
+    failures += test_misfiled_identifier_used_as_a_container_key_caught()
+    failures += test_load_salt_fallback_without_storage()
+    failures += test_load_salt_round_trips_through_storage()
     return failures
