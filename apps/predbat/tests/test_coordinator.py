@@ -960,6 +960,58 @@ def test_misfiled_identifier_used_as_a_container_key_caught():
     return 0
 
 
+# --- Review round 3: Task 7 review - a case/separator-transformed echo of a pseudonymised value ---
+
+
+def test_identifier_variants_registered_for_case_and_separator_transforms():
+    """Redactor._note() registers case-folded and separator-swapped variants of a noted original,
+    all resolving to the SAME token, and marks each substring-eligible when the original was -
+    this is the general mechanism a component's get_entity_name()-style helper (Octopus's own
+    included, and Solcast's, which embeds a site id in an entity name the same way) relies on: such
+    a helper commonly lower-cases an identifier and swaps "-" for "_" when folding it into an
+    entity id, producing a string that is neither equal to, nor contains as a literal substring,
+    the noted original."""
+    redactor = Redactor("test-salt-0001")
+    token = redactor._note("A-1234ABCD", substring=True)
+    for variant in ("A-1234ABCD", "a-1234abcd", "A_1234ABCD", "a_1234abcd"):
+        assert redactor.originals.get(variant) == token, "{} should map to the same token".format(variant)
+        assert variant in redactor.substring_ok, "{} should be substring-eligible, matching the original's own substring=True".format(variant)
+    print("PASS: _note registers case-folded and separator-swapped variants, all mapping to the same token")
+    return 0
+
+
+def test_pseudonymised_value_hidden_when_case_folded_and_separator_swapped_in_entity_id():
+    """Task 7 review, Finding 1: a vendor helper shaped like Octopus's get_entity_name() lower-cases
+    an identifier and swaps "-" for "_" when building an entity id, producing a DIFFERENT string
+    from the noted original - "A-1234ABCD" becomes "a_1234abcd" - which neither the exact-match nor
+    the (pre-fix, verbatim-only) substring pass would ever match, so it reached the redacted
+    catalogue in the clear right next to its own pseudonymised original. MPAN is included alongside
+    to confirm the fix does not disturb its own, independent protection - the all-digit shape guard,
+    unaffected by this change."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "octopus",
+        {
+            "meters": [{"device_id": "octopus:1234567890123", "direction": "import", "account_ids": {"mpan": "1234567890123", "account": "A-1234ABCD"}}],
+            "cars": [
+                {
+                    "device_id": "octopus:dev1",
+                    "entities": {"octopus_intelligent_slot": {"entity_id": "binary_sensor.predbat_octopus_a_1234abcd_intelligent_dispatch_1", "domain": "binary_sensor", "access": "r"}},
+                }
+            ],
+        },
+    )
+    catalogue = coordinator.catalogue()
+    catalogue_text = str(catalogue)
+    assert "A-1234ABCD" not in catalogue_text, "raw account id must not survive"
+    assert "a_1234abcd" not in catalogue_text, "the case-folded, separator-swapped form must not survive either"
+    assert "1234567890123" not in catalogue_text, "raw MPAN must still be hidden"
+    entity = catalogue["cars"][0]["entities"]["octopus_intelligent_slot"]
+    assert entity["domain"] == "binary_sensor" and entity["access"] == "r", "a legitimate neighbouring descriptor field is untouched"
+    print("PASS: a case-folded, separator-swapped echo of a pseudonymised value is hidden, and MPAN protection is unaffected")
+    return 0
+
+
 # --- Review round 2: test gaps ---
 
 
@@ -1152,6 +1204,8 @@ def test_coordinator_all(my_predbat=None):
     failures += test_substitution_does_not_touch_the_catalogue_timestamp()
     failures += test_shorter_original_does_not_fragment_a_longer_one()
     failures += test_misfiled_identifier_used_as_a_container_key_caught()
+    failures += test_identifier_variants_registered_for_case_and_separator_transforms()
+    failures += test_pseudonymised_value_hidden_when_case_folded_and_separator_swapped_in_entity_id()
     failures += test_load_salt_fallback_without_storage()
     failures += test_load_salt_round_trips_through_storage()
     failures += test_report_discovery_helper()

@@ -701,6 +701,26 @@ class OctopusAPI(ComponentBase):
                 self.automatic_config(self.tariffs)
                 self._refresh_discovery_report()
 
+        # Unconditional and outside the "if self.automatic:" block above (unlike the two calls
+        # inside it, which exist only to refresh the report in the SAME cycle a wiring change
+        # happens): those three call sites beside automatic_config() cover a stable installation's
+        # ongoing life, but every one of them is reachable only from a narrow, one-off condition
+        # ("first", an intelligent-device-set change, a tariff-structure change) or is itself
+        # gated on self.automatic. For a stable installation - one EV, an unchanging tariff - none
+        # of those conditions is ever true again after startup, so a build_discovery() failure on
+        # that very first call would otherwise never be retried for the life of the process, and
+        # an installation running octopus_automatic: false would never be reported on at all - even
+        # though self.tariffs, self.mpan, the intelligent-device data and the entities this reports
+        # against are all populated regardless of that flag (self.automatic gates only
+        # automatic_config()'s own apps.yaml wiring, referenced nowhere else in this file). Placed
+        # here, at the end of every cycle, sensor_due has always already been true at least once
+        # this cycle by the time this runs (guaranteed on the first cycle, since sensor_due = first
+        # or ...), so entity publication has already happened before this executes. The extra call
+        # is a cheap no-op once _discovery_state_key() matches self.discovery_reported_for; an
+        # empty or partial snapshot taken too early self-corrects once real tariff/device data
+        # lands, because that changes the state key.
+        self._refresh_discovery_report()
+
         return True
 
     async def final(self):
@@ -1415,10 +1435,11 @@ class OctopusAPI(ComponentBase):
 
         Reporting is independent of self.automatic: it records what Octopus's own account
         describes, not whether this component wired Predbat's apps.yaml to it - that distinction is
-        what the report's own "automatic" flag is for, not a gate on reporting here. This method is
-        only ever actually invoked from beside automatic_config()'s own three call sites though (see
-        _refresh_discovery_report), and those are themselves only reached when self.automatic is
-        set - automatic_config() is not modified to change that.
+        what the report's own "automatic" flag is for, not a gate on reporting here. run() calls
+        _refresh_discovery_report() (which calls this) unconditionally once per cycle, in addition
+        to beside each of automatic_config()'s own three call sites, so this genuinely is reached
+        regardless of self.automatic - see run()'s own comment for why the automatic-gated call
+        sites alone are not enough.
         """
         meters = []
         for direction, tariff in self.tariffs.items():
@@ -1505,18 +1526,25 @@ class OctopusAPI(ComponentBase):
         """
         Report the current meters/tariffs/cars snapshot to the discovery catalogue, if it has moved on from the last report that both succeeded and was complete.
 
-        Placed beside each of automatic_config()'s three call sites, so a device-set or tariff
-        change refreshes the report exactly when automatic_config() itself refreshes apps.yaml.
+        Called from four places: beside each of automatic_config()'s three call sites, so a
+        device-set or tariff change refreshes the report in the same cycle automatic_config()
+        itself refreshes apps.yaml, AND unconditionally once per run() cycle (outside "if
+        self.automatic:") - see run()'s own comment for why the first three alone are not enough:
+        every one of them is reachable only from a narrow, one-off condition ("first", a device-set
+        change, a tariff-structure change) or is itself gated on self.automatic, so for a stable,
+        manually-configured installation none would ever fire again after startup. Idempotent
+        against the state-key check below, so calling it up to twice in one cycle costs nothing.
 
         self.discovery_reported_for is compared here rather than gated on "first": the try/except
         below (correctly) swallows a build_discovery() failure so run() still succeeds, and "first"
         is a start()-local that flips to False forever the instant run() returns True - without an
         out-of-band marker, a failure on the very first cycle would be lost for the life of the
-        process. The marker is left as it was, so the very next call site that runs retries, both
-        on a build_discovery() failure and when an active device's car entities are not all
-        published yet (Octopus publishes them conditionally - see build_discovery()); a report built
-        before they exist would otherwise be marked done and the catalogue would permanently
-        describe an incomplete car slot.
+        process. The marker is left as it was, so the very next call - now guaranteed within one
+        run() cycle regardless of which branch, if any, fires - retries, both on a build_discovery()
+        failure and when an active device's car entities are not all published yet (Octopus
+        publishes them conditionally - see build_discovery()); a report built before they exist
+        would otherwise be marked done and the catalogue would permanently describe an incomplete
+        car slot.
 
         Exception-guarded like the other discovery reporters (GivTCP, GE Cloud): an observer must
         never be able to degrade the health of the component it observes.

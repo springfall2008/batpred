@@ -212,19 +212,47 @@ class Redactor:
     def _note(self, value, substring=False):
         """Record an original so it can later be swapped for its token wherever it appears.
 
-        Registers every numeric variant of the value too (see _numeric_variants), so an
-        identifier noted as a string in one place and echoed as an int or a float in another
-        still resolves to the same token in both. substring=True additionally makes it eligible
-        for substring replacement inside a VALUE (never a dict key - see _substitute_key);
-        otherwise it is only ever matched by whole-string equality.
+        Registers every numeric variant of the value (see _numeric_variants) and every
+        case-folded / separator-swapped variant (see _identifier_variants), composed together -
+        every combination of the two axes - so an identifier noted once resolves to the same
+        token however a component later echoes it: as a string, an int, a float, upper- or
+        lower-cased, or with "-" and "_" interchanged. That last pair matters because
+        get_entity_name()-style helpers commonly lower-case an identifier and swap "-" for "_"
+        when folding it into an entity id, producing a DIFFERENT string from the noted original -
+        one neither the exact-match nor the substring pass would otherwise ever match.
+        substring=True additionally makes every one of those variants eligible for substring
+        replacement inside a VALUE (never a dict key - see _substitute_key); otherwise each is
+        only ever matched by whole-string equality. Registering a variant here unconditionally,
+        even one shorter than MIN_SUBSTITUTE, is safe: nothing is ever matched against it below
+        that floor - see _exact_match/_substitute_text.
         """
         text = str(value)
         token = self.token(text)
-        for variant in self._numeric_variants(text):
+        variants = {text} | self._numeric_variants(text)
+        for variant in list(variants):
+            variants |= self._identifier_variants(variant)
+        for variant in variants:
             self.originals[variant] = token
             if substring:
                 self.substring_ok.add(variant)
         return token
+
+    def _identifier_variants(self, text):
+        """Every case-folded / separator-swapped form of `text` a component might embed it under.
+
+        A helper shaped like Octopus's get_entity_name() - and Solcast's own entity naming embeds
+        a site id the same way - lower-cases an identifier and replaces "-" with "_" when folding
+        it into an entity id, so "A-1234ABCD" becomes "a_1234abcd": a string that is neither equal
+        to, nor contains as a literal substring, the noted original. Registering the lower-cased
+        form, both separator directions and their combination closes that gap once, in shared
+        code, rather than as a per-component workaround.
+        """
+        lowered = text.lower()
+        variants = {text, lowered}
+        for source in (text, lowered):
+            variants.add(source.replace("-", "_"))
+            variants.add(source.replace("_", "-"))
+        return variants
 
     def _numeric_variants(self, text):
         """Every textual form representing the same integral value as `text`.

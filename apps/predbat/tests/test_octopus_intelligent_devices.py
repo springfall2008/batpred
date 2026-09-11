@@ -21,6 +21,8 @@ def test_octopus_intelligent_devices_wrapper(my_predbat):
     failed += test_discovery_report_not_advanced_while_car_entities_incomplete(my_predbat)
     failed += test_discovery_report_failure_contained_and_retried(my_predbat)
     failed += test_build_discovery_round_trips_through_coordinator_and_redaction(my_predbat)
+    failed += test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_failure(my_predbat)
+    failed += test_discovery_report_produced_when_automatic_is_false(my_predbat)
     return failed
 
 
@@ -966,9 +968,155 @@ def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predba
 
     check(mpan not in catalogue_text, "the raw MPAN appears in the clear in the redacted catalogue")
     check(account_id not in catalogue_text, "the raw account id appears in the clear in the redacted catalogue")
+    # Task 7 review, Finding 1: get_entity_name() lower-cases account_id and swaps "-" for "_" when
+    # folding it into every car entity id (already published above by _publish_car_entities, using
+    # the real get_entity_name()) - "A-1234ABCD" becomes "a_1234abcd", a DIFFERENT string from the
+    # noted original that the redactor must catch too, not just the byte-exact raw form.
+    check(account_id.lower().replace("-", "_") not in catalogue_text, "the case-folded, separator-swapped account id form appears in the clear in the redacted catalogue")
     check("E-1R-INTELLI-VAR-24-10-29-A" in catalogue_text, "the tariff code should survive in the clear, but is missing from the redacted catalogue")
     check("INTELLI-VAR-24-10-29" in catalogue_text, "the product code should survive in the clear, but is missing from the redacted catalogue")
 
     if failed == 0:
-        print("PASS: build_discovery() round-trips through the real Coordinator and Redactor - MPAN/account pseudonymised, tariff/product codes kept in the clear")
+        print("PASS: build_discovery() round-trips through the real Coordinator and Redactor - MPAN/account pseudonymised (byte-exact AND case/separator-transformed), tariff/product codes kept in the clear")
+    return failed
+
+
+def _stub_run_dependencies(api):
+    """
+    Replace every network-facing async call OctopusAPI.run() makes with a harmless no-op.
+
+    Lets a test drive a real run() cycle - exercising the actual gating/ordering the Finding 2 fix
+    relies on, not just calling _refresh_discovery_report() directly - without touching the network
+    or overwriting the tariffs/intelligent_devices state the test set up directly.
+    automatic_config(), build_discovery(), report_discovery() and _refresh_discovery_report() are
+    deliberately left real (or individually overridden by the caller), since exercising those is
+    the whole point of the tests that use this.
+    """
+
+    async def _async_none(*args, **kwargs):
+        """Stand in for an async call whose real return value these tests do not depend on."""
+        return None
+
+    async def _async_false(*args, **kwargs):
+        """Stand in for an async call whose real return value these tests do not depend on."""
+        return False
+
+    api.load_octopus_cache = _async_none
+    api.process_commands = _async_false
+    api.async_get_account = _async_false
+    api.async_find_tariffs = _async_none
+    api.async_get_flexibility_events = _async_none
+    api.get_saving_session_data = lambda: None
+    api.fetch_tariffs = _async_none
+    api.async_update_intelligent_devices = _async_none
+    api.async_intelligent_update_sensor = _async_none
+    api.save_octopus_cache = _async_none
+
+
+def test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_failure(my_predbat):
+    """
+    Task 7 review, Finding 2: a build_discovery() failure on the very first run() cycle is retried
+    on a later, unchanging cycle - not lost for the life of the process.
+
+    Reproduces the reviewer's "stable installation" scenario: one unchanging active device, one
+    unchanging tariff, self.automatic left True. automatic_config() is stubbed to a no-op that only
+    mirrors its one relevant side effect (settling self.intelligent_config_devices to the active
+    device set, exactly as the real method does at its own end) - not because exercising the real
+    automatic_config() would be wrong, but because it also calls set_arg() against global,
+    non-account-scoped apps.yaml keys (octopus_saving_session_join and friends) that would leak
+    into and corrupt whichever OTHER test in the suite runs next against the same shared
+    my_predbat fixture; that side effect is irrelevant to what this test is proving. With
+    self.intelligent_config_devices settled and self.sensor_updated_at genuinely advanced by the
+    first cycle, NONE of automatic_config()'s own three call sites (see run()'s comment) fire again
+    on the second cycle: "first" is only ever true once, the device set has not changed, and
+    async_find_tariffs() is stubbed to a no-op so its own internal call site cannot fire either.
+    Only run()'s unconditional call, added outside "if self.automatic:" at the end of the method,
+    can retry this.
+    """
+    api = _make_discovery_api(my_predbat, "discovery-run-retry")
+    device_id = "smart-charge-6001"
+    api.intelligent_devices = {device_id: {"suspended": False}}
+    api.tariffs = {"import": {"tariffCode": "E-1R-VAR-22-11-01-A", "productCode": "VAR-22-11-01", "deviceID": "meter-1"}}
+    _publish_car_entities(my_predbat, api, device_id)
+    _stub_run_dependencies(api)
+    api.automatic_config = lambda tariffs: setattr(api, "intelligent_config_devices", api.get_active_intelligent_device_ids())
+
+    real_build_discovery = api.build_discovery
+    api.build_discovery = MagicMock(side_effect=Exception("boom"))
+    reports = []
+    api.report_discovery = lambda report: reports.append(report)
+
+    result1 = asyncio.run(api.run(seconds=0, first=True))
+
+    failed = 0
+    if result1 is not True:
+        print("ERROR: run() should still succeed on a cycle where only the discovery report fails")
+        failed += 1
+    if reports:
+        print(f"ERROR: no report should have succeeded on the failing first cycle, got {len(reports)}")
+        failed += 1
+    if api.discovery_reported_for is not None:
+        print("ERROR: a failed report must not be marked as reported")
+        failed += 1
+
+    # The bug is fixed. The second cycle is not "first", the device set and tariff are unchanged,
+    # and sensor_due will be False (sensor_updated_at was just stamped, seconds ago) - so every
+    # automatic_config()-adjacent call site is unreachable here. Only the unconditional call retries.
+    api.build_discovery = real_build_discovery
+    result2 = asyncio.run(api.run(seconds=600, first=False))
+
+    if result2 is not True:
+        print("ERROR: run() should succeed on the retried cycle")
+        failed += 1
+    if len(reports) != 1:
+        print(f"ERROR: expected exactly one successful report after the retry, got {len(reports)}")
+        failed += 1
+    if api.discovery_reported_for is None:
+        print("ERROR: the marker should have advanced once the retried report succeeded")
+        failed += 1
+    if failed == 0:
+        print("PASS: a first-cycle build_discovery() failure is retried on a later, unchanging cycle via run()'s unconditional call")
+    return failed
+
+
+def test_discovery_report_produced_when_automatic_is_false(my_predbat):
+    """
+    Task 7 review, Finding 2: an installation running octopus_automatic: false - precisely the
+    manually-configured installation the catalogue most wants to describe - still gets a discovery
+    report, even though every automatic_config() call site (and therefore its own adjacent
+    _refresh_discovery_report() call) is gated on self.automatic and so never runs at all.
+    self.tariffs/self.mpan/the intelligent-device data/the published entities are all populated
+    regardless of that flag - self.automatic is referenced nowhere else in this file.
+    """
+    api = _make_discovery_api(my_predbat, "discovery-automatic-false", automatic=False)
+    device_id = "smart-charge-6002"
+    api.intelligent_devices = {device_id: {"suspended": False}}
+    api.tariffs = {"import": {"tariffCode": "E-1R-VAR-22-11-01-A", "productCode": "VAR-22-11-01", "deviceID": "meter-1"}}
+    _publish_car_entities(my_predbat, api, device_id)
+    _stub_run_dependencies(api)
+    automatic_config_calls = []
+    api.automatic_config = lambda tariffs: automatic_config_calls.append(tariffs)
+    reports = []
+    api.report_discovery = lambda report: reports.append(report)
+
+    result = asyncio.run(api.run(seconds=0, first=True))
+
+    failed = 0
+    if result is not True:
+        print("ERROR: run() should succeed")
+        failed += 1
+    if automatic_config_calls:
+        print("ERROR: automatic_config() must not run when self.automatic is False")
+        failed += 1
+    if len(reports) != 1:
+        print(f"ERROR: expected exactly one discovery report even with automatic=False, got {len(reports)}")
+        failed += 1
+    elif reports[0].get("automatic") is not False:
+        print(f"ERROR: the report should record automatic=False, got {reports[0].get('automatic')}")
+        failed += 1
+    if api.discovery_reported_for is None:
+        print("ERROR: the marker should have advanced once the report succeeded")
+        failed += 1
+    if failed == 0:
+        print("PASS: run() reports to the discovery catalogue even when self.automatic is False")
     return failed
