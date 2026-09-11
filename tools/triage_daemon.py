@@ -187,7 +187,7 @@ JOURNAL_BRANCH_PREFIX = "bot/debug-journal-"
 # Write grant is not an option: Write() rules do not match a path, and bare Write would
 # hand the one flow that can push the ability to write anywhere in the clone.
 JOURNAL_BODY_FILE = SCRATCH_DIR / "journal-pr-body.md"
-JOURNAL_BODY_SCOPE = f"//{JOURNAL_BODY_FILE.relative_to('/')}"
+JOURNAL_BODY_SCOPE = f"//{JOURNAL_BODY_FILE.relative_to(JOURNAL_BODY_FILE.anchor).as_posix()}"
 JOURNAL_BODY_PLACEHOLDER = "<!-- Replace this line with the pull request body. -->\n"
 # Branch prefixes the PR flow may create, matching issue-pr/SKILL.md.
 PR_BRANCH_PREFIXES = ("fix/", "feat/")
