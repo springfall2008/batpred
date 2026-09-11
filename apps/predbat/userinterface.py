@@ -205,6 +205,11 @@ class UserInterface:
                 self.args[arg][index] = value
             else:
                 self.args[arg] = value
+        # A credential value or the redact_strings/redact_strings_labelled denylists themselves
+        # can change here, so log()'s cached redaction pattern (hass.py) must be rebuilt on next
+        # use - otherwise a newly added/changed secret keeps leaking into the log under the stale
+        # pattern until Predbat restarts (GH#4770 review).
+        self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
 
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
