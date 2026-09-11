@@ -17,7 +17,9 @@ to them when shared. A container taking only numbers cannot leak a name or a cre
 however the catalogue grows, so components add facts freely by choosing a container.
 """
 
+import hashlib
 import re
+import secrets
 import threading
 from datetime import datetime, timezone
 
@@ -143,6 +145,134 @@ CONTAINER_SPEC = {
     "entities": ("clear", _clean_descriptor),
 }
 
+# Container name sets derived from CONTAINER_SPEC's own class tags rather than hardcoded, so a
+# container added there later is redacted correctly with nothing extra to keep in sync - a
+# hardcoded tuple here already went stale once, when entities moved into CONTAINER_SPEC as a
+# clear container and a copy of the old tuple would have kept quietly skipping it.
+CLEAR_CONTAINERS = tuple(name for name, (redaction_class, _) in CONTAINER_SPEC.items() if redaction_class == "clear")
+PSEUDONYM_CONTAINERS = tuple(name for name, (redaction_class, _) in CONTAINER_SPEC.items() if redaction_class == "pseudonym")
+
+# A clear-container value shaped like an identifier rather than a measurement. An MPAN is a
+# number so it satisfies ratings; this is the safety net for that, not the classifier.
+DIGIT_RUN_RE = re.compile(r"^\d{10,}$")
+
+
+class Redactor:
+    """Applies the catalogue's redaction classes to an assembled document.
+
+    Pseudonymises everything in a pseudonym container (account_ids today) and anything
+    cross-linking to it, substitutes those originals wherever else they appear (entity ids
+    included), and defensively pseudonymises identifier-shaped values misfiled into a clear
+    container - including one nested inside a descriptor dict or a token list, not just a
+    container's top-level scalars.
+    """
+
+    # Minimum length of an original before it is substituted inside other strings; below this a
+    # substring replacement would corrupt unrelated text more often than it would hide anything.
+    MIN_SUBSTITUTE = 6
+
+    def __init__(self, salt, log=None):
+        """Hold the installation salt and an optional logger for misfiled values."""
+        self.salt = salt
+        self.log = log
+        self.originals = {}
+
+    def token(self, value):
+        """The stable pseudonym for one value under this installation's salt."""
+        digest = hashlib.sha256((self.salt + str(value)).encode("utf-8")).hexdigest()
+        return "#" + digest[:8]
+
+    def _note(self, value):
+        """Record an original so it is also substituted out of every other string later."""
+        text = str(value)
+        token = self.token(text)
+        self.originals[text] = token
+        return token
+
+    def _misfiled(self, value):
+        """Whether a clear-container value looks like an identifier rather than a measurement."""
+        text = str(value)
+        if "@" in text:
+            return True
+        return bool(DIGIT_RUN_RE.match(text.replace(" ", "")))
+
+    def _guard_scalar(self, container, name, value):
+        """Pseudonymise one scalar value if it looks misfiled, logging where it was found."""
+        if not self._misfiled(value):
+            return value
+        if self.log:
+            self.log("Warn: Coordinator: {}.{} looks like an identifier in a clear container - pseudonymised".format(container, name))
+        return self._note(value)
+
+    def _guard_value(self, container, name, value):
+        """Shape-guard one clear-container value, recursing through nested dicts and lists to reach every scalar.
+
+        Most clear containers (hardware_ids, info, ratings, coverage) hold a flat dict of
+        scalars, so guarding the top-level value would be enough for those. entities is the
+        exception every future reporter populates: its values are descriptor dicts (entity_id,
+        unit, min, max, options, ...), so a scalar-only guard would stringify a whole dict and
+        never match a shape pattern - an identifier misfiled into descriptor["max"] or
+        descriptor["unit"] would then reach the published catalogue untouched. Recursing into
+        dict and list values closes that gap for every present and future descriptor-shaped
+        container, not just entities.
+        """
+        if isinstance(value, dict):
+            return {key: self._guard_value(container, "{}.{}".format(name, key), entry) for key, entry in value.items()}
+        if isinstance(value, list):
+            return [self._guard_value(container, name, entry) for entry in value]
+        return self._guard_scalar(container, name, value)
+
+    def _walk(self, node, container=None):
+        """Recursively redact a node: pseudonym containers by class, clear containers via the shape guard.
+
+        A record carrying a pseudonym container (account_ids) also has its own device_id noted
+        as an original, alongside that container's values. Nothing here has to know that
+        "meter" or "measures_meter" are cross-link field names: the later substitution pass
+        rewrites any string containing a noted original wherever it appears, so noting the
+        owning record's device_id is what lets a cross-link field resolve to the same token as
+        the record it points to, even when that field merely repeats the device_id rather than
+        embedding the account identifier itself.
+        """
+        if isinstance(node, dict):
+            if isinstance(node.get("device_id"), str) and any(name in node for name in PSEUDONYM_CONTAINERS):
+                self._note(node["device_id"])
+            out = {}
+            for key, value in node.items():
+                if key in PSEUDONYM_CONTAINERS:
+                    out[key] = {name: self._note(entry) for name, entry in value.items()}
+                elif key in CLEAR_CONTAINERS:
+                    out[key] = {name: self._guard_value(key, name, entry) for name, entry in value.items()}
+                elif key in VOCAB_CONTAINERS:
+                    # Vocabulary lists are clear too, and a token is free-form enough (digits
+                    # are legal in the pattern) that a misfiled identifier can hide as one.
+                    out[key] = [self._guard_scalar(key, "token", entry) for entry in value]
+                else:
+                    out[key] = self._walk(value, container=key)
+            return out
+        if isinstance(node, list):
+            return [self._walk(entry, container=container) for entry in node]
+        return node
+
+    def _substitute(self, node):
+        """Replace every noted original wherever it appears inside a string."""
+        if isinstance(node, dict):
+            return {key: self._substitute(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [self._substitute(entry) for entry in node]
+        if isinstance(node, str):
+            for original, token in self.originals.items():
+                if len(original) >= self.MIN_SUBSTITUTE and original in node:
+                    node = node.replace(original, token)
+            return node
+        return node
+
+    def redact(self, catalogue):
+        """Return a redacted copy of an assembled catalogue."""
+        walked = self._walk(catalogue)
+        # device_id and cross-links are derived from identifiers, so they are substituted rather
+        # than classified: the substitution pass rewrites them wherever the original appears.
+        return self._substitute(walked)
+
 
 class Coordinator:
     """Collects component discovery reports and assembles them into one catalogue.
@@ -158,6 +288,7 @@ class Coordinator:
         self.lock = threading.Lock()
         self.reports = {}
         self.assembled = None
+        self.salt = None
 
     def report(self, component_name, report):
         """Validate and store one component's discovery report, replacing any previous one."""
@@ -237,6 +368,49 @@ class Coordinator:
     def _resulting_config(self):
         """What apps.yaml actually ended up as, so every dump compares discovered against configured."""
         return {key: self.base.get_arg(key, None) for key in ("num_inverters", "num_cars", "inverter_type")}
+
+    def load_salt(self):
+        """The per-installation pseudonym salt, generated and stored on first use.
+
+        Without Storage (MockBase, CLI harnesses) a per-process salt is generated instead, so
+        redaction never silently falls back to an unsalted digest - a 13-digit MPAN under one of
+        those is brute-forceable in seconds. ``ha`` is imported lazily here, and only once a
+        Storage component actually exists, rather than at module level: ha.py pulls in
+        aiohttp/requests via component_base, and a later task adds a module-level
+        "from coordinator import Coordinator" to components.py, so a module-level ha import here
+        would widen the startup import graph for every install - including the common case, this
+        method's other branch, where there is no Storage component to talk to at all.
+        """
+        if self.salt:
+            return self.salt
+        components = getattr(self.base, "components", None)
+        storage = components.get_component("storage") if components else None
+        if not storage:
+            self.salt = secrets.token_hex(16)
+            return self.salt
+        from ha import run_async
+
+        try:
+            stored = run_async(storage.load("coordinator", "salt"))
+            if isinstance(stored, dict) and stored.get("salt"):
+                self.salt = str(stored["salt"])
+                return self.salt
+        except Exception as e:
+            self.log("Warn: Coordinator: could not load the pseudonym salt: {}".format(e))
+        self.salt = secrets.token_hex(16)
+        try:
+            run_async(storage.save("coordinator", "salt", {"salt": self.salt}, format="json"))
+        except Exception as e:
+            self.log("Warn: Coordinator: could not save the pseudonym salt: {}".format(e))
+        return self.salt
+
+    def catalogue(self):
+        """The assembled catalogue, redacted. This is what every consumer gets."""
+        return Redactor(self.load_salt(), log=self.log).redact(self.assembled or self.assemble())
+
+    def catalogue_raw(self):
+        """The assembled catalogue, unredacted. In-process diagnostics only - never write this anywhere."""
+        return self.assembled or self.assemble()
 
 
 def _validate_container(container_name, value, component_name, section, log):

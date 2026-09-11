@@ -308,6 +308,192 @@ def test_observations_resulting_config():
     return 0
 
 
+def _redacting_coordinator():
+    """A coordinator with a fixed salt, so pseudonym tokens are reproducible inside one test."""
+    base, coordinator = _coordinator()
+    coordinator.salt = "test-salt-0001"
+    return base, coordinator
+
+
+def test_account_ids_pseudonymised_and_stable():
+    """account_ids values never appear in the clear, and the same value maps to the same token throughout."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "octopus",
+        {
+            "meters": [{"device_id": "octopus:1234567890123", "direction": "import", "account_ids": {"mpan": "1234567890123", "account": "A-1234ABCD"}}],
+            "programmes": [{"device_id": "axle:site1", "kind": "vpp", "meter": "octopus:1234567890123"}],
+        },
+    )
+    catalogue = coordinator.catalogue()
+    text = str(catalogue)
+    assert "1234567890123" not in text, "raw MPAN must not survive redaction"
+    assert "A-1234ABCD" not in text
+    meter = catalogue["meters"][0]
+    assert meter["account_ids"]["mpan"].startswith("#")
+    # the cross-link still resolves to the same meter
+    assert catalogue["programmes"][0]["meter"] == meter["device_id"]
+    print("PASS: account ids pseudonymised, cross-link preserved")
+    return 0
+
+
+def test_cross_link_resolves_without_coincidental_substring():
+    """The device_id/meter cross-link resolves even when device_id does not literally embed the account
+    identifier as a substring - proving the link is via noting the owning record's device_id, not a
+    coincidence of the previous test's device_id happening to spell out the raw MPAN."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "octopus",
+        {
+            "meters": [{"device_id": "octopus:m1", "direction": "import", "account_ids": {"mpan": "1234567890123"}}],
+            "programmes": [{"device_id": "axle:site1", "kind": "vpp", "meter": "octopus:m1"}],
+        },
+    )
+    catalogue = coordinator.catalogue()
+    meter = catalogue["meters"][0]
+    assert meter["device_id"] != "octopus:m1", "device_id of a record with account_ids must itself be pseudonymised"
+    assert catalogue["programmes"][0]["meter"] == meter["device_id"]
+    print("PASS: cross-link resolves without a coincidental substring match")
+    return 0
+
+
+def test_measures_meter_cross_link_resolves():
+    """The measures_meter cross-link (inverter -> meter) resolves the same way as meter (programme -> meter)."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "givtcp",
+        {
+            "meters": [{"device_id": "givtcp:m1", "direction": "import", "account_ids": {"mpan": "1234567890123"}}],
+            "inverters": [{"device_id": "givtcp:inv1", "measures_meter": "givtcp:m1"}],
+        },
+    )
+    catalogue = coordinator.catalogue()
+    meter = catalogue["meters"][0]
+    assert catalogue["inverters"][0]["measures_meter"] == meter["device_id"]
+    print("PASS: measures_meter cross-link resolves")
+    return 0
+
+
+def test_pseudonym_differs_across_salts():
+    """The same value under a different installation salt produces a different token."""
+    base_a, coordinator_a = _redacting_coordinator()
+    base_b, coordinator_b = _coordinator()
+    coordinator_b.salt = "a-different-salt"
+    report = {"meters": [{"device_id": "octopus:m", "direction": "import", "account_ids": {"mpan": "1234567890123"}}]}
+    coordinator_a.report("octopus", report)
+    coordinator_b.report("octopus", report)
+    token_a = coordinator_a.catalogue()["meters"][0]["account_ids"]["mpan"]
+    token_b = coordinator_b.catalogue()["meters"][0]["account_ids"]["mpan"]
+    assert token_a != token_b
+    print("PASS: tokens differ across installations")
+    return 0
+
+
+def test_pseudonym_substituted_inside_entity_ids():
+    """A vendor that embeds an identifier in an entity name does not republish what the field just hid."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "solar",
+        {
+            "forecasts": [
+                {
+                    "device_id": "solcast:abcdef123456",
+                    "kind": "solar",
+                    "account_ids": {"site_id": "abcdef123456"},
+                    "entities": {"pv_forecast_today": {"entity_id": "sensor.predbat_solcast_abcdef123456_today", "domain": "sensor", "access": "r"}},
+                }
+            ]
+        },
+    )
+    catalogue = coordinator.catalogue()
+    assert "abcdef123456" not in str(catalogue), catalogue["forecasts"][0]["entities"]
+    print("PASS: pseudonymised value substituted inside entity ids")
+    return 0
+
+
+def test_serials_and_tariff_codes_stay_clear():
+    """Hardware identity and product codes stay readable - they are what makes a bug report diagnosable."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:SA2242G123", "hardware_ids": {"serial": "SA2242G123"}, "info": {"firmware": "D0.451"}}]})
+    coordinator.report("octopus", {"meters": [{"device_id": "octopus:m", "direction": "import", "tariff": {"info": {"tariff_code": "E-1R-AGILE-24-10-01-A"}}}]})
+    text = str(coordinator.catalogue())
+    assert "SA2242G123" in text and "D0.451" in text and "E-1R-AGILE-24-10-01-A" in text
+    print("PASS: serials, firmware and tariff codes kept clear")
+    return 0
+
+
+def test_misfiled_identifier_caught_by_shape_guard():
+    """An MPAN is a number, so ratings accepts it - the shape guard pseudonymises it anyway and logs."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report("octopus", {"meters": [{"device_id": "octopus:m", "direction": "import", "ratings": {"standing_charge_p": 47.5, "supply_number": 1234567890123}}]})
+    catalogue = coordinator.catalogue()
+    assert "1234567890123" not in str(catalogue)
+    assert catalogue["meters"][0]["ratings"]["standing_charge_p"] == 47.5, "a real measurement is untouched"
+    print("PASS: misfiled identifier caught by the shape guard")
+    return 0
+
+
+def test_misfiled_identifier_inside_entity_descriptor_caught():
+    """An MPAN misfiled into a nested entity descriptor field (e.g. its "max") is still caught: entities
+    values are descriptor dicts, not scalars, so the shape guard has to recurse into them rather than
+    stringify the whole descriptor - the exact gap Correction 2 exists to close."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "octopus",
+        {
+            "meters": [
+                {
+                    "device_id": "octopus:m",
+                    "direction": "import",
+                    "entities": {"supply_number": {"entity_id": "sensor.predbat_octopus_m_supply_number", "domain": "sensor", "access": "r", "max": 1234567890123}},
+                }
+            ]
+        },
+    )
+    catalogue = coordinator.catalogue()
+    assert "1234567890123" not in str(catalogue)
+    entity = catalogue["meters"][0]["entities"]["supply_number"]
+    assert entity["entity_id"] == "sensor.predbat_octopus_m_supply_number", "the descriptor itself survives, only the misfiled value is pseudonymised"
+    print("PASS: identifier misfiled inside a nested entity descriptor field caught")
+    return 0
+
+
+def test_misfiled_email_inside_entity_id_caught():
+    """entity_id is kept verbatim by validation (unlike every other descriptor field, which is cleaned by
+    type), so it is the one realistic path an email-shaped value can reach a clear container - info and
+    every other string field already refuse "@" at validation. The shape guard is what stands between a
+    buggy component's entity_id and a public dump."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report("ohme", {"chargers": [{"device_id": "ohme:CH1", "entities": {"login": {"entity_id": "sensor.bob@example.com", "domain": "sensor", "access": "r"}}}]})
+    assert "bob@example.com" in str(coordinator.catalogue_raw()), "sanity check: the email really does reach the raw catalogue unguarded"
+    catalogue = coordinator.catalogue()
+    assert "bob@example.com" not in str(catalogue)
+    print("PASS: email-shaped entity_id caught by the shape guard")
+    return 0
+
+
+def test_misfiled_identifier_inside_vocabulary_list_caught():
+    """A vocabulary token pattern allows digits, so an MPAN-shaped value misfiled into a flags/functions
+    list is still caught, even though vocabulary lists are validated and walked differently from the
+    dict-shaped clear containers."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report("octopus", {"meters": [{"device_id": "octopus:m", "direction": "import", "tariff": {"flags": ["agile", "1234567890123"]}}]})
+    catalogue = coordinator.catalogue()
+    assert "1234567890123" not in str(catalogue)
+    assert "agile" in catalogue["meters"][0]["tariff"]["flags"]
+    print("PASS: misfiled identifier inside a vocabulary list caught")
+    return 0
+
+
+def test_catalogue_raw_is_unredacted():
+    """catalogue_raw is the in-process view and keeps originals, so the redacted path is demonstrably doing work."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report("octopus", {"meters": [{"device_id": "octopus:m", "direction": "import", "account_ids": {"mpan": "1234567890123"}}]})
+    assert "1234567890123" in str(coordinator.catalogue_raw())
+    print("PASS: raw catalogue retains originals")
+    return 0
+
+
 def test_coordinator_all(my_predbat=None):
     """Run every coordinator test, returning the number of failures."""
     failures = 0
@@ -331,4 +517,15 @@ def test_coordinator_all(my_predbat=None):
     failures += test_observations_duplicate_serial()
     failures += test_observations_contested_cars_and_meters()
     failures += test_observations_resulting_config()
+    failures += test_account_ids_pseudonymised_and_stable()
+    failures += test_cross_link_resolves_without_coincidental_substring()
+    failures += test_measures_meter_cross_link_resolves()
+    failures += test_pseudonym_differs_across_salts()
+    failures += test_pseudonym_substituted_inside_entity_ids()
+    failures += test_serials_and_tariff_codes_stay_clear()
+    failures += test_misfiled_identifier_caught_by_shape_guard()
+    failures += test_misfiled_identifier_inside_entity_descriptor_caught()
+    failures += test_misfiled_email_inside_entity_id_caught()
+    failures += test_misfiled_identifier_inside_vocabulary_list_caught()
+    failures += test_catalogue_raw_is_unredacted()
     return failures
