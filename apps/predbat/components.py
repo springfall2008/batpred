@@ -38,6 +38,8 @@ from datetime import datetime, timezone, timedelta
 import asyncio
 import os
 
+from coordinator import Coordinator
+
 
 def load_component_class(component_info):
     """Import a registry entry's module and return its component class.
@@ -746,6 +748,14 @@ class Components:
     """
 
     def __init__(self, base):
+        """Create the registry, with an empty component set and its own discovery coordinator.
+
+        The coordinator lives here - never as a PredBat attribute - because create_debug_yaml()
+        dumps every non-excluded member of PredBat.__dict__, and the coordinator holds the raw
+        unredacted reports plus the pseudonym salt. "components" is in DEBUG_EXCLUDE_LIST (as is
+        "coordinator", defensively), so nothing under self.components is dumped automatically at
+        all; create_debug_yaml() instead adds a plain redacted dict via coordinator.catalogue().
+        """
         self.components = {}
         self.component_tasks = {}
         # Why a configured component could not be loaded or constructed, by name. Such a component
@@ -754,6 +764,7 @@ class Components:
         self.component_errors = {}
         self.base = base
         self.log = base.log
+        self.coordinator = Coordinator(base)
 
     def initialize(self, only=None, phase=0):
         """Initialise components without starting them"""
@@ -801,6 +812,9 @@ class Components:
                     component_class = load_component_class(component_info)
                     self.log(f"Initialising {component_info['name']} interface")
                     self.components[component_name] = component_class(self.base, **arg_dict)
+                    # Overrides the class-name fallback ComponentBase.__init__ set, with the
+                    # registry key report_discovery() should file this component's reports under.
+                    self.components[component_name].component_name = component_name
                 except Exception as e:
                     # A component that will not import (a missing package, a syntax error) or
                     # construct must not take Predbat down with it: record why, leave it inactive

@@ -848,6 +848,19 @@ class UserInterface:
         debug["inverters"] = inverters_debug
         debug["CONFIG_ITEMS"] = copy.deepcopy(self.CONFIG_ITEMS)
 
+        # Explicit: "components" is in DEBUG_EXCLUDE_LIST so nothing under it is dumped
+        # automatically, and a plain redacted dict avoids the object-graph walk described above.
+        # getattr, not a bare attribute access: several tests stand self.components in for a
+        # minimal registry double that does not model .coordinator at all, and this function is
+        # what a real user's bug-report download runs - it must degrade to no discovery section
+        # rather than raise on an attribute a stand-in never promised to have.
+        coordinator = getattr(self.components, "coordinator", None) if self.components else None
+        if coordinator:
+            try:
+                debug["discovery"] = coordinator.catalogue()
+            except Exception as e:
+                self.log("Warn: Failed to add the discovery catalogue to the debug dump: {}".format(e))
+
         if write_file:
             with open(filename, "w") as file:
                 dump_debug_yaml(debug, file)

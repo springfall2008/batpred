@@ -2,6 +2,8 @@
 # pylint: disable=line-too-long
 """Unit tests for the discovery catalogue coordinator (coordinator.py) - container validation and report collection."""
 
+from datetime import datetime
+
 from mock_base import MockBase
 from coordinator import Coordinator, Redactor, SCHEMA_VERSION
 
@@ -273,6 +275,25 @@ def test_assemble_component_status():
     assert components["fox"]["status"] == "load_error"
     assert components["solis"]["status"] == "not_configured"
     print("PASS: component statuses derived")
+    return 0
+
+
+def test_component_status_reported_at_set_only_for_ok():
+    """reported_at carries a UTC timestamp for a component that has actually reported, and stays
+    None for every other status - the field previously existed on the "not_configured" default
+    but was never populated anywhere, so a published catalogue showed reported_at: null forever
+    even for a component reporting normally."""
+    base, coordinator = _coordinator()
+    base.components = _StubRegistry(active=["givtcp", "octopus"], alive=["octopus"], all_names=["givtcp", "octopus", "solis"])
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:A"}]})
+    components = coordinator.assemble()["components"]
+    assert components["givtcp"]["status"] == "ok"
+    reported_at = components["givtcp"]["reported_at"]
+    assert reported_at, "an 'ok' component must carry a reported_at timestamp"
+    datetime.fromisoformat(reported_at)  # must parse as a real ISO-8601 timestamp, not just be truthy
+    assert components["octopus"]["reported_at"] is None, "a component that has not reported must not have a timestamp"
+    assert components["solis"]["reported_at"] is None
+    print("PASS: reported_at is set only for a component with status ok")
     return 0
 
 
@@ -992,6 +1013,68 @@ def test_load_salt_round_trips_through_storage():
     return 0
 
 
+def test_report_discovery_helper():
+    """A component reports through the base-class helper, and does nothing harmful when there is no coordinator."""
+    from component_base import ComponentBase
+
+    class _FakeComponent(ComponentBase):
+        """Minimal component used to exercise report_discovery."""
+
+        def initialize(self, **kwargs):
+            """Nothing to set up."""
+            pass
+
+        async def run(self, seconds, first):
+            """Never called here."""
+            return True
+
+    base, coordinator = _coordinator()
+    component = _FakeComponent(base)
+    component.component_name = "givtcp"
+    component.report_discovery({"inverters": [{"device_id": "givtcp:A"}]})  # no coordinator yet - must not raise
+    assert coordinator.reports == {}
+
+    class _Registry:
+        """Registry stub exposing the coordinator, as Components does."""
+
+        def __init__(self):
+            """Hold the coordinator."""
+            self.coordinator = coordinator
+
+        def get_all(self):
+            """One known component."""
+            return ["givtcp"]
+
+        def is_active(self, name):
+            """Active."""
+            return True
+
+        def is_alive(self, name):
+            """Alive."""
+            return True
+
+        def load_error(self, name):
+            """No error."""
+            return None
+
+    base.components = _Registry()
+    component.report_discovery({"inverters": [{"device_id": "givtcp:A"}]})
+    assert coordinator.reports["givtcp"]["inverters"][0]["device_id"] == "givtcp:A"
+    print("PASS: report_discovery routes to the coordinator and no-ops without one")
+    return 0
+
+
+def test_publish_writes_sensor():
+    """The catalogue is published as an entity for the web viewer to read later."""
+    base, coordinator = _redacting_coordinator()
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:A", "inverter_type": "GE"}]})
+    coordinator.assemble()
+    coordinator.publish()
+    assert base.entities.get("sensor.predbat_discovery"), base.entities
+    print("PASS: discovery sensor published")
+    return 0
+
+
 def test_coordinator_all(my_predbat=None):
     """Run every coordinator test, returning the number of failures."""
     failures = 0
@@ -1012,6 +1095,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_credential_guard_fires_inside_sub_record_container()
     failures += test_assemble_merges_sections_and_tags_source()
     failures += test_assemble_component_status()
+    failures += test_component_status_reported_at_set_only_for_ok()
     failures += test_observations_duplicate_serial()
     failures += test_observations_contested_cars_and_meters()
     failures += test_observations_resulting_config()
@@ -1045,4 +1129,6 @@ def test_coordinator_all(my_predbat=None):
     failures += test_misfiled_identifier_used_as_a_container_key_caught()
     failures += test_load_salt_fallback_without_storage()
     failures += test_load_salt_round_trips_through_storage()
+    failures += test_report_discovery_helper()
+    failures += test_publish_writes_sensor()
     return failures

@@ -51,6 +51,9 @@ class ComponentBase(ABC):
         api_started: Flag indicating whether the component has successfully started
         api_stop: Flag to signal the component to stop
         last_success_timestamp: Timestamp of the last successful operation
+        component_name: Registry key this component is filed under (e.g. "givtcp"), set by
+            Components.initialize(); falls back to the class name for a component built outside
+            the registry (the standalone CLI harnesses), so report_discovery() always has a name.
     """
 
     def __init__(self, base, **kwargs):
@@ -70,6 +73,10 @@ class ComponentBase(ABC):
         self.args = base.args
         self.count_errors = 0
         self.run_timeout = 60 * 60  # Default run time in seconds, can be overridden by subclasses
+        # Overridden with the registry key by Components.initialize() once this component is
+        # constructed through the registry; a component built directly (the standalone CLI
+        # harnesses) keeps this class-name fallback instead.
+        self.component_name = self.__class__.__name__
         self.initialize(**kwargs)
 
     @abstractmethod
@@ -143,6 +150,17 @@ class ComponentBase(ABC):
     def update_success_timestamp(self):
         """Update the last success timestamp to the current time"""
         self.last_success_timestamp = datetime.now(timezone.utc)
+
+    def report_discovery(self, report):
+        """Report what this component discovered to the discovery catalogue.
+
+        Silently does nothing when there is no coordinator - the standalone CLI harnesses run a
+        component against a MockBase with no registry at all.
+        """
+        components = getattr(self.base, "components", None)
+        coordinator = getattr(components, "coordinator", None) if components else None
+        if coordinator:
+            coordinator.report(self.component_name, report)
 
     @property
     def currency_symbols(self):

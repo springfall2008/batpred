@@ -482,6 +482,11 @@ class Coordinator:
         self.log = base.log
         self.lock = threading.Lock()
         self.reports = {}
+        # UTC ISO-8601 timestamp of the last report(), by component name - surfaced as
+        # "reported_at" for a status "ok" component in _component_status(). Kept apart from
+        # self.reports rather than folded into the cleaned report dict, since it describes when
+        # the coordinator heard from the component, not anything the component itself reported.
+        self.reported_at = {}
         self.assembled = None
         self.salt = None
 
@@ -490,6 +495,7 @@ class Coordinator:
         cleaned = validate_report(report, component_name, self.log)
         with self.lock:
             self.reports[component_name] = cleaned
+            self.reported_at[component_name] = datetime.now(timezone.utc).isoformat()
         counts = ", ".join("{} {}".format(len(cleaned.get(section, [])), section) for section in SECTION_SPEC if cleaned.get(section))
         self.log("Coordinator: {} reported {}".format(component_name, counts or "nothing"))
 
@@ -501,7 +507,8 @@ class Coordinator:
         """
         with self.lock:
             reports = {name: report for name, report in self.reports.items()}
-        catalogue = {"schema_version": SCHEMA_VERSION, "generated": datetime.now(timezone.utc).isoformat(), "components": self._component_status(reports)}
+            reported_at = dict(self.reported_at)
+        catalogue = {"schema_version": SCHEMA_VERSION, "generated": datetime.now(timezone.utc).isoformat(), "components": self._component_status(reports, reported_at)}
         for section in SECTION_SPEC:
             merged = []
             for name in sorted(reports):
@@ -514,11 +521,14 @@ class Coordinator:
         self.assembled = catalogue
         return catalogue
 
-    def _component_status(self, reports):
+    def _component_status(self, reports, reported_at):
         """A status for every component the registry knows, not only those that reported.
 
         A component that never reports is not an error: in this version only a handful report
         at all, so "no_report" has to read differently from "started but never answered".
+        reported_at is a component-name -> ISO-8601 UTC timestamp snapshot, taken under the same
+        lock as reports so the two agree with each other; it is only ever populated for a status
+        "ok" component - one the coordinator has actually heard from.
         """
         components = getattr(self.base, "components", None)
         names = components.get_all() if components else sorted(reports)
@@ -529,6 +539,7 @@ class Coordinator:
                 entry["status"] = "ok"
                 entry["automatic"] = reports[name].get("automatic", True)
                 entry["counts"] = {section: len(reports[name][section]) for section in SECTION_SPEC if reports[name].get(section)}
+                entry["reported_at"] = reported_at.get(name)
             elif components and components.load_error(name):
                 entry["status"] = "load_error"
                 entry["error"] = components.load_error(name)
@@ -606,6 +617,14 @@ class Coordinator:
     def catalogue_raw(self):
         """The assembled catalogue, unredacted. In-process diagnostics only - never write this anywhere."""
         return self.assembled or self.assemble()
+
+    def publish(self):
+        """Publish the redacted catalogue as an entity, for the web viewer and HA users."""
+        catalogue = self.catalogue()
+        counts = {section: len(catalogue.get(section, [])) for section in SECTION_SPEC}
+        attributes = {"friendly_name": "Predbat discovery", "icon": "mdi:sitemap"}
+        attributes.update(catalogue)
+        self.base.dashboard_item("sensor.{}_discovery".format(self.base.prefix), state=sum(counts.values()), attributes=attributes)
 
 
 def _validate_container(container_name, value, component_name, section, log):

@@ -1936,6 +1936,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 self.log("Error: Some components failed to start (phase 2)")
                 self.record_status("Error: Some components failed to start (phase 2)", had_errors=True)
 
+            # Discovery barrier: every component has now started or timed out, so assemble what
+            # they reported into the catalogue. Observe only - nothing here changes configuration.
+            try:
+                self.components.coordinator.assemble()
+                self.components.coordinator.publish()
+            except Exception as e:
+                self.log("Warn: Failed to assemble the discovery catalogue: {}".format(e))
+
             self.load_user_config(quiet=False, register=True)
             self.auto_config(final=True)
             self.validate_config_schedule_retry(self.validate_config())
