@@ -87,6 +87,73 @@ def test_entities_credential_named_key_rejected():
     return 0
 
 
+def test_entities_free_text_unit_dropped_legitimate_descriptor_intact():
+    """A free-text value in a typed descriptor field is dropped, while a fully legitimate descriptor survives with every field intact."""
+    base, coordinator = _coordinator()
+    coordinator.report("givtcp", {"inverters": [{
+        "device_id": "givtcp:SN1",
+        "entities": {
+            "charge_rate": {
+                "entity_id": "number.predbat_givtcp_0_charge_rate",
+                "domain": "number", "access": "rw", "unit": "W",
+                "device_class": "power", "min": 0, "max": 3600, "step": 100, "precision": 0,
+            },
+            "soc_kw": {
+                "entity_id": "sensor.predbat_givtcp_0_soc_kw",
+                "domain": "sensor", "access": "r", "unit": "not a real unit " * 6,
+            },
+        },
+    }]})
+    entities = coordinator.reports["givtcp"]["inverters"][0]["entities"]
+    assert entities["charge_rate"] == {
+        "entity_id": "number.predbat_givtcp_0_charge_rate",
+        "domain": "number", "access": "rw", "unit": "W",
+        "device_class": "power", "min": 0, "max": 3600, "step": 100, "precision": 0,
+    }, entities["charge_rate"]
+    assert entities["soc_kw"]["entity_id"] == "sensor.predbat_givtcp_0_soc_kw"
+    assert "unit" not in entities["soc_kw"]
+    print("PASS: free-text descriptor field dropped, legitimate descriptor intact")
+    return 0
+
+
+def test_entities_options_preserves_realistic_values():
+    """options takes bounded strings, not vocabulary tokens - realistic select values like time strings and mixed-case labels survive."""
+    base, coordinator = _coordinator()
+    coordinator.report("givtcp", {"inverters": [{
+        "device_id": "givtcp:SN1",
+        "entities": {
+            "charge_start_time": {"entity_id": "select.predbat_givtcp_0_charge_start_time", "domain": "select", "access": "rw", "options": ["00:00", "00:30"]},
+            "pause_mode": {"entity_id": "select.predbat_givtcp_0_pause_mode", "domain": "select", "access": "rw", "options": ["Disabled", "PauseCharge"]},
+        },
+    }]})
+    entities = coordinator.reports["givtcp"]["inverters"][0]["entities"]
+    assert entities["charge_start_time"]["options"] == ["00:00", "00:30"], entities["charge_start_time"]
+    assert entities["pause_mode"]["options"] == ["Disabled", "PauseCharge"], entities["pause_mode"]
+    print("PASS: options preserves realistic time and label values")
+    return 0
+
+
+def test_coverage_accepts_numbers_booleans_and_vocabulary_lists():
+    """coverage accepts numbers, booleans and lists of vocabulary tokens - Solcast's pv10/pv50/pv90 variants must survive whole."""
+    base, coordinator = _coordinator()
+    coordinator.report("solcast", {"forecasts": [{"device_id": "solcast:site1", "kind": "solar", "coverage": {"horizon_hours": 168, "variants": ["pv10", "pv50"]}}]})
+    coverage = coordinator.reports["solcast"]["forecasts"][0]["coverage"]
+    assert coverage == {"horizon_hours": 168, "variants": ["pv10", "pv50"]}, coverage
+    print("PASS: coverage accepts numbers and vocabulary-token lists")
+    return 0
+
+
+def test_validate_report_never_raises_on_non_dict():
+    """A non-dict report (None, a list, ...) never raises - it is treated as empty, per the 'never raises' contract."""
+    base, coordinator = _coordinator()
+    coordinator.report("broken", None)
+    assert coordinator.reports["broken"] == {"schema_version": SCHEMA_VERSION, "automatic": True}
+    coordinator.report("broken2", ["not", "a", "dict"])
+    assert coordinator.reports["broken2"] == {"schema_version": SCHEMA_VERSION, "automatic": True}
+    print("PASS: non-dict report never raises")
+    return 0
+
+
 def test_unknown_container_dropped():
     """A container this schema does not know is dropped - there is no untyped path into the catalogue."""
     base, coordinator = _coordinator()
@@ -133,6 +200,19 @@ def test_meter_sub_record_validated():
     return 0
 
 
+def test_credential_guard_fires_inside_sub_record_container():
+    """The credential guard is shared code, so it fires identically for a key nested inside a sub-record's container (tariff.info), not just at record level."""
+    base, coordinator = _coordinator()
+    coordinator.report("octopus", {"meters": [{
+        "device_id": "octopus:m1", "direction": "import",
+        "tariff": {"info": {"tariff_code": "E-1R-AGILE-24-10-01-A", "api_key": "abcd1234"}},
+    }]})
+    tariff_info = coordinator.reports["octopus"]["meters"][0]["tariff"]["info"]
+    assert tariff_info == {"tariff_code": "E-1R-AGILE-24-10-01-A"}, tariff_info
+    print("PASS: credential guard fires inside a sub-record container")
+    return 0
+
+
 def test_coordinator_all(my_predbat=None):
     """Run every coordinator test, returning the number of failures."""
     failures = 0
@@ -142,8 +222,13 @@ def test_coordinator_all(my_predbat=None):
     failures += test_info_rejects_email_shaped_and_long_strings()
     failures += test_credential_named_field_rejected()
     failures += test_entities_credential_named_key_rejected()
+    failures += test_entities_free_text_unit_dropped_legitimate_descriptor_intact()
+    failures += test_entities_options_preserves_realistic_values()
+    failures += test_coverage_accepts_numbers_booleans_and_vocabulary_lists()
+    failures += test_validate_report_never_raises_on_non_dict()
     failures += test_unknown_container_dropped()
     failures += test_record_without_device_id_dropped()
     failures += test_report_is_idempotent_and_versioned()
     failures += test_meter_sub_record_validated()
+    failures += test_credential_guard_fires_inside_sub_record_container()
     return failures

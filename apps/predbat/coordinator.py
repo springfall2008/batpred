@@ -74,14 +74,61 @@ def _clean_scalar(value):
     return value if isinstance(value, (str, int, float, bool)) else None
 
 
+MAX_OPTIONS = 256
+
+
+def _clean_option_list(value):
+    """A select's legal option list: bounded strings, capped at MAX_OPTIONS entries, or None.
+
+    Not vocabulary tokens - real select options look like "00:30" or "PauseCharge", which the
+    lowercase-token pattern would reject outright.
+    """
+    if not isinstance(value, list):
+        return None
+    return [option for option in (_clean_string(entry) for entry in value[:MAX_OPTIONS]) if option is not None]
+
+
+def _clean_measure_or_tokens(value):
+    """A coverage fact: a number, a boolean, or a list of vocabulary tokens (e.g. forecast variants), or None."""
+    cleaned = _clean_number(value)
+    if cleaned is not None:
+        return cleaned
+    if isinstance(value, list):
+        return [token for token in (_clean_token(entry) for entry in value) if token is not None]
+    return None
+
+
+# Descriptor field name -> cleaner. entity_id is required and handled separately in
+# _clean_descriptor, since every other field is optional and dropped rather than disqualifying.
+DESCRIPTOR_FIELD_CLEANERS = {
+    "domain": _clean_token,
+    "access": _clean_token,
+    "unit": _clean_string,
+    "device_class": _clean_string,
+    "min": _clean_number,
+    "max": _clean_number,
+    "step": _clean_number,
+    "precision": _clean_number,
+    "options": _clean_option_list,
+    "format": _clean_string,
+}
+
+
 def _clean_descriptor(value):
-    """One entity descriptor, keeping only known descriptor fields, or None if it lacks a string entity_id."""
+    """One entity descriptor: entity_id required verbatim, every other field cleaned by its own declared type.
+
+    entities is a "clear" container, republished unredacted into debug dumps users post to public
+    GitHub issues, so a field is kept only if it fits its type - free text cannot ride in on unit,
+    device_class or options just because the container's name sounds safe.
+    """
     if not isinstance(value, dict) or not isinstance(value.get("entity_id"), str):
         return None
-    kept = {}
-    for field in DESCRIPTOR_FIELDS:
+    kept = {"entity_id": value["entity_id"]}
+    for field, cleaner in DESCRIPTOR_FIELD_CLEANERS.items():
         if field in value and value[field] is not None:
-            kept[field] = value[field]
+            cleaned = cleaner(value[field])
+            if cleaned is not None:
+                kept[field] = cleaned
     return kept
 
 
@@ -91,7 +138,7 @@ CONTAINER_SPEC = {
     "account_ids": ("pseudonym", _clean_scalar),
     "info": ("clear", _clean_string),
     "ratings": ("clear", _clean_number),
-    "coverage": ("clear", _clean_number),
+    "coverage": ("clear", _clean_measure_or_tokens),
     "entities": ("clear", _clean_descriptor),
 }
 
@@ -197,6 +244,9 @@ def _validate_record(record, section, component_name, log):
 
 def validate_report(report, component_name, log):
     """Return a cleaned copy of one component's report - never raises, drops what does not fit."""
+    if not isinstance(report, dict):
+        log("Warn: Coordinator: {} report is a {}, not a dict - treated as empty".format(component_name, type(report).__name__))
+        report = {}
     cleaned = {"schema_version": SCHEMA_VERSION, "automatic": bool(report.get("automatic", True))}
     for section in SECTION_SPEC:
         records = []
