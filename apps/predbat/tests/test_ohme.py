@@ -20,6 +20,8 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ohme import (
+    CAR_DISCOVERY_ENTITY_SPEC,
+    CHARGER_DISCOVERY_ENTITY_SPEC,
     ENERGY_TODAY_ENTITY,
     MAX_ENERGY_GAP_SECONDS,
     POWER_WATTS_ENTITY,
@@ -312,6 +314,20 @@ def test_ohme(my_predbat=None):
         ("switch_max_charge_off", _test_ohme_switch_event_handler_max_charge_off, "switch_event_handler max_charge off"),
         ("switch_approve_charge", _test_ohme_switch_event_handler_approve_charge, "switch_event_handler approve_charge"),
         ("switch_approve_wrong_status", _test_ohme_switch_event_handler_approve_charge_wrong_status, "switch_event_handler approve wrong status"),
+        ("discovery_split", _test_ohme_build_discovery_charger_and_car_split, "build_discovery produces cross-linked charger and car records"),
+        ("discovery_stub_car", _test_ohme_build_discovery_stub_car_when_no_vehicle, "build_discovery stubs the car when no vehicle is known"),
+        ("discovery_known_vehicle", _test_ohme_build_discovery_known_vehicle, "build_discovery reports a genuine car identity when a vehicle is known"),
+        ("discovery_vehicle_real_parse", _test_ohme_build_discovery_vehicle_from_real_client_parse, "the non-stub car path works against the real client parsing pipeline"),
+        ("discovery_entity_split", _test_ohme_build_discovery_entities_split_by_record, "charger and car entities land in the correct record"),
+        ("discovery_entities_partial", _test_ohme_build_discovery_entities_only_when_published, "only published entities are reported"),
+        ("discovery_no_max_power", _test_ohme_build_discovery_omits_unknown_ratings, "build_discovery reports no ratings when none are genuinely known"),
+        ("discovery_automatic_flag", _test_ohme_build_discovery_records_automatic_flag, "build_discovery records self.ohme_automatic regardless of its value"),
+        ("discovery_marker_incomplete", _test_ohme_discovery_report_not_advanced_while_entities_incomplete, "the reported-marker does not advance while entities are incomplete"),
+        ("discovery_failure_retry", _test_ohme_discovery_report_failure_contained_and_retried, "a build_discovery failure is contained and retried"),
+        ("discovery_run_unconditional", _test_ohme_discovery_report_retried_via_unconditional_run_call, "a first-cycle failure is retried by run()'s unconditional call"),
+        ("discovery_automatic_false_run", _test_ohme_discovery_report_produced_when_automatic_false, "run() reports to the catalogue even when ohme_automatic is False"),
+        ("discovery_round_trip", _test_ohme_build_discovery_round_trips_through_coordinator_and_redaction, "build_discovery round-trips through the real Coordinator and Redactor"),
+        ("discovery_no_email_leak", _test_ohme_build_discovery_never_leaks_login_email, "the Ohme login email never enters the discovery report in any form"),
     ]
 
     # Run all sub-tests
@@ -1610,6 +1626,7 @@ class MockOhmeAPI(OhmeAPI):
         self.energy_last_time = None
         self.energy_last_watts = 0.0
         self.energy_restored = False
+        self.discovery_reported_for = None
 
         # Stand-in for the PredBat base object, so arg wiring and state read-back can be tested
         self.args = {}
@@ -3131,4 +3148,451 @@ def _test_ohme_switch_event_handler_approve_charge_wrong_status(my_predbat=None)
     assert "not pending approval" in api.log_messages[0], f"Expected not pending approval warning, got {api.log_messages[0]}"
 
     print("PASS: switch_event_handler correctly rejects approve_charge when not pending")
+    return 0
+
+
+# ============================================================================
+# Discovery Catalogue Tests (build_discovery, _refresh_discovery_report)
+# ============================================================================
+#
+# Task 8: the Ohme reporter is what proves the charger-and-car split the discovery catalogue
+# design rests on - one charger record and one car record, cross-linked in both directions, with
+# the car carrying a genuine identity when Ohme's own account data knows the vehicle and a stub
+# otherwise. MockOhmeAPI's own states dict stands in for the state store here, exactly as
+# _ohme_control_api() already stages entries in it for the control tests above -
+# MockOhmeAPI.dashboard_item() does not feed published entities back into get_state_wrapper() the
+# way the real ComponentBase/PredBat one does (see output.py's dashboard_item(), which calls
+# set_state_wrapper()), so a test that needs build_discovery()'s entity-existence check to see an
+# entity as published stages it into api.states directly.
+# ============================================================================
+
+
+def _stage_all_discovery_entities(api):
+    """Publish every charger and car discovery entity into the mock state store."""
+    for entity_id, _domain, _access in CHARGER_DISCOVERY_ENTITY_SPEC.values():
+        api.states[(entity_id, None)] = "on"
+    for entity_id, _domain, _access in CAR_DISCOVERY_ENTITY_SPEC.values():
+        api.states[(entity_id, None)] = "on"
+
+
+def _known_vehicle():
+    """One realistic Ohme "cars" API entry, matching MOCK_DEVICE_INFO_RESPONSE's shape."""
+    return {
+        "id": "car-123",
+        "name": "Tesla Model 3",
+        "model": {
+            "make": "Tesla",
+            "modelName": "Model 3",
+            "availableFromYear": 2017,
+            "brand": {"name": "Tesla"},
+        },
+    }
+
+
+def _test_ohme_build_discovery_charger_and_car_split(my_predbat=None):
+    """One charger record and one car record are produced, cross-linked in both directions"""
+    print("**** Running test_ohme_build_discovery_charger_and_car_split ****")
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    _stage_all_discovery_entities(api)
+
+    report = api.build_discovery()
+
+    assert len(report["chargers"]) == 1, f"Expected exactly one charger record, got {len(report['chargers'])}"
+    assert len(report["cars"]) == 1, f"Expected exactly one car record, got {len(report['cars'])}"
+    charger = report["chargers"][0]
+    car = report["cars"][0]
+    assert charger["device_id"] == "ohme:TEST-SERIAL-123", f"Unexpected charger device_id: {charger['device_id']}"
+    assert car["charged_by"] == charger["device_id"], f"car.charged_by should point back at the charger, got {car.get('charged_by')}"
+    assert charger["serves_cars"] == [car["device_id"]], f"charger.serves_cars should list the car, got {charger.get('serves_cars')}"
+
+    print("PASS: build_discovery produces one charger and one car record, cross-linked in both directions")
+    return 0
+
+
+def _test_ohme_build_discovery_stub_car_when_no_vehicle(my_predbat=None):
+    """With no vehicle known the car record is a stub - device_id "ohme:{serial}:car", info.stub true"""
+    print("**** Running test_ohme_build_discovery_stub_car_when_no_vehicle ****")
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    api.client._cars = []
+    _stage_all_discovery_entities(api)
+
+    report = api.build_discovery()
+
+    car = report["cars"][0]
+    assert car["device_id"] == "ohme:TEST-SERIAL-123:car", f"Unexpected stub device_id: {car['device_id']}"
+    assert car["info"].get("stub") is True, f"Expected info.stub True for a stub car, got {car.get('info')}"
+
+    print("PASS: with no vehicle known, build_discovery stubs the car with info.stub True")
+    return 0
+
+
+def _test_ohme_build_discovery_known_vehicle(my_predbat=None):
+    """With a vehicle known the car carries its make and model and a non-stub device_id"""
+    print("**** Running test_ohme_build_discovery_known_vehicle ****")
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    api.client._cars = [_known_vehicle()]
+    _stage_all_discovery_entities(api)
+
+    report = api.build_discovery()
+
+    car = report["cars"][0]
+    assert car["device_id"] == "ohme:car-123", f"Unexpected car device_id: {car['device_id']}"
+    assert car["info"].get("make") == "Tesla", f"Expected info.make 'Tesla', got {car.get('info')}"
+    assert car["info"].get("model") == "Model 3", f"Expected info.model 'Model 3', got {car.get('info')}"
+    assert "stub" not in car["info"], f"Expected no info.stub for a known vehicle, got {car.get('info')}"
+
+    print("PASS: with a vehicle known, build_discovery reports its make/model and a non-stub device_id")
+    return 0
+
+
+def _test_ohme_build_discovery_vehicle_from_real_client_parse(my_predbat=None):
+    """The non-stub car path works against data parsed by the real client, not a hand-built _cars list"""
+    print("**** Running test_ohme_build_discovery_vehicle_from_real_client_parse ****")
+
+    api = MockOhmeAPI()
+    # async_update_device_info() is the real OhmeApiClient method, parsing MockOhmeApiClient's
+    # canned /v1/users/me/account response (MOCK_DEVICE_INFO_RESPONSE) exactly as it would parse a
+    # real Ohme API response - nothing about _cars is hand-built here.
+    run_async(api.client.async_update_device_info())
+    _stage_all_discovery_entities(api)
+
+    assert api.client.serial == "TEST-SERIAL-123", f"Expected the real parse to set serial, got {api.client.serial}"
+    assert len(api.client._cars) == 1, f"Expected the real parse to populate one car, got {api.client._cars}"
+
+    report = api.build_discovery()
+
+    car = report["cars"][0]
+    assert car["device_id"] == "ohme:car-123", f"Unexpected car device_id from real client parse: {car['device_id']}"
+    assert car["info"].get("make") == "Tesla", f"Expected info.make 'Tesla' from real client parse, got {car.get('info')}"
+    assert car["info"].get("model") == "Model 3", f"Expected info.model 'Model 3' from real client parse, got {car.get('info')}"
+
+    print("PASS: the non-stub car path works end to end against data the real client parsed")
+    return 0
+
+
+def _test_ohme_build_discovery_entities_split_by_record(my_predbat=None):
+    """Charger entities land on the charger record, car entities land on the car record"""
+    print("**** Running test_ohme_build_discovery_entities_split_by_record ****")
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    _stage_all_discovery_entities(api)
+
+    report = api.build_discovery()
+
+    charger_entities = set(report["chargers"][0]["entities"])
+    car_entities = set(report["cars"][0]["entities"])
+
+    assert charger_entities == set(CHARGER_DISCOVERY_ENTITY_SPEC), f"Unexpected charger entities: {charger_entities}"
+    assert car_entities == set(CAR_DISCOVERY_ENTITY_SPEC), f"Unexpected car entities: {car_entities}"
+    assert "car_charging_planned" in charger_entities and "car_charging_planned" not in car_entities, "car_charging_planned should be a charger fact"
+    assert "car_charging_soc" in car_entities and "car_charging_soc" not in charger_entities, "car_charging_soc should be a car fact"
+    assert report["chargers"][0]["entities"]["car_charging_planned"]["entity_id"] == "binary_sensor.predbat_ohme_connected"
+    assert report["cars"][0]["entities"]["car_charging_soc"]["entity_id"] == "sensor.predbat_ohme_battery_percent"
+
+    print("PASS: charger and car entities are split into the correct record")
+    return 0
+
+
+def _test_ohme_build_discovery_entities_only_when_published(my_predbat=None):
+    """Only entities that actually exist in the state store are reported"""
+    print("**** Running test_ohme_build_discovery_entities_only_when_published ****")
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    # Only the connected sensor and the battery percent sensor have been published so far.
+    api.states[("binary_sensor.predbat_ohme_connected", None)] = "on"
+    api.states[("sensor.predbat_ohme_battery_percent", None)] = 75
+
+    report = api.build_discovery()
+
+    assert set(report["chargers"][0]["entities"]) == {"car_charging_planned"}, f"Expected only car_charging_planned, got {list(report['chargers'][0]['entities'])}"
+    assert set(report["cars"][0]["entities"]) == {"car_charging_soc"}, f"Expected only car_charging_soc, got {list(report['cars'][0]['entities'])}"
+
+    print("PASS: build_discovery reports only the entities that actually exist in the state store")
+    return 0
+
+
+def _test_ohme_build_discovery_omits_unknown_ratings(my_predbat=None):
+    """No ratings.max_power_kw is invented when this client parses no such field"""
+    print("**** Running test_ohme_build_discovery_omits_unknown_ratings ****")
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    _stage_all_discovery_entities(api)
+
+    report = api.build_discovery()
+
+    assert "ratings" not in report["chargers"][0], f"Expected no fabricated ratings, got {report['chargers'][0].get('ratings')}"
+
+    print("PASS: build_discovery reports no ratings rather than inventing a max_power_kw")
+    return 0
+
+
+def _test_ohme_build_discovery_records_automatic_flag(my_predbat=None):
+    """The report's "automatic" flag mirrors self.ohme_automatic, and reporting is not gated on it"""
+    print("**** Running test_ohme_build_discovery_records_automatic_flag ****")
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    _stage_all_discovery_entities(api)
+
+    api.ohme_automatic = False
+    report_off = api.build_discovery()
+    api.ohme_automatic = True
+    report_on = api.build_discovery()
+
+    assert report_off["automatic"] is False, f"Expected automatic False, got {report_off['automatic']}"
+    assert report_on["automatic"] is True, f"Expected automatic True, got {report_on['automatic']}"
+    assert len(report_off["chargers"]) == 1 and len(report_off["cars"]) == 1, "A report should still be produced with ohme_automatic False"
+
+    print("PASS: build_discovery records self.ohme_automatic and is produced regardless of its value")
+    return 0
+
+
+def _test_ohme_discovery_report_not_advanced_while_entities_incomplete(my_predbat=None):
+    """
+    The reported-marker does not advance while the charger/car entity set is incomplete.
+
+    Without this, a report built before publish_data() has ever run would be marked done forever,
+    and the catalogue would permanently describe an incomplete charger and car.
+    """
+    print("**** Running test_ohme_discovery_report_not_advanced_while_entities_incomplete ****")
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    reports = []
+    api.report_discovery = lambda report: reports.append(report)
+
+    api._refresh_discovery_report()
+
+    assert api.discovery_reported_for is None, "The marker should not advance while entities are incomplete"
+    assert len(reports) == 1, f"Expected exactly one report attempt, got {len(reports)}"
+
+    _stage_all_discovery_entities(api)
+    api._refresh_discovery_report()
+
+    assert api.discovery_reported_for is not None, "The marker should advance once every entity is published"
+    assert len(reports) == 2, f"Expected a second report attempt once entities were complete, got {len(reports)}"
+
+    print("PASS: the reported-marker only advances once the charger and car entities are complete")
+    return 0
+
+
+def _test_ohme_discovery_report_failure_contained_and_retried(my_predbat=None):
+    """A build_discovery failure must not propagate, and is retried the next time it is called"""
+    print("**** Running test_ohme_discovery_report_failure_contained_and_retried ****")
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    _stage_all_discovery_entities(api)
+    real_build_discovery = api.build_discovery
+    api.build_discovery = MagicMock(side_effect=Exception("boom"))
+    reports = []
+    api.report_discovery = lambda report: reports.append(report)
+
+    api._refresh_discovery_report()
+
+    assert not reports, "No report should have been recorded on the failing attempt"
+    assert api.discovery_reported_for is None, "A failed report must not be marked as reported"
+    assert any("failed to report discovery" in msg for msg in api.log_messages), f"Expected a warning log, got {api.log_messages}"
+
+    api.build_discovery = real_build_discovery
+    api._refresh_discovery_report()
+
+    assert len(reports) == 1, f"Expected the retried report to succeed, got {len(reports)} reports"
+    assert api.discovery_reported_for is not None, "The marker should advance once the retried report succeeds"
+
+    print("PASS: a build_discovery failure is contained and retried on the next call, not lost forever")
+    return 0
+
+
+def _test_ohme_discovery_report_retried_via_unconditional_run_call(my_predbat=None):
+    """
+    A build_discovery failure on the very first run() cycle is retried on a later, unchanging
+    cycle via run()'s unconditional call to _refresh_discovery_report() - not lost for the life of
+    the process, even though the "if first and self.client.serial:" block it sits beside only ever
+    runs once ("first" flips to False forever the instant run() returns True).
+    """
+    print("**** Running test_ohme_discovery_report_retried_via_unconditional_run_call ****")
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    _stage_all_discovery_entities(api)
+
+    async def _async_noop(*args, **kwargs):
+        """Stand in for a network-facing async call whose real return value this test does not depend on."""
+        return None
+
+    api.client.async_update_device_info = _async_noop
+    api.client.async_get_charge_session = _async_noop
+    api.publish_data = _async_noop
+    api.update_success_timestamp = lambda: None
+
+    real_build_discovery = api.build_discovery
+    api.build_discovery = MagicMock(side_effect=Exception("boom"))
+    reports = []
+    api.report_discovery = lambda report: reports.append(report)
+
+    result1 = run_async(api.run(seconds=0, first=True))
+
+    assert result1 is True, "run() should still succeed on a cycle where only the discovery report fails"
+    assert not reports, f"No report should have succeeded on the failing first cycle, got {len(reports)}"
+    assert api.discovery_reported_for is None, "A failed report must not be marked as reported"
+
+    api.build_discovery = real_build_discovery
+    result2 = run_async(api.run(seconds=600, first=False))
+
+    assert result2 is True, "run() should succeed on the retried cycle"
+    assert len(reports) == 1, f"Expected exactly one successful report after the retry, got {len(reports)}"
+    assert api.discovery_reported_for is not None, "The marker should have advanced once the retried report succeeded"
+
+    print("PASS: a first-cycle build_discovery failure is retried on a later cycle via run()'s unconditional call")
+    return 0
+
+
+def _test_ohme_discovery_report_produced_when_automatic_false(my_predbat=None):
+    """
+    An installation running ohme_automatic: false - precisely the manually-configured
+    installation a discovery catalogue most wants to describe - still gets a discovery report from
+    a real run() cycle, even though automatic_config() is gated on ohme_automatic and never runs.
+    """
+    print("**** Running test_ohme_discovery_report_produced_when_automatic_false ****")
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    api.ohme_automatic = False
+    _stage_all_discovery_entities(api)
+
+    async def _async_noop(*args, **kwargs):
+        """Stand in for a network-facing async call whose real return value this test does not depend on."""
+        return None
+
+    api.client.async_update_device_info = _async_noop
+    api.client.async_get_charge_session = _async_noop
+    api.publish_data = _async_noop
+    api.update_success_timestamp = lambda: None
+    automatic_config_calls = []
+
+    async def _mock_automatic_config():
+        """Record that automatic_config() was called, without performing its real apps.yaml wiring."""
+        automatic_config_calls.append(True)
+
+    api.automatic_config = _mock_automatic_config
+    reports = []
+    api.report_discovery = lambda report: reports.append(report)
+
+    result = run_async(api.run(seconds=0, first=True))
+
+    assert result is True, "run() should succeed"
+    assert not automatic_config_calls, "automatic_config() must not run when ohme_automatic is False"
+    assert len(reports) == 1, f"Expected exactly one discovery report even with ohme_automatic False, got {len(reports)}"
+    assert reports[0].get("automatic") is False, f"Expected the report to record automatic False, got {reports[0].get('automatic')}"
+    assert api.discovery_reported_for is not None, "The marker should have advanced once the report succeeded"
+
+    print("PASS: run() reports to the discovery catalogue even when ohme_automatic is False")
+    return 0
+
+
+def _test_ohme_build_discovery_round_trips_through_coordinator_and_redaction(my_predbat=None):
+    """
+    Feed build_discovery()'s output through the real Coordinator.report()/assemble() and then
+    through the real Redactor, exactly as it will be at runtime.
+
+    Checks two things: that nothing intended for a typed container was silently dropped by
+    validation (the round-trip check that has caught a real bug in each of the previous
+    reporters - a truncated option list, an integer dropped by a strings-only container, an
+    identifier embedded in a transformed form), and that the redacted catalogue never publishes
+    the Ohme login email in the clear in any form - see
+    _test_ohme_build_discovery_never_leaks_login_email for that half in isolation, with more forms
+    checked.
+    """
+    print("**** Running test_ohme_build_discovery_round_trips_through_coordinator_and_redaction ****")
+
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    api = MockOhmeAPI()
+    api.client.serial = "OHME-SERIAL-99887"
+    api.client.device_info = {"model": "Home Pro"}
+    api.client._cars = [_known_vehicle()]
+    _stage_all_discovery_entities(api)
+
+    report = api.build_discovery()
+
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.report("ohme", report)
+    cleaned = coordinator.reports["ohme"]
+
+    failed = 0
+
+    def check(condition, message):
+        """Record one failed assertion, printing its message, without aborting the remaining checks."""
+        nonlocal failed
+        if not condition:
+            print("ERROR: " + message)
+            failed += 1
+
+    charger = next(r for r in cleaned["chargers"] if r["device_id"] == "ohme:OHME-SERIAL-99887")
+    check(charger.get("hardware_ids", {}).get("serial") == "OHME-SERIAL-99887", "serial dropped or altered by validation: {}".format(charger.get("hardware_ids")))
+    check(charger.get("info", {}).get("vendor") == "Ohme", "vendor dropped by validation: {}".format(charger.get("info")))
+    check(charger.get("info", {}).get("model") == "Home Pro", "model dropped by validation: {}".format(charger.get("info")))
+    check(charger.get("serves_cars") == ["ohme:car-123"], "serves_cars dropped or altered by validation: {}".format(charger.get("serves_cars")))
+    check(len(charger.get("entities", {})) == len(CHARGER_DISCOVERY_ENTITY_SPEC), "not every charger entity survived validation: {}".format(charger.get("entities")))
+
+    car = next(r for r in cleaned["cars"] if r["device_id"] == "ohme:car-123")
+    check(car.get("charged_by") == "ohme:OHME-SERIAL-99887", "charged_by dropped or altered by validation: {}".format(car.get("charged_by")))
+    check(car.get("info", {}).get("make") == "Tesla", "make dropped by validation: {}".format(car.get("info")))
+    check(car.get("info", {}).get("model") == "Model 3", "model dropped by validation: {}".format(car.get("info")))
+    check(len(car.get("entities", {})) == len(CAR_DISCOVERY_ENTITY_SPEC), "not every car entity survived validation: {}".format(car.get("entities")))
+
+    coordinator.assemble()
+    catalogue_text = str(coordinator.catalogue())
+
+    check("OHME-SERIAL-99887" in catalogue_text, "the serial should survive in the clear (it is hardware_ids, not a credential), but is missing from the redacted catalogue")
+    check("car-123" in catalogue_text, "the vehicle id should survive in the clear, but is missing from the redacted catalogue")
+    check("Tesla" in catalogue_text and "Model 3" in catalogue_text, "make/model should survive in the clear, but are missing from the redacted catalogue")
+    check(api.client.email not in catalogue_text, "the Ohme login email appears in the clear in the redacted catalogue")
+
+    if failed == 0:
+        print("PASS: build_discovery round-trips through the real Coordinator and Redactor - nothing intended was dropped, and no login email leaked")
+    return failed
+
+
+def _test_ohme_build_discovery_never_leaks_login_email(my_predbat=None):
+    """
+    The Ohme login email must never enter the catalogue - not in info, not in a device_id, not
+    embedded in an entity name - in any form, not just its raw string.
+
+    build_discovery() never reads self.client.email/_password at all, so this is a regression
+    guard: it fails loudly if a future change ever starts threading the login identifier into any
+    field this reporter populates, checking the raw address, its case-folded form and its local
+    part in isolation (the fragment most likely to survive a careless partial redaction).
+    """
+    print("**** Running test_ohme_build_discovery_never_leaks_login_email ****")
+
+    api = MockOhmeAPI()
+    api.email = "Driver@Example.com"
+    api.client.email = "Driver@Example.com"
+    api.client.serial = "TEST-SERIAL-123"
+    api.client._cars = [_known_vehicle()]
+    _stage_all_discovery_entities(api)
+
+    report = api.build_discovery()
+    report_text = str(report)
+
+    email = api.client.email
+    local_part = email.split("@")[0]
+
+    assert email not in report_text, "the raw login email appears in build_discovery()'s output"
+    assert email.lower() not in report_text.lower(), "a case-folded form of the login email appears in build_discovery()'s output"
+    assert local_part not in report_text, "the login email's local part appears in build_discovery()'s output"
+
+    print("PASS: the Ohme login email does not enter the discovery report in any form")
     return 0
