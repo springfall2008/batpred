@@ -359,6 +359,58 @@ def _test_basic_no_car(my_predbat, failed):
     return failed
 
 
+def _test_savings_today_predbat_matches_published_adjusted_value(my_predbat, failed):
+    """self.savings_today_predbat - what accumulates into sensor.predbat_savings_total_predbat -
+    must equal the same saving_adjusted figure sensor.predbat_savings_yesterday_predbat's own
+    *state* publishes, not the unadjusted saving_real (GH#3894).
+
+    Before the fix, the running total summed saving_real (self.savings_today_predbat = saving)
+    while the daily sensor's state - the value a HA dashboard bar chart actually shows - was
+    saving_adjusted. The two series measure different things, so a real, climbing total could
+    coexist with daily bars sitting negative: exactly the symptom reported. The sibling metric,
+    savings_today_pvbat, already used the adjusted figure correctly - this was the one
+    inconsistent case.
+
+    Forcing a real divergence: with the default fixture, battery_value_yesterday and
+    battery_value_baseline both come out 0 (no soc_kwh_history is set, so nothing to adjust for)
+    and saving_real == saving_adjusted, which would pass even with the bug reverted. Setting
+    soc_kwh_history to a closing SoC that differs from run_prediction's mocked final_soc gives
+    the real and baseline sides different battery-value adjustments, so the two figures only
+    match here if the code is actually reading the adjusted value.
+    """
+    print("calculate_yesterday: Test - savings_today_predbat matches the published saving_adjusted, not saving_real (#3894)")
+    now_utc = _setup_base(my_predbat)
+
+    minutes_back = my_predbat.minutes_now
+    my_predbat.soc_kwh_history = {minutes_back: 2.0}  # differs from the mock's FIXED_FINAL_SOC (5.0)
+
+    captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0)
+    my_predbat.calculate_yesterday()
+
+    saving_real = my_predbat.get_state_wrapper(my_predbat.prefix + ".savings_yesterday_predbat", attribute="saving_real")
+    saving_adjusted = my_predbat.get_state_wrapper(my_predbat.prefix + ".savings_yesterday_predbat", attribute="saving_adjusted")
+
+    if saving_real is None or saving_adjusted is None:
+        print("ERROR: saving_real/saving_adjusted attributes were not published")
+        failed = True
+    else:
+        if abs(saving_real - saving_adjusted) < 1e-9:
+            print("ERROR: test setup did not produce a real vs adjusted divergence (saving_real={}, saving_adjusted={}) - cannot distinguish the bug".format(saving_real, saving_adjusted))
+            failed = True
+        if abs(my_predbat.savings_today_predbat - saving_adjusted) > 1e-9:
+            print(
+                "ERROR: savings_today_predbat ({}) should equal the published saving_adjusted ({}), not saving_real ({}) - the running total (predbat.py) would sum a different quantity than the daily sensor state shows (#3894)".format(
+                    my_predbat.savings_today_predbat, saving_adjusted, saving_real
+                )
+            )
+            failed = True
+
+    my_predbat.soc_kwh_history = {}
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
 def _test_forecast_minutes_widened_before_step_data(my_predbat, failed):
     """Regression test for #4418.
 
@@ -2025,6 +2077,7 @@ def test_calculate_yesterday(my_predbat):
 
     failed = _test_early_exit(my_predbat, failed)
     failed = _test_basic_no_car(my_predbat, failed)
+    failed = _test_savings_today_predbat_matches_published_adjusted_value(my_predbat, failed)
     failed = _test_forecast_minutes_widened_before_step_data(my_predbat, failed)
     failed = _test_car_slot_subtraction(my_predbat, failed)
     failed = _test_car_slot_from_energy_sensor(my_predbat, failed)
