@@ -474,25 +474,26 @@ class GivTCPComponent(ComponentBase):
             self.log("Warn: GivTCP: no data read from any configured REST endpoint yet")
             return False
 
-        if rediscover:
-            await self.rediscover()
-
-        # Re-runs when the fleet has grown. Deliberately not when it shrinks: self.discovered is
-        # append-only, because dropping an inverter that stopped answering would rebuild Predbat's
-        # inverter list for a smaller fleet and leave a real battery uncontrolled at whatever
-        # settings it last had. Leaving it in makes Inverter.__init__ fail visibly instead.
-        if self.discovered != self.configured_for:
-            await self.automatic_config()
-            self.configured_for = list(self.discovered)
-            self.automatic_config_done = True
-
         # Independent of self.automatic and of automatic_config(): the catalogue describes what
         # hardware is physically there, not whether this component wired Predbat's apps.yaml to
         # it - that distinction is recorded in the report's own "automatic" flag, not acted on
         # here as a gate on reporting at all.
         #
+        # Deliberately placed BEFORE "if rediscover:"/automatic_config() below, not just before
+        # update_success_timestamp() at the bottom: rediscover() appends a newly-found index to
+        # self.discovered without publishing anything for it (publish_data() already ran, above,
+        # over self.discovered as it stood at the TOP of this cycle - the new index isn't in it
+        # yet), and automatic_config() only writes apps.yaml args, not HA entities, either. A
+        # report positioned after rediscover() would see the mismatch immediately and describe the
+        # rediscovered inverter with an empty entity map - and, since self.reported_for advances
+        # regardless, that empty record would never be retried even once publish_data() actually
+        # published its entities on the very next cycle. Positioned here, this cycle's report still
+        # matches self.reported_for (self.discovered hasn't grown yet) and is a no-op; the next
+        # cycle's poll republishes the grown fleet - including the rediscovered inverter - before
+        # this block runs again, so the report that finally fires sees real entities.
+        #
         # Exception-guarded like publish_data()'s per-inverter work, unlike the automatic_config()
-        # call above: an observer must never be able to degrade the health of the thing it
+        # call below: an observer must never be able to degrade the health of the thing it
         # observes. Without this, a bug in build_discovery() would propagate out of run() itself,
         # withholding update_success_timestamp() below and retrying - identically failing - every
         # cycle, eventually pushing an otherwise-healthy component toward unhealthy. self.reported_for
@@ -505,6 +506,18 @@ class GivTCPComponent(ComponentBase):
             except Exception as e:
                 self.log("Warn: GivTCP: failed to report discovery for the catalogue: {}".format(e))
                 self.non_fatal_error_occurred()
+
+        if rediscover:
+            await self.rediscover()
+
+        # Re-runs when the fleet has grown. Deliberately not when it shrinks: self.discovered is
+        # append-only, because dropping an inverter that stopped answering would rebuild Predbat's
+        # inverter list for a smaller fleet and leave a real battery uncontrolled at whatever
+        # settings it last had. Leaving it in makes Inverter.__init__ fail visibly instead.
+        if self.discovered != self.configured_for:
+            await self.automatic_config()
+            self.configured_for = list(self.discovered)
+            self.automatic_config_done = True
 
         # Deliberately still True: a failed poll should not tear the component down and restart it
         # over a transient blip. Withholding the timestamp lets ComponentManager's staleness check

@@ -2390,6 +2390,55 @@ def test_report_discovery_failure_does_not_degrade_component_health(my_predbat=N
     return 0
 
 
+def test_rediscovered_inverter_is_reported_only_once_its_entities_exist(my_predbat=None):
+    """
+    A rediscovered inverter's report is deferred a cycle, until publish_data() has actually
+    published its entities - not emitted empty, and marked reported, on the very cycle
+    rediscover() adds it to self.discovered.
+
+    rediscover() appends the newly-found index to self.discovered without publishing anything for
+    it - publish_data() already ran that same cycle, over self.discovered as it stood at the TOP of
+    the cycle, before the new index existed in it. The report block in run() is positioned BEFORE
+    "if rediscover:" for exactly this reason: on the rediscovery cycle it still matches
+    self.reported_for (self.discovered hasn't grown yet) and is a no-op, and the NEXT cycle's poll
+    republishes the now-grown fleet - including the rediscovered inverter's real entities - before
+    the (now mismatched) report block runs again. Drives an actual run() cycle through rediscovery
+    rather than calling build_discovery() directly, since that ordering is exactly what a direct
+    call sidesteps.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = MagicMock(return_value=None)
+
+    reports = []
+    component.report_discovery = lambda report: reports.append(report)
+
+    run_async(component.run(seconds=0, first=True))
+    assert len(reports) == 1, f"Expected the startup report, got {len(reports)}"
+    assert component.reported_for == [0]
+
+    # inverter 1 comes back, and the hourly re-probe finds it
+    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
+
+    assert component.discovered == [0, 1], f"Expected both endpoints discovered, got {component.discovered}"
+    # The rediscovery cycle itself must not have reported anything new: reporting here, before
+    # publish_data() has published inverter 1's entities, would emit an empty entity map for it and
+    # - since self.reported_for would advance regardless - never retry even once the entities exist.
+    assert len(reports) == 1, "The rediscovery cycle itself must not report yet - inverter 1 has no published entities until next cycle's poll"
+    assert component.reported_for == [0], f"Expected the report to stay deferred this cycle, got {component.reported_for}"
+
+    # The following cycle republishes the grown fleet before the (now mismatched) report block runs
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS + GIVTCP_POLL_SECONDS, first=False))
+    assert len(reports) == 2, "Expected the deferred report to fire once inverter 1's entities exist"
+    assert component.reported_for == [0, 1]
+    rediscovered_entities = reports[-1]["inverters"][1]["entities"]
+    assert rediscovered_entities, "The rediscovered inverter's report must have a populated entity map, not an empty one"
+    assert "charge_rate" in rediscovered_entities
+    print("PASS: a rediscovered inverter's report is deferred until its entities actually exist, never emitted empty")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -2502,6 +2551,7 @@ def test_givtcp_component(my_predbat=None):
         ("discovery_entities_v3_include", test_build_discovery_entities_include_what_v3_actually_publishes, "v3 catalogue includes entities actually published"),
         ("discovery_round_trip", test_build_discovery_round_trips_through_the_coordinator, "build_discovery round-trips through the real Coordinator"),
         ("discovery_report_failure_contained", test_report_discovery_failure_does_not_degrade_component_health, "a build_discovery failure is contained, not left to degrade health"),
+        ("discovery_rediscovery_ordering", test_rediscovered_inverter_is_reported_only_once_its_entities_exist, "rediscovered inverter reported only once its entities exist"),
     ]
 
     passed = 0
