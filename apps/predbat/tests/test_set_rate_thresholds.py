@@ -33,10 +33,11 @@ def _setup_two_rate_tariff(my_predbat, event_start, event_end, event_boost=100.0
     my_predbat.minutes_now = 0
     my_predbat.forecast_minutes = 24 * 60
 
-    rate_import = {}
+    rate_import_base = {}
     for minute in range(0, 48 * 60):
         hour = (minute // 60) % 24
-        rate_import[minute] = 25.95 if 6 <= hour < 22 else 3.49
+        rate_import_base[minute] = 25.95 if 6 <= hour < 22 else 3.49
+    rate_import = rate_import_base.copy()
 
     rate_import_replicated = {}
     for minute in range(event_start, event_end):
@@ -46,8 +47,10 @@ def _setup_two_rate_tariff(my_predbat, event_start, event_end, event_boost=100.0
     rate_export = {minute: 15.0 for minute in range(0, 48 * 60)}
 
     my_predbat.rate_import = rate_import
+    my_predbat.rate_import_base = rate_import_base
     my_predbat.rate_import_replicated = rate_import_replicated
     my_predbat.rate_export = rate_export
+    my_predbat.rate_export_base = rate_export.copy()
     my_predbat.rate_export_replicated = {}
 
     my_predbat.rate_min, my_predbat.rate_max, my_predbat.rate_average, _, _ = my_predbat.rate_minmax(rate_import)
@@ -186,6 +189,31 @@ def test_set_rate_thresholds_ignores_saving_boost_in_automatic_mode(my_predbat):
     return failed
 
 
+def test_set_rate_thresholds_ignores_small_saving_boost_in_manual_import_mode(my_predbat):
+    """Manual import threshold mode must also ignore a saving reward added to a cheap slot.
+
+    Reproduces the review case from #5052: +5p on a 3.49p night slot (8.49p total) stays below the
+    25.95p day-rate max, so a global-max filter leaves it in rate_average and inflates the manual
+    threshold.
+    """
+    print("**** test_set_rate_thresholds_ignores_small_saving_boost_in_manual_import_mode ****")
+    failed = False
+
+    _setup_two_rate_tariff(my_predbat, event_start=60, event_end=180, event_boost=5.0)
+    my_predbat.rate_low_threshold = 1.0
+
+    my_predbat.set_rate_thresholds()
+
+    expected_threshold = 18.46
+    if abs(my_predbat.rate_import_cost_threshold - expected_threshold) > 0.01:
+        print("ERROR: rate_import_cost_threshold should be {} (clean import average x 1.0), got {} - small boosted saving minutes contaminated manual mode".format(expected_threshold, my_predbat.rate_import_cost_threshold))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
 def test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode(my_predbat):
     """The export side and manual-threshold mode (rate_high_threshold > 0) were both untested -
     every prior test here used rate_import_replicated only and left rate_high_threshold at 0
@@ -282,6 +310,7 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_rate_minmax_excluding_saving_keeps_genuine_free_slots(my_predbat)
         failed |= test_rate_minmax_excluding_saving_falls_back_when_everything_is_tagged(my_predbat)
         failed |= test_set_rate_thresholds_ignores_saving_boost_in_automatic_mode(my_predbat)
+        failed |= test_set_rate_thresholds_ignores_small_saving_boost_in_manual_import_mode(my_predbat)
         failed |= test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode(my_predbat)
         return failed
     finally:

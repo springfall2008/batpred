@@ -2290,12 +2290,15 @@ class Fetch:
         every rate and makes the whole ordinary-price day read as "low" (Copilot review on
         #5052 - reproduced with exactly that scenario before fixing).
 
-        Two passes: the first pass over the untagged minutes alone sets a baseline max. The
-        second pass then excludes a "saving"-tagged minute only if its rate exceeds that
-        baseline max - the one shape (a reward) that can distort the automatic threshold - and
-        admits every other minute, tagged or not, including a "saving"-tagged discount at or
-        below the baseline: a lower rate never inflates rate_max, and rate_min existing to reach
-        it is the whole point of a free/discount session.
+        Prefer a per-minute comparison against the pre-event/base tariff where available
+        (rate_import_base/rate_export_base): for a tagged minute above its own base rate, use the
+        base rate for min/max/average. This catches small rewards on cheap slots too
+        (e.g. 3.49p + 5p = 8.49p), which can stay below the day's global max yet still contaminate
+        averages if not mapped back to their base.
+
+        When no base curve is available, fall back to the earlier two-pass heuristic: first pass
+        over untagged minutes sets a baseline max, second pass excludes tagged minutes above that
+        baseline max.
 
         Falls back to the plain (unfiltered) min/max/average when every minute in range is tagged
         "saving" - an event that covers the whole forecast window leaves no genuine tariff minute to
@@ -2313,6 +2316,12 @@ class Fetch:
         if baseline_n == 0:
             return self.rate_minmax(rates)[:3]
 
+        rate_base = None
+        if rates is self.rate_import and self.rate_import_base:
+            rate_base = self.rate_import_base
+        elif rates is self.rate_export and self.rate_export_base:
+            rate_base = self.rate_export_base
+
         rate_min = 99999
         rate_max = 0
         rate_total = 0
@@ -2322,8 +2331,12 @@ class Fetch:
             if minute not in rates:
                 continue
             rate = rates[minute]
-            if rate_replicate.get(minute) == "saving" and rate > baseline_max:
-                continue
+            if rate_replicate.get(minute) == "saving":
+                if rate_base and minute in rate_base:
+                    if rate > rate_base[minute]:
+                        rate = rate_base[minute]
+                elif rate > baseline_max:
+                    continue
             rate_min = min(rate_min, rate)
             rate_max = max(rate_max, rate)
             rate_total += rate
