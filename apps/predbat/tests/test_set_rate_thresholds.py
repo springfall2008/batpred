@@ -254,8 +254,10 @@ _SNAPSHOT_FIELDS = (
     "rate_export_min",
     "rate_export_max",
     "rate_export_average",
+    "rate_import_cost_threshold",
+    "rate_export_cost_threshold",
     "rate_low_threshold",
-    "rate_high_threshold",
+    "rate_high_threshold"
     "alert_active_keep",
     "manual_soc_keep",
     "num_cars",
