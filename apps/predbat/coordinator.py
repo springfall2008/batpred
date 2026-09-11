@@ -177,7 +177,11 @@ class Redactor:
     cross-linking to it, substitutes those originals wherever else they appear (entity ids and
     dict keys included), and defensively pseudonymises identifier-shaped values misfiled into a
     clear container or used as a container key - including one nested inside a descriptor dict
-    or a token list, not just a container's top-level scalars.
+    or a token list, not just a container's top-level scalars. Two asymmetries keep this from
+    over-reaching: substring replacement is reserved for genuine identifiers (never a whole dict
+    key, which is rewritten by exact match only - see _substitute_key), and a value inside
+    hardware_ids is only shape-flagged when it is nothing BUT digits, since a letter-prefixed
+    vendor serial with a long digit tail is that container's entire declared purpose.
     """
 
     # Minimum length of an original before it is substituted inside other strings; below this a
@@ -191,11 +195,12 @@ class Redactor:
         self.salt = salt
         self.log = log
         self.originals = {}
-        # Subset of self.originals eligible for substring replacement inside unrelated strings -
-        # true identifiers (account_ids values, anything the shape or key guard catches). A bare
-        # device_id noted only for cross-linking is deliberately NOT included: matching it by
-        # substring would let an ordinary word like "charger" corrupt every unrelated string that
-        # happens to contain it.
+        # Subset of self.originals eligible for substring replacement inside a VALUE (never a
+        # dict key - see _substitute_key) - true identifiers: account_ids values, an
+        # identity-derived device_id (one whose record also carries account_ids - see _walk), and
+        # anything the shape or key guard catches. A device_id with no account_ids alongside it is
+        # never noted at all, so an ordinary word used as one (e.g. "charger") cannot corrupt
+        # unrelated text it happens to share a substring with.
         self.substring_ok = set()
         self._substring_order = []
 
@@ -207,25 +212,71 @@ class Redactor:
     def _note(self, value, substring=False):
         """Record an original so it can later be swapped for its token wherever it appears.
 
-        substring=True additionally makes it eligible for substring replacement inside unrelated
-        strings (entity ids, cross-link fields, dict keys); otherwise it is only ever matched by
-        whole-string equality. That split is what keeps a bare device_id (noted purely so a
-        cross-link resolves, regardless of whether its value looks like an identifier) from going
-        substring-hunting through text it merely happens to be a fragment of.
+        Registers every numeric variant of the value too (see _numeric_variants), so an
+        identifier noted as a string in one place and echoed as an int or a float in another
+        still resolves to the same token in both. substring=True additionally makes it eligible
+        for substring replacement inside a VALUE (never a dict key - see _substitute_key);
+        otherwise it is only ever matched by whole-string equality.
         """
         text = str(value)
         token = self.token(text)
-        self.originals[text] = token
-        if substring:
-            self.substring_ok.add(text)
+        for variant in self._numeric_variants(text):
+            self.originals[variant] = token
+            if substring:
+                self.substring_ok.add(variant)
         return token
 
-    def _misfiled(self, value):
-        """Whether a value looks like an identifier rather than a measurement or ordinary text."""
+    def _numeric_variants(self, text):
+        """Every textual form representing the same integral value as `text`.
+
+        An identifier can be reported as a string, an int or a float depending on where a
+        component got it from ("123456" in account_ids, 123456.0 echoed in a ratings field), and
+        the exact-match substitution pass has to catch it whichever form it turns up in elsewhere
+        - a bare digit string and its "X.0" float repr must map to the same token in BOTH
+        directions, or the pair leaks each other's raw form right next to the one that got
+        tokenised.
+        """
+        variants = {text}
+        sign, body = ("-", text[1:]) if text.startswith("-") else ("", text)
+        if body.isdigit():
+            variants.add(sign + body + ".0")
+        elif body.endswith(".0") and body[:-2].isdigit():
+            variants.add(sign + body[:-2])
+        return variants
+
+    def _misfiled(self, value, strict_numeric=False):
+        """Whether a value looks like an identifier rather than a measurement, a vendor code, or ordinary text.
+
+        A NUMERIC value is judged on its INTEGER PART's digit count, not its stringified repr: a
+        genuine measurement computed as a float (an efficiency, a percentage, a unit conversion)
+        can easily carry ten-plus digits after the decimal point - str(1/3) is
+        "0.3333333333333" - and judging the whole repr would flag every one of those as a
+        misfiled identifier, silently turning a number into a string for every consumer of a
+        numbers-only container. int(1234567890123.0) is still 1234567890123, so a genuinely
+        misfiled float identifier is still caught. A STRING keeps the separator-stripped
+        digit-run search.
+
+        strict_numeric additionally requires a string to be nothing BUT digits before it counts -
+        used only inside hardware_ids, where a letter-prefixed serial with a long digit tail (the
+        industry-standard shape: "HV2160123456") is that container's entire declared purpose, not
+        a misfiling; a BARE all-digit string there is still genuinely suspicious, since an MPAN
+        misfiled where a serial belongs looks exactly like one.
+        """
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            try:
+                integer_part = abs(int(value))
+            except (ValueError, OverflowError):
+                return False
+            return len(str(integer_part)) >= 10
         text = str(value)
         if "@" in text:
             return True
-        return bool(DIGIT_RUN_RE.search(SEPARATOR_RE.sub("", text)))
+        stripped = SEPARATOR_RE.sub("", text)
+        if strict_numeric:
+            return len(stripped) >= 10 and stripped.isdigit()
+        return bool(DIGIT_RUN_RE.search(stripped))
 
     def _is_location_key(self, name):
         """Whether a field name itself names a location fact, independent of its value's shape."""
@@ -235,7 +286,7 @@ class Redactor:
 
     def _guard_scalar(self, container, name, value):
         """Pseudonymise one scalar value if it looks misfiled or sits under a location-named field, logging where it was found."""
-        if not (self._misfiled(value) or self._is_location_key(name)):
+        if not (self._misfiled(value, strict_numeric=(container == "hardware_ids")) or self._is_location_key(name)):
             return value
         if self.log:
             label = container if container == name else "{}.{}".format(container, name)
@@ -267,7 +318,7 @@ class Redactor:
         the serial itself, say) rather than only ever putting one in a value; being a dict key
         rather than a value does not make it any less publishable.
         """
-        if not self._misfiled(name):
+        if not self._misfiled(name, strict_numeric=(container == "hardware_ids")):
             return name
         if self.log:
             self.log("Warn: Coordinator: {} key '{}' looks like an identifier - pseudonymised".format(container, name))
@@ -276,21 +327,25 @@ class Redactor:
     def _walk(self, node, container=None):
         """Recursively redact a node: pseudonym containers by class, clear containers via the shape guard.
 
-        A record carrying a pseudonym container (account_ids) also has its own device_id noted
-        as an original (whole-string only - see _note), alongside that container's values.
-        Nothing here has to know that "meter" or "measures_meter" are cross-link field names: the
-        later substitution pass rewrites any string equal to a noted original wherever it
-        appears, so noting the owning record's device_id is what lets a cross-link field resolve
-        to the same token as the record it points to, even when that field merely repeats the
-        device_id rather than embedding the account identifier itself. Every scalar reached
-        through the generic else branch - structural fields (device_id, serials, meter,
+        A record carrying a pseudonym container (account_ids) also has its own device_id noted as
+        an original, alongside that container's values. Nothing here has to know that "meter" or
+        "measures_meter" are cross-link field names: the later substitution pass rewrites any
+        string equal to (or, since the id is identity-derived, containing) a noted original
+        wherever it appears, so noting the owning record's device_id is what lets a cross-link
+        field resolve to the same token as the record it points to, even when that field merely
+        repeats the device_id rather than embedding the account identifier itself - and what
+        catches the SAME device_id text left in the clear elsewhere in that record (an entity_id,
+        a free-text note) rather than just tokenising the one place it was noted. A device_id with
+        no pseudonym container alongside it is never noted at all, so an ordinary word used as one
+        still cannot corrupt unrelated text it happens to share a substring with. Every scalar
+        reached through the generic else branch - structural fields (device_id, serials, meter,
         measures_meter, ...) included - is routed through the same shape guard as a clear
         container's values, since a misfiled identifier does not stop being one just because it
         landed outside CONTAINER_SPEC.
         """
         if isinstance(node, dict):
             if isinstance(node.get("device_id"), str) and any(name in node for name in PSEUDONYM_CONTAINERS):
-                self._note(node["device_id"])
+                self._note(node["device_id"], substring=True)
             out = {}
             for key, value in node.items():
                 if key in PSEUDONYM_CONTAINERS:
@@ -313,23 +368,26 @@ class Redactor:
     def _exact_match(self, text):
         """The token for a noted original if `text` equals it exactly and clears the length floor, else None.
 
-        Exact equality is what lets a device_id (noted whole-string-only) resolve a cross-link,
-        and what catches a non-string scalar echoed verbatim elsewhere (str(node) compared as
-        text) - neither of those is a substring-corruption risk, since the entire value is being
-        replaced rather than a fragment of a larger string.
+        Exact equality is what lets a device_id with no account_ids alongside it (never
+        substring-eligible - see __init__) resolve nothing at all since it was never noted, what
+        lets a dict key resolve only when it wholly IS a noted original (see _substitute_key), and
+        what catches a non-string scalar echoed verbatim elsewhere (str(node) compared as text) -
+        none of those is a substring-corruption risk, since the entire value is being replaced
+        rather than a fragment of a larger string.
         """
         if len(text) >= self.MIN_SUBSTITUTE and text in self.originals:
             return self.originals[text]
         return None
 
     def _substitute_text(self, text):
-        """Replace a string leaf or dict key: an exact match first, then substring-eligible originals, longest first.
+        """Replace a VALUE string: an exact match first, then substring-eligible originals, longest first.
 
         Longest-first matters when one noted original is itself a substring of another (a short
         MSN inside a longer MPAN): substituting the longer one first replaces it whole, so the
         shorter original no longer appears as a fragment afterwards. Substituting the shorter one
         first would splice a token into the middle of the longer identifier and leave the
-        surrounding digits of the longer one exposed on either side.
+        surrounding digits of the longer one exposed on either side. Never called for a dict key -
+        see _substitute_key, which does not do the substring pass at all.
         """
         exact = self._exact_match(text)
         if exact is not None:
@@ -339,17 +397,33 @@ class Redactor:
                 text = text.replace(original, self.originals[original])
         return text
 
+    def _substitute_key(self, key):
+        """Rewrite a dict key by exact match only - never by substring.
+
+        A key drawn from Predbat's own naming - a section name, a container name, a descriptor
+        field a component chose to call something - is short and structural enough that an
+        ordinary account_ids value (nothing stops a component reporting something as mundane as
+        "charge" for an account label) can coincidentally appear as a substring of one:
+        substring-rewriting keys turned exactly that coincidence into an entire published section
+        vanishing from the document. _guard_key (applied earlier, during _walk) is what catches a
+        key that IS ITSELF shaped like a misfiled identifier; this pass only catches a key that
+        happens to equal a noted original in full.
+        """
+        exact = self._exact_match(key)
+        return exact if exact is not None else key
+
     def _substitute(self, node):
         """Replace every noted original wherever it appears: in string values, dict keys, and non-string scalars.
 
-        A dict key is substituted exactly like a value string - "keyed by Predbat's standard
-        name" is a convention a component's own report can break, and this pass exists precisely
-        to not trust that convention. A non-string scalar (an int identifier echoed outside its
-        guarded container) is matched by exact equality, since a numeric value cannot meaningfully
-        contain a "substring" of another number the way a longer string can.
+        A dict key is rewritten by _substitute_key (exact match only, never substring - see its
+        docstring); a value string goes through the full exact-then-substring pass. A non-string
+        scalar (an int or float identifier echoed outside its guarded container) is matched by
+        exact equality against every noted numeric variant (see _numeric_variants), since a
+        numeric value cannot meaningfully contain a "substring" of another number the way a
+        longer string can.
         """
         if isinstance(node, dict):
-            return {(self._substitute_text(key) if isinstance(key, str) else key): self._substitute(value) for key, value in node.items()}
+            return {(self._substitute_key(key) if isinstance(key, str) else key): self._substitute(value) for key, value in node.items()}
         if isinstance(node, list):
             return [self._substitute(entry) for entry in node]
         if isinstance(node, str):
