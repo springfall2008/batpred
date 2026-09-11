@@ -2911,6 +2911,58 @@ def test_force_export_stable_window_presses_button_once(test_name, ha, inv):
     finally:
         inv.press_and_poll_button = saved_press
 
+    # The same retry rule applies when the combined schedule_write_button service itself is rejected.
+    saved_call_service_wrapper = inv.base.call_service_wrapper
+    try:
+        inv.last_export_schedule_committed = None
+        ha.dummy_items["switch.inverter_button"] = "off"
+
+        def fail_schedule_write_button(service, **kwargs):
+            if (service == "switch/turn_on") and (kwargs.get("entity_id") == "switch.inverter_button"):
+                return None
+            return saved_call_service_wrapper(service, **kwargs)
+
+        inv.base.call_service_wrapper = fail_schedule_write_button
+        inv.adjust_force_export(True, ts, te)
+        if inv.last_export_schedule_committed is not None:
+            print(f"ERROR: {test_name}: a rejected schedule_write_button call must not be recorded as committed")
+            failed = True
+    finally:
+        inv.base.call_service_wrapper = saved_call_service_wrapper
+
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_force_export(True, ts, te)
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: the same stable window should retry after a rejected schedule_write_button call")
+        failed = True
+
+    # A failed schedule-register write followed by a successful button press must also retry next cycle,
+    # rather than caching the tuple and skipping the button while part of the slot is still unapplied.
+    saved_write_and_poll_option = inv.write_and_poll_option
+    changed_end = datetime.strptime("09:32:00", "%H:%M:%S")
+    try:
+        inv.last_export_schedule_committed = None
+        ha.dummy_items["switch.inverter_button"] = "off"
+
+        def fail_discharge_end_hour(name, entity_id, new_value, ignore_fail=False):
+            if name == "discharge_end_hour":
+                return False
+            return saved_write_and_poll_option(name, entity_id, new_value, ignore_fail=ignore_fail)
+
+        inv.write_and_poll_option = fail_discharge_end_hour
+        inv.adjust_force_export(True, ts, changed_end)
+        if inv.last_export_schedule_committed is not None:
+            print(f"ERROR: {test_name}: a failed schedule-register write must not be recorded as committed")
+            failed = True
+    finally:
+        inv.write_and_poll_option = saved_write_and_poll_option
+
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_force_export(True, ts, changed_end)
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: the same stable window should retry after a failed schedule-register write")
+        failed = True
+
     inv.last_export_schedule_committed = None
     return failed
 
@@ -2931,6 +2983,18 @@ def test_force_export_enable_only_flip_skips_settle_sleep(test_name, ha, inv):
     """
     failed = False
     print("Test: {}".format(test_name))
+
+    unset = object()
+    saved_args = {key: inv.base.args.get(key, unset) for key in ("discharge_start_time", "discharge_end_time", "discharge_start_hour", "discharge_end_hour", "scheduled_discharge_enable")}
+    saved_items = {
+        key: ha.dummy_items.get(key, unset)
+        for key in ("select.discharge_start_time", "select.discharge_end_time", "switch.scheduled_discharge_enable", "number.discharge_target_soc", "select.inverter_mode", "switch.inverter_button")
+    }
+    saved_rest_data = inv.rest_data
+    saved_inv_charge_time_format = inv.inv_charge_time_format
+    saved_inv_time_button_press = inv.inv_time_button_press
+    saved_last_export_schedule_committed = inv.last_export_schedule_committed
+    saved_sleep = inv.sleep
 
     inv.rest_data = None
     inv.inv_charge_time_format = "HH:MM:SS"
@@ -2957,7 +3021,6 @@ def test_force_export_enable_only_flip_skips_settle_sleep(test_name, ha, inv):
     ts = datetime.strptime(export_time, "%H:%M:%S")
     te = datetime.strptime(export_end, "%H:%M:%S")
 
-    saved_sleep = inv.sleep
     sleep_calls = []
     inv.sleep = lambda seconds, _c=sleep_calls: _c.append(seconds)
 
@@ -2986,7 +3049,20 @@ def test_force_export_enable_only_flip_skips_settle_sleep(test_name, ha, inv):
             failed = True
     finally:
         inv.sleep = saved_sleep
-        inv.last_export_schedule_committed = None
+        inv.rest_data = saved_rest_data
+        inv.inv_charge_time_format = saved_inv_charge_time_format
+        inv.inv_time_button_press = saved_inv_time_button_press
+        inv.last_export_schedule_committed = saved_last_export_schedule_committed
+        for key, value in saved_args.items():
+            if value is unset:
+                inv.base.args.pop(key, None)
+            else:
+                inv.base.args[key] = value
+        for key, value in saved_items.items():
+            if value is unset:
+                ha.dummy_items.pop(key, None)
+            else:
+                ha.dummy_items[key] = value
 
     return failed
 
@@ -3010,9 +3086,9 @@ def test_force_export_off_does_not_press_every_cycle(test_name, ha, my_predbat):
     has_discharge_enable_time.
 
     Plain GS takes the midnight-override path and is not affected by this None-comparison route, so it
-    is checked here too to pin the difference down. (GS was affected by a separate bug - #4711's
-    unconditional H M register rewrite, which GS also uses - but that is a different code path to the
-    one this test targets.)
+    is checked here too to pin the difference down. That same internally generated midnight window still
+    has to count as a managed schedule: if the inverter drifts away from 00:00-00:00 while export is
+    already off, Predbat must press the commit button once to re-apply the disable window.
     """
     failed = False
     print("Test: {}".format(test_name))
@@ -3069,6 +3145,19 @@ def test_force_export_off_does_not_press_every_cycle(test_name, ha, my_predbat):
             if len(presses) != idle_presses + 1:
                 print(f"ERROR: {test_name}: {inverter_type} should press once on entering an export window, pressed {len(presses) - idle_presses} times")
                 failed = True
+
+            if inverter_type == "GS":
+                # Once the idle disable window has been committed, drifting away from midnight while
+                # export is still off must trigger one more commit to restore it.
+                inv.last_export_schedule_committed = ("00:00:00", "00:00:00", False)
+                ha.dummy_items["select.discharge_start_time"] = "03:33:00"
+                ha.dummy_items["select.discharge_end_time"] = "04:44:00"
+                ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
+                drift_presses = len(presses)
+                inv.adjust_force_export(False)
+                if len(presses) != drift_presses + 1:
+                    print(f"ERROR: {test_name}: {inverter_type} should re-commit a drifted midnight disable window once")
+                    failed = True
     finally:
         for key, value in saved_args.items():
             if value is unset:
