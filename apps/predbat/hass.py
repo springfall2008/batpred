@@ -12,6 +12,8 @@ import asyncio
 import os
 import subprocess
 
+from utils import collect_log_secret_values, compile_log_secret_pattern, redact_log_line
+
 
 def write_git_version_marker():
     """
@@ -177,10 +179,38 @@ class Hass:
     and file change detection for development hot-reload.
     """
 
+    # Sentinel distinct from None: compile_log_secret_pattern() legitimately returns None when
+    # there are no secrets configured to redact, so None alone in the cache slot can't tell
+    # "not built yet" from "built, and there is nothing to redact" - the latter would otherwise
+    # rebuild (recompute the value set, recompile) on every single log() call instead of caching.
+    _LOG_SECRET_PATTERN_UNSET = object()
+
+    def _log_secret_pattern(self):
+        """
+        Return the cached compiled redaction pattern log() must apply, rebuilding it the first
+        time it is needed and whenever load_secrets()/apps.yaml load invalidate it (GH#4770).
+
+        Cached rather than recomputed on every log() call: log() runs on every log line, while
+        args/secrets only change on startup and on a config reload, so rebuilding the value set
+        and recompiling the pattern that rarely - rather than on every call - keeps the
+        redaction check to a single compiled-regex scan per line on the hot path.
+        """
+        if self._log_secret_pattern_cache is self._LOG_SECRET_PATTERN_UNSET:
+            args = getattr(self, "args", None)
+            redact_strings = args.get("redact_strings") if args else None
+            redact_strings_labelled = args.get("redact_strings_labelled") if args else None
+            values = collect_log_secret_values(args, getattr(self, "secrets", None), redact_strings, redact_strings_labelled)
+            self._log_secret_pattern_cache = compile_log_secret_pattern(values)
+        return self._log_secret_pattern_cache
+
     def log(self, msg, quiet=True):
         """
         Log a message to the logfile
         """
+        # Redacted here, at the point the line is written, not at serve/download time: some users
+        # copy predbat.log directly off a Samba share exposing the addon's config directory,
+        # bypassing every HTTP/MCP endpoint a download-time scrub could sit behind (GH#4770).
+        msg = redact_log_line(str(msg), self._log_secret_pattern())
         message = "{}: {}\n".format(datetime.now(), msg)
         self.logfile.write(message)
         self.logfile.flush()
@@ -251,6 +281,7 @@ class Hass:
         self.threads = []
         self.fatal_error = False
         self.hass_api_version = 2
+        self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
 
         self.logfile = open("predbat.log", "a")
 
@@ -260,6 +291,10 @@ class Hass:
         except yaml.YAMLError as exc:
             print(exc)
             sys.exit(1)
+
+        # Both args and secrets have just been populated, so the redaction pattern built from them
+        # (GH#4770) is stale - drop it so the next log() call rebuilds from the loaded config.
+        self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
 
     def run_every(self, callback, next_time, run_every, **kwargs):
         """
