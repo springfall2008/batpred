@@ -63,6 +63,16 @@ OCTOPUS_SLOT_MAX_CAPPED = 12  # 6 hours with 30-minute slots
 # whose settings query fails can carry the previous values forward rather than dropping the device.
 INTELLIGENT_DEVICE_SETTING_KEYS = ["suspended", "weekday_target_time", "weekday_target_soc", "weekend_target_time", "weekend_target_soc", "minimum_soc", "maximum_soc"]
 
+# Discovery catalogue entity key -> (domain, get_entity_name() suffix, access) for a car record.
+# Mirrors automatic_config()'s own octopus_intelligent_slot/octopus_ready_time/octopus_charge_limit
+# wiring exactly (see build_discovery()), so a future change to that wiring is picked up here too
+# rather than the catalogue drifting out of step with what apps.yaml actually points at.
+OCTOPUS_CAR_ENTITY_SPEC = {
+    "octopus_intelligent_slot": ("binary_sensor", "intelligent_dispatch", "r"),
+    "octopus_ready_time": ("select", "intelligent_target_time", "rw"),
+    "octopus_charge_limit": ("number", "intelligent_target_soc", "rw"),
+}
+
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(4 * 60, 11 * 60, 30)]
 
@@ -552,6 +562,11 @@ class OctopusAPI(ComponentBase):
         # run() compares this against the live set so a device appearing, disappearing or being
         # suspended re-wires the slots without waiting for a restart (issue #4648).
         self.intelligent_config_devices = None
+        # The (tariff, active-device) snapshot build_discovery() was last reported against AND
+        # found complete - compared outside any one-shot gate by _refresh_discovery_report(), so a
+        # failed or incomplete report is retried the next time any of automatic_config()'s three
+        # call sites runs, rather than lost for the life of the process.
+        self.discovery_reported_for = None
         self.tariff_fetched_at = None
         self.device_fetched_at = None
         self.sensor_updated_at = None
@@ -676,6 +691,7 @@ class OctopusAPI(ComponentBase):
             active_devices = self.get_active_intelligent_device_ids()
             if first:
                 self.automatic_config(self.tariffs)
+                self._refresh_discovery_report()
             elif sensor_due and active_devices != self.intelligent_config_devices:
                 # The set of live, non-suspended Intelligent devices has moved - a second EV
                 # registered on the account, one deregistered, or the customer suspended one in
@@ -683,6 +699,7 @@ class OctopusAPI(ComponentBase):
                 # dispatch sensor and Predbat never sees the live IOG window (issue #4648).
                 self.log("OctopusAPI: Live intelligent devices changed from {} to {}, reconfiguring car slots".format(self.intelligent_config_devices, active_devices))
                 self.automatic_config(self.tariffs)
+                self._refresh_discovery_report()
 
         return True
 
@@ -879,6 +896,7 @@ class OctopusAPI(ComponentBase):
         if old_tariff_keys and new_tariff_keys != old_tariff_keys and self.automatic:
             self.log("OctopusAPI: Tariff structure changed from {} to {}, reconfiguring".format(old_tariff_keys, new_tariff_keys))
             self.automatic_config(self.tariffs)
+            self._refresh_discovery_report()
 
         return self.tariffs
 
@@ -1349,6 +1367,171 @@ class OctopusAPI(ComponentBase):
 
         # Record the device set this wiring was built for so run() can spot it changing later
         self.intelligent_config_devices = self.get_active_intelligent_device_ids()
+
+    def _current_standing_charge_p(self, direction):
+        """
+        Today's standing charge for one tariff direction, in pence, or None if not yet fetched.
+
+        Reuses _get_rate_for_time against the raw standing-charges list fetch_tariffs() already
+        downloaded (self.tariffs[direction]["standing"]), rather than re-deriving it through
+        get_octopus_rates_direct()'s minute_data() conversion - that helper always returns a
+        number, falling back to an all-zero dict before any data has ever been fetched, and
+        reporting a fabricated 0 as a real standing charge would be worse than reporting nothing.
+        """
+        standing = self.tariffs.get(direction, {}).get("standing")
+        if not standing:
+            return None
+        return self._get_rate_for_time(standing, self.now_utc_exact)
+
+    def build_discovery(self):
+        """
+        Describe the discovered Octopus meters, tariffs and intelligent-device cars for the discovery catalogue.
+
+        One `meters` record per direction present in self.tariffs ("import", "export", "gas") -
+        never a fixed list, since not every account has an export or gas agreement. mpan is only
+        known for electricity (import/export); this component tracks no separate MPRN for gas, so
+        a gas record's account_ids carries only the account id rather than mislabelling it with
+        the electricity MPAN. Both mpan and account genuinely identify the customer, so they go in
+        account_ids, the pseudonym container the redactor tokenises - see the module's docstring
+        and docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md. The tariff and product
+        codes describe a publicly listed Octopus product rather than the customer, so they go in
+        the clear, in the nested `tariff` sub-record's info container, alongside flags built from
+        this component's own existing classifiers (is_intelligent_go_tariff, has_six_hour_cap) plus
+        "agile" when the product code names an Agile product - so a future change to those
+        classifiers is picked up here too, rather than a second copy of the same logic drifting out
+        of step with the one automatic_config() and the rest of this component already use.
+        standing_charge_p is today's standing charge in pence, reported only once it has actually
+        been fetched.
+
+        One `cars` record per ACTIVE (non-suspended) intelligent device: get_active_intelligent_device_ids()
+        is the exact filter automatic_config() itself applies when wiring the car slots into
+        apps.yaml, so the catalogue never lists a slot that is no longer being wired. Its three
+        entities (octopus_intelligent_slot, octopus_ready_time, octopus_charge_limit - see
+        OCTOPUS_CAR_ENTITY_SPEC) are included only when they actually exist in the state store:
+        async_intelligent_update_sensor() publishes them per device, never as a fixed set, so the
+        catalogue must not claim one exists that Home Assistant has never seen. Vehicle battery
+        size and charge-point power are reported in ratings where Octopus's own vehicle/charger
+        catalogue lookup found them.
+
+        Reporting is independent of self.automatic: it records what Octopus's own account
+        describes, not whether this component wired Predbat's apps.yaml to it - that distinction is
+        what the report's own "automatic" flag is for, not a gate on reporting here. This method is
+        only ever actually invoked from beside automatic_config()'s own three call sites though (see
+        _refresh_discovery_report), and those are themselves only reached when self.automatic is
+        set - automatic_config() is not modified to change that.
+        """
+        meters = []
+        for direction, tariff in self.tariffs.items():
+            tariff_code = tariff.get("tariffCode")
+            product_code = tariff.get("productCode")
+            mpan = self.mpan if direction in ("import", "export") else None
+            record = {"device_id": "octopus:{}".format(mpan or direction), "direction": direction}
+
+            account_ids = {}
+            if mpan:
+                account_ids["mpan"] = mpan
+            if self.account_id:
+                account_ids["account"] = self.account_id
+            if account_ids:
+                record["account_ids"] = account_ids
+
+            info = {}
+            if tariff_code:
+                info["tariff_code"] = tariff_code
+            if product_code:
+                info["product_code"] = product_code
+            flags = []
+            if self.is_intelligent_go_tariff(tariff_code):
+                flags.append("intelligent_go")
+            if self.has_six_hour_cap(tariff_code):
+                flags.append("six_hour_cap")
+            if product_code and "AGILE" in product_code:
+                flags.append("agile")
+            tariff_record = {}
+            if info:
+                tariff_record["info"] = info
+            if flags:
+                tariff_record["flags"] = flags
+            if tariff_record:
+                record["tariff"] = tariff_record
+
+            standing_charge_p = self._current_standing_charge_p(direction)
+            if standing_charge_p is not None:
+                record["ratings"] = {"standing_charge_p": standing_charge_p}
+
+            meters.append(record)
+
+        cars = []
+        for device_id in self.get_active_intelligent_device_ids():
+            device = self.intelligent_devices.get(device_id, {})
+            index_suffix = self.device_id_to_index_suffix(device_id)
+            record = {"device_id": "octopus:{}".format(device_id)}
+
+            ratings = {}
+            battery_size = device.get("vehicle_battery_size_in_kwh")
+            if battery_size is not None:
+                ratings["vehicle_battery_kwh"] = battery_size
+            charge_point_power = device.get("charge_point_power_in_kw")
+            if charge_point_power is not None:
+                ratings["charge_point_power_kw"] = charge_point_power
+            if ratings:
+                record["ratings"] = ratings
+
+            entities = {}
+            for name, (domain, suffix, access) in OCTOPUS_CAR_ENTITY_SPEC.items():
+                entity_id = self.get_entity_name(domain, suffix, index=index_suffix)
+                if self.get_state_wrapper(entity_id) is not None:
+                    entities[name] = {"entity_id": entity_id, "domain": domain, "access": access}
+            if entities:
+                record["entities"] = entities
+
+            cars.append(record)
+
+        return {"automatic": self.automatic, "meters": meters, "cars": cars}
+
+    def _discovery_state_key(self):
+        """
+        A snapshot of what build_discovery() depends on: the tariff identities and the active intelligent-device set.
+
+        Deliberately narrower than self.tariffs itself, which also carries the rate/standing-charge
+        API payloads and churns on every fetch cycle - keying on those would make
+        _refresh_discovery_report() re-report on every tick instead of only when something
+        build_discovery() actually renders differently has changed.
+        """
+        tariff_key = tuple(sorted((direction, tariff.get("tariffCode"), tariff.get("productCode"), tariff.get("deviceID")) for direction, tariff in self.tariffs.items()))
+        return (tariff_key, tuple(self.get_active_intelligent_device_ids()))
+
+    def _refresh_discovery_report(self):
+        """
+        Report the current meters/tariffs/cars snapshot to the discovery catalogue, if it has moved on from the last report that both succeeded and was complete.
+
+        Placed beside each of automatic_config()'s three call sites, so a device-set or tariff
+        change refreshes the report exactly when automatic_config() itself refreshes apps.yaml.
+
+        self.discovery_reported_for is compared here rather than gated on "first": the try/except
+        below (correctly) swallows a build_discovery() failure so run() still succeeds, and "first"
+        is a start()-local that flips to False forever the instant run() returns True - without an
+        out-of-band marker, a failure on the very first cycle would be lost for the life of the
+        process. The marker is left as it was, so the very next call site that runs retries, both
+        on a build_discovery() failure and when an active device's car entities are not all
+        published yet (Octopus publishes them conditionally - see build_discovery()); a report built
+        before they exist would otherwise be marked done and the catalogue would permanently
+        describe an incomplete car slot.
+
+        Exception-guarded like the other discovery reporters (GivTCP, GE Cloud): an observer must
+        never be able to degrade the health of the component it observes.
+        """
+        state_key = self._discovery_state_key()
+        if state_key == self.discovery_reported_for:
+            return
+        try:
+            report = self.build_discovery()
+            self.report_discovery(report)
+            if all(len(record.get("entities", {})) == len(OCTOPUS_CAR_ENTITY_SPEC) for record in report.get("cars", [])):
+                self.discovery_reported_for = state_key
+        except Exception as e:
+            self.log("Warn: OctopusAPI: failed to report discovery for the catalogue: {}".format(e))
+            self.non_fatal_error_occurred()
 
     async def async_get_saving_sessions(self, account_id):
         """

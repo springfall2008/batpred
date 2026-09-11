@@ -7,12 +7,21 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
-from octopus import OctopusAPI, DATE_TIME_STR_FORMAT
+from octopus import OctopusAPI, DATE_TIME_STR_FORMAT, OCTOPUS_CAR_ENTITY_SPEC
 
 
 def test_octopus_intelligent_devices_wrapper(my_predbat):
-    """Wrapper to run async tests."""
-    return asyncio.run(test_octopus_intelligent_devices(my_predbat))
+    """Wrapper to run the async dispatch-parsing tests plus the synchronous discovery-catalogue tests."""
+    failed = asyncio.run(test_octopus_intelligent_devices(my_predbat))
+    failed += test_build_discovery_cars_active_only(my_predbat)
+    failed += test_build_discovery_meters_intelligent_go_flag(my_predbat)
+    failed += test_build_discovery_cars_entity_map_matches_automatic_config(my_predbat)
+    failed += test_build_discovery_meters_direction_distinct(my_predbat)
+    failed += test_build_discovery_cars_entities_only_when_published(my_predbat)
+    failed += test_discovery_report_not_advanced_while_car_entities_incomplete(my_predbat)
+    failed += test_discovery_report_failure_contained_and_retried(my_predbat)
+    failed += test_build_discovery_round_trips_through_coordinator_and_redaction(my_predbat)
+    return failed
 
 
 async def test_octopus_intelligent_devices(my_predbat):
@@ -680,4 +689,286 @@ async def test_octopus_intelligent_devices(my_predbat):
         print("\n**** All Octopus intelligent devices tests PASSED ****")
     else:
         print(f"\n**** Octopus intelligent devices tests FAILED ({failed} test(s) failed) ****")
+    return failed
+
+
+# ----------------------------------------------------------------------------------------------
+# OctopusAPI.build_discovery() - the discovery catalogue reporter (meters, tariffs, cars).
+#
+# Unlike the async dispatch-parsing tests above, these build a real OctopusAPI against the shared
+# my_predbat harness (real get_state_wrapper/set_state_wrapper/get_entity_name), since
+# build_discovery()'s entity-existence check (see its docstring) has to be exercised against a
+# real state store, not a mock. Each test uses its own account_id so entities published by one
+# test cannot be mistaken for another's, since my_predbat's state store is shared across every
+# test called from test_octopus_intelligent_devices_wrapper.
+# ----------------------------------------------------------------------------------------------
+
+
+def _make_discovery_api(my_predbat, account_id, automatic=True):
+    """A real OctopusAPI instance for build_discovery()/_refresh_discovery_report() tests."""
+    return OctopusAPI(my_predbat, key="test-key", account_id=account_id, automatic=automatic)
+
+
+def _publish_car_entities(my_predbat, api, device_id):
+    """Publish all three of one device's car entities in my_predbat's state store, as async_intelligent_update_sensor() would."""
+    index_suffix = api.device_id_to_index_suffix(device_id)
+    for domain, suffix, _access in OCTOPUS_CAR_ENTITY_SPEC.values():
+        my_predbat.set_state_wrapper(api.get_entity_name(domain, suffix, index=index_suffix), "on")
+
+
+def test_build_discovery_cars_active_only(my_predbat):
+    """Two active intelligent devices and one suspended yield exactly two car records - the same filter automatic_config() applies."""
+    api = _make_discovery_api(my_predbat, "cars-active-only")
+    api.intelligent_devices = {
+        "smart-charge-1001": {"suspended": False},
+        "smart-charge-1002": {"suspended": False},
+        "smart-charge-1003": {"suspended": True},
+    }
+
+    report = api.build_discovery()
+
+    device_ids = {record["device_id"] for record in report["cars"]}
+    expected = {"octopus:smart-charge-1001", "octopus:smart-charge-1002"}
+    if device_ids != expected:
+        print(f"ERROR: expected car records for exactly the two active devices {expected}, got {device_ids}")
+        return 1
+    print("PASS: only active (non-suspended) intelligent devices produce a car record")
+    return 0
+
+
+def test_build_discovery_meters_intelligent_go_flag(my_predbat):
+    """An Intelligent GO tariff code yields a meter whose tariff.flags contains intelligent_go."""
+    api = _make_discovery_api(my_predbat, "meters-iog-flag")
+    api.tariffs = {"import": {"tariffCode": "E-1R-INTELLI-VAR-24-10-29-A", "productCode": "INTELLI-VAR-24-10-29", "deviceID": "meter-1"}}
+
+    report = api.build_discovery()
+
+    flags = report["meters"][0].get("tariff", {}).get("flags", [])
+    if "intelligent_go" not in flags:
+        print(f"ERROR: expected 'intelligent_go' in tariff.flags, got {flags}")
+        return 1
+    print("PASS: an Intelligent GO tariff code yields tariff.flags containing intelligent_go")
+    return 0
+
+
+def test_build_discovery_cars_entity_map_matches_automatic_config(my_predbat):
+    """The car record's entities point at exactly the entity names automatic_config() wires into apps.yaml for the same device."""
+    api = _make_discovery_api(my_predbat, "cars-entity-map")
+    device_id = "smart-charge-2001"
+    api.intelligent_devices = {device_id: {"suspended": False}}
+    _publish_car_entities(my_predbat, api, device_id)
+    index_suffix = api.device_id_to_index_suffix(device_id)
+
+    report = api.build_discovery()
+
+    entities = report["cars"][0]["entities"]
+    expected = {
+        "octopus_intelligent_slot": api.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix),
+        "octopus_ready_time": api.get_entity_name("select", "intelligent_target_time", index=index_suffix),
+        "octopus_charge_limit": api.get_entity_name("number", "intelligent_target_soc", index=index_suffix),
+    }
+    failed = 0
+    for name, entity_id in expected.items():
+        got = entities.get(name, {}).get("entity_id")
+        if got != entity_id:
+            print(f"ERROR: {name} entity_id mismatch: expected {entity_id}, got {got}")
+            failed += 1
+    if failed == 0:
+        print("PASS: car entities match the same entity names automatic_config() wires into apps.yaml")
+    return failed
+
+
+def test_build_discovery_meters_direction_distinct(my_predbat):
+    """An import and an export tariff yield two meter records with distinct direction."""
+    api = _make_discovery_api(my_predbat, "meters-two-directions")
+    api.tariffs = {
+        "import": {"tariffCode": "E-1R-VAR-22-11-01-A", "productCode": "VAR-22-11-01", "deviceID": "meter-import"},
+        "export": {"tariffCode": "E-1R-OUTGOING-VAR-22-11-01-A", "productCode": "OUTGOING-VAR-22-11-01", "deviceID": "meter-export"},
+    }
+
+    report = api.build_discovery()
+
+    directions = {record["direction"] for record in report["meters"]}
+    if len(report["meters"]) != 2 or directions != {"import", "export"}:
+        print(f"ERROR: expected two meter records with distinct import/export directions, got {report['meters']}")
+        return 1
+    print("PASS: import and export tariffs yield two meter records with distinct direction")
+    return 0
+
+
+def test_build_discovery_cars_entities_only_when_published(my_predbat):
+    """
+    A car's entities dict only lists what actually exists in the state store.
+
+    Octopus publishes octopus_intelligent_slot/octopus_ready_time/octopus_charge_limit
+    conditionally, never as a fixed set (see build_discovery()'s docstring) - the catalogue must
+    never claim an entity exists that Home Assistant has never seen.
+    """
+    api = _make_discovery_api(my_predbat, "cars-entities-partial")
+    device_id = "smart-charge-3001"
+    api.intelligent_devices = {device_id: {"suspended": False}}
+    index_suffix = api.device_id_to_index_suffix(device_id)
+    # Only the dispatch slot sensor has been published so far - ready_time/charge_limit have not.
+    my_predbat.set_state_wrapper(api.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix), "on")
+
+    report = api.build_discovery()
+
+    entities = report["cars"][0].get("entities", {})
+    if set(entities) != {"octopus_intelligent_slot"}:
+        print(f"ERROR: expected only octopus_intelligent_slot to be reported, got {list(entities)}")
+        return 1
+    print("PASS: build_discovery() reports only the car entities that actually exist in the state store")
+    return 0
+
+
+def test_discovery_report_not_advanced_while_car_entities_incomplete(my_predbat):
+    """
+    The reported-marker does not advance while an active device's car entities are incomplete.
+
+    Without this, a report built one cycle too early (see build_discovery()'s ordering docstring)
+    would be marked done forever, and the catalogue would permanently describe an incomplete car
+    slot even once Octopus goes on to publish the missing entities on a later cycle.
+    """
+    api = _make_discovery_api(my_predbat, "cars-incomplete-marker")
+    device_id = "smart-charge-4001"
+    api.intelligent_devices = {device_id: {"suspended": False}}
+    reports = []
+    api.report_discovery = lambda report: reports.append(report)
+
+    api._refresh_discovery_report()
+
+    failed = 0
+    if api.discovery_reported_for is not None:
+        print("ERROR: the marker should not advance while the device's car entities are not yet published")
+        failed += 1
+    if len(reports) != 1:
+        print(f"ERROR: expected exactly one report attempt, got {len(reports)}")
+        failed += 1
+
+    # Octopus has now published the device's entities - a later cycle's async_intelligent_update_sensor().
+    _publish_car_entities(my_predbat, api, device_id)
+
+    api._refresh_discovery_report()
+
+    if api.discovery_reported_for is None:
+        print("ERROR: the marker should advance once the active device's car entities are complete")
+        failed += 1
+    if len(reports) != 2:
+        print(f"ERROR: expected a second report attempt once entities were complete, got {len(reports)}")
+        failed += 1
+    if failed == 0:
+        print("PASS: the reported-marker only advances once the active device's car entities are complete")
+    return failed
+
+
+def test_discovery_report_failure_contained_and_retried(my_predbat):
+    """
+    A bug in build_discovery() must not propagate out of _refresh_discovery_report(), and the
+    failed attempt is retried the next time it is called - not lost for the life of the process,
+    even though "first" (the one-shot gate on the first of automatic_config()'s three call sites)
+    never runs again once run() has returned True once.
+    """
+    api = _make_discovery_api(my_predbat, "discovery-failure-retry")
+    api.tariffs = {"import": {"tariffCode": "E-1R-VAR-22-11-01-A", "productCode": "VAR-22-11-01", "deviceID": "meter-1"}}
+    real_build_discovery = api.build_discovery
+    api.build_discovery = MagicMock(side_effect=Exception("boom"))
+    reports = []
+    api.report_discovery = lambda report: reports.append(report)
+
+    api._refresh_discovery_report()
+
+    failed = 0
+    if reports:
+        print("ERROR: no report should have been recorded on the failing attempt")
+        failed += 1
+    if api.discovery_reported_for is not None:
+        print("ERROR: a failed report must not be marked as reported")
+        failed += 1
+
+    # The bug is fixed; calling it again - as the next automatic_config() call site would - retries and succeeds.
+    api.build_discovery = real_build_discovery
+    api._refresh_discovery_report()
+
+    if len(reports) != 1:
+        print(f"ERROR: the retried report should now succeed, got {len(reports)} reports")
+        failed += 1
+    if api.discovery_reported_for is None:
+        print("ERROR: the marker should advance once the retried report succeeds")
+        failed += 1
+    if failed == 0:
+        print("PASS: a build_discovery() failure is contained and retried on the next call, not lost forever")
+    return failed
+
+
+def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predbat):
+    """
+    Feed build_discovery()'s output through the real Coordinator.report()/assemble() and then
+    through the real Redactor.
+
+    This is the first discovery reporter carrying genuinely sensitive data (MPANs, account ids),
+    so the check that matters most here is not just "nothing was silently dropped by validation"
+    (the round-trip check that caught a real bug in each of the previous two reporters) but that
+    the redacted catalogue never publishes a raw MPAN or account identifier in the clear, while the
+    tariff and product codes - public Octopus product data, not customer data - DO survive.
+    """
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    mpan = "1200023305967"
+    account_id = "A-1234ABCD"
+    api = _make_discovery_api(my_predbat, account_id)
+    api.mpan = mpan
+    api.tariffs = {
+        "import": {
+            "tariffCode": "E-1R-INTELLI-VAR-24-10-29-A",
+            "productCode": "INTELLI-VAR-24-10-29",
+            "deviceID": "meter-import",
+            "standing": [{"value_inc_vat": 45.32, "valid_from": None, "valid_to": None}],
+        },
+        "export": {"tariffCode": "E-1R-AGILE-OUTGOING-19-05-13-A", "productCode": "AGILE-OUTGOING-19-05-13", "deviceID": "meter-export"},
+    }
+    device_id = "smart-charge-5001"
+    api.intelligent_devices = {device_id: {"suspended": False, "vehicle_battery_size_in_kwh": 75.0, "charge_point_power_in_kw": 7.4}}
+    _publish_car_entities(my_predbat, api, device_id)
+
+    report = api.build_discovery()
+
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.report("octopus", report)
+    cleaned = coordinator.reports["octopus"]
+
+    failed = 0
+
+    def check(condition, message):
+        """Record one failed assertion, printing its message, without aborting the remaining checks."""
+        nonlocal failed
+        if not condition:
+            print("ERROR: " + message)
+            failed += 1
+
+    # Nothing intended for a typed container was silently dropped by validation.
+    import_record = next(r for r in cleaned["meters"] if r["direction"] == "import")
+    check(import_record.get("account_ids", {}).get("mpan") == mpan, "mpan dropped or altered by validation: {}".format(import_record.get("account_ids")))
+    check(import_record.get("account_ids", {}).get("account") == account_id, "account dropped or altered by validation: {}".format(import_record.get("account_ids")))
+    check(import_record.get("tariff", {}).get("info", {}).get("tariff_code") == "E-1R-INTELLI-VAR-24-10-29-A", "tariff_code dropped by validation: {}".format(import_record.get("tariff")))
+    check(import_record.get("tariff", {}).get("info", {}).get("product_code") == "INTELLI-VAR-24-10-29", "product_code dropped by validation: {}".format(import_record.get("tariff")))
+    check("intelligent_go" in import_record.get("tariff", {}).get("flags", []), "intelligent_go flag dropped by validation: {}".format(import_record.get("tariff")))
+    check(import_record.get("ratings", {}).get("standing_charge_p") == 45.32, "standing_charge_p dropped or altered by validation: {}".format(import_record.get("ratings")))
+    export_record = next(r for r in cleaned["meters"] if r["direction"] == "export")
+    check("agile" in export_record.get("tariff", {}).get("flags", []), "agile flag dropped by validation: {}".format(export_record.get("tariff")))
+    car_record = cleaned["cars"][0]
+    check(len(car_record.get("entities", {})) == len(OCTOPUS_CAR_ENTITY_SPEC), "not every car entity survived validation: {}".format(car_record.get("entities")))
+    check(car_record.get("ratings", {}).get("vehicle_battery_kwh") == 75.0, "vehicle battery size dropped or altered by validation: {}".format(car_record.get("ratings")))
+    check(car_record.get("ratings", {}).get("charge_point_power_kw") == 7.4, "charge point power dropped or altered by validation: {}".format(car_record.get("ratings")))
+
+    coordinator.assemble()
+    catalogue_text = str(coordinator.catalogue())
+
+    check(mpan not in catalogue_text, "the raw MPAN appears in the clear in the redacted catalogue")
+    check(account_id not in catalogue_text, "the raw account id appears in the clear in the redacted catalogue")
+    check("E-1R-INTELLI-VAR-24-10-29-A" in catalogue_text, "the tariff code should survive in the clear, but is missing from the redacted catalogue")
+    check("INTELLI-VAR-24-10-29" in catalogue_text, "the product code should survive in the clear, but is missing from the redacted catalogue")
+
+    if failed == 0:
+        print("PASS: build_discovery() round-trips through the real Coordinator and Redactor - MPAN/account pseudonymised, tariff/product codes kept in the clear")
     return failed
