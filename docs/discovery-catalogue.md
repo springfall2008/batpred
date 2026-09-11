@@ -95,12 +95,23 @@ inverter, which firmware, or which tariff is in play.
 
 A handful of further guards run regardless of which container a value landed in: anything that
 looks like a credential by its field name (`api_key`, `password`, `token`, ...) is refused outright,
-wherever it is nested; anything that is nothing but a long run of digits is treated as a
-misfiled identifier and pseudonymised even inside a container that is not supposed to hold one; and
-a field literally named `latitude`, `longitude` or `postcode` is pseudonymised regardless of what it
-contains, since a location cannot otherwise be recognised from one value alone. A debug dump is
-safe to attach to a public issue; **the equivalent in-process, unredacted view exists only for
-Predbat's own internal diagnostics and must never be written anywhere.**
+wherever it is nested; a value that looks like a misfiled identifier is pseudonymised even inside a
+container that is not supposed to hold one - a 10-or-more-digit run is enough anywhere it turns up
+in a clear container's value (embedded in a longer string too, e.g. `"MPAN 1234567890123"`), except
+inside `hardware_ids`, where a value is only flagged when it is *nothing but* digits, so a
+letter-prefixed vendor serial like `HV2160123456` stays readable; and a field literally named
+`latitude`, `longitude` or `postcode` is pseudonymised regardless of what it contains, since a
+location cannot otherwise be recognised from one value alone. A debug dump is safe to attach to a
+public issue; **the equivalent in-process, unredacted view exists only for Predbat's own internal
+diagnostics and must never be written anywhere.**
+
+One visible side effect of pseudonymisation worth knowing about when reading a dump: a `device_id`
+built from a sensitive identifier is replaced *wholesale* by its pseudonym token rather than having
+just that part of it swapped out. Octopus's meter `device_id` is `"octopus:{mpan}"`, so a
+pseudonymised one loses its `"octopus:"` prefix entirely and reads as a bare `#` token, unlike a
+`device_id` in most other sections. Nothing is lost functionally - cross-links between records still
+resolve to the same token, and the record is still tagged with its `source` - but a maintainer
+comparing sections will notice the inconsistency and should not have to wonder whether it is a bug.
 
 ## For developers: the report schema
 
