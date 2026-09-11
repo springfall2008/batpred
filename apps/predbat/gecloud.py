@@ -417,6 +417,10 @@ class GECloudDirect(ComponentBase):
         self.evc_device_list = []
         self.settings_from_cache = False
         self.default_options_stamp = None
+        # The devices_dict build_discovery() was last successfully reported against - compared
+        # every cycle (not gated on "first", unlike the report call itself) so a failed report is
+        # retried on a later cycle rather than being lost for the life of the process. See run().
+        self.discovery_reported_for = None
 
         # Customer account details, including the timezone the inverter register times are expressed in
         self.account = {}
@@ -1418,22 +1422,26 @@ class GECloudDirect(ComponentBase):
         meter_serials = (devices.get("battery_meters") or {}).get(device) or []
         return meter_serials[0] if meter_serials else None
 
-    def _apply_meter_cross_link(self, devices, device, record, meters_by_id):
+    def _apply_meter_cross_link(self, devices, device, record):
         """
-        Set `record["measures_meter"]` and add its meter to `meters_by_id`, when this device's CT/meter serial is known.
+        Set `record["measures_meter"]` from this device's own CT/meter serial, when GE Cloud reports one.
 
-        `meters_by_id` is keyed by meter device_id so two devices sharing one physical CT
-        clamp serial (the shared-CT case gecloud.py's own automatic_config() detects) collapse
-        onto the SAME meter record, rather than the catalogue describing one physical meter
-        twice. Devices GE Cloud never reported a meter serial for (PV-only devices, a gateway
-        or EMS device fronting others) are simply left without a measures_meter cross-link.
+        Deliberately a dangling cross-link, not a fabricated `meters` record: a `meters` section
+        record in this design is a utility supply point (a direction, an MPAN in `account_ids`, a
+        tariff) with its `device_id` derived from that account identity - a CT clamp physically
+        attached to an inverter is hardware that measures a circuit, not a billing point, and does
+        not fit that identity model. GivTCP, the reference reporter, reports no `meters` key at all
+        for the same reason. Two devices agreeing on the same CT serial is still real, useful
+        information - the shared-CT case gecloud.py's own automatic_config() detects - so the
+        cross-link is set regardless; resolving it against a real supply-point meter once one is
+        reported is exactly what the catalogue's `observations` layer is for, not this reporter.
+        Devices GE Cloud never reported a meter serial for (PV-only devices, a gateway or EMS
+        device fronting others) are simply left without a measures_meter cross-link.
         """
         meter_serial = self._device_meter_serial(devices, device)
         if meter_serial is None:
             return
-        meter_device_id = "gecloud:meter:{}".format(meter_serial)
-        record["measures_meter"] = meter_device_id
-        meters_by_id.setdefault(meter_device_id, {"device_id": meter_device_id, "hardware_ids": {"serial": str(meter_serial)}})
+        record["measures_meter"] = "gecloud:meter:{}".format(meter_serial)
 
     def build_discovery(self, devices):
         """
@@ -1455,7 +1463,10 @@ class GECloudDirect(ComponentBase):
         `measures_meter` is set from the device's own CT/meter serial where GE Cloud's device
         connections data reports one (see _apply_meter_cross_link) - the same data
         async_automatic_config()'s shared-CT detection reads - so two devices sharing a meter
-        serial show up in the catalogue as two inverters measuring the same meter.
+        serial show up in the catalogue as two inverters measuring the same meter. It is
+        deliberately a dangling cross-link: `meters` is always returned empty here, since a CT
+        clamp serial is not a utility supply point and does not fit that section's identity model
+        (see _apply_meter_cross_link).
 
         Reporting is independent of self.automatic: the catalogue records what hardware GE Cloud
         found, not whether this component wired Predbat's apps.yaml to it - that distinction is
@@ -1479,7 +1490,6 @@ class GECloudDirect(ComponentBase):
         inverter_type = "GEE" if composition == "ems" else "GEC"
 
         inverters = []
-        meters_by_id = {}
 
         for device in controlled:
             info, ratings = self._device_info_and_ratings(device)
@@ -1495,7 +1505,7 @@ class GECloudDirect(ComponentBase):
             capabilities = self._device_capabilities(device)
             if capabilities:
                 record["capabilities"] = capabilities
-            self._apply_meter_cross_link(devices, device, record, meters_by_id)
+            self._apply_meter_cross_link(devices, device, record)
             if info:
                 record["info"] = info
             if ratings:
@@ -1516,7 +1526,9 @@ class GECloudDirect(ComponentBase):
                 record["ratings"] = ratings
             inverters.append(record)
 
-        return {"automatic": self.automatic, "inverters": inverters, "meters": list(meters_by_id.values())}
+        # Always empty - see _apply_meter_cross_link for why a CT clamp does not become a
+        # fabricated meters record.
+        return {"automatic": self.automatic, "inverters": inverters, "meters": []}
 
     def evc_control_enable(self):
         """Decide whether Predbat-led charger control should run, and say why when it will not.
@@ -1855,20 +1867,38 @@ class GECloudDirect(ComponentBase):
                 if self.automatic_evc:
                     await self.async_automatic_config_evc()
 
-                # Independent of self.automatic: the catalogue describes what hardware GE Cloud
-                # found, not whether this component wired Predbat's apps.yaml to it - that
-                # distinction is recorded in the report's own "automatic" flag, not acted on here
-                # as a gate on reporting at all. Placed after both settings (populated for every
-                # device in self.device_list, above, since seconds == 0 on this very first pass)
-                # and self.info (populated earlier this same cycle, in the seconds % 120 block)
-                # are in hand, so build_discovery()'s capabilities/info/ratings never see stale
-                # or empty data. Exception-guarded like publish_data()'s per-inverter work in
-                # GivTCP: an observer must never be able to degrade the health of the component it
-                # observes - without this, a bug in build_discovery() would propagate out of
-                # run() itself and withhold update_success_timestamp() below, retrying -
-                # identically failing - every cycle instead of just being logged once.
+            # Independent of self.automatic: the catalogue describes what hardware GE Cloud found,
+            # not whether this component wired Predbat's apps.yaml to it - that distinction is
+            # recorded in the report's own "automatic" flag, not acted on here as a gate on
+            # reporting at all. Placed after both settings (populated for every device in
+            # self.device_list, above) and self.info (populated earlier this same cycle, in the
+            # seconds % 120 block) are in hand, so build_discovery()'s capabilities/info/ratings
+            # never see stale or empty data.
+            #
+            # Deliberately compared against self.discovery_reported_for on every pass through this
+            # block, not gated on "first" the way async_automatic_config() above is: self.devices_dict
+            # never changes once fetched (GE Cloud has no rediscovery loop the way GivTCP does), so
+            # this only ever actually calls build_discovery() once devices_dict differs from what was
+            # last successfully reported - normally exactly once, on the first pass. But "first" is a
+            # ComponentBase.start()-local that flips to False forever the instant run() returns True,
+            # and the guard below deliberately swallows a build_discovery() failure so run() still
+            # succeeds - unlike async_automatic_config(), which is unguarded and so gets a de facto
+            # retry from start() itself (an uncaught exception there keeps "first" True). Without this
+            # comparison living outside "if first:", a build_discovery() failure on the very first
+            # cycle would report nothing for the rest of the process's life, even once the underlying
+            # bug or data problem clears up. self.discovery_reported_for is left unset on failure so
+            # the very next cycle through this block (every ~10 minutes, matching how often settings
+            # refresh) retries.
+            #
+            # Exception-guarded like publish_data()'s per-inverter work in GivTCP: an observer must
+            # never be able to degrade the health of the component it observes - without this, a bug
+            # in build_discovery() would propagate out of run() itself and withhold
+            # update_success_timestamp() below, retrying - identically failing - every cycle instead
+            # of just being logged once.
+            if self.devices_dict != self.discovery_reported_for:
                 try:
                     self.report_discovery(self.build_discovery(self.devices_dict))
+                    self.discovery_reported_for = self.devices_dict
                 except Exception as e:
                     self.log("Warn: GECloud: failed to report discovery for the catalogue: {}".format(e))
                     self.non_fatal_error_occurred()

@@ -69,6 +69,7 @@ class MockGECloudDirect(GECloudDirect):
         self.evc_devices_dict = []
         self.ems_device = None
         self.gateway_device = None
+        self.discovery_reported_for = None
         self._now_utc_exact = datetime.now(timezone.utc)
         self.settings_from_cache = False
         self.default_options_stamp = None
@@ -290,6 +291,7 @@ def test_ge_cloud(my_predbat=None):
         ("discovery_regardless_of_automatic", _test_build_discovery_reports_regardless_of_automatic, "build_discovery reports with automatic off"),
         ("discovery_round_trip", _test_build_discovery_round_trips_through_the_coordinator, "build_discovery round-trips through the real Coordinator"),
         ("discovery_report_failure_contained", _test_report_discovery_failure_does_not_degrade_component_health, "a build_discovery failure is contained, not left to degrade health"),
+        ("discovery_report_retries", _test_discovery_report_retries_after_a_failure, "a build_discovery failure is retried on a later cycle"),
         ("publish_evc_device", _test_publish_evc_device, "Publish EVC device status"),
         ("automatic_config_evc", _test_async_automatic_config_evc, "Automatic config for EV chargers"),
         ("evc_control", _test_evc_control, "EV charger control from the car plan"),
@@ -4646,7 +4648,14 @@ def _test_build_discovery_pv_only_devices(my_predbat):
 
 
 def _test_build_discovery_shared_meter(my_predbat):
-    """Two devices sharing a meter serial both carry the same measures_meter, and the meter is reported once."""
+    """
+    Two devices sharing a meter serial both carry the same measures_meter cross-link.
+
+    `meters` stays empty: a CT clamp is not a utility supply point (no direction, no MPAN, no
+    tariff), so build_discovery() never fabricates a meters-section record for it - see
+    _apply_meter_cross_link. The cross-link is real, useful information on its own even with
+    nothing (yet) on the other end of it.
+    """
     devices = {
         "ems": None,
         "gateway": None,
@@ -4668,13 +4677,13 @@ def _test_build_discovery_shared_meter(my_predbat):
     measures = {record["device_id"]: record.get("measures_meter") for record in inverters}
     assert measures["gecloud:battery001"] == measures["gecloud:battery002"], "shared-CT devices should report the same meter"
     assert measures["gecloud:battery001"] == "gecloud:meter:9999"
-    assert report["meters"] == [{"device_id": "gecloud:meter:9999", "hardware_ids": {"serial": "9999"}}], "the shared meter should be reported once, not twice"
-    print("PASS: two devices sharing a meter serial carry the same measures_meter, reported once")
+    assert report["meters"] == [], "a CT clamp is not a utility supply point - no meters record should be fabricated for it"
+    print("PASS: two devices sharing a meter serial carry the same measures_meter; meters stays empty")
     return 0
 
 
 def _test_build_discovery_unique_meters(my_predbat):
-    """Two devices with distinct dedicated meter serials get distinct measures_meter cross-links."""
+    """Two devices with distinct dedicated meter serials get distinct measures_meter cross-links, and meters stays empty."""
     devices = {
         "ems": None,
         "gateway": None,
@@ -4694,8 +4703,8 @@ def _test_build_discovery_unique_meters(my_predbat):
     measures = {record["device_id"]: record.get("measures_meter") for record in report["inverters"]}
     assert measures["gecloud:battery001"] == "gecloud:meter:1001"
     assert measures["gecloud:battery002"] == "gecloud:meter:1002"
-    assert {meter["device_id"] for meter in report["meters"]} == {"gecloud:meter:1001", "gecloud:meter:1002"}
-    print("PASS: distinct meter serials yield distinct measures_meter cross-links")
+    assert report["meters"] == [], "a CT clamp is not a utility supply point - no meters record should be fabricated for it"
+    print("PASS: distinct meter serials yield distinct measures_meter cross-links; meters stays empty")
     return 0
 
 
@@ -4772,9 +4781,9 @@ def _test_build_discovery_round_trips_through_the_coordinator(my_predbat):
     assert record["ratings"]["battery_kwh"] == original["ratings"]["battery_kwh"]
     assert record["ratings"]["max_charge_w"] == 3600
     assert record["measures_meter"] == "gecloud:meter:9999"
-    assert len(cleaned["meters"]) == 1
-    assert cleaned["meters"][0]["device_id"] == "gecloud:meter:9999"
-    assert cleaned["meters"][0]["hardware_ids"] == {"serial": "9999"}
+    # A dangling cross-link, not a fabricated supply-point record - see _apply_meter_cross_link.
+    # The coordinator only ever keys "meters" in when there is at least one record for it.
+    assert cleaned.get("meters", []) == []
     print("PASS: build_discovery() round-trips through the real Coordinator with nothing dropped")
     return 0
 
@@ -4799,7 +4808,51 @@ def _test_report_discovery_failure_does_not_degrade_component_health(my_predbat)
     assert ge.last_success_timestamp is not None, "the success timestamp must still be recorded"
     assert any("failed to report discovery" in message for message in ge.log_messages), "the failure should be logged"
     assert getattr(ge.base, "had_errors", False) is True, "the failure should still be counted as a non-fatal error"
+    assert ge.discovery_reported_for is None, "a failed report must not be marked as reported"
     print("PASS: a build_discovery() failure is contained, not left to degrade the component")
+    return 0
+
+
+def _test_discovery_report_retries_after_a_failure(my_predbat):
+    """
+    A discovery-report failure is retried on a later cycle, not lost for the life of the process.
+
+    async_automatic_config() is unguarded, so an exception there propagates out of run(), is
+    caught by ComponentBase.start()'s outer handler, and crucially skips "first = False" - which
+    is what gives IT a genuine retry. The discovery report does the opposite by design: the guard
+    swallows the exception so run() still returns True. But "first" is a start()-local that flips
+    to False forever the moment run() returns True, and "if first:" is the only place
+    async_automatic_config() (and, before this fix, the discovery report) was ever called from -
+    so without a marker compared outside that gate, a report that fails exactly once would be
+    lost for the life of the process even once the underlying bug or data problem clears up.
+
+    self.discovery_reported_for is compared against self.devices_dict on every pass through the
+    settings block (not gated on "first"), so a failed attempt is retried on the very next such
+    cycle - simulated here by calling run() a second time with first=False, exactly as
+    ComponentBase would once run() has ever returned True.
+    """
+    devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": [], "battery_meters": {}}
+    settings = {"battery001": {}}
+    ge = _discovery_component(devices, settings=settings)
+    real_build_discovery = ge.build_discovery
+    ge.build_discovery = MagicMock(side_effect=Exception("boom"))
+    reports = []
+    ge.report_discovery = lambda report: reports.append(report)
+
+    result = run_async(ge.run(seconds=0, first=True))
+    assert result is True, "a discovery-reporting bug must not fail the whole run() call"
+    assert reports == [], "no report should have been recorded on the failing cycle"
+    assert ge.discovery_reported_for is None, "a failed report must not be marked as reported"
+
+    # The bug is fixed; the next cycle - first=False, matching every call after run() has ever
+    # returned True - retries and succeeds, even though "if first:" itself never runs again.
+    ge.build_discovery = real_build_discovery
+    result = run_async(ge.run(seconds=600, first=False))
+
+    assert result is True
+    assert len(reports) == 1, "the retried report should now succeed"
+    assert ge.discovery_reported_for == devices, "the marker should advance once the report actually succeeds"
+    print("PASS: a build_discovery() failure is retried on a later, non-first cycle - not lost forever")
     return 0
 
 
