@@ -615,6 +615,60 @@ def test_set_arg_invalidates_log_secret_cache(my_predbat):
     return failed
 
 
+def test_auto_config_invalidates_log_secret_cache(my_predbat):
+    """auto_config() must invalidate log()'s cached redaction pattern too (holistic #5053 review).
+
+    set_arg() and the web.py apps.yaml batch editor both invalidate the cache on every args
+    mutation (Copilot review on #5053) - but auto_config() (userinterface.py) is a third,
+    independent place that writes into self.args: it resolves `re:` patterns against live HA
+    entity ids on every startup/reconfigure pass (predbat.py's auto_config()/auto_config(final=True)
+    calls) and had no invalidation at all. A `re:` argument that resolves to (or stops matching,
+    and is removed from self.args) a credential-shaped value would otherwise keep leaking under -
+    or being missed by - a stale pattern built before auto_config() ran, until Predbat next
+    restarts. Covers both the "resolved to a new value" and "removed because nothing matched" arms.
+    """
+    if my_predbat is None:
+        return False
+    print("**** Testing auto_config() invalidates the cached log redaction pattern ****")
+    failed = False
+
+    import io
+
+    saved_args = my_predbat.args.copy()
+    saved_logfile = my_predbat.logfile
+    saved_cache = my_predbat._log_secret_pattern_cache
+    saved_get_state_wrapper = my_predbat.get_state_wrapper
+    saved_unmatched_args = getattr(my_predbat, "unmatched_args", {})
+    try:
+        my_predbat.args.pop("test_marker_secret_key_xyz", None)
+        my_predbat.args["test_marker_secret_key_xyz"] = "re:sensor\\.auto_config_secret_marker"
+        my_predbat.get_state_wrapper = lambda *a, **kw: {"sensor.auto_config_secret_marker": "on"}
+        my_predbat._log_secret_pattern_cache = my_predbat._LOG_SECRET_PATTERN_UNSET
+        my_predbat.logfile = io.StringIO()
+
+        # Build the cache from the pre-auto_config() args (the "re:..." string itself, not yet
+        # resolved), the same way a real log() call between startup and auto_config() would.
+        my_predbat.log("Info: nothing secret published yet")
+        my_predbat.auto_config()
+        my_predbat.log("Info: now using sensor.auto_config_secret_marker")
+
+        content = my_predbat.logfile.getvalue()
+        if "sensor.auto_config_secret_marker" in content and "<test_marker_secret_key_xyz>" not in content:
+            print("ERROR: a value resolved by auto_config() after the cache was built still leaked into the log unredacted: {}".format(content))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.unmatched_args = saved_unmatched_args
+        my_predbat.get_state_wrapper = saved_get_state_wrapper
+        my_predbat.logfile = saved_logfile
+        my_predbat._log_secret_pattern_cache = saved_cache
+
+    if not failed:
+        print("**** test_auto_config_invalidates_log_secret_cache PASSED ****")
+    return failed
+
+
 def test_log_secret_pattern_build_is_not_racy(my_predbat):
     """_log_secret_pattern() must not let a build started before an invalidation overwrite that
     invalidation once it finishes (#5053 review).
@@ -706,5 +760,6 @@ def run_secrets_tests(my_predbat=None):
     failed |= test_log_redacts_at_write_time()
     failed |= test_redact_strings_masked_in_debug_dump()
     failed |= test_set_arg_invalidates_log_secret_cache(my_predbat)
+    failed |= test_auto_config_invalidates_log_secret_cache(my_predbat)
     failed |= test_log_secret_pattern_build_is_not_racy(my_predbat)
     return failed

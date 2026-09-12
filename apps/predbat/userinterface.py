@@ -1214,6 +1214,7 @@ class UserInterface:
         self.unmatched_args = {}
 
         # Find each arg re to match
+        changed = False
         for arg in self.args:
             arg_value = self.args[arg]
             matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
@@ -1223,11 +1224,25 @@ class UserInterface:
                     disabled.append(arg)
             else:
                 self.args[arg] = arg_value
+                changed = True
 
         # Remove unmatched keys
         for key in disabled:
             self.unmatched_args[key] = self.args[key]
             del self.args[key]
+            changed = True
+
+        # A `re:` pattern can resolve to a live HA entity's state/attribute - a credential-shaped
+        # value from a third-party integration is exactly what redact_strings/redact_strings_labelled
+        # exist to catch (GH#4770) - and a disabled key's removal changes what collect_log_secret_values()
+        # sees from args too. Unlike set_arg() (this class's only other args mutator, which invalidates
+        # unconditionally on every call), auto_config() runs over every configured arg on each call, so
+        # invalidating once at the end - only when something actually changed - avoids rebuilding the
+        # pattern key-by-key while still closing the gap: a value resolved or removed here must not keep
+        # leaking under the stale pattern (or keep being redacted after a redact_strings entry is removed)
+        # until Predbat next restarts.
+        if changed:
+            self._invalidate_log_secret_pattern()
 
     def split_command_index(self, command):
         """
