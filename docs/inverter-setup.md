@@ -2785,179 +2785,82 @@ See the components documentation for details: [Components - Sunsynk Cloud API](c
 
 ## Sunsynk
 
-- Copy the Sunsynk template over the top of your `apps.yaml`, and edit for your system.
-- Create the following Home Assistant automations:
+Predbat can control Sunsynk inverters directly through a single timer slot.
+No additional Home Assistant automations or template sensors are required.
+
+### Setup
+
+On the Sunsynk inverter timer page, configure:
+
+| Timer | Time  | Grid Charge |
+|-------|-------|-------------|
+| 1     | 00:30 | Enabled     |
+| 2     | 23:00 | Disabled    |
+| 3     | 23:30 | Disabled    |
+| 4     | 23:30 | Disabled    |
+| 5     | 23:30 | Disabled    |
+| 6     | 23:30 | Disabled    |
+
+Only Timer 1 has grid charging enabled. The remaining slots are parked
+outside the operating window.
+
+In `apps.yaml`, map Predbat to Timer 1:
 
 ```yaml
-alias: Predbat Charge / Discharge Control
-description: "Turn SunSynk charge/discharge on/off to mirror Predbat"
-trigger:
-    - platform: state
-    entity_id:
-      - binary_sensor.predbat_charging
-    to: "on"
-    id: predbat_charge_on
-    - platform: state
-    entity_id:
-      - binary_sensor.predbat_charging
-    to: "off"
-    id: predbat_charge_off
-    - platform: state
-    entity_id:
-      - binary_sensor.predbat_exporting
-    to: "on"
-    id: predbat_discharge_on
-    - platform: state
-    entity_id:
-      - binary_sensor.predbat_exporting
-    to: "off"
-    id: predbat_discharge_off
-condition: []
-action:
-    - choose:
-      - conditions:
-          - condition: trigger
-            id:
-              - predbat_charge_on
-        sequence:
-          - service: switch.turn_on
-            data: {}
-            target:
-              entity_id: switch.sunsynk_grid_charge_timezone1
-      - conditions:
-          - condition: trigger
-            id:
-              - predbat_charge_off
-        sequence:
-          - service: switch.turn_off
-            target:
-              entity_id:
-                - switch.sunsynk_grid_charge_timezone1
-            data: {}
-      - conditions:
-          - condition: trigger
-            id:
-              - predbat_discharge_on
-        sequence:
-          - service: switch.turn_on
-            data: {}
-            target:
-              entity_id: switch.sunsynk_solar_sell
-      - conditions:
-          - condition: trigger
-            id:
-              - predbat_discharge_off
-        sequence:
-          - service: switch.turn_off
-            target:
-              entity_id:
-                - switch.sunsynk_solar_sell
-            data: {}
-mode: single
+use_timer:
+  - switch.ss_use_timer_2
+
+timed_charge_current:
+  - number.ss_battery_max_charge_current_2
+
+timed_discharge_current:
+  - number.ss_battery_max_discharge_current_2
+
+charge_limit:
+  - number.ss_prog1_capacity_2
+
+charge_rate:
+  - number.ss_prog1_power_2
+
+charge_start_time:
+  - select.ss_prog1_time_2
+
+charge_end_time:
+  - select.ss_prog1_time_2
+
+charge_enable:
+  - select.ss_prog1_charge_2
 ```
 
-- Optional: create the following automation to prevent export when the current export price is negative.
-    - On negative price, it sets Sunsynk to `Zero export to CT` and turns off `switch.sunsynk_solar_sell`
-    - On positive price, it only turns `switch.sunsynk_solar_sell` back on (it does not restore work mode)
-    - `grid_export_now` is an attribute of `sensor.predbat_marginal_energy_costs`
+Predbat writes the charge window directly into Timer 1, for example:
 
-```yaml
-alias: "Sunsynk - Negative Export Price Safety"
-description: "Set Zero export to CT on negative export price and re-enable solar_sell when price recovers"
-trigger:
-  - platform: template
-    value_template: >
-      {{ (state_attr('sensor.predbat_marginal_energy_costs', 'grid_export_now') | float(9999)) < 0 }}
-    for: "00:02:00"
-    id: negative_price
+- `sensor.predbat_SK_0_charge_start_time = 15:30:00`
+- `sensor.predbat_SK_0_charge_end_time = 16:00:00`
+- `select.ss_prog1_charge_2 = Allow Grid`
 
-  - platform: template
-    value_template: >
-      {{ (state_attr('sensor.predbat_marginal_energy_costs', 'grid_export_now') | float(-9999)) > 1 }}
-    for: "00:02:00"
-    id: positive_price
+### Why one slot?
 
-condition: []
-action:
-  - choose:
-      - conditions:
-          - condition: trigger
-            id: negative_price
-        sequence:
-          - service: select.select_option
-            target:
-              entity_id: select.sunsynk_work_mode
-            data:
-              option: "Zero export to CT"
-          - service: switch.turn_off
-            target:
-              entity_id: switch.sunsynk_solar_sell
+Sunsynk timer slots are sequential intervals — each runs until the next
+slot's start time — and Sunsynk requires them to be set chronologically.
+When Predbat manages all six slots, charge windows that cross midnight can
+create overlapping or duplicate start times, leading to unreliable timer
+behaviour. Using one dedicated slot avoids this.
 
-      - conditions:
-          - condition: trigger
-            id: positive_price
-        sequence:
-          - service: switch.turn_on
-            target:
-              entity_id: switch.sunsynk_solar_sell
-mode: single
-```
+This configuration has been running reliably since March 2026, including
+midnight-crossing windows, with no issues.
 
-```yaml
-alias: PredBat - Copy Charge Limit
-description: Copy Battery SoC to all timezone (time) slots
-trigger:
-    - platform: state
-    entity_id:
-      - number.sunsynk_set_soc_timezone1
-    to: null
-condition: []
-action:
-    - service: number.set_value
-    data_template:
-      entity_id:
-        - number.sunsynk_set_soc_timezone2
-        - number.sunsynk_set_soc_timezone3
-        - number.sunsynk_set_soc_timezone4
-        - number.sunsynk_set_soc_timezone5
-        - number.sunsynk_set_soc_timezone6
-      value: "{{ states('number.sunsynk_set_soc_timezone1')|int(20) }}"
-mode: single
-```
+### Alternative: six-slot configuration
 
-- Create the following templates sensors in your `configuration.yaml`:
+Mapping Predbat across all six slots is possible but requires care with
+chronological ordering and midnight rollover. If you experience timer
+conflicts, use the single-slot method above.
 
-```yaml
-template:
-  sensor:
-    - name: "sunsynk_max_battery_charge_rate"
-      unit_of_measurement: "w"
-      state_class: measurement
-      state: >
-        {{ [8000,[states('input_number.sunsynk_battery_max_charge_current_limit')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
-        * states('sensor.sunsynk_battery_voltage')|float]|min }}
+The previous automation-based configuration (using
+`binary_sensor.predbat_charging`, `switch.sunsynk_grid_charge_timezone1`
+and template sensors) remains valid for users whose setups depend on it.
 
-    - name: "sunsynk_max_battery_discharge_rate"
-      unit_of_measurement: "w"
-      state_class: measurement
-      state: >
-        {{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
-        * states('sensor.sunsynk_battery_voltage')|float]|min }}
-
-    - name: "sunsynk_charge_rate_calc"
-      unit_of_measurement: "w"
-      state_class: measurement
-      state: >
-        {{ [8000,[states('input_number.test_sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
-        * states('sensor.sunsynk_battery_voltage')|float]|min }}
-
-    - name: "sunsynk_discharge_rate_calc"
-      unit_of_measurement: "w"
-      state_class: measurement
-      state: >
-        {{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
-         * states('sensor.sunsynk_battery_voltage')|float]|min }}
-```
+Note: the standard `utility_meter` block is still required, as it is for
+every Predbat installation. This is not Sunsynk-specific.
 
 ## Tesla Powerwall
 
