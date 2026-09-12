@@ -158,10 +158,12 @@ def _scope(p: Path, glob: str = "") -> str:
     """Format an absolute path as a glob pattern for Claude Code tool scoping."""
     try:
         rel = p.relative_to("/")
+        base = "//"
     except ValueError:
         rel = p.relative_to(p.anchor)
+        base = p.anchor.replace("\\", "/")
     suffix = f"/{glob}" if glob else ""
-    return f"//{rel.as_posix()}{suffix}"
+    return f"{base}{rel.as_posix()}{suffix}"
 
 
 EDIT_SCOPE = _scope(CLONE_DIR, "**")

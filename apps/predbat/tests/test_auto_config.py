@@ -12,9 +12,14 @@ def run_auto_config_tests(my_predbat):
     print("Running auto_config tests")
     print("============================================================")
 
+    import copy
+
     # Backup original
-    original_args = my_predbat.args.copy()
-    original_unmatched = getattr(my_predbat, "unmatched_args", {}).copy()
+    original_args = copy.deepcopy(my_predbat.args)
+    original_unmatched = copy.deepcopy(getattr(my_predbat, "unmatched_args", {}))
+    saved_retries_remaining = my_predbat.validate_config_retries_remaining
+    saved_next_retry_time = my_predbat.validate_config_next_retry_time
+    saved_started_time = getattr(my_predbat, "started_time", None)
 
     try:
         # Test 1: List matching retains 're:' elements if they fail
@@ -94,7 +99,7 @@ def run_auto_config_tests(my_predbat):
         # Test 6: Retry matching resolves previously unmatched scalar arg from unmatched_args
         print("\n=== Test 6: Scalar retry resolution from unmatched_args ===")
         my_predbat.args = {}
-        my_predbat.unmatched_args = {"inverter_limit": "re:sensor\\.delayed_limit_.*"}
+        my_predbat.unmatched_args = {"inverter_limit": "re:sensor\.delayed_limit_.*"}
         my_predbat.auto_config(final=True)
         if "inverter_limit" in my_predbat.args:
             print(f"FAIL: inverter_limit prematurely resolved before entity appeared")
@@ -111,13 +116,34 @@ def run_auto_config_tests(my_predbat):
         else:
             print("PASS: Scalar regex resolved and restored from unmatched_args.")
 
+        # Test 6b: Retry matching resolves previously unmatched list/dict arg from unmatched_args (MEDIUM 13)
+        print("\n=== Test 6b: List retry resolution from unmatched_args ===")
+        my_predbat.args = {"pv_forecast_raw": ["sensor.inv1", "re:sensor\.late_inv_.*"]}
+        my_predbat.unmatched_args = {}
+        my_predbat.auto_config(final=True)
+        val = my_predbat.args.get("pv_forecast_raw")
+        if val != ["sensor.inv1", None]:
+            print(f"FAIL: List regex matching failed to disable item on final=True. Got {val}")
+            failed = True
+
+        my_predbat.set_state_wrapper("sensor.late_inv_1", "3600")
+        my_predbat.auto_config(final=True)
+        if my_predbat.args.get("pv_forecast_raw") != ["sensor.inv1", "sensor.late_inv_1"]:
+            print(f"FAIL: pv_forecast_raw not restored from unmatched_args. Got {my_predbat.args.get('pv_forecast_raw')}")
+            failed = True
+        elif "pv_forecast_raw" in my_predbat.unmatched_args:
+            print("FAIL: pv_forecast_raw still in unmatched_args after retry resolution")
+            failed = True
+        else:
+            print("PASS: List regex resolved and restored from unmatched_args.")
+
         # Test 7: List retry resolution during startup window (< 10 mins)
         print("\n=== Test 7: List regex retry resolution ===")
-        my_predbat.args = {"pv_forecast_raw": ["sensor.inv1", "re:sensor\\.delayed_inv_.*"]}
+        my_predbat.args = {"pv_forecast_raw": ["sensor.inv1", "re:sensor\.delayed_inv_.*"]}
         my_predbat.unmatched_args = {}
         my_predbat.auto_config(final=False)
         val = my_predbat.args.get("pv_forecast_raw")
-        if val != ["sensor.inv1", "re:sensor\\.delayed_inv_.*"]:
+        if val != ["sensor.inv1", "re:sensor\.delayed_inv_.*"]:
             print(f"FAIL: List regex matching failed to retain string before entity appeared. Got {val}")
             failed = True
 
@@ -132,11 +158,11 @@ def run_auto_config_tests(my_predbat):
 
         # Test 8: Dict retry resolution during startup window (< 10 mins)
         print("\n=== Test 8: Dict regex retry resolution ===")
-        my_predbat.args = {"my_dict": {"primary": "sensor.foo", "secondary": "re:sensor\\.delayed_dict_.*"}}
+        my_predbat.args = {"my_dict": {"primary": "sensor.foo", "secondary": "re:sensor\.delayed_dict_.*"}}
         my_predbat.unmatched_args = {}
         my_predbat.auto_config(final=False)
         val = my_predbat.args.get("my_dict")
-        if val != {"primary": "sensor.foo", "secondary": "re:sensor\\.delayed_dict_.*"}:
+        if val != {"primary": "sensor.foo", "secondary": "re:sensor\.delayed_dict_.*"}:
             print(f"FAIL: Dict regex failed to retain string before entity appeared. Got {val}")
             failed = True
 
@@ -153,7 +179,7 @@ def run_auto_config_tests(my_predbat):
         print("\n=== Test 9: validate_config_check_retry resolves regex and clears error ===")
         from datetime import timedelta
 
-        my_predbat.args = {"inverter_limit": "re:sensor\\.delayed_valid_.*"}
+        my_predbat.args = {"inverter_limit": "re:sensor\.delayed_valid_.*"}
         my_predbat.unmatched_args = {}
         my_predbat.validate_config_retries_remaining = 2
         my_predbat.validate_config_next_retry_time = my_predbat.now_utc - timedelta(seconds=1)
@@ -169,13 +195,54 @@ def run_auto_config_tests(my_predbat):
         else:
             print("PASS: validate_config_check_retry successfully resolved regex and cleared retry sequence.")
 
+        # Test 10: 10-minute finalisation boundary (MEDIUM 17)
+        print("\n=== Test 10: 10-minute finalisation boundary ===")
+        my_predbat.args = {"inverter_limit": "re:sensor\.time_boundary_.*"}
+        my_predbat.unmatched_args = {}
+        my_predbat.validate_config_retries_remaining = 2
+        my_predbat.validate_config_next_retry_time = my_predbat.now_utc - timedelta(seconds=1)
+
+        # Test started_time absent fallback
+        my_predbat.started_time = None
+        my_predbat.validate_config_next_retry_time = my_predbat.now_utc - timedelta(seconds=1)
+        my_predbat.validate_config_check_retry()
+        if "inverter_limit" not in my_predbat.args:
+            print(f"FAIL: finalisation boundary test: getattr fallback resolved final=True prematurely")
+            failed = True
+
+        # Test exactly 10 minutes (should be non-final)
+        my_predbat.validate_config_retries_remaining = 2
+        my_predbat.validate_config_next_retry_time = my_predbat.now_utc - timedelta(seconds=1)
+        my_predbat.started_time = my_predbat.now_utc_real - timedelta(minutes=10)
+        my_predbat.validate_config_check_retry()
+        if "inverter_limit" not in my_predbat.args:
+            print(f"FAIL: finalisation boundary test: 10 minutes exactly resolved final=True prematurely")
+            failed = True
+
+        # Test > 10 minutes (should be final)
+        my_predbat.validate_config_retries_remaining = 2
+        my_predbat.validate_config_next_retry_time = my_predbat.now_utc - timedelta(seconds=1)
+        my_predbat.started_time = my_predbat.now_utc_real - timedelta(minutes=11)
+        my_predbat.validate_config_check_retry()
+        if "inverter_limit" in my_predbat.args:
+            print(f"FAIL: finalisation boundary test: 11 minutes did not resolve final=True")
+            failed = True
+        elif "inverter_limit" not in my_predbat.unmatched_args:
+            print(f"FAIL: finalisation boundary test: 11 minutes did not put arg in unmatched_args")
+            failed = True
+        else:
+            print("PASS: 10-minute finalisation boundary correctly checked.")
+
     finally:
         # Cleanup dummy items added during tests
-        for dummy_key in ("sensor.delayed_limit_99", "sensor.delayed_inv_2", "sensor.delayed_dict_sub", "sensor.delayed_valid_1"):
+        for dummy_key in ("sensor.delayed_limit_99", "sensor.delayed_inv_2", "sensor.delayed_dict_sub", "sensor.delayed_valid_1", "sensor.late_inv_1"):
             if hasattr(my_predbat, "ha_interface") and hasattr(my_predbat.ha_interface, "dummy_items"):
                 my_predbat.ha_interface.dummy_items.pop(dummy_key, None)
         my_predbat.args = original_args
         my_predbat.unmatched_args = original_unmatched
+        my_predbat.validate_config_retries_remaining = saved_retries_remaining
+        my_predbat.validate_config_next_retry_time = saved_next_retry_time
+        my_predbat.started_time = saved_started_time
 
     print("============================================================")
     if failed:

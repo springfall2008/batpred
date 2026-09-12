@@ -196,19 +196,21 @@ class Hass:
                         pass
 
             self.logfile.close()
+            rename_failed = False
             try:
                 if os.path.isfile("predbat.1.log"):
                     os.remove("predbat.1.log")
                 os.rename("predbat.log", "predbat.1.log")
             except OSError:
-                pass
-            self.logfile = open("predbat.log", "w")
+                rename_failed = True
+
+            self.logfile = open("predbat.log", "a" if rename_failed else "w")
         except Exception:
             try:
-                if self.logfile.closed:
+                if getattr(self, "logfile", None) and getattr(self.logfile, "closed", True):
                     self.logfile = open("predbat.log", "a")
             except Exception:
-                pass
+                self.logfile = open(os.devnull, "w")
 
     def log(self, msg, quiet=True):
         """

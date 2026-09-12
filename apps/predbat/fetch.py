@@ -2520,7 +2520,7 @@ class Fetch:
         """
         # Use ML Model for load prediction
         status = self.get_state_wrapper("sensor." + self.prefix + "_load_ml_forecast")
-        if status and status != "active":
+        if status != "active":
             self.log("ML load forecast is not active (status: {}), falling back to historical data".format(status))
             return {}
 
