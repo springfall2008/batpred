@@ -1194,6 +1194,13 @@ def _apply_rates(predbat, rate_import, rate_export):
     predbat.rate_export = rate_export
     predbat.rate_low_threshold = 0
     predbat.rate_high_threshold = 0
+    # The saving-minute sets are provenance for the live tariff's rates, captured in
+    # fetch_sensor_data() and frozen there so a later rate_replicate()/basic_rates() overwrite
+    # cannot erase it (#5050). They describe minute offsets in the rates being replaced here, so
+    # they must not outlive them: set_rate_thresholds() below would otherwise exclude whatever
+    # happens to sit at those offsets in the simulated tariff from its min/max/average scan.
+    predbat.rate_import_saving_minutes = set()
+    predbat.rate_export_saving_minutes = set()
 
     if predbat.rate_import:
         predbat.rate_scan(predbat.rate_import, print=False)

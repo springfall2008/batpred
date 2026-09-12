@@ -327,6 +327,41 @@ def test_rate_minmax_excluding_saving_ignores_overwritten_replicate_tag(my_predb
     return failed
 
 
+def test_compare_and_annual_clear_stale_saving_minutes(my_predbat):
+    """The saving-minute sets must not outlive the rates they describe.
+
+    rate_import_saving_minutes/rate_export_saving_minutes are only ever populated in
+    fetch_sensor_data(), and they hold absolute minute offsets into the live tariff's rate tables.
+    compare.py's fetch_rates() and annual.py's _apply_rates() both replace rate_import/rate_export
+    with a simulated tariff and then call set_rate_thresholds() - so after a live cycle containing a
+    saving session, those stale offsets would exclude whatever unrelated minutes happen to sit at
+    the same positions in the simulated tariff from the threshold scan (Copilot review on #5052).
+
+    Both resets sit beside the existing rate_low_threshold/rate_high_threshold ones, so assert on
+    the source of each rather than running the functions: fetch_rates()/_apply_rates() drive the
+    whole scan pipeline and rewrite ~24 fields on the shared my_predbat fixture (including
+    dashboard_values and the window lists), which would leak into later tests in the registry.
+    """
+    print("**** test_compare_and_annual_clear_stale_saving_minutes ****")
+    failed = False
+
+    import inspect
+
+    import annual
+    from compare import Compare
+
+    for label, func, receiver in (("compare.fetch_rates", Compare.fetch_rates, "pb"), ("annual._apply_rates", annual._apply_rates, "predbat")):
+        source = inspect.getsource(func)
+        for field in ("rate_import_saving_minutes", "rate_export_saving_minutes"):
+            if "{}.{} = set()".format(receiver, field) not in source:
+                print("ERROR: {}() must reset {} alongside the rates it replaces, or a stale saving-session offset from a live cycle filters the simulated tariff".format(label, field))
+                failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
 _SNAPSHOT_FIELDS = (
     "minutes_now",
     "forecast_minutes",
@@ -375,6 +410,7 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_set_rate_thresholds_ignores_small_saving_boost_in_manual_import_mode(my_predbat)
         failed |= test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode(my_predbat)
         failed |= test_rate_minmax_excluding_saving_ignores_overwritten_replicate_tag(my_predbat)
+        failed |= test_compare_and_annual_clear_stale_saving_minutes(my_predbat)
         return failed
     finally:
         for field, value in snapshot.items():
