@@ -2377,6 +2377,17 @@ def run_model_tests(my_predbat, prediction_kernel=False):
     failed |= simple_scenario("low_power_dark_full_rate", my_predbat, set_charge_low_power=False, **low_power_dark)
     failed |= simple_scenario("low_power_dark_low_power", my_predbat, set_charge_low_power=True, **low_power_dark)
 
+    # A low constant PV forecast across the whole window stays on low power because its own average
+    # power is below low_power_pv_threshold_w, even though its accumulated energy over the 8 hour
+    # window (0.1kW * 8h = 0.8kWh) would have tripped the old fixed-kWh LOW_POWER_PV_THRESHOLD (0.1kWh)
+    # regardless of window length - the fix this threshold is meant to catch (#4699 follow-up).
+    my_predbat.low_power_pv_threshold_w = 150
+    low_power_below_threshold = dict(low_power_pv)
+    low_power_below_threshold["pv_amount"] = 0.1
+    low_power_below_threshold["pv_hours"] = None
+    low_power_below_threshold["assert_final_metric"] = import_rate * 12 - export_rate * 0.0  # PV is fully absorbed by the battery, not exported
+    failed |= simple_scenario("low_power_below_threshold_stays_low_power", my_predbat, set_charge_low_power=True, assert_final_soc=13.62, **{k: v for k, v in low_power_below_threshold.items() if k != "assert_final_soc"})
+
     my_predbat.prediction_kernel_enable = False
     if failed:
         print("**** ERROR: Some Model tests failed ****")

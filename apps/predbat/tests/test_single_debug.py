@@ -151,9 +151,12 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
         # Find charging windows
         if my_predbat.rate_import:
-            # Find charging window
+            # Find charging window - mirrors fetch.py's fetch_sensor_data(), including the dawn
+            # light/dark split (#4699: this reimplementation used to omit pv_light_dark entirely,
+            # so a debug.yaml replay could never catch a regression in the split)
+            pv_light_dark = my_predbat.calc_pv_light_dark()
             print("rate scan window import threshold rate {}".format(my_predbat.rate_import_cost_threshold))
-            my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export)
+            my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export, pv_light_dark=pv_light_dark)
             # Update threshold automatically
             if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
                 my_predbat.rate_import_cost_threshold = highest
