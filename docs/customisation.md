@@ -816,6 +816,7 @@ The **select.predbat_manual_soc_max** selector is the opposite of **select.predb
 This is useful for a periodic calibration discharge - some batteries benefit from occasionally being run down close to empty just before a known cheap import slot (e.g. an Octopus Intelligent Go midnight slot), so the BMS can re-anchor its SoC estimate, and then Predbat can immediately recharge cheaply. See issue [#1578](https://github.com/springfall2008/batpred/issues/1578) for the discussion that led to this.
 
 The SoC ceiling percentage will be that configured in **input_number.predbat_manual_soc_max_value** (default 0%) which can be adjusted prior to making a selection.
+A ceiling of 0% is a real target meaning empty the battery as far as the reserve and the inverter allow, not 'no ceiling' - to remove a ceiling, clear the selection instead.
 
 For example, to run the battery down to 4% by 00:00 (just ahead of a midnight cheap slot), set **input_number.predbat_manual_soc_max_value** to 4 and select the 00:00 slot on **select.predbat_manual_soc_max**. Predbat will plan discharging so the battery is at or below that ceiling by that time, preferring to use the energy against load or export rather than simply forcing a fixed-duration export block, so it stays coordinated with the rest of the plan (car charging, existing charge/export windows, etc).
 

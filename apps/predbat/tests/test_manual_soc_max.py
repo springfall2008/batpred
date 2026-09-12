@@ -10,6 +10,46 @@
 
 from datetime import datetime, timezone
 
+from tests.test_infra import reset_rates, reset_inverter
+from prediction import Prediction
+
+IMPORT_RATE = 10.0
+EXPORT_RATE = 5.0
+
+
+def _keep_metric_for_ceiling(my_predbat, ceiling_percent):
+    """Run an hour of prediction with the given manual_soc_max ceiling and return the keep metric."""
+    reset_inverter(my_predbat)
+    reset_rates(my_predbat, IMPORT_RATE, EXPORT_RATE)
+    my_predbat.soc_max = 10.0
+    my_predbat.soc_kw = 8.0
+    my_predbat.reserve = 0.0
+    # Isolate the ceiling penalty from the floor one, which shares metric_keep
+    my_predbat.best_soc_keep = 0.0
+    my_predbat.best_soc_keep_weight = 1.0
+    my_predbat.debug_enable = False
+    # Pin the Python engine so this exercises the source, not whatever prebuilt binary is present;
+    # kernel_parity covers the C++ mirror agreeing with it
+    my_predbat.prediction_kernel_enable = False
+
+    my_predbat.all_active_keep = {}
+    if ceiling_percent is None:
+        my_predbat.all_active_keep_max = {}
+    else:
+        my_predbat.all_active_keep_max = {minute: ceiling_percent for minute in range(my_predbat.minutes_now, my_predbat.minutes_now + 120)}
+
+    step = 5
+    pv_step = {minute: 0.0 for minute in range(0, my_predbat.forecast_minutes, step)}
+    load_step = {minute: 0.0 for minute in range(0, my_predbat.forecast_minutes, step)}
+    my_predbat.load_minutes_step = load_step
+    my_predbat.load_minutes_step10 = load_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.pv_forecast_minute10_step = pv_step
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+
+    result = my_predbat.run_prediction([], [], [], [], False, end_record=60)
+    return result[8]
+
 
 def run_test_manual_soc_max(my_predbat):
     """
@@ -86,19 +126,9 @@ def run_test_manual_soc_max(my_predbat):
     my_predbat.manual_soc_keep = my_predbat.manual_rates("manual_soc", default_rate=my_predbat.get_arg("manual_soc_value"))
     my_predbat.manual_soc_max_keep = my_predbat.manual_rates("manual_soc_max", default_rate=my_predbat.get_arg("manual_soc_max_value"))
 
-    # Reproduce the merge fetch_config_options() performs, exercising the actual conflict-resolution code
+    # Call the production merge/conflict-resolution path itself (fetch.py), not a copy of it
     my_predbat.alert_active_keep = {}
-    my_predbat.all_active_keep = my_predbat.alert_active_keep.copy()
-    for minute, soc_value in my_predbat.manual_soc_keep.items():
-        my_predbat.all_active_keep[minute] = max(my_predbat.all_active_keep.get(minute, 0), soc_value)
-    my_predbat.all_active_keep_max = {}
-    for minute, soc_value in my_predbat.manual_soc_max_keep.items():
-        my_predbat.all_active_keep_max[minute] = min(my_predbat.all_active_keep_max.get(minute, soc_value), soc_value)
-    for minute in list(my_predbat.all_active_keep_max.keys()):
-        floor_value = my_predbat.all_active_keep.get(minute, 0)
-        if floor_value > my_predbat.all_active_keep_max[minute]:
-            my_predbat.log("Warn: manual_soc_max target {}% at minute {} is below the manual_soc/alert floor {}% for the same minute - ignoring the ceiling there".format(my_predbat.all_active_keep_max[minute], minute, floor_value))
-            del my_predbat.all_active_keep_max[minute]
+    my_predbat.combine_active_keep()
     my_predbat.log = orig_log
 
     if my_predbat.all_active_keep_max:
@@ -109,6 +139,34 @@ def run_test_manual_soc_max(my_predbat):
         failed = True
     else:
         print("PASS: T4 Conflicting ceiling dropped with a warning, floor preserved")
+
+    # Test 5: a 0% ceiling is a real request (empty the battery for a BMS calibration, the point of
+    # issue #1578), not an absent one. Absence has to be encoded separately from the numeric ceiling
+    # or the default manual_soc_max_value of 0 silently does nothing.
+    print("Test 5: A 0% ceiling penalises held charge, no ceiling does not")
+    my_predbat.manual_select("manual_soc", "off")
+    my_predbat.manual_select("manual_soc_max", "off")
+    my_predbat.alert_active_keep = {}
+    my_predbat.manual_soc_keep = {}
+
+    no_ceiling_keep = _keep_metric_for_ceiling(my_predbat, None)
+    zero_ceiling_keep = _keep_metric_for_ceiling(my_predbat, 0.0)
+    half_ceiling_keep = _keep_metric_for_ceiling(my_predbat, 50.0)
+
+    if no_ceiling_keep != 0:
+        print("ERROR: T5 Expected no keep penalty with no ceiling set, got {}".format(no_ceiling_keep))
+        failed = True
+    elif zero_ceiling_keep <= 0:
+        print("ERROR: T5 Expected a keep penalty for holding charge above a 0% ceiling, got {}".format(zero_ceiling_keep))
+        failed = True
+    elif half_ceiling_keep <= 0:
+        print("ERROR: T5 Expected a keep penalty for holding charge above a 50% ceiling, got {}".format(half_ceiling_keep))
+        failed = True
+    elif zero_ceiling_keep <= half_ceiling_keep:
+        print("ERROR: T5 Expected the 0% ceiling to penalise more than the 50% one, got {} vs {}".format(zero_ceiling_keep, half_ceiling_keep))
+        failed = True
+    else:
+        print("PASS: T5 0% ceiling penalised ({}) above the 50% ceiling ({}), none without a ceiling".format(zero_ceiling_keep, half_ceiling_keep))
 
     # Clean up
     my_predbat.alert_active_keep = {}

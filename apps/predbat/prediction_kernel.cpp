@@ -43,7 +43,7 @@
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
 #define PK_ABI_VERSION 5
-#define PK_PARITY_REVISION 11
+#define PK_PARITY_REVISION 12
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_LIMIT_FREEZE 99.0 // const.py EXPORT_LIMIT_FREEZE
@@ -145,7 +145,7 @@ struct PkContext {
     const double *rate_import;        // import rate per step
     const double *rate_export;        // export rate per step
     const double *alert_keep;         // alert keep value per step
-    const double *alert_keep_max;     // soc ceiling keep value per step (manual_soc_max), 0 = no ceiling
+    const double *alert_keep_max;     // soc ceiling keep value per step (manual_soc_max), negative = no ceiling
     const double *pv;                 // PV forecast kWh per step (central)
     const double *load;               // load kWh per step (central)
     const double *pv10;               // PV forecast kWh per step (PV10)
@@ -756,9 +756,10 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         }
 
         // Soc max keep is a ceiling rather than a floor (manual_soc_max) - mirrors prediction.py's
-        // best_soc_max block right after the alert keep floor. 0 = no ceiling.
-        double best_soc_max = 0;
-        if (alert_keep_max > 0) {
+        // best_soc_max block right after the alert keep floor. Negative = no ceiling, 0 = empty the
+        // battery (a real request, so presence is not encoded as a non-zero value).
+        double best_soc_max = -1;
+        if (alert_keep_max >= 0) {
             keep_minute_scaling = std::max(keep_minute_scaling, 10.0);
             best_soc_max = std::min(alert_keep_max / 100.0 * soc_max, soc_max);
         }
@@ -1276,7 +1277,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
         // Metric keep max - pretend the excess above the ceiling should have been exported instead
         // of held - mirrors prediction.py's best_soc_max block right after the floor.
-        if (best_soc_max > 0 && soc >= best_soc_max) {
+        if (best_soc_max >= 0 && soc >= best_soc_max) {
             metric_keep += (soc - best_soc_max) * export_rate * keep_minute_scaling * step / 60.0;
         }
 

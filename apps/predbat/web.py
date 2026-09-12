@@ -4784,7 +4784,7 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_soc_max", selection_option)
             elif action == "Clear SOC Max":
-manual_soc_max = self.base.manual_rates("manual_soc_max", update=False)
+                manual_soc_max = self.base.manual_rates("manual_soc_max", update=False)
                 actual_rate = manual_soc_max.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_soc_max", clear_option)

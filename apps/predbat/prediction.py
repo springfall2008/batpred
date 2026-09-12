@@ -699,7 +699,7 @@ class Prediction(PredictionBatch):
 
             # Alert?
             alert_keep = all_active_keep.get(minute_absolute, 0)
-            alert_keep_max = all_active_keep_max.get(minute_absolute, 0)
+            alert_keep_max = all_active_keep_max.get(minute_absolute, -1)
 
             # Project battery temperature
             battery_temperature = battery_temperature_prediction.get(minute, self.battery_temperature)
@@ -718,9 +718,11 @@ class Prediction(PredictionBatch):
                 keep_minute_scaling = max(keep_minute_scaling, 10.0)
                 best_soc_keep = max(best_soc_keep, min(alert_keep / 100.0 * soc_max, soc_max))
 
-            # Soc max keep is a ceiling rather than a floor (e.g. manual_soc_max) - 0 means no ceiling
-            best_soc_max = 0
-            if alert_keep_max > 0:
+            # Soc max keep is a ceiling rather than a floor (e.g. manual_soc_max). A ceiling of 0% is a
+            # legitimate request (empty the battery for a BMS calibration), so absence is a negative
+            # sentinel rather than 0 - see all_active_keep_max in fetch.py.
+            best_soc_max = -1
+            if alert_keep_max >= 0:
                 keep_minute_scaling = max(keep_minute_scaling, 10.0)
                 best_soc_max = min(alert_keep_max / 100.0 * soc_max, soc_max)
 
@@ -1285,7 +1287,7 @@ class Prediction(PredictionBatch):
                 metric_keep += (best_soc_keep - soc) * import_rate * keep_minute_scaling * step / 60.0
 
             # Metric keep max - pretend the excess above the ceiling should have been exported instead of held
-            if best_soc_max > 0 and soc >= best_soc_max:
+            if best_soc_max >= 0 and soc >= best_soc_max:
                 metric_keep += (soc - best_soc_max) * export_rate * keep_minute_scaling * step / 60.0
 
             if diff > 0:

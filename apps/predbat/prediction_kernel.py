@@ -32,7 +32,7 @@ from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 5
-KERNEL_PARITY_REVISION = 11
+KERNEL_PARITY_REVISION = 12
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -551,7 +551,8 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
         rate_import.append(pred.rate_import.get(minute_absolute, 0))
         rate_export.append(pred.rate_export.get(minute_absolute, 0))
         alert_keep.append(pred.all_active_keep.get(minute_absolute, 0))
-        alert_keep_max.append(pred.all_active_keep_max.get(minute_absolute, 0))
+        # Negative means no ceiling at this step - 0 is a real request to empty the battery
+        alert_keep_max.append(pred.all_active_keep_max.get(minute_absolute, -1))
         io_flag.append(1 if pred.io_adjusted.get(minute_absolute, 0) else 0)
         pv.append(pred.pv_forecast_minute_step[minute])
         pv10.append(pred.pv_forecast_minute10_step[minute])
