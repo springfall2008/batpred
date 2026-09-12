@@ -112,6 +112,12 @@ INVERTER_TEST = False  # Run inverter control self test
 # revision bump and a rebuild of all platform binaries.
 EXPORT_LIMIT_FREEZE = 99.0  # Hold SoC, export only genuine PV surplus - no forced discharge
 EXPORT_LIMIT_IDLE = 100.0  # Export window disabled entirely
+# Highest SoC target an export window may aim at. The limit packs the target in the integer part and
+# the export power in the fraction, so reserving 99.0 for freeze actually consumes all of
+# [99.0, 100.0): a 99% target at reduced power packs to 99.3/99.5/99.7, which reads as neither a
+# freeze (not == 99.0) nor a forced export (not < 99.0) and leaves the window doing nothing at all
+# (GH#4914). Targets are clamped here instead; 98% and 99% are operationally the same request.
+EXPORT_TARGET_MAX_PERCENT = 98
 
 # Create an array of times in the day in 5-minute intervals
 BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")

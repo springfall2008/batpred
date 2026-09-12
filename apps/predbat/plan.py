@@ -20,7 +20,7 @@ call to the C++ prediction kernel, which is where the threading now lives.
 
 from datetime import datetime, timedelta
 from multiprocessing import cpu_count
-from const import CLOUD_FACTOR_PV10, CLOUD_WINDOW_MINUTES, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import CLOUD_FACTOR_PV10, CLOUD_WINDOW_MINUTES, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_TARGET_MAX_PERCENT
 
 from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
 from prediction import Prediction
@@ -2353,9 +2353,15 @@ class Plan:
                 if (this_export_limit in [EXPORT_LIMIT_IDLE, EXPORT_LIMIT_FREEZE]) and (start != window["start"]):
                     continue
 
-                # Never go below the minimum level
-                this_export_limit = max(calc_percent_limit(self.best_soc_min, self.soc_max), int(this_export_limit))
-                this_export_limit = this_export_limit + loop_limit - int(loop_limit)
+                # Never go below the minimum level. The floor is also capped below the reserved
+                # range: the fraction carries the export power, so a target of 99 would pack into
+                # [99.0, 100.0) and read as neither a freeze nor a forced export, silently disabling
+                # the window (GH#4914). Only real targets are capped - the idle and freeze rungs are
+                # the reserved values themselves and must pass through untouched.
+                if this_export_limit not in [EXPORT_LIMIT_IDLE, EXPORT_LIMIT_FREEZE]:
+                    soc_floor_percent = min(calc_percent_limit(self.best_soc_min, self.soc_max), EXPORT_TARGET_MAX_PERCENT)
+                    this_export_limit = max(soc_floor_percent, int(this_export_limit))
+                    this_export_limit = this_export_limit + loop_limit - int(loop_limit)
                 try_options.append([start, this_export_limit])
 
                 results.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_NOMINAL, all_n, end_record))
@@ -3076,7 +3082,12 @@ class Plan:
                         target_soc = max(limit_soc, soc_min)
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge * self.battery_rate_max_scaling_discharge)
                         window["target"] = calc_percent_limit(target_soc, self.soc_max)
-                        export_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max) + (limit - int(limit))
+                        # Cap below the reserved range before re-attaching the power fraction, or a
+                        # clip up to 99% would pack into [99.0, 100.0) and read as neither a freeze
+                        # nor a forced export, silently disabling the window (GH#4914). Unlike the
+                        # ladder's floor this needs no config to reach - it is wherever the
+                        # simulation says the battery actually got to.
+                        export_limits_best[window_n] = min(calc_percent_limit(limit_soc, self.soc_max), EXPORT_TARGET_MAX_PERCENT) + (limit - int(limit))
                         if limit != export_limits_best[window_n] and self.debug_enable:
                             self.log("Clip up export window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
             else:
