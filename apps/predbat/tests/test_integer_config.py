@@ -478,3 +478,106 @@ def test_metric_battery_value_scaling_step_resolves_export_margin(my_predbat):
 
     print("✓ Test passed: metric_battery_value_scaling step {} keeps the first nudge ({:.4f}) clear of the {:.4f} flip point and keeps old 0.1-step values valid".format(step, first_nudge, flip_point))
     return False
+
+
+def test_get_arg_float_schema_int_default_not_truncated(my_predbat):
+    """
+    Regression test for #4925: a fractional value for a key APPS_SCHEMA declares "float" must
+    survive get_arg() even when the call site passed a bare int as its default.
+
+    get_arg() coerces its return value on the *type* of the default it was handed, not on the
+    key's declared type, and applies that coercion to whatever value was resolved - real
+    configured value or not. So `get_arg("solcast_poll_hours", 8)` ran a genuinely configured 4.8
+    through `int(float(value))` and returned 4, shortening the Solcast poll TTL from 4.8h to 4h
+    and pushing a two-site hobbyist account past its 10 poll/day quota into nightly HTTP 429s.
+    Nothing warned: validate_config() checks the raw apps.yaml value against the float schema and
+    passes it, so apps.yaml still reads 4.8 while the runtime behaves as 4.
+
+    Fixed at the source in get_arg() by trusting APPS_SCHEMA over the literal the caller happened
+    to write, so this cannot depend on which call site does the reading. #4296 was the same
+    mechanism on the CONFIG_ITEMS route (see the get_ha_config tests above); this is the
+    apps.yaml/APPS_SCHEMA route, which get_ha_config's normalisation cannot reach because there
+    is no config_index entry to match.
+    """
+    print("**** test_get_arg_float_schema_int_default_not_truncated ****")
+
+    original_args = my_predbat.args.copy()
+    try:
+        # The reported case: solcast_poll_hours read the way components.py's arg spec reads it.
+        my_predbat.args["solcast_poll_hours"] = 4.8
+        value = my_predbat.get_arg("solcast_poll_hours", 8)
+        assert value == 4.8, "get_arg('solcast_poll_hours', 8) should return 4.8, got {} ({})".format(value, type(value))
+        assert value * 60 == 288, "Solcast poll TTL should be 288 minutes, got {}".format(value * 60)
+
+        # A money value on the same path - a configured 12.5p/kWh must not be charged as 12p.
+        my_predbat.args["axle_pence_per_kwh"] = 12.5
+        value = my_predbat.get_arg("axle_pence_per_kwh", 100)
+        assert value == 12.5, "get_arg('axle_pence_per_kwh', 100) should return 12.5, got {} ({})".format(value, type(value))
+
+        # Not only the component path: a direct get_arg() call site with an int default is equally
+        # affected, which is why the fix lives in get_arg() rather than in Components.initialize().
+        my_predbat.args["octopus_saving_session_rate"] = 12.5
+        value = my_predbat.get_arg("octopus_saving_session_rate", 100)
+        assert value == 12.5, "get_arg('octopus_saving_session_rate', 100) should return 12.5, got {} ({})".format(value, type(value))
+
+        # An unset key still falls back to the caller's default, just typed to match the schema.
+        my_predbat.args.pop("solcast_poll_hours", None)
+        value = my_predbat.get_arg("solcast_poll_hours", 8)
+        assert value == 8 and isinstance(value, float), "Unset float-declared key should fall back to a float 8.0, got {} ({})".format(value, type(value))
+
+        # An integer-declared key must be unaffected - truncation there is the declared behaviour.
+        my_predbat.args["num_cars"] = 1.8
+        value = my_predbat.get_arg("num_cars", 1)
+        assert value == 1 and isinstance(value, int), "Integer-declared key should still coerce to int, got {} ({})".format(value, type(value))
+
+        # A boolean default must not be dragged into the float branch by isinstance(True, int).
+        my_predbat.args["forecast_solar_open_meteo_first"] = True
+        value = my_predbat.get_arg("forecast_solar_open_meteo_first", False)
+        assert value is True, "Boolean-declared key should stay boolean, got {} ({})".format(value, type(value))
+    finally:
+        my_predbat.args = original_args
+
+    print("✓ Test passed: a fractional value for a float-declared key survives an int default in get_arg")
+    return False
+
+
+def test_component_arg_specs_resolve_float_declared_keys_as_float(my_predbat):
+    """
+    Sweep for #4925 across the whole component framework: every COMPONENT_LIST arg spec whose
+    "config" key APPS_SCHEMA declares "float" must resolve a fractional value as a float, however
+    that spec's "default" literal happens to be written.
+
+    Components.initialize() passes the spec default straight into get_arg()
+    (`arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=indirect)`), so an
+    author writing `"default": 8` rather than `8.0` used to change the runtime type of the key.
+    This resolves each spec exactly the way initialize() does, rather than asserting on the
+    literals in config.py/components.py, so it stays true for arg specs added later.
+    """
+    print("**** test_component_arg_specs_resolve_float_declared_keys_as_float ****")
+
+    from components import COMPONENT_LIST
+    from config import APPS_SCHEMA
+
+    original_args = my_predbat.args.copy()
+    checked = []
+    try:
+        for component_name, component_info in COMPONENT_LIST.items():
+            for arg, arg_info in component_info.get("args", {}).items():
+                config_name = arg_info.get("config", None)
+                if not config_name or arg_info.get("config_late_resolve", False):
+                    continue
+                if "float" not in APPS_SCHEMA.get(config_name, {}).get("type", "").split("|"):
+                    continue
+
+                my_predbat.args[config_name] = 4.8
+                value = my_predbat.get_arg(config_name, arg_info.get("default", None), indirect=arg_info.get("indirect", False))
+                my_predbat.args.pop(config_name, None)
+                assert value == 4.8, "{}.{} ({}) resolved a configured 4.8 as {} ({}) - a float-declared key must not be truncated by its arg spec default".format(component_name, arg, config_name, value, type(value))
+                checked.append(config_name)
+    finally:
+        my_predbat.args = original_args
+
+    assert checked, "No float-declared component arg specs found to check - has APPS_SCHEMA or COMPONENT_LIST changed shape?"
+
+    print("✓ Test passed: {} float-declared component arg spec(s) resolve fractional values intact: {}".format(len(checked), ", ".join(sorted(set(checked)))))
+    return False
