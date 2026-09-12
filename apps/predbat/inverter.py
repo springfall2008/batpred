@@ -428,10 +428,9 @@ class Inverter:
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
-        self.inv_has_fox_inverter_mode = INVERTER_DEF[self.inverter_type].get("has_fox_inverter_mode", False)
         # Whether this "power" mode inverter type needs a synthetic charge_rate/discharge_rate HA
-        # entity auto-created when it has no inverter-source component (see the elif not
-        # self.inverter_source_active() branch below). Defaults True to match every "power" mode
+        # entity auto-created when it has no inverter-source component covering it (see the
+        # elif self.inv_needs_charge_rate_entity branch below). Defaults True to match every "power" mode
         # type's existing behaviour - the underlying need (a "power" inverter with no source
         # component has nowhere else to persist the computed rate, #3311) isn't specific to one
         # inverter, it applies to any of them run without a source (e.g. GE's own documented
@@ -649,11 +648,11 @@ class Inverter:
             # *something* to read/write - without an entity the computed rate has nowhere to be
             # stored and reads back as battery_rate_max_raw instead, sending full power to the
             # script regardless of what was actually planned. A component-backed inverter (GivTCP
-            # REST, GE Cloud, a cloud vendor) gets its charge_rate arg auto-configured to the
-            # component's own published entity, so it never falls into this branch's
-            # "not already configured" gap either. has_charge_rate_entity (INVERTER_DEF) declares
-            # which inverter types actually need this; still gated on "not already configured"
-            # too, so a real user-configured entity is never clobbered.
+            # REST, GE Cloud, a cloud vendor) points charge_rate at the component's own published
+            # entity instead - see the source_active check in the loop for how that case is kept
+            # out. has_charge_rate_entity (INVERTER_DEF) declares which inverter types actually
+            # need this; still gated on "not already configured" too, so a real user-configured
+            # entity is never clobbered.
             max_charge = self.battery_rate_max_charge * MINUTE_WATT
             max_discharge = self.battery_rate_max_discharge * MINUTE_WATT
             # Gate per inverter index, not on key presence: in a mixed multi-inverter config the
@@ -661,15 +660,25 @@ class Inverter:
             # inverter's slot, which get_current_charge_rate() would still resolve to
             # battery_rate_max_raw - the #3311 fault - even though the key exists. A single
             # (non-list) user value applies to every inverter and is still never overwritten.
+            source_active = self.inverter_source_active()
             for rate_arg, rate_default in (("charge_rate", max_charge), ("discharge_rate", max_discharge)):
                 configured = self.base.args.get(rate_arg)
                 if configured is not None and not isinstance(configured, list):
                     continue
                 if isinstance(configured, list) and id < len(configured) and configured[id] not in (None, ""):
                     continue
+                if configured is None and source_active:
+                    # A source component is active and has not written this key at all - either its
+                    # automatic config is off (givtcp_automatic/ge_cloud_automatic: the user was told
+                    # apps.yaml is theirs to write) or it has not run yet, in which case its own
+                    # set_arg/set_arg_auto fills the key shortly. Inventing a dummy here would take
+                    # the rate writes for a REST/cloud-controlled inverter and put them in a sensor
+                    # nothing reads. A list that names *some* inverters but not this one is the
+                    # opposite case and still falls through: the source has said what it covers, and
+                    # this index is outside it (a component-backed inverter 0 alongside a
+                    # script-driven Solax at 1), so the uncovered slot does need its own entity.
+                    continue
                 self.create_missing_arg(rate_arg, rate_default)
-                while len(self.base.args[rate_arg]) <= id:
-                    self.base.args[rate_arg].append(rate_default)
                 self.base.args[rate_arg][id] = self.create_entity(rate_arg, rate_default, uom="W", device_class="power")
 
         if not self.inv_has_ge_inverter_mode and not self.inv_has_ge_eco_toggle:
