@@ -301,6 +301,43 @@ class Inverter:
             # then looked up as one.
             self.base.args[arg] = self.base.args[arg] + [None] * (self.id + 1 - len(self.base.args[arg]))
 
+    def is_own_dummy_entity(self, value, entity_name):
+        """
+        Whether value is one of Predbat's own dummy entity ids for this inverter and field, i.e.
+        something an earlier construction of this inverter left behind in args via create_entity()
+        rather than anything a user or a component's automatic_config() deliberately pointed at.
+
+        create_entity() builds 'sensor.{prefix}_{inverter_type}_{id}_{entity_name}' and writes it
+        back into self.base.args, which lives for the whole process and is never re-read from
+        apps.yaml. Inverters are rebuilt from scratch on the balance path (execute.py) as well as at
+        startup, so from the second construction onwards args already holds that dummy - which has a
+        domain and would otherwise read back as a genuinely configured entity, skipping the
+        recreation that re-registers created_attributes and restores the state if it has gone away.
+        The inverter_type sits in the middle and is matched loosely, so a dummy left over from a
+        previous type is still recognised as ours rather than stranding writes on the stale sensor.
+        """
+        if not isinstance(value, str):
+            return False
+        return value.startswith("sensor.{}_".format(self.base.prefix)) and value.endswith("_{}_{}".format(self.id, entity_name))
+
+    def is_real_entity_configured(self, arg):
+        """
+        True if arg already resolves to a real HA entity id for this inverter (contains a domain,
+        e.g. 'time.foo'), as opposed to being unset, a bare placeholder value such as '23:59:00' or
+        '00:00:00' with no domain, or a dummy this inverter created for itself on an earlier
+        construction. Used to tell "this was configured deliberately" apart from "nothing real is
+        there yet" before create_missing_arg's own value-vs-list check would conflate the two - a
+        config item that's present but not a real entity is exactly the case a dummy entity still
+        needs to be created for.
+        """
+        values = self.base.args.get(arg)
+        if not isinstance(values, list) or self.id >= len(values):
+            return False
+        value = values[self.id]
+        if self.is_own_dummy_entity(value, arg):
+            return False
+        return is_entity_id(value)
+
     def __init__(self, base, id=0, quiet=False):
         """
         Inverter class
@@ -625,11 +662,18 @@ class Inverter:
             self.base.args["inverter_mode"][id] = self.create_entity("inverter_mode", "Eco")
 
         if self.inv_charge_time_format != "HH:MM:SS":
+            # Some formats (H M) decompose the write into separate hour/minute entities and never
+            # expect the user to set this directly; others (no time window at all) ship a bare
+            # placeholder string. Either way Predbat needs somewhere to read/write for its own window
+            # bookkeeping. But if the user has genuinely pointed this at a real entity - a custom
+            # inverter definition using a non-HH:MM:SS format together with a real time window, e.g.
+            # #4738 - that's the one to use, not a self-created dummy that silently discards it.
             for x in ["charge", "discharge"]:
                 for y in ["start", "end"]:
                     entity_name = f"{x}_{y}_time"
                     self.create_missing_arg(entity_name, "23:59:00")
-                    self.base.args[entity_name][id] = self.create_entity(entity_name, "23:59:00")
+                    if not self.is_real_entity_configured(entity_name):
+                        self.base.args[entity_name][id] = self.create_entity(entity_name, "23:59:00")
 
         # Create dummy idle time entities
         if not self.inv_has_idle_time:
