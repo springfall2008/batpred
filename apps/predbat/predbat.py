@@ -1641,6 +1641,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                     self.arg_errors[name] = "Invalid type, element {} expected dict".format(item)
                                     errors += 1
                                     break
+
+                                # scalar_value_dict (e.g. redact_strings_labelled): a mapping value
+                                # that isn't already a string passes this branch silently since it
+                                # only checks item is a dict, but the consumer collecting these
+                                # values only matches strings - an unquoted numeric MPAN/account ID
+                                # loads from YAML as an int and would otherwise go unredacted with
+                                # no warning at all (#5053 review). Warn, don't error: the value is
+                                # still usable once coerced to a string by the collector.
+                                if spec.get("scalar_value_dict", False):
+                                    for key, sub_value in item.items():
+                                        if not isinstance(sub_value, str):
+                                            self.log("Warn: Validation of apps.yaml found configuration item '{}' entry '{}' value {} is not a string - quote it to keep its exact formatting (e.g. a leading zero)".format(name, key, sub_value))
                     elif expected_type == "int_float_dict":
                         if spec.get("or_auto", False) and value == "auto":
                             matches = True

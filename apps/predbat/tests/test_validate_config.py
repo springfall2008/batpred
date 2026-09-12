@@ -53,7 +53,12 @@ def _run(my_predbat, extra_args, extra_states=None, expect_errors=(), expect_cle
         for name in expect_clean:
             assert name not in my_predbat.arg_errors, f"Unexpected validation error for '{name}': {my_predbat.arg_errors.get(name)}"
     finally:
-        my_predbat.args = saved_args
+        # In place, not my_predbat.args = saved_args - a ComponentBase aliases self.args = base.args
+        # at construction time (component_base.py), so reassigning here would leave any component
+        # already holding that reference still pointing at the old, now-extra_args-mutated dict
+        # even though my_predbat.args itself looks restored (#5053 review).
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
         my_predbat.ha_interface.dummy_items = saved_states
 
 
@@ -184,6 +189,39 @@ def test_validate_config(my_predbat):
 
     print("  [dict] list of non-dict items fails")
     _run(my_predbat, {"alerts": ["not_a_dict"]}, expect_errors=["alerts"])
+
+    # ==========================================================================
+    # redact_strings / redact_strings_labelled  (GH#4770 log/debug redaction denylist)
+    # ==========================================================================
+    print("  [string_list] redact_strings list of strings passes")
+    _run(my_predbat, {"redact_strings": ["some-mpan-1234567890"]}, expect_clean=["redact_strings"])
+
+    print("  [dict] redact_strings_labelled name->value mapping passes")
+    _run(my_predbat, {"redact_strings_labelled": {"my_landlords_mpan": "1234567890123"}}, expect_clean=["redact_strings_labelled"])
+
+    print("  [dict] redact_strings_labelled rejects a non-dict value")
+    _run(my_predbat, {"redact_strings_labelled": "not_a_dict"}, expect_errors=["redact_strings_labelled"])
+
+    print("  [dict, scalar_value_dict] redact_strings_labelled warns (not errors) on a numeric value")
+    # An unquoted numeric MPAN (my_mpan: 1234567890123) loads from YAML as an int. It passed this
+    # branch silently before - the dict-type check only looks at the mapping itself, never its
+    # values - even though the collector that actually redacts log lines only matched strings, so
+    # the value would go unredacted with no warning at all (#5053 review). Warn, not error: the
+    # value is still usable once collect_log_secret_values() coerces it to a string.
+    saved_args = my_predbat.args.copy()
+    saved_log = my_predbat.log
+    captured = []
+    try:
+        my_predbat.log = lambda msg, quiet=True: captured.append(msg)
+        my_predbat.args.update({"redact_strings_labelled": {"my_mpan": 1234567890123}})
+        my_predbat.validate_config()
+        assert "redact_strings_labelled" not in my_predbat.arg_errors, "a numeric redact_strings_labelled value should warn, not error: {}".format(my_predbat.arg_errors.get("redact_strings_labelled"))
+        assert any("my_mpan" in msg and "not a string" in msg for msg in captured), "expected a 'not a string' warning naming my_mpan, got {}".format(captured)
+    finally:
+        # In place, not reassignment - see _run()'s equivalent comment above (#5053 review).
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.log = saved_log
 
     # ==========================================================================
     # DICT_LIST type  (rates_import: {"type": "dict_list"})

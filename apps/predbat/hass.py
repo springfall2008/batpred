@@ -4,6 +4,18 @@ Provides the Hass class that emulates the AppDaemon interface for standalone
 execution, including YAML configuration loading, secret management, log
 rotation, scheduled callback execution, and file change detection for
 development hot-reload.
+
+Despite the "outside AppDaemon" framing (legacy naming, kept for history), this
+IS the class predbat.PredBat actually inherits from in every currently
+supported install path - the Predbat app/addon and Docker both run this
+standalone-style loader, not a real appdaemon package. The genuinely
+AppDaemon-hosted install method has been retired (docs/install.md); there is
+no appdaemon dependency anywhere in this repo, and no conditional import
+branches to a different hass module. So Hass.log() below - and the write-time
+secret redaction in it (GH#4770) - is not a partial mitigation that misses an
+AppDaemon-hosted population still running elsewhere: there is no such
+population left to miss. Flagging this explicitly because the class/module
+docstrings alone would lead a reviewer to (reasonably) suspect the opposite.
 """
 
 import io
@@ -12,6 +24,8 @@ import sys
 import asyncio
 import os
 import subprocess
+
+from utils import collect_log_secret_values, compile_log_secret_pattern, redact_log_line
 
 
 def write_git_version_marker():
@@ -177,10 +191,58 @@ class Hass:
     and file change detection for development hot-reload.
     """
 
+    # Sentinel distinct from None: compile_log_secret_pattern() legitimately returns None when
+    # there are no secrets configured to redact, so None alone in the cache slot can't tell
+    # "not built yet" from "built, and there is nothing to redact" - the latter would otherwise
+    # rebuild (recompute the value set, recompile) on every single log() call instead of caching.
+    _LOG_SECRET_PATTERN_UNSET = object()
+
+    def _invalidate_log_secret_pattern(self):
+        """
+        Mark the cached redaction pattern stale so the next log() call rebuilds it from the
+        current args/secrets (GH#4770). Every call site that mutates self.args or self.secrets
+        after startup must call this - see _log_secret_pattern()'s docstring for why a missed
+        site is a real leak, not just a staleness bug.
+        """
+        with self._log_secret_pattern_lock:
+            self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
+
+    def _log_secret_pattern(self):
+        """
+        Return the cached compiled redaction pattern log() must apply, rebuilding it the first
+        time it is needed and whenever load_secrets()/apps.yaml load invalidate it (GH#4770).
+
+        Cached rather than recomputed on every log() call: log() runs on every log line, while
+        args/secrets only change on startup and on a config reload, so rebuilding the value set
+        and recompiling the pattern that rarely - rather than on every call - keeps the
+        redaction check to a single compiled-regex scan per line on the hot path.
+
+        Guarded by a lock, not just the sentinel check: log() runs from component threads as well
+        as the main thread (create_task()), so two threads can both observe the sentinel and race
+        to rebuild. Without the lock, a thread that started building from stale args right before
+        another thread invalidates the cache (a credential just added via set_arg()) can finish
+        second and overwrite the fresh invalidation with its stale, already-out-of-date pattern -
+        silently keeping the just-added credential unredacted until something invalidates the
+        cache again. The lock makes "read sentinel, build, store" one atomic step so a build that
+        started before an invalidation can never win a race against it.
+        """
+        with self._log_secret_pattern_lock:
+            if self._log_secret_pattern_cache is self._LOG_SECRET_PATTERN_UNSET:
+                args = getattr(self, "args", None)
+                redact_strings = args.get("redact_strings") if args else None
+                redact_strings_labelled = args.get("redact_strings_labelled") if args else None
+                values = collect_log_secret_values(args, getattr(self, "secrets", None), redact_strings, redact_strings_labelled)
+                self._log_secret_pattern_cache = compile_log_secret_pattern(values)
+            return self._log_secret_pattern_cache
+
     def log(self, msg, quiet=True):
         """
         Log a message to the logfile
         """
+        # Redacted here, at the point the line is written, not at serve/download time: some users
+        # copy predbat.log directly off a Samba share exposing the addon's config directory,
+        # bypassing every HTTP/MCP endpoint a download-time scrub could sit behind (GH#4770).
+        msg = redact_log_line(str(msg), self._log_secret_pattern())
         message = "{}: {}\n".format(datetime.now(), msg)
         self.logfile.write(message)
         self.logfile.flush()
@@ -272,10 +334,22 @@ class Hass:
             self.log(f"Loading secrets from {secrets_file}", quiet=False)
             try:
                 with io.open(secrets_file, "r") as stream:
-                    secrets = yaml.safe_load(stream) or {}
-                    # Check for debug logging option
-                    if secrets.get("logger") == "debug":
-                        self.log(f"Info: Secrets loaded from {secrets_file}", quiet=False)
+                    loaded = yaml.safe_load(stream) or {}
+                    if not isinstance(loaded, dict):
+                        # Valid YAML (a bare scalar or list at the top level) but the wrong shape -
+                        # yaml.safe_load() raises nothing here, so without this check `secrets`
+                        # below would be reassigned to that scalar/list before the .get() call two
+                        # lines down throws AttributeError. The generic except then logs the crash
+                        # but the reassignment has already happened and is never undone, so
+                        # load_secrets() still returns the malformed value - and the very next
+                        # log() call reaches collect_log_secret_values()'s secrets.items(), which
+                        # raises unhandled and aborts startup entirely (#5053 review).
+                        self.log(f"Error: secrets.yaml at {secrets_file} must be a mapping of name: value, found {type(loaded).__name__} - ignoring it", quiet=False)
+                    else:
+                        secrets = loaded
+                        # Check for debug logging option
+                        if secrets.get("logger") == "debug":
+                            self.log(f"Info: Secrets loaded from {secrets_file}", quiet=False)
             except yaml.YAMLError as exc:
                 self.log(f"Error: Failed to load secrets from {secrets_file}: {exc}", quiet=False)
             except Exception as exc:
@@ -305,11 +379,14 @@ class Hass:
         self.threads = []
         self.fatal_error = False
         self.hass_api_version = 2
+        self._log_secret_pattern_lock = threading.Lock()
+        self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
 
         self.logfile = open("predbat.log", "a")
 
         # Load secrets first
         self.secrets = self.load_secrets()
+        self._invalidate_log_secret_pattern()
 
         # Register custom YAML constructor for !secret tag
         yaml.add_constructor("!secret", self.secret_constructor, Loader=yaml.SafeLoader)
@@ -321,6 +398,7 @@ class Hass:
             try:
                 config = yaml.safe_load(stream)
                 self.args = config["pred_bat"]
+                self._invalidate_log_secret_pattern()
             except yaml.YAMLError as exc:
                 print(exc)
                 sys.exit(1)

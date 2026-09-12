@@ -45,6 +45,15 @@ SECRET_KEY_SUBSTRINGS = ("_key", "password", "secret", "token")
 # debugging "my cloud integration stopped working", so keep it readable.
 SECRET_KEY_EXEMPT_SUFFIXES = ("_expires_at", "_expires", "_expiry", "_expiration", "_birth")
 
+# Top-level apps.yaml keys not owned by any component (so not in the components.py registry) whose
+# own CONTENTS are sensitive rather than the key name matching a credential substring -
+# redact_strings/redact_strings_labelled are themselves the user's lists of values to redact
+# (GH#4770), so they must be masked wholesale in a debug dump or they would defeat their own
+# purpose - and for redact_strings_labelled, masking wholesale rather than per-value additionally
+# means the user's own chosen labels never end up in the dump either, which could themselves hint
+# at what the values are (a key named "landlord_mpan" is as informative as the MPAN itself).
+SECRET_KEY_EXPLICIT_NAMES = ("redact_strings", "redact_strings_labelled")
+
 # What a redacted credential is replaced with. Named because find_redacted_secret_overwrite()
 # has to recognise it coming back in on a write, so the writer and the redactor must agree.
 SECRET_MASK = "xxx"
@@ -189,6 +198,8 @@ def is_secret_key(key, registry=True):
     noise. Redaction is the strict default so a new caller fails safe rather than leaking.
     """
     key_lower = str(key).lower()
+    if key_lower in SECRET_KEY_EXPLICIT_NAMES:
+        return True
     if registry and key_lower in registry_secret_key_names():
         return True
     if key_lower.endswith(SECRET_KEY_EXEMPT_SUFFIXES):
@@ -224,6 +235,218 @@ def mask_secret_args(args):
     masked = copy.deepcopy(args)
     _mask_secrets_in_place(masked)
     return masked
+
+
+def _collect_secret_values(value, found, label_prefix=""):
+    """
+    Recursively gather {value: label} for the string values of credential-like keys, mirroring
+    _mask_secrets_in_place()'s traversal but collecting rather than redacting. label_prefix lets
+    a nested call (e.g. inside a forecast_solar list entry) qualify the label with the parent
+    key, since the leaf key name alone ("api_key") is rarely distinctive on its own.
+    """
+    if isinstance(value, dict):
+        for key, item in value.items():
+            # redact_strings/redact_strings_labelled are secret-flagged here (via
+            # SECRET_KEY_EXPLICIT_NAMES in is_secret_key()) so mask_secret_args()'s debug-dump
+            # masking hides them wholesale - but collect_log_secret_values() already gathers
+            # both explicitly afterward, in a specific order (a more specific label wins over
+            # the generic "redact_strings" one for the same value). Collecting them here too,
+            # at the top level, would race that ordering: this pass runs first, so a value
+            # present in both would keep this pass's generic "redact_strings" label instead of
+            # the more specific one redact_strings_labelled would have given it (#5053 review).
+            # Only exempt the true top-level keys (label_prefix empty) - an unrelated nested key
+            # that happens to share the name is not these denylists and should still collect.
+            # str(key) first: apps.yaml keys are always strings in practice, but is_secret_key()
+            # below already tolerates a non-string key the same way, and log() runs on the very
+            # first startup line - an unguarded .lower() here would crash before validation ever
+            # gets a chance to report the malformed input (#5053 review).
+            if not label_prefix and str(key).lower() in SECRET_KEY_EXPLICIT_NAMES:
+                continue
+            if is_secret_key(key):
+                key_label = (label_prefix + "." + key) if label_prefix else key
+                if isinstance(item, str) and item and item not in found:
+                    found[item] = key_label
+                elif isinstance(item, list):
+                    # A secret-flagged key can itself hold a list (e.g. teslemetry_site_id,
+                    # sigenergy_system_id are "string|string_list") - collect each element
+                    # individually rather than dropping the whole list, since a log line needs
+                    # each real value recognised on its own, not the list masked as one blob the
+                    # way mask_secret_args()'s debug-dump redaction is allowed to.
+                    for entry in item:
+                        if isinstance(entry, str) and entry and entry not in found:
+                            found[entry] = key_label
+            else:
+                nested_prefix = label_prefix
+                if isinstance(item, (dict, list)):
+                    nested_prefix = (label_prefix + "." + key) if label_prefix else key
+                _collect_secret_values(item, found, nested_prefix)
+    elif isinstance(value, list):
+        for entry in value:
+            _collect_secret_values(entry, found, label_prefix)
+
+
+def collect_log_secret_values(args, secrets, redact_strings=None, redact_strings_labelled=None):
+    """
+    Return {value: label} for every credential string value a log line must never be allowed to
+    contain, and for every value in redact_strings/redact_strings_labelled (user-maintained
+    apps.yaml denylists).
+
+    Four sources, because not every user routes credentials through secrets.yaml and Predbat
+    cannot infer every credential-shaped string a third-party integration exposes (GH#4770):
+      - the resolved values of every secrets.yaml entry, labelled by their secrets.yaml key;
+      - the resolved values of every credential-like key in args (an apps.yaml written with the
+        key inline, `!secret` already resolved by the time args is built), labelled by that key;
+      - redact_strings - values Predbat cannot recognise as a credential by key name or registry
+        entry at all (an MPAN embedded in a third-party sensor's state or attributes, say), which
+        the user lists explicitly because only they know it is sensitive. Labelled generically
+        "redact_strings" - a bare string list carries no name to attach to any one entry;
+      - redact_strings_labelled - the same idea as redact_strings, but a {label: value} mapping
+        the user writes to get their own identifying label back in the log instead, the same way
+        a built-in credential is labelled by its own apps.yaml key name - e.g.
+        "my_landlords_mpan: '1234567890123'" redacts as <my_landlords_mpan> rather than every
+        entry collapsing into the one generic <redact_strings> label.
+    A value appearing in more than one source keeps whichever label it was found under first, in
+    the order above - args/secrets/redact_strings_labelled all identify the credential, a bare
+    redact_strings entry does not, so a more specific label wins when both would otherwise apply
+    to the same value.
+
+    Short values (len < 6) are dropped from the secrets.yaml and args sources - a one- or
+    two-character secret is either a placeholder/empty default or would false-positive-redact
+    ordinary log text constantly, and is not a credential worth the noise either way. Not applied
+    to redact_strings/redact_strings_labelled: those are the user's own deliberate denylist, not
+    a key-name heuristic that could coincidentally catch an ordinary word, so a short entry is
+    still exactly what was asked to be redacted.
+
+    redact_strings/redact_strings_labelled are type-checked (list/dict) before use, not just
+    trusted: log() calls this on the very first startup log line, before APPS_SCHEMA validation
+    has run at all, so a malformed value here (the string APPS_SCHEMA's own validator would
+    later reject) must degrade to "nothing from this source" rather than crash the whole of
+    Predbat's startup on a config typo, before the user ever sees the validation warning.
+
+    Scalar (str/int/float) secrets.yaml and redact_strings_labelled values are coerced to string
+    before matching - an unquoted numeric MPAN or account ID (e.g. landlord_mpan: 1234567890123)
+    loads from YAML as an int, and log() serializes every message with str(msg), so a value
+    dropped here for not already being a str would reach the log in the clear (#5053 review).
+    """
+    found = {}
+    if secrets:
+        for key, value in secrets.items():
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                value = str(value)
+                if len(value) >= 6 and value not in found:
+                    found[value] = key
+    if args:
+        collected = {}
+        _collect_secret_values(args, collected)
+        for value, label in collected.items():
+            if len(value) >= 6 and value not in found:
+                found[value] = label
+    # No length floor below this point: redact_strings/redact_strings_labelled are entries the
+    # user put there deliberately, not something Predbat inferred from a key-name heuristic that
+    # could coincidentally catch an ordinary short word - the false-positive risk the floor
+    # exists to avoid above is the user's own call to accept here, and a short denylisted value
+    # (a 4-digit PIN, say) is still exactly what they asked to have redacted.
+    if isinstance(redact_strings_labelled, dict):
+        for label, value in redact_strings_labelled.items():
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                value = str(value)
+                if value and value not in found:
+                    found[value] = str(label)
+    if isinstance(redact_strings, list):
+        for value in redact_strings:
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                value = str(value)
+                if value and value not in found:
+                    found[value] = "redact_strings"
+    return found
+
+
+def compile_log_secret_pattern(secret_values):
+    """
+    Compile the {value: label} map into a single alternation pattern plus a value->label lookup
+    for redact_log_line(), or None when there is nothing to redact.
+
+    Compiled once whenever the value set changes (hass.py caches this alongside the values
+    themselves) rather than per log line: log() runs on every line, and matching one compiled
+    alternation is a single scan of the line regardless of how many secrets there are to check
+    for, where re-scanning the line once per value (the naive str.replace() loop) costs O(line
+    length x secret count) on every single line Predbat ever logs.
+
+    Returns (pattern, labels) rather than just a pattern: the label lookup is what lets
+    redact_log_line() report *which* credential a masked line held (octopus_api_key, say)
+    without ever writing out the value itself, so a log still tells you which integration to
+    check when something goes wrong, instead of every credential collapsing into one opaque
+    "xxx" indistinguishable from every other.
+    """
+    if not secret_values:
+        return None
+    # Longest-first: a shorter secret that happens to be a substring of a longer one (an API key
+    # and a derived token sharing a prefix, say) must not pre-empt the longer, more specific match.
+    ordered = sorted(secret_values, key=len, reverse=True)
+    pattern = re.compile("|".join(re.escape(value) for value in ordered))
+    return pattern, secret_values
+
+
+def redact_log_line(line, secret_pattern):
+    """
+    Replace any occurrence of a known secret value in a log line with a labelled mask, e.g.
+    "<octopus_api_key>", identifying which credential was redacted without exposing it.
+
+    Written at the point a log line is produced (hass.py log()), not at serve/download time: some
+    users copy predbat.log directly off a Samba share exposing the addon's config directory,
+    bypassing every HTTP/MCP endpoint entirely, so redacting only at those endpoints would leave
+    the on-disk file itself carrying the plaintext value (GH#4770).
+
+    Takes the already-compiled (pattern, labels) pair from compile_log_secret_pattern(), not the
+    raw value map, so log() never pays compilation cost on the hot path.
+
+    Two secrets can overlap as substrings starting at different offsets (e.g. "sec1" and "c123x"
+    both present in "sec123x") - pattern.sub() alone only ever finds the first alternative that
+    matches at the earliest position ("sec1"), then resumes scanning after it, so it never
+    considers "c123x" starting one character in and leaves "23x" exposed. Extend each match to
+    the longest secret that starts anywhere inside it before emitting the mask, so a longer
+    secret overlapping a shorter one is always fully covered. Every secret that contributed to an
+    extended span keeps its own label in the mask (joined with "+"), rather than falling back to
+    the generic mask just because the merged span itself is not a single known value (#5053
+    review) - the point of a labelled mask is telling an operator which credential to check.
+    """
+    if secret_pattern is None or not line:
+        return line
+    pattern, labels = secret_pattern
+    out = []
+    pos = 0
+    for match in pattern.finditer(line):
+        start, end = match.span()
+        if start < pos:
+            # Already covered by the extended span of a previous match.
+            continue
+        # Collect the label of every secret found to contribute to the (possibly extended) span,
+        # in the order encountered, rather than looking up labels[line[start:end]] once at the
+        # end - a merged span covering more than one overlapping secret is not itself a key in
+        # labels, so that lookup would silently fall back to the generic mask and the line would
+        # read no differently from an unrecognised value, losing the "which credential" guarantee
+        # this feature exists to provide (#5053 review).
+        span_labels = [labels.get(match.group(0), SECRET_MASK)]
+        # Look for a longer secret starting at each position within this match's span and extend
+        # to cover it - finditer() itself won't report an overlapping match once it has already
+        # consumed the earlier one, so each candidate start position must be probed directly with
+        # match(). Repeat in case the extension is itself overlapped by a still-longer secret.
+        extended = True
+        while extended:
+            extended = False
+            for probe in range(start + 1, end):
+                rescan = pattern.match(line, probe)
+                if rescan and rescan.end() > end:
+                    end = rescan.end()
+                    rescan_label = labels.get(rescan.group(0), SECRET_MASK)
+                    if rescan_label not in span_labels:
+                        span_labels.append(rescan_label)
+                    extended = True
+        out.append(line[pos:start])
+        out.append("<{}>".format("+".join(span_labels)))
+        pos = end
+    out.append(line[pos:])
+    return "".join(out)
 
 
 def find_unmasked_secret_paths(node, path=""):
