@@ -54,6 +54,18 @@ SECRET_KEY_EXEMPT_SUFFIXES = ("_expires_at", "_expires", "_expiry", "_expiration
 # at what the values are (a key named "landlord_mpan" is as informative as the MPAN itself).
 SECRET_KEY_EXPLICIT_NAMES = ("redact_strings", "redact_strings_labelled")
 
+# Credential key names that no substring catches and no component registers, because they are not
+# apps.yaml keys: "account_id" is the annual tool's own raw-schema spelling
+# (annual.load.octopus.account_id) for the credential apps.yaml calls octopus_api_account /
+# kraken_account_id. Without it the value reached the annual result and web surface in the clear
+# after being masked everywhere else (#5053 review).
+#
+# Kept separate from SECRET_KEY_EXPLICIT_NAMES because that list carries a second meaning -
+# _collect_secret_values() skips those names at the top level so the redact_strings denylists get
+# their labels from a later, more specific pass. These names have no such pass and must keep
+# collecting normally wherever they appear.
+SECRET_KEY_EXTRA_NAMES = ("account_id",)
+
 # What a redacted credential is replaced with. Named because find_redacted_secret_overwrite()
 # has to recognise it coming back in on a write, so the writer and the redactor must agree.
 SECRET_MASK = "xxx"
@@ -198,7 +210,7 @@ def is_secret_key(key, registry=True):
     noise. Redaction is the strict default so a new caller fails safe rather than leaking.
     """
     key_lower = str(key).lower()
-    if key_lower in SECRET_KEY_EXPLICIT_NAMES:
+    if key_lower in SECRET_KEY_EXPLICIT_NAMES or key_lower in SECRET_KEY_EXTRA_NAMES:
         return True
     if registry and key_lower in registry_secret_key_names():
         return True
