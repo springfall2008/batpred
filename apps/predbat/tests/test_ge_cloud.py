@@ -4451,6 +4451,20 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"]
         assert ge.config_args.get("charge_limit_enable") is None, "charge_limit_enable should be None when enable register is absent"
 
+        # Test 10: a manually-configured inverter_mode in apps.yaml must survive auto-config when no
+        # eco-mode register exists to auto-discover (GH#5056). inverter_mode is bound via
+        # set_arg_auto(..., overwrite=False), the same precedent as export_limit (GH#4494/#4978), so a
+        # real apps.yaml value must win rather than being deleted by set_arg(None). Populating
+        # args_from_apps_yaml (not just config_args) is what actually exercises the overwrite=False
+        # branch - without it set_arg_auto sees no user-configured value and behaves like plain set_arg.
+        manual_inverter_mode = "switch.my_manual_inverter_mode"
+        ge.config_args = {"inverter_mode": manual_inverter_mode}
+        ge.base.args_from_apps_yaml = {"inverter_mode": manual_inverter_mode}
+        ge.settings = {"battery001": {}}
+        devices = {"ems": None, "gateway": None, "battery": ["battery001"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("inverter_mode") == manual_inverter_mode, "manually configured inverter_mode should survive auto-config when no eco toggle switch is discovered"
+
         return 0
 
     return run_async(test())
