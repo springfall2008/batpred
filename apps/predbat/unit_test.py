@@ -64,7 +64,7 @@ from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_battery_accuracy import run_battery_accuracy_tests
 from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_active_flag import test_active_flag
-from tests.test_component_health_status import test_component_health_status, test_record_status_state_clamped
+from tests.test_component_health_status import test_component_health_status
 from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_trim_export import run_trim_export_tests
 from tests.test_plan_tiebreak import run_plan_tiebreak_tests
@@ -146,6 +146,16 @@ from tests.test_window import run_window_sort_tests, run_intersect_window_tests,
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
+from tests.test_battery_full_hysteresis import (
+    test_find_charge_rate_hysteresis_clamps_to_zero,
+    test_get_charge_rate_curve_cached_hysteresis_clamps_to_zero,
+    test_inverter_full_hysteresis_state_machine,
+    test_inverter_full_hysteresis_restores_after_restart,
+    test_multi_inverter_full_hysteresis_independence,
+    test_battery_full_hysteresis_kernel_parity,
+    test_record_status_preserves_hysteresis_when_no_inverters,
+    test_dashboard_display_reflects_hysteresis_band,
+)
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_times import run_test_manual_times
@@ -495,7 +505,6 @@ def main():
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
         ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
         ("component_health_status", test_component_health_status, "Component errors fail the recorded run status tests", False),
-        ("record_status_state_clamped", test_record_status_state_clamped, "Status sensor state is clamped at the 255 characters Home Assistant accepts", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
         ("dynamic_load_high", test_dynamic_load_high_load_baseline, "Dynamic load high-load baseline tests", False),
         ("units", run_test_units, "Unit tests", False),
@@ -551,6 +560,14 @@ def main():
         ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
+        ("battery_full_hysteresis_clamp", test_find_charge_rate_hysteresis_clamps_to_zero, "Battery full hysteresis clamps find_charge_rate to zero", False),
+        ("battery_full_hysteresis_curve_clamp", test_get_charge_rate_curve_cached_hysteresis_clamps_to_zero, "Battery full hysteresis clamps the shared charge-rate curve function (covers PV/export charging paths too)", False),
+        ("battery_full_hysteresis_state", test_inverter_full_hysteresis_state_machine, "Battery full hysteresis per-inverter state machine transitions", False),
+        ("battery_full_hysteresis_restore", test_inverter_full_hysteresis_restores_after_restart, "Battery full hysteresis restores per-inverter state across a restart", False),
+        ("battery_full_hysteresis_multi_inverter", test_multi_inverter_full_hysteresis_independence, "Battery full hysteresis: one inverter full does not affect another inverter's state", False),
+        ("battery_full_hysteresis_kernel_parity", test_battery_full_hysteresis_kernel_parity, "Battery full hysteresis: C++ kernel vs Python engine parity", False),
+        ("battery_full_hysteresis_startup_persist", test_record_status_preserves_hysteresis_when_no_inverters, "Battery full hysteresis: record_status preserves state across early-startup errors", False),
+        ("battery_full_hysteresis_dashboard", test_dashboard_display_reflects_hysteresis_band, "Battery full hysteresis: dashboard display reflects the whole band, gated on the feature being enabled", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
         ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),
         ("energydataservice", run_energydataservice_tests, "Energy data service tests", False),

@@ -1082,6 +1082,12 @@ class Output:
             self.battery_temperature,
             self.battery_temperature_charge_curve,
             pv_window_kwh=pv_window_kwh,
+            # Derived from configured hysteresis and this window's soc trajectory (predict_soc_best,
+            # the actual simulation result): treats the whole band below 100% as potentially active,
+            # not just the exact leading edge at soc==100%, since a suppressed charge leaves soc stuck
+            # somewhere inside the band rather than pinned at exactly soc_max. Gated on the feature
+            # actually being enabled, so this has no effect for the default (hysteresis=0) case.
+            full_hysteresis_active=(self.battery_soc_full_hysteresis > 0 and self.soc_max > 0 and (soc / self.soc_max * 100.0) >= (100.0 - self.battery_soc_full_hysteresis)),
         )
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
@@ -2650,6 +2656,16 @@ class Output:
         if had_errors:
             error_count += 1
 
+        if self.inverters:
+            hysteresis_status = {str(inverter.id): getattr(inverter, "full_hysteresis_active", False) for inverter in self.inverters}
+        else:
+            # Inverters have not been fetched yet (e.g. an early startup error, before the first
+            # successful fetch_inverter_data() call) - preserve whatever was last persisted rather than
+            # overwriting it with an empty dict, since dashboard_item replaces the whole attributes dict
+            # each call. Without this, a startup warning ahead of the first fetch would silently wipe out
+            # every inverter's restart-persisted hysteresis state.
+            hysteresis_status = self.get_state_wrapper(self.prefix + ".status", attribute="battery_full_hysteresis_active", default={})
+
         # Home Assistant rejects entity states over 255 characters, and this message is the state
         # of the status sensor. Clamp what is written as the state - the full text survives in
         # current_status, the log line and the notification, and attributes have no such cap.
@@ -2668,6 +2684,11 @@ class Output:
                 "version": THIS_VERSION_DISPLAY,
                 "error": (had_errors or self.had_errors),
                 "error_count": error_count,
+                # Per-inverter dict (not just the fleet-wide aggregate) since each inverter's own BMS
+                # clamp is independent - Inverter.update_full_hysteresis() reads this same attribute
+                # back on restart, keyed by inverter id.
+                "battery_full_hysteresis_active": hysteresis_status,
+                "battery_full_hysteresis_active_any": self.battery_full_hysteresis_active,
             },
         )
 

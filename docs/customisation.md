@@ -466,6 +466,14 @@ explains how the low-power charging works and shows how Predbat automatically cr
 **input_number.predbat_charge_low_power_margin** (requires **switch.predbat_set_charge_low_power** to be turned On) Controls how many minutes before the completion time to target finishing charging,
 this defaults to 10 but can be changed between 0 and 30.
 
+**input_number.predbat_battery_soc_full_hysteresis** (_expert_mode_) Some inverters clamp their maximum charge current to (near) zero once the
+battery reaches 100% SoC, and will not resume accepting charge current until the SoC has dropped a few percent below full - even though Predbat's
+own target SoC is still set to 100%. Left at its default of 0 this has no effect. Set it to the drop (in %) your inverter requires before it will
+charge again - for example if charging only resumes once SoC has fallen below 97%, set this to 3. While the battery is within this band below 100%,
+Predbat will not schedule or issue charge current to the battery (in both its plan and its live control of the inverter) since the inverter would
+reject it anyway, avoiding wasted charge windows and inaccurate forecasts. Once SoC drops below the hysteresis band Predbat resumes charging normally,
+so you still get full use of the battery's capacity rather than having to cap **input_number.predbat_best_soc_max** below 100%.
+
 **switch.predbat_set_reserve_enable** (_expert_mode_) When turned On (the default) the battery reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit.
 

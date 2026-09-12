@@ -273,6 +273,7 @@ class Execute:
                             self.battery_temperature_charge_curve,
                             current_charge_rate=current_charge_rate / MINUTE_WATT,
                             pv_window_kwh=pv_window_kwh,
+                            full_hysteresis_active=getattr(inverter, "full_hysteresis_active", False),
                         )
                         new_charge_rate = int(new_charge_rate * MINUTE_WATT)
 
@@ -869,6 +870,23 @@ class Execute:
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
 
+    def update_battery_full_hysteresis_aggregate(self):
+        """
+        The plan simulation models one combined virtual battery (see the fleet-wide aggregation in
+        fetch_inverter_data below), so it cannot track each inverter's hysteresis state individually the
+        way live control now does (Inverter.update_full_hysteresis - each inverter's own BMS clamps
+        independently). As a conservative seed for the simulation's initial condition, treat the fleet as
+        hysteresis-active if ANY inverter currently is: this avoids the simulation planning a charge that
+        has already been proven impossible on at least one physical inverter, at the cost of being overly
+        cautious about the others - a known limitation of the single-combined-battery model shared with
+        the rest of the codebase, not something this setting can fully resolve on its own.
+
+        This is purely derived from the per-inverter flags (the source of truth, persisted individually
+        by each Inverter) - it is not itself restored from a sensor.
+        """
+        self.battery_full_hysteresis_active = any(getattr(inverter, "full_hysteresis_active", False) for inverter in self.inverters)
+        # Else: SoC is inside the hysteresis band - leave the existing state alone either way
+
     def fetch_inverter_data(self, create=True):
         """
         Fetch data about the inverters
@@ -1037,6 +1055,7 @@ class Execute:
         self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
         self.reserve_percent = calc_percent_limit(self.reserve, self.soc_max)
         self.reserve_current_percent = calc_percent_limit(self.reserve_current, self.soc_max)
+        self.update_battery_full_hysteresis_aggregate()
 
         if self.debug_enable:
             self.log(
