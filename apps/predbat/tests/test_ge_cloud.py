@@ -4547,6 +4547,11 @@ def _test_async_automatic_config_evc(my_predbat):
             "sensor.predbat_gecloud_evc200_evc_power_active_import",
         ], "car_charging_power should list both chargers in serial order, got {}".format(ge.config_args.get("car_charging_power"))
         assert ge.config_args.get("num_cars") == 2, "num_cars should be raised to the number of chargers"
+        # Regression for a Copilot review finding on #4880: apps.yaml ships num_chargers: 1 by
+        # default, so two auto-discovered chargers with num_chargers never touched would trip
+        # car_charging_power's entries_exact check (2 > 1) and report a spurious configuration
+        # error on a correct multi-charger setup.
+        assert ge.config_args.get("num_chargers") == 2, "num_chargers should match the discovered charger count, got {}".format(ge.config_args.get("num_chargers"))
 
         # Test 2: an existing larger num_cars is left alone - another component may own those cars
         ge.config_args = {"num_cars": 3}

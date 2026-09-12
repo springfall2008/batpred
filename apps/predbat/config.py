@@ -2624,8 +2624,13 @@ APPS_SCHEMA = {
     "pv_forecast_d3": {"type": "sensor", "sensor_type": "float"},
     "pv_forecast_d4": {"type": "sensor", "sensor_type": "float"},
     "car_charging_energy": {"type": "sensor", "sensor_type": "float", "transient_ok": True},
-    "car_charging_power": {"type": "sensor|sensor_list", "sensor_type": "float", "transient_ok": True},
+    # Unlike every other car_charging_* key this is a list of CHARGERS, not of cars - the entries are
+    # summed rather than indexed, so a charger listed twice doubles the reported power (#4879).
+    # entries_exact against num_chargers is what lets a household say how many it actually has;
+    # num_chargers is unset by default, which disables the check and leaves existing installs alone.
+    "car_charging_power": {"type": "sensor|sensor_list", "sensor_type": "float", "transient_ok": True, "entries": "num_chargers", "entries_exact": True, "optional_entries": True},
     "num_cars": {"type": "integer", "zero": True},
+    "num_chargers": {"type": "integer", "zero": True},
     "car_charging_planned": {"type": "sensor|sensor_list", "sensor_type": "string|boolean", "entries": "num_cars"},
     "car_charging_planned_response": {"type": "string_list"},
     "car_charging_now": {"type": "sensor|sensor_list", "sensor_type": "string|boolean", "entries": "num_cars"},

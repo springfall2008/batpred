@@ -872,6 +872,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
             self.set_arg_auto("car_charging_planned", zappi_plug_entities)
             self.log("Info: myenergi: setting car_charging_power to {}".format(zappi_power_entities))
             self.set_arg_auto("car_charging_power", zappi_power_entities)
+            self.set_arg_auto("num_chargers", len(zappi_power_entities))
         if eddi_entity:
             self.log("Info: myenergi: setting iboost_energy_today to {}".format(eddi_entity))
             self.set_arg_auto("iboost_energy_today", eddi_entity)

@@ -109,6 +109,14 @@ def test_validate_config(my_predbat):
     print("  [string|integer allowed] string not in allowed list fails")
     _run(my_predbat, {"threads": "one_hundred"}, expect_errors=["threads"])
 
+    # Regression for a Copilot review finding on #4880: the integer/integer_list branch of the
+    # expected_types elif chain was declared twice, and since the first occurrence always matches
+    # first, the second (the only one that checked "allowed") was dead code - an integer outside
+    # threads' 0-20 allowed range passed validation silently. Confirms the surviving branch now
+    # carries that check.
+    print("  [string|integer allowed] integer outside allowed range fails")
+    _run(my_predbat, {"threads": 21}, expect_errors=["threads"])
+
     # ==========================================================================
     # INTEGER type  (db_days: {"type": "integer"})
     # ==========================================================================
