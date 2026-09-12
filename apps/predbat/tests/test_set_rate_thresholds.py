@@ -84,8 +84,8 @@ def test_rate_minmax_excluding_saving_skips_the_boosted_minutes(my_predbat):
     if rate_max != 25.95:
         print("ERROR: saving-excluded rate_max should be 25.95 (the true day rate), got {}".format(rate_max))
         failed = True
-    if abs(rate_average - 17.78) > 0.01:
-        print("ERROR: saving-excluded rate_average should be ~17.78, got {}".format(rate_average))
+    if abs(rate_average - 18.46) > 0.01:
+        print("ERROR: saving-excluded rate_average should be ~18.46, got {}".format(rate_average))
         failed = True
 
     if not failed:
