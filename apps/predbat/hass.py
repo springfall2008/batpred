@@ -194,6 +194,7 @@ class Hass:
                         os.rename(filename, newfile)
                     except OSError as e:
                         import sys
+
                         print(f"Error rotating log file {filename} to {newfile}: {e}", file=sys.stderr)
 
             self.logfile.close()
@@ -204,12 +205,14 @@ class Hass:
                 os.rename("predbat.log", "predbat.1.log")
             except OSError as e:
                 import sys
+
                 print(f"Error rotating predbat.log to predbat.1.log: {e}", file=sys.stderr)
                 rename_failed = True
 
             self.logfile = open("predbat.log", "a" if rename_failed else "w")
         except Exception as e:
             import sys
+
             print(f"Fatal error during log rotation: {e}", file=sys.stderr)
             try:
                 if getattr(self, "logfile", None) and getattr(self.logfile, "closed", True):
