@@ -2986,10 +2986,7 @@ def test_force_export_enable_only_flip_skips_settle_sleep(test_name, ha, inv):
 
     unset = object()
     saved_args = {key: inv.base.args.get(key, unset) for key in ("discharge_start_time", "discharge_end_time", "discharge_start_hour", "discharge_end_hour", "scheduled_discharge_enable")}
-    saved_items = {
-        key: ha.dummy_items.get(key, unset)
-        for key in ("select.discharge_start_time", "select.discharge_end_time", "switch.scheduled_discharge_enable", "number.discharge_target_soc", "select.inverter_mode", "switch.inverter_button")
-    }
+    saved_items = {key: ha.dummy_items.get(key, unset) for key in ("select.discharge_start_time", "select.discharge_end_time", "switch.scheduled_discharge_enable", "number.discharge_target_soc", "select.inverter_mode", "switch.inverter_button")}
     saved_rest_data = inv.rest_data
     saved_inv_charge_time_format = inv.inv_charge_time_format
     saved_inv_time_button_press = inv.inv_time_button_press
