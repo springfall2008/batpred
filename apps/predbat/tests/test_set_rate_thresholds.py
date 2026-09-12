@@ -19,9 +19,14 @@ classified the whole ordinary-price day as "low rate" (binary_sensor.predbat_low
 ON for ~24h, the reported symptom).
 
 set_rate_thresholds() now derives its threshold stats from rate_minmax_excluding_saving(), which
-scans the same rates but skips any minute tagged "saving". self.rate_max/rate_min/rate_average
-(and the export equivalents) are deliberately left untouched - they feed dashboard sensors, graph
-scaling, and plan.py pricing, where the real boosted price is what should be shown.
+scans the same rates but skips any minute in rate_import_saving_minutes/rate_export_saving_minutes
+- a frozen snapshot of "saving"-tagged minutes taken right after the saving/free/Axle loaders run
+and before any override (rates_import_override, manual rates) can overwrite that same minute's
+rate_import_replicated/rate_export_replicated tag with its own "increment"/"user" tag, silently
+losing the "this was a saving minute" provenance the live dict alone can no longer tell (Copilot
+review on #5052). self.rate_max/rate_min/rate_average (and the export equivalents) are
+deliberately left untouched - they feed dashboard sensors, graph scaling, and plan.py pricing,
+where the real boosted price is what should be shown.
 """
 
 
@@ -43,15 +48,18 @@ def _setup_two_rate_tariff(my_predbat, event_start, event_end, event_boost=100.0
     for minute in range(event_start, event_end):
         rate_import[minute] += event_boost
         rate_import_replicated[minute] = "saving"
+    rate_import_saving_minutes = set(range(event_start, event_end))
 
     rate_export = {minute: 15.0 for minute in range(0, 48 * 60)}
 
     my_predbat.rate_import = rate_import
     my_predbat.rate_import_base = rate_import_base
     my_predbat.rate_import_replicated = rate_import_replicated
+    my_predbat.rate_import_saving_minutes = rate_import_saving_minutes
     my_predbat.rate_export = rate_export
     my_predbat.rate_export_base = rate_export.copy()
     my_predbat.rate_export_replicated = {}
+    my_predbat.rate_export_saving_minutes = set()
 
     my_predbat.rate_min, my_predbat.rate_max, my_predbat.rate_average, _, _ = my_predbat.rate_minmax(rate_import)
     my_predbat.rate_export_min, my_predbat.rate_export_max, my_predbat.rate_export_average, _, _ = my_predbat.rate_minmax(rate_export)
@@ -62,7 +70,7 @@ def _setup_two_rate_tariff(my_predbat, event_start, event_end, event_boost=100.0
     my_predbat.manual_soc_keep = {}
     my_predbat.num_cars = 0
 
-    return rate_import, rate_import_replicated
+    return rate_import, rate_import_saving_minutes
 
 
 def test_rate_minmax_excluding_saving_skips_the_boosted_minutes(my_predbat):
@@ -71,13 +79,13 @@ def test_rate_minmax_excluding_saving_skips_the_boosted_minutes(my_predbat):
     print("**** test_rate_minmax_excluding_saving_skips_the_boosted_minutes ****")
     failed = False
 
-    rate_import, rate_import_replicated = _setup_two_rate_tariff(my_predbat, event_start=17 * 60, event_end=19 * 60)
+    rate_import, rate_import_saving_minutes = _setup_two_rate_tariff(my_predbat, event_start=17 * 60, event_end=19 * 60)
 
     if my_predbat.rate_max != 125.95:
         print("ERROR: test setup sanity check failed - contaminated rate_max should be 125.95, got {}".format(my_predbat.rate_max))
         failed = True
 
-    rate_min, rate_max, rate_average = my_predbat.rate_minmax_excluding_saving(rate_import, rate_import_replicated)
+    rate_min, rate_max, rate_average = my_predbat.rate_minmax_excluding_saving(rate_import, rate_import_saving_minutes)
     if rate_min != 3.49:
         print("ERROR: saving-excluded rate_min should be 3.49, got {}".format(rate_min))
         failed = True
@@ -112,9 +120,9 @@ def test_rate_minmax_excluding_saving_keeps_genuine_free_slots(my_predbat):
     my_predbat.forecast_minutes = 24 * 60
     rate_import = {minute: 20.0 for minute in range(0, 24 * 60)}
     rate_import[100] = 0.0
-    rate_import_replicated = {100: "saving"}
+    rate_import_saving_minutes = {100}
 
-    rate_min, rate_max, rate_average = my_predbat.rate_minmax_excluding_saving(rate_import, rate_import_replicated)
+    rate_min, rate_max, rate_average = my_predbat.rate_minmax_excluding_saving(rate_import, rate_import_saving_minutes)
 
     if rate_min != 0.0:
         print("ERROR: the free slot's 0.0p should still set rate_min, got {}".format(rate_min))
@@ -138,9 +146,9 @@ def test_rate_minmax_excluding_saving_falls_back_when_everything_is_tagged(my_pr
     print("**** test_rate_minmax_excluding_saving_falls_back_when_everything_is_tagged ****")
     failed = False
 
-    rate_import, rate_import_replicated = _setup_two_rate_tariff(my_predbat, event_start=0, event_end=my_predbat.forecast_minutes)
+    rate_import, rate_import_saving_minutes = _setup_two_rate_tariff(my_predbat, event_start=0, event_end=my_predbat.forecast_minutes)
 
-    rate_min, rate_max, rate_average = my_predbat.rate_minmax_excluding_saving(rate_import, rate_import_replicated)
+    rate_min, rate_max, rate_average = my_predbat.rate_minmax_excluding_saving(rate_import, rate_import_saving_minutes)
     expected_min, expected_max, expected_average, _, _ = my_predbat.rate_minmax(rate_import)
     if (rate_min, rate_max, rate_average) != (expected_min, expected_max, expected_average):
         print("ERROR: fully-tagged window should fall back to the plain scan {}, got {}".format((expected_min, expected_max, expected_average), (rate_min, rate_max, rate_average)))
@@ -240,11 +248,14 @@ def test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode(my_predb
     for minute in range(600, 720):
         rate_export[minute] += 50.0
         rate_export_replicated[minute] = "saving"
+    rate_export_saving_minutes = set(range(600, 720))
 
     my_predbat.rate_import = rate_import
     my_predbat.rate_import_replicated = {}
+    my_predbat.rate_import_saving_minutes = set()
     my_predbat.rate_export = rate_export
     my_predbat.rate_export_replicated = rate_export_replicated
+    my_predbat.rate_export_saving_minutes = rate_export_saving_minutes
     my_predbat.rate_min, my_predbat.rate_max, my_predbat.rate_average, _, _ = my_predbat.rate_minmax(rate_import)
     my_predbat.rate_export_min, my_predbat.rate_export_max, my_predbat.rate_export_average, _, _ = my_predbat.rate_minmax(rate_export)
     my_predbat.rate_low_threshold = 0
@@ -269,13 +280,62 @@ def test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode(my_predb
     return failed
 
 
+def test_rate_minmax_excluding_saving_ignores_overwritten_replicate_tag(my_predbat):
+    """A saving-boosted minute must stay excluded even after something downstream overwrites its
+    rate_replicate tag - a documented, supported combination (an export rate_increment override
+    active during the same saving session) rewrites rate_replicate[minute] from "saving" to
+    "increment"/"user" (fetch.py's basic_rates()), which happens for real in the production fetch
+    path: load_saving_slot()/load_free_slot()/load_axle_slot() tag rate_replicate, then
+    basic_rates()/apply_manual_rates() run afterward and can overwrite the tag on the very same
+    minute (Copilot review on #5052).
+
+    rate_minmax_excluding_saving() must not be fooled by that - it takes the frozen
+    rate_import_saving_minutes/rate_export_saving_minutes set (captured before any override can
+    run), not the live, possibly-overwritten rate_replicate dict, so this reproduces the
+    overwrite directly rather than relying on the full fetch pipeline.
+    """
+    print("**** test_rate_minmax_excluding_saving_ignores_overwritten_replicate_tag ****")
+    failed = False
+
+    my_predbat.minutes_now = 0
+    my_predbat.forecast_minutes = 24 * 60
+    rate_import = {minute: 20.0 for minute in range(0, 24 * 60)}
+    rate_import[100] += 50.0  # a saving-session reward, same shape as load_saving_slot()
+    rate_import_saving_minutes = {100}
+    # Simulate basic_rates()'s rate_increment branch overwriting the same minute's tag afterward -
+    # the live rate_replicate dict no longer says "saving" for minute 100 at all.
+    rate_import_replicated = {100: "increment"}
+
+    rate_min, rate_max, rate_average = my_predbat.rate_minmax_excluding_saving(rate_import, rate_import_saving_minutes)
+
+    if rate_max != 20.0:
+        print("ERROR: the boosted minute should still be excluded from rate_max even though its rate_replicate tag was overwritten, got {}".format(rate_max))
+        failed = True
+    if rate_min != 20.0:
+        print("ERROR: rate_min should be the flat tariff rate, got {}".format(rate_min))
+        failed = True
+
+    # The overwritten dict is passed through unused here (rate_minmax_excluding_saving takes the
+    # saving_minutes set, not rate_replicate) - assert on it anyway so the test documents exactly
+    # what would have fooled a live-dict-based check.
+    if rate_import_replicated.get(100) == "saving":
+        print("ERROR: test setup sanity check failed - the simulated overwrite did not actually overwrite the tag")
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
 _SNAPSHOT_FIELDS = (
     "minutes_now",
     "forecast_minutes",
     "rate_import",
     "rate_import_replicated",
+    "rate_import_saving_minutes",
     "rate_export",
     "rate_export_replicated",
+    "rate_export_saving_minutes",
     "rate_min",
     "rate_max",
     "rate_average",
@@ -285,10 +345,12 @@ _SNAPSHOT_FIELDS = (
     "rate_import_cost_threshold",
     "rate_export_cost_threshold",
     "rate_low_threshold",
-    "rate_high_threshold"
+    "rate_high_threshold",
     "alert_active_keep",
     "manual_soc_keep",
     "num_cars",
+    "rate_import_base",
+    "rate_export_base",
 )
 
 
@@ -312,6 +374,7 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_set_rate_thresholds_ignores_saving_boost_in_automatic_mode(my_predbat)
         failed |= test_set_rate_thresholds_ignores_small_saving_boost_in_manual_import_mode(my_predbat)
         failed |= test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode(my_predbat)
+        failed |= test_rate_minmax_excluding_saving_ignores_overwritten_replicate_tag(my_predbat)
         return failed
     finally:
         for field, value in snapshot.items():

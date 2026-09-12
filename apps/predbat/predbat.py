@@ -568,8 +568,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.carbon_yesterday = 0.0
         self.rate_import = {}
         self.rate_import_replicated = {}
+        self.rate_import_saving_minutes = set()
         self.rate_export = {}
         self.rate_export_replicated = {}
+        self.rate_export_saving_minutes = set()
         self.rate_slots = []
         self.low_rates = []
         self.high_export_rates = []

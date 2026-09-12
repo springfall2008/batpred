@@ -917,8 +917,10 @@ class Fetch:
 
         import_rates = {}
         self.rate_import_replicated = {}
+        self.rate_import_saving_minutes = set()
         export_rates = {}
         self.rate_export_replicated = {}
+        self.rate_export_saving_minutes = set()
         self.rate_slots = []
         self.io_adjusted = {}
         self.low_rates = []
@@ -1191,6 +1193,13 @@ class Fetch:
             self.load_saving_slot(self.octopus_saving_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             load_axle_slot(self, self.axle_sessions, import_rates, export=False, rate_replicate=self.rate_import_replicated)
+            # Snapshot which minutes a saving/free/Axle session tagged "saving" here, before
+            # basic_rates()/apply_manual_rates() below get a chance to overwrite rate_replicate
+            # with their own "increment"/"user" tag on the same minute - a supported combination
+            # (an override active during a saving session) that would otherwise silently defeat
+            # rate_minmax_excluding_saving()'s exclusion, since it reads rate_replicate live and
+            # the "saving" provenance would already be gone by the time it runs (#5052 review).
+            self.rate_import_saving_minutes = {minute for minute, tag in self.rate_import_replicated.items() if tag == "saving"}
             import_rates = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", import_rates, self.rate_import_replicated)
             import_rates = self.apply_manual_rates(import_rates, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
             self.rate_scan(import_rates, print=True)
@@ -1213,6 +1222,8 @@ class Fetch:
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export_rates, export=True, rate_replicate=self.rate_export_replicated)
             load_axle_slot(self, self.axle_sessions, export_rates, export=True, rate_replicate=self.rate_export_replicated)
+            # See the import block's equivalent comment above (#5052 review).
+            self.rate_export_saving_minutes = {minute for minute, tag in self.rate_export_replicated.items() if tag == "saving"}
             export_rates = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", export_rates, self.rate_export_replicated)
             export_rates = self.apply_manual_rates(export_rates, self.manual_export_rates, is_import=False, rate_replicate=self.rate_export_replicated)
             self.rate_scan_export(export_rates, print=True)
@@ -2272,19 +2283,26 @@ class Fetch:
 
         return dp2(rate_min), dp2(rate_max), dp2(rate_average), rate_min_minute, rate_max_minute
 
-    def rate_minmax_excluding_saving(self, rates, rate_replicate):
+    def rate_minmax_excluding_saving(self, rates, saving_minutes):
         """
-        Work out min/max/average over the forecast window, excluding only "saving"-tagged
-        minutes that are inflated relative to the tariff's own rates - not every minute the
-        "saving" tag touches.
+        Work out min/max/average over the forecast window, excluding only saving-session/Axle
+        minutes that are inflated relative to the tariff's own rates - not every such minute.
 
-        "saving" (set by load_saving_slot()/load_axle_slot()/load_free_slot()) marks two
-        economically opposite things with the same string: a saving-session/Axle event REWARD,
+        saving_minutes (rate_import_saving_minutes/rate_export_saving_minutes) is a frozen set of
+        minutes load_saving_slot()/load_axle_slot()/load_free_slot() tagged, captured right after
+        those calls and before basic_rates()/apply_manual_rates() run - NOT the live
+        rate_import_replicated/rate_export_replicated dict. A later override active during the
+        same session (a documented, supported combination - an export rate_increment alongside a
+        saving session, say) overwrites that dict's "saving" tag with its own "increment"/"user"
+        tag on the same minute, which would silently defeat a live-dict check here and let the
+        boosted price back into the threshold stats (Copilot review on #5052).
+
+        These minutes mark two economically opposite things: a saving-session/Axle event REWARD,
         added on top of the tariff rate (GH#5050 - a synthetic one-off high that should not be
         allowed to raise the automatic threshold above every genuine tariff rate), and a
         free/discounted import session, which SUBTRACTS from or floors the rate (a genuinely
         cheap slot the automatic threshold should be free to pick as "low rate"). Excluding every
-        "saving" minute regardless of direction throws the cheap ones away too - with a flat
+        such minute regardless of direction throws the cheap ones away too - with a flat
         tariff plus one free slot, that leaves only the flat rate, rate_max == rate_min, and
         set_rate_thresholds() takes its rate_max + 0.1 branch, which sets the threshold above
         every rate and makes the whole ordinary-price day read as "low" (Copilot review on
@@ -2300,16 +2318,17 @@ class Fetch:
         over untagged minutes sets a baseline max, second pass excludes tagged minutes above that
         baseline max.
 
-        Falls back to the plain (unfiltered) min/max/average when every minute in range is tagged
-        "saving" - an event that covers the whole forecast window leaves no genuine tariff minute to
-        scan, and a 99999/0/0 result would make every downstream comparison in set_rate_thresholds()
-        behave as if there were no data at all, which is worse than the boosted-but-real numbers.
+        Falls back to the plain (unfiltered) min/max/average when every minute in range is a
+        saving minute - an event that covers the whole forecast window leaves no genuine tariff
+        minute to scan, and a 99999/0/0 result would make every downstream comparison in
+        set_rate_thresholds() behave as if there were no data at all, which is worse than the
+        boosted-but-real numbers.
         """
         baseline_max = 0
         baseline_n = 0
 
         for minute in range(self.minutes_now, self.forecast_minutes + self.minutes_now):
-            if minute in rates and rate_replicate.get(minute) != "saving":
+            if minute in rates and minute not in saving_minutes:
                 baseline_max = max(baseline_max, rates[minute])
                 baseline_n += 1
 
@@ -2331,7 +2350,7 @@ class Fetch:
             if minute not in rates:
                 continue
             rate = rates[minute]
-            if rate_replicate.get(minute) == "saving":
+            if minute in saving_minutes:
                 if rate_base and minute in rate_base:
                     if rate > rate_base[minute]:
                         rate = rate_base[minute]
@@ -2434,8 +2453,8 @@ class Fetch:
         # export equivalents) include those synthetic minutes and are used elsewhere (dashboard
         # sensors, graph scaling, plan.py pricing) where the real boosted price is exactly what is
         # wanted, so this is a separate, narrower scan rather than a change to those.
-        rate_min, rate_max, rate_average = self.rate_minmax_excluding_saving(self.rate_import, self.rate_import_replicated)
-        rate_export_min, rate_export_max, rate_export_average = self.rate_minmax_excluding_saving(self.rate_export, self.rate_export_replicated)
+        rate_min, rate_max, rate_average = self.rate_minmax_excluding_saving(self.rate_import, self.rate_import_saving_minutes)
+        rate_export_min, rate_export_max, rate_export_average = self.rate_minmax_excluding_saving(self.rate_export, self.rate_export_saving_minutes)
 
         if self.rate_low_threshold > 0:
             self.rate_import_cost_threshold = dp2(rate_average * self.rate_low_threshold)
