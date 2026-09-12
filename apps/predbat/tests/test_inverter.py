@@ -756,6 +756,229 @@ def test_current_reasserted_on_unchanged_rate(test_name, ha, inv, prev_current, 
     return failed
 
 
+def test_low_power_mode_entity_created_for_script_driven_power_inverter(test_name, my_predbat):
+    """
+    #3311: a "power" output_charge_control inverter normally writes its rate straight to the
+    inverter (REST/cloud API) with no HA entity involved, so the dummy charge_rate/discharge_rate
+    entities are usually skipped for it. But a "power" inverter with no inverter-source component
+    (Solax, driven via charge_start_service/a script rather than a REST API) still reads/writes the
+    rate through self.base.args["charge_rate"] exactly like "current" mode does - without the
+    entity, the computed low-power-mode rate has nowhere to be stored, so get_current_charge_rate()
+    falls back to battery_rate_max_raw and the script is sent full power regardless of what was
+    planned.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    # Constructing an inverter creates a dummy entity for every register it lacks - not just the
+    # rate keys this test names - and each one writes into args. This module shares one fixture
+    # across every test in it, so the whole dict is snapshotted and put back rather than a named
+    # few, the same as test_short_per_inverter_list_gets_its_dummy_entity does.
+    saved_args = copy.deepcopy(my_predbat.args)
+    try:
+        my_predbat.args["inverter_type"] = ["GE"]  # GE's output_charge_control is "power"
+        my_predbat.args["givtcp_rest"] = None  # no REST configured - script/service driven
+        for key in ["charge_rate", "discharge_rate", "charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        inv = Inverter(my_predbat, 0)
+
+        if inv.inv_output_charge_control != "power":
+            print("ERROR: {} test fixture assumption broken - GE output_charge_control is no longer 'power'".format(test_name))
+            failed = True
+        if inv.inverter_source_active():
+            print("ERROR: {} test fixture assumption broken - an inverter-source component is unexpectedly active with no source configured".format(test_name))
+            failed = True
+
+        if "charge_rate" not in my_predbat.args:
+            print("ERROR: {} charge_rate entity was not auto-created for a source-less 'power' inverter".format(test_name))
+            failed = True
+        if "discharge_rate" not in my_predbat.args:
+            print("ERROR: {} discharge_rate entity was not auto-created for a source-less 'power' inverter".format(test_name))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return failed
+
+
+def test_low_power_mode_entity_not_clobbered_when_already_configured(test_name, my_predbat):
+    """
+    Guards the actual bug hit while building the #3311 fix: a non-REST "power" inverter that
+    already has a real charge_rate/discharge_rate configured (e.g. GE's own coverage/apps.yaml,
+    which sets charge_rate for the "if not using REST" case) must keep it - the entity-creation
+    block must only fill genuine gaps, not overwrite an already-configured real entity with a
+    fresh dummy one.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    # Whole-dict snapshot, not the rate keys alone - see the note in
+    # test_low_power_mode_entity_created_for_script_driven_power_inverter.
+    saved_args = copy.deepcopy(my_predbat.args)
+    try:
+        my_predbat.args["inverter_type"] = ["GE"]
+        my_predbat.args["givtcp_rest"] = None
+        my_predbat.args["charge_rate"] = ["number.real_charge_rate", "number.real_charge_rate", "number.real_charge_rate", "number.real_charge_rate"]
+        my_predbat.args["discharge_rate"] = ["number.real_discharge_rate", "number.real_discharge_rate", "number.real_discharge_rate", "number.real_discharge_rate"]
+        for key in ["charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        Inverter(my_predbat, 0)
+
+        if my_predbat.args["charge_rate"][0] != "number.real_charge_rate":
+            print("ERROR: {} pre-configured charge_rate was clobbered by auto-creation, now {}".format(test_name, my_predbat.args["charge_rate"][0]))
+            failed = True
+        if my_predbat.args["discharge_rate"][0] != "number.real_discharge_rate":
+            print("ERROR: {} pre-configured discharge_rate was clobbered by auto-creation, now {}".format(test_name, my_predbat.args["discharge_rate"][0]))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return failed
+
+
+def test_low_power_mode_entity_filled_for_partial_multi_inverter_list(test_name, my_predbat):
+    """
+    Copilot review on #4645: gating auto-creation on `"charge_rate" not in args` misses a mixed
+    multi-inverter config where charge_rate is a list shorter than the inverter count (or carries a
+    None in one slot). The key exists, so the old guard skipped creation, and
+    get_current_charge_rate() for that inverter still fell back to battery_rate_max_raw - the #3311
+    fault - for the source-less "power" inverter in slot 1. The per-index gate must fill slot 1
+    while leaving inverter 0's real configured entity untouched.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    # Whole-dict snapshot, not the rate keys alone - this one constructs inverter 1, which also
+    # writes scheduled_discharge_enable[1] and friends. See the note in
+    # test_low_power_mode_entity_created_for_script_driven_power_inverter.
+    saved_args = copy.deepcopy(my_predbat.args)
+    try:
+        my_predbat.args["inverter_type"] = ["GE", "GE"]
+        my_predbat.args["givtcp_rest"] = None
+        my_predbat.args["charge_rate"] = ["number.real_charge_rate"]  # only inverter 0 configured
+        my_predbat.args["discharge_rate"] = ["number.real_discharge_rate"]
+        for key in ["charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        Inverter(my_predbat, 1)
+
+        if my_predbat.args["charge_rate"][0] != "number.real_charge_rate":
+            print("ERROR: {} inverter 0's configured charge_rate was clobbered, now {}".format(test_name, my_predbat.args["charge_rate"][0]))
+            failed = True
+        if len(my_predbat.args["charge_rate"]) <= 1 or my_predbat.args["charge_rate"][1] in (None, "", "number.real_charge_rate"):
+            print("ERROR: {} charge_rate slot for inverter 1 was not auto-filled: {}".format(test_name, my_predbat.args["charge_rate"]))
+            failed = True
+        if len(my_predbat.args["discharge_rate"]) <= 1 or my_predbat.args["discharge_rate"][1] in (None, "", "number.real_discharge_rate"):
+            print("ERROR: {} discharge_rate slot for inverter 1 was not auto-filled: {}".format(test_name, my_predbat.args["discharge_rate"]))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return failed
+
+
+def test_low_power_mode_entity_not_created_for_rest_driven_power_inverter(test_name, my_predbat):
+    """
+    Companion to test_low_power_mode_entity_created_for_script_driven_power_inverter - a genuinely
+    component-backed "power" inverter (GE with givtcp_rest configured) gets its charge_rate arg
+    auto-configured to the GivTCP component's own published entity, so it doesn't need the dummy
+    entity either. Guards against the #3311 fix over-widening and creating unused entities for the
+    inverters the original behaviour was correct for.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    # Whole-dict snapshot, not the rate keys alone - see the note in
+    # test_low_power_mode_entity_created_for_script_driven_power_inverter.
+    saved_args = copy.deepcopy(my_predbat.args)
+    try:
+        my_predbat.args["inverter_type"] = ["GE"]
+        my_predbat.args["givtcp_rest"] = "dummy"
+        for key in ["charge_rate", "discharge_rate", "charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        restore_components = _activate_inverter_component(my_predbat, "givtcp")
+        try:
+            inv = Inverter(my_predbat, 0)
+
+            if not inv.inverter_source_active():
+                print("ERROR: {} test fixture assumption broken - no inverter-source component is active with GivTCP configured".format(test_name))
+                failed = True
+
+            if "charge_rate" in my_predbat.args:
+                print("ERROR: {} charge_rate entity was auto-created for a component-backed 'power' inverter - the component auto-configures its own".format(test_name))
+                failed = True
+            if "discharge_rate" in my_predbat.args:
+                print("ERROR: {} discharge_rate entity was auto-created for a component-backed 'power' inverter - the component auto-configures its own".format(test_name))
+                failed = True
+        finally:
+            restore_components()
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return failed
+
+
+def test_low_power_mode_entity_filled_beyond_component_backed_fleet(test_name, my_predbat):
+    """
+    Copilot review on #4645: inverter_source_active() answers a fleet-wide question by design
+    (components.py) - a component serves whichever inverters it discovered, so one component-backed
+    inverter made "is there a source" true for every index. Gating entity creation on that alone
+    skipped the script-driven Solax sat at index 1 behind a GivTCP inverter at index 0, leaving
+    get_current_charge_rate() on the #3311 fallback to battery_rate_max_raw for it.
+
+    A source that configured slots 0..n-1 and stopped has said what it covers, so an index outside
+    that list still gets its own entity - which is what separates this from
+    test_low_power_mode_entity_not_created_for_rest_driven_power_inverter, where the source has
+    written no list at all.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    # Whole-dict snapshot, not the rate keys alone - see the note in
+    # test_low_power_mode_entity_created_for_script_driven_power_inverter.
+    saved_args = copy.deepcopy(my_predbat.args)
+    try:
+        my_predbat.args["inverter_type"] = ["GE", "GE"]
+        my_predbat.args["givtcp_rest"] = "dummy"
+        # As a component that discovered one inverter leaves it: slot 0 claimed, the rest untouched
+        my_predbat.args["charge_rate"] = ["number.predbat_givtcp_0_charge_rate"]
+        my_predbat.args["discharge_rate"] = ["number.predbat_givtcp_0_discharge_rate"]
+        for key in ["charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        restore_components = _activate_inverter_component(my_predbat, "givtcp")
+        try:
+            inv = Inverter(my_predbat, 1)
+
+            if not inv.inverter_source_active():
+                print("ERROR: {} test fixture assumption broken - no inverter-source component is active with GivTCP configured".format(test_name))
+                failed = True
+
+            if my_predbat.args["charge_rate"][0] != "number.predbat_givtcp_0_charge_rate":
+                print("ERROR: {} the component's own charge_rate for inverter 0 was clobbered, now {}".format(test_name, my_predbat.args["charge_rate"][0]))
+                failed = True
+            if len(my_predbat.args["charge_rate"]) <= 1 or my_predbat.args["charge_rate"][1] in (None, "", "number.predbat_givtcp_0_charge_rate"):
+                print("ERROR: {} charge_rate slot for the inverter outside the component's fleet was not auto-filled: {}".format(test_name, my_predbat.args["charge_rate"]))
+                failed = True
+            if len(my_predbat.args["discharge_rate"]) <= 1 or my_predbat.args["discharge_rate"][1] in (None, "", "number.predbat_givtcp_0_discharge_rate"):
+                print("ERROR: {} discharge_rate slot for the inverter outside the component's fleet was not auto-filled: {}".format(test_name, my_predbat.args["discharge_rate"]))
+                failed = True
+        finally:
+            restore_components()
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return failed
+
+
 def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, expect_mode=None):
     """
     Test the adjust_inverter_mode function
@@ -4037,6 +4260,16 @@ def run_inverter_tests(my_predbat_dummy):
     # just when the rate itself changes
     failed |= test_current_reasserted_on_unchanged_rate("current_reassert_charge", ha, inv, 0, 200)
     failed |= test_current_reasserted_on_unchanged_rate("current_reassert_discharge", ha, inv, 0, 250, discharge=True)
+    if failed:
+        return failed
+
+    # #3311: script-driven "power" inverters (Solax) still need the charge_rate/discharge_rate
+    # dummy entity, unlike genuinely REST-driven "power" inverters (GE with givtcp_rest set)
+    failed |= test_low_power_mode_entity_created_for_script_driven_power_inverter("low_power_entity_created_script_driven", my_predbat)
+    failed |= test_low_power_mode_entity_not_clobbered_when_already_configured("low_power_entity_not_clobbered", my_predbat)
+    failed |= test_low_power_mode_entity_filled_for_partial_multi_inverter_list("low_power_entity_partial_multi_inverter", my_predbat)
+    failed |= test_low_power_mode_entity_not_created_for_rest_driven_power_inverter("low_power_entity_not_created_rest_driven", my_predbat)
+    failed |= test_low_power_mode_entity_filled_beyond_component_backed_fleet("low_power_entity_filled_beyond_component_fleet", my_predbat)
     if failed:
         return failed
 
