@@ -367,6 +367,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.max_days_previous = max(self.days_previous) + 1
         self.forecast_days = 0
         self.forecast_minutes = 0
+        self.started_time = None
+        self.auto_config_finalised = False
         self.soc_kw = 0
         self.soc_percent = 0
         self.soc_max = 10.0
@@ -1832,10 +1834,30 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.validate_config_retries_remaining = 0
             self.validate_config_next_retry_time = None
 
+    def auto_config_retry(self):
+        """
+        Retry auto config, finalising after 10 minutes from startup.
+        Skips completely if the 10-minute window has closed and no unmatched_args remain.
+        """
+        if getattr(self, "started_time", None) is None:
+            started_time = getattr(self, "now_utc_real", None) or self.now_utc
+        else:
+            started_time = self.started_time
+
+        now = getattr(self, "now_utc_real", None) or self.now_utc
+        time_since_start = (now - started_time).total_seconds() / 60.0
+        final = time_since_start > 10
+
+        if final and getattr(self, "auto_config_finalised", False) and not getattr(self, "unmatched_args", {}):
+            return
+
+        self.auto_config(final=final)
+        if final:
+            self.auto_config_finalised = True
+
     def validate_config_check_retry(self):
         """
-        Called every 15 seconds from update_time_loop(). Re-runs validate_config() if a retry is
-        due, only while a retry sequence is armed (i.e. only following an actual validation
+        Called every cycle to run pending apps.yaml validation retries (e.g. following a Kraken API
         failure - see #4379) - a no-op the rest of the time.
         """
         if self.validate_config_retries_remaining <= 0:
@@ -1844,6 +1866,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return
 
         self.validate_config_retries_remaining -= 1
+        self.auto_config_retry()
         errors = self.validate_config()
         if errors == 0:
             self.log("Info: Config validation retry succeeded, previous errors have now cleared")
@@ -1977,7 +2000,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 self.record_status("Error: Some components failed to start (phase 2)", had_errors=True)
 
             self.load_user_config(quiet=False, register=True)
-            self.auto_config(final=True)
+            self.auto_config(final=False)
             self.validate_config_schedule_retry(self.validate_config())
 
             # Restore the last saved plan so it is immediately active before the first calculation
@@ -2056,6 +2079,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.prediction_started = True
             try:
                 self.load_user_config()
+                if self.auto_config_retry():
+                    self.log("Auto config is still running, aborting this update")
+                    return
                 self.validate_config_schedule_retry(self.validate_config())
                 self.update_pred(scheduled=False)
                 self.create_entity_list()
@@ -2132,8 +2158,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     self.update_pending = False
                     self.ha_interface.update_states()
                     self.load_user_config()
-                    self.validate_config_schedule_retry(self.validate_config())
                     config_changed = True
+
+                # Retry auto config (and finalise after 10 minutes from startup)
+                if self.auto_config_retry():
+                    self.log("Auto config is still running, aborting this update")
+                    return
+
+                if config_changed:
+                    self.validate_config_schedule_retry(self.validate_config())
 
                 # Run the prediction
                 self.update_pred(scheduled=True)

@@ -1152,7 +1152,7 @@ class UserInterface:
         # Save current config to file if it was pending
         self.save_current_config()
 
-    def resolve_arg_re(self, arg, arg_value, state_keys):
+    def resolve_arg_re(self, arg, arg_value, state_keys, final=False):
         """
         Resolve argument regular expression on list or string
         """
@@ -1161,10 +1161,15 @@ class UserInterface:
         if isinstance(arg_value, list):
             new_list = []
             for item_value in arg_value:
-                item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
+                item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys, final=final)
                 if not item_matched:
-                    self.log("Warn: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
-                    new_list.append(None)
+                    matched = False
+                    if final:
+                        self.log("Warn: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
+                        new_list.append(None)
+                    else:
+                        self.log("Warn: Regular argument {} expression {} failed to match - will retry".format(arg, item_value))
+                        new_list.append(item_value)
                 else:
                     new_list.append(item_value)
             arg_value = new_list
@@ -1172,10 +1177,15 @@ class UserInterface:
             new_dict = {}
             for item_name in arg_value:
                 item_value = arg_value[item_name]
-                item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
+                item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys, final=final)
                 if not item_matched:
-                    self.log("Warn: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
-                    new_dict[item_name] = None
+                    matched = False
+                    if final:
+                        self.log("Warn: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
+                        new_dict[item_name] = None
+                    else:
+                        self.log("Warn: Regular argument {} expression {} failed to match - will retry".format(arg, item_value))
+                        new_dict[item_name] = item_value
                 else:
                     new_dict[item_name] = item_value
             arg_value = new_dict
@@ -1195,6 +1205,8 @@ class UserInterface:
                         arg_value = res.group(0)
                         matched = True
                         break
+            if not matched and final:
+                arg_value = None
         return matched, arg_value
 
     def auto_config(self, final=False):
@@ -1204,25 +1216,45 @@ class UserInterface:
         """
 
         states = self.get_state_wrapper()
-        state_keys = states.keys()
-        disabled = []
-        self.unmatched_args = {}
+        state_keys = list(states.keys())
+        enabled = []
+
+        if not hasattr(self, "unmatched_args"):
+            self.unmatched_args = {}
 
         # Find each arg re to match
-        for arg in self.args:
+        for arg in list(self.args.keys()):
             arg_value = self.args[arg]
-            matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
+            matched, resolved_value = self.resolve_arg_re(arg, arg_value, state_keys, final=final)
             if not matched:
                 if final:
-                    self.log("Warn: Regular expression argument: {} unable to match {}, now will disable".format(arg, arg_value))
-                    disabled.append(arg)
+                    self.log("Warn: Regular expression argument: {} unable to fully match, recording for retry".format(arg))
+                    self.unmatched_args[arg] = arg_value
+                if resolved_value is None:
+                    del self.args[arg]
+                else:
+                    self.args[arg] = resolved_value
             else:
-                self.args[arg] = arg_value
+                self.args[arg] = resolved_value
 
-        # Remove unmatched keys
-        for key in disabled:
-            self.unmatched_args[key] = self.args[key]
-            del self.args[key]
+        # Check previously unmatched args
+        for arg in list(self.unmatched_args.keys()):
+            arg_value = self.unmatched_args[arg]
+            matched, resolved_value = self.resolve_arg_re(arg, arg_value, state_keys, final=final)
+            if matched:
+                self.args[arg] = resolved_value
+                enabled.append(arg)
+                self.log("Info: Regular expression argument: {} matched on retry".format(arg))
+            else:
+                if resolved_value is None:
+                    if arg in self.args:
+                        del self.args[arg]
+                else:
+                    self.args[arg] = resolved_value
+
+        # Remove matched keys from unmatched list
+        for key in enabled:
+            del self.unmatched_args[key]
 
     def split_command_index(self, command):
         """
