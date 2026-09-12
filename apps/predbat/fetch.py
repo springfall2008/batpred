@@ -1196,9 +1196,10 @@ class Fetch:
             # Snapshot which minutes a saving/free/Axle session tagged "saving" here, before
             # basic_rates()/apply_manual_rates() below get a chance to overwrite rate_replicate
             # with their own "increment"/"user" tag on the same minute - a supported combination
-            # (an override active during a saving session) that would otherwise silently defeat
-            # rate_minmax_excluding_saving()'s exclusion, since it reads rate_replicate live and
-            # the "saving" provenance would already be gone by the time it runs (#5052 review).
+            # (an override active during a saving session). rate_minmax_excluding_saving() reads
+            # this frozen set, not the live rate_replicate dict, precisely so that a later
+            # overwrite here can't erase the "this was a saving minute" provenance it depends on
+            # (#5052 review).
             self.rate_import_saving_minutes = {minute for minute, tag in self.rate_import_replicated.items() if tag == "saving"}
             import_rates = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", import_rates, self.rate_import_replicated)
             import_rates = self.apply_manual_rates(import_rates, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
