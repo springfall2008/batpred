@@ -70,6 +70,14 @@ class Compare:
         pb.rate_import = copy.deepcopy(rate_import_base)
         pb.rate_export = copy.deepcopy(rate_export_base)
 
+        # The saving-minute sets are provenance for the live tariff's rates, captured in
+        # fetch_sensor_data() and frozen there so a later rate_replicate()/basic_rates() overwrite
+        # cannot erase it (#5050). They describe minute offsets in the rates being replaced here, so
+        # they must not outlive them: set_rate_thresholds() below would otherwise exclude whatever
+        # happens to sit at those offsets in this tariff from its min/max/average scan.
+        pb.rate_import_saving_minutes = set()
+        pb.rate_export_saving_minutes = set()
+
         # Fetch rates from Octopus Energy API
         if "rates_import_octopus_url" in tariff:
             # Fixed URL for rate import
