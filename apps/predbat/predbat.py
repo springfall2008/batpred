@@ -1652,7 +1652,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 if spec.get("scalar_value_dict", False):
                                     for key, sub_value in item.items():
                                         if not isinstance(sub_value, str):
-                                            self.log("Warn: Validation of apps.yaml found configuration item '{}' entry '{}' value {} is not a string - quote it to ensure it is matched".format(name, key, sub_value))
+                                            self.log("Warn: Validation of apps.yaml found configuration item '{}' entry '{}' value {} is not a string - quote it to keep its exact formatting (e.g. a leading zero)".format(name, key, sub_value))
                     elif expected_type == "int_float_dict":
                         if spec.get("or_auto", False) and value == "auto":
                             matches = True

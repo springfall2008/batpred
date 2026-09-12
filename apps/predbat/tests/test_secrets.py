@@ -323,6 +323,27 @@ def test_collect_log_secret_values():
         print("ERROR: a boolean secrets.yaml value should not be collected, got {}".format(bool_found))
         failed = True
 
+    # An unquoted numeric MPAN in the bare redact_strings list form (not just the labelled dict
+    # form) loads from YAML as an int and must still be collected, coerced to string - the same
+    # gap as the labelled form, just missed on the first pass (#5053 review).
+    numeric_bare_found = collect_log_secret_values({}, {}, [1234567890123], None)
+    if "1234567890123" not in numeric_bare_found or numeric_bare_found["1234567890123"] != "redact_strings":
+        print("ERROR: a numeric redact_strings (bare list) value should be collected as a string, got {}".format(numeric_bare_found))
+        failed = True
+
+    # A non-string dict key (an integer key in a nested mapping, reached at the true top level of
+    # args) must not crash the traversal - log() runs on the very first startup line, before
+    # validation has had any chance to report the malformed input (#5053 review).
+    try:
+        non_string_key_found = collect_log_secret_values({123: "some_value"}, {})
+    except AttributeError as e:
+        print("ERROR: a non-string dict key crashed the traversal instead of being tolerated: {}".format(e))
+        failed = True
+        non_string_key_found = {}
+    if non_string_key_found:
+        print("ERROR: a non-secret-flagged non-string key should not itself be collected, got {}".format(non_string_key_found))
+        failed = True
+
     if not failed:
         print("**** test_collect_log_secret_values PASSED ****")
     return failed
@@ -388,14 +409,24 @@ def test_compile_log_secret_pattern_and_redact_log_line():
     if "sec1" in diff_position_redacted or "c123x" in diff_position_redacted:
         print("ERROR: an overlapping secret value survived redaction: {}".format(diff_position_redacted))
         failed = True
+    # The merged span itself is not a key in `labels` (it is neither secret value alone), so a
+    # naive labels.get(merged_value, SECRET_MASK) falls back to the generic mask - losing the
+    # "which credential" guarantee a labelled mask exists to provide, even though nothing leaks
+    # (Copilot review on #5053). Both contributing labels must survive, joined together.
+    if "<short_secret+long_secret>" not in diff_position_redacted:
+        print("ERROR: an overlapping match should keep both labels, got {}".format(diff_position_redacted))
+        failed = True
 
     # A three-way overlap chain (v1/1v2/v2345 all present in "v1v2345") must extend through
-    # every overlap, not just the first one found.
+    # every overlap, not just the first one found - and keep every contributing label.
     chain_found = {"v1": "l1", "1v2": "l2", "v2345": "l3"}
     chain_pattern = compile_log_secret_pattern(chain_found)
     chain_redacted = redact_log_line("value v1v2345 end", chain_pattern)
     if "v1v2345" in chain_redacted or "2345" in chain_redacted or "v2345" in chain_redacted:
         print("ERROR: a chained overlap was not fully covered: {}".format(chain_redacted))
+        failed = True
+    if "<l1+l2+l3>" not in chain_redacted:
+        print("ERROR: a chained overlap should keep every contributing label, got {}".format(chain_redacted))
         failed = True
 
     # A line with nothing secret in it must come back byte-identical.

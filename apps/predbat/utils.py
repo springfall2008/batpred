@@ -256,7 +256,11 @@ def _collect_secret_values(value, found, label_prefix=""):
             # the more specific one redact_strings_labelled would have given it (#5053 review).
             # Only exempt the true top-level keys (label_prefix empty) - an unrelated nested key
             # that happens to share the name is not these denylists and should still collect.
-            if not label_prefix and key.lower() in SECRET_KEY_EXPLICIT_NAMES:
+            # str(key) first: apps.yaml keys are always strings in practice, but is_secret_key()
+            # below already tolerates a non-string key the same way, and log() runs on the very
+            # first startup line - an unguarded .lower() here would crash before validation ever
+            # gets a chance to report the malformed input (#5053 review).
+            if not label_prefix and str(key).lower() in SECRET_KEY_EXPLICIT_NAMES:
                 continue
             if is_secret_key(key):
                 key_label = (label_prefix + "." + key) if label_prefix else key
@@ -350,8 +354,10 @@ def collect_log_secret_values(args, secrets, redact_strings=None, redact_strings
                     found[value] = str(label)
     if isinstance(redact_strings, list):
         for value in redact_strings:
-            if isinstance(value, str) and value and value not in found:
-                found[value] = "redact_strings"
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                value = str(value)
+                if value and value not in found:
+                    found[value] = "redact_strings"
     return found
 
 
@@ -399,7 +405,10 @@ def redact_log_line(line, secret_pattern):
     matches at the earliest position ("sec1"), then resumes scanning after it, so it never
     considers "c123x" starting one character in and leaves "23x" exposed. Extend each match to
     the longest secret that starts anywhere inside it before emitting the mask, so a longer
-    secret overlapping a shorter one is always fully covered.
+    secret overlapping a shorter one is always fully covered. Every secret that contributed to an
+    extended span keeps its own label in the mask (joined with "+"), rather than falling back to
+    the generic mask just because the merged span itself is not a single known value (#5053
+    review) - the point of a labelled mask is telling an operator which credential to check.
     """
     if secret_pattern is None or not line:
         return line
@@ -411,7 +420,13 @@ def redact_log_line(line, secret_pattern):
         if start < pos:
             # Already covered by the extended span of a previous match.
             continue
-        value = match.group(0)
+        # Collect the label of every secret found to contribute to the (possibly extended) span,
+        # in the order encountered, rather than looking up labels[line[start:end]] once at the
+        # end - a merged span covering more than one overlapping secret is not itself a key in
+        # labels, so that lookup would silently fall back to the generic mask and the line would
+        # read no differently from an unrecognised value, losing the "which credential" guarantee
+        # this feature exists to provide (#5053 review).
+        span_labels = [labels.get(match.group(0), SECRET_MASK)]
         # Look for a longer secret starting at each position within this match's span and extend
         # to cover it - finditer() itself won't report an overlapping match once it has already
         # consumed the earlier one, so each candidate start position must be probed directly with
@@ -423,10 +438,12 @@ def redact_log_line(line, secret_pattern):
                 rescan = pattern.match(line, probe)
                 if rescan and rescan.end() > end:
                     end = rescan.end()
-                    value = line[start:end]
+                    rescan_label = labels.get(rescan.group(0), SECRET_MASK)
+                    if rescan_label not in span_labels:
+                        span_labels.append(rescan_label)
                     extended = True
         out.append(line[pos:start])
-        out.append("<{}>".format(labels.get(value, SECRET_MASK)))
+        out.append("<{}>".format("+".join(span_labels)))
         pos = end
     out.append(line[pos:])
     return "".join(out)

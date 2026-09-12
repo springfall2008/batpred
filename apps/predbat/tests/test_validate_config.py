@@ -53,7 +53,12 @@ def _run(my_predbat, extra_args, extra_states=None, expect_errors=(), expect_cle
         for name in expect_clean:
             assert name not in my_predbat.arg_errors, f"Unexpected validation error for '{name}': {my_predbat.arg_errors.get(name)}"
     finally:
-        my_predbat.args = saved_args
+        # In place, not my_predbat.args = saved_args - a ComponentBase aliases self.args = base.args
+        # at construction time (component_base.py), so reassigning here would leave any component
+        # already holding that reference still pointing at the old, now-extra_args-mutated dict
+        # even though my_predbat.args itself looks restored (#5053 review).
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
         my_predbat.ha_interface.dummy_items = saved_states
 
 
@@ -213,7 +218,9 @@ def test_validate_config(my_predbat):
         assert "redact_strings_labelled" not in my_predbat.arg_errors, "a numeric redact_strings_labelled value should warn, not error: {}".format(my_predbat.arg_errors.get("redact_strings_labelled"))
         assert any("my_mpan" in msg and "not a string" in msg for msg in captured), "expected a 'not a string' warning naming my_mpan, got {}".format(captured)
     finally:
-        my_predbat.args = saved_args
+        # In place, not reassignment - see _run()'s equivalent comment above (#5053 review).
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
         my_predbat.log = saved_log
 
     # ==========================================================================
