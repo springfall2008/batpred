@@ -20,10 +20,6 @@ import glob
 import argparse
 from datetime import timedelta
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from predbat import PredBat
 from tests.test_auto_config import run_auto_config_tests
@@ -53,6 +49,7 @@ from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_window2minutes import test_window2minutes
 from tests.test_hass_watcher import test_hass_watcher
+from tests.test_hass_rotation import test_hass_rotation
 from tests.test_new_install_detection import test_new_install_detection
 from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
@@ -448,6 +445,7 @@ def main():
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
         ("hass_watcher", test_hass_watcher, "Standalone-mode file watcher tests (#4397/#4396)", False),
+        ("hass_rotation", test_hass_rotation, "Standalone-mode log rotation tests", False),
         ("new_install_detection", test_new_install_detection, "New-install misdetection tests (Bug B, #4397/#4396, #3259, #3306)", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
         ("pv90", run_pv90_tests, "pv90 upside scenario tests", False),
