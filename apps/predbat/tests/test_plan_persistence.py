@@ -13,6 +13,8 @@ import tempfile
 from datetime import timedelta
 
 from storage import StorageComponent, StorageLocalFiles
+from utils import pack_export_limit
+from const import EXPORT_MODE_TARGET
 from tests.test_infra import run_async
 
 
@@ -51,7 +53,7 @@ def test_plan_persistence(my_predbat):
         charge_windows = [{"start": 480, "end": 600, "average": 14.5}]
         charge_limits = [8.5]
         export_windows = [{"start": 720, "end": 840, "average": 45.0}]
-        export_limits = [50.0]
+        export_limits = [pack_export_limit(EXPORT_MODE_TARGET, 50)]
         saved_minutes = my_predbat.minutes_now
 
         my_predbat.charge_window_best = charge_windows
@@ -64,7 +66,7 @@ def test_plan_persistence(my_predbat):
 
         # The pre-clip snapshot is what plan selection scores against next cycle, so it has to survive a
         # restart too - without it the first recompute back compares a clipped incumbent and falls back
-        preclip = ([9.0], charge_windows, export_windows, [0.0])
+        preclip = ([9.0], charge_windows, export_windows, [pack_export_limit(EXPORT_MODE_TARGET, 0)])
         my_predbat.plan_preclip = preclip
 
         # 1. save_plan() must not raise and must write something loadable

@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored
 import functools
 import io
 import itertools
@@ -31,6 +31,7 @@ from const import (
     TIME_FORMAT,
     PREDBAT_MODE_OPTIONS,
     PREDBAT_MODE_MONITOR,
+    DEBUG_SCHEMA_VERSION,
     MANUAL_RATE_MAX_MINUTES,
     MANUAL_TIME_MAX_MINUTES,
 )
@@ -65,6 +66,13 @@ class DebugYamlDumper(yaml.Dumper):
         if self.anchor_ids is None:
             return super().generate_anchor(node)
         return "id{:03d}".format(next(self.anchor_ids))
+
+
+# An export limit is a (mode, target, power) tuple, and PyYAML tags a tuple as !!python/tuple,
+# which yaml.safe_load refuses - the debug dump is an artefact people attach to bug reports and has
+# to load with plain YAML tooling. Written as an ordinary sequence instead. Nothing else in a dump
+# is a tuple today, and a sequence is what a reader wants from one anyway.
+DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
 
 
 def dump_debug_yaml(debug, stream):
@@ -777,7 +785,13 @@ class UserInterface:
             self.log("Warn: Debug file {} not found".format(filename))
             return
 
+        schema_version = debug.get("debug_schema_version", 0)
+        if schema_version > DEBUG_SCHEMA_VERSION:
+            self.log("Warn: Debug file {} was written by a newer Predbat (schema {} > {}) - replaying it may misread fields that have changed shape".format(filename, schema_version, DEBUG_SCHEMA_VERSION))
+
         for key in debug:
+            if key == "debug_schema_version":
+                continue
             if key not in ["CONFIG_ITEMS", "inverters"]:
                 self.__dict__[key] = copy.deepcopy(debug[key])
             if key == "inverters":
@@ -792,6 +806,18 @@ class UserInterface:
         # Handle old-format octopus_slots (flat list of dicts) vs new format (list-of-lists per car)
         if isinstance(self.octopus_slots, list) and self.octopus_slots and isinstance(self.octopus_slots[0], dict):
             self.octopus_slots = [self.octopus_slots] + [[] for _ in range(7)]
+
+        # Both export limit lists come back from the dump as self-describing mappings (or bare
+        # packed floats in an older dump, or 3-element sequences a YAML round trip made of the
+        # tuples) - decode each back to a (mode, target, power) tuple. export_limits is the current
+        # inverter state; export_limits_best is the plan.
+        for attr in ("export_limits", "export_limits_best"):
+            if hasattr(self, attr):
+                setattr(self, attr, export_limits_from_stored(getattr(self, attr)))
+        if hasattr(self, "plan_preclip") and isinstance(self.plan_preclip, (list, tuple)) and len(self.plan_preclip) > 3:
+            self.plan_preclip = list(self.plan_preclip)
+            self.plan_preclip[3] = export_limits_from_stored(self.plan_preclip[3])
+            self.plan_preclip = tuple(self.plan_preclip)
 
         for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)
@@ -847,6 +873,15 @@ class UserInterface:
             inverters_debug.append(inverter_debug)
         debug["inverters"] = inverters_debug
         debug["CONFIG_ITEMS"] = copy.deepcopy(self.CONFIG_ITEMS)
+        # Write both export limit lists as self-describing mappings rather than the (mode, target,
+        # power) tuples in memory: 99.0 does not say "freeze" to anything that has not read const.py,
+        # and a tuple would emit as an ordinary sequence a reader could not tell from a window count.
+        for attr in ("export_limits", "export_limits_best"):
+            if attr in debug:
+                debug[attr] = export_limits_to_stored(debug[attr])
+        # Marks how the fields above are shaped, so a replay can tell an old encoding from a new one
+        # rather than guessing from the data. Absent in dumps written before versioning.
+        debug["debug_schema_version"] = DEBUG_SCHEMA_VERSION
 
         if write_file:
             with open(filename, "w") as file:

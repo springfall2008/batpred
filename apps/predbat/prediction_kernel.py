@@ -22,17 +22,18 @@ rejected at load time rather than producing divergent results.
 
 import array
 import ctypes
+import struct
 import os
 import platform
 import sys
 import weakref
 
-from const import PREDICT_STEP, PREDBAT_MAX_CARS
-from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
+from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPORT_POWER
+from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_from_stored
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 5
-KERNEL_PARITY_REVISION = 10
+KERNEL_ABI_VERSION = 7
+KERNEL_PARITY_REVISION = 12
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -138,6 +139,20 @@ class PkContext(ctypes.Structure):
     ]
 
 
+class PkExportLimit(ctypes.Structure):
+    """One export instruction - mirrors PkExportLimit in prediction_kernel.cpp.
+
+    Field order and types must match the C struct exactly; ctypes applies the same natural alignment
+    the compiler does, so the double lands 8-aligned after the two int32s.
+    """
+
+    _fields_ = [
+        ("mode", ctypes.c_int32),
+        ("target", ctypes.c_int32),
+        ("power", ctypes.c_double),
+    ]
+
+
 class PkScenario(ctypes.Structure):
     """ctypes mirror of the PkScenario struct in prediction_kernel.cpp (field order must match exactly)"""
 
@@ -145,7 +160,7 @@ class PkScenario(ctypes.Structure):
         ("charge_limit", ctypes.POINTER(ctypes.c_double)),
         ("charge_start", ctypes.POINTER(ctypes.c_int32)),
         ("charge_end", ctypes.POINTER(ctypes.c_int32)),
-        ("export_limits", ctypes.POINTER(ctypes.c_double)),
+        ("export_limits", ctypes.POINTER(PkExportLimit)),
         ("export_start", ctypes.POINTER(ctypes.c_int32)),
         ("export_end", ctypes.POINTER(ctypes.c_int32)),
         ("soc_out", ctypes.POINTER(ctypes.c_double)),
@@ -188,7 +203,7 @@ class PkBatchJob(ctypes.Structure):
         ("charge_limit", ctypes.POINTER(ctypes.c_double)),
         ("charge_start", ctypes.POINTER(ctypes.c_int32)),
         ("charge_end", ctypes.POINTER(ctypes.c_int32)),
-        ("export_limits", ctypes.POINTER(ctypes.c_double)),
+        ("export_limits", ctypes.POINTER(PkExportLimit)),
         ("export_start", ctypes.POINTER(ctypes.c_int32)),
         ("export_end", ctypes.POINTER(ctypes.c_int32)),
         ("soc_out", ctypes.POINTER(ctypes.c_double)),
@@ -380,6 +395,70 @@ def double_array(values):
         return (ctypes.c_double * len(values))(*values)
     backing = array.array(DOUBLE_TYPECODE, values)
     return (ctypes.c_double * len(backing)).from_buffer(backing)
+
+
+# One (mode, target, power) record, matching PkExportLimit in prediction_kernel.cpp: two int32s
+# then a double, which the compiler pads to 16 bytes with the double 8-aligned. struct's native
+# layout ("@") applies the same padding, so packing with this and casting the bytes to the ctypes
+# array is layout-identical to filling the fields one by one - and measured about a third faster,
+# because it is one C-level pack per window instead of three Python attribute stores.
+_EXPORT_LIMIT_STRUCT = struct.Struct("@iid")
+
+# Contents-keyed cache of marshalled export-limit buffers for the single-run path
+# (run_prediction_kernel). The batch path caches by list identity, which never hits here because
+# every prediction is handed a fresh list; a search fans out thousands of simulations over the same
+# handful of distinct limit configurations, so keying on the tuple contents instead turns almost
+# every call after the first into a dict lookup. Bounded so a long-lived process cannot grow it
+# without limit - the working set of distinct plans in one fan-out is tens, not thousands.
+_EXPORT_LIMIT_BUFFER_CACHE = {}
+_EXPORT_LIMIT_BUFFER_CACHE_MAX = 512
+
+
+def _build_export_limit_array(export_limits):
+    """Pack one export-limit list into a PkExportLimit array (see export_limit_array).
+
+    export_limits is documented as already-tuple-shaped by the time it reaches this function - the
+    normalisation, if any is needed, happens in export_limit_array before the cache key is built
+    below, not here, because an unnormalised legacy element (a list or a dict) is unhashable and
+    would break tuple(export_limits) itself, not just this packing loop.
+    """
+    pack = _EXPORT_LIMIT_STRUCT.pack
+    raw = b"".join(pack(mode, target, power) if mode == EXPORT_MODE_TARGET else pack(mode, 0, FULL_EXPORT_POWER) for mode, target, power in export_limits)
+    return (PkExportLimit * len(export_limits)).from_buffer_copy(raw)
+
+
+def export_limit_array(export_limits):
+    """Marshal a list of (mode, target, power) tuples into one array of PkExportLimit.
+
+    An array of structs rather than three parallel arrays: the simulation reads all three fields of
+    the same window on the same step, so they belong on one cache line, and this is one buffer to
+    fill instead of three. The two modes carry neither a target nor a power, so they are written as
+    0 and full rate, which the kernel never reads for them.
+
+    The result is cached on the tuple contents: the kernel only ever reads the buffer, and a
+    fan-out re-marshals the same few plans thousands of times.
+
+    export_limits is documented as already-tuple-shaped, and both the packing loop in
+    _build_export_limit_array and the cache key below trust that - but an unnormalised legacy
+    element (a bare packed float, a malformed short sequence, or a stored mapping) would otherwise
+    either unpack wrong in the packer or, if it is a list or dict, make tuple(export_limits) itself
+    unhashable and raise before the packer is even reached, rather than falling back to idle as
+    every other entry point into this encoding does (GitHub Copilot review, PR #5047).
+    export_limit_from_stored is the general decoder - it also validates a 3-element sequence's
+    fields rather than trusting it, unlike the narrower unpack_export_limit. The isinstance check is
+    one pass per call, not per element normalised, so a plan already in tuple form - every plan once
+    it has been through a real cycle - pays nothing beyond the check itself.
+    """
+    if not all(isinstance(limit, tuple) for limit in export_limits):
+        export_limits = [export_limit_from_stored(limit) for limit in export_limits]
+    key = tuple(export_limits)
+    buffer = _EXPORT_LIMIT_BUFFER_CACHE.get(key)
+    if buffer is None:
+        if len(_EXPORT_LIMIT_BUFFER_CACHE) >= _EXPORT_LIMIT_BUFFER_CACHE_MAX:
+            _EXPORT_LIMIT_BUFFER_CACHE.clear()
+        buffer = _build_export_limit_array(export_limits)
+        _EXPORT_LIMIT_BUFFER_CACHE[key] = buffer
+    return buffer
 
 
 def int32_array(values):
@@ -834,18 +913,31 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
             window_cache[id(windows)] = entry
         return entry
 
+    # The export limits are shared across a fan-out for exactly the same reason the window lists are,
+    # so their marshalled PkExportLimit buffer is memoised the same way and on the same terms - keyed
+    # on identity, with the list retained so an id() cannot be recycled mid-batch.
+    limits_cache = {}
+
+    def limit_arrays(export_limits):
+        """Marshal an export limit list into its PkExportLimit buffer, reusing an earlier job's where possible"""
+        entry = limits_cache.get(id(export_limits))
+        if entry is None:
+            entry = (export_limit_array(export_limits), export_limits)
+            limits_cache[id(export_limits)] = entry
+        return entry
+
     for index, job in enumerate(jobs):
         charge_start, charge_end, _ = window_arrays(job.charge_window)
         export_start, export_end, _ = window_arrays(job.export_window)
         charge_limit = double_array(job.charge_limit)
-        export_limits = double_array(job.export_limits)
-        buffers.append((charge_limit, export_limits))
+        export_limits_buffer, _ = limit_arrays(job.export_limits)
+        buffers.append((charge_limit, export_limits_buffer))
 
         pk_job = job_array[index]
         pk_job.charge_limit = charge_limit
         pk_job.charge_start = charge_start
         pk_job.charge_end = charge_end
-        pk_job.export_limits = export_limits
+        pk_job.export_limits = export_limits_buffer
         pk_job.export_start = export_start
         pk_job.export_end = export_end
         pk_job.soc_out = None
@@ -899,7 +991,7 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     # list lengths, the per-item call overhead outweighing what the comprehension costs.
     scenario.charge_limit = double_array(charge_limit)
     scenario.charge_start, scenario.charge_end = window_bound_arrays(charge_window)
-    scenario.export_limits = double_array(export_limits)
+    scenario.export_limits = export_limit_array(export_limits)
     scenario.export_start, scenario.export_end = window_bound_arrays(export_window)
     # A cached run discards the per-minute SoC series (see the `if not cache` block below), so the
     # buffer is not allocated and the kernel is told to skip filling it. That skips a round_py per

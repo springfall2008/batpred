@@ -21,6 +21,8 @@ each cached one to match its own independent build, and require two different lo
 different answers so a leak cannot hide behind coincidentally equal results.
 """
 from prediction import Prediction
+from const import EXPORT_MODE_IDLE
+from utils import pack_export_limit
 from prediction_kernel import create_kernel_context, load_kernel
 from tests.test_infra import reset_inverter, reset_rates
 
@@ -94,7 +96,7 @@ def run_one(my_predbat, pv_step, load_step, static_cache):
         return None
     charge_window = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 120, "average": 10.0}]
     export_window = [{"start": my_predbat.minutes_now + 180, "end": my_predbat.minutes_now + 240, "average": 15.0}]
-    return prediction.run_prediction([my_predbat.soc_max], charge_window, export_window, [100.0], False, my_predbat.forecast_minutes, save=None, cache=False)
+    return prediction.run_prediction([my_predbat.soc_max], charge_window, export_window, [pack_export_limit(EXPORT_MODE_IDLE)], False, my_predbat.forecast_minutes, save=None, cache=False)
 
 
 def test_cached_context_matches_an_independent_build(my_predbat):

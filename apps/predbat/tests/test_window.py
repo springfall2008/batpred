@@ -12,7 +12,8 @@ import copy
 import random
 
 import prediction_kernel
-from utils import clone_windows, remove_intersecting_windows
+from utils import clone_windows, remove_intersecting_windows, pack_export_limit
+from const import EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 from tests.test_infra import reset_rates, reset_inverter
 from prediction import Prediction
 
@@ -79,7 +80,13 @@ def reference_remove_intersecting_windows(charge_limit_best, charge_window_best,
         clipped = False
         if limit > 0.0:
             for dlimit, dwindow in zip(export_limit_best, export_window_best):
-                if dlimit >= 100.0:
+                # An idle window clips nothing. A bare number is a legacy plan (>= 100 is idle); a
+                # tuple is (mode, target, power). The reference reads the field directly rather than
+                # via export_mode_of so a change in utils cannot mask a divergence here.
+                if isinstance(dlimit, tuple):
+                    if dlimit[0] == EXPORT_MODE_IDLE:
+                        continue
+                elif dlimit >= 100.0:
                     continue
                 dstart, dend = dwindow["start"], dwindow["end"]
                 new_segments = []
@@ -285,6 +292,38 @@ def run_intersect_window_tests(my_predbat):
         [{"start": now + 30, "end": now + 90, "average": 10}],
         [(now, now + 30), (now + 60, now + 120), (now + 120, now + 180)],
         [4, 0, 8],
+    )
+
+    # Export limits reach here as (mode, target, power) tuples, not bare numbers. The active-window
+    # test used to be `limit < 100.0`, a raw literal; it is now export_mode_of(...) != IDLE. A freeze
+    # still exports, so it must clip a charge window it overlaps, and an idle window must not. This
+    # pins that the accessor, not the literal, decides.
+    failed |= _intersect_case(
+        "freeze export tuple clips charge",
+        [4],
+        [{"start": now, "end": now + 60, "average": 10}],
+        [pack_export_limit(EXPORT_MODE_FREEZE)],
+        [{"start": now + 30, "end": now + 90, "average": 10}],
+        [(now, now + 30)],
+        [4],
+    )
+    failed |= _intersect_case(
+        "idle export tuple leaves charge alone",
+        [4],
+        [{"start": now, "end": now + 60, "average": 10}],
+        [pack_export_limit(EXPORT_MODE_IDLE)],
+        [{"start": now + 30, "end": now + 90, "average": 10}],
+        [(now, now + 60)],
+        [4],
+    )
+    failed |= _intersect_case(
+        "target export tuple clips charge",
+        [4],
+        [{"start": now, "end": now + 60, "average": 10}],
+        [pack_export_limit(EXPORT_MODE_TARGET, 50, 1.0)],
+        [{"start": now + 30, "end": now + 90, "average": 10}],
+        [(now, now + 30)],
+        [4],
     )
 
     # Randomised equivalence against the naive reference. Generates short (sub-5-minute) windows,

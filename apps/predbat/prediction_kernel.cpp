@@ -42,14 +42,39 @@
 // unconditionally, so loading one against this Python segfaults on the first prediction rather than
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
-#define PK_ABI_VERSION 5
-#define PK_PARITY_REVISION 10
+// ABI 6: export limits moved from one packed double per window to three parallel arrays
+// (mode/target/power). The packed form put the target in the integer part, the export power in the
+// fraction and the mode in two reserved whole values, so the kernel had to unpack it by arithmetic -
+// and reconstructing the power as 1 - frac round-tripped through binary floating point on the hot
+// path.
+// ABI 7: export limits are packed as PkExportLimit structs (array-of-structs) rather than those
+// three arrays. Same three fields, but one buffer and one stride, with the (99.0, 100.0) gap gone
+// because mode is explicit (GH#4914).
+#define PK_ABI_VERSION 7
+#define PK_PARITY_REVISION 12
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
-#define PK_EXPORT_LIMIT_FREEZE 99.0 // const.py EXPORT_LIMIT_FREEZE
-#define PK_EXPORT_LIMIT_IDLE 100.0  // const.py EXPORT_LIMIT_IDLE
+#define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
+#define PK_EXPORT_MODE_FREEZE 1 // const.py EXPORT_MODE_FREEZE
+#define PK_EXPORT_MODE_IDLE 2   // const.py EXPORT_MODE_IDLE
 
 namespace {
+
+// The three questions the simulation asks of an export limit. They read the mode field directly now
+// rather than inferring it from a packed double, mirroring export_mode_of/export_target_of/
+// export_power_of in utils.py.
+// One export instruction per window. An array of these rather than three parallel arrays: the
+// simulation reads all three fields of the same window on the same step, so they want to be on the
+// same cache line, and it makes the Python side one buffer to fill instead of three.
+struct PkExportLimit {
+    int32_t mode;   // const.py EXPORT_MODE_TARGET / _FREEZE / _IDLE
+    int32_t target; // SoC percent, meaningful only for EXPORT_MODE_TARGET
+    double power;   // fraction of full export rate, 1.0 = full
+};
+
+inline bool pk_export_is_idle(int32_t mode) { return mode == PK_EXPORT_MODE_IDLE; }
+inline bool pk_export_is_freeze(int32_t mode) { return mode == PK_EXPORT_MODE_FREEZE; }
+
 
 // Mirror of CPython round(x, n): correctly-rounded decimal rounding (ties to even).
 // snprintf performs a correctly-rounded binary->decimal conversion and strtod a
@@ -236,7 +261,7 @@ struct PkScenario {
     const double *charge_limit;   // kWh target per charge window
     const int32_t *charge_start;  // absolute minutes
     const int32_t *charge_end;
-    const double *export_limits;  // percent per export window (99=freeze, 100=off - see EXPORT_LIMIT_FREEZE/EXPORT_LIMIT_IDLE in const.py)
+    const PkExportLimit *export_limits; // one instruction per export window
     const int32_t *export_start;
     const int32_t *export_end;
     double *soc_out;              // caller-allocated, n_steps entries, filled with round(soc, 3)
@@ -285,7 +310,7 @@ struct PkBatchJob {
     const double *charge_limit;
     const int32_t *charge_start;
     const int32_t *charge_end;
-    const double *export_limits;
+    const PkExportLimit *export_limits;
     const int32_t *export_start;
     const int32_t *export_end;
     double *soc_out; // optional, null to skip
@@ -426,13 +451,13 @@ inline double rate_curve(double soc_key, double rate_setting, double rate_max, d
 //
 // PARITY: any change here must be mirrored in utils.remove_intersecting_windows and vice versa.
 static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, std::vector<int32_t> &out_end, std::vector<double> &out_limit, int32_t n_charge, const int32_t *charge_start, const int32_t *charge_end, const double *charge_limit, int32_t n_export, const int32_t *export_start,
-                                             const int32_t *export_end, const double *export_limits)
+                                             const int32_t *export_end, const PkExportLimit *export_limits)
 {
     // Enabled export windows only - the sole candidates for clipping anything - in start order
     std::vector<std::pair<int32_t, int32_t>> export_active;
     export_active.reserve(n_export);
     for (int32_t n = 0; n < n_export; n++) {
-        if (export_limits[n] < PK_EXPORT_LIMIT_IDLE) {
+        if (!pk_export_is_idle(export_limits[n].mode)) {
             export_active.emplace_back(export_start[n], export_end[n]);
         }
     }
@@ -503,11 +528,13 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
     }
 }
 
-void build_window_membership(std::vector<int32_t> &member, int32_t n_windows, const int32_t *starts, const int32_t *ends, const double *limits, bool is_export, int32_t minutes_now, int32_t n_steps)
+// Shared with the charge side, which has a bare kWh limit and no mode - hence both arrays, with
+// only the one matching is_export ever read.
+void build_window_membership(std::vector<int32_t> &member, int32_t n_windows, const int32_t *starts, const int32_t *ends, const double *limits, const PkExportLimit *export_limits, bool is_export, int32_t minutes_now, int32_t n_steps)
 {
     member.assign(n_steps, -1);
     for (int32_t window_n = 0; window_n < n_windows; window_n++) {
-        if (is_export ? !(limits[window_n] < PK_EXPORT_LIMIT_IDLE) : !(limits[window_n] > 0.0)) {
+        if (is_export ? pk_export_is_idle(export_limits[window_n].mode) : !(limits[window_n] > 0.0)) {
             continue;
         }
         for (int32_t m = starts[window_n]; m < ends[window_n]; m += 5) {
@@ -659,8 +686,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     clip_intersecting_charge_windows(clipped_start, clipped_end, clipped_limit, s->n_charge, s->charge_start, s->charge_end, s->charge_limit, s->n_export, s->export_start, s->export_end, s->export_limits);
     const int32_t n_charge_clipped = static_cast<int32_t>(clipped_start.size());
 
-    build_window_membership(charge_window_optimised, n_charge_clipped, clipped_start.data(), clipped_end.data(), clipped_limit.data(), false, c->minutes_now, n_steps);
-    build_window_membership(export_window_optimised, s->n_export, s->export_start, s->export_end, s->export_limits, true, c->minutes_now, n_steps);
+    build_window_membership(charge_window_optimised, n_charge_clipped, clipped_start.data(), clipped_end.data(), clipped_limit.data(), nullptr, false, c->minutes_now, n_steps);
+    build_window_membership(export_window_optimised, s->n_export, s->export_start, s->export_end, nullptr, s->export_limits, true, c->minutes_now, n_steps);
 
     // Initial state - prediction.py:435-490
     double soc = c->soc_kw;
@@ -756,7 +783,12 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         const int32_t export_window_n = export_window_optimised[k];
         const bool charge_window_active = charge_window_n >= 0;
         const bool export_window_active = export_window_n >= 0;
-        const double export_limit_now = export_window_active ? s->export_limits[export_window_n] : PK_EXPORT_LIMIT_IDLE;
+        // Read the fields once per step rather than per use; target and power are only meaningful
+        // for EXPORT_MODE_TARGET and are ignored by the branches that handle the other two modes.
+        const PkExportLimit export_now = export_window_active ? s->export_limits[export_window_n] : PkExportLimit{PK_EXPORT_MODE_IDLE, 0, 1.0};
+        const int32_t export_mode_now = export_now.mode;
+        const int32_t export_target_now = export_now.target;
+        const double export_power_now = export_now.power;
 
         // Find charge limit - prediction.py:609-620
         double charge_limit_n = 0;
@@ -932,21 +964,31 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         const double battery_to_min = std::max(soc - reserve_expected, 0.0) * battery_loss_discharge;
         const double battery_to_max = std::max(soc_max - soc, 0.0) * battery_loss;
 
-        // prediction.py:791-793
+        // prediction.py:791-793. The floor a target exports down to comes from the target field; the
+        // two modes that carry no target keep the floor the packed sentinels used to produce - 99% for
+        // a freeze (hold SoC) and 100% for an idle window (disabled, so the floor never binds) - so
+        // this stays numerically identical to the packed form for them.
         double discharge_min = reserve;
         if (export_window_active) {
-            discharge_min = std::max({soc_max * export_limit_now / 100.0, reserve, c->best_soc_min});
+            const double export_floor_percent = export_mode_now == PK_EXPORT_MODE_TARGET ? static_cast<double>(export_target_now) : (export_mode_now == PK_EXPORT_MODE_FREEZE ? 99.0 : 100.0);
+            discharge_min = std::max({soc_max * export_floor_percent / 100.0, reserve, c->best_soc_min});
         }
 
         double battery_draw = 0;
         double pv_dc = 0;
         double pv_ac = 0;
 
-        if (!c->set_export_freeze_only && export_window_active && export_limit_now < PK_EXPORT_LIMIT_FREEZE && (soc > discharge_min)) {
+        // BEHAVIOUR CHANGE vs the packed encoding: this asked "< freeze", which no value in
+        // (99.0, 100.0) satisfied while the freeze test below asked "== freeze", so such a window did
+        // nothing at all (GH#4914). With a mode field that state cannot be represented - a window is
+        // a target, a freeze or idle - so the interval is gone rather than preserved. The Python
+        // engine already asks the mode here (prediction.py:918), so this also ends a real divergence
+        // between the two: the comment claiming bit-parity on this line was already out of date.
+        if (!c->set_export_freeze_only && export_window_active && export_mode_now == PK_EXPORT_MODE_TARGET && (soc > discharge_min)) {
             // Force export - prediction.py:795-902
             double export_rate_adjust = 1.0;
             if (c->set_export_low_power) {
-                export_rate_adjust = 1 - (export_limit_now - static_cast<double>(static_cast<int64_t>(export_limit_now)));
+                export_rate_adjust = export_power_now;
             }
             discharge_rate_now = battery_rate_max_export * export_rate_adjust;
             discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_export, c->temp_discharge_cap[k], c->discharge_curve, battery_rate_min) * battery_rate_max_scaling_discharge;
@@ -1064,7 +1106,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             // charge rate to 0 (or pauses charging) and otherwise leaves the inverter in
             // Demand/ECO mode, never touching the discharge rate. So it shares this flow with the
             // charge rate zeroed rather than being modelled by a parallel branch - see #4676.
-            const bool freeze_export = c->set_export_freeze && export_window_active && export_limit_now < PK_EXPORT_LIMIT_IDLE && (export_limit_now == PK_EXPORT_LIMIT_FREEZE || c->set_export_freeze_only);
+            const bool freeze_export = c->set_export_freeze && export_window_active && !pk_export_is_idle(export_mode_now) && (pk_export_is_freeze(export_mode_now) || c->set_export_freeze_only);
 
             pv_ac = pv_now * inverter_loss_ac;
             pv_dc = 0;
