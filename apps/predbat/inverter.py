@@ -313,8 +313,7 @@ class Inverter:
         values = self.base.args.get(arg)
         if not isinstance(values, list) or self.id >= len(values):
             return False
-        value = values[self.id]
-return is_entity_id(values[self.id])
+        return is_entity_id(values[self.id])
 
     def __init__(self, base, id=0, quiet=False):
         """
