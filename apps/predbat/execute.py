@@ -740,7 +740,14 @@ class Execute:
                             inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
 
             # Charging/Discharging off via service
-            if not isCharging and self.set_charge_window:
+            # Skipped while isExporting: adjust_export_immediate() above already issues its own
+            # charge_stop_service before starting the export, so the adjust_charge_immediate(0) below
+            # is a second, redundant charge stop. On inverters whose charge stop shares a control with
+            # the export it just started (e.g. Tesla, where charge_stop_service writes the same
+            # operation_mode select as discharge_start_service) that second call clobbers the export
+            # (batpred#4641/#4165). The carHolding/boostHolding branch is unaffected - both flags are
+            # already gated on "not isExporting" where they are set, so it never ran during an export.
+            if not isCharging and not isExporting and self.set_charge_window:
                 if carHolding or boostHolding:
                     inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
                 else:

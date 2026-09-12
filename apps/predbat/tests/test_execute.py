@@ -29,6 +29,7 @@ class ActiveTestInverter:
         self.discharge_end_time_minutes = -1
         self.immediate_charge_soc_target = -1
         self.immediate_discharge_soc_target = -1
+        self.adjust_charge_immediate_calls = 0
         self.immediate_charge_soc_freeze = False
         self.immediate_discharge_soc_freeze = False
         self.charge_start_time_minutes = -1
@@ -106,6 +107,7 @@ class ActiveTestInverter:
     def adjust_charge_immediate(self, target_soc, freeze=False):
         self.immediate_charge_soc_target = target_soc
         self.immediate_charge_soc_freeze = freeze
+        self.adjust_charge_immediate_calls += 1
 
     def adjust_export_immediate(self, target_soc, freeze=False):
         self.immediate_discharge_soc_target = target_soc
@@ -225,6 +227,7 @@ def run_execute_test(
     assert_immediate_charge_soc_freeze_array=None,
     pv_forecast=0.0,
     set_charge_freeze_only=False,
+    assert_charge_immediate_calls=None,
 ):
     if assert_immediate_charge_soc_freeze_array is None:
         assert_immediate_charge_soc_freeze_array = []
@@ -300,6 +303,11 @@ def run_execute_test(
         inverter.reserve = reserve_kwh
         inverter.reserve_max = reserve_max_array[inverter.id] if reserve_max_array else reserve_max
         inverter.battery_temperature = battery_temperature
+        # Reset the immediate-charge probes per scenario - these inverter objects are reused across
+        # every scenario in one run, so without this a value set by an earlier scenario leaks forward
+        # and the assertions below cannot tell "left untouched" from "set to the same value again".
+        inverter.immediate_charge_soc_target = -1
+        inverter.adjust_charge_immediate_calls = 0
 
     # fetch_inverter_data() only ever narrows the freeze capability flags (it sets them False for an
     # inverter that doesn't support freeze, and never widens them back), matching production where
@@ -418,10 +426,20 @@ def run_execute_test(
                 if assert_status in ["Charging", "Charging, Hold for car", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"]
                 else 0
             )
-            if not set_charge_window:
+            if not set_charge_window or read_only:
+                # Read-only makes no inverter writes at all, so adjust_charge_immediate() is never
+                # called and the probe stays at its reset value.
+                assert_soc_target_force = -1
+            elif assert_status.split(" [")[0] in ["Exporting", "Freeze exporting"]:
+                # adjust_export_immediate() already issues its own charge stop before starting the
+                # export, so the "Charging/Discharging off via service" block in execute.py is skipped
+                # while exporting and must leave immediate_charge_soc_target untouched (batpred#4641/#4165).
                 assert_soc_target_force = -1
         if inverter.immediate_charge_soc_target != assert_soc_target_force:
             print("ERROR: Inverter {} Immediate charge SOC target should be {} got {}".format(inverter.id, assert_soc_target_force, inverter.immediate_charge_soc_target))
+            failed = True
+        if assert_charge_immediate_calls is not None and inverter.adjust_charge_immediate_calls != assert_charge_immediate_calls:
+            print("ERROR: Inverter {} adjust_charge_immediate call count should be {} got {}".format(inverter.id, assert_charge_immediate_calls, inverter.adjust_charge_immediate_calls))
             failed = True
         if assert_immediate_charge_soc_freeze_array:
             if inverter.immediate_charge_soc_freeze != assert_immediate_charge_soc_freeze_array[inverter.id]:
@@ -2518,6 +2536,12 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # assert_charge_immediate_calls=0 pins batpred#4641/#4165 - while exporting, the
+    # "Charging/Discharging off via service" block must not call adjust_charge_immediate() a second
+    # time. adjust_export_immediate() already issues its own charge stop before starting the export;
+    # a second charge-stop call on some inverters (e.g. Tesla, where charge_stop_service writes the
+    # same shared operation_mode select that discharge_start_service just set) clobbers the export
+    # that call just started.
     failed |= run_execute_test(
         my_predbat,
         "discharge2_no_reserve",
@@ -2533,6 +2557,7 @@ def run_execute_tests(my_predbat):
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
         set_reserve_enable=False,
+        assert_charge_immediate_calls=0,
     )
     if failed:
         return failed
@@ -2719,6 +2744,9 @@ def run_execute_tests(my_predbat):
         assert_pause_charge=True,
         assert_charge_rate=1000,
         assert_immediate_soc_target=90,
+        # A freeze export is still an export, so the same no-duplicate-charge-stop rule applies
+        # (batpred#4641/#4165) - see discharge2_no_reserve.
+        assert_charge_immediate_calls=0,
     )
     failed |= run_execute_test(
         my_predbat,
