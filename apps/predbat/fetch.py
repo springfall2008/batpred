@@ -905,6 +905,38 @@ class Fetch:
             load_minutes = MinuteArray(load_minutes, size)
         return load_minutes, age_days
 
+    def combine_active_keep(self):
+        """
+        Combine the SOC keep floors (alerts, manual_soc) and ceilings (manual_soc_max) into all_active_keep/all_active_keep_max.
+        """
+        # Combine keep from alerts and manual SOC into all_active_keep
+        self.all_active_keep = self.alert_active_keep.copy()
+        if self.manual_soc_keep:
+            for minute, soc_value in self.manual_soc_keep.items():
+                if minute in self.all_active_keep:
+                    self.all_active_keep[minute] = max(self.all_active_keep[minute], soc_value)
+                else:
+                    self.all_active_keep[minute] = soc_value
+
+        # Manual SOC max is a ceiling rather than a floor - combine separately, taking the
+        # tightest (lowest) ceiling if more than one source ever applies to the same minute.
+        self.all_active_keep_max = {}
+        if self.manual_soc_max_keep:
+            for minute, soc_value in self.manual_soc_max_keep.items():
+                if minute in self.all_active_keep_max:
+                    self.all_active_keep_max[minute] = min(self.all_active_keep_max[minute], soc_value)
+                else:
+                    self.all_active_keep_max[minute] = soc_value
+
+        # A ceiling below the floor at the same minute is a contradiction (e.g. a leftover manual_soc
+        # override never cleared) - the floor wins as the safety-relevant constraint, so drop the
+        # conflicting ceiling rather than hand the optimiser two penalties pulling opposite ways.
+        for minute in list(self.all_active_keep_max.keys()):
+            floor_value = self.all_active_keep.get(minute, 0)
+            if floor_value > self.all_active_keep_max[minute]:
+                self.log("Warn: manual_soc_max target {}% at minute {} is below the manual_soc/alert floor {}% for the same minute - ignoring the ceiling there".format(self.all_active_keep_max[minute], minute, floor_value))
+                del self.all_active_keep_max[minute]
+
     def fetch_sensor_data(self, save=True):
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
@@ -952,14 +984,8 @@ class Fetch:
             if alert_feed:
                 self.alerts, self.alert_active_keep = alert_feed.process_alerts(self.minutes_now, self.midnight_utc)
 
-        # Combine keep from alerts and manual SOC into all_active_keep
-        self.all_active_keep = self.alert_active_keep.copy()
-        if self.manual_soc_keep:
-            for minute, soc_value in self.manual_soc_keep.items():
-                if minute in self.all_active_keep:
-                    self.all_active_keep[minute] = max(self.all_active_keep[minute], soc_value)
-                else:
-                    self.all_active_keep[minute] = soc_value
+        # Combine keep floors and ceilings from alerts and manual SOC
+        self.combine_active_keep()
 
         # iBoost load data
         if "iboost_energy_today" in self.args:
@@ -3216,6 +3242,7 @@ class Fetch:
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
         self.manual_load_adjust = self.manual_rates("manual_load_adjust", default_rate=self.get_arg("manual_load_value"))
         self.manual_soc_keep = self.manual_rates("manual_soc", default_rate=self.get_arg("manual_soc_value"))
+        self.manual_soc_max_keep = self.manual_rates("manual_soc_max", default_rate=self.get_arg("manual_soc_max_value"))
 
         # Update list of config options to save/restore to
         self.update_save_restore_list()

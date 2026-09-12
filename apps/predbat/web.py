@@ -2549,12 +2549,14 @@ chart.render();
         manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
         manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
         manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
+        manual_soc_max_keep = self.base.manual_rates("manual_soc_max", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
         manual_export_rates_list = [{"minutes": k, "rate": v} for k, v in manual_export_rates.items()]
         manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
         manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
+        manual_soc_max_list = [{"minutes": k, "target": v} for k, v in manual_soc_max_keep.items()]
 
         # Build overrides object
         overrides = {
@@ -2567,6 +2569,7 @@ chart.render();
             "manual_export_rates": manual_export_rates_list,
             "manual_load_adjust": manual_load_adjust_list,
             "manual_soc": manual_soc_list,
+            "manual_soc_max": manual_soc_max_list,
         }
 
         # Calculate hash of overrides for change detection
@@ -2645,12 +2648,14 @@ chart.render();
         manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
         manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
         manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
+        manual_soc_max_keep = self.base.manual_rates("manual_soc_max", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
         manual_export_rates_list = [{"minutes": k, "rate": v} for k, v in manual_export_rates.items()]
         manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
         manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
+        manual_soc_max_list = [{"minutes": k, "target": v} for k, v in manual_soc_max_keep.items()]
 
         # Build overrides object
         overrides = {
@@ -2663,6 +2668,7 @@ chart.render();
             "manual_export_rates": manual_export_rates_list,
             "manual_load_adjust": manual_load_adjust_list,
             "manual_soc": manual_soc_list,
+            "manual_soc_max": manual_soc_max_list,
         }
 
         # Calculate hash of overrides for change detection
@@ -4773,6 +4779,15 @@ chart.render();
                 actual_rate = manual_soc.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_soc", clear_option)
+            elif action == "Set SOC Max":
+                item = self.base.config_index.get("manual_soc_max_value", {})
+                await self.set_state_external(item.get("entity", None), rate)
+                await self.base.async_manual_select("manual_soc_max", selection_option)
+            elif action == "Clear SOC Max":
+                manual_soc_max = self.base.manual_rates("manual_soc_max", update=False)
+                actual_rate = manual_soc_max.get(minutes_from_midnight, rate)
+                clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
+                await self.base.async_manual_select("manual_soc_max", clear_option)
             else:
                 self.log("ERROR: Unknown action for rate override")
                 return web.json_response({"success": False, "message": "Unknown action"}, status=400)
