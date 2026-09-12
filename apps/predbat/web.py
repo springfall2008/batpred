@@ -86,6 +86,7 @@ from utils import (
     classify_log_line,
     log_line_included,
     predbat_log_file_prev,
+    is_secret_key,
 )
 from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
@@ -3802,8 +3803,13 @@ chart.render();
         for arg in args:
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
-            if isinstance(arg, str) and (("_key" in arg) or ("_password" in arg) or ("_secret" in arg) or ("_pem" in arg)):
-                value = '<span title = "{}"> (hidden)</span>'.format(value)
+            # Shared predicate rather than this route's own key-name substrings: the component
+            # registry flags credentials the name alone cannot reveal (account and serial
+            # numbers, MPANs), and those were rendered in the clear here - and put into
+            # data-original-value below - even after being masked everywhere else (#5053 review).
+            if isinstance(arg, str) and is_secret_key(arg):
+                value = '<span title = "(hidden)"> (hidden)</span>'
+                raw_value = "(hidden)"
             arg_errors = self.base.arg_errors.get(arg, "")
 
             # Determine if this value can be edited
