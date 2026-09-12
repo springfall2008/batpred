@@ -38,7 +38,7 @@ from const import (
     INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES,
 )
 from control_ledger import generation_from_state, OWNED, UNOWNED
-from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
+from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -287,6 +287,19 @@ class Inverter:
         """
         if (arg not in self.base.args) or (not isinstance(self.base.args[arg], list)):
             self.base.args[arg] = [default, default, default, default]
+        elif len(self.base.args[arg]) <= self.id:
+            # A list that stops short of this inverter is just as missing for it as no list at all,
+            # and every caller assigns into [self.id] straight afterwards - so a short one raised
+            # IndexError rather than getting its dummy entity. Reachable whenever apps.yaml or a
+            # component's auto-config names fewer inverters than num_inverters, which is now the
+            # normal shape of a mixed fleet: a component configures the inverters it discovered and
+            # leaves the rest of the list to the user (#5029).
+            #
+            # Padded with None rather than the default: the caller overwrites [self.id] with its
+            # dummy entity, so the padding is only ever read by some other inverter, for which this
+            # key is genuinely unconfigured. A bare value there reads back as an entity id and is
+            # then looked up as one.
+            self.base.args[arg] = self.base.args[arg] + [None] * (self.id + 1 - len(self.base.args[arg]))
 
     def __init__(self, base, id=0, quiet=False):
         """
@@ -410,7 +423,6 @@ class Inverter:
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
-        self.inv_has_fox_inverter_mode = INVERTER_DEF[self.inverter_type].get("has_fox_inverter_mode", False)
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -608,7 +620,7 @@ class Inverter:
             self.base.args["charge_rate"][id] = self.create_entity("charge_rate", max_charge, uom="W", device_class="power")
             self.base.args["discharge_rate"][id] = self.create_entity("discharge_rate", max_discharge, uom="W", device_class="power")
 
-        if not self.inv_has_ge_inverter_mode and not self.inv_has_fox_inverter_mode and not self.inv_has_ge_eco_toggle:
+        if not self.inv_has_ge_inverter_mode and not self.inv_has_ge_eco_toggle:
             self.create_missing_arg("inverter_mode", "Eco")
             self.base.args["inverter_mode"][id] = self.create_entity("inverter_mode", "Eco")
 
@@ -1833,6 +1845,11 @@ class Inverter:
         model's known floor instead (GivTCP does this with GE's 4%), so a user who has configured
         battery_min_soc lower has that reflected in what is published.
 
+        reserve does not have to be an entity at all - the huawei and sofar templates ship a literal
+        percentage, because those inverters have no reserve register to point at. A literal carries
+        no attributes, so the reads below warn and come back with nothing and there are no bounds to
+        honour, rather than the state lookup on a number that used to raise (GH#5003).
+
         The rounding is the caller's contract as much as this one's: reserve is written as a whole
         percent, so a floor takes the ceiling and a ceiling takes the floor and the value returned is
         always one the register accepts. Rounding to nearest instead would turn a published floor of
@@ -2102,14 +2119,32 @@ class Inverter:
             self.base.log("Inverter {} control ledger: {} ({}) verdict {} - Predbat set {}, inverter now reads {}".format(self.id, name, entity_id, verdict, owned, value))
         return verdict
 
+    def check_write_entity(self, caller, name, entity_id, new_value):
+        """
+        Whether a control can be written to, warning if it is missing or is a fixed value.
+
+        apps.yaml settings may hold a literal rather than an entity id - the huawei and sofar
+        templates ship one for reserve, because those inverters have no register to point at - and a
+        literal is not somewhere a value can be written. Every write path used to split it as though
+        it were an entity id, so a control configured that way raised instead of reporting that
+        Predbat cannot set it (GH#5003).
+        """
+        if is_entity_id(entity_id):
+            return True
+        if entity_id:
+            message = "Warn: Inverter {} {}: {} for {} is a fixed value, not an entity id, so {} can not be written".format(self.id, caller, entity_id, name, new_value)
+        else:
+            message = "Warn: Inverter {} {}: No entity_id for {} to write {}".format(self.id, caller, name, new_value)
+        self.base.log(message)
+        self.base.record_status(message, had_errors=True)
+        return False
+
     def write_and_poll_switch(self, name, entity_id, new_value):
         """
         GivTCP Workaround, keep writing until correct
         """
         # Re-written to minimise writes
-        if not entity_id:
-            self.base.log("Warn: Inverter {} write_and_poll_switch: No entity_id for {} to write {}".format(self.id, name, new_value))
-            self.base.record_status("Warn: Inverter {} write_and_poll_switch: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+        if not self.check_write_entity("write_and_poll_switch", name, entity_id, new_value):
             return False
         domain, entity_name = entity_id.split(".")
 
@@ -2188,9 +2223,7 @@ class Inverter:
     def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
-        if not entity_id:
-            self.base.log("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value))
-            self.base.record_status("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+        if not self.check_write_entity("write_and_poll_value", name, entity_id, new_value):
             return False
         domain, entity_name = entity_id.split(".")
 
@@ -2281,9 +2314,7 @@ class Inverter:
         """
         GivTCP Workaround, keep writing until correct
         """
-        if not entity_id:
-            self.base.log("Warn: Inverter {} write_and_poll_option: No entity_id for {} to write {}".format(self.id, name, new_value))
-            self.base.record_status("Warn: Inverter {} write_and_poll_option: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+        if not self.check_write_entity("write_and_poll_option", name, entity_id, new_value):
             return False
         entity_base = entity_id.split(".")[0]
 
@@ -2435,20 +2466,17 @@ class Inverter:
         inverter_mode_configured = "inverter_mode" in self.base.args
         old_inverter_mode = self.base.get_arg("inverter_mode", index=self.id)
 
-        if not self.inv_has_fox_inverter_mode and not self.inv_has_ge_eco_toggle:
-            # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
-            if old_inverter_mode == "Eco (Paused)":
-                old_inverter_mode = "Eco"
-
-        if self.inv_has_fox_inverter_mode:
-            # For fox we only use selfuse as the rest is done by schedule
-            new_inverter_mode = "SelfUse"
-        elif self.inv_has_ge_eco_toggle:
+        if self.inv_has_ge_eco_toggle:
+            # GE has an eco toggle rather than a mode, so exporting means eco off
             if force_export:
                 new_inverter_mode = "off"
             else:
                 new_inverter_mode = "on"
         else:
+            # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
+            if old_inverter_mode == "Eco (Paused)":
+                old_inverter_mode = "Eco"
+
             # Force export or Eco mode?
             if force_export:
                 new_inverter_mode = "Timed Export"

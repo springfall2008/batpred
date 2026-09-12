@@ -13,7 +13,7 @@ import copy
 import yaml
 import os
 from datetime import datetime, timedelta
-from utils import calc_percent_limit
+from utils import calc_percent_limit, is_entity_id
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
 from inverter import Inverter
@@ -381,6 +381,172 @@ def test_reserve_model_device_bounds(test_name, my_predbat, ha, set_reserve_min,
     return failed
 
 
+def test_reserve_literal_value(test_name, my_predbat, ha, inverter_type, reserve_arg, expect_reserve_percent, expect_reserve_percent_current, set_reserve_enable=True):
+    """
+    Test
+       Inverter.__init__ accepts a hard-wired reserve percentage, not only an entity id.
+
+    templates/huawei.yaml and templates/sofar.yaml both ship a literal reserve, since those
+    inverters expose no reserve register to bind to. Reading the register bounds off that literal as
+    though it were an entity raised TypeError inside __init__ and failed inverter creation outright,
+    so no plan could be computed at all (GH#5003).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    # Inverter.__init__ replaces args with dummy entities for whatever the type has no register for,
+    # so the whole dict is snapshotted rather than the reserve entries alone - the shared fixture is
+    # reused by every later test in this module
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_reserve_enable = my_predbat.set_reserve_enable
+    saved_reserve_item = ha.dummy_items["number.reserve"]
+    try:
+        my_predbat.args["inverter_type"] = [inverter_type]
+        my_predbat.args["reserve"] = reserve_arg
+        my_predbat.set_reserve_enable = set_reserve_enable
+        # Pin the entity too, so the entity case is not left reading whatever an earlier test wrote
+        ha.dummy_items["number.reserve"] = {"state": 4.0, "min": None, "max": None}
+
+        inv = Inverter(my_predbat, 0)
+        if inv.reserve_percent != expect_reserve_percent:
+            print("ERROR: reserve_percent should be {} got {}".format(expect_reserve_percent, inv.reserve_percent))
+            failed = True
+        # The configured literal is what the inverter is taken to currently be set to
+        if inv.reserve_percent_current != expect_reserve_percent_current:
+            print("ERROR: reserve_percent_current should be {} got {}".format(expect_reserve_percent_current, inv.reserve_percent_current))
+            failed = True
+        # reserve is what the plan treats as the bottom of the battery
+        expect_reserve_kwh = round(inv.soc_max * expect_reserve_percent / 100.0, 3)
+        if inv.reserve != expect_reserve_kwh:
+            print("ERROR: reserve should be {}kWh got {}kWh".format(expect_reserve_kwh, inv.reserve))
+            failed = True
+        # A literal carries no min/max attributes, so there are no device bounds to honour. Types
+        # with no reserve register have had the arg replaced by a dummy entity during __init__, so
+        # only assert this where the literal survived.
+        if not is_entity_id(my_predbat.args["reserve"][0]) and inv.reserve_device_bounds() != (None, None):
+            print("ERROR: reserve_device_bounds should be (None, None) for a literal, got {}".format(inv.reserve_device_bounds()))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.set_reserve_enable = saved_reserve_enable
+        ha.dummy_items["number.reserve"] = saved_reserve_item
+
+    return failed
+
+
+def test_write_and_poll_non_entity(test_name, my_predbat, inv):
+    """
+    Test
+       write_and_poll_switch/value/option refuse a control that is not an entity id, with a warning.
+
+    apps.yaml settings may hold a fixed value rather than an entity id - the huawei and sofar
+    templates ship one for reserve - and every write path split it as though it were an entity id,
+    raising out of the middle of plan execution. A fixed value means Predbat cannot set that
+    control, which is a warning about a control it does not own, not a crash (GH#5003).
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    log_messages = []
+    orig_log = my_predbat.log
+    orig_status = my_predbat.current_status
+    orig_had_errors = my_predbat.had_errors
+    writes = (
+        ("write_and_poll_switch", lambda entity_id: inv.write_and_poll_switch("reserve", entity_id, True)),
+        ("write_and_poll_value", lambda entity_id: inv.write_and_poll_value("reserve", entity_id, 12)),
+        ("write_and_poll_option", lambda entity_id: inv.write_and_poll_option("reserve", entity_id, "Eco")),
+    )
+    try:
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        # A literal percentage, a float, a bool, and the missing/empty cases that already warned
+        for entity_id in (12, 12.5, True, None, ""):
+            for caller, write in writes:
+                del log_messages[:]
+                try:
+                    result = write(entity_id)
+                except Exception as error:
+                    print("ERROR: {} raised {} for non-entity {}".format(caller, error, repr(entity_id)))
+                    failed = True
+                    continue
+                if result is not False:
+                    print("ERROR: {} should refuse non-entity {}, returned {}".format(caller, repr(entity_id), result))
+                    failed = True
+                if not any(("Warn" in message) and (caller in message) for message in log_messages):
+                    print("ERROR: {} did not warn for non-entity {}, logged {}".format(caller, repr(entity_id), log_messages))
+                    failed = True
+    finally:
+        my_predbat.log = orig_log
+        my_predbat.current_status = orig_status
+        my_predbat.had_errors = orig_had_errors
+
+    return failed
+
+
+def test_state_wrapper_non_entity(test_name, my_predbat):
+    """
+    Test
+       get_state_wrapper/set_state_wrapper warn on a fixed value instead of indexing into it.
+
+    This is the read half of the same problem: reserve_device_bounds() fetches reserve with
+    indirect=False and looks up its min/max attributes, so a template's hard-wired percentage
+    reached "$" in 12 and raised TypeError out of Inverter.__init__, leaving Predbat unable to
+    create the inverter or compute any plan at all (GH#5003).
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    log_messages = []
+    orig_log = my_predbat.log
+    try:
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        for entity_id in (12, 12.5, True):
+            del log_messages[:]
+            try:
+                state = my_predbat.get_state_wrapper(entity_id, default=99)
+            except Exception as error:
+                print("ERROR: get_state_wrapper raised {} for non-entity {}".format(error, repr(entity_id)))
+                failed = True
+                continue
+            if state != 99:
+                print("ERROR: get_state_wrapper should return the default for non-entity {}, got {}".format(repr(entity_id), state))
+                failed = True
+            if not any(("Warn" in message) and ("get_state_wrapper" in message) for message in log_messages):
+                print("ERROR: get_state_wrapper did not warn for non-entity {}, logged {}".format(repr(entity_id), log_messages))
+                failed = True
+
+            del log_messages[:]
+            try:
+                written = my_predbat.set_state_wrapper(entity_id, 12)
+            except Exception as error:
+                print("ERROR: set_state_wrapper raised {} for non-entity {}".format(error, repr(entity_id)))
+                failed = True
+                continue
+            if written is not False:
+                print("ERROR: set_state_wrapper should refuse non-entity {}, returned {}".format(repr(entity_id), written))
+                failed = True
+            if not any(("Warn" in message) and ("set_state_wrapper" in message) for message in log_messages):
+                print("ERROR: set_state_wrapper did not warn for non-entity {}, logged {}".format(repr(entity_id), log_messages))
+                failed = True
+
+        # An entity id is still read as one, and no entity id at all is still the "every state" call
+        del log_messages[:]
+        my_predbat.set_state_wrapper("number.non_entity_probe", 7)
+        if my_predbat.get_state_wrapper("number.non_entity_probe", default=99) != 7:
+            print("ERROR: an entity id should still be read and written, got {}".format(my_predbat.get_state_wrapper("number.non_entity_probe", default=99)))
+            failed = True
+        if my_predbat.get_state_wrapper() is None:
+            print("ERROR: get_state_wrapper() with no entity should still return every state")
+            failed = True
+        if any("Warn" in message for message in log_messages):
+            print("ERROR: unexpected warning for a real entity id, logged {}".format(log_messages))
+            failed = True
+    finally:
+        my_predbat.log = orig_log
+
+    return failed
+
+
 def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_end, prev_force_export, prev_discharge_target, new_start, new_end, new_force_export, has_inv_time_button_press=False, expect_inv_time_button_press=False):
     """
     Test
@@ -721,6 +887,59 @@ def test_adjust_ge_eco_toggle_missing_entity(test_name, inv, force_export, inver
     if warning_found != expect_warning:
         print("ERROR: expected warning {} got {}".format(expect_warning, warning_found))
         failed = True
+
+    return failed
+
+
+def test_fox_no_predbat_inverter_mode_control(test_name, my_predbat):
+    """
+    Test neither Fox type routes its work mode through Predbat's inverter_mode control
+
+    Fox's work mode is set per-slot inside the scheduler fox.py writes (Cloud, see
+    apply_battery_schedule - including the Feed-in First slot for a freeze export) or by the
+    charge/discharge/freeze service templates in templates/fox.yaml (modbus). Neither path wants
+    Predbat writing the mode as well, so Fox takes the same route as every other non-GE inverter:
+    a dummy inverter_mode entity that nothing reads and no service call behind it.
+
+    FoxCloud used to be the sole inverter type declaring the has_fox_inverter_mode flag, which
+    bought it a special case in adjust_inverter_mode pinning the work mode to SelfUse every cycle -
+    fighting the scheduler and stopping Feed-in First ever being selected (#5022). The flag has
+    been removed along with that branch; this test is what keeps a mode write from coming back.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_type = my_predbat.args.get("inverter_type")
+    saved_has_mode = "inverter_mode" in my_predbat.args
+    saved_mode = my_predbat.args.get("inverter_mode")
+    try:
+        my_predbat.args["inverter_type"] = ["FoxCloud"]
+        my_predbat.args.pop("inverter_mode", None)
+
+        inv = Inverter(my_predbat, 0, quiet=True)
+
+        services = []
+        orig_call = my_predbat.call_service_wrapper
+        my_predbat.call_service_wrapper = lambda service, **kwargs: services.append(service) or orig_call(service, **kwargs)
+        try:
+            inv.adjust_inverter_mode(False)
+            inv.adjust_inverter_mode(True)
+        finally:
+            my_predbat.call_service_wrapper = orig_call
+
+        # The mode must never leave Predbat - a real write would fight the scheduler
+        if services:
+            print("ERROR: FoxCloud adjust_inverter_mode should reach no inverter, got service calls {}".format(services))
+            failed = True
+    finally:
+        if saved_type is None:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = saved_type
+        if saved_has_mode:
+            my_predbat.args["inverter_mode"] = saved_mode
+        else:
+            my_predbat.args.pop("inverter_mode", None)
 
     return failed
 
@@ -1758,6 +1977,58 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
 
     restore()
     return failed
+
+
+def test_short_per_inverter_list_gets_its_dummy_entity(test_name, my_predbat):
+    """
+    A per-inverter args list that stops short of this inverter is treated as missing for it.
+
+    create_missing_arg() only replaced an arg that was absent or not a list, and every caller
+    assigns into [self.id] immediately afterwards - so a list naming fewer inverters than
+    num_inverters raised IndexError instead of getting its dummy entity. That is the normal shape
+    of a mixed fleet now that a component configures the inverters it discovered and leaves the
+    rest of the list alone (#5029): a GivTCP fleet of one alongside a hand-configured Solis at
+    index 1 crashed Inverter construction at inverter.py's scheduled_charge_enable dummy, since
+    GS reports no charge enable register of its own.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    # Constructing a non-GE inverter creates dummy entities for every register it lacks, and each
+    # one writes into args - so the whole dict is snapshotted and put back rather than a named few.
+    # This module shares one fixture across every test in it, and the keys this would otherwise
+    # leave behind change what the later window tests read.
+    saved_args = copy.deepcopy(my_predbat.args)
+    try:
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["inverter_type"] = ["GE", "GS"]
+        # One entry, as a component that discovered a single inverter leaves it
+        my_predbat.args["scheduled_charge_enable"] = ["switch.predbat_givtcp_0_scheduled_charge_enable"]
+        # Named for both inverters so this test is about the short list above and not about
+        # whatever an earlier test in this module left in the shared fixture's reserve
+        my_predbat.args["reserve"] = ["number.reserve", "number.reserve"]
+
+        try:
+            Inverter(my_predbat, 1, quiet=True)
+        except IndexError as e:
+            print("ERROR: Inverter 1 raised IndexError on a list that stops short of it: {}".format(e))
+            return 1
+
+        enable = my_predbat.args["scheduled_charge_enable"]
+        if len(enable) < 2:
+            print("ERROR: expected scheduled_charge_enable to be extended to cover inverter 1, got {}".format(enable))
+            failed = True
+        elif enable[0] != "switch.predbat_givtcp_0_scheduled_charge_enable":
+            print("ERROR: inverter 0's own entry was disturbed, got {}".format(enable[0]))
+            failed = True
+        elif enable[1] != "sensor.predbat_GS_1_scheduled_charge_enable":
+            print("ERROR: expected inverter 1 to get its dummy entity, got {}".format(enable[1]))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return 1 if failed else 0
 
 
 def test_window_warning_names_components_when_type_unset(test_name, my_predbat, dummy_items):
@@ -3316,6 +3587,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_unset_export", inv, True, "unset", True)
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_enable", inv, False, None, False)
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_export", inv, True, None, False)
+    failed |= test_fox_no_predbat_inverter_mode_control("fox_no_predbat_inverter_mode_control", my_predbat)
     if failed:
         return failed
 
@@ -3386,6 +3658,26 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_reserve_model_device_bounds("reserve_model_no_bounds", my_predbat, ha, set_reserve_min=4, device_min=None, device_max=None, expect_reserve_percent=4)
     # The floor is the device's, not a policy, so it applies with set_reserve_enable off too
     failed |= test_reserve_model_device_bounds("reserve_model_device_min_no_set_reserve", my_predbat, ha, set_reserve_min=4, device_min=5, device_max=100, expect_reserve_percent=5, set_reserve_enable=False)
+    if failed:
+        return failed
+
+    # GH#5003: a hard-wired reserve percentage - what templates/huawei.yaml and templates/sofar.yaml
+    # ship, since those inverters have no reserve register - must not be read as an entity id, which
+    # raised inside __init__ and failed inverter creation outright
+    failed |= test_reserve_literal_value("reserve_literal_huawei", my_predbat, ha, "HU", [12], expect_reserve_percent=4, expect_reserve_percent_current=12)
+    failed |= test_reserve_literal_value("reserve_literal_below_battery_min", my_predbat, ha, "HU", [1], expect_reserve_percent=4, expect_reserve_percent_current=4)
+    # On a type that does have a reserve register the literal is kept as the current setting rather
+    # than being replaced by a dummy entity, so it is what gets modelled when set_reserve_enable is off
+    failed |= test_reserve_literal_value("reserve_literal_ge", my_predbat, ha, "GE", [12], expect_reserve_percent=12, expect_reserve_percent_current=12, set_reserve_enable=False)
+    # An entity id is still resolved as one, rather than everything being treated as a literal
+    failed |= test_reserve_literal_value("reserve_entity_still_read", my_predbat, ha, "GE", ["number.reserve"], expect_reserve_percent=4, expect_reserve_percent_current=4, set_reserve_enable=False)
+    if failed:
+        return failed
+
+    # GH#5003: the same fixed value must be a warning rather than a crash wherever it reaches a read
+    # or a write, not only on the reserve path that reported it
+    failed |= test_state_wrapper_non_entity("state_wrapper_non_entity", my_predbat)
+    failed |= test_write_and_poll_non_entity("write_and_poll_non_entity", my_predbat, inv)
     if failed:
         return failed
 
@@ -3779,6 +4071,7 @@ charge_start_service:
     failed |= test_export_window_ge_cloud_configured_but_no_data_yet("export_window_ge_cloud_configured_but_no_data_yet", my_predbat, dummy_items)
     failed |= test_export_window_no_source_configured_raises("export_window_no_source_configured_raises", my_predbat, dummy_items)
     failed |= test_window_warning_names_components_when_type_unset("window_warning_names_components_when_type_unset", my_predbat, dummy_items)
+    failed |= test_short_per_inverter_list_gets_its_dummy_entity("short_per_inverter_list_gets_its_dummy_entity", my_predbat)
     if failed:
         return failed
 

@@ -3014,7 +3014,16 @@ class Output:
         )
         self.dashboard_item("binary_sensor." + self.prefix + "_demand", state="on" if isDemand else "off", attributes={"friendly_name": "Predbat is in demand mode", "icon": "mdi:battery-arrow-up"})
 
-    def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step):
+    def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step, minutes_now):
+        """Rebuild yesterday's car charging slots and subtract them from the load band.
+
+        :param end_record: last plan-axis minute to reconstruct, 0 = yesterday midnight.
+        :param yesterday_load_step: load per PREDICT_STEP, keyed on that same plan axis.
+        :param minutes_now: real minutes_now of the live plan. calculate_yesterday fakes
+            self.minutes_now to 0 before calling this, but car_charging_energy is still
+            indexed in minutes before the real now, so the lookup must use the real value
+            (#5004).
+        """
         # Normalize to list for multi-car support
         entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
         if entity_id_config and not isinstance(entity_id_config, list):
@@ -3030,12 +3039,11 @@ class Output:
 
         # re-construct car charging slots from non-octopus using the car energy sensor
         # sum the energy over each 30 minutes and add it to the car plan if missing
-        if self.num_cars > 0:
+        if self.num_cars > 0 and self.car_charging_energy:
             for start_minute in range(0, end_record, self.plan_interval_minutes):
                 car_energy = 0
                 for minute in range(start_minute, start_minute + self.plan_interval_minutes):
-                    minute_previous = self.minutes_now + 24 * 60 - minute  # How far back in time are we looking
-                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_previous)
+                    car_energy += self.get_historical_base(self.car_charging_energy, minute, minutes_now + 24 * 60)
                 if car_energy > 0.1:
                     # Only add the slot if there isn't already one covering this time period
                     if not any(slot["start"] <= start_minute < slot["end"] for slot in self.car_charging_slots[0]):
@@ -3290,7 +3298,9 @@ class Output:
         self.car_charging_soc = [0] * len(self.car_charging_soc)
 
         # re-construct car charging slots from non-octopus using the sensor
-        self.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
+        # Pass the real minutes_now: self.minutes_now has been faked to 0 above, but the car
+        # energy history is still indexed from the real now (#5004).
+        self.yesterday_reconstruct_car_slots(end_record, yesterday_load_step, minutes_now)
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, soc_kw=soc_yesterday)

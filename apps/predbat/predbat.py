@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.0.1"
+THIS_VERSION = "v9.0.2"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -76,7 +76,7 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
-from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths, mask_secret_args, malloc_trim, limit_malloc_arenas, MALLOC_ARENA_LIMIT
+from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths, is_entity_id, mask_secret_args, malloc_trim, limit_malloc_arenas, MALLOC_ARENA_LIMIT
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
@@ -186,6 +186,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.log("Error: get_state_wrapper - No HA interface available")
             return None
 
+        # A literal is not something a state can be read from. Anything fetched with indirect=False
+        # can arrive here as one - several apps.yaml settings accept a fixed value in place of an
+        # entity, which the huawei and sofar templates use for reserve - and indexing into it raised
+        # rather than reading nothing, taking inverter creation down with it (GH#5003). entity_id of
+        # None is left alone: that is the documented "give me every state" call.
+        if entity_id is not None and not is_entity_id(entity_id):
+            self.log("Warn: get_state_wrapper - {} is a fixed value, not an entity id, so no state can be read from it".format(entity_id))
+            return default
+
         # Entity with coded attribute
         if entity_id and "$" in entity_id:
             entity_id, attribute = entity_id.split("$")
@@ -204,6 +213,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             attributes = {}
         if not self.ha_interface:
             self.log("Error: set_state_wrapper - No HA interface available")
+            return False
+
+        # Same as get_state_wrapper - a fixed value in apps.yaml is not somewhere a state can be
+        # written, so say so rather than creating an entity named after a number (GH#5003)
+        if not is_entity_id(entity_id):
+            self.log("Warn: set_state_wrapper - {} is a fixed value, not an entity id, so {} can not be written to it".format(entity_id, state))
             return False
 
         state = self.unit_conversion(entity_id, state, None, required_unit, going_to=True)
