@@ -53,6 +53,10 @@ def test_custom_type_respects_configured_time_entity(my_predbat):
         writes go via separate hour/minute entities - so the dummy must still be created.
       - SF style (has_time_window False): ships a bare placeholder string, not a real entity - the
         dummy must still replace it, since there is nothing real to preserve.
+
+    And a dummy Predbat wrote into args itself must not read back as user configuration on a later
+    construction, since args is process-lifetime state and inverters are rebuilt from scratch on the
+    balance path: the dummy has a domain, so a plain "has a dot" test would skip recreating it.
     """
     failed = False
     print("Test: test_custom_type_respects_configured_time_entity")
@@ -110,6 +114,42 @@ def test_custom_type_respects_configured_time_entity(my_predbat):
         if not (isinstance(got, str) and got.startswith("sensor.")):
             print(f"ERROR: test_custom_type_respects_configured_time_entity: SF-style bare placeholder should still be replaced by a dummy sensor, got {got}")
             failed = True
+
+        # Case 4: rebuild. self.base.args lives for the whole process and is never re-read from
+        # apps.yaml, and inverters are rebuilt from scratch on the balance path (execute.py), so by
+        # the second construction args already holds the dummy written by the first. That dummy has
+        # a domain, so a plain "has a dot" test reads it back as user-configured and skips creation
+        # - leaving created_attributes unpopulated on the new object and the state unrestored if it
+        # has gone away.
+        my_predbat.args["inverter_type"] = ["TEST_CUSTOM_TIME_ENTITY_REBUILD"]
+        my_predbat.args["inverter"] = {
+            "charge_time_format": "S",
+            "has_time_window": True,
+            "has_charge_enable_time": True,
+            "has_discharge_enable_time": True,
+        }
+        my_predbat.args.pop("discharge_start_time", None)
+
+        Inverter(my_predbat, 0, quiet=True)
+        dummy_id = my_predbat.args["discharge_start_time"][0]
+        rebuilt = Inverter(my_predbat, 0, quiet=True)
+
+        if my_predbat.args["discharge_start_time"][0] != dummy_id:
+            print(f"ERROR: test_custom_type_respects_configured_time_entity: rebuild should keep the same dummy id {dummy_id}, got {my_predbat.args['discharge_start_time'][0]}")
+            failed = True
+        if dummy_id not in rebuilt.created_attributes:
+            print(f"ERROR: test_custom_type_respects_configured_time_entity: rebuild should re-register {dummy_id} in created_attributes, got {sorted(rebuilt.created_attributes)}")
+            failed = True
+
+        # Case 5: the inverter type changes between constructions (discovery or an apps.yaml edit).
+        # The dummy id embeds the type, so the one left in args names the old type - it must be
+        # recognised as Predbat's own and replaced, not preserved as though the user had chosen it.
+        my_predbat.args["inverter_type"] = ["TEST_CUSTOM_TIME_ENTITY_REBUILD2"]
+        Inverter(my_predbat, 0, quiet=True)
+        got = my_predbat.args["discharge_start_time"][0]
+        if got != "sensor.{}_TEST_CUSTOM_TIME_ENTITY_REBUILD2_0_discharge_start_time".format(my_predbat.prefix):
+            print(f"ERROR: test_custom_type_respects_configured_time_entity: a stale dummy from a previous inverter type should be replaced, got {got}")
+            failed = True
     finally:
         my_predbat.args = saved_args
         if saved_def is None:
@@ -117,6 +157,8 @@ def test_custom_type_respects_configured_time_entity(my_predbat):
         else:
             INVERTER_DEF["TEST_CUSTOM_TIME_ENTITY"] = saved_def
         INVERTER_DEF.pop("TEST_CUSTOM_TIME_ENTITY_SF", None)
+        INVERTER_DEF.pop("TEST_CUSTOM_TIME_ENTITY_REBUILD", None)
+        INVERTER_DEF.pop("TEST_CUSTOM_TIME_ENTITY_REBUILD2", None)
 
     return failed
 
