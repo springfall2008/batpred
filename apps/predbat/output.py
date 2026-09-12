@@ -3487,7 +3487,14 @@ class Output:
                 dp2(battery_value_baseline),
             )
         )
-        self.savings_today_predbat = saving
+        # saving_adjusted, not the unadjusted saving: this feeds savings_total_predbat (predbat.py)
+        # and the Prometheus/metrics-dashboard gauge, both of which must track the same figure the
+        # sensor.predbat_savings_yesterday_predbat *state* already publishes (set to saving_adjusted
+        # a few lines above), or the running total and the daily value it is meant to be a sum of
+        # measure two different quantities - a real total climbing while daily bars sit negative
+        # (GH#3894). The sibling savings_today_pvbat already does this correctly with
+        # saving_no_pvbat_adjusted; this was the one inconsistent case.
+        self.savings_today_predbat = saving_adjusted
         self.savings_today_predbat_soc = final_soc
         self.savings_today_actual = cost_yesterday
         self.cost_yesterday_car = cost_yesterday_car
