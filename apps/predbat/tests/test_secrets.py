@@ -116,6 +116,10 @@ def test_secrets_loading():
         f.write("  module: predbat\n")
         f.write("  class: PredBat\n")
 
+    # Saved rather than unconditionally deleted in the finally: the runner reuses one process for
+    # every registered test, so a pre-existing PREDBAT_APPS_FILE belongs to the caller and must
+    # survive this test (#5053 review).
+    saved_apps_file = os.environ.get("PREDBAT_APPS_FILE")
     os.environ["PREDBAT_APPS_FILE"] = "test_apps.yaml"
     try:
         h = Hass()
@@ -124,7 +128,10 @@ def test_secrets_loading():
         # returns, not inside load_secrets() itself - so a log() call here is the real assertion.
         h.log("Info: Predbat started despite the malformed secrets.yaml")
     finally:
-        del os.environ["PREDBAT_APPS_FILE"]
+        if saved_apps_file is None:
+            os.environ.pop("PREDBAT_APPS_FILE", None)
+        else:
+            os.environ["PREDBAT_APPS_FILE"] = saved_apps_file
         os.remove("test_apps.yaml")
         os.remove("secrets.yaml")
         if os.path.exists("predbat.log"):
@@ -268,14 +275,25 @@ def test_collect_log_secret_values():
     # A malformed redact_strings_labelled (the shape APPS_SCHEMA's own validator rejects) must
     # degrade to "nothing from this source", not crash - log() runs before validation has had a
     # chance to run at all (Copilot review on #5053: AttributeError on .items() froze startup).
+    #
+    # A bare string redact_strings is the exception, and is deliberately NOT treated as malformed:
+    # "redact_strings: !secret my_mpan" is a plausible config that validate_config() reads without
+    # get_arg()'s scalar-to-list wrapping, and dropping it would leave exactly the value the user
+    # asked to hide in the clear. Safe degradation for a string is to redact it; only shapes that
+    # name no value at all (a dict here) collect nothing (#5053 review).
     try:
-        malformed_found = collect_log_secret_values({}, {}, "not_a_list", "not_a_dict")
+        malformed_found = collect_log_secret_values({}, {}, {"not": "a list"}, "not_a_dict")
     except (AttributeError, TypeError) as e:
         print("ERROR: malformed redact_strings/redact_strings_labelled crashed instead of degrading: {}".format(e))
         failed = True
         malformed_found = {}
     if malformed_found:
         print("ERROR: malformed redact_strings/redact_strings_labelled should collect nothing, got {}".format(malformed_found))
+        failed = True
+
+    scalar_found = collect_log_secret_values({}, {}, "1234567890123", None)
+    if scalar_found.get("1234567890123") != "redact_strings":
+        print("ERROR: a scalar redact_strings must still be redacted, got {}".format(scalar_found))
         failed = True
 
     # Missing/None args, secrets, redact_strings and redact_strings_labelled must not raise -
@@ -615,6 +633,60 @@ def test_set_arg_invalidates_log_secret_cache(my_predbat):
     return failed
 
 
+def test_log_redaction_survives_a_missed_invalidation(my_predbat):
+    """A credential published into args without any invalidation must still be redacted.
+
+    Every writer of self.args mutates first and calls _invalidate_log_secret_pattern() second, so
+    a log() landing between those two steps takes the cache lock, sees a cache not yet marked
+    stale, and redacts with the pre-mutation pattern - the race successive reviews of #5053 raised
+    against set_arg(), the web.py batch editor, web_chat.py's provider save, chat_tools.py and
+    userinterface.py's auto_config() in turn. The same window is what a writer that forgets to
+    invalidate at all falls into permanently.
+
+    _log_secret_pattern() therefore rebuilds when the args/secrets fingerprint no longer matches
+    the one the cached pattern was built from, rather than trusting the invalidation alone. This
+    test deliberately skips the invalidation to stand in for both cases; GH#5063 tracks removing
+    the underlying contract by routing args mutation through one setter.
+    """
+    if my_predbat is None:
+        return False
+    print("**** Testing log redaction survives a missed cache invalidation ****")
+    failed = False
+
+    import io
+
+    saved_args = my_predbat.args.copy()
+    saved_logfile = my_predbat.logfile
+    saved_cache = my_predbat._log_secret_pattern_cache
+    try:
+        my_predbat.args.pop("test_marker_missed_invalidation_key", None)
+        my_predbat._log_secret_pattern_cache = my_predbat._LOG_SECRET_PATTERN_UNSET
+        my_predbat.logfile = io.StringIO()
+
+        # Build the cache, then publish a credential WITHOUT invalidating - the state a racing
+        # log() observes, and what a writer that forgets the call leaves behind for good.
+        my_predbat.log("Info: nothing secret published yet")
+        my_predbat.args["test_marker_missed_invalidation_key"] = "MISSED-INVALIDATION-SECRET-98765"
+        my_predbat.log("Info: now using MISSED-INVALIDATION-SECRET-98765")
+
+        content = my_predbat.logfile.getvalue()
+        if "MISSED-INVALIDATION-SECRET-98765" in content:
+            print("ERROR: a credential published without an invalidation leaked into the log: {}".format(content))
+            failed = True
+        if "<test_marker_missed_invalidation_key>" not in content:
+            print("ERROR: the credential was not redacted with its label: {}".format(content))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.logfile = saved_logfile
+        my_predbat._log_secret_pattern_cache = saved_cache
+
+    if not failed:
+        print("**** test_log_redaction_survives_a_missed_invalidation PASSED ****")
+    return failed
+
+
 def test_auto_config_invalidates_log_secret_cache(my_predbat):
     """auto_config() must invalidate log()'s cached redaction pattern too (holistic #5053 review).
 
@@ -760,6 +832,7 @@ def run_secrets_tests(my_predbat=None):
     failed |= test_log_redacts_at_write_time()
     failed |= test_redact_strings_masked_in_debug_dump()
     failed |= test_set_arg_invalidates_log_secret_cache(my_predbat)
+    failed |= test_log_redaction_survives_a_missed_invalidation(my_predbat)
     failed |= test_auto_config_invalidates_log_secret_cache(my_predbat)
     failed |= test_log_secret_pattern_build_is_not_racy(my_predbat)
     return failed

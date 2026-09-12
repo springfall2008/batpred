@@ -2926,6 +2926,11 @@ def test_provider_save_invalidates_log_secret_cache(my_predbat):
     original = web_chat.APPS_YAML_PATH
     web_chat.APPS_YAML_PATH = path
     saved_cache = my_predbat._log_secret_pattern_cache
+    # The save route assigns my_predbat.args["chat"], and the runner passes this one instance
+    # through the whole registry - left unrestored, the saved provider and its API key stay in
+    # shared args for every later test (#5053 review).
+    unset = object()
+    saved_chat = my_predbat.args.get("chat", unset)
     try:
         agent = _run_inline_on_agent(_make_agent(my_predbat, providers={"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "sk-or-secret-value", "model": "a/model"}}))
         page = _make_web(my_predbat, agent=agent).chat_page
@@ -2945,6 +2950,10 @@ def test_provider_save_invalidates_log_secret_cache(my_predbat):
     finally:
         web_chat.APPS_YAML_PATH = original
         my_predbat._log_secret_pattern_cache = saved_cache
+        if saved_chat is unset:
+            my_predbat.args.pop("chat", None)
+        else:
+            my_predbat.args["chat"] = saved_chat
     return failed
 
 

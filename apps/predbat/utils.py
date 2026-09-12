@@ -264,17 +264,21 @@ def _collect_secret_values(value, found, label_prefix=""):
                 continue
             if is_secret_key(key):
                 key_label = (label_prefix + "." + key) if label_prefix else key
-                if isinstance(item, str) and item and item not in found:
-                    found[item] = key_label
+                if isinstance(item, (str, int, float)) and not isinstance(item, bool) and str(item) and str(item) not in found:
+                    found[str(item)] = key_label
                 elif isinstance(item, list):
                     # A secret-flagged key can itself hold a list (e.g. teslemetry_site_id,
                     # sigenergy_system_id are "string|string_list") - collect each element
                     # individually rather than dropping the whole list, since a log line needs
                     # each real value recognised on its own, not the list masked as one blob the
                     # way mask_secret_args()'s debug-dump redaction is allowed to.
+                    # Coerced like the scalar branch above: an unquoted numeric element of a
+                    # secret-flagged list (sigenergy_system_id, teslemetry_site_id) loads from
+                    # YAML as an int, and log() serializes with str(msg), so a str-only check
+                    # left it outside the pattern (#5053 review).
                     for entry in item:
-                        if isinstance(entry, str) and entry and entry not in found:
-                            found[entry] = key_label
+                        if isinstance(entry, (str, int, float)) and not isinstance(entry, bool) and str(entry) and str(entry) not in found:
+                            found[str(entry)] = key_label
             else:
                 nested_prefix = label_prefix
                 if isinstance(item, (dict, list)):
@@ -352,6 +356,13 @@ def collect_log_secret_values(args, secrets, redact_strings=None, redact_strings
                 value = str(value)
                 if value and value not in found:
                     found[value] = str(label)
+    # redact_strings is declared "string_list", but the normal getter wraps a bare scalar into a
+    # one-item list only when it goes through get_arg() - validate_config() reads it directly, so
+    # "redact_strings: !secret my_mpan" arrives here as a plain string. A list-only guard dropped
+    # it silently, leaving exactly the value the user asked to have hidden in the clear
+    # (#5053 review).
+    if isinstance(redact_strings, (str, int, float)) and not isinstance(redact_strings, bool):
+        redact_strings = [redact_strings]
     if isinstance(redact_strings, list):
         for value in redact_strings:
             if isinstance(value, (str, int, float)) and not isinstance(value, bool):

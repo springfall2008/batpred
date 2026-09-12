@@ -207,6 +207,29 @@ class Hass:
         with self._log_secret_pattern_lock:
             self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
 
+    def _log_secret_fingerprint(self):
+        """
+        A cheap value that changes whenever the set of credentials in args/secrets could have.
+
+        Deliberately not a hash of every value: this runs under the lock on the way to each
+        rebuild decision, so it stays O(number of top-level keys). Identity of the args and
+        secrets mappings plus their sizes catches the shapes a config mutation takes - a key
+        added or removed (size), and the whole mapping being replaced or rebound (identity), as
+        web.py's batch editor does via clear()/update() and web_chat.py does by assigning a new
+        block.
+
+        An in-place edit of an existing key that keeps the size the same is NOT caught here, so
+        the explicit _invalidate_log_secret_pattern() call sites remain load-bearing. This is a
+        safety net under them, not a replacement: with it, a missed or mis-ordered call site
+        degrades to "redacted from the next line" instead of "leaks until the next restart",
+        which is the failure mode successive reviews of this PR kept finding one call site at a
+        time. GH#5063 tracks removing the contract itself by routing every args mutation through
+        one setter (#5053 review).
+        """
+        args = getattr(self, "args", None)
+        secrets = getattr(self, "secrets", None)
+        return (id(args), len(args) if isinstance(args, dict) else -1, id(secrets), len(secrets) if isinstance(secrets, dict) else -1)
+
     def _log_secret_pattern(self):
         """
         Return the cached compiled redaction pattern log() must apply, rebuilding it the first
@@ -227,12 +250,14 @@ class Hass:
         started before an invalidation can never win a race against it.
         """
         with self._log_secret_pattern_lock:
-            if self._log_secret_pattern_cache is self._LOG_SECRET_PATTERN_UNSET:
+            fingerprint = self._log_secret_fingerprint()
+            if self._log_secret_pattern_cache is self._LOG_SECRET_PATTERN_UNSET or fingerprint != self._log_secret_pattern_fingerprint:
                 args = getattr(self, "args", None)
                 redact_strings = args.get("redact_strings") if args else None
                 redact_strings_labelled = args.get("redact_strings_labelled") if args else None
                 values = collect_log_secret_values(args, getattr(self, "secrets", None), redact_strings, redact_strings_labelled)
                 self._log_secret_pattern_cache = compile_log_secret_pattern(values)
+                self._log_secret_pattern_fingerprint = fingerprint
             return self._log_secret_pattern_cache
 
     def log(self, msg, quiet=True):
@@ -381,6 +406,7 @@ class Hass:
         self.hass_api_version = 2
         self._log_secret_pattern_lock = threading.Lock()
         self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
+        self._log_secret_pattern_fingerprint = None
 
         self.logfile = open("predbat.log", "a")
 
