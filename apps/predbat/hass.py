@@ -192,8 +192,9 @@ class Hass:
                         if os.path.isfile(newfile):
                             os.remove(newfile)
                         os.rename(filename, newfile)
-                    except OSError:
-                        pass
+                    except OSError as e:
+                        import sys
+                        print(f"Error rotating log file {filename} to {newfile}: {e}", file=sys.stderr)
 
             self.logfile.close()
             rename_failed = False
@@ -201,15 +202,20 @@ class Hass:
                 if os.path.isfile("predbat.1.log"):
                     os.remove("predbat.1.log")
                 os.rename("predbat.log", "predbat.1.log")
-            except OSError:
+            except OSError as e:
+                import sys
+                print(f"Error rotating predbat.log to predbat.1.log: {e}", file=sys.stderr)
                 rename_failed = True
 
             self.logfile = open("predbat.log", "a" if rename_failed else "w")
-        except Exception:
+        except Exception as e:
+            import sys
+            print(f"Fatal error during log rotation: {e}", file=sys.stderr)
             try:
                 if getattr(self, "logfile", None) and getattr(self.logfile, "closed", True):
                     self.logfile = open("predbat.log", "a")
-            except Exception:
+            except Exception as e2:
+                print(f"Could not open logfile in append mode: {e2}. Falling back to devnull.", file=sys.stderr)
                 self.logfile = open(os.devnull, "w")
 
     def log(self, msg, quiet=True):
