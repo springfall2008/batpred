@@ -1227,7 +1227,13 @@ CONFIG_ITEMS = [
         "friendly_name": "Debug history snapshot count",
         "type": "input_number",
         "min": 1,
-        "max": 50,
+        # The maximum only bounds what a user can opt into, the default below is what almost every
+        # install actually runs. It was raised from 50 to 500 for #5070: intermittent optimiser
+        # behaviour often needs a week or two of history to audit, and at the 1-hour minimum
+        # interval 50 snapshots only reached back about two days. 500 covers 14 days hourly (336)
+        # with headroom. Snapshots are full debug dumps, roughly 2MB each, so the top of this range
+        # is around 1GB on disk - see the storage warning in docs/customisation.md.
+        "max": 500,
         "step": 1,
         "unit": "snapshots",
         "icon": "mdi:history",
