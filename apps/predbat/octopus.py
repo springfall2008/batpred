@@ -3034,16 +3034,26 @@ class Octopus:
         Build a fixed-width, one-character-per-block dispatch status string for the diagnostic
         timeline log (#4516 Stage 1 - not yet used for any rate/plan decision, purely observational).
 
-        Each character covers `step` minutes, offset from now, spanning
-        [-window_before_hours, +window_after_hours). '.' = nothing known, 'P' = planned
-        (provisional), 'S' = started, 'C' = completed. Where lists disagree on the same block, the
-        most-confirmed status wins (completed > started > planned) - reflects Octopus's own view
-        having moved on, not a genuine simultaneous claim.
+        Each character covers `step` minutes, spanning [-window_before_hours, +window_after_hours)
+        around now. The grid is anchored to the `step` boundary at or before now rather than to
+        now itself: dispatch slots are 30-minute aligned, so an off-boundary anchor would split
+        one slot across two columns ("pp") and register as a spurious change.
 
-        The letter is lowercased where Predbat's own plan charges in that block, so 'p' is a
-        provisional slot Predbat is relying on and 'P' one it is not. That distinction is the
+        'p' = planned (provisional), 's' = started, 'c' = completed, over a background of '-'
+        where importing is cheap (at or below the planner's low-rate threshold), '.' where it is
+        not, and '?' where that block's rate is not known - so the overnight cheap session shows
+        as the backdrop a dispatch sits on, and a rate-data gap is visible as a gap. Where
+        lists disagree on the same block, the most-confirmed status wins (completed > started >
+        planned) - reflects Octopus's own view having moved on, not a genuine simultaneous claim.
+
+        A single '|' marks where now falls, inserted between columns rather than overwriting one,
+        so past and future are distinguishable without losing a dispatch character.
+
+        The letter is UPPERCASED where Predbat's own plan charges in that block, so 'P' is a
+        provisional slot Predbat is relying on and 'p' one it is not. That distinction is the
         point: a slot that disappears having never been planned against costs nothing, while one
-        Predbat committed an import to is a plan that will not happen.
+        Predbat committed an import to is a plan that will not happen - so the case that matters
+        is the one that shouts.
 
         Stacking consecutive lines (a heartbeat one per 30-minute boundary, plus one on any
         earlier change - see the caller in fetch.py) in a monospace log viewer reveals dispatch
@@ -3054,29 +3064,54 @@ class Octopus:
         total_before = window_before_hours * 60
         total_after = window_after_hours * 60
         num_blocks = (total_before + total_after) // step
-        status = ["."] * num_blocks
+
+        # Anchor the grid to the `step` boundary at or before now, not to now itself. Dispatch
+        # slots are always 30-minute aligned, so anchoring on an off-boundary `minutes_now` (any
+        # cycle not landing exactly on :00/:30) makes a single slot straddle two columns and
+        # render as "pp" - which then also reads as a change against the previous line and gets
+        # marked '*', reporting churn that is purely an artefact of when the cycle ran.
+        origin = (self.minutes_now // step) * step - total_before
+
+        # Background: '-' where importing is cheap (at or below the planner's own low-rate
+        # threshold), '.' where it is not, and '?' where the rate for that block is not known.
+        # Uses the same threshold the planner uses to pick charge windows, so the render agrees
+        # with the decision rather than approximating it.
+        #
+        # The '?' matters: rate_import is rebuilt each cycle and is briefly empty while apps.yaml
+        # is re-read, so a missing rate is a real state the render can hit. Drawing those blocks
+        # as '.' made a transient data gap indistinguishable from a genuinely expensive slot -
+        # the whole overnight band would vanish for one cycle and come back on the next, looking
+        # like the rates had changed when only the render had lost them.
+        status = []
+        rates = self.rate_import or {}
+        threshold = getattr(self, "rate_import_cost_threshold", None)
+        for block in range(num_blocks):
+            rate = rates.get(origin + block * step, None)
+            if threshold is None or rate is None:
+                status.append("?")
+            else:
+                status.append("-" if rate <= threshold else ".")
 
         def mark(slots, char):
             for slot in slots or []:
                 start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
                 if start_minutes == end_minutes:
                     continue
-                start_offset = start_minutes - self.minutes_now
-                end_offset = end_minutes - self.minutes_now
-                block_start = max(0, (start_offset + total_before) // step)
-                block_end = min(num_blocks, -(-(end_offset + total_before) // step))  # ceil division
+                block_start = max(0, (start_minutes - origin) // step)
+                block_end = min(num_blocks, -(-(end_minutes - origin) // step))  # ceil division
                 for block in range(int(block_start), int(block_end)):
                     status[block] = char
 
-        mark(planned, "P")
-        mark(started, "S")
-        mark(completed, "C")
+        mark(planned, "p")
+        mark(started, "s")
+        mark(completed, "c")
 
-        # Lowercase where Predbat's own plan plans to import - so a stripe shows not just the
+        # Uppercase where Predbat's own plan plans to import - so a stripe shows not just the
         # dispatch's lifecycle but whether Predbat had committed a charge window to it. A slot
-        # that reads 'p' and then vanishes before reaching the now column is one Predbat planned
-        # around and lost, which is the case a plain P/S/C timeline cannot distinguish from a
-        # slot nothing depended on.
+        # that reads 'P' and then vanishes before reaching the now column is one Predbat planned
+        # around and lost, which is the case a plain p/s/c timeline cannot distinguish from a
+        # slot nothing depended on. Uppercase carries the slots that matter so they stand out
+        # against both the background and the dispatches Predbat is ignoring.
         #
         # This runs in fetch, before the planner, so the windows are the *previous* cycle's plan -
         # one 5-minute cycle stale against 30-minute blocks. That is deliberate: what Predbat
@@ -3084,15 +3119,18 @@ class Octopus:
         for window_n, window in enumerate(self.charge_window_best or []):
             if window_n < len(self.charge_limit_best or []) and self.charge_limit_best[window_n] <= 0:
                 continue
-            start_offset = window.get("start", 0) - self.minutes_now
-            end_offset = window.get("end", 0) - self.minutes_now
-            block_start = max(0, (start_offset + total_before) // step)
-            block_end = min(num_blocks, -(-(end_offset + total_before) // step))
+            block_start = max(0, (window.get("start", 0) - origin) // step)
+            block_end = min(num_blocks, -(-(window.get("end", 0) - origin) // step))
             for block in range(int(block_start), int(block_end)):
-                if status[block] in ("P", "S", "C"):
-                    status[block] = status[block].lower()
+                if status[block] in ("p", "s", "c"):
+                    status[block] = status[block].upper()
 
-        return "".join(status)
+        # Mark where `now` falls, so past and future symbols can be told apart at a glance. The
+        # marker sits *between* columns (inserted before the block containing now) rather than
+        # overwriting one, so no dispatch character is lost to it. Every line carries exactly one,
+        # so the fixed-width stacking the render depends on still holds.
+        now_block = total_before // step
+        return "".join(status[:now_block]) + "|" + "".join(status[now_block:])
 
     def dispatch_timeline_should_log(self, car_n, timeline):
         """
@@ -3120,6 +3158,30 @@ class Octopus:
             return False, ""
         self.dispatch_timeline_last[car_n] = timeline
         return True, "" if is_heartbeat else " *"
+
+    def log_dispatch_timelines(self):
+        """
+        Render and log the dispatch timelines captured earlier in this fetch cycle (#4516 Stage 1).
+
+        Split from the capture site because the two halves need different moments. The dispatch
+        lists and the plugged-in reading are only correct during the car fetch - the Octopus branch
+        later overwrites car_charging_planned with "has dispatch slots" - while the cheap-rate
+        background needs rate_import and rate_import_cost_threshold, which are not set until after
+        the car fetch has run. Rendering here gives both halves their correct values; rendering at
+        the capture site drew the background from the previous cycle's rates, and drew none at all
+        on the first cycle after a restart.
+        """
+        hours_before = 4
+        hours_after = 24
+        for pending in self.dispatch_timeline_pending:
+            car_n = pending["car_n"]
+            timeline = self.build_dispatch_timeline(car_n, pending["completed"], pending["started"], pending["planned"], window_before_hours=hours_before, window_after_hours=hours_after)
+            should_log, marker = self.dispatch_timeline_should_log(car_n, timeline)
+            if should_log:
+                plugged = "plugged" if pending["plugged"] else "unplugged"
+                soc = "{} soc {}/{}kWh {}".format(timeline, dp2(self.car_charging_soc[car_n]), dp2(self.car_charging_limit[car_n]), plugged)
+                self.log("Octopus: Dispatch timeline car {} @ {} [-{}h..+{}h]: {}{}".format(car_n, self.time_abs_str(self.minutes_now), hours_before, hours_after, soc, marker))
+        self.dispatch_timeline_pending = []
 
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """

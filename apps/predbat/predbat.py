@@ -519,6 +519,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.dispatch_timeline_last = {}
+        self.dispatch_timeline_pending = []
         self.ge_url_cache = {}
         self.github_url_cache = {}
         self.load_minutes = {}
