@@ -756,6 +756,30 @@ def test_current_reasserted_on_unchanged_rate(test_name, ha, inv, prev_current, 
     return failed
 
 
+def _snapshot_inverter_fixture(my_predbat):
+    """Snapshot the shared fixture state constructing an Inverter mutates.
+
+    Returns an opaque token for _restore_inverter_fixture(). Constructing an Inverter writes a
+    dummy entity into args for every register the type lacks AND creates the matching state in the
+    shared HA interface, so restoring args alone still leaks entities (sensor.predbat_GE_1_* and
+    friends) into every test that runs afterwards in this module (#4645 review).
+    """
+    ha = my_predbat.ha_interface
+    return (copy.deepcopy(my_predbat.args), dict(getattr(ha, "dummy_items", {})))
+
+
+def _restore_inverter_fixture(my_predbat, snapshot):
+    """Put back what _snapshot_inverter_fixture() captured."""
+    saved_args, saved_items = snapshot
+    my_predbat.args.clear()
+    my_predbat.args.update(saved_args)
+    ha = my_predbat.ha_interface
+    items = getattr(ha, "dummy_items", None)
+    if items is not None:
+        items.clear()
+        items.update(saved_items)
+
+
 def test_low_power_mode_entity_created_for_script_driven_power_inverter(test_name, my_predbat):
     """
     #3311: a "power" output_charge_control inverter normally writes its rate straight to the
@@ -774,7 +798,7 @@ def test_low_power_mode_entity_created_for_script_driven_power_inverter(test_nam
     # rate keys this test names - and each one writes into args. This module shares one fixture
     # across every test in it, so the whole dict is snapshotted and put back rather than a named
     # few, the same as test_short_per_inverter_list_gets_its_dummy_entity does.
-    saved_args = copy.deepcopy(my_predbat.args)
+    snapshot = _snapshot_inverter_fixture(my_predbat)
     try:
         my_predbat.args["inverter_type"] = ["GE"]  # GE's output_charge_control is "power"
         my_predbat.args["givtcp_rest"] = None  # no REST configured - script/service driven
@@ -797,8 +821,7 @@ def test_low_power_mode_entity_created_for_script_driven_power_inverter(test_nam
             print("ERROR: {} discharge_rate entity was not auto-created for a source-less 'power' inverter".format(test_name))
             failed = True
     finally:
-        my_predbat.args.clear()
-        my_predbat.args.update(saved_args)
+        _restore_inverter_fixture(my_predbat, snapshot)
 
     return failed
 
@@ -816,7 +839,7 @@ def test_low_power_mode_entity_not_clobbered_when_already_configured(test_name, 
 
     # Whole-dict snapshot, not the rate keys alone - see the note in
     # test_low_power_mode_entity_created_for_script_driven_power_inverter.
-    saved_args = copy.deepcopy(my_predbat.args)
+    snapshot = _snapshot_inverter_fixture(my_predbat)
     try:
         my_predbat.args["inverter_type"] = ["GE"]
         my_predbat.args["givtcp_rest"] = None
@@ -834,8 +857,7 @@ def test_low_power_mode_entity_not_clobbered_when_already_configured(test_name, 
             print("ERROR: {} pre-configured discharge_rate was clobbered by auto-creation, now {}".format(test_name, my_predbat.args["discharge_rate"][0]))
             failed = True
     finally:
-        my_predbat.args.clear()
-        my_predbat.args.update(saved_args)
+        _restore_inverter_fixture(my_predbat, snapshot)
 
     return failed
 
@@ -855,7 +877,7 @@ def test_low_power_mode_entity_filled_for_partial_multi_inverter_list(test_name,
     # Whole-dict snapshot, not the rate keys alone - this one constructs inverter 1, which also
     # writes scheduled_discharge_enable[1] and friends. See the note in
     # test_low_power_mode_entity_created_for_script_driven_power_inverter.
-    saved_args = copy.deepcopy(my_predbat.args)
+    snapshot = _snapshot_inverter_fixture(my_predbat)
     try:
         my_predbat.args["inverter_type"] = ["GE", "GE"]
         my_predbat.args["givtcp_rest"] = None
@@ -876,8 +898,7 @@ def test_low_power_mode_entity_filled_for_partial_multi_inverter_list(test_name,
             print("ERROR: {} discharge_rate slot for inverter 1 was not auto-filled: {}".format(test_name, my_predbat.args["discharge_rate"]))
             failed = True
     finally:
-        my_predbat.args.clear()
-        my_predbat.args.update(saved_args)
+        _restore_inverter_fixture(my_predbat, snapshot)
 
     return failed
 
@@ -895,7 +916,7 @@ def test_low_power_mode_entity_not_created_for_rest_driven_power_inverter(test_n
 
     # Whole-dict snapshot, not the rate keys alone - see the note in
     # test_low_power_mode_entity_created_for_script_driven_power_inverter.
-    saved_args = copy.deepcopy(my_predbat.args)
+    snapshot = _snapshot_inverter_fixture(my_predbat)
     try:
         my_predbat.args["inverter_type"] = ["GE"]
         my_predbat.args["givtcp_rest"] = "dummy"
@@ -919,8 +940,7 @@ def test_low_power_mode_entity_not_created_for_rest_driven_power_inverter(test_n
         finally:
             restore_components()
     finally:
-        my_predbat.args.clear()
-        my_predbat.args.update(saved_args)
+        _restore_inverter_fixture(my_predbat, snapshot)
 
     return failed
 
@@ -943,7 +963,7 @@ def test_low_power_mode_entity_filled_beyond_component_backed_fleet(test_name, m
 
     # Whole-dict snapshot, not the rate keys alone - see the note in
     # test_low_power_mode_entity_created_for_script_driven_power_inverter.
-    saved_args = copy.deepcopy(my_predbat.args)
+    snapshot = _snapshot_inverter_fixture(my_predbat)
     try:
         my_predbat.args["inverter_type"] = ["GE", "GE"]
         my_predbat.args["givtcp_rest"] = "dummy"
@@ -973,8 +993,7 @@ def test_low_power_mode_entity_filled_beyond_component_backed_fleet(test_name, m
         finally:
             restore_components()
     finally:
-        my_predbat.args.clear()
-        my_predbat.args.update(saved_args)
+        _restore_inverter_fixture(my_predbat, snapshot)
 
     return failed
 
@@ -2221,7 +2240,7 @@ def test_short_per_inverter_list_gets_its_dummy_entity(test_name, my_predbat):
     # one writes into args - so the whole dict is snapshotted and put back rather than a named few.
     # This module shares one fixture across every test in it, and the keys this would otherwise
     # leave behind change what the later window tests read.
-    saved_args = copy.deepcopy(my_predbat.args)
+    snapshot = _snapshot_inverter_fixture(my_predbat)
     try:
         my_predbat.args["num_inverters"] = 2
         my_predbat.args["inverter_type"] = ["GE", "GS"]
@@ -2248,8 +2267,7 @@ def test_short_per_inverter_list_gets_its_dummy_entity(test_name, my_predbat):
             print("ERROR: expected inverter 1 to get its dummy entity, got {}".format(enable[1]))
             failed = True
     finally:
-        my_predbat.args.clear()
-        my_predbat.args.update(saved_args)
+        _restore_inverter_fixture(my_predbat, snapshot)
 
     return 1 if failed else 0
 
