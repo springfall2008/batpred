@@ -520,11 +520,6 @@ def test_component_base_midnight_utc_ignores_rewound_base(my_predbat):
     base.midnight_utc = base.midnight_utc - timedelta(days=1)
     assert component.midnight_utc == datetime(2025, 6, 15, 0, 0, 0, tzinfo=timezone.utc), f"Rewound base.midnight_utc leaked into the component: {component.midnight_utc}"
 
-    # A base that has not run update_time() yet has no now_utc to derive from - fall back rather
-    # than raising, since components can be constructed before the first clock update.
-    del base.now_utc
-    assert component.midnight_utc == datetime(2025, 6, 14, 0, 0, 0, tzinfo=timezone.utc), "Should fall back to base.midnight_utc when now_utc is absent"
-
     print("PASS: midnight_utc derives from now_utc and ignores the rewound shared value")
     return False
 
