@@ -142,13 +142,24 @@ def test_custom_type_respects_configured_time_entity(my_predbat):
             failed = True
 
         # Case 5: the inverter type changes between constructions (discovery or an apps.yaml edit).
-        # The dummy id embeds the type, so the one left in args names the old type - it must be
-        # recognised as Predbat's own and replaced, not preserved as though the user had chosen it.
+        # The dummy id embeds the type, so the one left in args names the old type - it is still
+        # one Predbat created, so it must be replaced with the current type's dummy rather than
+        # preserved as though the user had chosen it.
         my_predbat.args["inverter_type"] = ["TEST_CUSTOM_TIME_ENTITY_REBUILD2"]
         Inverter(my_predbat, 0, quiet=True)
         got = my_predbat.args["discharge_start_time"][0]
         if got != "sensor.{}_TEST_CUSTOM_TIME_ENTITY_REBUILD2_0_discharge_start_time".format(my_predbat.prefix):
             print(f"ERROR: test_custom_type_respects_configured_time_entity: a stale dummy from a previous inverter type should be replaced, got {got}")
+            failed = True
+
+        # Case 6: a real entity a component's automatic_config() discovered (fox.py/gecloud.py
+        # set_arg() select.* time entities) is deliberate configuration even though it never
+        # appears in apps.yaml, so it must be preserved exactly like a hand-written one.
+        my_predbat.args["discharge_start_time"] = ["select.predbat_fox_abc_battery_schedule_discharge_start_time"]
+        Inverter(my_predbat, 0, quiet=True)
+        got = my_predbat.args["discharge_start_time"][0]
+        if got != "select.predbat_fox_abc_battery_schedule_discharge_start_time":
+            print(f"ERROR: test_custom_type_respects_configured_time_entity: an auto-discovered component entity should be preserved, got {got}")
             failed = True
     finally:
         my_predbat.args = saved_args

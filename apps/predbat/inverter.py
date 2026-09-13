@@ -301,40 +301,33 @@ class Inverter:
             # then looked up as one.
             self.base.args[arg] = self.base.args[arg] + [None] * (self.id + 1 - len(self.base.args[arg]))
 
-    def is_own_dummy_entity(self, value, entity_name):
-        """
-        Whether value is one of Predbat's own dummy entity ids for this inverter and field, i.e.
-        something an earlier construction of this inverter left behind in args via create_entity()
-        rather than anything a user or a component's automatic_config() deliberately pointed at.
-
-        create_entity() builds 'sensor.{prefix}_{inverter_type}_{id}_{entity_name}' and writes it
-        back into self.base.args, which lives for the whole process and is never re-read from
-        apps.yaml. Inverters are rebuilt from scratch on the balance path (execute.py) as well as at
-        startup, so from the second construction onwards args already holds that dummy - which has a
-        domain and would otherwise read back as a genuinely configured entity, skipping the
-        recreation that re-registers created_attributes and restores the state if it has gone away.
-        The inverter_type sits in the middle and is matched loosely, so a dummy left over from a
-        previous type is still recognised as ours rather than stranding writes on the stale sensor.
-        """
-        if not isinstance(value, str):
-            return False
-        return value.startswith("sensor.{}_".format(self.base.prefix)) and value.endswith("_{}_{}".format(self.id, entity_name))
-
     def is_real_entity_configured(self, arg):
         """
         True if arg already resolves to a real HA entity id for this inverter (contains a domain,
         e.g. 'time.foo'), as opposed to being unset, a bare placeholder value such as '23:59:00' or
-        '00:00:00' with no domain, or a dummy this inverter created for itself on an earlier
+        '00:00:00' with no domain, or a dummy Predbat created for itself on an earlier
         construction. Used to tell "this was configured deliberately" apart from "nothing real is
         there yet" before create_missing_arg's own value-vs-list check would conflate the two - a
         config item that's present but not a real entity is exactly the case a dummy entity still
         needs to be created for.
+
+        "Deliberately" covers a component's automatic_config() as well as apps.yaml: fox.py and
+        gecloud.py both set_arg() real select.* time entities they discovered, which never appear
+        in args_from_apps_yaml, so presence in apps.yaml alone is not the question being asked.
+
+        The dummies are recognised from the registry create_entity() records them in rather than by
+        re-deriving their id format here: self.base.args lives for the whole process and is never
+        re-read from apps.yaml, and inverters are rebuilt from scratch on the balance path
+        (execute.py) as well as at startup, so from the second construction onwards args already
+        holds the dummy - which has a domain and would otherwise read back as genuine
+        configuration, skipping the recreation that re-registers created_attributes and restores
+        the state if it has gone away (#4745 review).
         """
         values = self.base.args.get(arg)
         if not isinstance(values, list) or self.id >= len(values):
             return False
         value = values[self.id]
-        if self.is_own_dummy_entity(value, arg):
+        if value in getattr(self.base, "predbat_created_entities", ()):
             return False
         return is_entity_id(value)
 
@@ -1462,6 +1455,12 @@ class Inverter:
             attributes["icon"] = icon
 
         self.created_attributes[entity_id] = attributes
+        # Recorded on base, not self: created_attributes is reset per Inverter object, but args
+        # outlives every rebuild, so this is what lets a later construction tell its own dummy
+        # apart from real configuration (#4745 review).
+        if getattr(self.base, "predbat_created_entities", None) is None:
+            self.base.predbat_created_entities = set()
+        self.base.predbat_created_entities.add(entity_id)
 
         if self.base.get_state_wrapper(entity_id) is None:
             self.log("Inverter {} **** Creating dummy entity {} with value {} and attributes {}".format(self.id, entity_id, value, attributes))
