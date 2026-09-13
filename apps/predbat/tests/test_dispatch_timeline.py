@@ -200,12 +200,21 @@ def run_dispatch_timeline_tests(my_predbat):
             print("  ERROR: a bare start/end-only started slot should still render as S, expected {!r}, got {!r}".format(expected, timeline))
             failed = True
 
-        print("Test 12: a charge window where there is no slot leaves dots untouched")
+        print("Test 12: a charge window where there is no slot marks the import, not a dispatch")
+        # This used to assert the background was left untouched. Losing a committed import the
+        # moment its dispatch was withdrawn was the blind spot; it now renders 'X' (expensive) or
+        # 'I' (cheap). See tests 25-28.
         my_predbat.charge_window_best = [{"start": 14 * 60, "end": 14 * 60 + 30}]
         my_predbat.charge_limit_best = [5.0]
         timeline = my_predbat.build_dispatch_timeline(0, [], [], [])
-        if timeline != _render(["."] * NUM_BLOCKS, NOW_BLOCK):
-            print("  ERROR: charging where no dispatch exists must not mark the timeline, got {!r}".format(timeline))
+        expected = ["."] * NUM_BLOCKS
+        expected[NOW_BLOCK + 8] = "X"
+        expected = _render(expected, NOW_BLOCK)
+        if timeline != expected:
+            print("  ERROR: a planned import with no dispatch should read 'X', expected {!r}, got {!r}".format(expected, timeline))
+            failed = True
+        if "p" in timeline or "P" in timeline:
+            print("  ERROR: no dispatch exists, so no dispatch letter should appear, got {!r}".format(timeline))
             failed = True
 
         my_predbat.charge_window_best = []
@@ -371,6 +380,68 @@ def run_dispatch_timeline_tests(my_predbat):
             print("  ERROR: a dispatch must still render over unknown rates, expected {!r}, got {!r}".format(expected, timeline))
             failed = True
 
+        my_predbat.rate_import = {_origin + block * 30: 30.0 for block in range(56)}
+        my_predbat.rate_import_cost_threshold = 10.0
+        my_predbat.dispatch_timeline_last = {}
+
+        print("Test 25: a planned import with no dispatch renders 'I' when cheap, 'X' when not")
+        # The case the diagnostic exists to catch: a dispatch Predbat planned around is withdrawn,
+        # so the block loses its letter. Before this the committed import vanished with the slot.
+        my_predbat.dispatch_timeline_last = {}
+        my_predbat.rate_import = {_origin + block * 30: 30.0 for block in range(56)}
+        for block in range(NOW_BLOCK + 10, NOW_BLOCK + 12):
+            my_predbat.rate_import[_origin + block * 30] = 5.0
+        my_predbat.rate_import_cost_threshold = 10.0
+
+        # Predbat charges over one expensive block and one cheap one, with no dispatch anywhere.
+        my_predbat.charge_window_best = [
+            {"start": 12 * 60, "end": 12 * 60 + 30},
+            {"start": 15 * 60, "end": 15 * 60 + 30},
+        ]
+        my_predbat.charge_limit_best = [5.0, 5.0]
+        timeline = my_predbat.build_dispatch_timeline(0, [], [], [])
+        expected = ["."] * NUM_BLOCKS
+        for block in range(NOW_BLOCK + 10, NOW_BLOCK + 12):
+            expected[block] = "-"
+        expected[NOW_BLOCK + 4] = "X"
+        expected[NOW_BLOCK + 10] = "I"
+        expected = _render(expected, NOW_BLOCK)
+        if timeline != expected:
+            print("  ERROR: expected 'X' on the expensive block and 'I' on the cheap one, expected {!r}, got {!r}".format(expected, timeline))
+            failed = True
+
+        print("Test 26: a dispatch still wins over 'I'/'X' in the same block")
+        slot_start = midnight_utc + timedelta(hours=12)
+        slot_end = slot_start + timedelta(minutes=30)
+        timeline = my_predbat.build_dispatch_timeline(0, [], [], [_slot(slot_start, slot_end)])
+        expected = ["."] * NUM_BLOCKS
+        for block in range(NOW_BLOCK + 10, NOW_BLOCK + 12):
+            expected[block] = "-"
+        expected[NOW_BLOCK + 4] = "P"
+        expected[NOW_BLOCK + 10] = "I"
+        expected = _render(expected, NOW_BLOCK)
+        if timeline != expected:
+            print("  ERROR: a dispatch block should read 'P', not 'X', expected {!r}, got {!r}".format(expected, timeline))
+            failed = True
+
+        print("Test 27: a zero-limit window is not an import, so no 'I'/'X'")
+        my_predbat.charge_limit_best = [0.0, 0.0]
+        timeline = my_predbat.build_dispatch_timeline(0, [], [], [])
+        if "X" in timeline or "I" in timeline:
+            print("  ERROR: a zero-limit window must not mark an import, got {!r}".format(timeline))
+            failed = True
+
+        print("Test 28: an import where the rate is unknown stays '?'")
+        my_predbat.rate_import = {}
+        my_predbat.rate_import_cost_threshold = 10.0
+        my_predbat.charge_limit_best = [5.0, 5.0]
+        timeline = my_predbat.build_dispatch_timeline(0, [], [], [])
+        if timeline != _render(["?"] * NUM_BLOCKS, NOW_BLOCK):
+            print("  ERROR: an unknown rate cannot be classified cheap or expensive, got {!r}".format(timeline))
+            failed = True
+
+        my_predbat.charge_window_best = []
+        my_predbat.charge_limit_best = []
         my_predbat.rate_import = {_origin + block * 30: 30.0 for block in range(56)}
         my_predbat.rate_import_cost_threshold = 10.0
         my_predbat.dispatch_timeline_last = {}

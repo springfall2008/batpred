@@ -503,11 +503,19 @@ marks now - so everything left of it has already happened. The characters are:
 | `s` | A slot Octopus has started |
 | `c` | A completed slot |
 | `P` `S` `C` | UPPERCASE means Predbat's own plan is charging in that slot too |
+| `I` | Predbat plans to import here on a cheap rate, with no dispatch slot |
+| `X` | Predbat plans to import here at a normal rate, with no dispatch slot |
 
 The case distinction is the useful one. A lowercase `p` that vanishes costs nothing because Predbat
 was not relying on it, whereas an uppercase `P` that disappears before reaching the `|` column is a
 charge Predbat had committed to and will now not get - so the slots worth worrying about are the
 ones that shout.
+
+`X` is the one to watch for. Every block where Predbat plans to import shows as exactly one of
+`P`/`S`/`C` (inside a dispatch slot), `I` (cheap rate, no slot) or `X` (normal rate, no slot). When
+Octopus withdraws a slot Predbat had committed to, the dispatch letter disappears but the import
+does not - so the stripe turns from `P` into `I` or `X` instead of vanishing, and an `X` trail
+means Predbat is planning to import at full price where it expected a dispatch.
 
 The end of the line shows the car's current SoC and target, and whether the car is plugged in
 (`plugged` / `unplugged`, from the **car_charging_planned** sensor in `apps.yaml`). An unplugged car

@@ -3046,6 +3046,19 @@ class Octopus:
         lists disagree on the same block, the most-confirmed status wins (completed > started >
         planned) - reflects Octopus's own view having moved on, not a genuine simultaneous claim.
 
+        Where Predbat's own plan imports but there is no dispatch, the background is replaced
+        instead: 'I' on a cheap block, 'X' on an expensive one. Every planned import therefore
+        shows as exactly one of 'P'/'S'/'C' (in a dispatch), 'I' (cheap, no dispatch) or 'X'
+        (expensive, no dispatch) - the three are mutually exclusive, since a block either carries
+        a dispatch or does not, and if it does not its rate is either cheap or it is not. A block
+        whose rate is unknown stays '?' even when Predbat imports there, because it cannot be
+        classified as cheap or expensive.
+
+        'X' is the one to look for. A withdrawn dispatch leaves the block with no letter, so
+        before this the evidence that Predbat had committed an import there vanished with the
+        slot - exactly the case this diagnostic exists to catch. Now a rescinded slot reads as a
+        stripe that turns from 'P' into 'I' or 'X' rather than disappearing.
+
         A single '|' marks where now falls, inserted between columns rather than overwriting one,
         so past and future are distinguishable without losing a dispatch character.
 
@@ -3123,7 +3136,15 @@ class Octopus:
             block_end = min(num_blocks, -(-(window.get("end", 0) - origin) // step))
             for block in range(int(block_start), int(block_end)):
                 if status[block] in ("p", "s", "c"):
+                    # A dispatch Predbat is importing in: uppercase it.
                     status[block] = status[block].upper()
+                elif status[block] == "-":
+                    # Importing on a cheap rate with no dispatch under it.
+                    status[block] = "I"
+                elif status[block] == ".":
+                    # Importing at a normal rate with no dispatch - either a deliberate expensive
+                    # charge, or a dispatch that was withdrawn after Predbat planned around it.
+                    status[block] = "X"
 
         # Mark where `now` falls, so past and future symbols can be told apart at a glance. The
         # marker sits *between* columns (inserted before the block containing now) rather than
