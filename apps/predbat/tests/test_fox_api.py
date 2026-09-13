@@ -8,11 +8,27 @@
 
 from datetime import datetime
 import asyncio
+import time
 import pytz
 import aiohttp
 import json
 from unittest.mock import MagicMock, patch, AsyncMock
-from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal, FOX_CACHE_KEYS, FOX_REFRESH_SETTINGS, FOX_REFRESH_REALTIME, OPTIONS_WORK_MODE, FOX_SETTINGS_CACHE_VERSION
+from fox import (
+    validate_schedule,
+    minutes_to_schedule_time,
+    end_minute_inclusive_to_exclusive,
+    FoxAPI,
+    schedules_are_equal,
+    FOX_CACHE_KEYS,
+    FOX_REFRESH_SETTINGS,
+    FOX_REFRESH_REALTIME,
+    OPTIONS_WORK_MODE,
+    FOX_SETTINGS_CACHE_VERSION,
+    SCHEDULER_READ_STALE_SECONDS,
+    merge_fox_credentials,
+    FOX_CLI_CREDENTIAL_KEYS,
+    FOX_CLI_OAUTH_KEYS,
+)
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -75,6 +91,8 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.device_production_year = {}
         self.device_battery_charging_time = {}
         self.device_scheduler = {}
+        self.scheduler_written_groups = {}
+        self.scheduler_write_time = {}
         self.local_schedule = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}
@@ -6088,6 +6106,230 @@ def test_apply_battery_schedule_neither_enabled(my_predbat):
     return False
 
 
+def test_apply_battery_schedule_freeze_export_feedin_baseline(my_predbat):
+    """
+    Test apply_battery_schedule writes a Feedin baseline when Predbat signals a freeze export
+
+    FoxCloud declares has_timed_pause False and charge_discharge_with_rate False, so the only
+    lever execute.py has left for a freeze export is adjust_charge_rate(0) - which lands on the
+    per-window battery_schedule_charge_power. With no charge window active that zero used to mean
+    nothing at all and the schedule came out byte-identical to plain demand, so surplus PV charged
+    the battery instead of being exported (#5022/#5015). A zero charge power alongside a live
+    discharge power is Predbat saying "do not charge the battery, exporting is still allowed",
+    which on Fox is the Feedin work mode.
+    """
+    print("  - test_apply_battery_schedule_freeze_export_feedin_baseline")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.local_schedule[deviceSN] = {
+        "reserve": 15,
+        "charge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "power": 0},
+        "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "power": 5000},
+    }
+
+    run_async(fox.apply_battery_schedule(deviceSN))
+
+    assert len(fox.set_scheduler_calls) == 1
+    groups = fox.set_scheduler_calls[0]["groups"]
+    assert len(groups) == 1
+    assert groups[0]["workMode"] == "Feedin", f"Expected workMode=Feedin, got {groups[0]['workMode']}"
+    assert groups[0]["startHour"] == 0
+    assert groups[0]["endHour"] == 23
+    assert groups[0]["endMinute"] == 59
+    # The freeze bars charging, not serving the house - the battery keeps its reserve headroom
+    assert groups[0]["minSocOnGrid"] == 15, f"Expected minSocOnGrid=15, got {groups[0]['minSocOnGrid']}"
+    assert groups[0]["maxSoc"] == 100
+
+    return False
+
+
+def test_apply_battery_schedule_demand_keeps_selfuse_baseline(my_predbat):
+    """
+    Test apply_battery_schedule leaves the baseline as SelfUse in plain demand
+
+    execute.py resets the charge rate to battery_rate_max_charge whenever it is not holding the
+    battery (resetCharge), so a non-zero charge power is the signal that this is ordinary demand
+    and not a freeze. Without this the freeze inference would swallow every idle slot.
+    """
+    print("  - test_apply_battery_schedule_demand_keeps_selfuse_baseline")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.local_schedule[deviceSN] = {
+        "reserve": 15,
+        "charge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "power": 8000},
+        "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "power": 5000},
+    }
+
+    run_async(fox.apply_battery_schedule(deviceSN))
+
+    groups = fox.set_scheduler_calls[0]["groups"]
+    assert groups[0]["workMode"] == "SelfUse", f"Expected workMode=SelfUse, got {groups[0]['workMode']}"
+
+    return False
+
+
+def test_apply_battery_schedule_zero_rates_keep_selfuse_baseline(my_predbat):
+    """
+    Test apply_battery_schedule does not read an all-zero rate pair as a freeze export
+
+    A system whose battery rates were never derived - both power entities still at their published
+    0, or battery_rate_max unmappable - would otherwise sit in a permanent Feedin freeze. All-zero
+    is an absence of a plan rather than a plan, so demand is the right fallback (the same guard
+    sunsynk.py and deye.py carry).
+    """
+    print("  - test_apply_battery_schedule_zero_rates_keep_selfuse_baseline")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.local_schedule[deviceSN] = {
+        "reserve": 15,
+        "charge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "power": 0},
+        "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "power": 0},
+    }
+
+    run_async(fox.apply_battery_schedule(deviceSN))
+
+    groups = fox.set_scheduler_calls[0]["groups"]
+    assert groups[0]["workMode"] == "SelfUse", f"Expected workMode=SelfUse, got {groups[0]['workMode']}"
+
+    return False
+
+
+def test_apply_battery_schedule_freeze_export_gaps_around_future_charge(my_predbat):
+    """
+    Test a freeze export sets Feedin on the gap slots while a future charge window still charges
+
+    execute.py can leave the next charge window enabled while a freeze export runs now, so the
+    freeze has to reach the gap slots around it rather than only the all-day case.
+
+    The charge group keeps whatever rate Predbat wrote, zero included: a zero charge rate inside
+    an enabled window is also how multi-inverter balancing holds one inverter back during a shared
+    charge (execute.py balance_inverters), so it must not be second-guessed here. The freeze's own
+    zero self-corrects before the window arrives - execute.py's resetCharge restores the full rate,
+    and that restore now re-applies the schedule (see the power-change event tests).
+    """
+    print("  - test_apply_battery_schedule_freeze_export_gaps_around_future_charge")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.local_schedule[deviceSN] = {
+        "reserve": 15,
+        "charge": {"enable": 1, "start_time": "02:30:00", "end_time": "05:30:00", "soc": 90, "power": 0},
+        "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "power": 5000},
+    }
+
+    run_async(fox.apply_battery_schedule(deviceSN))
+
+    groups = fox.set_scheduler_calls[0]["groups"]
+    baselines = [group for group in groups if group.get("workMode") not in ("ForceCharge", "ForceDischarge")]
+    assert baselines, "No baseline groups found in schedule"
+    for group in baselines:
+        assert group["workMode"] == "Feedin", f"Expected baseline workMode=Feedin, got {group['workMode']}"
+
+    charge_groups = [group for group in groups if group.get("workMode") == "ForceCharge"]
+    assert len(charge_groups) == 1, f"Expected one ForceCharge group, got {len(charge_groups)}"
+    assert charge_groups[0]["startHour"] == 2 and charge_groups[0]["startMinute"] == 30
+    assert charge_groups[0]["fdPwr"] == 0, f"Expected the charge group to keep Predbat's rate verbatim, got {charge_groups[0]['fdPwr']}"
+
+    return False
+
+
+def test_write_battery_schedule_event_power_change_applies_schedule(my_predbat):
+    """
+    Test a charge power change re-applies the schedule so a freeze export reaches the inverter
+
+    press_and_poll_button only fires from adjust_charge_window when the charge times or enable
+    change, so during a freeze export - which changes neither - nothing used to trigger a write
+    and the charge power sat in local_schedule unapplied. The same gap stranded the restore to
+    full rate afterwards, leaving an enabled ForceCharge group at fdPwr 0. set_scheduler compares
+    against the live schedule before writing, so a redundant re-apply costs no API call.
+    """
+    print("  - test_write_battery_schedule_event_power_change_applies_schedule")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.local_schedule[deviceSN] = {
+        "reserve": 15,
+        "charge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "power": 8000},
+        "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "power": 5000},
+    }
+
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_charge_power", "0"))
+
+    assert fox.local_schedule[deviceSN]["charge"]["power"] == 0
+    assert len(fox.set_scheduler_calls) == 1, f"Expected the power change to re-apply the schedule, got {len(fox.set_scheduler_calls)} calls"
+    assert fox.set_scheduler_calls[0]["groups"][0]["workMode"] == "Feedin"
+
+    return False
+
+
+def test_write_battery_schedule_event_charge_power_restore_reaches_charge_group(my_predbat):
+    """
+    Test the charge rate restored after a freeze export reaches an already-enabled charge window
+
+    A freeze export writes charge power 0 while the next charge window can still be enabled, so
+    the ForceCharge group is written with fdPwr 0. execute.py's resetCharge restores the full rate
+    afterwards, and that restore is a power change with no accompanying time or enable change -
+    the one thing that never used to trigger a write. Without it the group would keep fdPwr 0 into
+    the charge window itself.
+    """
+    print("  - test_write_battery_schedule_event_charge_power_restore_reaches_charge_group")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.local_schedule[deviceSN] = {
+        "reserve": 15,
+        "charge": {"enable": 1, "start_time": "02:30:00", "end_time": "05:30:00", "soc": 90, "power": 0},
+        "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "power": 5000},
+    }
+
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_charge_power", "8000"))
+
+    assert len(fox.set_scheduler_calls) == 1, f"Expected the restore to re-apply the schedule, got {len(fox.set_scheduler_calls)} calls"
+    groups = fox.set_scheduler_calls[0]["groups"]
+    charge_groups = [group for group in groups if group.get("workMode") == "ForceCharge"]
+    assert len(charge_groups) == 1
+    assert charge_groups[0]["fdPwr"] == 8000, f"Expected fdPwr=8000, got {charge_groups[0]['fdPwr']}"
+    # The freeze is over, so the gaps must go back to SelfUse
+    baselines = [group for group in groups if group.get("workMode") not in ("ForceCharge", "ForceDischarge")]
+    for group in baselines:
+        assert group["workMode"] == "SelfUse", f"Expected baseline workMode=SelfUse, got {group['workMode']}"
+
+    return False
+
+
 # ============================================================================
 # automatic_config Tests
 # ============================================================================
@@ -6223,8 +6465,40 @@ def test_automatic_config_custom_prefix(my_predbat):
     assert fox.args_set.get("soc_percent") == [f"sensor.custom_prefix_fox_{sn_lower}_soc"], f"Expected custom_prefix, got {fox.args_set.get('soc_percent')}"
     assert fox.args_set.get("battery_power") == [f"sensor.custom_prefix_fox_{sn_lower}_invbatpower"]
     assert fox.args_set.get("charge_start_time") == [f"select.custom_prefix_fox_{sn_lower}_battery_schedule_charge_start_time"]
-    assert fox.args_set.get("inverter_mode") == [f"select.custom_prefix_fox_{sn_lower}_setting_workmode"]
+    # The work mode is not a Predbat control on the Cloud path - see
+    # test_automatic_config_does_not_wire_inverter_mode
+    assert "inverter_mode" not in fox.args_set
     assert fox.args_set.get("battery_temperature_history") == f"sensor.custom_prefix_fox_{sn_lower}_battemperature"
+
+    return False
+
+
+def test_automatic_config_does_not_wire_inverter_mode(my_predbat):
+    """
+    Test automatic_config leaves the work-mode setting out of Predbat's controls
+
+    On the Cloud path the work mode is set per-slot inside the scheduler this component writes
+    itself (apply_battery_schedule), so wiring inverter_mode to the work-mode select gave two
+    writers for one setting: adjust_inverter_mode pinned it to SelfUse every cycle while the
+    scheduler was the thing actually in charge (#5022). The modbus path is unaffected - it selects
+    the work mode through the service templates in templates/fox.yaml, which never set
+    inverter_mode either.
+
+    The select entity itself is still published, so it stays visible and manually settable.
+    """
+    print("  - test_automatic_config_does_not_wire_inverter_mode")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    run_async(fox.automatic_config())
+
+    assert "inverter_mode" not in fox.args_set, f"inverter_mode should not be wired, got {fox.args_set.get('inverter_mode')}"
+    # The rest of the control surface is untouched
+    assert fox.args_set.get("scheduled_charge_enable") == [f"switch.predbat_fox_{deviceSN.lower()}_battery_schedule_charge_enable"]
 
     return False
 
@@ -6852,6 +7126,294 @@ def test_apply_battery_schedule_limited_charge_power_sent_to_api(my_predbat):
     return False
 
 
+class MockFoxAPIStaleRead(MockFoxAPIWithRequests):
+    """
+    Mock FoxAPI whose scheduler read lags behind its writes, like the real Fox API does.
+
+    Observed live on an EVO 10-5-H (2026-09-10 19:42): a Feedin write returned success, a read 3s
+    later still returned the pre-write schedule, and a read 18s later returned Feedin.
+    """
+
+    def __init__(self):
+        """Set up the mock with an empty write log and a settable read payload."""
+        super().__init__()
+        self.written_groups = []
+        self.stale_groups = []
+        self.read_returns_stale = True
+
+    async def set_scheduler_write(self, deviceSN, groups):
+        """Record a write the way the real endpoint would accept it."""
+        self.written_groups.append([dict(group) for group in groups])
+        return True
+
+    async def get_scheduler(self, deviceSN, checkBattery=True):
+        """Return the stale schedule while read_returns_stale is set, then the written one."""
+        groups = self.stale_groups if self.read_returns_stale else (self.written_groups[-1] if self.written_groups else [])
+        result = {"enable": 1, "groups": [dict(group) for group in groups], "properties": {}}
+        self.apply_scheduler_read(deviceSN, result)
+        return result
+
+
+def _selfuse_groups():
+    """The all-day Self Use baseline apply_battery_schedule produces when no window is active."""
+    return validate_schedule([], 5, 5000, 0)
+
+
+def _feedin_groups():
+    """The all-day Feed-in First baseline apply_battery_schedule produces for a freeze export."""
+    return validate_schedule([], 5, 5000, 0, baseline_work_mode="Feedin")
+
+
+def test_stale_scheduler_read_does_not_overwrite_a_recent_write(my_predbat):
+    """
+    Test a scheduler read that lags behind our own write does not regress the cached schedule
+
+    The Fox scheduler read is eventually consistent: a write returns success and a read seconds
+    later can still return the pre-write schedule (confirmed live on an EVO 10-5-H, 2026-09-10).
+    A read like that used to be written straight into device_scheduler, throwing away what we
+    know we just set.
+    """
+    print("  - test_stale_scheduler_read_does_not_overwrite_a_recent_write")
+
+    fox = MockFoxAPIStaleRead()
+    deviceSN = "TEST123456"
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+
+    feedin = _feedin_groups()
+    fox.note_scheduler_write(deviceSN, feedin)
+    fox.stale_groups = _selfuse_groups()
+
+    run_async(fox.get_scheduler(deviceSN, checkBattery=False))
+
+    cached = fox.device_scheduler.get(deviceSN, {}).get("groups", [])
+    modes = [group.get("workMode") for group in cached if group.get("enable", 1)]
+    assert modes == ["Feedin"], f"Expected the cache to keep the written Feedin schedule, got {modes}"
+
+    return False
+
+
+def test_stale_scheduler_read_does_not_skip_the_write_that_ends_a_freeze(my_predbat):
+    """
+    Test a freeze export can still be ended after a stale read
+
+    This is what the stale read actually costs. set_scheduler skips a write whose schedule matches
+    the cache, so a read that regressed the cache to Self Use while the inverter was really in
+    Feedin made the next Self Use write look redundant - and the inverter stayed in Feed-in First
+    for the rest of the day. Seen for real: the live test's restore reported "Restore write
+    result: False" and left the inverter in Feedin (#5022).
+    """
+    print("  - test_stale_scheduler_read_does_not_skip_the_write_that_ends_a_freeze")
+
+    fox = MockFoxAPIStaleRead()
+    deviceSN = "TEST123456"
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+
+    # A freeze export is written and lands on the inverter
+    feedin = _feedin_groups()
+    fox.note_scheduler_write(deviceSN, feedin)
+
+    # A poll arrives inside the staleness window and still reports the pre-write Self Use
+    fox.stale_groups = _selfuse_groups()
+    run_async(fox.get_scheduler(deviceSN, checkBattery=False))
+
+    # The freeze ends, so Predbat asks for Self Use again - which must actually be written
+    writes = []
+
+    async def capture(path, datain=None, post=False, **kwargs):
+        """Record the scheduler write instead of calling the API."""
+        writes.append(datain)
+        return {}
+
+    fox.request_get = capture
+    wrote = run_async(fox.set_scheduler(deviceSN, _selfuse_groups()))
+
+    assert writes, "The write ending the freeze was skipped - the inverter would stay in Feedin"
+    assert wrote is True, f"set_scheduler should report the write, got {wrote}"
+
+    return False
+
+
+def test_scheduler_read_is_trusted_once_the_write_window_has_passed(my_predbat):
+    """
+    Test a later read still wins, so a change made outside Predbat is not ignored forever
+
+    The write is only preferred over a read for a short window. Beyond that a read is the truth -
+    the user may have changed the schedule in the Fox app, and pinning the cache to our last write
+    would hide that permanently.
+    """
+    print("  - test_scheduler_read_is_trusted_once_the_write_window_has_passed")
+
+    fox = MockFoxAPIStaleRead()
+    deviceSN = "TEST123456"
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+
+    fox.note_scheduler_write(deviceSN, _feedin_groups())
+    # Age the write past the staleness window
+    fox.scheduler_write_time[deviceSN] = time.time() - (SCHEDULER_READ_STALE_SECONDS + 5)
+    fox.stale_groups = _selfuse_groups()
+
+    run_async(fox.get_scheduler(deviceSN, checkBattery=False))
+
+    cached = fox.device_scheduler.get(deviceSN, {}).get("groups", [])
+    modes = [group.get("workMode") for group in cached if group.get("enable", 1)]
+    assert modes == ["SelfUse"], f"Expected a settled read to win, got {modes}"
+
+    return False
+
+
+def test_merge_fox_credentials_from_config(my_predbat):
+    """
+    Test fox credentials are taken from an apps.yaml-format config when not given on the command line
+    """
+    print("  - test_merge_fox_credentials_from_config")
+
+    config = {"fox_key": "config-key", "fox_inverter_sn": "SN123456", "fox_automatic": True}
+    merged = merge_fox_credentials({"api_key": None, "token_hash": None, "token_expires": None, "serial": None}, config)
+
+    assert merged["api_key"] == "config-key", f"Expected the config key, got {merged['api_key']}"
+    assert merged["serial"] == "SN123456", f"Expected the config serial, got {merged['serial']}"
+    assert merged["token_hash"] is None
+
+    return False
+
+
+def test_merge_fox_credentials_command_line_wins(my_predbat):
+    """
+    Test an explicit command line value overrides the config file
+
+    The config is the fallback, so a one-off run against a different key or inverter does not mean
+    editing apps.yaml.
+    """
+    print("  - test_merge_fox_credentials_command_line_wins")
+
+    config = {"fox_key": "config-key", "fox_inverter_sn": "SN123456"}
+    merged = merge_fox_credentials({"api_key": "cli-key", "token_hash": None, "token_expires": None, "serial": "SN999999"}, config)
+
+    assert merged["api_key"] == "cli-key", f"Expected the CLI key to win, got {merged['api_key']}"
+    assert merged["serial"] == "SN999999", f"Expected the CLI serial to win, got {merged['serial']}"
+
+    return False
+
+
+def test_merge_fox_credentials_inverter_sn_list(my_predbat):
+    """
+    Test a list-valued fox_inverter_sn yields the first serial
+
+    fox_inverter_sn is "string|string_list" in APPS_SCHEMA, but the CLI drives one device at a time.
+    """
+    print("  - test_merge_fox_credentials_inverter_sn_list")
+
+    merged = merge_fox_credentials({"api_key": None, "token_hash": None, "token_expires": None, "serial": None}, {"fox_inverter_sn": ["SN111111", "SN222222"]})
+
+    assert merged["serial"] == "SN111111", f"Expected the first serial, got {merged['serial']}"
+
+    return False
+
+
+def test_merge_fox_credentials_oauth(my_predbat):
+    """
+    Test an OAuth config supplies the token hash and expiry, and that auth_method breaks a tie
+
+    A config carrying both a key and a token hash is ambiguous, so fox_auth_method decides - the
+    same field the component itself uses to pick between them.
+    """
+    print("  - test_merge_fox_credentials_oauth")
+
+    oauth = {"fox_auth_method": "oauth", "fox_token_hash": "hash-abc", "fox_token_expires_at": "2026-09-11T09:53:12.236+00:00"}
+    merged = merge_fox_credentials({"api_key": None, "token_hash": None, "token_expires": None, "serial": None}, oauth)
+    assert merged["token_hash"] == "hash-abc", f"Expected the token hash, got {merged['token_hash']}"
+    assert merged["token_expires"] == "2026-09-11T09:53:12.236+00:00"
+
+    # Both present, OAuth declared - the key must not be used
+    both_oauth = dict(oauth, fox_key="config-key")
+    merged = merge_fox_credentials({"api_key": None, "token_hash": None, "token_expires": None, "serial": None}, both_oauth)
+    assert merged["api_key"] is None, f"Expected the key to be ignored under oauth, got {merged['api_key']}"
+    assert merged["token_hash"] == "hash-abc"
+
+    # Both present, api_key declared - the token hash must not be used
+    both_api = {"fox_auth_method": "api_key", "fox_key": "config-key", "fox_token_hash": "hash-abc"}
+    merged = merge_fox_credentials({"api_key": None, "token_hash": None, "token_expires": None, "serial": None}, both_api)
+    assert merged["api_key"] == "config-key"
+    assert merged["token_hash"] is None, f"Expected the token hash to be ignored under api_key, got {merged['token_hash']}"
+
+    return False
+
+
+def test_fox_cli_credential_keys_match_component(my_predbat):
+    """
+    Test the CLI's apps.yaml key names are the ones the Fox component actually declares
+
+    The CLI maps its own argument names onto apps.yaml keys by hand, because importing
+    components.py into fox.py would pull predbat in behind it. This is what keeps that copy honest
+    if a config key is ever renamed in COMPONENT_LIST.
+    """
+    print("  - test_fox_cli_credential_keys_match_component")
+
+    from components import COMPONENT_LIST
+
+    declared = {spec.get("config") for spec in COMPONENT_LIST["fox"]["args"].values() if spec.get("config")}
+    for cli_name, config_key in FOX_CLI_CREDENTIAL_KEYS.items():
+        assert config_key in declared, f"{cli_name} maps to {config_key}, which the fox component does not declare: {sorted(declared)}"
+    assert "fox_auth_method" in declared, "fox_auth_method is used to break the key/token tie but is not declared"
+
+    return False
+
+
+def test_merge_fox_credentials_supabase(my_predbat):
+    """
+    Test the OAuth refresh settings are picked up from the config too
+
+    An OAuth run is useless without them: oauth_mixin reads SUPABASE_URL/SUPABASE_KEY from the
+    environment and user_id from base.args, so a --config run carrying only a token hash refused
+    to refresh with "OAuth refresh skipped - SUPABASE_URL or SUPABASE_KEY not set" and every
+    request came back 401.
+
+    These are not Fox component args - supabase_url/supabase_key are environment variables in
+    production and user_id is a base arg - so they sit in their own mapping, away from the
+    fox_-prefixed keys the component declares.
+    """
+    print("  - test_merge_fox_credentials_supabase")
+
+    config = {
+        "fox_auth_method": "oauth",
+        "fox_token_hash": "hash-abc",
+        "supabase_url": "https://project.supabase.co",
+        "supabase_key": "anon-key-123",
+        "user_id": "user-uuid-456",
+    }
+    blank = {key: None for key in list(FOX_CLI_CREDENTIAL_KEYS) + list(FOX_CLI_OAUTH_KEYS)}
+    merged = merge_fox_credentials(blank, config)
+
+    assert merged["supabase_url"] == "https://project.supabase.co", f"Expected the supabase url, got {merged['supabase_url']}"
+    assert merged["supabase_key"] == "anon-key-123", f"Expected the supabase key, got {merged['supabase_key']}"
+    assert merged["user_id"] == "user-uuid-456", f"Expected the user id, got {merged['user_id']}"
+    assert merged["token_hash"] == "hash-abc"
+
+    # An explicit command line value still wins
+    merged = merge_fox_credentials(dict(blank, supabase_url="https://cli.supabase.co"), config)
+    assert merged["supabase_url"] == "https://cli.supabase.co", f"Expected the CLI url to win, got {merged['supabase_url']}"
+
+    return False
+
+
+def test_merge_fox_credentials_reports_what_it_used(my_predbat):
+    """
+    Test the merge reports which config keys it took, so a mis-named key is visible
+
+    The failure mode this guards against is silent: a key the CLI does not look for simply leaves
+    the credential unset, and the only symptom is a 401 several lines later.
+    """
+    print("  - test_merge_fox_credentials_reports_what_it_used")
+
+    blank = {key: None for key in list(FOX_CLI_CREDENTIAL_KEYS) + list(FOX_CLI_OAUTH_KEYS)}
+    merged, used = merge_fox_credentials(blank, {"fox_key": "k", "user_id": "u"}, report=True)
+
+    assert set(used) == {"fox_key", "user_id"}, f"Expected the keys actually used, got {used}"
+    assert merged["api_key"] == "k"
+
+    return False
+
+
 def run_fox_api_tests(my_predbat):
     """
     Run all Fox API tests
@@ -7061,6 +7623,26 @@ def run_fox_api_tests(my_predbat):
         failed |= test_apply_battery_schedule_neither_enabled(my_predbat)
         failed |= test_apply_battery_schedule_limited_charge_power_sent_to_api(my_predbat)
 
+        # Freeze export (Feedin work mode) tests - #5022
+        failed |= test_apply_battery_schedule_freeze_export_feedin_baseline(my_predbat)
+        failed |= test_apply_battery_schedule_demand_keeps_selfuse_baseline(my_predbat)
+        failed |= test_apply_battery_schedule_zero_rates_keep_selfuse_baseline(my_predbat)
+        failed |= test_apply_battery_schedule_freeze_export_gaps_around_future_charge(my_predbat)
+        failed |= test_write_battery_schedule_event_power_change_applies_schedule(my_predbat)
+        failed |= test_write_battery_schedule_event_charge_power_restore_reaches_charge_group(my_predbat)
+        failed |= test_stale_scheduler_read_does_not_overwrite_a_recent_write(my_predbat)
+        failed |= test_stale_scheduler_read_does_not_skip_the_write_that_ends_a_freeze(my_predbat)
+        failed |= test_scheduler_read_is_trusted_once_the_write_window_has_passed(my_predbat)
+
+        # --config credential loading tests
+        failed |= test_merge_fox_credentials_from_config(my_predbat)
+        failed |= test_merge_fox_credentials_command_line_wins(my_predbat)
+        failed |= test_merge_fox_credentials_inverter_sn_list(my_predbat)
+        failed |= test_merge_fox_credentials_oauth(my_predbat)
+        failed |= test_fox_cli_credential_keys_match_component(my_predbat)
+        failed |= test_merge_fox_credentials_supabase(my_predbat)
+        failed |= test_merge_fox_credentials_reports_what_it_used(my_predbat)
+
         # compute_schedule charge-rate power fix tests (issue #3610)
         failed |= test_compute_schedule_charge_power_reads_slot_fdpwr(my_predbat)
         failed |= test_compute_schedule_discharge_missing_fdpwr_defaults_to_max(my_predbat)
@@ -7071,6 +7653,7 @@ def run_fox_api_tests(my_predbat):
         failed |= test_automatic_config_battery_and_pv_inverter(my_predbat)
         failed |= test_automatic_config_no_scheduler_error(my_predbat)
         failed |= test_automatic_config_custom_prefix(my_predbat)
+        failed |= test_automatic_config_does_not_wire_inverter_mode(my_predbat)
         failed |= test_automatic_config_export_limit_all_devices(my_predbat)
         failed |= test_automatic_config_export_limit_some_devices(my_predbat)
         failed |= test_automatic_config_export_limit_no_devices(my_predbat)
