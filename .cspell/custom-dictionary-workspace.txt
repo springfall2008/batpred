@@ -254,6 +254,7 @@ gridconsumption
 gridconsumptionpower
 Groq
 growatt
+growattsph
 GWMQTT
 HACS
 hadashboard
