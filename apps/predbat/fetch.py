@@ -928,6 +928,7 @@ class Fetch:
             attributes={"friendly_name": "Predbat is past dawn (light, not dark, in the low-power charge window split)", "icon": "mdi:weather-sunset-up"},
         )
         return pv_light_dark
+
     def combine_active_keep(self):
         """
         Combine the SOC keep floors (alerts, manual_soc) and ceilings (manual_soc_max) into all_active_keep/all_active_keep_max.
