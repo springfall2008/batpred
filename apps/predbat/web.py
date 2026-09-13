@@ -83,6 +83,11 @@ from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboa
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
 
+# How many of the newest debug-history snapshots the dashboard's one-click archive bundles.
+# debug_history_count reaches 500 since #5070 and the archive is built in memory, so this is the
+# point where a single download stops being practical - not a limit on what is retained on disk.
+DEBUG_HISTORY_DOWNLOAD_MAX = 16
+
 
 def state_as_of_slots(records, slots):
     """
@@ -509,7 +514,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/debug_plan", self.html_debug_plan)
         app.router.add_get("/debug_history_list", self.html_debug_history_list)
         app.router.add_get("/debug_history_download", self.html_debug_history_download)
-        app.router.add_get("/debug_history_download_all", self.html_debug_history_download_all)
+        app.router.add_get("/debug_history_download_recent", self.html_debug_history_download_recent)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
         self._register_annual_routes(app)
@@ -1038,7 +1043,7 @@ class WebInterface(ComponentBase):
         text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
-        text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all</a></td></tr>\n"
+        text += "<tr><td>History</td><td><a href='./debug_history_download_recent'>Download recent</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
         # The HA Companion app's embedded webview does not act on Content-Disposition: attachment,
         # so it renders these downloads inline instead of saving them - a client limitation with no
@@ -3004,14 +3009,19 @@ chart.render();
         filename = debug_history.snapshot_filename(resolved_id)
         return await self.html_file(filename, data)
 
-    async def html_debug_history_download_all(self, request):
+    async def html_debug_history_download_recent(self, request):
         """
-        Download every retained debug-history snapshot as a single gzip tarball, so a
-        bug report can be gathered with one link instead of chasing a user through the
-        per-snapshot picker for the right moment, for #4417.
+        Download the most recent DEBUG_HISTORY_DOWNLOAD_MAX retained debug-history snapshots as a
+        single gzip tarball, so a bug report can be gathered with one link instead of chasing a
+        user through the per-snapshot picker for the right moment, for #4417.
+
+        Capped rather than "all": debug_history_count reaches 500 since #5070, and the archive is
+        built by loading every snapshot into memory at once, so an unbounded bundle of whole debug
+        dumps is neither downloadable nor attachable to an issue. Older snapshots are still
+        available individually from the plan's History view, or straight off disk in debug/.
         """
         storage = self._storage()
-        named_snapshots = await debug_history.load_all_snapshots(storage)
+        named_snapshots = await debug_history.load_all_snapshots(storage, DEBUG_HISTORY_DOWNLOAD_MAX)
         if not named_snapshots:
             return web.Response(content_type="text/html", text="No debug-history snapshots found", status=404)
 

@@ -1231,8 +1231,9 @@ CONFIG_ITEMS = [
         # install actually runs. It was raised from 50 to 500 for #5070: intermittent optimiser
         # behaviour often needs a week or two of history to audit, and at the 1-hour minimum
         # interval 50 snapshots only reached back about two days. 500 covers 14 days hourly (336)
-        # with headroom. Snapshots are full debug dumps, roughly 2MB each, so the top of this range
-        # is around 1GB on disk - see the storage warning in docs/customisation.md.
+        # with headroom. Snapshots are full debug dumps, roughly 2MB-5MB each dependent on system
+        # configuration, so the top of this range is around 2.5GB on disk - see the storage warning
+        # in docs/customisation.md.
         "max": 500,
         "step": 1,
         "unit": "snapshots",
