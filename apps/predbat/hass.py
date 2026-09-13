@@ -36,7 +36,7 @@ def write_git_version_marker():
 write_git_version_marker()
 
 import predbat
-from utils import load_apps_yaml
+from utils import load_apps_yaml, predbat_log_count, predbat_log_name, predbat_log_name_legacy, PREDBAT_LOG_COUNT_MAX
 import time
 from datetime import datetime, timedelta
 from multiprocessing import set_start_method
@@ -188,21 +188,34 @@ class Hass:
         if not quiet or msg_lower.startswith("error") or msg_lower.startswith("warn") or msg_lower.startswith("info"):
             print(message, end="")
 
-        # maximum number of historic logfiles to retain
-        max_logs = 9
+        # Total logfiles to keep including the live one, so max_logs rotated copies.
+        max_logs = predbat_log_count(self.args) - 1
 
         log_size = self.logfile.tell()
         if log_size > 10000000 and threading.current_thread() is threading.main_thread():
             # Only rotate from the main thread to avoid race conditions with
             # component threads that also call log().
+            #
+            # Walk downwards so each slot is free before anything moves into it. Both the
+            # two-digit name and the single-digit one an older Predbat wrote are considered at
+            # every slot, which is what migrates an existing set to the padded form: whichever
+            # name is found is renamed to the two-digit name of the next slot up.
             for num_logs in range(max_logs - 1, 0, -1):
-                filename = "predbat." + format(num_logs) + ".log"
-                if os.path.isfile(filename):
-                    newfile = "predbat." + format(num_logs + 1) + ".log"
-                    os.rename(filename, newfile)
+                for filename in (predbat_log_name(num_logs), predbat_log_name_legacy(num_logs)):
+                    if os.path.isfile(filename):
+                        os.rename(filename, predbat_log_name(num_logs + 1))
+                        break
+
+            # Drop anything that has aged out past the configured count - both spellings, and
+            # every slot up to the maximum rather than just the one above max_logs, so lowering
+            # the setting clears the now-surplus files instead of stranding them forever.
+            for num_logs in range(max_logs + 1, PREDBAT_LOG_COUNT_MAX + 1):
+                for filename in (predbat_log_name(num_logs), predbat_log_name_legacy(num_logs)):
+                    if os.path.isfile(filename):
+                        os.remove(filename)
 
             self.logfile.close()
-            os.rename("predbat.log", "predbat.1.log")
+            os.rename("predbat.log", predbat_log_name(1))
             self.logfile = open("predbat.log", "w")
 
     async def run_in_executor(self, callback, *args):

@@ -31,7 +31,59 @@ DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "
 
 # The live log and the one rotated out from under it - both read whole when serving logs.
 PREDBAT_LOG_FILE = "predbat.log"
-PREDBAT_LOG_FILE_PREV = "predbat.1.log"
+
+# Rotated logs are numbered predbat.01.log .. predbat.99.log. Two digits so a directory listing
+# sorts in rotation order; before this they were single-digit, which is still read (see
+# predbat_log_file_prev()) so an upgrade does not lose the previous log.
+PREDBAT_LOG_COUNT_DEFAULT = 10
+PREDBAT_LOG_COUNT_MIN = 2
+PREDBAT_LOG_COUNT_MAX = 100
+
+
+def predbat_log_name(number):
+    """
+    Return the rotated log filename for a rotation slot, zero-padded to two digits.
+    """
+    return "predbat.{:02d}.log".format(number)
+
+
+def predbat_log_name_legacy(number):
+    """
+    Return the pre-#5076 un-padded rotated log filename for a rotation slot.
+
+    Only for finding files written by an older version; nothing writes this form any more.
+    """
+    return "predbat.{}.log".format(number)
+
+
+def predbat_log_file_prev():
+    """
+    Return the path of the most recently rotated log, or None when there is not one.
+
+    Prefers the two-digit name and falls back to the single-digit one an older Predbat wrote, so
+    the first run after an upgrade still shows the previous log rather than silently dropping it.
+    """
+    for candidate in (predbat_log_name(1), predbat_log_name_legacy(1)):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def predbat_log_count(args):
+    """
+    Return the configured number of log files to keep, including the live one.
+
+    Clamped to [PREDBAT_LOG_COUNT_MIN, PREDBAT_LOG_COUNT_MAX]: below 2 there is no rotation to
+    speak of, and above 100 the numbering would need a third digit. A non-numeric value falls
+    back to the default rather than stopping the log working.
+    """
+    value = (args or {}).get("log_count", PREDBAT_LOG_COUNT_DEFAULT)
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return PREDBAT_LOG_COUNT_DEFAULT
+    return max(PREDBAT_LOG_COUNT_MIN, min(PREDBAT_LOG_COUNT_MAX, value))
+
 
 # Key-name substrings that mark an apps.yaml value as a credential, for mask_secret_args().
 # "_key" and "password" were the original pair; "secret" and "token" were added for #4768,
@@ -380,10 +432,15 @@ def mask_secret_yaml_text(text):
     return buf.getvalue()
 
 
-def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=PREDBAT_LOG_FILE_PREV):
+def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=None):
     """
     Return the contents of predbat.log, prefixed with the rotated previous log when one exists.
+
+    logfile_prev defaults to whichever previous log is actually present - the two-digit name, or
+    the single-digit one an older Predbat wrote. Pass it explicitly only to read a specific file.
     """
+    if logfile_prev is None:
+        logfile_prev = predbat_log_file_prev()
     # Decoded explicitly rather than with the platform default: a single non-UTF-8 byte anywhere
     # in the log - an inverter API error message carrying one, say - would otherwise raise
     # UnicodeDecodeError and take out both /api/log and the get_log MCP tool.
@@ -391,7 +448,7 @@ def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=PREDBAT_LOG_FILE_PRE
     if os.path.exists(logfile):
         with open(logfile, "r", encoding="utf-8", errors="replace") as f:
             logdata = f.read()
-    if os.path.exists(logfile_prev):
+    if logfile_prev and os.path.exists(logfile_prev):
         with open(logfile_prev, "r", encoding="utf-8", errors="replace") as f:
             logdata = f.read() + "\n" + logdata
     return logdata
