@@ -613,31 +613,34 @@ class SolisAPI(ComponentBase, OAuthMixin):
         return isinstance(data, list) and any(isinstance(item, dict) and item.get("code") is not None and str(item.get("code")) != "0" for item in data)
 
     @staticmethod
-    def _quota_pause_bounds(error_msg):
-        """Return (reason, first pause, longest pause) for a quota refusal, pauses in seconds.
-
-        Neither pause outlasts the quota window the message names ("200 times in 1DAYS"); a message
-        that names no window gets the default bounds.
-        """
+    def _quota_window(error_msg):
+        """Return (reason, window in seconds) for a rate-limit refusal that names its window ("200 times in 1DAYS"), else None."""
         window = SOLIS_QUOTA_WINDOW.search(error_msg)
         if not window:
-            return "the request quota is exhausted", SOLIS_QUOTA_PAUSE_INITIAL, SOLIS_QUOTA_PAUSE_MAX
+            return None
         limit, count, unit = window.group(1), int(window.group(2)), window.group(3).lower()
-        window_seconds = max(count, 1) * SOLIS_QUOTA_WINDOW_SECONDS[unit]
         reason = f"the request quota of {limit} per {count} {unit}{'' if count == 1 else 's'} is exhausted"
-        return reason, min(SOLIS_QUOTA_PAUSE_INITIAL, window_seconds), min(SOLIS_QUOTA_PAUSE_MAX, window_seconds)
+        return reason, max(count, 1) * SOLIS_QUOTA_WINDOW_SECONDS[unit]
 
     def _refusal_error(self, scope, code, error_msg, message):
         """Build the error for a refused request, pausing its scope when retrying cannot help.
 
-        An exhausted quota pauses the scope at once. B0115 is retried after
+        A rate limit whose window outlasts a call's retries pauses the scope at once; a shorter window, or a
+        message that names none, is retried. B0115 is retried after
         SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY and pauses the scope only after
         SOLIS_DATALOGGER_OFFLINE_REFUSALS refusals in a row. Anything else is an ordinary retryable error.
         """
         error_msg = str(error_msg)
         if SOLIS_QUOTA_MESSAGE.search(error_msg):
-            self._pause_requests(scope, "quota", *self._quota_pause_bounds(error_msg))
-            return SolisAPIError(message, response_code=str(code), retryable=False)
+            quota = self._quota_window(error_msg)
+            if quota and quota[1] > SOLIS_MAX_RETRY_TIME:
+                # The window cannot reopen before this call's retries run out, so pause instead
+                reason, window_seconds = quota
+                self._pause_requests(scope, "quota", reason, min(SOLIS_QUOTA_PAUSE_INITIAL, window_seconds), min(SOLIS_QUOTA_PAUSE_MAX, window_seconds))
+                return SolisAPIError(message, response_code=str(code), retryable=False)
+            # A short window ("2 times in 1SECONDS") reopens within the call, and a message naming no window
+            # may be ordinary throttling, so both are retried - waiting out a short window first
+            return SolisAPIError(message, response_code=str(code), retry_after=quota[1] if quota else 0)
         if str(code) == SOLIS_DATALOGGER_OFFLINE_CODE:
             refusals = self.offline_refusals.get(scope, 0) + 1
             self.offline_refusals[scope] = refusals

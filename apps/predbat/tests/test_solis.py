@@ -1280,22 +1280,30 @@ async def test_quota_refusal_pauses_that_inverter_endpoint_without_retrying():
 def test_quota_pause_bounds_follow_the_quota_window():
     """A quota pause doubles up to its cap, never outlasts the quota window, and starts again after a quiet spell or a different refusal."""
     failed = False
-    cases = [
-        ("No authority too many request 200 times in 1DAYS", 15 * 60, 60 * 60, "200 per 1 day"),
-        ("too many requests 10 times in 1MINUTES", 60, 60, "10 per 1 minute"),
-        ("too many request 50 times in 20 MINUTES", 15 * 60, 20 * 60, "50 per 20 minutes"),
-        ("too many request", solis_module.SOLIS_QUOTA_PAUSE_INITIAL, solis_module.SOLIS_QUOTA_PAUSE_MAX, "quota is exhausted"),
-    ]
-    for message, first, longest, reason_part in cases:
-        reason, got_first, got_longest = SolisAPI._quota_pause_bounds(message)
-        if (got_first, got_longest) != (first, longest) or reason_part not in reason:
-            print("ERROR: {!r} gave {!r} {}s-{}s, expected {}s-{}s mentioning {!r}".format(message, reason, got_first, got_longest, first, longest, reason_part))
-            failed = True
-
     api = MockSolisAPI()
     clock = _FakeClock()
     scope = (SOLIS_READ_ENDPOINT, "SN1")
     with _patch_clock(clock)[0]:
+        # A window longer than a call's retries pauses, and neither the first pause nor the next one outlasts it
+        cases = [
+            ("No authority too many request 200 times in 1DAYS", 15 * 60, 2 * 15 * 60, "200 per 1 day"),
+            ("too many requests 10 times in 1MINUTES", 60, 60, "10 per 1 minute"),
+            ("too many request 50 times in 20 MINUTES", 15 * 60, 20 * 60, "50 per 20 minutes"),
+        ]
+        for message, first, second, reason_part in cases:
+            api.request_pauses = {}
+            err = api._refusal_error(scope, "R0000", message, message)
+            got_first = api.request_pauses.get(scope, {}).get("pause")
+            reason = api.request_pauses.get(scope, {}).get("reason", "")
+            if scope in api.request_pauses:
+                clock.now = api.request_pauses[scope]["until"]
+            api._refusal_error(scope, "R0000", message, message)
+            got_second = api.request_pauses.get(scope, {}).get("pause")
+            if err.retryable or (got_first, got_second) != (first, second) or reason_part not in reason:
+                print("ERROR: {!r} gave retryable={} pauses {}s then {}s ({!r}), expected {}s then {}s mentioning {!r}".format(message, err.retryable, got_first, got_second, reason, first, second, reason_part))
+                failed = True
+        api.request_pauses = {}
+
         # Refused again as soon as each pause ends: doubles to the cap
         pauses = []
         for _ in range(4):
@@ -1321,6 +1329,32 @@ def test_quota_pause_bounds_follow_the_quota_window():
             failed = True
     if not failed:
         print("PASSED: quota pauses double to their cap, stay inside the quota window, and reset")
+    return failed
+
+
+async def test_short_window_and_unnamed_rate_limits_are_retried_not_paused():
+    """A rate limit whose window fits inside a call's retries, or that names no window, is retried rather than paused."""
+    failed = False
+    for message in ("No authority too many request 2 times in 1SECONDS", "Too many requests, please try again later"):
+        api = MockSolisAPI()
+        clock = _FakeClock()
+        patches = _patch_clock(clock, uniform=lambda low, high: high)
+        for active in patches:
+            active.start()
+        try:
+            api.session = _SequenceSession([{"success": True, "code": "R0000", "msg": message, "data": None}, SOLIS_READ_OK])
+            value, _info = await api.read_cid("SN1", 103)
+            if value != "50" or len(api.session.post_calls) != 2 or clock.sleeps != [1] or api.request_pauses:
+                print("ERROR: {!r}: expected one retry after 1s and no pause, got value {} after {} requests, waits {}, pauses {}".format(message, value, len(api.session.post_calls), clock.sleeps, api.request_pauses))
+                failed = True
+        except solis_module.SolisAPIError as err:
+            print("ERROR: {!r}: expected a retry, got {}".format(message, err))
+            failed = True
+        finally:
+            for active in patches:
+                active.stop()
+    if not failed:
+        print("PASSED: short-window and unnamed rate limits are retried, not paused")
     return failed
 
 
@@ -1900,6 +1934,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_with_retry_aborts_on_oauth_failed())
         failed |= asyncio.run(test_quota_refusal_pauses_that_inverter_endpoint_without_retrying())
         failed |= test_quota_pause_bounds_follow_the_quota_window()
+        failed |= asyncio.run(test_short_window_and_unnamed_rate_limits_are_retried_not_paused())
         failed |= asyncio.run(test_brief_datalogger_disconnect_is_retried_after_ten_seconds())
         failed |= asyncio.run(test_datalogger_that_stays_offline_is_paused_after_repeated_refusals())
         failed |= asyncio.run(test_read_and_write_cid_rides_out_a_brief_datalogger_disconnect())
