@@ -621,7 +621,7 @@ They are used in the daily cost-saving and total cost-savings charts - see [crea
 
 - predbat.cost_yesterday - A sensor that gives the total energy costs in pence for yesterday (00:00-23:59 on the previous day)
 - predbat.savings_total_actual - A running total in pence of the above cost_yesterday sensor, with attribute of the total in pounds
-- predbat.savings_total_predbat - A running total in pence of the below savings_yesterday_predbat sensor, with attribute of the total in pounds
+- predbat.savings_total_predbat - A running total in pence of the *real* (unadjusted) saving each day, deliberately not the same figure as the below savings_yesterday_predbat sensor's own state - see the note below
 - predbat.savings_total_pvbat - A running total of the below savings_yesterday_pvbat sensor, with attribute of the total in pounds
 - predbat.savings_total_soc - The simulated final SoC in kWh at the end of the most recent 'without Predbat' day simulation. This is used as the starting SoC for the next day's simulation,
   so that the simulated 'without Predbat' universe is self-consistent across days. It will differ from the actual midnight SoC tracked in the 'History' view.
@@ -629,6 +629,8 @@ They are used in the daily cost-saving and total cost-savings charts - see [crea
 and only charging at the lowest import rate in the 24 hour period
 - predbat.savings_yesterday_pvbat - A sensor which tells you how much money you saved from using Predbat
 vs not having a PV and battery system at all and all house load being met from grid import
+
+Note: predbat.savings_yesterday_predbat's own displayed state is the *adjusted* saving (it factors in the change in battery value across the day, via the `saving_adjusted` attribute), while predbat.savings_total_predbat accumulates the *real*, unadjusted `saving_real` attribute from that same sensor. This is deliberate - the running total is meant to track real money saved, not a figure that includes the battery-value adjustment - but it means the two numbers are not simply "yesterday's bar vs the running total plus that bar", and the daily figure can legitimately be negative on a day the total still rises. Both `saving_real` and `saving_adjusted` are published as attributes on predbat.savings_yesterday_predbat if you want to chart either one explicitly.
 
 Note: The savings using Predbat are calculated by default compared to having one fixed nightly charge slot set to charge at the lowest import rate with a target of 100%
 You can change the number of simulated charge slots in `apps.yaml` by setting **calculate_savings_max_charge_slots** to the number of slots to allow.
