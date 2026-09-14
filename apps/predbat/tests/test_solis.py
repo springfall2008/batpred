@@ -1335,7 +1335,8 @@ def test_quota_pause_bounds_follow_the_quota_window():
 async def test_short_window_and_unnamed_rate_limits_are_retried_not_paused():
     """A rate limit whose window fits inside a call's retries, or that names no window, is retried rather than paused."""
     failed = False
-    for message in ("No authority too many request 2 times in 1SECONDS", "Too many requests, please try again later"):
+    # The named window (5s) is longer than the first backoff wait (1s), so the retry must wait the window out
+    for message, expected_wait in (("No authority too many request 2 times in 5SECONDS", 5), ("Too many requests, please try again later", 1)):
         api = MockSolisAPI()
         clock = _FakeClock()
         patches = _patch_clock(clock, uniform=lambda low, high: high)
@@ -1344,8 +1345,8 @@ async def test_short_window_and_unnamed_rate_limits_are_retried_not_paused():
         try:
             api.session = _SequenceSession([{"success": True, "code": "R0000", "msg": message, "data": None}, SOLIS_READ_OK])
             value, _info = await api.read_cid("SN1", 103)
-            if value != "50" or len(api.session.post_calls) != 2 or clock.sleeps != [1] or api.request_pauses:
-                print("ERROR: {!r}: expected one retry after 1s and no pause, got value {} after {} requests, waits {}, pauses {}".format(message, value, len(api.session.post_calls), clock.sleeps, api.request_pauses))
+            if value != "50" or len(api.session.post_calls) != 2 or clock.sleeps != [expected_wait] or api.request_pauses:
+                print("ERROR: {!r}: expected one retry after {}s and no pause, got value {} after {} requests, waits {}, pauses {}".format(message, expected_wait, value, len(api.session.post_calls), clock.sleeps, api.request_pauses))
                 failed = True
         except solis_module.SolisAPIError as err:
             print("ERROR: {!r}: expected a retry, got {}".format(message, err))
