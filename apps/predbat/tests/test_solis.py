@@ -82,6 +82,7 @@ class MockSolisAPI(SolisAPI):
         self.cached_infos = {}
         self.slots_reset = set()
         self.quota_exhausted_until = None
+        self.datalogger_offline_until = {}
         self.automatic_config_done = False
 
         # Timezone for now_utc_exact property (from ComponentBase)
@@ -1453,6 +1454,11 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_quota_pause_is_capped_at_an_hour_and_at_utc_midnight())
         failed |= asyncio.run(test_quota_pause_expires_and_requests_resume())
         failed |= asyncio.run(test_health_message_names_the_quota_limit())
+        failed |= asyncio.run(test_quota_diagnostic_survives_until_a_request_succeeds())
+        failed |= asyncio.run(test_offline_datalogger_stops_being_polled())
+        failed |= asyncio.run(test_automatic_config_settles_on_a_pv_only_fleet())
+        failed |= asyncio.run(test_discovery_cache_lets_a_restart_configure_without_the_api())
+        failed |= asyncio.run(test_successful_discovery_is_cached_and_session_reused())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())
@@ -5866,7 +5872,7 @@ async def test_datalogger_offline_does_not_sleep():
 
     with patch.object(solis_module.asyncio, "sleep", fake_sleep):
         try:
-            await api._execute_request(SOLIS_INVERTER_LIST_ENDPOINT, {})
+            await api._execute_request(SOLIS_READ_ENDPOINT, {"inverterSn": "INV001", "cid": 636})
             print("ERROR: expected SolisAPIError for the B0115 response")
             failed = True
         except solis_module.SolisAPIError as err:
@@ -5883,6 +5889,9 @@ async def test_datalogger_offline_does_not_sleep():
     offline_logs = [m for m in api.log_messages if "offline or disconnected" in m]
     if not offline_logs:
         print("ERROR: expected a log line naming the datalogger as offline, got {}".format(api.log_messages))
+        failed = True
+    if not api.datalogger_offline("INV001"):
+        print("ERROR: B0115 should back off that inverter's reads")
         failed = True
 
     if not failed:
@@ -5950,4 +5959,212 @@ async def test_run_retries_automatic_config_until_it_succeeds():
 
     if not failed:
         print("PASSED: automatic_config is retried until it binds the args, then left alone")
+    return failed
+
+
+# ==================== Review follow-ups on issue #5087 ====================
+
+
+class _FakeStorage:
+    """In-memory stand-in for the Storage component, recording what a component saves."""
+
+    def __init__(self, contents=None):
+        self.contents = dict(contents or {})
+
+    async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
+        """Store the data under module/filename."""
+        self.contents[(module, filename)] = data
+
+    async def load(self, module, filename):
+        """Return the stored data, or None when nothing was saved."""
+        return self.contents.get((module, filename))
+
+
+def _storage_api(storage):
+    """Return a MockSolisAPI whose storage property resolves to the given fake."""
+    api = _make_run_api(configured_sns=[], control_enable=False, automatic=True)
+    # ComponentBase.storage reads through base.components, which MockBase does not have. Subclass
+    # per instance rather than patching MockSolisAPI itself, which would leak into other tests.
+    api.__class__ = type("MockSolisAPIWithStorage", (MockSolisAPI,), {"storage": property(lambda self: storage)})
+    return api
+
+
+async def test_quota_diagnostic_survives_until_a_request_succeeds():
+    """The quota diagnostic must outlive the pause window, or the run status never gets to show it.
+
+    components.is_alive() only turns false after 60 minutes without a successful poll, and the pause
+    is itself an hour, so a diagnostic tied to the pause window expires at almost exactly the moment
+    anything would consult it. It is a successful request that clears it instead.
+    """
+    failed = False
+    api = _quota_api(now=datetime(2026, 3, 4, 12, 0, 0, tzinfo=UTC))
+    api.note_quota_exhausted()
+
+    # The pause has expired, so a probe may go out - but nothing has succeeded yet
+    api._test_now_utc_exact = datetime(2026, 3, 4, 13, 30, 0, tzinfo=UTC)
+    if api.quota_paused():
+        print("ERROR: an expired pause should not hold requests back")
+        failed = True
+    if not api.health_message():
+        print("ERROR: the diagnostic should survive the pause window until a request succeeds")
+        failed = True
+
+    api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "0", "data": {"ok": 1}}))
+    await api._execute_request(SOLIS_INVERTER_LIST_ENDPOINT, {})
+
+    if api.quota_exhausted_until is not None:
+        print("ERROR: a successful request should clear the quota diagnostic")
+        failed = True
+    if api.health_message() is not None:
+        print("ERROR: expected no health message once the allowance is back, got {}".format(api.health_message()))
+        failed = True
+
+    if not failed:
+        print("PASSED: the quota diagnostic is retained until a request actually succeeds")
+    return failed
+
+
+async def test_offline_datalogger_stops_being_polled():
+    """An offline datalogger is dropped from the polling rotation until its cooldown expires.
+
+    Not retrying a B0115 is only half of it: run() polls every inverter every minute, so an offline
+    inverter left in the rotation still spends a request a minute out of the 200 a day.
+    """
+    failed = False
+    offline_sn = "INV_OFFLINE"
+    healthy_sn = "INV_OK"
+    api = _make_run_api(configured_sns=[offline_sn, healthy_sn], control_enable=False)
+    api.inverter_sn = [offline_sn, healthy_sn]
+    api._test_now_utc_exact = datetime(2026, 3, 4, 12, 0, 0, tzinfo=UTC)
+    api.note_datalogger_offline(offline_sn)
+
+    await api.run(60, False)
+
+    if offline_sn in api.fetch_inverter_details_calls:
+        print("ERROR: an offline inverter should not be polled, got {}".format(api.fetch_inverter_details_calls))
+        failed = True
+    if healthy_sn not in api.fetch_inverter_details_calls:
+        print("ERROR: the healthy inverter should still be polled, got {}".format(api.fetch_inverter_details_calls))
+        failed = True
+    if api.update_success_timestamp_calls:
+        print("ERROR: a skipped inverter must still fail the poll, so the component reads unhealthy")
+        failed = True
+    message = api.health_message()
+    if not message or offline_sn not in message:
+        print("ERROR: expected the health message to name the offline inverter, got {}".format(message))
+        failed = True
+
+    # Once the cooldown expires it is probed again
+    api._test_now_utc_exact = datetime(2026, 3, 4, 12, 20, 0, tzinfo=UTC)
+    api.fetch_inverter_details_calls = []
+    await api.run(120, False)
+    if offline_sn not in api.fetch_inverter_details_calls:
+        print("ERROR: the inverter should be re-probed once its cooldown expires")
+        failed = True
+
+    if not failed:
+        print("PASSED: an offline datalogger is skipped until its cooldown expires, then re-probed")
+    return failed
+
+
+async def test_automatic_config_settles_on_a_pv_only_fleet():
+    """A fleet that genuinely has no batteries is a final answer, not something to re-ask every cycle.
+
+    The retry added for #5087 must not turn the existing "No inverters with batteries found" warning
+    into a once-a-minute log line for everyone running PV-only inverters.
+    """
+    failed = False
+    api = MockSolisAPI()
+    api.inverter_sn = ["PV001"]
+    api.inverter_details = {"PV001": {"batteryType": "No Battery"}}
+
+    if await api.automatic_config() is not True:
+        print("ERROR: a read PV-only fleet should be settled, not retried forever")
+        failed = True
+
+    # Details missing (the API could not be reached) is the retryable case
+    api = MockSolisAPI()
+    api.inverter_sn = ["INV001"]
+    api.inverter_details = {}
+
+    if await api.automatic_config() is not False:
+        print("ERROR: missing inverter details should be retried, not settled")
+        failed = True
+
+    if not failed:
+        print("PASSED: a PV-only fleet settles while unread details stay retryable")
+    return failed
+
+
+async def test_discovery_cache_lets_a_restart_configure_without_the_api():
+    """A restart while the allowance is gone still binds load_today, from the cached fleet.
+
+    Discovery is the first thing a restart does and the first thing an exhausted allowance refuses,
+    which leaves no serial numbers to build entity names from - so automatic_config() never ran and
+    fetch_sensor_data raised ValueError every cycle (issue #5087).
+    """
+    failed = False
+    sn = "INV001"
+    storage = _FakeStorage({("solis", "discovery"): {"inverter_sn": [sn], "inverter_details": {sn: {"batteryHealthSoh": "98"}}}})
+    api = _storage_api(storage)
+
+    async def mock_get_inverter_list_refused():
+        """Discovery fails the way an exhausted daily allowance makes it fail."""
+        raise solis_module.SolisAPIError("quota", response_code="R0000")
+
+    api.get_inverter_list = mock_get_inverter_list_refused
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+
+    if api.inverter_sn != [sn]:
+        print("ERROR: expected the cached inverter list to be restored, got {}".format(api.inverter_sn))
+        failed = True
+    if api.automatic_config_calls != 1:
+        print("ERROR: auto-config should run from the cached fleet, got {} calls".format(api.automatic_config_calls))
+        failed = True
+    fallback_logs = [m for m in api.log_messages if "falling back to" in m]
+    if not fallback_logs:
+        print("ERROR: expected a log line naming the fallback, got {}".format(api.log_messages))
+        failed = True
+
+    if not failed:
+        print("PASSED: a restart with no API access configures from the cached inverter list")
+    return failed
+
+
+async def test_successful_discovery_is_cached_and_session_reused():
+    """A successful discovery is saved for next time, and startup retries reuse one ClientSession."""
+    failed = False
+    sn = "INV001"
+    storage = _FakeStorage()
+    api = _storage_api(storage)
+
+    async def mock_get_inverter_list():
+        """Discovery succeeds with one inverter."""
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    sessions = []
+
+    def make_session(*args, **kwargs):
+        """Record every ClientSession the startup path builds."""
+        sessions.append(_FakeAiohttpSession())
+        return sessions[-1]
+
+    with patch.object(solis_module.aiohttp, "ClientSession", make_session), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        await api.run(60, True)
+
+    saved = storage.contents.get(("solis", "discovery"))
+    if not saved or saved.get("inverter_sn") != [sn]:
+        print("ERROR: expected the discovered fleet to be cached, got {}".format(saved))
+        failed = True
+    if len(sessions) != 1:
+        print("ERROR: a startup retry should reuse the session, {} were created".format(len(sessions)))
+        failed = True
+
+    if not failed:
+        print("PASSED: discovery is cached and the startup retry reuses one session")
     return failed
