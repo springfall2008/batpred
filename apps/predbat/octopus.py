@@ -3202,7 +3202,34 @@ class Octopus:
                 plugged = "plugged" if pending["plugged"] else "unplugged"
                 soc = "{} soc {}/{}kWh {}".format(timeline, dp2(self.car_charging_soc[car_n]), dp2(self.car_charging_limit[car_n]), plugged)
                 self.log("Octopus: Dispatch timeline car {} @ {} [-{}h..+{}h]: {}{}".format(car_n, self.time_abs_str(self.minutes_now), hours_before, hours_after, soc, marker))
+            self.log_dispatch_unconfirmed(car_n, pending.get("started"), pending.get("charging_now", True))
         self.dispatch_timeline_pending = []
+
+    def log_dispatch_unconfirmed(self, car_n, started, charging_now):
+        """
+        Log a slot where a dispatch is running but the car is not drawing power (GH#5080).
+
+        Predbat prices a live dispatch at the off-peak rate and imports against it. If the car
+        never charges in that slot, Octopus may bill the import at the full rate instead - a
+        direct loss that only becomes provable days later, when the per-slot costs settle and
+        MEASUREMENTS_QUERY can be re-read for that half-hour.
+
+        This is the flag, not the proof: it records which slots are worth reconciling so the
+        check has somewhere to start, rather than trawling every half-hour of history. Logged
+        once per half-hour slot per car so a dispatch that runs for hours does not repeat the
+        line every cycle.
+
+        Deliberately not an error or a warning. A car that finishes charging part-way through a
+        dispatch, or a dispatch Octopus honours anyway, both produce this line legitimately - so
+        it reads as something to check, not something that has gone wrong.
+        """
+        if not started or charging_now:
+            return
+        slot = (self.minutes_now // 30) * 30
+        if self.dispatch_unconfirmed_last.get(car_n) == slot:
+            return
+        self.dispatch_unconfirmed_last[car_n] = slot
+        self.log("Octopus: Note: car {} dispatch active at {} but the car is not charging - import in this slot may be billed at the full rate, needs reconciling against the bill (GH#5080)".format(car_n, self.time_abs_str(slot)))
 
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """

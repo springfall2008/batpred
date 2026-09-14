@@ -54,6 +54,7 @@ def run_dispatch_timeline_tests(my_predbat):
     saved_charge_window_best = my_predbat.charge_window_best
     saved_charge_limit_best = my_predbat.charge_limit_best
     saved_dispatch_timeline_pending = my_predbat.dispatch_timeline_pending
+    saved_dispatch_unconfirmed_last = my_predbat.dispatch_unconfirmed_last
     saved_rate_import = my_predbat.rate_import
     saved_rate_import_cost_threshold = getattr(my_predbat, "rate_import_cost_threshold", None)
 
@@ -296,7 +297,7 @@ def run_dispatch_timeline_tests(my_predbat):
             # Capture with no rates known yet, exactly as the real call order does.
             my_predbat.rate_import = {}
             my_predbat.rate_import_cost_threshold = None
-            my_predbat.dispatch_timeline_pending = [{"car_n": 0, "completed": [], "started": [], "planned": [], "plugged": True}]
+            my_predbat.dispatch_timeline_pending = [{"car_n": 0, "completed": [], "started": [], "planned": [], "plugged": True, "charging_now": True}]
 
             # Rates arrive, then the render runs.
             origin = (my_predbat.minutes_now // 30) * 30 - 4 * 60
@@ -446,6 +447,71 @@ def run_dispatch_timeline_tests(my_predbat):
         my_predbat.rate_import_cost_threshold = 10.0
         my_predbat.dispatch_timeline_last = {}
 
+        print("Test 29: a dispatch running with no car charging logs a reconciliation note")
+        # GH#5080 loss mode 2: Predbat prices a live dispatch cheap and imports against it. If the
+        # car never draws power, Octopus may bill that import at the full rate. This flags the
+        # slot for later reconciliation against the settled bill.
+        my_predbat.dispatch_unconfirmed_last = {}
+        my_predbat.minutes_now = 10 * 60
+        logged = []
+        saved_log = my_predbat.log
+        my_predbat.log = lambda message: logged.append(message)
+        try:
+            slot = [_slot(midnight_utc + timedelta(hours=10), midnight_utc + timedelta(hours=10, minutes=30))]
+            my_predbat.log_dispatch_unconfirmed(0, slot, False)
+        finally:
+            my_predbat.log = saved_log
+        if len(logged) != 1 or "not charging" not in logged[0]:
+            print("  ERROR: expected one reconciliation note, got {!r}".format(logged))
+            failed = True
+
+        print("Test 30: the note is not repeated within the same half-hour slot")
+        logged = []
+        saved_log = my_predbat.log
+        my_predbat.log = lambda message: logged.append(message)
+        try:
+            my_predbat.minutes_now = 10 * 60 + 5
+            my_predbat.log_dispatch_unconfirmed(0, slot, False)
+            my_predbat.minutes_now = 10 * 60 + 25
+            my_predbat.log_dispatch_unconfirmed(0, slot, False)
+        finally:
+            my_predbat.log = saved_log
+        if logged:
+            print("  ERROR: a dispatch spanning a slot must log once, not every cycle, got {!r}".format(logged))
+            failed = True
+
+        print("Test 31: the next half-hour slot logs again")
+        logged = []
+        saved_log = my_predbat.log
+        my_predbat.log = lambda message: logged.append(message)
+        try:
+            my_predbat.minutes_now = 10 * 60 + 30
+            my_predbat.log_dispatch_unconfirmed(0, slot, False)
+        finally:
+            my_predbat.log = saved_log
+        if len(logged) != 1:
+            print("  ERROR: a new slot should log again, got {!r}".format(logged))
+            failed = True
+
+        print("Test 32: a charging car, or no dispatch, logs nothing")
+        my_predbat.dispatch_unconfirmed_last = {}
+        my_predbat.minutes_now = 11 * 60
+        logged = []
+        saved_log = my_predbat.log
+        my_predbat.log = lambda message: logged.append(message)
+        try:
+            my_predbat.log_dispatch_unconfirmed(0, slot, True)  # car is charging - the normal case
+            my_predbat.log_dispatch_unconfirmed(0, [], False)  # no dispatch running
+            my_predbat.log_dispatch_unconfirmed(0, None, False)
+        finally:
+            my_predbat.log = saved_log
+        if logged:
+            print("  ERROR: nothing to reconcile should log nothing, got {!r}".format(logged))
+            failed = True
+
+        my_predbat.minutes_now = 10 * 60
+        my_predbat.dispatch_unconfirmed_last = {}
+
         # ------------------------------------------------------------------
         # dispatch_timeline_should_log() - #4948 review: a heartbeat every 30 minutes alone would
         # miss a provisional slot that appears and disappears entirely within one half-hour window.
@@ -489,6 +555,7 @@ def run_dispatch_timeline_tests(my_predbat):
 
     finally:
         my_predbat.dispatch_timeline_pending = saved_dispatch_timeline_pending
+        my_predbat.dispatch_unconfirmed_last = saved_dispatch_unconfirmed_last
         my_predbat.rate_import = saved_rate_import
         my_predbat.rate_import_cost_threshold = saved_rate_import_cost_threshold
         my_predbat.now_utc = saved_now_utc
