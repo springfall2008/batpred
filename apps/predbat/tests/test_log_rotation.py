@@ -26,6 +26,7 @@ from utils import (
     predbat_log_name,
     predbat_log_name_legacy,
     read_predbat_log,
+    rotate_predbat_logs,
 )
 
 
@@ -35,24 +36,18 @@ def _touch(name, content=""):
         handle.write(content)
 
 
-def _rotate(args, max_count=PREDBAT_LOG_COUNT_MAX):
+def _rotate(args):
     """
     Run the rotation exactly as Hass.log() does, against the current working directory.
 
-    Mirrors the loop in hass.py rather than importing it, because that code is welded to a live
-    Hass instance with an open logfile handle. Kept structurally identical so a change to one
-    shows up as a failure here.
+    Calls the same rotate_predbat_logs() Hass.log() calls, rather than a hand-copy of its loop -
+    a copy can diverge from the code it is meant to be testing and still pass, which is exactly
+    what let the off-by-one Copilot found on #5076 ship with a green test suite (the copy had the
+    same bug, so it agreed with itself). Only the parts of Hass.log() this file does not otherwise
+    exercise - closing/reopening the live predbat.log - are still done directly here.
     """
     max_logs = predbat_log_count(args) - 1
-    for num_logs in range(max_logs - 1, 0, -1):
-        for filename in (predbat_log_name(num_logs), predbat_log_name_legacy(num_logs)):
-            if os.path.isfile(filename):
-                os.rename(filename, predbat_log_name(num_logs + 1))
-                break
-    for num_logs in range(max_logs + 1, max_count + 1):
-        for filename in (predbat_log_name(num_logs), predbat_log_name_legacy(num_logs)):
-            if os.path.isfile(filename):
-                os.remove(filename)
+    rotate_predbat_logs(max_logs)
     os.rename("predbat.log", predbat_log_name(1))
     _touch("predbat.log", "live")
 
@@ -78,6 +73,11 @@ def run_log_rotation_tests(my_predbat):
                 ({"log_count": "30"}, 30, "numeric string"),
                 ({"log_count": "banana"}, PREDBAT_LOG_COUNT_DEFAULT, "non-numeric"),
                 ({"log_count": None}, PREDBAT_LOG_COUNT_DEFAULT, "null"),
+                # YAML accepts non-finite numeric scalars (.inf/-.inf), which parse as a float
+                # int() cannot convert - OverflowError, not caught by the (TypeError, ValueError)
+                # this already guarded against (Copilot review on #5076).
+                ({"log_count": float("inf")}, PREDBAT_LOG_COUNT_DEFAULT, "positive infinity"),
+                ({"log_count": float("-inf")}, PREDBAT_LOG_COUNT_DEFAULT, "negative infinity"),
             ):
                 actual = predbat_log_count(args)
                 if actual != expected:
@@ -119,6 +119,24 @@ def run_log_rotation_tests(my_predbat):
                 if not os.path.isfile(name) or open(name, encoding="utf-8").read() != expected:
                     print("  ERROR: expected {} to hold {!r}, listing is {}".format(name, expected, sorted(os.listdir("."))))
                     failed = True
+
+            print("Test 4b: a legacy single-digit log in the OLDEST kept slot is migrated, not stranded")
+            # #5076 Copilot review: the shift previously only walked slots 1..max_logs-1, so a
+            # legacy predbat.9.log sitting in the oldest kept slot (max_logs=9 for the default
+            # log_count=10) was never a rename source - it does not collide with anything landing
+            # on slot 9 from below, since that only writes the two-digit name. Left on disk under
+            # the old name forever, invisible to predbat_log_file_prev()'s two-digit-first lookup.
+            for name in os.listdir("."):
+                os.remove(name)
+            _touch("predbat.log", "current")
+            _touch(predbat_log_name_legacy(9), "oldest-legacy")
+            _rotate({"log_count": 10})  # max_logs = 9
+            if os.path.isfile(predbat_log_name_legacy(9)):
+                print("  ERROR: the legacy file in the oldest kept slot should not survive under its old name, found {}".format(sorted(os.listdir("."))))
+                failed = True
+            if os.path.isfile(predbat_log_name(10)) or os.path.isfile(predbat_log_name_legacy(10)):
+                print("  ERROR: log_count=10 keeps only slots 1-9 plus the live log, found {}".format(sorted(os.listdir("."))))
+                failed = True
 
             print("Test 5: logs beyond the configured count are removed")
             for name in os.listdir("."):

@@ -69,6 +69,37 @@ def predbat_log_file_prev():
     return None
 
 
+def rotate_predbat_logs(max_logs):
+    """
+    Shift rotated log slots up by one and drop anything past max_logs, against the current
+    working directory. Does not touch the live predbat.log - the caller closes/reopens that.
+
+    Walk downwards so each slot is free before anything moves into it. Both the two-digit name
+    and the single-digit one an older Predbat wrote are considered at every slot, which is what
+    migrates an existing set to the padded form: whichever name is found is renamed to the
+    two-digit name of the next slot up.
+
+    The shift runs through max_logs itself, not max_logs - 1: a legacy single-digit file sitting
+    in the oldest kept slot is a different filename from that slot's two-digit target, so it is
+    never reached by a rename landing *on* that slot from below - it has to be the *source* of a
+    rename once, onto the slot that is about to be dropped, or it is orphaned on disk under the
+    old name forever (Copilot review on #5076).
+    """
+    for num_logs in range(max_logs, 0, -1):
+        for filename in (predbat_log_name(num_logs), predbat_log_name_legacy(num_logs)):
+            if os.path.isfile(filename):
+                os.rename(filename, predbat_log_name(num_logs + 1))
+                break
+
+    # Drop anything that has aged out past the configured count - both spellings, and every slot
+    # up to the maximum rather than just the one above max_logs, so lowering the setting clears
+    # the now-surplus files instead of stranding them forever.
+    for num_logs in range(max_logs + 1, PREDBAT_LOG_COUNT_MAX + 1):
+        for filename in (predbat_log_name(num_logs), predbat_log_name_legacy(num_logs)):
+            if os.path.isfile(filename):
+                os.remove(filename)
+
+
 def predbat_log_count(args):
     """
     Return the configured number of log files to keep, including the live one.
@@ -80,7 +111,11 @@ def predbat_log_count(args):
     value = (args or {}).get("log_count", PREDBAT_LOG_COUNT_DEFAULT)
     try:
         value = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: YAML accepts non-finite numeric scalars (.inf, -.inf), which parse as a
+        # float int() cannot convert - falling back rather than raising out of every log() call
+        # is the same "don't stop the log working" contract as the other invalid shapes here
+        # (Copilot review on #5076).
         return PREDBAT_LOG_COUNT_DEFAULT
     return max(PREDBAT_LOG_COUNT_MIN, min(PREDBAT_LOG_COUNT_MAX, value))
 
