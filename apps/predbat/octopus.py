@@ -3537,6 +3537,7 @@ class Octopus:
             saving_rate = 200  # Default rate if not reported
             octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per penny
             octopoints_min_threshold = self.get_arg("octopus_saving_session_min_octopoints_per_kwh", 0)
+            join_lead_hours = self.get_arg("octopus_saving_auto_join_lead_hours", 0)
 
             joined_events = []
             available_events = []
@@ -3602,6 +3603,10 @@ class Octopus:
                         # Do not auto-join a saving session that overlaps an Axle VPP session - we cannot honour both for the same period
                         if self._saving_event_conflicts_axle(start_time, end_time, axle_sessions):
                             self.log("Octopus: Skipping saving event code {} {}-{} - conflicts with an Axle VPP session".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
+                            continue
+                        # If a lead hours is set, skip joining session until we are within that many hours of the start time
+                        if join_lead_hours and (start_time - timedelta(hours=join_lead_hours)) > self.now_utc:
+                            self.log("Octopus: Delaying join of saving event code {} {}-{} - not within configured lead hours ({}) of start of event".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), join_lead_hours))
                             continue
                         if code:  # Join the new Octopus saving event and send an alert if successfully joined
                             self.log("Octopus: Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
