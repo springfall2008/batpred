@@ -76,7 +76,7 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
-from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths, is_entity_id, mask_secret_args, malloc_trim, limit_malloc_arenas, MALLOC_ARENA_LIMIT
+from utils import minutes_since_yesterday, minutes_since_midnight, dp1, dp2, dp3, find_unmasked_secret_paths, is_entity_id, mask_secret_args, malloc_trim, limit_malloc_arenas, MALLOC_ARENA_LIMIT
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
@@ -687,7 +687,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # when it did not. now_utc and the midnight derived from it share a tzinfo, so these stay
         # wall-clock differences, exactly as the naive arithmetic was.
         self.difference_minutes = minutes_since_yesterday(now_utc)
-        self.minutes_now = int((now_utc - self.midnight_utc).total_seconds() / 60 / PREDICT_STEP) * PREDICT_STEP
+        self.minutes_now = minutes_since_midnight(now_utc, self.midnight_utc)
         self.minutes_to_midnight = 24 * 60 - self.minutes_now
         self.log("--------------- PredBat - update at {} with clock skew {} minutes, minutes now {}".format(now_utc, skew, self.minutes_now))
 

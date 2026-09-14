@@ -21,7 +21,7 @@ requirements and costs for heat pump systems.
 
 from datetime import datetime, timedelta
 import pytz
-from utils import str2time, dp2, dp3, minute_data
+from utils import str2time, dp2, dp3, minute_data, minutes_since_midnight
 
 from const import TIME_FORMAT
 
@@ -533,8 +533,8 @@ class PredHeat:
         self.forecast_minutes = self.forecast_days * 60 * 24
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         # Measured against now_utc like the rest of Predbat, rather than a second naive clock
-        # taken from the host's timezone - see update_time() in predbat.py.
-        self.minutes_now = int((now_utc - self.midnight_utc).total_seconds() / 60 / PREDICT_STEP) * PREDICT_STEP
+        # taken from the host's timezone - see update_time() in predbat.py, which shares this helper.
+        self.minutes_now = minutes_since_midnight(now_utc, self.midnight_utc)
         self.metric_future_rate_offset_import = 0
 
         self.log("Predheat: update at {}".format(now_utc))

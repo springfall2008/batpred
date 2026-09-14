@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 import pytz
 
 from const import PREDICT_STEP
-from utils import minutes_since_yesterday
+from utils import minutes_since_midnight, minutes_since_yesterday
 
 # Far enough from any plausible host timezone that the two cannot silently agree.
 FAR_TIMEZONE = "Pacific/Kiritimati"  # UTC+14, and never observes DST
@@ -87,10 +87,15 @@ def test_clock_follows_configured_timezone(my_predbat):
         print(f"ERROR: minutes_now {clock['minutes_now']} is not the offset from midnight_utc ({expected})")
         failed = True
 
-    # Independently of how update_time computes it: it must be that timezone's wall clock.
+    # Independently of how update_time computes it: it must be that timezone's wall clock. The two
+    # are read moments apart, so compare the distance around the day rather than the plain
+    # difference - at 23:59 update_time floors to 23:55 while this read is already 00:00, which is
+    # five minutes apart, not 1435.
     wall_clock = datetime.now(pytz.timezone(FAR_TIMEZONE))
     wall_minutes = (wall_clock.hour * 60 + wall_clock.minute) // PREDICT_STEP * PREDICT_STEP
-    if abs(clock["minutes_now"] - wall_minutes) > PREDICT_STEP:
+    distance = abs(clock["minutes_now"] - wall_minutes)
+    distance = min(distance, 24 * 60 - distance)
+    if distance > PREDICT_STEP:
         print(f"ERROR: minutes_now {clock['minutes_now']} does not match {FAR_TIMEZONE} wall clock {wall_minutes} - it is following the host clock")
         failed = True
 
@@ -194,6 +199,39 @@ def test_minutes_since_yesterday_accepts_an_aware_clock(my_predbat):
     return failed
 
 
+def test_minutes_since_midnight_helper(my_predbat):
+    """
+    Test the minutes_since_midnight helper both clocks share.
+
+    update_time() (predbat.py) and PredHeat.update_pred() (predheat.py) both need the same
+    calculation, and predheat's tests stub update_pred out entirely - so a copy of the formula
+    there could drift back to the host clock with the suite still green. They call this instead,
+    and it is tested here.
+    """
+    print("\n*** Test: minutes_since_midnight ***")
+    failed = False
+
+    london = pytz.timezone("Europe/London")
+    cases = [
+        ("2026-06-15 14:37", 14 * 60 + 35, "a plain summer afternoon, floored to PREDICT_STEP"),
+        ("2026-06-15 00:00", 0, "midnight itself"),
+        ("2026-06-15 23:59", 23 * 60 + 55, "the last slot of the day"),
+        ("2026-03-29 12:07", 12 * 60 + 5, "the spring-forward day - a wall-clock difference, not 11 hours"),
+        ("2026-10-25 12:07", 12 * 60 + 5, "the autumn-back day - likewise not 13 hours"),
+    ]
+    for stamp, expected, description in cases:
+        now_utc = london.localize(datetime.strptime(stamp, "%Y-%m-%d %H:%M"))
+        midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        result = minutes_since_midnight(now_utc, midnight_utc)
+        if result != expected:
+            print(f"ERROR: {stamp} ({description}) gave {result}, expected {expected}")
+            failed = True
+
+    if not failed:
+        print("PASS: minutes_since_midnight holds across DST changes and day boundaries")
+    return failed
+
+
 def run_clock_tests(my_predbat):
     """Run all update_time clock tests"""
     failed = False
@@ -201,4 +239,5 @@ def run_clock_tests(my_predbat):
     failed |= test_clock_time_strings_follow_midnight_utc(my_predbat)
     failed |= test_clock_skew_still_applies(my_predbat)
     failed |= test_minutes_since_yesterday_accepts_an_aware_clock(my_predbat)
+    failed |= test_minutes_since_midnight_helper(my_predbat)
     return failed

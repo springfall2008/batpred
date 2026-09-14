@@ -1505,6 +1505,16 @@ def window2minutes(start, end, minutes_now):
     return compute_window_minutes(start, end, minutes_now)
 
 
+def minutes_since_midnight(now, midnight):
+    """
+    Compute minutes from midnight to now, floored to a PREDICT_STEP boundary
+
+    Both arguments come from the same clock - predbat's now_utc and the midnight derived from it -
+    so they carry the same tzinfo and this stays a wall-clock difference across a DST change.
+    """
+    return int((now - midnight).total_seconds() / 60 / PREDICT_STEP) * PREDICT_STEP
+
+
 def minutes_since_yesterday(now):
     """
     Calculate the number of minutes since 23:59 yesterday
