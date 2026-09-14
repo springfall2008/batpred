@@ -67,6 +67,7 @@ brickatius
 bwignore
 byok
 cadata
+calcsize
 calib
 Cantarell
 cbat
@@ -139,6 +140,7 @@ dedupe
 dend
 denorm
 derate
+derated
 derating
 desync
 desynced
