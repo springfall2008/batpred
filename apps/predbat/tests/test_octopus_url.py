@@ -1170,6 +1170,19 @@ async def test_edf_freephase_dynamic_url(my_predbat):
     print("**** Running EDF FreePhase Dynamic URL tests ****")
     failed = False
 
+    # Test 4 below pins midnight_utc/now_utc to the test data's date (2025-12-17) and,
+    # without this, left them there for every later test in the shared fixture (#5079) -
+    # snapshot so they can be restored once this function is done with them.
+    original_midnight_utc = my_predbat.midnight_utc
+    original_now_utc = my_predbat.now_utc
+    original_debug_enable = my_predbat.debug_enable
+    # failures_total is NOT restored here even though it's assigned below - it's a
+    # pre-existing bug in this test (setting an attribute PredBat doesn't have; the
+    # OctopusAPI instance under test, `api`, is what actually owns failures_total) rather
+    # than a real leak, and "fixing" it by snapshotting would crash on the first run since
+    # the attribute doesn't exist until this test creates it. Out of scope here (#5079 is
+    # about leaked *shared fixture* state, not this test's own unrelated mistake).
+
     # Create API instance
     api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
 
@@ -1299,7 +1312,7 @@ async def test_edf_freephase_dynamic_url(my_predbat):
     # Set midnight_utc to match the test data (2025-12-17)
     my_predbat.midnight_utc = datetime.strptime("2025-12-17T00:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z")
     # now_utc has to move with midnight_utc - ComponentBase.midnight_utc derives today's
-    # midnight from now_utc (GH#4804), and this pin is left behind for later test modules.
+    # midnight from now_utc (GH#4804). Restored at the end of this function (#5079).
     my_predbat.now_utc = my_predbat.midnight_utc
     test_url = "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates"
 
@@ -1415,5 +1428,9 @@ async def test_edf_freephase_dynamic_url(my_predbat):
 
     if not failed:
         print("\n**** All EDF FreePhase Dynamic URL tests PASSED ****")
+
+    my_predbat.midnight_utc = original_midnight_utc
+    my_predbat.now_utc = original_now_utc
+    my_predbat.debug_enable = original_debug_enable
 
     return failed
