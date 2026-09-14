@@ -1539,12 +1539,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                             self.arg_errors[name] = "Too many entries, expected exactly {}".format(required_entries)
                             errors += 1
                             continue
+                    elif entries_key_present and spec.get("entries_exact", False) and required_entries == 0:
+                        self.log("Warn: Validation of apps.yaml found configuration item '{}' has 1 entries, expected exactly {} based on {}".format(name, required_entries, entries))
+                        self.arg_errors[name] = "Too many entries, expected exactly {}".format(required_entries)
+                        errors += 1
+                        continue
                     elif required_entries > 1:
-                        if not optional_entries:
-                            self.log("Warn: Validation of apps.yaml found configuration item '{}' is not a list, but requires {} entries based on {}".format(name, required_entries, entries))
-                            self.arg_errors[name] = "Invalid type, expected list"
-                            errors += 1
-                            continue
                         # A scalar here is a de-facto list of 1, still short of required_entries.
                         # optional_entries permits that (see the short-list case above) but must not
                         # let it go unremarked the way the list branch doesn't - a single sensor
