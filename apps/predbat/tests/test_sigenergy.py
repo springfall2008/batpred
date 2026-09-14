@@ -1330,10 +1330,20 @@ def test_sigenergy_apply_controls_freeze_export_no_window(my_predbat):
     # would also stop the battery serving the house, which is a freeze charge not a freeze export
     assert bat_cmds[0][4] is None, "no charging power cap sent for freeze export, got {}".format(bat_cmds[0][4])
 
-    # Both rates zero is an absence of a plan, not a plan — must stay in demand
+    # Both rates zero — a freeze export with a car-charging or iBoost discharge hold on top.
+    # selfConsumption-grid would let the battery discharge to serve the house, which the hold
+    # forbids, so this is plain self-consumption with the bidirectional power pinned to zero
     bat_cmds = run_case(0, 0)
-    assert len(bat_cmds) >= 1, "send_battery_command called for all-zero rates"
-    assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF, "selfConsumption sent when both rates are zero, got {}".format(bat_cmds[0][2])
+    assert len(bat_cmds) >= 1, "send_battery_command called for freeze export with a discharge hold"
+    assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF, "selfConsumption sent for freeze export with a discharge hold, got {}".format(bat_cmds[0][2])
+    assert bat_cmds[0][4] == 0, "charging power pinned to 0 for freeze export with a discharge hold, got {}".format(bat_cmds[0][4])
+
+    # A discharge hold on its own, with charging still allowed, is not a freeze and must not be
+    # capped — the bidirectional power cannot express "charge allowed, discharge blocked"
+    bat_cmds = run_case(3000, 0)
+    assert len(bat_cmds) >= 1, "send_battery_command called for a discharge hold alone"
+    assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF, "selfConsumption sent for a discharge hold alone, got {}".format(bat_cmds[0][2])
+    assert bat_cmds[0][4] is None, "no charging power cap sent for a discharge hold alone, got {}".format(bat_cmds[0][4])
 
     # A normal demand period with both rates live stays in demand
     bat_cmds = run_case(3000, 3000)
