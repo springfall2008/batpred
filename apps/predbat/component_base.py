@@ -190,8 +190,14 @@ class ComponentBase(ABC):
 
         This is the same calculation update_time() makes, through the same helper, so the value is
         identical to base.minutes_now outside that window.
+
+        now_utc is snapshotted rather than read twice (once here, once through self.midnight_utc):
+        update_time() runs on the main thread and can replace it between the two reads, which at a
+        day boundary would subtract the new day's midnight from the old timestamp and return a
+        negative minute.
         """
-        return minutes_since_midnight(self.base.now_utc, self.midnight_utc)
+        now_utc = self.base.now_utc
+        return minutes_since_midnight(now_utc, now_utc.replace(hour=0, minute=0, second=0, microsecond=0))
 
     @property
     def plan_interval_minutes(self):
