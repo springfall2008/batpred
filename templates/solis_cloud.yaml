@@ -39,9 +39,10 @@ pred_bat:
   # cell, NOT the live/resting battery voltage which varies with charge state). The inverter
   # holds its limits in amps, so this is the voltage used to convert them to watts for the
   # battery_capacity, max charge/discharge power and slot power sensors, and hence for
-  # battery_rate_max. Leave it commented out and Predbat instead latches the first battery
-  # voltage it sees and holds that - stable, but a few percent off nominal, so battery_capacity
-  # is flagged unreliable (reliable: false attribute, plus a log warning). See soc_max below.
+  # battery_rate_max. Leave it commented out and Predbat infers it instead: on an LV pack from
+  # the BMS charge voltage the inverter reports (48V or 51.2V), on an HV pack from the live
+  # reading. Either way battery_capacity is flagged unreliable (reliable: false attribute, plus a
+  # log warning) since an inferred value is only close to nominal. See soc_max below.
   # solis_nominal_voltage: 512
 
   #

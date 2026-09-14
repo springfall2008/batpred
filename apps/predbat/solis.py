@@ -76,6 +76,18 @@ SOLIS_ALLOW_EXPORT_OFF = "1"  # Block export
 SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT = 7224
 SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT = 7226
 
+# Nominal pack voltage selection (issue #5090). Thresholds come from 30 days of battery_voltage
+# history across 30 LV systems plus a full inverterDetail from 14 of them:
+#  - no LV system exceeded 57.5V live, so a live reading above 60V is an HV pack;
+#  - the BMS-requested charge voltage separates the LV pack classes cleanly - 53.2V on every 15S
+#    pack that reported it, 56.5-58.4V on every 16S - so 55V sits in a 3.3V empty gap.
+# The live voltage itself cannot be used to tell 15S from 16S: the classes overlap (a full 15S
+# reaches 53.5V, a low 16S drops to 47.1V), which is why this is decided from the charge voltage.
+SOLIS_HV_BATTERY_VOLTAGE = 60.0
+SOLIS_LV_16S_CHARGE_VOLTAGE = 55.0
+SOLIS_LV_15S_NOMINAL_VOLTAGE = 48.0
+SOLIS_LV_16S_NOMINAL_VOLTAGE = 51.2
+
 # Charge slot CIDs (base + slot_index for slots 1-6)
 SOLIS_CID_CHARGE_ENABLE_BASE = 5916  # 5916-5921
 SOLIS_CID_CHARGE_SOC_BASE = 5928  # 5928-5933
@@ -382,13 +394,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.automatic = automatic
         self.session = None
         self.queued_events = []
-        # Last-resort fallback, used only for an inverter that has never reported a batteryVoltage
-        # at all - matches the previous hard-coded assumption (issue #4493). get_nominal_voltage()
-        # below is the real source of truth and documents the full priority order.
+        # Last-resort fallback, used only for an LV pack that reports no BMS charge voltage to be
+        # classified by - matches the previous hard-coded assumption (issue #4493).
+        # get_nominal_voltage() below is the real source of truth for the full priority order.
         self.nominal_voltage = 48.0
-        # {inverter_sn: conversion voltage latched from the FIRST live reading and then held}.
-        # Deliberately never refreshed afterwards - see get_nominal_voltage() (issue #5090).
-        self.nominal_voltage_latched = {}
+        self.live_voltage_last_known = {}  # {inverter_sn: last measured battery voltage}
+        self.nominal_voltage_reported = {}  # {inverter_sn: conversion voltage already logged}
         # Nominal *pack* voltage (e.g. cell count x nominal cell voltage) from apps.yaml. It is
         # the preferred source for both the capacity calculation and the amp<->watt conversions,
         # being the one figure available here that is an actual physical property rather than an
@@ -1494,8 +1505,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # The arithmetic bug that made this sensor wrong by ~11x on HV batteries is fixed (issue
         # #4493), and since #5090 the sensor no longer wobbles cycle to cycle either - so the
         # original reason this was commented out is gone. It stays off for a second one: without
-        # solis_nominal_voltage configured the capacity is still an *estimate*, a few percent out
-        # depending on where in the charge cycle the conversion voltage was latched, and
+        # solis_nominal_voltage configured the capacity is still an *estimate* - the pack class is
+        # inferred from its BMS charge voltage, not stated - and
         # set_arg_auto() defaults to overwrite=True, so enabling it would replace a correct
         # hand-entered soc_max with an approximate one (noted in the log, but still replaced).
         # User must still set soc_max manually in apps.yaml.
@@ -1584,47 +1595,101 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         self.log(f"Solis API: Calculated max currents for {inverter_sn}: charge={max_charge}A, discharge={max_discharge}A")
 
-    def get_nominal_voltage(self, inverter_sn):
+    def get_live_battery_voltage(self, inverter_sn):
         """
-        Return the *stable* voltage to use for amp<->watt conversions on this inverter.
+        Return the live measured pack voltage, or the last one this inverter reported, or None.
 
-        The inverter holds its limits as currents (CID 7224/7226, and the per-slot currents), so
-        every watt value Predbat sees is derived. Deriving it from the live measured voltage made
-        a fixed 70A limit republish as anything from 3352W to 3726W as the pack voltage moved with
-        charge state - dragging battery_rate_max, the write tolerance that is computed from it and
-        the read-back of every rate setpoint along with it (issue #5090). In priority order:
-
-          1. solis_nominal_voltage from apps.yaml - the real nominal pack voltage, and the only
-             source here that is a physical property rather than an inference;
-          2. otherwise the first live batteryVoltage this inverter reported, latched and then
-             held. Wherever in the cycle that reading was taken it is within a few percent of
-             nominal, and - the point of the exercise - it does not move afterwards. It cannot
-             usefully be refined into a cell count: LiFePO4's discharge curve is flat enough that
-             the same 16S pack reads 47.9V to 53.2V, which rounds to anything from 15 to 17
-             cells, so a "smarter" guess would just be a less predictable one (the same reasoning
-             behind deye.py's nominal_pack_voltage() refusing to infer from a resting voltage);
-          3. otherwise the 48V fallback, for an inverter that has never reported a voltage at all.
-
-        The live measured voltage is still published as its own sensor for display, and is still
-        what latches the value in (2) - it is only barred from being re-read on every conversion.
-        A hard-coded 48V here was issue #4493, wrong on a high-voltage battery by roughly the
-        ratio of the real pack voltage to 48V; tracking the live value was the over-correction.
+        This is the reading that moves with state of charge. It identifies an HV pack and is
+        published as a sensor for display, but must not be used for amp<->watt conversions on an
+        LV pack - see get_nominal_voltage().
         """
-        if self.nominal_pack_voltage:
-            return self.nominal_pack_voltage
-        latched = self.nominal_voltage_latched.get(inverter_sn)
-        if latched:
-            return latched
         detail = self.inverter_details.get(inverter_sn, {})
         try:
             voltage = float(detail.get("batteryVoltage"))
         except (ValueError, TypeError):
             voltage = None
         if voltage and voltage > 0:
-            self.nominal_voltage_latched[inverter_sn] = voltage
-            self.log(f"Solis API: {inverter_sn} will use {voltage}V for all amp<->watt conversions, latched from the first battery voltage reading and held from now on - set solis_nominal_voltage in apps.yaml for the pack's true nominal voltage")
+            self.live_voltage_last_known[inverter_sn] = voltage
             return voltage
+        return self.live_voltage_last_known.get(inverter_sn)
+
+    def get_bms_charge_voltage(self, inverter_sn):
+        """
+        Return the BMS-requested charge voltage for this pack, or None if it isn't reported.
+
+        Unlike the live pack voltage this is a setting rather than a measurement, so it holds
+        still, and it is what distinguishes a 15S pack from a 16S one (53.2V vs 56.5-58.4V across
+        14 sampled systems). inverterDetail carries it top level as batteryAcvSet and per battery
+        as batteryList[].batteryChargingVoltage; the two agreed on every system sampled, so either
+        will do and the first non-zero one wins. Some inverters report neither (one S5-EH1P3.6K-L
+        had batteryChargingVoltage absent and batteryAcvSet 0.0), hence the None case.
+        """
+        detail = self.inverter_details.get(inverter_sn, {})
+        candidates = [detail.get("batteryAcvSet")]
+        for entry in detail.get("batteryList") or []:
+            if isinstance(entry, dict):
+                candidates.append(entry.get("batteryChargingVoltage"))
+        for candidate in candidates:
+            try:
+                voltage = float(candidate)
+            except (ValueError, TypeError):
+                continue
+            if voltage > 0:
+                return voltage
+        return None
+
+    def get_nominal_voltage(self, inverter_sn):
+        """
+        Return the voltage to use for amp<->watt conversions on this inverter.
+
+        The inverter holds its limits as currents (CID 7224/7226, and the per-slot currents), so
+        every watt value Predbat sees is derived. Deriving them from the live measured voltage made
+        a fixed 70A limit republish as anything from 3352W to 3726W as the pack moved with state of
+        charge, dragging battery_rate_max, the write tolerance computed from it and the read-back of
+        every rate setpoint along with it (issue #5090). Live voltage swings 10-14% over a month on
+        every system sampled, so this affected all of them, not just edge cases. In priority order:
+
+          1. solis_nominal_voltage from apps.yaml - the pack's real nominal voltage, and the only
+             source here that is a stated physical property rather than an inference;
+          2. a live reading above 60V means an HV pack, where the live voltage continues to be used
+             as it has been since issue #4493. No LV system sampled exceeded 57.5V. HV packs still
+             drift for want of field data to classify them by; solis_nominal_voltage fixes that;
+          3. otherwise an LV pack, classified by the BMS-requested charge voltage: 16S (51.2V
+             nominal) at or above 55V, 15S (48V nominal) below it. Both are settings rather than
+             measurements, so the result holds still across polls;
+          4. otherwise the 48V fallback, for a pack that reports no charge voltage at all.
+
+        The live reading cannot do the classifying itself, which is what made the first attempt at
+        this wrong: 15S packs average 49.3-50.4V and 16S 52.6-54.4V, but a full 15S reaches 53.5V
+        and a low 16S drops to 47.1V, so a single sample lands in the wrong class. batteryType is
+        no help either - it names the BMS protocol, not the pack, and PYLON_LV was reported by both
+        classes.
+        """
+        if self.nominal_pack_voltage:
+            return self.nominal_pack_voltage
+        live_voltage = self.get_live_battery_voltage(inverter_sn)
+        if live_voltage and live_voltage > SOLIS_HV_BATTERY_VOLTAGE:
+            return live_voltage
+        charge_voltage = self.get_bms_charge_voltage(inverter_sn)
+        if charge_voltage:
+            nominal = SOLIS_LV_16S_NOMINAL_VOLTAGE if charge_voltage >= SOLIS_LV_16S_CHARGE_VOLTAGE else SOLIS_LV_15S_NOMINAL_VOLTAGE
+            self.report_nominal_voltage(inverter_sn, nominal, f"a BMS charge voltage of {charge_voltage}V")
+            return nominal
+        self.report_nominal_voltage(inverter_sn, self.nominal_voltage, "no BMS charge voltage being reported, so the pack class is unknown")
         return self.nominal_voltage
+
+    def report_nominal_voltage(self, inverter_sn, nominal, reason):
+        """Log the conversion voltage chosen for an LV pack, but only when it changes.
+
+        get_nominal_voltage() runs for every published entity, several times a second during a
+        publish cycle, so this cannot log unconditionally. Keyed on the value rather than a
+        once-only flag so that a pack being reclassified - which should not happen, and is worth
+        seeing if it does - is still reported.
+        """
+        if self.nominal_voltage_reported.get(inverter_sn) == nominal:
+            return
+        self.nominal_voltage_reported[inverter_sn] = nominal
+        self.log(f"Solis API: {inverter_sn} will use {nominal}V for amp<->watt conversions, from {reason} - set solis_nominal_voltage in apps.yaml to state the pack's nominal voltage directly")
 
     def get_capacity_voltage(self, inverter_sn):
         """
@@ -1636,8 +1701,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
         Note on the None case: DEYE's equivalent (nominal_pack_voltage()/derive_battery_capacity()
         in deye.py) refuses to publish a capacity at all rather than guess, on the basis that a
         wrong soc_max source is worse than none. Solis instead falls back to get_nominal_voltage()
-        - since #5090 a latched reading rather than a live one, so the published capacity at least
-        holds still - and flags the result unreliable (see the caller in publish_entities) so that
+        - since #5090 an inferred nominal rather than a live reading on an LV pack, so the published
+        capacity holds still - and flags it unreliable (see the caller in publish_entities) so that
         existing installs which already had this sensor (using the old, worse, hard-coded 48V)
         don't lose it outright. A different tradeoff than DEYE's for the same underlying problem,
         worth reviewer scrutiny.
@@ -2523,7 +2588,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     # handled in _calculate_max_currents() above.
                     battery_count = self.parallel_battery_count.get(inverter_sn, 1)
                     # Prefer the configured nominal pack voltage. Without it, fall back to the
-                    # latched conversion voltage rather than dropping the sensor entirely - existing
+                    # inferred conversion voltage rather than dropping the sensor - existing
                     # installs already have this sensor published (albeit with the old, worse,
                     # hard-coded 48V figure) and losing it outright with no migration path was too
                     # disruptive. It's flagged as unreliable via the reliable/voltage_source
@@ -2539,7 +2604,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         if inverter_sn not in self.capacity_voltage_warned:
                             self.capacity_voltage_warned.add(inverter_sn)
                             self.log(
-                                f"Warn: Solis API {inverter_name} battery capacity is estimated from a battery voltage reading ({capacity_voltage}V), which is only within a few percent of the pack's nominal voltage - "
+                                f"Warn: Solis API {inverter_name} battery capacity is estimated using an inferred pack voltage ({capacity_voltage}V), which is only within a few percent of the pack's true nominal voltage - "
                                 "set solis_nominal_voltage in apps.yaml for an accurate value (this warning will not repeat)"
                             )
                     battery_capacity_kWh = battery_capacity_ah * battery_count * capacity_voltage / 1000.0
@@ -2554,7 +2619,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                             "state_class": "measurement",
                             "icon": "mdi:battery" if reliable else "mdi:battery-alert",
                             "reliable": reliable,
-                            "voltage_source": "configured (solis_nominal_voltage)" if reliable else "estimated from a battery voltage reading - set solis_nominal_voltage in apps.yaml for an accurate value",
+                            "voltage_source": "configured (solis_nominal_voltage)" if reliable else "estimated using an inferred pack voltage - set solis_nominal_voltage in apps.yaml for an accurate value",
                         },
                         app="solis"
                     )
