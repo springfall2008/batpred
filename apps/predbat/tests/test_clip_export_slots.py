@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_inverter
 from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, EXPORT_MODE_TARGET
-from utils import export_mode_of, export_target_of, export_power_of, pack_export_limit
+from utils import export_mode_of, export_target_of, export_power_of, pack_export_limit, export_limits_to_stored, export_limits_from_stored
 
 
 def run_clip_export_slots_tests(my_predbat):
@@ -24,6 +24,7 @@ def run_clip_export_slots_tests(my_predbat):
     failed |= test_normal_export_clipped_up_when_soc_above_reserve_with_zero_limit(my_predbat)
     failed |= test_normal_export_clipped_up_when_soc_flat_above_limit(my_predbat)
     failed |= test_export_power_does_not_shift_the_clip_target(my_predbat)
+    failed |= test_clipped_high_target_is_storable(my_predbat)
     failed |= test_disabled_window_ignored(my_predbat)
     failed |= test_passed_window_clipped(my_predbat)
     failed |= test_multiple_windows_mixed(my_predbat)
@@ -247,6 +248,40 @@ def test_export_power_does_not_shift_the_clip_target(my_predbat):
 
     if not failed:
         print("PASS")
+    return failed
+
+
+def test_clipped_high_target_is_storable(my_predbat):
+    """A target clipped to the top of the range survives being saved and reloaded.
+
+    The clip pass narrows a target towards the SoC the simulation says is reachable, so a battery
+    predicted to sit near full with a derated discharge rate clips to 99% or 100%. The stored-form
+    validator used to reject anything at or above the old freeze sentinel, so the write side emitted
+    those faithfully and the read side turned them into an idle window - the export vanished when a
+    plan was restored after a restart, or when a debug dump was replayed. Paired with the encoding
+    test of the same name so the clip pass and the validator cannot disagree again unnoticed.
+    """
+    print("**** test_clipped_high_target_is_storable ****")
+    failed = False
+    setup(my_predbat)
+
+    for rate_kw, soc_kwh in ((0.06, 9.95), (0.06, 9.99), (0.3, 9.99)):
+        my_predbat.battery_rate_max_discharge = rate_kw / 60.0
+        window = [make_window(0, 60)]
+        limits = [pack_export_limit(EXPORT_MODE_TARGET, 50)]
+        _, clipped = my_predbat.clip_export_slots(0, make_predict_soc(0, soc_kwh), window, limits, 1, 5)
+        limit = clipped[0]
+        if export_mode_of(limit) != EXPORT_MODE_TARGET:
+            print("ERROR: clipping a {}kWh SoC at {}kW gave mode {}, expected a target".format(soc_kwh, rate_kw, export_mode_of(limit)))
+            failed = True
+            continue
+        if export_target_of(limit) < 99:
+            print("ERROR: clipping a {}kWh SoC of 10.0kWh at {}kW gave target {}, expected the top of the range - the fixture no longer exercises the case".format(soc_kwh, rate_kw, export_target_of(limit)))
+            failed = True
+        restored = export_limits_from_stored(export_limits_to_stored([limit]))[0]
+        if restored != limit:
+            print("ERROR: the clipped limit {} did not survive a store/load round trip, became {}".format(limit, restored))
+            failed = True
     return failed
 
 

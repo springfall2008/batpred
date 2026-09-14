@@ -93,6 +93,23 @@ def build_status_extra(status_extra_parts):
     return status_extra
 
 
+def export_target_percent_or_zero(export_limit):
+    """The SoC percentage an export instruction targets, or 0 where it carries no target.
+
+    Only EXPORT_MODE_TARGET has a target; export_target_of returns None for the other two modes so a
+    caller cannot use their sentinels as if they were one. Every value this feeds here - the
+    discharge floor, the displayed target, the inverter target register - is a percentage, so the
+    two modes resolve to the bottom of the range rather than to None.
+
+    Spelled out rather than written `or 0` at each site: that reads as a guard against a falsy
+    target, which is not what is being guarded. The distinction matters because the callers all sit
+    inside a target-mode branch already, so the fallback is unreachable for them and a reader needs
+    to see that it is a type normalisation and not a live default.
+    """
+    target = export_target_of(export_limit)
+    return 0 if target is None else target
+
+
 class Execute:
     """Execution mixin for applying optimised plans to physical inverters.
 
@@ -478,7 +495,7 @@ class Execute:
                 # Turn minutes into time
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + export_adjust))  # Add in 1 minute margin to allow Predbat to restore demand mode
-                discharge_soc = max(((export_target_of(self.export_limits_best[0]) or 0) * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
+                discharge_soc = max((export_target_percent_or_zero(self.export_limits_best[0]) * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
                 self.log("Next export window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.export_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (export_mode_of(self.export_limits_best[0]) != EXPORT_MODE_IDLE):
                     if not self.set_export_freeze_only and export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_TARGET and (self.soc_kw > discharge_soc):
@@ -500,7 +517,7 @@ class Execute:
                         # instruction's own target rather than to the instruction itself
                         target = self.export_window_best[0].get("target")
                         if target is None:
-                            target = export_target_of(self.export_limits_best[0]) or 0
+                            target = export_target_percent_or_zero(self.export_limits_best[0])
                         self.isExporting_Target = int(target)
 
                         status = "Exporting"
@@ -530,14 +547,14 @@ class Execute:
                             isExporting = True
                             target = self.export_window_best[0].get("target")
                             if target is None:
-                                target = export_target_of(self.export_limits_best[0]) or 0
+                                target = export_target_percent_or_zero(self.export_limits_best[0])
                             self.isExporting_Target = int(target)
                         else:
                             status = "Hold exporting"
                             status_per_inverter[inverter.id] = status
                             target = self.export_window_best[0].get("target")
                             if target is None:
-                                target = export_target_of(self.export_limits_best[0]) or 0
+                                target = export_target_percent_or_zero(self.export_limits_best[0])
                             status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, inverter.soc_percent)))  # append multi-inverter target SoC's together
                             self.isExporting_Target = inverter.soc_percent
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
@@ -843,7 +860,7 @@ class Execute:
         Returns:
         - int: export target as a percentage of the battery
         """
-        target = export_target_of(self.export_limits_best[0]) or 0
+        target = export_target_percent_or_zero(self.export_limits_best[0])
         if not self.set_reserve_enable:
             target = max(target, calc_percent_limit(max(self.reserve, self.best_soc_min), self.soc_max))
         return target

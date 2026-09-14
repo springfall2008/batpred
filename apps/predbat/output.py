@@ -3483,7 +3483,12 @@ class Output:
                     else:
                         soc_was = battery_soc_yesterday_array.get(export_end_minute, 0.0)
                         soc_percent = calc_percent_limit(soc_was, self.soc_max)
-                        self.export_limits_best.append(soc_percent)
+                        # A target instruction, not the bare percentage this used to append. A bare
+                        # number still decodes through the legacy path, but only by accident, and
+                        # not at the top of the range: a slot that ended at 99% read back as a
+                        # freeze and one at 100% as an idle window, dropping it from the History
+                        # view entirely.
+                        self.export_limits_best.append(pack_export_limit(EXPORT_MODE_TARGET, soc_percent))
 
                 if "charging" in charge_during_slot:
                     # Assume charging at this time

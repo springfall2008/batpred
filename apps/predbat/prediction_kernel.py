@@ -405,6 +405,22 @@ def double_array(values):
 # because it is one C-level pack per window instead of three Python attribute stores.
 _EXPORT_LIMIT_STRUCT = struct.Struct("@iid")
 
+# That reasoning is checked rather than trusted. from_buffer_copy already rejects a total-size
+# mismatch, but two layouts of the same size with the double at a different offset would pack wrong
+# and run on silently - and the platforms most likely to differ (armv7l, i686) are cross-built, so
+# nobody exercises them here. Both the size and the field offsets are compared, the offsets derived
+# from the same format string rather than written out, so this cannot drift from the Struct above.
+#
+# A mismatch disables the fast path instead of raising: the struct packing is an optimisation, and
+# the per-field fallback below is correct on any layout. That matches how the rest of this module
+# treats a kernel it cannot trust - fall back to something slower that works, rather than take the
+# process down.
+_EXPORT_LIMIT_STRUCT_USABLE = _EXPORT_LIMIT_STRUCT.size == ctypes.sizeof(PkExportLimit) and tuple(getattr(PkExportLimit, name).offset for name in ("mode", "target", "power")) == (
+    0,
+    struct.calcsize("@i"),
+    struct.calcsize("@ii0d"),
+)
+
 # Contents-keyed cache of marshalled export-limit buffers for the single-run path
 # (run_prediction_kernel). The batch path caches by list identity, which never hits here because
 # every prediction is handed a fresh list; a search fans out thousands of simulations over the same
@@ -423,9 +439,20 @@ def _build_export_limit_array(export_limits):
     below, not here, because an unnormalised legacy element (a list or a dict) is unhashable and
     would break tuple(export_limits) itself, not just this packing loop.
     """
+    buffer = PkExportLimit * len(export_limits)
+    if not _EXPORT_LIMIT_STRUCT_USABLE:
+        # Struct packing is not layout-identical to the ctypes struct on this platform, so fill the
+        # fields one at a time instead. Slower, and never taken on any platform Predbat ships.
+        packed = buffer()
+        for index, (mode, target, power) in enumerate(export_limits):
+            entry = packed[index]
+            entry.mode = mode
+            entry.target = target if mode == EXPORT_MODE_TARGET else 0
+            entry.power = power if mode == EXPORT_MODE_TARGET else FULL_EXPORT_POWER
+        return packed
     pack = _EXPORT_LIMIT_STRUCT.pack
     raw = b"".join(pack(mode, target, power) if mode == EXPORT_MODE_TARGET else pack(mode, 0, FULL_EXPORT_POWER) for mode, target, power in export_limits)
-    return (PkExportLimit * len(export_limits)).from_buffer_copy(raw)
+    return buffer.from_buffer_copy(raw)
 
 
 def export_limit_array(export_limits):

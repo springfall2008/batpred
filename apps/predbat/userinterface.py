@@ -800,6 +800,10 @@ class UserInterface:
                     inverter_obj = copy.deepcopy(self.inverters[0])
                     for key in inverter:
                         inverter_obj.__dict__[key] = copy.deepcopy(inverter[key])
+                    # Decoded the same way as the two Predbat-level lists below - the inverter's own
+                    # copy is the same encoding and arrives in the same three shapes
+                    if hasattr(inverter_obj, "export_limits"):
+                        inverter_obj.export_limits = export_limits_from_stored(inverter_obj.export_limits)
                     new_inverters.append(inverter_obj)
                 self.inverters = new_inverters
 
@@ -870,6 +874,12 @@ class UserInterface:
                         pass
                     else:
                         inverter_debug[key] = inverter.__dict__[key]
+            # Each inverter keeps its own copy of the current export instructions, in the same
+            # encoding as the two lists below - so it is written the same self-describing way rather
+            # than as the bare sequence the tuple representer would otherwise emit, which a replay
+            # would restore as a list and hand to export_mode_of to compare against a float.
+            if "export_limits" in inverter_debug:
+                inverter_debug["export_limits"] = export_limits_to_stored(inverter_debug["export_limits"])
             inverters_debug.append(inverter_debug)
         debug["inverters"] = inverters_debug
         debug["CONFIG_ITEMS"] = copy.deepcopy(self.CONFIG_ITEMS)

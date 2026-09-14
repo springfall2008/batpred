@@ -1627,6 +1627,15 @@ def _test_mixed_slot_keeps_most_active_state(my_predbat, failed):
         if unmarked:
             print("ERROR: {} of {} rebuilt export slots held two states but were not marked as mixed".format(len(unmarked), len(captured["export_window_best"])))
             failed = True
+        # A rebuilt limit has to be a real export instruction, not the bare SoC percentage this used
+        # to append. A bare number still decodes through the legacy compatibility path, so every
+        # mode assertion above passes either way - but only for targets below 99, where the packed
+        # encoding's reserved values begin: a slot that ended at 99% would read back as a freeze and
+        # one at 100% as an idle window, dropping it from the History view.
+        bare = [limit for limit in captured["export_limits_best"] if not isinstance(limit, tuple)]
+        if bare:
+            print("ERROR: {} of {} rebuilt export limits are bare numbers rather than (mode, target, power) instructions: {!r}".format(len(bare), len(captured["export_limits_best"]), bare))
+            failed = True
 
     _restore_methods(my_predbat, original_run_pred)
     my_predbat.savings_last_updated = None

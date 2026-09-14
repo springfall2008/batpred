@@ -32,6 +32,7 @@ from const import (
     INVERTER_MAX_RETRY,
     EXPORT_MODE_TARGET,
     EXPORT_MODE_IDLE,
+    FULL_EXPORT_POWER,
     INVERTER_WRITE_POLL_INTERVAL,
     INVERTER_WRITE_POLL_MAX_INTERVAL,
     INVERTER_CLOCK_SKEW_RESTART_MINUTES,
@@ -1751,7 +1752,7 @@ class Inverter:
 
         # Pre-fill best discharge enables
         if self.discharge_enable_time:
-            self.export_limits = [pack_export_limit(EXPORT_MODE_TARGET, 0, 1.0) for i in range(len(self.export_window))]
+            self.export_limits = [pack_export_limit(EXPORT_MODE_TARGET, 0, FULL_EXPORT_POWER) for i in range(len(self.export_window))]
         else:
             self.export_limits = [pack_export_limit(EXPORT_MODE_IDLE) for i in range(len(self.export_window))]
 

@@ -18,7 +18,8 @@ out by hand in Prediction.run_prediction and prediction_kernel.cpp, so the two c
 import random
 
 from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
-from userinterface import dump_debug_yaml
+from tests.test_infra import TestInverter
+from userinterface import dump_debug_yaml, DEBUG_YAML_LOADER
 import io
 import yaml
 from utils import export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limits_to_stored, export_limits_from_stored
@@ -27,7 +28,8 @@ from utils import export_mode_of, export_target_of, export_power_of, export_limi
 def test_export_encoding_roundtrip():
     """Every representable target/power pair survives a pack/unpack round trip"""
     failed = 0
-    for target in range(0, 99):
+    # The full 0-100 range, including the 99 and 100 the packed encoding had no room for
+    for target in range(0, 101):
         for power in (1.0, 0.7, 0.5, 0.3):
             packed = pack_export_limit(EXPORT_MODE_TARGET, target, power)
             if export_mode_of(packed) != EXPORT_MODE_TARGET:
@@ -132,7 +134,11 @@ def test_export_limit_serialisation_roundtrip():
     """
     failed = 0
     limits = [pack_export_limit(EXPORT_MODE_FREEZE), pack_export_limit(EXPORT_MODE_IDLE)]
-    for target in range(0, 99):
+    # 0 to 100 inclusive: the whole representable range, not the 0-98 the packed encoding had room
+    # for. clip_export_slots genuinely produces the top of it - a near-full battery with a derated
+    # discharge rate clips a target up to 99 or 100 - and those used to be written out faithfully
+    # and read back as an idle window, silently dropping the export from a restored plan.
+    for target in range(0, 101):
         for power in (1.0, 0.7, 0.5, 0.3):
             limits.append(pack_export_limit(EXPORT_MODE_TARGET, target, power))
 
@@ -172,7 +178,7 @@ def test_export_limit_reads_the_old_float_form():
         {"mode": "target", "target": "nonsense"},
         {"mode": "target", "target": 40, "power": "nonsense"},
         {"mode": "target", "target": -1, "power": 0.7},
-        {"mode": "target", "target": 99, "power": 0.7},
+        {"mode": "target", "target": 101, "power": 0.7},
         {"mode": "target", "target": 40, "power": -0.1},
         {"mode": "target", "target": 40, "power": 1.1},
     ):
@@ -211,6 +217,124 @@ def test_export_limit_dumps_as_plain_yaml():
     return failed
 
 
+def test_clipped_high_target_survives_a_save_and_reload():
+    """A target clipped to the top of the range round trips instead of becoming an idle window.
+
+    clip_export_slots narrows an export target towards the SoC the simulation says is reachable, so
+    a battery predicted to sit near full with a derated discharge rate clips to a 99% or 100%
+    target. The validator used to reject anything at or above the old freeze sentinel, so
+    export_limit_to_stored wrote those out faithfully and export_limit_from_stored read them back as
+    idle - the export window silently disappeared when a plan was restored after a restart, or when
+    a debug dump was replayed. test_clip_export_slots pairs this with the clip pass itself, so the
+    two halves cannot drift back apart.
+    """
+    failed = 0
+    for target in (99, 100):
+        limit = pack_export_limit(EXPORT_MODE_TARGET, target, 1.0)
+        restored = export_limits_from_stored(export_limits_to_stored([limit]))[0]
+        if restored != limit:
+            print("ERROR: a {}% target did not survive a store/load round trip: {} became {}".format(target, limit, restored))
+            failed += 1
+        if export_mode_of(restored) != EXPORT_MODE_TARGET:
+            print("ERROR: a {}% target reloaded as mode {} rather than a target".format(target, export_mode_of(restored)))
+            failed += 1
+    # Still rejected above the representable range - the bound moved, it did not go away
+    for target in (101, 1000, -1):
+        restored = export_limits_from_stored([{"mode": "target", "target": target, "power": 1.0}])[0]
+        if export_mode_of(restored) != EXPORT_MODE_IDLE:
+            print("ERROR: an out-of-range target of {} was accepted rather than falling back to idle".format(target))
+            failed += 1
+    return failed
+
+
+def test_the_marshaller_agrees_with_its_slow_path():
+    """Packing a limit buffer with struct gives byte-identical results to filling the fields.
+
+    The fast path packs each record with struct.Struct("@iid") and casts the bytes onto the ctypes
+    array, which is only valid while the two layouts agree. prediction_kernel checks that at import
+    and falls back to per-field assignment when they do not - a fallback no shipped platform takes,
+    so nothing would exercise it if this did not. Both paths are run here and compared field for
+    field, so the fallback cannot rot into being wrong by the time a platform needs it.
+    """
+    failed = 0
+    import prediction_kernel
+
+    if not prediction_kernel._EXPORT_LIMIT_STRUCT_USABLE:
+        print("ERROR: struct packing was disabled on this platform - PkExportLimit and '@iid' disagree on layout")
+        failed += 1
+
+    limits = [pack_export_limit(EXPORT_MODE_TARGET, 47, 0.7), pack_export_limit(EXPORT_MODE_TARGET, 100, 1.0), pack_export_limit(EXPORT_MODE_FREEZE), pack_export_limit(EXPORT_MODE_IDLE)]
+    fast = prediction_kernel._build_export_limit_array(limits)
+    prediction_kernel._EXPORT_LIMIT_STRUCT_USABLE = False
+    try:
+        slow = prediction_kernel._build_export_limit_array(limits)
+    finally:
+        prediction_kernel._EXPORT_LIMIT_STRUCT_USABLE = True
+
+    for index in range(len(limits)):
+        packed = (fast[index].mode, fast[index].target, fast[index].power)
+        filled = (slow[index].mode, slow[index].target, slow[index].power)
+        if packed != filled:
+            print("ERROR: limit {} packed as {} but filled as {}".format(limits[index], packed, filled))
+            failed += 1
+    # The two modes carry no target or power of their own, and reach the kernel as 0 and full rate
+    for index, limit in enumerate(limits):
+        if export_mode_of(limit) == EXPORT_MODE_TARGET:
+            continue
+        if (fast[index].target, fast[index].power) != (0, 1.0):
+            print("ERROR: mode {} marshalled as target {} power {}, expected 0 and full rate".format(export_mode_of(limit), fast[index].target, fast[index].power))
+            failed += 1
+    return failed
+
+
+def test_the_debug_dump_stores_every_export_limit_list(my_predbat):
+    """Both the plan's export limits and each inverter's own copy are written in the stored form.
+
+    create_debug_yaml sweeps __dict__ wholesale, so an inverter's export_limits rides into the dump
+    alongside the two Predbat-level lists. It used to be left as the raw tuples, which the dumper's
+    representer writes as bare sequences - a reader could not tell them from a window count, and a
+    replay restored them as lists, where export_mode_of compares a list against a float and raises.
+    Every list in the dump has to be in the same self-describing form.
+    """
+    failed = 0
+    limits = [pack_export_limit(EXPORT_MODE_TARGET, 47, 0.7), pack_export_limit(EXPORT_MODE_FREEZE), pack_export_limit(EXPORT_MODE_IDLE)]
+    # A throwaway inverter rather than reset_inverter, which rewrites most of the shared fixture -
+    # this module runs second in the registry, ahead of nearly the whole suite
+    inverter = TestInverter()
+    inverter.export_limits = list(limits)
+    saved = {"export_limits": my_predbat.export_limits, "export_limits_best": my_predbat.export_limits_best, "inverters": my_predbat.inverters}
+    my_predbat.export_limits = list(limits)
+    my_predbat.export_limits_best = list(limits)
+    my_predbat.inverters = [inverter]
+    try:
+        # The loader read_debug_yaml itself uses. A whole dump carries objects safe_load will not
+        # build (it is loaded back only by Predbat); that the export limits in it are plain data is
+        # what test_export_limit_dumps_as_plain_yaml pins, and this is about which lists get written.
+        document = yaml.load(my_predbat.create_debug_yaml(write_file=False), Loader=DEBUG_YAML_LOADER)
+    except yaml.YAMLError as error:
+        print("ERROR: the debug dump did not load back: {}".format(error))
+        return failed + 1
+    finally:
+        my_predbat.export_limits = saved["export_limits"]
+        my_predbat.export_limits_best = saved["export_limits_best"]
+        my_predbat.inverters = saved["inverters"]
+
+    stored = [("export_limits", document.get("export_limits")), ("export_limits_best", document.get("export_limits_best")), ("inverters[0].export_limits", document.get("inverters", [{}])[0].get("export_limits"))]
+    for name, written in stored:
+        if not isinstance(written, list) or len(written) != len(limits):
+            print("ERROR: {} was not written as a list of {} limits: {!r}".format(name, len(limits), written))
+            failed += 1
+            continue
+        if any(not isinstance(entry, dict) or "mode" not in entry for entry in written):
+            print("ERROR: {} was not written in the self-describing mapping form: {!r}".format(name, written))
+            failed += 1
+            continue
+        if export_limits_from_stored(written) != limits:
+            print("ERROR: {} did not round trip: {!r} became {}".format(name, written, export_limits_from_stored(written)))
+            failed += 1
+    return failed
+
+
 def run_export_encoding_tests(my_predbat=None):
     """Run all export limit encoding tests"""
     failed = 0
@@ -222,6 +346,10 @@ def run_export_encoding_tests(my_predbat=None):
     failed += test_export_limit_serialisation_roundtrip()
     failed += test_export_limit_reads_the_old_float_form()
     failed += test_export_limit_dumps_as_plain_yaml()
+    failed += test_clipped_high_target_survives_a_save_and_reload()
+    failed += test_the_marshaller_agrees_with_its_slow_path()
+    if my_predbat is not None:
+        failed += test_the_debug_dump_stores_every_export_limit_list(my_predbat)
     if not failed:
         print("Test: export limit encoding accessors match the hand-written decode they replace")
     return failed

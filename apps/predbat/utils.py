@@ -1830,6 +1830,14 @@ def export_limit_sort_key(export_limit):
     target as the reserved values did. Tuples order lexicographically, which is not that order, so
     anything comparing two limits by depth - or formatting one as a number for a chart - goes
     through this rather than the raw value.
+
+    Deliberately lossy at the top of the range: a 99% target at full power and a freeze both come
+    back as 99.0, and a 100% target and an idle window both as 100.0, because this has to stay the
+    number the display paths already print (window["target"], the plan_debug limit, the export limit
+    chart series) and those are the numbers they print. The tie is benign - the two sides of it are
+    a discharge that moves almost nothing and one that moves nothing - and nothing decides *what* a
+    window does from this value: every mode test goes through export_mode_of, which reads the field
+    and never confuses the two. Use this to order or to display; never to identify.
     """
     if not isinstance(export_limit, tuple):
         return export_limit
@@ -1922,7 +1930,14 @@ def _export_limit_from_fields(mode, target, power):
         power = float(power)
     except (TypeError, ValueError, OverflowError):
         return pack_export_limit(EXPORT_MODE_IDLE)
-    if target < 0 or target >= EXPORT_LIMIT_FREEZE or power < 0 or power > FULL_EXPORT_POWER:
+    # A target is any whole SoC percentage, 0 to 100 inclusive. The bound used to be the freeze
+    # sentinel, which is where the packed encoding ran out of room - but the fields have no reserved
+    # range, and the planner genuinely produces the top of it: clip_export_slots narrows a target
+    # towards the SoC the simulation says is reachable, so a near-full battery with a derated
+    # discharge rate clips to 99 or 100. Rejecting those made the write side and the read side
+    # disagree - export_limit_to_stored wrote the target out faithfully and this read it back as an
+    # idle window, silently dropping the export from a restored plan or a replayed debug dump.
+    if target < 0 or target > 100 or power < 0 or power > FULL_EXPORT_POWER:
         return pack_export_limit(EXPORT_MODE_IDLE)
     return pack_export_limit(mode, target, power)
 
