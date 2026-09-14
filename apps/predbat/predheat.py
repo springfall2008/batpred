@@ -529,12 +529,12 @@ class PredHeat:
 
         local_tz = pytz.timezone(self.get_arg("timezone", "Europe/London"))
         now_utc = datetime.now(local_tz)
-        now = datetime.now()
         self.forecast_days = self.get_arg("forecast_days", 2, domain="predheat")
         self.forecast_minutes = self.forecast_days * 60 * 24
-        self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = int((now - self.midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
+        # Measured against now_utc like the rest of Predbat, rather than a second naive clock
+        # taken from the host's timezone - see update_time() in predbat.py.
+        self.minutes_now = int((now_utc - self.midnight_utc).total_seconds() / 60 / PREDICT_STEP) * PREDICT_STEP
         self.metric_future_rate_offset_import = 0
 
         self.log("Predheat: update at {}".format(now_utc))

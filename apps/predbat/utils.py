@@ -1510,7 +1510,10 @@ def minutes_since_yesterday(now):
     Calculate the number of minutes since 23:59 yesterday
     """
     yesterday = now - timedelta(days=1)
-    yesterday_at_2359 = datetime.combine(yesterday, datetime.max.time())
+    # replace() rather than datetime.combine(): combine drops the tzinfo, and now is timezone
+    # aware. Keeping the same tzinfo also keeps this a wall-clock difference, as it was when
+    # both sides were naive.
+    yesterday_at_2359 = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
     difference = now - yesterday_at_2359
     difference_minutes = int((difference.seconds + 59) / 60)
     return difference_minutes
