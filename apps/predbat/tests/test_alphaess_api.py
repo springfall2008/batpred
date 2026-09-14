@@ -11,7 +11,7 @@
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 import hashlib
 import pytz
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from alphaess import AlphaESSAPI
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
@@ -27,7 +27,11 @@ class MockAlphaESS(AlphaESSAPI):
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
         self.base.args = {"user_id": "test-alphaess-1"}
-        self.base.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        # A real clock, not a MagicMock attribute: ComponentBase.minutes_now derives from
+        # base.now_utc (GH#4804), so the mock base has to carry a coherent now_utc/midnight_utc
+        # pair. set_mock_clock() below moves it; writing base.minutes_now alone does nothing.
+        self.base.now_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.base.midnight_utc = self.base.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         self.base.minutes_now = 0
         self.state = {}
         self.published = {}
@@ -45,6 +49,16 @@ class MockAlphaESS(AlphaESSAPI):
             control_enable=control_enable,
             api_delay=0,
         )
+
+    def set_mock_clock(self, minutes_now):
+        """Move the mock base's clock to minutes_now past midnight.
+
+        ComponentBase.minutes_now is derived from base.now_utc, so a test that wants a particular
+        time of day has to move the clock rather than write base.minutes_now (GH#4804). Both are
+        set here so a direct base.minutes_now read stays honest too.
+        """
+        self.base.now_utc = self.base.midnight_utc + timedelta(minutes=minutes_now)
+        self.base.minutes_now = minutes_now
 
     def log(self, message):
         """Capture logs."""

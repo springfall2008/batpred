@@ -20,6 +20,8 @@ from this class.
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+
+from utils import minutes_since_midnight
 import asyncio
 import time
 import traceback
@@ -179,8 +181,23 @@ class ComponentBase(ABC):
 
     @property
     def minutes_now(self):
-        """Get the current time in minutes since midnight"""
-        return self.base.minutes_now
+        """Get the current time in minutes since midnight
+
+        Derived from the base's now_utc for the same reason as midnight_utc: calculate_yesterday()
+        (output.py) fakes the shared base.minutes_now to 0 for the duration of the savings
+        calculation, and a component reading it mid-rewind reads 0 - which, unlike a rewound date,
+        looks like a perfectly legitimate "just after midnight" (GH#4804).
+
+        This is the same calculation update_time() makes, through the same helper, so the value is
+        identical to base.minutes_now outside that window.
+
+        now_utc is snapshotted rather than read twice (once here, once through self.midnight_utc):
+        update_time() runs on the main thread and can replace it between the two reads, which at a
+        day boundary would subtract the new day's midnight from the old timestamp and return a
+        negative minute.
+        """
+        now_utc = self.base.now_utc
+        return minutes_since_midnight(now_utc, now_utc.replace(hour=0, minute=0, second=0, microsecond=0))
 
     @property
     def plan_interval_minutes(self):
