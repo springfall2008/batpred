@@ -231,6 +231,12 @@ async def test_async_get_day_night_rates(my_predbat):
     # Create API instance
     api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
 
+    # now_utc_exact is normally a live ComponentBase property, not an instance attribute -
+    # pinning it here shadows that property at the instance level, and was never being
+    # un-shadowed afterwards, leaking a fixed 2024 clock into every later test that reads
+    # now_utc_exact through this same fixture (#5079).
+    now_utc_exact_was_shadowed = "now_utc_exact" in vars(my_predbat)
+
     # Set a fixed current time for predictable testing via my_predbat mock
     fixed_time = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
     my_predbat.now_utc_exact = fixed_time
@@ -440,6 +446,9 @@ async def test_async_get_day_night_rates(my_predbat):
     if not failed:
         print("\n**** All async_get_day_night_rates tests PASSED ****")
 
+    if not now_utc_exact_was_shadowed:
+        del my_predbat.__dict__["now_utc_exact"]
+
     return failed
 
 
@@ -461,6 +470,10 @@ def _test_get_saving_session_data(my_predbat):
 
     # Create API instance
     api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
+
+    # now_utc_exact is normally a live ComponentBase property; pinning it shadows that
+    # property at the instance level and was never being un-shadowed afterwards (#5079).
+    now_utc_exact_was_shadowed = "now_utc_exact" in vars(my_predbat)
 
     # Set a fixed current time for predictable testing
     fixed_time = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
@@ -678,6 +691,9 @@ def _test_get_saving_session_data(my_predbat):
     if not failed:
         print("\n**** All get_saving_session_data tests PASSED ****")
 
+    if not now_utc_exact_was_shadowed:
+        del my_predbat.__dict__["now_utc_exact"]
+
     return failed
 
 
@@ -706,6 +722,10 @@ async def test_async_intelligent_update_sensor(my_predbat):
 
     # Create API instance
     api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
+
+    # now_utc_exact is normally a live ComponentBase property; pinning it shadows that
+    # property at the instance level and was never being un-shadowed afterwards (#5079).
+    now_utc_exact_was_shadowed = "now_utc_exact" in vars(my_predbat)
 
     # Set a fixed current time for predictable testing (Wednesday June 12, 2024)
     fixed_time = datetime(2024, 6, 12, 12, 0, 0, tzinfo=timezone.utc)
@@ -904,6 +924,9 @@ async def test_async_intelligent_update_sensor(my_predbat):
 
     if not failed:
         print("\n**** All async_intelligent_update_sensor tests PASSED ****")
+
+    if not now_utc_exact_was_shadowed:
+        del my_predbat.__dict__["now_utc_exact"]
 
     return failed
 
