@@ -575,8 +575,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
                     # Return data field
                     record_api_call("solis")
-                    self._clear_pause(scope)
-                    return response_json.get("data")
+                    data = response_json.get("data")
+                    # A control response can still refuse individual items, which the caller pauses for, so
+                    # only a response with nothing refused lifts the scope's pause
+                    if not self._has_refused_item(data):
+                        self._clear_pause(scope)
+                    return data
 
         except asyncio.TimeoutError as err:
             record_api_call("solis", False, "connection_error")
@@ -602,6 +606,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
         """Name a request scope for the log."""
         endpoint, inverter_sn = scope
         return f"{endpoint} for {inverter_sn}" if inverter_sn else endpoint
+
+    @staticmethod
+    def _has_refused_item(data):
+        """Return True when a response's item list carries a non-zero code for any item."""
+        return isinstance(data, list) and any(isinstance(item, dict) and item.get("code") is not None and str(item.get("code")) != "0" for item in data)
 
     @staticmethod
     def _quota_pause_bounds(error_msg):

@@ -1451,6 +1451,45 @@ async def test_write_cid_item_level_quota_refusal_pauses_control_writes():
     return failed
 
 
+async def test_item_level_refusals_escalate_and_pause_like_whole_response_refusals():
+    """Refusals inside a control response keep their pause history: a quota pause doubles, and B0115 pauses after repeated refusals."""
+    failed = False
+    scope = (SOLIS_CONTROL_ENDPOINT, "SN1")
+    item_offline = {"code": "0", "data": [{"code": "B0115", "msg": "Sending failure ,the current datalogger is offline or disconnected"}]}
+    clock = _FakeClock()
+    patches = _patch_clock(clock)
+    for active in patches:
+        active.start()
+    try:
+        api = MockSolisAPI()
+        api.session = _SequenceSession([SOLIS_CONTROL_ITEM_QUOTA_REFUSAL])
+        pauses = []
+        for _ in range(3):
+            await api.write_cid("SN1", SOLIS_CID_STORAGE_MODE, "33", old_value="35")
+            pauses.append(api.request_pauses.get(scope, {}).get("pause"))
+            if scope in api.request_pauses:
+                clock.now = api.request_pauses[scope]["until"]
+        if pauses != [900, 1800, 3600]:
+            print("ERROR: item-level quota refusals should double the pause, got {}".format(pauses))
+            failed = True
+
+        api = MockSolisAPI()
+        api.session = _SequenceSession([item_offline])
+        await api.write_cid("SN1", SOLIS_CID_STORAGE_MODE, "33", old_value="35")
+        clock.now += 60
+        await api.write_cid("SN1", SOLIS_CID_STORAGE_MODE, "33", old_value="35")
+        limit = solis_module.SOLIS_DATALOGGER_OFFLINE_REFUSALS
+        if len(api.session.post_calls) != limit or api.request_pauses.get(scope, {}).get("kind") != "offline":
+            print("ERROR: item-level B0115 should pause after {} refusals, got {} requests and {}".format(limit, len(api.session.post_calls), api.request_pauses.get(scope)))
+            failed = True
+    finally:
+        for active in patches:
+            active.stop()
+    if not failed:
+        print("PASSED: refusals inside a control response escalate and pause like whole-response refusals")
+    return failed
+
+
 async def test_oauth_401_still_refreshes_and_retries():
     """An OAuth 401 still refreshes the token and retries under the new backoff, leaving no pause."""
     failed = False
@@ -1865,6 +1904,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_datalogger_that_stays_offline_is_paused_after_repeated_refusals())
         failed |= asyncio.run(test_read_and_write_cid_rides_out_a_brief_datalogger_disconnect())
         failed |= asyncio.run(test_write_cid_item_level_quota_refusal_pauses_control_writes())
+        failed |= asyncio.run(test_item_level_refusals_escalate_and_pause_like_whole_response_refusals())
         failed |= asyncio.run(test_oauth_401_still_refreshes_and_retries())
         failed |= asyncio.run(test_with_retry_backoff_doubles_with_jitter_and_stops_at_the_retry_cap())
         failed |= asyncio.run(test_with_retry_raises_a_non_retryable_error_at_once())
