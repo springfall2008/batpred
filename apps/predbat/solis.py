@@ -51,6 +51,12 @@ SOLIS_MAX_RETRY_TIME = 30  # seconds
 SOLIS_INITIAL_RETRY_DELAY = 1  # seconds
 SOLIS_REQUEST_TIMEOUT = 30  # seconds
 
+# SolisCloud allows 200 OpenAPI requests per account per day. Once that is gone every further
+# request is refused with R0000, so requests are paused rather than retried - see
+# note_quota_exhausted(). One probe an hour is enough to notice the allowance coming back
+# without spending a meaningful part of the next day's budget on finding out (issue #5087).
+SOLIS_QUOTA_PAUSE_SECONDS = 3600
+
 # CID Constants (Control IDs for inverter registers)
 SOLIS_CID_STORAGE_MODE = 636
 SOLIS_CID_BATTERY_RESERVE_SOC = 157
@@ -340,8 +346,16 @@ SOLIS_API_CODES = {
     "10403": "Forbidden",
     "10404": "Not found",
     "10500": "Internal server error",
-    "B0115": "Failure to send",
+    "B0115": "Datalogger offline or disconnected",
+    "R0000": "Daily API request allowance exhausted",
 }
+
+# Response codes that are settled for this cycle: retrying cannot change the answer, and every
+# attempt still spends one of the 200 daily requests. B0115 means the datalogger is offline, not
+# that the request was throttled, and R0000 means the daily allowance is already gone (issue #5087).
+SOLIS_API_CODE_QUOTA_EXCEEDED = "R0000"
+SOLIS_API_CODE_DATALOGGER_OFFLINE = "B0115"
+SOLIS_API_CODES_NO_RETRY = {SOLIS_API_CODE_QUOTA_EXCEEDED, SOLIS_API_CODE_DATALOGGER_OFFLINE}
 
 # Time options for selectors (HH:MM:SS format)
 BASE_TIME = datetime(2000, 1, 1, 0, 0, 0)
@@ -421,6 +435,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         # Tracking
         self.slots_reset = set()  # Track which inverters had slots reset
+        self.quota_exhausted_until = None  # UTC time the daily API allowance pause lifts, None when not paused
+        self.automatic_config_done = False  # Auto-config succeeded, so it does not need re-running
         self.capacity_voltage_warned = set()  # Inverters already warned about an estimated capacity voltage
         self.verify_settle_seconds = SOLIS_VERIFY_SETTLE_SECONDS  # Pause before a verify read is re-taken, 0 in tests
         self.mode_asserted_for = {}  # Inverter -> the window whose start already had the storage mode asserted
@@ -492,8 +508,55 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
     # ==================== Core API Methods ====================
 
+    def _quota_pause_until(self):
+        """Return the UTC time at which Solis requests may resume after the daily allowance ran out.
+
+        The documented reset is the account's day boundary, but SolisCloud does not say which
+        timezone that is, so the pause is capped at SOLIS_QUOTA_PAUSE_SECONDS: whichever boundary
+        the allowance really uses, polling resumes within an hour of it, and a wrong guess at the
+        timezone cannot leave Predbat blind for a whole day.
+        """
+        now = self.now_utc_exact.astimezone(UTC)
+        next_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        return min(next_midnight, now + timedelta(seconds=SOLIS_QUOTA_PAUSE_SECONDS))
+
+    def note_quota_exhausted(self):
+        """Pause all Solis requests after SolisCloud reports the daily API allowance is used up"""
+        resume_at = self._quota_pause_until()
+        if self.quota_exhausted_until and self.quota_exhausted_until >= resume_at:
+            # Already paused for at least this long - don't re-log it on every refused call
+            return
+        self.quota_exhausted_until = resume_at
+        self.log("Error: Solis API: SolisCloud daily API request allowance exhausted (code {}), pausing all Solis requests until {}".format(SOLIS_API_CODE_QUOTA_EXCEEDED, resume_at.strftime("%Y-%m-%d %H:%M:%S UTC")))
+
+    def quota_paused(self):
+        """Whether Solis requests are currently paused because the daily API allowance ran out.
+
+        Clears the pause once it has expired, so the next request is the probe that finds out
+        whether the allowance has been restored.
+        """
+        if not self.quota_exhausted_until:
+            return False
+        if self.now_utc_exact.astimezone(UTC) >= self.quota_exhausted_until:
+            self.log("Solis API: Daily API allowance pause has expired, resuming requests")
+            self.quota_exhausted_until = None
+            return False
+        return True
+
+    def health_message(self):
+        """Name the reason Solis is unhealthy so the run status says more than 'component errors: Solis'"""
+        # Tested against the clock rather than just read: quota_paused() is what clears an expired
+        # pause, and it only runs when a request is attempted, so the stored time outlives the pause.
+        if self.quota_exhausted_until and self.now_utc_exact.astimezone(UTC) < self.quota_exhausted_until:
+            return "Solis Cloud daily API limit reached, paused until {}".format(self.quota_exhausted_until.strftime("%H:%M UTC"))
+        return None
+
     async def _execute_request(self, endpoint, payload):
         """Execute HTTP POST request to Solis API"""
+        # The daily allowance is gone - fail without sending. Requests made while it is exhausted
+        # are refused but still counted, so sending them is what keeps it exhausted (issue #5087).
+        if self.quota_paused():
+            raise SolisAPIError("SolisCloud daily API request allowance exhausted, requests paused until {}".format(self.quota_exhausted_until.strftime("%Y-%m-%d %H:%M:%S UTC")), response_code=SOLIS_API_CODE_QUOTA_EXCEEDED)
         # OAuth reads/control live in a different route namespace (see SOLIS_OAUTH_ENDPOINTS).
         # Translate before building the URL; in api-key mode the paths are used unchanged.
         if self.auth_method == "oauth":
@@ -536,10 +599,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         error_msg = response_json.get("msg", "Unknown error")
                         error_detail = SOLIS_API_CODES.get(str(code), f"Unknown code: {code}")
                         record_api_call("solis", False, "server_error")
-                        if str(code) == "B0115":
-                            # Perform a wait as it maybe rate limiting
-                            self.log("Solis API: Received B0115 error, likely rate limiting. Waiting for 10 seconds before retrying.")
-                            await asyncio.sleep(10)
+                        if str(code) == SOLIS_API_CODE_QUOTA_EXCEEDED:
+                            self.note_quota_exhausted()
+                        elif str(code) == SOLIS_API_CODE_DATALOGGER_OFFLINE:
+                            # Not throttling, whatever the old 10 second sleep assumed: the datalogger
+                            # is offline, so this read is skipped for the cycle rather than retried.
+                            self.log(f"Warn: Solis API: Datalogger for this inverter is offline or disconnected (code {SOLIS_API_CODE_DATALOGGER_OFFLINE}), skipping the read rather than retrying")
                         raise SolisAPIError(f"API error: {error_msg} ({error_detail} - {response_json})", response_code=str(code))
 
                     # Return data field
@@ -566,6 +631,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 # OAuth permanently failed (needs reauth) — abort immediately rather than
                 # burning the full retry window hitting the API with a known-bad token.
                 if self.oauth_failed:
+                    raise err
+                # An exhausted allowance or an offline datalogger will answer every retry the same
+                # way, and each attempt still costs one of the 200 daily requests (issue #5087).
+                if err.response_code in SOLIS_API_CODES_NO_RETRY:
                     raise err
                 elapsed_time = time.monotonic() - start_time
                 if elapsed_time >= max_retry_time:
@@ -1425,10 +1494,14 @@ class SolisAPI(ComponentBase, OAuthMixin):
         return not self._reports_no_battery(self.inverter_details.get(inverter_sn, {}))
 
     async def automatic_config(self):
-        """Automatically configure Predbat base args based on discovered inverters"""
+        """Automatically configure Predbat base args based on discovered inverters.
+
+        Returns True only when the args were actually bound, so run() knows whether to try again
+        on a later cycle (issue #5087).
+        """
         if not self.inverter_sn:
             self.log("Warn: Solis API automatic_config: No inverters to configure")
-            return
+            return False
 
         # Count inverters with batteries
         batteries = []
@@ -1451,7 +1524,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.log(f"Solis API: Configuring Predbat for {num_inverters} inverter(s) with batteries")
         if num_inverters == 0:
             self.log("Warn: Solis API automatic_config: No inverters with batteries found, skipping configuration")
-            return
+            return False
 
         # Convert SNs to lowercase for entity naming
         devices = [sn.lower() for sn in batteries]
@@ -1518,6 +1591,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.set_arg_auto("export_limit", [f"number.{self.prefix}_solis_{device}_max_export_power" for device in devices])
 
         self.log("Solis API: Automatic configuration complete")
+        return True
 
     async def poll_inverter_data(self, inverter_sn, cid_list, batch=True):
         """Poll CID values for specific inverter"""
@@ -3425,9 +3499,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
         if first or (seconds % 60 == 0):
             await self.publish_entities()
 
-        # Auto-configure Predbat if enabled
-        if first and self.automatic and self.inverter_sn:
-            await self.automatic_config()
+        # Auto-configure Predbat if enabled. Retried on later cycles rather than being a
+        # first-cycle-only step: when the first cycle can't read the inverter details (an exhausted
+        # API allowance, a cloud outage) there is nothing to bind the args to, and without a retry
+        # load_today and the rest stay unset until Predbat is restarted - which is what left
+        # fetch_sensor_data raising ValueError every cycle in issue #5087.
+        if self.automatic and self.inverter_sn and not self.automatic_config_done:
+            self.automatic_config_done = bool(await self.automatic_config())
 
         # Return status. A refused control write must not refresh the success timestamp:
         # components.is_alive() treats a stale timestamp as unhealthy, which surfaces as
