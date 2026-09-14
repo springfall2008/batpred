@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import random
+import re
 import time
 import copy
 from datetime import datetime, timedelta, UTC
@@ -54,10 +55,25 @@ SOLIS_MAX_RETRY_DELAY = 8  # seconds, cap on any single backoff wait
 SOLIS_MAX_RETRIES = 4  # retries after the first attempt - each one is another request against the quota
 SOLIS_REQUEST_TIMEOUT = 30  # seconds
 
+# SolisCloud reports an exhausted request quota as HTTP 200 with a message such as
+# "No authority too many request 200 times in 1DAYS". No retry can succeed until the quota window
+# moves on, and every attempt counts against the same quota, so the request is paused instead. The
+# pause starts short, doubles each time the quota is still exhausted, and never outlasts the window
+# the message names.
+SOLIS_QUOTA_MESSAGE = re.compile(r"too many requests?", re.IGNORECASE)
+SOLIS_QUOTA_WINDOW = re.compile(r"(\d+)\s*times?\s+in\s+(\d+)\s*(second|minute|hour|day)s?", re.IGNORECASE)
+SOLIS_QUOTA_WINDOW_SECONDS = {"second": 1, "minute": 60, "hour": 60 * 60, "day": 24 * 60 * 60}
+SOLIS_QUOTA_PAUSE_INITIAL = 15 * 60  # seconds
+SOLIS_QUOTA_PAUSE_MAX = 60 * 60  # seconds - also the longest a quota that has come back can go unused
+
 # B0115 means the datalogger is offline or disconnected. Most are brief and a retry about 10s later
-# succeeds, so the retry waits at least that long.
+# succeeds, so the retry waits at least that long. Only a datalogger that keeps refusing - more
+# requests in a row than one call's retries, with no success between - has its requests paused.
 SOLIS_DATALOGGER_OFFLINE_CODE = "B0115"
 SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY = 10  # seconds
+SOLIS_DATALOGGER_OFFLINE_REFUSALS = 6  # consecutive refusals before pausing
+SOLIS_DATALOGGER_OFFLINE_PAUSE_INITIAL = 5 * 60  # seconds
+SOLIS_DATALOGGER_OFFLINE_PAUSE_MAX = 60 * 60  # seconds
 
 # CID Constants (Control IDs for inverter registers)
 SOLIS_CID_STORAGE_MODE = 636
@@ -358,9 +374,12 @@ OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M:%S
 
 class SolisAPIError(Exception):
     """Custom exception for Solis API errors"""
-    def __init__(self, message, status_code=None, response_code=None, retry_after=0):
+    def __init__(self, message, status_code=None, response_code=None, retryable=True, retry_after=0):
         self.status_code = status_code
         self.response_code = response_code
+        # False when sending the request again cannot help yet - an exhausted quota, a datalogger that
+        # keeps refusing, a request held back by a pause - so _with_retry raises it at once
+        self.retryable = retryable
         # Shortest wait in seconds before a retry is worth sending, e.g. for a datalogger to reconnect
         self.retry_after = retry_after
         final_message = message
@@ -434,6 +453,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.capacity_voltage_warned = set()  # Inverters already warned about an estimated capacity voltage
         self.verify_settle_seconds = SOLIS_VERIFY_SETTLE_SECONDS  # Pause before a verify read is re-taken, 0 in tests
         self.mode_asserted_for = {}  # Inverter -> the window whose start already had the storage mode asserted
+        self.request_pauses = {}  # (endpoint, inverter SN) -> pause after an exhausted quota or offline datalogger, see _pause_requests()
+        self.offline_refusals = {}  # (endpoint, inverter SN) -> B0115 refusals since the last success, see _refusal_error()
 
         self.log(f"Solis API: Initialised with inverter_sn={self.configured_inverter_sn}, automatic={automatic}")
 
@@ -504,6 +525,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
     async def _execute_request(self, endpoint, payload):
         """Execute HTTP POST request to Solis API"""
+        # Scoped on the untranslated endpoint, so a pause holds in either auth mode
+        scope = self._request_scope(endpoint, payload)
+        self._raise_if_paused(scope)
         # OAuth reads/control live in a different route namespace (see SOLIS_OAUTH_ENDPOINTS).
         # Translate before building the URL; in api-key mode the paths are used unchanged.
         if self.auth_method == "oauth":
@@ -545,12 +569,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     if str(code) != "0":
                         error_msg = response_json.get("msg", "Unknown error")
                         error_detail = SOLIS_API_CODES.get(str(code), f"Unknown code: {code}")
-                        record_api_call("solis", False, "server_error")
-                        retry_after = SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY if str(code) == SOLIS_DATALOGGER_OFFLINE_CODE else 0
-                        raise SolisAPIError(f"API error: {error_msg} ({error_detail} - {response_json})", response_code=str(code), retry_after=retry_after)
+                        message = f"API error: {error_msg} ({error_detail} - {response_json})"
+                        record_api_call("solis", False, "rate_limit" if SOLIS_QUOTA_MESSAGE.search(str(error_msg)) else "server_error")
+                        raise self._refusal_error(scope, code, error_msg, message)
 
                     # Return data field
                     record_api_call("solis")
+                    self._clear_pause(scope)
                     return response_json.get("data")
 
         except asyncio.TimeoutError as err:
@@ -560,11 +585,96 @@ class SolisAPI(ComponentBase, OAuthMixin):
             record_api_call("solis", False, "connection_error")
             raise SolisAPIError(f"Network error accessing {url}: {str(err)}") from err
 
+    @staticmethod
+    def _request_scope(endpoint, payload):
+        """Return the (endpoint, inverter SN) pair that a quota or offline pause applies to.
+
+        The refusals name one inverter's requests, so a pause is kept as narrow as the failure rather
+        than silencing every inverter on the account. If a quota turns out to cover the whole account,
+        each scope pauses itself on its own first refusal. Account-level calls such as the inverter
+        list carry no SN and share an empty one.
+        """
+        payload = payload or {}
+        return endpoint, str(payload.get("inverterSn") or payload.get("sn") or "")
+
+    @staticmethod
+    def _describe_scope(scope):
+        """Name a request scope for the log."""
+        endpoint, inverter_sn = scope
+        return f"{endpoint} for {inverter_sn}" if inverter_sn else endpoint
+
+    @staticmethod
+    def _quota_pause_bounds(error_msg):
+        """Return (reason, first pause, longest pause) for a quota refusal, pauses in seconds.
+
+        Neither pause outlasts the quota window the message names ("200 times in 1DAYS"); a message
+        that names no window gets the default bounds.
+        """
+        window = SOLIS_QUOTA_WINDOW.search(error_msg)
+        if not window:
+            return "the request quota is exhausted", SOLIS_QUOTA_PAUSE_INITIAL, SOLIS_QUOTA_PAUSE_MAX
+        limit, count, unit = window.group(1), int(window.group(2)), window.group(3).lower()
+        window_seconds = max(count, 1) * SOLIS_QUOTA_WINDOW_SECONDS[unit]
+        reason = f"the request quota of {limit} per {count} {unit}{'' if count == 1 else 's'} is exhausted"
+        return reason, min(SOLIS_QUOTA_PAUSE_INITIAL, window_seconds), min(SOLIS_QUOTA_PAUSE_MAX, window_seconds)
+
+    def _refusal_error(self, scope, code, error_msg, message):
+        """Build the error for a refused request, pausing its scope when retrying cannot help.
+
+        An exhausted quota pauses the scope at once. B0115 is retried after
+        SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY and pauses the scope only after
+        SOLIS_DATALOGGER_OFFLINE_REFUSALS refusals in a row. Anything else is an ordinary retryable error.
+        """
+        error_msg = str(error_msg)
+        if SOLIS_QUOTA_MESSAGE.search(error_msg):
+            self._pause_requests(scope, "quota", *self._quota_pause_bounds(error_msg))
+            return SolisAPIError(message, response_code=str(code), retryable=False)
+        if str(code) == SOLIS_DATALOGGER_OFFLINE_CODE:
+            refusals = self.offline_refusals.get(scope, 0) + 1
+            self.offline_refusals[scope] = refusals
+            if refusals >= SOLIS_DATALOGGER_OFFLINE_REFUSALS:
+                self._pause_requests(scope, "offline", f"the datalogger has refused {refusals} requests in a row as offline", SOLIS_DATALOGGER_OFFLINE_PAUSE_INITIAL, SOLIS_DATALOGGER_OFFLINE_PAUSE_MAX)
+                return SolisAPIError(message, response_code=str(code), retryable=False)
+            return SolisAPIError(message, response_code=str(code), retry_after=SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY)
+        return SolisAPIError(message, response_code=str(code))
+
+    def _pause_requests(self, scope, kind, reason, first_pause, longest_pause):
+        """Stop sending requests in a scope for a while.
+
+        The pause doubles, up to longest_pause, while the same kind of refusal comes back soon after the
+        last pause ends. A different kind of refusal, or one long after the last pause, starts again at
+        first_pause.
+        """
+        now = time.monotonic()
+        previous = self.request_pauses.get(scope)
+        if previous and previous["kind"] == kind and now - previous["until"] < previous["pause"]:
+            pause = min(previous["pause"] * 2, longest_pause)
+        else:
+            pause = min(first_pause, longest_pause)
+        self.request_pauses[scope] = {"until": now + pause, "pause": pause, "kind": kind, "reason": reason}
+        self.log(f"Warn: Solis API: {reason}, pausing requests to {self._describe_scope(scope)} for {pause:.0f}s")
+
+    def _raise_if_paused(self, scope):
+        """Refuse a request, without sending it, while its scope is paused."""
+        paused = self.request_pauses.get(scope)
+        if paused:
+            remaining = paused["until"] - time.monotonic()
+            if remaining > 0:
+                raise SolisAPIError(f"Request to {self._describe_scope(scope)} not sent, {paused['reason']} - next attempt in {remaining:.0f}s", retryable=False)
+
+    def _clear_pause(self, scope):
+        """Forget a scope's pause and B0115 refusal count once a request in it succeeds again."""
+        self.offline_refusals.pop(scope, None)
+        if self.request_pauses.pop(scope, None):
+            self.log(f"Solis API: Requests to {self._describe_scope(scope)} are succeeding again, pause lifted")
+
     async def _with_retry(self, operation, max_retry_time=SOLIS_MAX_RETRY_TIME):
         """Run operation, retrying transient failures with capped exponential backoff.
 
         Every retry is one more request counted against the SolisCloud quota, so a call gives up after
-        SOLIS_MAX_RETRIES retries or max_retry_time, whichever comes first.
+        SOLIS_MAX_RETRIES retries or max_retry_time, whichever comes first. Errors marked not retryable -
+        an exhausted quota, a datalogger that keeps refusing, a request held back by a pause - are raised
+        at once.
         """
         start_time = time.monotonic()
         attempt = 0
@@ -575,7 +685,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             except SolisAPIError as err:
                 # OAuth permanently failed (needs reauth) — abort immediately rather than
                 # burning the full retry window hitting the API with a known-bad token.
-                if self.oauth_failed:
+                if self.oauth_failed or not err.retryable:
                     raise err
                 elapsed_time = time.monotonic() - start_time
                 if attempt >= SOLIS_MAX_RETRIES or elapsed_time >= max_retry_time:
@@ -1328,7 +1438,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 code = item.get("code")
                 if code is not None and str(code) != "0":
                     error_msg = item.get("msg", "Unknown error")
-                    raise SolisAPIError(f"Write CID {cid} failed: {error_msg}", response_code=str(code))
+                    # A refusal can arrive per item as well as for the whole request, so it pauses the same way
+                    raise self._refusal_error(self._request_scope(SOLIS_CONTROL_ENDPOINT, payload), code, error_msg, f"Write CID {cid} failed: {error_msg}")
 
         try:
             await self._with_retry(write_operation)

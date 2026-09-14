@@ -67,6 +67,8 @@ class MockSolisAPI(SolisAPI):
         # care about it, and every other test would just be waiting for nothing.
         self.verify_settle_seconds = 0
         self.mode_asserted_for = {}
+        self.request_pauses = {}
+        self.offline_refusals = {}
         self.control_enable = True
         self.configured_inverter_sn = []
         self.inverter_sn = []
@@ -1142,12 +1144,14 @@ async def test_with_retry_aborts_on_oauth_failed():
 
 
 # ---------------------------------------------------------------------------
-# Retry backoff and brief datalogger disconnects
+# Retry backoff, quota refusals and offline dataloggers
 # ---------------------------------------------------------------------------
 
+SOLIS_QUOTA_REFUSAL = {"success": True, "code": "R0000", "msg": "No authority too many request 200 times in 1DAYS", "data": None}
 SOLIS_DATALOGGER_OFFLINE = {"success": True, "code": "B0115", "msg": "Sending failure ,the current datalogger is offline or disconnected", "data": None}
 SOLIS_READ_OK = {"code": "0", "data": {"msg": "50"}}
 SOLIS_CONTROL_OK = {"code": "0", "data": [{"code": "0", "msg": "ok"}]}
+SOLIS_CONTROL_ITEM_QUOTA_REFUSAL = {"code": "0", "data": [{"code": "R0000", "msg": "No authority too many request 200 times in 1DAYS"}]}
 
 
 class _SequenceSession:
@@ -1205,8 +1209,123 @@ def _patch_clock(clock, uniform=None):
     return patches
 
 
+async def _expect_refusal(api, inverter_sn, cid=103):
+    """Read a CID that should be refused; return the error, or None if the read succeeded."""
+    try:
+        await api.read_cid(inverter_sn, cid)
+    except solis_module.SolisAPIError as err:
+        return err
+    return None
+
+
+async def test_quota_refusal_pauses_that_inverter_endpoint_without_retrying():
+    """An exhausted quota is not retried, and that inverter's requests to that endpoint are held back until the pause ends."""
+    failed = False
+    api = MockSolisAPI()
+    clock = _FakeClock()
+    scope = (SOLIS_READ_ENDPOINT, "SN1")
+    patches = _patch_clock(clock)
+    for active in patches:
+        active.start()
+    try:
+        api.session = _SequenceSession([SOLIS_QUOTA_REFUSAL])
+        err = await _expect_refusal(api, "SN1")
+        if err is None or err.retryable:
+            print("ERROR: a quota refusal must raise a non-retryable error, got {!r}".format(err))
+            failed = True
+        if len(api.session.post_calls) != 1 or clock.sleeps:
+            print("ERROR: expected one request and no retry wait, got {} requests and waits {}".format(len(api.session.post_calls), clock.sleeps))
+            failed = True
+        if api.request_pauses.get(scope, {}).get("pause") != solis_module.SOLIS_QUOTA_PAUSE_INITIAL:
+            print("ERROR: expected a {}s pause, got {}".format(solis_module.SOLIS_QUOTA_PAUSE_INITIAL, api.request_pauses.get(scope)))
+            failed = True
+
+        # Still paused: the request is refused without being sent
+        clock.now += 60
+        if await _expect_refusal(api, "SN1") is None or len(api.session.post_calls) != 1:
+            print("ERROR: a paused request was sent ({} requests)".format(len(api.session.post_calls)))
+            failed = True
+
+        # Another inverter, and another endpoint for the same inverter, are not held back
+        api.session = _SequenceSession([SOLIS_READ_OK])
+        value, _info = await api.read_cid("SN2", 103)
+        await api._execute_request(SOLIS_INVERTER_DETAIL_ENDPOINT, {"sn": "SN1"})
+        if value != "50" or len(api.session.post_calls) != 2:
+            print("ERROR: requests outside the paused scope should be sent, got value {} after {} requests".format(value, len(api.session.post_calls)))
+            failed = True
+
+        # When the pause ends a single request goes out; refused again, the pause doubles
+        clock.now += solis_module.SOLIS_QUOTA_PAUSE_INITIAL
+        api.session = _SequenceSession([SOLIS_QUOTA_REFUSAL])
+        await _expect_refusal(api, "SN1")
+        if len(api.session.post_calls) != 1 or api.request_pauses.get(scope, {}).get("pause") != 2 * solis_module.SOLIS_QUOTA_PAUSE_INITIAL:
+            print("ERROR: expected one probe and a doubled pause, got {} requests and {}".format(len(api.session.post_calls), api.request_pauses.get(scope)))
+            failed = True
+
+        # A success once that pause ends lifts it
+        clock.now += 2 * solis_module.SOLIS_QUOTA_PAUSE_INITIAL
+        api.session = _SequenceSession([SOLIS_READ_OK])
+        value, _info = await api.read_cid("SN1", 103)
+        if value != "50" or scope in api.request_pauses:
+            print("ERROR: a successful request should lift the pause, got value {} and {}".format(value, api.request_pauses.get(scope)))
+            failed = True
+    finally:
+        for active in patches:
+            active.stop()
+    if not failed:
+        print("PASSED: a quota refusal pauses only that inverter's endpoint, is not retried, and lifts on success")
+    return failed
+
+
+def test_quota_pause_bounds_follow_the_quota_window():
+    """A quota pause doubles up to its cap, never outlasts the quota window, and starts again after a quiet spell or a different refusal."""
+    failed = False
+    cases = [
+        ("No authority too many request 200 times in 1DAYS", 15 * 60, 60 * 60, "200 per 1 day"),
+        ("too many requests 10 times in 1MINUTES", 60, 60, "10 per 1 minute"),
+        ("too many request 50 times in 20 MINUTES", 15 * 60, 20 * 60, "50 per 20 minutes"),
+        ("too many request", solis_module.SOLIS_QUOTA_PAUSE_INITIAL, solis_module.SOLIS_QUOTA_PAUSE_MAX, "quota is exhausted"),
+    ]
+    for message, first, longest, reason_part in cases:
+        reason, got_first, got_longest = SolisAPI._quota_pause_bounds(message)
+        if (got_first, got_longest) != (first, longest) or reason_part not in reason:
+            print("ERROR: {!r} gave {!r} {}s-{}s, expected {}s-{}s mentioning {!r}".format(message, reason, got_first, got_longest, first, longest, reason_part))
+            failed = True
+
+    api = MockSolisAPI()
+    clock = _FakeClock()
+    scope = (SOLIS_READ_ENDPOINT, "SN1")
+    with _patch_clock(clock)[0]:
+        # Refused again as soon as each pause ends: doubles to the cap
+        pauses = []
+        for _ in range(4):
+            api._pause_requests(scope, "quota", "quota", 15 * 60, 60 * 60)
+            pauses.append(api.request_pauses[scope]["pause"])
+            clock.now = api.request_pauses[scope]["until"]
+        if pauses != [900, 1800, 3600, 3600]:
+            print("ERROR: expected pauses [900, 1800, 3600, 3600], got {}".format(pauses))
+            failed = True
+
+        # Refused again long after the last pause ended: starts from the first pause
+        clock.now += 2 * 60 * 60
+        api._pause_requests(scope, "quota", "quota", 15 * 60, 60 * 60)
+        if api.request_pauses[scope]["pause"] != 900:
+            print("ERROR: a refusal long after the last pause should start again at 900s, got {}".format(api.request_pauses[scope]["pause"]))
+            failed = True
+
+        # A different kind of refusal does not inherit the quota escalation
+        clock.now = api.request_pauses[scope]["until"]
+        api._pause_requests(scope, "offline", "offline", 5 * 60, 60 * 60)
+        if api.request_pauses[scope]["pause"] != 300:
+            print("ERROR: an offline pause after a quota pause should start at 300s, got {}".format(api.request_pauses[scope]["pause"]))
+            failed = True
+    if not failed:
+        print("PASSED: quota pauses double to their cap, stay inside the quota window, and reset")
+    return failed
+
+
 async def test_brief_datalogger_disconnect_is_retried_after_ten_seconds():
-    """A single B0115 is retried after SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY."""
+    """A single B0115 is retried after SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY and leaves no pause behind."""
     failed = False
     api = MockSolisAPI()
     clock = _FakeClock()
@@ -1222,11 +1341,64 @@ async def test_brief_datalogger_disconnect_is_retried_after_ten_seconds():
         if clock.sleeps != [solis_module.SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY]:
             print("ERROR: expected one {}s wait, got {}".format(solis_module.SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY, clock.sleeps))
             failed = True
+        if api.request_pauses or api.offline_refusals:
+            print("ERROR: a recovered disconnect should leave no pause or refusal count, got {} {}".format(api.request_pauses, api.offline_refusals))
+            failed = True
     finally:
         for active in patches:
             active.stop()
     if not failed:
-        print("PASSED: a brief datalogger disconnect is retried after 10s")
+        print("PASSED: a brief datalogger disconnect is retried after 10s without pausing")
+    return failed
+
+
+async def test_datalogger_that_stays_offline_is_paused_after_repeated_refusals():
+    """B0115 on every request pauses the scope once SOLIS_DATALOGGER_OFFLINE_REFUSALS come in a row, then backs off."""
+    failed = False
+    api = MockSolisAPI()
+    clock = _FakeClock()
+    scope = (SOLIS_READ_ENDPOINT, "SN1")
+    limit = solis_module.SOLIS_DATALOGGER_OFFLINE_REFUSALS
+    patches = _patch_clock(clock)
+    for active in patches:
+        active.start()
+    try:
+        api.session = _SequenceSession([SOLIS_DATALOGGER_OFFLINE])
+        err = await _expect_refusal(api, "SN1")
+        first_call_requests = len(api.session.post_calls)
+        if err is None or scope in api.request_pauses or first_call_requests >= limit:
+            print("ERROR: one failed call ({} requests) should not pause yet, got {!r} and {}".format(first_call_requests, err, api.request_pauses.get(scope)))
+            failed = True
+
+        clock.now += 60
+        err = await _expect_refusal(api, "SN1")
+        if err is None or err.retryable or len(api.session.post_calls) != limit:
+            print("ERROR: expected a non-retryable error at refusal {}, got {!r} after {} requests".format(limit, err, len(api.session.post_calls)))
+            failed = True
+        if api.request_pauses.get(scope, {}).get("pause") != solis_module.SOLIS_DATALOGGER_OFFLINE_PAUSE_INITIAL:
+            print("ERROR: expected a {}s offline pause, got {}".format(solis_module.SOLIS_DATALOGGER_OFFLINE_PAUSE_INITIAL, api.request_pauses.get(scope)))
+            failed = True
+
+        # Nothing is sent while paused; the probe after the pause is refused again and the pause doubles
+        await _expect_refusal(api, "SN1")
+        clock.now = api.request_pauses[scope]["until"]
+        await _expect_refusal(api, "SN1")
+        if len(api.session.post_calls) != limit + 1 or api.request_pauses[scope]["pause"] != 2 * solis_module.SOLIS_DATALOGGER_OFFLINE_PAUSE_INITIAL:
+            print("ERROR: expected one probe and a doubled pause, got {} requests and {}".format(len(api.session.post_calls), api.request_pauses.get(scope)))
+            failed = True
+
+        # The datalogger comes back: the next request after the pause succeeds and clears everything
+        clock.now = api.request_pauses[scope]["until"]
+        api.session = _SequenceSession([SOLIS_READ_OK])
+        value, _info = await api.read_cid("SN1", 103)
+        if value != "50" or api.request_pauses or api.offline_refusals:
+            print("ERROR: a success should lift the pause and refusal count, got value {} {} {}".format(value, api.request_pauses, api.offline_refusals))
+            failed = True
+    finally:
+        for active in patches:
+            active.stop()
+    if not failed:
+        print("PASSED: a datalogger that stays offline is paused after repeated refusals and lifts on success")
     return failed
 
 
@@ -1245,6 +1417,9 @@ async def test_read_and_write_cid_rides_out_a_brief_datalogger_disconnect():
         if not result or endpoints != [SOLIS_READ_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_READ_ENDPOINT]:
             print("ERROR: expected read, refused write, retried write, verify read to succeed, got {} via {}".format(result, endpoints))
             failed = True
+        if api.request_pauses:
+            print("ERROR: a brief disconnect should not pause control writes, got {}".format(api.request_pauses))
+            failed = True
     finally:
         for active in patches:
             active.stop()
@@ -1253,8 +1428,31 @@ async def test_read_and_write_cid_rides_out_a_brief_datalogger_disconnect():
     return failed
 
 
+async def test_write_cid_item_level_quota_refusal_pauses_control_writes():
+    """A quota refusal inside a control response's item list is not retried and pauses writes to that inverter."""
+    failed = False
+    api = MockSolisAPI()
+    clock = _FakeClock()
+    patches = _patch_clock(clock)
+    for active in patches:
+        active.start()
+    try:
+        api.session = _SequenceSession([SOLIS_CONTROL_ITEM_QUOTA_REFUSAL])
+        result = await api.write_cid("SN1", SOLIS_CID_STORAGE_MODE, "33", old_value="35")
+        pause = api.request_pauses.get((SOLIS_CONTROL_ENDPOINT, "SN1"), {})
+        if result or len(api.session.post_calls) != 1 or clock.sleeps or pause.get("kind") != "quota":
+            print("ERROR: expected one refused write with a quota pause, got {} after {} requests, waits {}, pause {}".format(result, len(api.session.post_calls), clock.sleeps, pause))
+            failed = True
+    finally:
+        for active in patches:
+            active.stop()
+    if not failed:
+        print("PASSED: an item-level quota refusal pauses control writes without retrying")
+    return failed
+
+
 async def test_oauth_401_still_refreshes_and_retries():
-    """An OAuth 401 still refreshes the token and retries under the new backoff."""
+    """An OAuth 401 still refreshes the token and retries under the new backoff, leaving no pause."""
     failed = False
     api = MockSolisAPI()
     api.auth_method = "oauth"
@@ -1276,8 +1474,8 @@ async def test_oauth_401_still_refreshes_and_retries():
     try:
         api.session = _SequenceSession([_FakeResponse(status=401, payload={"error": "expired"}), SOLIS_READ_OK])
         value, _info = await api.read_cid("SN1", 103)
-        if value != "50" or refreshes["n"] != 1 or len(api.session.post_calls) != 2:
-            print("ERROR: expected one refresh and a successful retry, got value {} refreshes {} requests {}".format(value, refreshes["n"], len(api.session.post_calls)))
+        if value != "50" or refreshes["n"] != 1 or len(api.session.post_calls) != 2 or api.request_pauses:
+            print("ERROR: expected one refresh and a successful retry, got value {} refreshes {} requests {} pauses {}".format(value, refreshes["n"], len(api.session.post_calls), api.request_pauses))
             failed = True
     finally:
         for active in patches:
@@ -1323,6 +1521,38 @@ async def test_with_retry_backoff_doubles_with_jitter_and_stops_at_the_retry_cap
             failed = True
     if not failed:
         print("PASSED: _with_retry backs off exponentially with jitter and stops at its caps")
+    return failed
+
+
+async def test_with_retry_raises_a_non_retryable_error_at_once():
+    """A non-retryable error is raised on the first attempt, with no wait."""
+    failed = False
+    api = MockSolisAPI()
+    clock = _FakeClock()
+    attempts = {"n": 0}
+
+    async def operation():
+        """Fail with an error that retrying cannot fix."""
+        attempts["n"] += 1
+        raise solis_module.SolisAPIError("quota", retryable=False)
+
+    patches = _patch_clock(clock)
+    for active in patches:
+        active.start()
+    try:
+        await api._with_retry(operation)
+        print("ERROR: expected the non-retryable error to propagate")
+        failed = True
+    except solis_module.SolisAPIError:
+        pass
+    finally:
+        for active in patches:
+            active.stop()
+    if attempts["n"] != 1 or clock.sleeps:
+        print("ERROR: expected one attempt and no wait, got {} attempts and waits {}".format(attempts["n"], clock.sleeps))
+        failed = True
+    if not failed:
+        print("PASSED: _with_retry raises a non-retryable error at once")
     return failed
 
 
@@ -1629,10 +1859,15 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_oauth_endpoint_namespace_translation())
         failed |= asyncio.run(test_oauth_execute_request_aborts_when_token_missing())
         failed |= asyncio.run(test_with_retry_aborts_on_oauth_failed())
+        failed |= asyncio.run(test_quota_refusal_pauses_that_inverter_endpoint_without_retrying())
+        failed |= test_quota_pause_bounds_follow_the_quota_window()
         failed |= asyncio.run(test_brief_datalogger_disconnect_is_retried_after_ten_seconds())
+        failed |= asyncio.run(test_datalogger_that_stays_offline_is_paused_after_repeated_refusals())
         failed |= asyncio.run(test_read_and_write_cid_rides_out_a_brief_datalogger_disconnect())
+        failed |= asyncio.run(test_write_cid_item_level_quota_refusal_pauses_control_writes())
         failed |= asyncio.run(test_oauth_401_still_refreshes_and_retries())
         failed |= asyncio.run(test_with_retry_backoff_doubles_with_jitter_and_stops_at_the_retry_cap())
+        failed |= asyncio.run(test_with_retry_raises_a_non_retryable_error_at_once())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())
