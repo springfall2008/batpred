@@ -58,7 +58,7 @@ class MockSolisAPI(SolisAPI):
         # __init__ (skipped above) sets this.
         self.queued_events = []
         self.nominal_voltage = 48.0
-        self.nominal_voltage_last_known = {}
+        self.nominal_voltage_latched = {}
         self.nominal_pack_voltage = None
         self.capacity_voltage_warned = set()
         # No wall-clock pause in tests; the settle re-read itself is asserted by the tests that
@@ -1532,6 +1532,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config())
         failed |= asyncio.run(test_get_nominal_voltage_and_capacity_voltage())
         failed |= asyncio.run(test_publish_entities_capacity_voltage_reliability())
+        failed |= test_nominal_voltage_sources_and_stability()
+        failed |= asyncio.run(test_rate_setpoints_do_not_drift_with_battery_voltage())
         failed |= asyncio.run(test_publish_entities_export_power_unit_conversion())
         failed |= asyncio.run(test_inverter_sn_filter_exact_match())
         failed |= asyncio.run(test_inverter_sn_filter_case_insensitive())
@@ -3466,8 +3468,10 @@ async def test_publish_entities():
     api.max_charge_current[inverter_sn] = 50
     api.max_discharge_current[inverter_sn] = 50
 
-    # Nominal pack voltage for the battery capacity calculation (issue #4493) - deliberately
-    # distinct from the fixture's live batteryVoltage (52.3V) used for power conversions
+    # Configured nominal pack voltage (issue #4493) - deliberately distinct from the fixture's
+    # live batteryVoltage (52.3V) so that the assertions below pin down which of the two every
+    # derived value uses. Since #5090 that is the configured voltage for all of them; the live
+    # reading survives only as the battery_voltage sensor.
     api.nominal_pack_voltage = 512.0
 
     # Call publish_entities
@@ -3496,11 +3500,11 @@ async def test_publish_entities():
     charge_soc = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_soc"]
     assert charge_soc["state"] == 95, f"Charge SOC should be 95, got {charge_soc['state']}"
 
-    # Check power conversion (amps to watts), using the LIVE measured voltage (52.3V from the
-    # fixture's batteryVoltage), not the old hard-coded 48.0V (issue #4493)
+    # Check power conversion (amps to watts), using the configured nominal pack voltage (512V) -
+    # not the old hard-coded 48.0V (issue #4493), and not the live 52.3V reading (issue #5090)
     assert f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_power" in api.dashboard_items, "Charge slot 1 power should be published"
     charge_power = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_power"]
-    expected_power = int(50 * 52.3)  # 50A * 52.3V (live measured, not nominal)
+    expected_power = int(50 * 512.0)  # 50A * 512.0V (configured nominal, not the live reading)
     assert charge_power["state"] == expected_power, f"Charge power should be {expected_power}W, got {charge_power['state']}"
     assert charge_power["attributes"]["unit_of_measurement"] == "W", "Charge power should have W unit"
 
@@ -3523,11 +3527,11 @@ async def test_publish_entities():
     reserve_soc = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_reserve_soc"]
     assert reserve_soc["state"] == "10", f"Reserve SOC should be 10, got {reserve_soc['state']}"
 
-    # Check max power numbers (converted from amps using the LIVE measured voltage, 52.3V from
-    # the fixture's batteryVoltage - not the old hard-coded 48.0V, issue #4493)
+    # Check max power numbers (converted from amps using the configured nominal pack voltage,
+    # 512V - not the old hard-coded 48.0V per issue #4493, nor the live 52.3V per issue #5090)
     assert f"number.{prefix}_solis_{inverter_sn_lower}_max_charge_power" in api.dashboard_items, "Max charge power should be published"
     max_charge = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_max_charge_power"]
-    expected_max_power = int(50 * 52.3)  # 50A * 52.3V (live measured, not nominal)
+    expected_max_power = int(50 * 512.0)  # 50A * 512.0V (configured nominal, not the live reading)
     assert max_charge["state"] == expected_max_power, f"Max charge power should be {expected_max_power}W, got {max_charge['state']}"
 
     # Check battery capacity calculation (Ah to kWh), using the configured nominal PACK voltage
@@ -5238,9 +5242,10 @@ async def test_automatic_config():
 async def test_get_nominal_voltage_and_capacity_voltage():
     """
     Test get_nominal_voltage() and get_capacity_voltage() (issue #4493): power/current
-    conversions must use the live measured battery voltage (not the old hard-coded 48V), retaining
-    the last known-good reading if it becomes unavailable, while capacity must use a separately
-    configured nominal pack voltage and never guess at one.
+    conversions must scale with the real pack voltage rather than the old hard-coded 48V, and
+    survive the live reading becoming unavailable. get_capacity_voltage() reports only the
+    configured nominal pack voltage, so that callers can tell a configured value from an
+    inferred one; it never guesses at one.
     """
     print("\n=== Test: get_nominal_voltage and get_capacity_voltage ===")
 
@@ -5252,17 +5257,18 @@ async def test_get_nominal_voltage_and_capacity_voltage():
     assert api.get_nominal_voltage(sn) == 48.0, "Should fall back to 48.0V default with no data"
     assert api.get_capacity_voltage(sn) is None, "Should return None when solis_nominal_voltage isn't configured"
 
-    # Live batteryVoltage reported - used directly, and remembered
+    # batteryVoltage reported - adopted for conversions, and latched (issue #5090)
     api.inverter_details[sn] = {"batteryVoltage": 533.0}
-    assert api.get_nominal_voltage(sn) == 533.0, "Should use the live measured voltage"
+    assert api.get_nominal_voltage(sn) == 533.0, "Should use the reported battery voltage"
 
-    # Live reading becomes unavailable (e.g. API outage) - retains the last known value, not 48.0
+    # Reading becomes unavailable (e.g. API outage) - retains the latched value, not 48.0
     api.inverter_details[sn] = {"batteryVoltage": None}
-    assert api.get_nominal_voltage(sn) == 533.0, "Should retain last known-good voltage when unavailable"
+    assert api.get_nominal_voltage(sn) == 533.0, "Should retain the latched voltage when unavailable"
 
-    # solis_nominal_voltage configured - used for capacity regardless of live voltage
+    # solis_nominal_voltage configured - capacity uses it, and so does everything else
     api.nominal_pack_voltage = 512.0
     assert api.get_capacity_voltage(sn) == 512.0, "Should use the configured nominal pack voltage for capacity"
+    assert api.get_nominal_voltage(sn) == 512.0, "A configured nominal pack voltage should also win for conversions"
 
     print("PASSED: get_nominal_voltage and get_capacity_voltage behave correctly")
     return False
@@ -5273,10 +5279,10 @@ async def test_publish_entities_capacity_voltage_reliability():
     Test battery_capacity behaviour with and without solis_nominal_voltage configured (issue
     #4493). The sensor is always published - dropping it outright for every existing install
     that hasn't set the new option was judged too disruptive - but without a configured nominal
-    pack voltage it falls back to the live measured voltage and is flagged unreliable (a warning
-    is logged, and the "reliable"/"voltage_source" attributes say so), since that value wobbles
-    with charge state and is still not the true nominal figure. parallel_battery_count is applied
-    either way.
+    pack voltage it falls back to the latched conversion voltage (issue #5090) and is flagged
+    unreliable (a warning is logged, and the "reliable"/"voltage_source" attributes say so),
+    since a measured voltage is only within a few percent of the true nominal figure.
+    parallel_battery_count is applied either way.
     """
     print("\n=== Test: publish_entities battery_capacity voltage reliability ===")
     from solis import SOLIS_CID_BATTERY_CAPACITY
@@ -5290,22 +5296,22 @@ async def test_publish_entities_capacity_voltage_reliability():
     prefix = api.prefix
     entity_id = f"sensor.{prefix}_solis_{sn.lower()}_battery_capacity"
 
-    # No solis_nominal_voltage configured - still published, using the live voltage, flagged unreliable
+    # No solis_nominal_voltage configured - still published, using the latched voltage, flagged unreliable
     await api.publish_entities()
     assert entity_id in api.dashboard_items, "battery_capacity should still be published without solis_nominal_voltage configured"
     capacity_item = api.dashboard_items[entity_id]
-    expected_kwh_estimated = round(100 * 533.0 / 1000.0, 2)  # 100Ah * 533.0V (live) / 1000 = 53.3 kWh
-    assert capacity_item["state"] == expected_kwh_estimated, f"Expected {expected_kwh_estimated}kWh from live voltage, got {capacity_item['state']}"
-    assert capacity_item["attributes"]["reliable"] is False, "Should be flagged unreliable when using the live voltage"
-    assert "estimated from the live measured voltage" in capacity_item["attributes"]["voltage_source"]
-    warn_count = sum(1 for msg in api.log_messages if "estimated from the live measured voltage" in msg)
+    expected_kwh_estimated = round(100 * 533.0 / 1000.0, 2)  # 100Ah * 533.0V (latched) / 1000 = 53.3 kWh
+    assert capacity_item["state"] == expected_kwh_estimated, f"Expected {expected_kwh_estimated}kWh from the latched voltage, got {capacity_item['state']}"
+    assert capacity_item["attributes"]["reliable"] is False, "Should be flagged unreliable when using a measured voltage"
+    assert "estimated from a battery voltage reading" in capacity_item["attributes"]["voltage_source"]
+    warn_count = sum(1 for msg in api.log_messages if "estimated from a battery voltage reading" in msg)
     assert warn_count == 1, f"Should warn that the value is an estimate exactly once, got {warn_count}"
 
     # publish_entities() runs roughly once a minute in production - a second call must not repeat
     # the warning, or it would drown out the log for every install that hasn't configured this
     api.dashboard_items = {}
     await api.publish_entities()
-    warn_count = sum(1 for msg in api.log_messages if "estimated from the live measured voltage" in msg)
+    warn_count = sum(1 for msg in api.log_messages if "estimated from a battery voltage reading" in msg)
     assert warn_count == 1, f"Warning should not repeat on a second publish_entities() call, got {warn_count}"
 
     # With solis_nominal_voltage AND 2 parallel batteries configured - both applied, flagged reliable
@@ -5320,6 +5326,111 @@ async def test_publish_entities_capacity_voltage_reliability():
     assert capacity_item["attributes"]["reliable"] is True, "Should be flagged reliable when solis_nominal_voltage is configured"
 
     print("PASSED: battery_capacity is always published, flags reliability, and respects parallel_battery_count")
+    return False
+
+
+def test_nominal_voltage_sources_and_stability():
+    """
+    Test get_nominal_voltage()'s priority order and, above all, that it holds still (issue #5090).
+
+    The inverter stores its limits as currents, so a conversion voltage that tracks the live
+    reading republishes a fixed 70A limit as a different wattage every poll. Priority is the
+    configured solis_nominal_voltage, then the first live reading latched and held, then 48V.
+    """
+    print("\n=== Test: get_nominal_voltage sources and stability ===")
+
+    # 1. Never reported a voltage - the 48V fallback
+    api = MockSolisAPI()
+    sn = "SN0NOMV01"
+    assert api.get_nominal_voltage(sn) == 48.0, f"Expected the 48V fallback with no reading, got {api.get_nominal_voltage(sn)}"
+
+    # 2. First live reading is latched, and then held however far the live value moves. The range
+    #    here is the one observed on the reporter's 48V-class pack over three days.
+    api.inverter_details[sn] = {"batteryVoltage": 52.1}
+    assert api.get_nominal_voltage(sn) == 52.1, f"Expected the first live reading to be adopted, got {api.get_nominal_voltage(sn)}"
+    for live in (47.89, 53.24, 50.0):
+        api.inverter_details[sn]["batteryVoltage"] = live
+        assert api.get_nominal_voltage(sn) == 52.1, f"Conversion voltage moved to {api.get_nominal_voltage(sn)} when the live value went to {live}V"
+
+    # The latch is per inverter, not global
+    other_sn = "SN0NOMV02"
+    api.inverter_details[other_sn] = {"batteryVoltage": 204.8}
+    assert api.get_nominal_voltage(other_sn) == 204.8, "A second inverter should latch its own voltage, not inherit the first's"
+    assert api.get_nominal_voltage(sn) == 52.1, "Latching a second inverter must not disturb the first"
+
+    # It is announced once, not on every conversion, since this runs on every published entity
+    latch_logs = [msg for msg in api.log_messages if "latched from the first battery voltage reading" in msg and sn in msg]
+    assert len(latch_logs) == 1, f"Expected exactly one latch log line for {sn}, got {len(latch_logs)}"
+
+    # 3. A configured solis_nominal_voltage wins outright - it is the pack's real nominal voltage,
+    #    where the latched value is only ever an approximation of it
+    configured = MockSolisAPI()
+    configured.nominal_pack_voltage = 51.2
+    configured.inverter_details[sn] = {"batteryVoltage": 53.24}
+    assert configured.get_nominal_voltage(sn) == 51.2, f"Configured solis_nominal_voltage should win, got {configured.get_nominal_voltage(sn)}"
+    assert sn not in configured.nominal_voltage_latched, "Nothing should be latched while solis_nominal_voltage is configured"
+
+    # 4. A zero or unparseable reading is not a voltage and must not be latched
+    for bad in (0, "", None, "unknown"):
+        rejects = MockSolisAPI()
+        rejects.inverter_details[sn] = {"batteryVoltage": bad}
+        assert rejects.get_nominal_voltage(sn) == 48.0, f"Expected the 48V fallback for batteryVoltage={bad!r}, got {rejects.get_nominal_voltage(sn)}"
+        assert sn not in rejects.nominal_voltage_latched, f"batteryVoltage={bad!r} must not be latched"
+
+    print("PASSED: get_nominal_voltage prefers the configured voltage, else latches one reading and holds it")
+    return False
+
+
+async def test_rate_setpoints_do_not_drift_with_battery_voltage():
+    """
+    Test that a rate written in watts reads back unchanged when the pack voltage moves (#5090).
+
+    This is the symptom the reporter saw: with the current limit untouched, max_charge_power and
+    max_discharge_power swung 3352W-3726W as the pack moved between 47.89V and 53.24V, dragging
+    battery_rate_max (auto-bound to max_charge_power) and the write tolerance derived from it with
+    them, and making Predbat rewrite slot rates it had already written correctly.
+    """
+    print("\n=== Test: rate setpoints do not drift with battery voltage ===")
+    from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, SOLIS_CID_STORAGE_MODE
+
+    api = MockSolisAPI()
+    sn = "SN0DRIFT1"
+    api.inverter_sn = [sn]
+    api.inverter_details[sn] = {"inverterName": "Drift Test", "batteryVoltage": 52.1}
+    # A constant 70A charge/discharge limit, as held by the inverter
+    api.cached_values[sn] = {SOLIS_CID_STORAGE_MODE: "33", SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "70", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT: "70"}
+    api.max_charge_current[sn] = 70
+    api.max_discharge_current[sn] = 70
+    api.charge_discharge_time_windows[sn] = {1: {"discharge_current": 0}}
+
+    prefix = api.prefix
+    max_charge_entity = f"number.{prefix}_solis_{sn.lower()}_max_charge_power"
+    max_discharge_entity = f"number.{prefix}_solis_{sn.lower()}_max_discharge_power"
+    slot_entity = f"number.{prefix}_solis_{sn.lower()}_discharge_slot1_power"
+
+    # Predbat writes a discharge rate in watts; the handler converts it to amps and republishes
+    await api.number_event_handler(slot_entity, 3437)
+    written_amps = api.charge_discharge_time_windows[sn][1]["discharge_current"]
+    before = {entity: api.dashboard_items[entity]["state"] for entity in (max_charge_entity, max_discharge_entity, slot_entity)}
+
+    # The pack now sags under the export it was just told to do, then recovers past where it began
+    for live in (47.89, 53.24):
+        api.inverter_details[sn]["batteryVoltage"] = live
+        await api.publish_entities()
+        for entity, was in before.items():
+            now = api.dashboard_items[entity]["state"]
+            assert now == was, f"{entity} moved from {was}W to {now}W at {live}V with the current unchanged"
+
+    # battery_rate_max is auto-bound to the max_charge_power entity, so a stable entity is the
+    # whole point: 70A must publish as the same wattage it did at the voltage it was latched at
+    assert before[max_charge_entity] == int(70 * 52.1), f"Expected 70A at the latched 52.1V, got {before[max_charge_entity]}W"
+
+    # ...and the round trip must close, or Predbat rewrites a setpoint that never changed and logs
+    # "Trying to write X to discharge_rate didn't complete got Y"
+    await api.number_event_handler(slot_entity, api.dashboard_items[slot_entity]["state"])
+    assert api.charge_discharge_time_windows[sn][1]["discharge_current"] == written_amps, f"Re-writing the published wattage changed the current from {written_amps}A to {api.charge_discharge_time_windows[sn][1]['discharge_current']}A"
+
+    print("PASSED: published rate wattages and the write round trip are unaffected by pack voltage")
     return False
 
 

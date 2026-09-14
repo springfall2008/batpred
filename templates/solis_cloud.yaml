@@ -36,12 +36,12 @@ pred_bat:
   solis_control_enable: true
 
   # Optional: your battery's nominal pack voltage (e.g. cell count x nominal cell voltage per
-  # cell, NOT the live/resting battery voltage which varies with charge state). Needed for an
-  # accurate, stable battery_capacity sensor on batteries with a voltage other than the ~48V
-  # default. The max charge/discharge power sensors already use the live measured voltage
-  # automatically and don't need this set. Leave commented out and battery_capacity is still
-  # published, but estimated from the live voltage and flagged unreliable (reliable: false
-  # attribute, plus a log warning) since that value drifts with charge state - see soc_max below.
+  # cell, NOT the live/resting battery voltage which varies with charge state). The inverter
+  # holds its limits in amps, so this is the voltage used to convert them to watts for the
+  # battery_capacity, max charge/discharge power and slot power sensors, and hence for
+  # battery_rate_max. Leave it commented out and Predbat instead latches the first battery
+  # voltage it sees and holds that - stable, but a few percent off nominal, so battery_capacity
+  # is flagged unreliable (reliable: false attribute, plus a log warning). See soc_max below.
   # solis_nominal_voltage: 512
 
   #
