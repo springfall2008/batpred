@@ -524,6 +524,53 @@ def test_component_base_midnight_utc_ignores_rewound_base(my_predbat):
     return False
 
 
+def test_component_base_minutes_now_follows_update_time(my_predbat):
+    """
+    Test ComponentBase.minutes_now matches update_time()'s own value and ignores the faked one (GH#4804).
+
+    calculate_yesterday() (output.py) fakes base.minutes_now to 0 alongside its midnight_utc rewind.
+    0 is the nastier of the two, since it reads as a legitimate "just after midnight" rather than an
+    obviously wrong date - it would tell octopus.py to keep every expired dispatch slot, and the
+    AlphaESS/Deye/Sunsynk adapters that pick the live TOU slot by time of day to believe it is
+    midnight while writing to a real inverter.
+
+    The derived value has to agree with update_time()'s (predbat.py), including its PREDICT_STEP
+    flooring - so the first half of this test compares the two on the real base rather than
+    restating the formula, and would catch the two drifting apart later.
+    """
+    print("\n*** Test: ComponentBase.minutes_now follows update_time and ignores the faked value ***")
+
+    # The fixture pins its own clock (unit_test.py's create_predbat) - put it back afterwards.
+    saved_now_utc = my_predbat.now_utc
+    saved_midnight_utc = my_predbat.midnight_utc
+    saved_minutes_now = my_predbat.minutes_now
+    try:
+        my_predbat.update_time(print=False)
+        component = TestComponent(my_predbat)
+        assert component.minutes_now == my_predbat.minutes_now, f"Derived {component.minutes_now} but update_time() computed {my_predbat.minutes_now}"
+        assert component.minutes_now % 5 == 0, f"Should stay on a PREDICT_STEP boundary, got {component.minutes_now}"
+    finally:
+        my_predbat.now_utc = saved_now_utc
+        my_predbat.midnight_utc = saved_midnight_utc
+        my_predbat.minutes_now = saved_minutes_now
+
+    base = MockBase()
+    base.now_utc = datetime(2025, 6, 15, 14, 37, 0, tzinfo=timezone.utc)
+    base.midnight_utc = base.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    base.minutes_now = 14 * 60 + 35
+    component = TestComponent(base)
+
+    assert component.minutes_now == 14 * 60 + 35, f"Expected 14:35 floored to a PREDICT_STEP boundary, got {component.minutes_now}"
+
+    # A concurrent calculate_yesterday() is mid-flight: the shared fields say midnight yesterday.
+    base.minutes_now = 0
+    base.midnight_utc = base.midnight_utc - timedelta(days=1)
+    assert component.minutes_now == 14 * 60 + 35, f"Faked base.minutes_now leaked into the component: {component.minutes_now}"
+
+    print("PASS: minutes_now follows update_time's computation and ignores the faked value")
+    return False
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -539,6 +586,7 @@ def test_component_base_all(my_predbat):
         ("set_arg_auto_keep", test_component_base_set_arg_auto_keeps_user_setting, "set_arg_auto(overwrite=False) keeps an explicit apps.yaml setting"),
         ("set_state_external", test_component_base_set_state_external, "set_state_external forwards to the HA interface"),
         ("midnight_utc_rewound", test_component_base_midnight_utc_ignores_rewound_base, "midnight_utc ignores a rewound base.midnight_utc"),
+        ("minutes_now_derived", test_component_base_minutes_now_follows_update_time, "minutes_now follows update_time and ignores the faked value"),
     ]
 
     failed = []
