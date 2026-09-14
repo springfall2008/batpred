@@ -2195,11 +2195,19 @@ class PushGuardHookTests(DaemonPathsTestCase):
 
     def _run_hook(self, remote_ref):
         """Feed the hook one ref update on stdin exactly as git does, return its exit code."""
+        import shutil
+
         hook = Path(self.tmp_dir.name) / "pre-push"
         hook.write_text(triage_daemon.PUSH_GUARD_HOOK)
         hook.chmod(0o755)
+        cmd = [str(hook)]
+        if os.name == "nt":
+            sh_exe = shutil.which("sh")
+            if not sh_exe:
+                self.skipTest("sh not found in PATH")
+            cmd = [sh_exe, str(hook)]
         return subprocess.run(
-            [str(hook)],
+            cmd,
             input=f"refs/heads/local abc123 {remote_ref} def456\n",
             capture_output=True,
             text=True,
@@ -2732,3 +2740,17 @@ class JournalQueueArchiveTests(DaemonPathsTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTriageDaemonScope(unittest.TestCase):
+    def test_scope_posix_fallback(self):
+        """Test that _scope handles PureWindowsPath correctly, retaining the drive letter."""
+        from pathlib import PureWindowsPath, PurePosixPath
+
+        # Windows path
+        win_path = PureWindowsPath("C:\\dev\\auto-config-startup-retry")
+        self.assertEqual(triage_daemon._scope(win_path, "**"), "C:/dev/auto-config-startup-retry/**")
+
+        # Posix path
+        posix_path = PurePosixPath("/var/log")
+        self.assertEqual(triage_daemon._scope(posix_path, "**"), "//var/log/**")

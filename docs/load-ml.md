@@ -367,7 +367,7 @@ Then set load_ml_source to true in `apps.yaml` so that the Load ML forecast is u
 
 The ML component tracks several status indicators:
 
-- **Model Status**: `not_initialized`, `training`, `active`, `validation_failed`, `stale`
+- **Model Status**: `not_initialized`, `training`, `active`, `validation_failed`, `stale`. When the model is not in the `active` state, Predbat will silently fall back to using your standard historical load configuration for predictions.
 - **Validation MAE**: Mean Absolute Error on validation data (see [Understanding MAE](#understanding-mae-mean-absolute-error) for details)
 - **Model Age**: How long since the model was last trained
 

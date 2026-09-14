@@ -166,7 +166,7 @@ As another example, the configuration entry for the Solcast day 3 forecast follo
 Syntax errors will be highlighted by the Home Assistant editor or via other YAML-aware editors such as VSCode.
 
 Once you have completed your `apps.yaml` and started Predbat you may want to open the Predbat Web Interface and click on 'Apps' at the top. Review any items shown
-in a red background as those do not match (it's okay for a 2nd inverter not to match if you only have one configured). Regular expressions that do not
+in a red background as those do not match (it's okay for a 2nd inverter not to match if you only have one configured). **Note that during the first 10 minutes of Predbat starting, unmatched regular expressions are kept in a pending state so they have time to match sensors that start up slowly. During this 10-minute startup window, they will not be highlighted in red.** Regular expressions that do not
 match can be ignored if you are not supporting that feature (e.g. Car SoC if you don't have a car).
 
 As an example these do not match and are shown in the web interface in red, I'm ignoring them as I only have one inverter and I'm using
@@ -2290,6 +2290,8 @@ Defines how often to run the inverter balancing, 30 seconds is recommended if yo
 (e.g. a slower-starting integration during a Home Assistant restart), Predbat reports a configuration error - correctly, at the time. If that
 sensor comes good on its own a few seconds later, Predbat automatically retries validation a few times, so a self-healed condition clears its
 own error status rather than needing a manual restart.
+
+Similarly, regular expressions (e.g. `re:sensor...`) in your `apps.yaml` are given a 10-minute startup window to match their targets. Unmatched `re:` expressions are retained and re-evaluated for the first 10 minutes, allowing slower integrations time to create their entities.
 
 ```yaml
   validate_config_retries: 2
