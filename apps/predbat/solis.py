@@ -12,6 +12,7 @@ import base64
 import hashlib
 import hmac
 import json
+import random
 import time
 import copy
 from datetime import datetime, timedelta, UTC
@@ -49,7 +50,14 @@ SOLIS_OAUTH_ENDPOINTS = {
 # Retry configuration
 SOLIS_MAX_RETRY_TIME = 30  # seconds
 SOLIS_INITIAL_RETRY_DELAY = 1  # seconds
+SOLIS_MAX_RETRY_DELAY = 8  # seconds, cap on any single backoff wait
+SOLIS_MAX_RETRIES = 4  # retries after the first attempt - each one is another request against the quota
 SOLIS_REQUEST_TIMEOUT = 30  # seconds
+
+# B0115 means the datalogger is offline or disconnected. Most are brief and a retry about 10s later
+# succeeds, so the retry waits at least that long.
+SOLIS_DATALOGGER_OFFLINE_CODE = "B0115"
+SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY = 10  # seconds
 
 # CID Constants (Control IDs for inverter registers)
 SOLIS_CID_STORAGE_MODE = 636
@@ -350,9 +358,11 @@ OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M:%S
 
 class SolisAPIError(Exception):
     """Custom exception for Solis API errors"""
-    def __init__(self, message, status_code=None, response_code=None):
+    def __init__(self, message, status_code=None, response_code=None, retry_after=0):
         self.status_code = status_code
         self.response_code = response_code
+        # Shortest wait in seconds before a retry is worth sending, e.g. for a datalogger to reconnect
+        self.retry_after = retry_after
         final_message = message
         if status_code is not None:
             final_message = f"{final_message} (HTTP status code: {status_code})"
@@ -536,11 +546,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         error_msg = response_json.get("msg", "Unknown error")
                         error_detail = SOLIS_API_CODES.get(str(code), f"Unknown code: {code}")
                         record_api_call("solis", False, "server_error")
-                        if str(code) == "B0115":
-                            # Perform a wait as it maybe rate limiting
-                            self.log("Solis API: Received B0115 error, likely rate limiting. Waiting for 10 seconds before retrying.")
-                            await asyncio.sleep(10)
-                        raise SolisAPIError(f"API error: {error_msg} ({error_detail} - {response_json})", response_code=str(code))
+                        retry_after = SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY if str(code) == SOLIS_DATALOGGER_OFFLINE_CODE else 0
+                        raise SolisAPIError(f"API error: {error_msg} ({error_detail} - {response_json})", response_code=str(code), retry_after=retry_after)
 
                     # Return data field
                     record_api_call("solis")
@@ -554,10 +561,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
             raise SolisAPIError(f"Network error accessing {url}: {str(err)}") from err
 
     async def _with_retry(self, operation, max_retry_time=SOLIS_MAX_RETRY_TIME):
-        """Execute operation with exponential backoff retry"""
+        """Run operation, retrying transient failures with capped exponential backoff.
+
+        Every retry is one more request counted against the SolisCloud quota, so a call gives up after
+        SOLIS_MAX_RETRIES retries or max_retry_time, whichever comes first.
+        """
         start_time = time.monotonic()
         attempt = 0
-        delay = SOLIS_INITIAL_RETRY_DELAY
 
         while True:
             try:
@@ -568,14 +578,18 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 if self.oauth_failed:
                     raise err
                 elapsed_time = time.monotonic() - start_time
-                if elapsed_time >= max_retry_time:
+                if attempt >= SOLIS_MAX_RETRIES or elapsed_time >= max_retry_time:
                     raise err
 
                 attempt += 1
                 self.log(f"Warn: Solis API retry {attempt} after {elapsed_time:.1f}s: {str(err)}")
 
-                await asyncio.sleep(delay)
-                delay = min(delay * 1.5, max_retry_time - elapsed_time)  # Exponential backoff
+                # Double the wait each attempt up to the cap, then randomise its upper half so installs
+                # that failed together (a SolisCloud outage) do not all retry in the same second. An error
+                # that asks for a longer wait, such as a datalogger reconnecting, gets that instead.
+                delay = min(SOLIS_INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), SOLIS_MAX_RETRY_DELAY)
+                wait = max(delay / 2 + random.uniform(0, delay / 2), err.retry_after)
+                await asyncio.sleep(min(wait, max_retry_time - elapsed_time))
 
     async def read_cid(self, inverter_sn, cid):
         """Read single CID value"""

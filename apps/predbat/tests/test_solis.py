@@ -9,6 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
+import random
+import time
 import solis as solis_module
 from datetime import datetime
 from unittest.mock import MagicMock, patch
@@ -1139,6 +1141,191 @@ async def test_with_retry_aborts_on_oauth_failed():
     return failed
 
 
+# ---------------------------------------------------------------------------
+# Retry backoff and brief datalogger disconnects
+# ---------------------------------------------------------------------------
+
+SOLIS_DATALOGGER_OFFLINE = {"success": True, "code": "B0115", "msg": "Sending failure ,the current datalogger is offline or disconnected", "data": None}
+SOLIS_READ_OK = {"code": "0", "data": {"msg": "50"}}
+SOLIS_CONTROL_OK = {"code": "0", "data": [{"code": "0", "msg": "ok"}]}
+
+
+class _SequenceSession:
+    """Fake aiohttp session that answers successive post() calls from canned payloads (or whole responses), repeating the last."""
+
+    def __init__(self, payloads):
+        self._payloads = list(payloads)
+        self.post_calls = []
+
+    def post(self, url, headers=None, json=None):
+        """Record the request and return the next canned response."""
+        self.post_calls.append({"url": url, "json": json})
+        payload = self._payloads.pop(0) if len(self._payloads) > 1 else self._payloads[0]
+        return payload if isinstance(payload, _FakeResponse) else _FakeResponse(status=200, payload=payload)
+
+    async def close(self):
+        """Pretend to close the session."""
+        pass
+
+
+class _FakeClock:
+    """Monotonic clock the tests move by hand; a sleep records its delay and moves the clock on by it."""
+
+    def __init__(self):
+        self.now = 1000.0
+        self.sleeps = []
+
+    def monotonic(self):
+        """Return the current fake time."""
+        return self.now
+
+    async def sleep(self, delay):
+        """Record the wait and advance the clock by it."""
+        self.sleeps.append(delay)
+        self.now += delay
+
+
+class _ModuleProxy:
+    """Stands in for a module solis.py imported: named attributes are replaced, everything else passes through."""
+
+    def __init__(self, module, **overrides):
+        self._module = module
+        self.__dict__.update(overrides)
+
+    def __getattr__(self, name):
+        """Fall back to the real module for anything not replaced."""
+        return getattr(self._module, name)
+
+
+def _patch_clock(clock, uniform=None):
+    """Patch solis.py's time and asyncio (and optionally random) so retries and pauses run on the fake clock."""
+    patches = [patch.object(solis_module, "time", _ModuleProxy(time, monotonic=clock.monotonic)), patch.object(solis_module, "asyncio", _ModuleProxy(asyncio, sleep=clock.sleep))]
+    if uniform is not None:
+        patches.append(patch.object(solis_module, "random", _ModuleProxy(random, uniform=uniform)))
+    return patches
+
+
+async def test_brief_datalogger_disconnect_is_retried_after_ten_seconds():
+    """A single B0115 is retried after SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY."""
+    failed = False
+    api = MockSolisAPI()
+    clock = _FakeClock()
+    patches = _patch_clock(clock)
+    for active in patches:
+        active.start()
+    try:
+        api.session = _SequenceSession([SOLIS_DATALOGGER_OFFLINE, SOLIS_READ_OK])
+        value, _info = await api.read_cid("SN1", 103)
+        if value != "50" or len(api.session.post_calls) != 2:
+            print("ERROR: expected the retry to succeed on the second request, got value {} after {} requests".format(value, len(api.session.post_calls)))
+            failed = True
+        if clock.sleeps != [solis_module.SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY]:
+            print("ERROR: expected one {}s wait, got {}".format(solis_module.SOLIS_DATALOGGER_OFFLINE_RETRY_DELAY, clock.sleeps))
+            failed = True
+    finally:
+        for active in patches:
+            active.stop()
+    if not failed:
+        print("PASSED: a brief datalogger disconnect is retried after 10s")
+    return failed
+
+
+async def test_read_and_write_cid_rides_out_a_brief_datalogger_disconnect():
+    """The real read-then-write path still completes when the control request gets one B0115."""
+    failed = False
+    api = MockSolisAPI()
+    clock = _FakeClock()
+    patches = _patch_clock(clock)
+    for active in patches:
+        active.start()
+    try:
+        api.session = _SequenceSession([{"code": "0", "data": {"msg": "35"}}, SOLIS_DATALOGGER_OFFLINE, SOLIS_CONTROL_OK, {"code": "0", "data": {"msg": "33"}}])
+        result = await SolisAPI.read_and_write_cid(api, "SN1", SOLIS_CID_STORAGE_MODE, 33, "storage mode")
+        endpoints = [call["url"].replace(api.base_url, "") for call in api.session.post_calls]
+        if not result or endpoints != [SOLIS_READ_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_READ_ENDPOINT]:
+            print("ERROR: expected read, refused write, retried write, verify read to succeed, got {} via {}".format(result, endpoints))
+            failed = True
+    finally:
+        for active in patches:
+            active.stop()
+    if not failed:
+        print("PASSED: read_and_write_cid rides out a brief datalogger disconnect")
+    return failed
+
+
+async def test_oauth_401_still_refreshes_and_retries():
+    """An OAuth 401 still refreshes the token and retries under the new backoff."""
+    failed = False
+    api = MockSolisAPI()
+    api.auth_method = "oauth"
+    api.access_token = "stale"
+    api.base_url = "https://solis.test"
+    api.check_and_refresh_oauth_token = _always_valid_token
+    refreshes = {"n": 0}
+
+    async def fake_handle_401():
+        """Count the forced refresh and install a new token."""
+        refreshes["n"] += 1
+        api.access_token = "fresh"
+
+    api.handle_oauth_401 = fake_handle_401
+    clock = _FakeClock()
+    patches = _patch_clock(clock)
+    for active in patches:
+        active.start()
+    try:
+        api.session = _SequenceSession([_FakeResponse(status=401, payload={"error": "expired"}), SOLIS_READ_OK])
+        value, _info = await api.read_cid("SN1", 103)
+        if value != "50" or refreshes["n"] != 1 or len(api.session.post_calls) != 2:
+            print("ERROR: expected one refresh and a successful retry, got value {} refreshes {} requests {}".format(value, refreshes["n"], len(api.session.post_calls)))
+            failed = True
+    finally:
+        for active in patches:
+            active.stop()
+    if not failed:
+        print("PASSED: an OAuth 401 still refreshes and retries")
+    return failed
+
+
+async def test_with_retry_backoff_doubles_with_jitter_and_stops_at_the_retry_cap():
+    """Transient failures back off 1, 2, 4, 8s (the upper half jittered) and stop after SOLIS_MAX_RETRIES or the time window."""
+    failed = False
+    api = MockSolisAPI()
+    attempts = {"n": 0}
+
+    async def operation():
+        """Always fail with a transient error."""
+        attempts["n"] += 1
+        raise solis_module.SolisAPIError("temporary", status_code=500)
+
+    cases = [
+        ("jitter at its top", lambda low, high: high, 60, solis_module.SOLIS_MAX_RETRIES + 1, [1, 2, 4, 8]),
+        ("jitter at its bottom", lambda low, high: low, 60, solis_module.SOLIS_MAX_RETRIES + 1, [0.5, 1, 2, 4]),
+        ("a 5s window", lambda low, high: high, 5, 4, [1, 2, 2]),
+    ]
+    for name, uniform, max_retry_time, expected_attempts, expected_sleeps in cases:
+        attempts["n"] = 0
+        clock = _FakeClock()
+        patches = _patch_clock(clock, uniform=uniform)
+        for active in patches:
+            active.start()
+        try:
+            await api._with_retry(operation, max_retry_time=max_retry_time)
+            print("ERROR: {}: expected the transient error to propagate".format(name))
+            failed = True
+        except solis_module.SolisAPIError:
+            pass
+        finally:
+            for active in patches:
+                active.stop()
+        if attempts["n"] != expected_attempts or clock.sleeps != expected_sleeps:
+            print("ERROR: {}: expected {} attempts with waits {}, got {} with {}".format(name, expected_attempts, expected_sleeps, attempts["n"], clock.sleeps))
+            failed = True
+    if not failed:
+        print("PASSED: _with_retry backs off exponentially with jitter and stops at its caps")
+    return failed
+
+
 # Battery blocks as SolisCloud inverterDetail actually returns them. Trimmed to the fields the
 # enrolment gate looks at; captured from a live two-inverter account where the battery had been
 # moved off the older inverter onto a newer one.
@@ -1442,6 +1629,10 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_oauth_endpoint_namespace_translation())
         failed |= asyncio.run(test_oauth_execute_request_aborts_when_token_missing())
         failed |= asyncio.run(test_with_retry_aborts_on_oauth_failed())
+        failed |= asyncio.run(test_brief_datalogger_disconnect_is_retried_after_ten_seconds())
+        failed |= asyncio.run(test_read_and_write_cid_rides_out_a_brief_datalogger_disconnect())
+        failed |= asyncio.run(test_oauth_401_still_refreshes_and_retries())
+        failed |= asyncio.run(test_with_retry_backoff_doubles_with_jitter_and_stops_at_the_retry_cap())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())

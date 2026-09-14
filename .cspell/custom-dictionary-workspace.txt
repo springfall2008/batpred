@@ -122,6 +122,8 @@ Dashlane
 datain
 datalist
 datalog
+datalogger
+dataloggers
 datap
 datapoints
 datas
