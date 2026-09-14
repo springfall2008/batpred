@@ -3202,7 +3202,7 @@ class Octopus:
                 plugged = "plugged" if pending["plugged"] else "unplugged"
                 soc = "{} soc {}/{}kWh {}".format(timeline, dp2(self.car_charging_soc[car_n]), dp2(self.car_charging_limit[car_n]), plugged)
                 self.log("Octopus: Dispatch timeline car {} @ {} [-{}h..+{}h]: {}{}".format(car_n, self.time_abs_str(self.minutes_now), hours_before, hours_after, soc, marker))
-            self.log_dispatch_unconfirmed(car_n, pending.get("started"), pending.get("charging_now", True))
+            self.log_dispatch_unconfirmed(car_n, pending.get("started"), pending.get("charging_now"))
         self.dispatch_timeline_pending = []
 
     def log_dispatch_unconfirmed(self, car_n, started, charging_now):
@@ -3222,8 +3222,12 @@ class Octopus:
         Deliberately not an error or a warning. A car that finishes charging part-way through a
         dispatch, or a dispatch Octopus honours anyway, both produce this line legitimately - so
         it reads as something to check, not something that has gone wrong.
+
+        charging_now is a tri-state: True/False from a configured car_charging_now sensor, or
+        None when the (optional) sensor isn't set up. None can't confirm or deny the car is
+        drawing power, so it's treated the same as True here - no signal, no flag.
         """
-        if not started or charging_now:
+        if not started or charging_now or charging_now is None:
             return
         slot = (self.minutes_now // 30) * 30
         if self.dispatch_unconfirmed_last.get(car_n) == slot:

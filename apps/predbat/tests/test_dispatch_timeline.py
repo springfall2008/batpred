@@ -321,6 +321,27 @@ def run_dispatch_timeline_tests(my_predbat):
             print("  ERROR: pending timelines must be cleared after rendering, got {!r}".format(my_predbat.dispatch_timeline_pending))
             failed = True
 
+        print("Test 22b: a pending entry with no charging_now key is treated as unknown, not charging")
+        # Copilot review on #5077: log_dispatch_unconfirmed() must never be handed a bare True
+        # default for a pending entry that never captured charging_now - that would silently
+        # suppress GH#5080's reconciliation note for every real dispatch.
+        started_slot = [_slot(midnight_utc + timedelta(hours=10), midnight_utc + timedelta(hours=10, minutes=30))]
+        my_predbat.dispatch_timeline_last = {}
+        my_predbat.dispatch_unconfirmed_last = {}
+        my_predbat.dispatch_timeline_pending = [{"car_n": 0, "completed": [], "started": started_slot, "planned": [], "plugged": True}]
+        logged = []
+        saved_log = my_predbat.log
+        my_predbat.log = lambda message: logged.append(message)
+        try:
+            my_predbat.log_dispatch_timelines()
+        finally:
+            my_predbat.log = saved_log
+        if any("not charging" in message for message in logged):
+            print("  ERROR: a missing charging_now key must read as unknown (no flag), got {!r}".format(logged))
+            failed = True
+
+        my_predbat.dispatch_timeline_pending = []
+        my_predbat.dispatch_unconfirmed_last = {}
         my_predbat.rate_import = {_origin + block * 30: 30.0 for block in range(56)}
         my_predbat.rate_import_cost_threshold = 10.0
         my_predbat.dispatch_timeline_last = {}
@@ -507,6 +528,23 @@ def run_dispatch_timeline_tests(my_predbat):
             my_predbat.log = saved_log
         if logged:
             print("  ERROR: nothing to reconcile should log nothing, got {!r}".format(logged))
+            failed = True
+
+        print("Test 32b: an unknown charging state (car_charging_now not configured) logs nothing")
+        # charging_now is None when the optional car_charging_now sensor isn't set up (Copilot
+        # review on #5077). Without a real signal we can neither confirm nor deny the car is
+        # drawing power, so this must not be treated as "not charging".
+        my_predbat.dispatch_unconfirmed_last = {}
+        my_predbat.minutes_now = 11 * 60
+        logged = []
+        saved_log = my_predbat.log
+        my_predbat.log = lambda message: logged.append(message)
+        try:
+            my_predbat.log_dispatch_unconfirmed(0, slot, None)
+        finally:
+            my_predbat.log = saved_log
+        if logged:
+            print("  ERROR: an unknown charging state should log nothing, got {!r}".format(logged))
             failed = True
 
         my_predbat.minutes_now = 10 * 60

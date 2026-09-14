@@ -1518,6 +1518,10 @@ class Fetch:
                 # Octopus branch overwrites car_charging_planned with "has dispatch slots", so
                 # capture the inputs now and render once the rates are known.
                 if save:
+                    # charging_now is None (unknown) rather than False when car_charging_now isn't
+                    # configured - the sensor is optional (docs/car-charging.md), and defaulting an
+                    # absent sensor to "not charging" would flag GH#5080's billing risk for every
+                    # dispatch on every IOG user who hasn't set it up, not just the ones it's true for.
                     self.dispatch_timeline_pending.append(
                         {
                             "car_n": car_n,
@@ -1525,6 +1529,7 @@ class Fetch:
                             "started": started,
                             "planned": planned,
                             "plugged": self.car_charging_planned[car_n],
+                            "charging_now": self.car_charging_now[car_n] if "car_charging_now" in self.args else None,
                         }
                     )
 
