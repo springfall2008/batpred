@@ -2215,7 +2215,9 @@ class Fetch:
 
                 # Adjust for date if specified
                 if date:
-                    delta_minutes = minutes_to_time(date, self.midnight)
+                    # Carry midnight_utc's offset so this stays a plain wall-clock difference in
+                    # whole days, whichever side of a DST change the date falls on.
+                    delta_minutes = minutes_to_time(date.replace(tzinfo=self.midnight_utc.tzinfo), self.midnight_utc)
                     start_minutes += delta_minutes
                     end_minutes += delta_minutes
 
@@ -2223,7 +2225,7 @@ class Fetch:
                     "Adding rate {}: {}{} => {} to {} @ {}{}, date {}, day_of_week {}, increment {}{}".format(rtype, this_rate, curr, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, curr, date, day_of_week, rate_increment, curr)
                 )
 
-                day_of_week_midnight = self.midnight.weekday()
+                day_of_week_midnight = self.midnight_utc.weekday()
 
                 # Store rates against range
                 if end_minutes >= (-48 * 60) and start_minutes < max_minute:

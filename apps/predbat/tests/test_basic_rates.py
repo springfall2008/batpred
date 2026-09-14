@@ -35,8 +35,8 @@ def test_basic_rates(my_predbat):
     """
     failed = 0
 
-    old_midnight = my_predbat.midnight
-    my_predbat.midnight = datetime.strptime("2025-07-05T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    old_midnight_utc = my_predbat.midnight_utc
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-07-05T00:00:00", "%Y-%m-%dT%H:%M:%S"))
 
     print("*** Running test: Simple rate1")
     simple_rate = [
@@ -96,7 +96,7 @@ def test_basic_rates(my_predbat):
     failed |= assert_rates(results, 24 * 60 + 17 * 60, 24 * 60 + 19 * 60, 10)
 
     print("*** Running test: Simple rate5")
-    rate_override = [{"start": "12:00:00", "end": "13:00:00", "rate_increment": 1, "date": my_predbat.midnight.strftime("%Y-%m-%d")}]
+    rate_override = [{"start": "12:00:00", "end": "13:00:00", "rate_increment": 1, "date": my_predbat.midnight_utc.strftime("%Y-%m-%d")}]
     print(rate_override)
     results = my_predbat.basic_rates(simple_rate2, "import")
     results = my_predbat.basic_rates(rate_override, "import", prev=results)
@@ -114,7 +114,7 @@ def test_basic_rates(my_predbat):
     # Weekends: All day 8 cent flat rate
     # Simulate Saturday afternoon at 14:00
     print("*** Running test: Simple rate6 - Midnight spanning with day_of_week (Saturday afternoon)")
-    my_predbat.midnight = datetime.strptime("2025-07-05T00:00:00", "%Y-%m-%dT%H:%M:%S")  # Saturday (day 6)
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-07-05T00:00:00", "%Y-%m-%dT%H:%M:%S"))  # Saturday (day 6)
     old_minutes_now = my_predbat.minutes_now
     my_predbat.minutes_now = 14 * 60  # 14:00 Saturday afternoon
     dutch_rate = [
@@ -133,7 +133,7 @@ def test_basic_rates(my_predbat):
 
     # Test 7: Monday (weekday) - peak/off-peak pattern
     print("*** Running test: Simple rate7 - Weekday peak/off-peak pattern")
-    my_predbat.midnight = datetime.strptime("2025-07-07T00:00:00", "%Y-%m-%dT%H:%M:%S")  # Monday (day 1)
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-07-07T00:00:00", "%Y-%m-%dT%H:%M:%S"))  # Monday (day 1)
     my_predbat.minutes_now = 14 * 60  # 14:00 Monday afternoon
     results = my_predbat.basic_rates(dutch_rate, "import")
     results, results_replicated = my_predbat.rate_replicate(results, is_import=True, is_gas=False)
@@ -149,7 +149,7 @@ def test_basic_rates(my_predbat):
     failed |= assert_rates(results, 24 * 60 + 22 * 60, 48 * 60, 8)  # 22:00-24:00 off-peak
 
     my_predbat.minutes_now = old_minutes_now
-    my_predbat.midnight = old_midnight
+    my_predbat.midnight_utc = old_midnight_utc
 
     # Test 8: predbat_manual_api rate override only marks the actually-overridden window in
     # rate_replicate, not the whole day (issue #2578). get_manual_api() returns each override
