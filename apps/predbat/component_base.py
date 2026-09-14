@@ -161,8 +161,16 @@ class ComponentBase(ABC):
 
     @property
     def midnight_utc(self):
-        """Get today's midnight time in UTC"""
-        return self.base.midnight_utc
+        """Get today's midnight time in UTC
+
+        Derived from the base's now_utc rather than read from base.midnight_utc: calculate_yesterday()
+        (output.py) rewinds the shared base.midnight_utc by a day for the duration of the savings
+        calculation, and components run on their own threads, so a passthrough read can land on
+        yesterday's midnight (GH#4804). now_utc is never faked by calculate_yesterday(), and always
+        exists by the time a component does - initialize() calls update_time() before the components
+        are constructed. The two agree outside the rewind: update_time() sets midnight_utc from now_utc.
+        """
+        return self.base.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
 
     @property
     def now_utc_exact(self):
