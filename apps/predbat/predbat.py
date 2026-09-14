@@ -945,7 +945,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     error_count += 1
                     component = self.components.get_component(component_name)
                     if not component.is_calculating():
-                        failed_components.append(COMPONENT_LIST.get(component_name, {}).get("name", component_name))
+                        # hasattr rather than a plain call: a component registered outside
+                        # ComponentBase (tests register fakes directly) doesn't have the method
+                        name = COMPONENT_LIST.get(component_name, {}).get("name", component_name)
+                        message = component.health_message() if hasattr(component, "health_message") else None
+                        failed_components.append("{} ({})".format(name, message) if message else name)
                 elif self.components.load_error(component_name):
                     # Configured but could not be imported or constructed - an error, not merely disabled
                     component_status[component_name] = "error"

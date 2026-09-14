@@ -411,6 +411,18 @@ class ComponentBase(ABC):
         """
         return self.api_started
 
+    def health_message(self):
+        """
+        Return a short reason this component is unhealthy, or None when it has nothing to add.
+
+        Surfaced next to the component name in the final run status, so a user reading
+        "component errors: Solis" is told what actually went wrong.
+
+        Returns:
+            str: A short reason, or None
+        """
+        return None
+
     def last_updated_time(self):
         """
         Get the timestamp of the last successful operation.
