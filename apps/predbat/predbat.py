@@ -758,7 +758,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "plan_last_updated_minutes": self.plan_last_updated_minutes,
         }
         try:
-            expiry = self.now_utc + timedelta(hours=8)
+            # storage.load() checks expiry against real wall-clock time (datetime.now(timezone.utc)),
+            # the same convention every other expiry-bearing storage.save() call in the codebase
+            # uses (github.py, octopus.py, enphase.py, fox.py, kraken.py, solax.py, etc.) - self.now_utc
+            # is Predbat's own simulated/plan clock, which is deliberately not real time during a
+            # debug-file replay or a test, and can drift from it. Using it here made a freshly-saved
+            # plan look already-expired the instant it was written whenever that drift exceeded 8
+            # hours (#5079).
+            expiry = datetime.now(timezone.utc) + timedelta(hours=8)
             run_async(storage.save("predbat", "plan", plan_data, format="json", expiry=expiry))
             self.log("Saved plan to storage")
         except Exception as e:
