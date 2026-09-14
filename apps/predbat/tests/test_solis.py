@@ -5341,7 +5341,7 @@ def test_nominal_voltage_sources_and_stability():
 
     # 1. Never reported a voltage - the 48V fallback
     api = MockSolisAPI()
-    sn = "SN0NOMV01"
+    sn = "SN0VOLT01"
     assert api.get_nominal_voltage(sn) == 48.0, f"Expected the 48V fallback with no reading, got {api.get_nominal_voltage(sn)}"
 
     # 2. First live reading is latched, and then held however far the live value moves. The range
@@ -5353,7 +5353,7 @@ def test_nominal_voltage_sources_and_stability():
         assert api.get_nominal_voltage(sn) == 52.1, f"Conversion voltage moved to {api.get_nominal_voltage(sn)} when the live value went to {live}V"
 
     # The latch is per inverter, not global
-    other_sn = "SN0NOMV02"
+    other_sn = "SN0VOLT02"
     api.inverter_details[other_sn] = {"batteryVoltage": 204.8}
     assert api.get_nominal_voltage(other_sn) == 204.8, "A second inverter should latch its own voltage, not inherit the first's"
     assert api.get_nominal_voltage(sn) == 52.1, "Latching a second inverter must not disturb the first"
