@@ -1629,6 +1629,38 @@ async def test_with_retry_raises_a_non_retryable_error_at_once():
     return failed
 
 
+async def test_with_retry_gives_up_rather_than_cut_a_requested_wait_short():
+    """When a requested retry wait no longer fits in the call's time window, _with_retry gives up instead of retrying early."""
+    failed = False
+    api = MockSolisAPI()
+    clock = _FakeClock()
+    attempts = {"n": 0}
+
+    async def operation():
+        """Fail with an error that asks for a 10s wait."""
+        attempts["n"] += 1
+        raise solis_module.SolisAPIError("datalogger reconnecting", retry_after=10)
+
+    patches = _patch_clock(clock)
+    for active in patches:
+        active.start()
+    try:
+        await api._with_retry(operation, max_retry_time=15)
+        print("ERROR: expected the error to propagate")
+        failed = True
+    except solis_module.SolisAPIError:
+        pass
+    finally:
+        for active in patches:
+            active.stop()
+    if attempts["n"] != 2 or clock.sleeps != [10]:
+        print("ERROR: expected two attempts and one full 10s wait, got {} attempts and waits {}".format(attempts["n"], clock.sleeps))
+        failed = True
+    if not failed:
+        print("PASSED: _with_retry gives up rather than cut a requested wait short")
+    return failed
+
+
 # Battery blocks as SolisCloud inverterDetail actually returns them. Trimmed to the fields the
 # enrolment gate looks at; captured from a live two-inverter account where the battery had been
 # moved off the older inverter onto a newer one.
@@ -1943,6 +1975,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_oauth_401_still_refreshes_and_retries())
         failed |= asyncio.run(test_with_retry_backoff_doubles_with_jitter_and_stops_at_the_retry_cap())
         failed |= asyncio.run(test_with_retry_raises_a_non_retryable_error_at_once())
+        failed |= asyncio.run(test_with_retry_gives_up_rather_than_cut_a_requested_wait_short())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())

@@ -700,7 +700,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 if self.oauth_failed or not err.retryable:
                     raise err
                 elapsed_time = time.monotonic() - start_time
-                if attempt >= SOLIS_MAX_RETRIES or elapsed_time >= max_retry_time:
+                # Give up rather than cut a requested wait short - retrying early only spends another request
+                if attempt >= SOLIS_MAX_RETRIES or elapsed_time >= max_retry_time or err.retry_after > max_retry_time - elapsed_time:
                     raise err
 
                 attempt += 1
