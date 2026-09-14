@@ -2221,6 +2221,35 @@ class SigenergyAPI(ComponentBase):
                 active_mode = SIGENERGY_ACTIVE_MODE_CHARGE
                 charge_power_kw = charge_rate_w / 1000.0
                 charge_priority_type = "PV"
+        elif charge_rate_w == 0 and export_rate_w > 0:
+            # No window is active, so the only thing left that can distinguish demand from a
+            # freeze export is the rates Predbat has written. Predbat expresses Freeze Export as
+            # "demand mode, but with charging disabled": execute.py turns the forced-export window
+            # off (adjust_force_export(False)) and calls adjust_charge_rate(0), because SIGCLOUD
+            # declares has_timed_pause False and charge_discharge_with_rate False, so that zero is
+            # the only lever it has left. The freeze_export branch above is therefore never
+            # reached from a planned freeze - export_enable is already False by the time we run -
+            # and the command came out identical to plain demand, which routes the surplus PV a
+            # freeze exists to export into the battery instead (GH#4761).
+            #
+            # The zero is only read as a freeze while the EXPORT rate is non-zero, which makes the
+            # signal "charging disabled, discharging still allowed" rather than just "zero", and
+            # keeps a system whose battery rates were never derived out of a permanent freeze:
+            # all-zero is an absence of a plan, not a plan.
+            #
+            # This is the same inference fox.py, deye.py and sunsynk.py make from the same
+            # entities, for the same reason - see fox.py's freeze_export_requested().
+            #
+            # Self-Consumption Grid is the right mode for it: surplus PV serves the load, then
+            # sells to the grid rather than charging the battery, while the battery still
+            # discharges to serve the house when solar is short - which is exactly what a freeze
+            # export means. charge_power_kw is deliberately left None: the API documents it as
+            # bidirectional ("max energy storage charging/discharging power"), so zeroing it here
+            # would also stop the battery serving the house, which is a freeze CHARGE, not a
+            # freeze export.
+            duration_min = 720
+            new_mode = "freeze_export"
+            active_mode = SIGENERGY_ACTIVE_MODE_SELF_GRID
         else:
             duration_min = 720
             new_mode = "eco"
