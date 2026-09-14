@@ -83,6 +83,29 @@ def test_load_forecast_history(my_predbat):
     now_utc = datetime(2026, 6, 17, 0, 0, 0, tzinfo=timezone.utc)  # Wednesday
     original_get_holiday_minutes = my_predbat.get_holiday_minutes
     original_args = dict(my_predbat.args) if hasattr(my_predbat, "args") else {}
+    # setup_predbat() below repeatedly overwrites these for each sub-test, and Test 6 calls
+    # fetch_config_options() directly, which re-derives forecast_minutes from apps.yaml
+    # (2880) rather than the fixture's overridden value (1440) - snapshot here so the
+    # fetch_config_options() call in the restore block below can be put back afterwards,
+    # instead of leaking the wrong horizon into every later test in the shared fixture (#5079).
+    original_minutes_now = my_predbat.minutes_now
+    original_forecast_minutes = my_predbat.forecast_minutes
+    original_car_charging_energy = my_predbat.car_charging_energy
+    # setup_predbat() and the sub-tests below also overwrite these; none were being restored
+    # either (Copilot review on #5097).
+    original_now_utc = my_predbat.now_utc
+    original_midnight_utc = my_predbat.midnight_utc
+    original_load_minutes = my_predbat.load_minutes
+    original_load_minutes_age = my_predbat.load_minutes_age
+    original_car_charging_threshold = my_predbat.car_charging_threshold
+    original_car_charging_rate = my_predbat.car_charging_rate
+    original_base_load = my_predbat.base_load
+    original_car_charging_hold = my_predbat.car_charging_hold
+    original_days_previous = my_predbat.days_previous
+    original_days_previous_weight = my_predbat.days_previous_weight
+    original_forecast_days = my_predbat.forecast_days
+    original_holiday_days_left = my_predbat.holiday_days_left
+    original_prefix = my_predbat.prefix
 
     # ---------------------------------------------------------------
     # Test 1: combined weekday + age weighting end-to-end (holiday neutral)
@@ -521,5 +544,21 @@ def test_load_forecast_history(my_predbat):
     my_predbat.args.clear()
     my_predbat.args.update(original_args)
     my_predbat.fetch_config_options()
+    my_predbat.minutes_now = original_minutes_now
+    my_predbat.forecast_minutes = original_forecast_minutes
+    my_predbat.car_charging_energy = original_car_charging_energy
+    my_predbat.now_utc = original_now_utc
+    my_predbat.midnight_utc = original_midnight_utc
+    my_predbat.load_minutes = original_load_minutes
+    my_predbat.load_minutes_age = original_load_minutes_age
+    my_predbat.car_charging_threshold = original_car_charging_threshold
+    my_predbat.car_charging_rate = original_car_charging_rate
+    my_predbat.base_load = original_base_load
+    my_predbat.car_charging_hold = original_car_charging_hold
+    my_predbat.days_previous = original_days_previous
+    my_predbat.days_previous_weight = original_days_previous_weight
+    my_predbat.forecast_days = original_forecast_days
+    my_predbat.holiday_days_left = original_holiday_days_left
+    my_predbat.prefix = original_prefix
 
     return failed
