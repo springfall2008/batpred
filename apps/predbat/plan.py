@@ -1526,8 +1526,6 @@ class Plan:
             self.log("Warn: load_scaling10 {} is below load_scaling ({}) so the PV10 scenario would have less load than the central case - using {} for this plan".format(self.load_scaling10, self.load_scaling, load_scaling10))
 
         load_adjust = self.manual_load_adjust.copy()
-        for minute, adjustment in self.house_load_additional_forecast_adjust.items():
-            load_adjust[minute] = load_adjust.get(minute, 0.0) + adjustment
         load_minutes_step = self.step_data_history(
             self.load_minutes,
             self.minutes_now,
@@ -1575,6 +1573,9 @@ class Plan:
             load_adjust=load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
+        load_minutes_step = self.add_additional_load_to_step_data(load_minutes_step, self.house_load_additional_forecast_adjust)
+        load_minutes_step10 = self.add_additional_load_to_step_data(load_minutes_step10, self.house_load_additional_forecast_adjust)
+        load_minutes_step90 = self.add_additional_load_to_step_data(load_minutes_step90, self.house_load_additional_forecast_adjust)
         # The p90 refresh has to happen before the p50 series is stepped, not after it: the envelope
         # model modulates p50 toward p90, so a stale or missing p90 would silently pick the
         # amplitude for the central scenario.
@@ -1671,18 +1672,20 @@ class Plan:
             additional_load_adjust_before = self.house_load_additional_forecast_adjust.copy()
             flexible_selected, load_minutes_step, load_minutes_step10 = self.select_flexible_additional_loads(load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step)
             if flexible_selected:
-                selected_load_adjust = {
-                    minute: self.house_load_additional_forecast_adjust.get(minute, 0.0) - additional_load_adjust_before.get(minute, 0.0)
-                    for minute in self.house_load_additional_forecast_adjust.keys() | additional_load_adjust_before.keys()
-                    if self.house_load_additional_forecast_adjust.get(minute, 0.0) != additional_load_adjust_before.get(minute, 0.0)
-                }
+                selected_load_adjust = getattr(self, "house_load_additional_selected_forecast_adjust", {})
+                if not selected_load_adjust:
+                    selected_load_adjust = {
+                        minute: self.house_load_additional_forecast_adjust.get(minute, 0.0) - additional_load_adjust_before.get(minute, 0.0)
+                        for minute in self.house_load_additional_forecast_adjust.keys() | additional_load_adjust_before.keys()
+                        if self.house_load_additional_forecast_adjust.get(minute, 0.0) != additional_load_adjust_before.get(minute, 0.0)
+                    }
                 load_minutes_step90 = self.add_additional_load_to_step_data(load_minutes_step90, selected_load_adjust)
                 self.load_minutes_step = load_minutes_step
                 self.load_minutes_step10 = load_minutes_step10
                 self.load_minutes_step90 = load_minutes_step90
                 self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90)
-                self.prediction.batch_threads = resolve_batch_threads(self.get_arg("threads", "auto"), cpu_count())
-            if flexible_selected and self.house_load_additional_flexible_selection_changed:
+                self.prediction.batch_threads = resolve_batch_threads(self.get_arg("threads", "auto"), available_cpu_count())
+            if flexible_selected:
                 self.log("Re-optimising plan after flexible additional load selection")
                 plan_prev = (self.charge_limit_best.copy(), clone_windows(self.charge_window_best), clone_windows(self.export_window_best), self.export_limits_best.copy())
                 preclip_prev = self.plan_preclip
