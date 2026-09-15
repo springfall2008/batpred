@@ -325,6 +325,25 @@ Valid values are:
   threads: auto
 ```
 
+### log_count
+
+Sets how many Predbat log files to keep, including the live `predbat.log`. The default is 10, so
+`predbat.log` plus nine rotated copies. Valid values are 2 to 100.
+
+Predbat rotates the log when it reaches 10MB: `predbat.log` becomes `predbat.01.log`, the old
+`predbat.01.log` becomes `predbat.02.log`, and so on, with anything past `log_count` deleted.
+Raising this keeps more history at the cost of disk space - each file can reach 10MB, so
+`log_count: 100` can use around 1GB.
+
+Rotated logs are numbered with two digits (`predbat.01.log` through `predbat.99.log`) so that a
+directory listing sorts them in rotation order. Older Predbat versions used single digits
+(`predbat.1.log`); those files are still read, and are renamed to the two-digit form as they
+rotate, so nothing is lost on upgrade and no manual clean-up is needed.
+
+```yaml
+  log_count: 10
+```
+
 ### enable_coarse_fine_levels
 
 Controls the two-pass coarse/fine optimisation algorithm for improved planning performance. The default is `true` (enabled).

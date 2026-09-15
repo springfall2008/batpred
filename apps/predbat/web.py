@@ -70,7 +70,23 @@ from web_helper import (
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, mask_secret_yaml_text, read_predbat_log, classify_log_line, log_line_included
+from utils import (
+    calc_percent_limit,
+    str2time,
+    dp0,
+    dp2,
+    dp4,
+    format_time_ago,
+    get_override_time_from_string,
+    history_attribute,
+    prune_today,
+    mask_secret_args,
+    mask_secret_yaml_text,
+    read_predbat_log,
+    classify_log_line,
+    log_line_included,
+    predbat_log_file_prev,
+)
 from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
 from predbat import THIS_VERSION_DISPLAY
@@ -3042,7 +3058,7 @@ chart.render();
         Load a file and serve it up
         """
         data = None
-        if os.path.exists(filename):
+        if filename and os.path.exists(filename):
             with open(filename, "r") as f:
                 data = f.read()
         if also_file and os.path.exists(also_file):
@@ -3055,7 +3071,10 @@ chart.render();
         return await self.html_file(as_file or filename, data)
 
     async def html_debug_log(self, request):
-        return await self.html_file_load("predbat.1.log", also_file="predbat.log", as_file="predbat.log")
+        # The previous log is whichever name is present - two-digit, or the single-digit one an
+        # older Predbat wrote (#5076). Hard-coding predbat.1.log here served nothing once
+        # rotation moved to the padded form.
+        return await self.html_file_load(predbat_log_file_prev(), also_file="predbat.log", as_file="predbat.log")
 
     async def html_debug_apps(self, request):
         """
