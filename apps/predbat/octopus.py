@@ -3226,13 +3226,30 @@ class Octopus:
         charging_now is a tri-state: True/False from a configured car_charging_now sensor, or
         None when the (optional) sensor isn't set up. None can't confirm or deny the car is
         drawing power, so it's treated the same as True here - no signal, no flag.
+
+        started_dispatches is retained by the HA Octopus integration as recent history, not
+        trimmed to the current interval, so a dispatch that started earlier and already ended
+        still appears here. Each entry is decoded to its own start/end and checked against
+        minutes_now - a non-empty list is not enough, a dispatch must actually cover now.
         """
-        if not started or charging_now or charging_now is None:
+        if charging_now or charging_now is None:
+            return
+        dispatch_active = False
+        for slot_entry in started or []:
+            start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot_entry, raw=True, boundaries_only=True)
+            if start_minutes <= self.minutes_now < end_minutes:
+                dispatch_active = True
+                break
+        if not dispatch_active:
             return
         slot = (self.minutes_now // 30) * 30
-        if self.dispatch_unconfirmed_last.get(car_n) == slot:
+        # minutes_now resets to 0 at each local midnight (Copilot review on #5077), so the dedup
+        # key needs the day too - otherwise an unconfirmed dispatch flagged at, say, 00:00 would
+        # suppress the same car's genuinely new 00:00 slot the following day.
+        dedup_key = (self.midnight_utc, slot)
+        if self.dispatch_unconfirmed_last.get(car_n) == dedup_key:
             return
-        self.dispatch_unconfirmed_last[car_n] = slot
+        self.dispatch_unconfirmed_last[car_n] = dedup_key
         self.log("Octopus: Note: car {} dispatch active at {} but the car is not charging - import in this slot may be billed at the full rate, needs reconciling against the bill (GH#5080)".format(car_n, self.time_abs_str(slot)))
 
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):

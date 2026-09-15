@@ -1518,10 +1518,6 @@ class Fetch:
                 # Octopus branch overwrites car_charging_planned with "has dispatch slots", so
                 # capture the inputs now and render once the rates are known.
                 if save:
-                    # charging_now is None (unknown) rather than False when car_charging_now isn't
-                    # configured - the sensor is optional (docs/car-charging.md), and defaulting an
-                    # absent sensor to "not charging" would flag GH#5080's billing risk for every
-                    # dispatch on every IOG user who hasn't set it up, not just the ones it's true for.
                     self.dispatch_timeline_pending.append(
                         {
                             "car_n": car_n,
@@ -1529,7 +1525,7 @@ class Fetch:
                             "started": started,
                             "planned": planned,
                             "plugged": self.car_charging_planned[car_n],
-                            "charging_now": self.car_charging_now[car_n] if "car_charging_now" in self.args else None,
+                            "charging_now": self.get_car_charging_now_tristate(car_n),
                         }
                     )
 
@@ -2498,6 +2494,31 @@ class Fetch:
 
         if print:
             self.log("Gas rates: min {}{}, max {}{}, average {}{}".format(self.rate_gas_min, curr, self.rate_gas_max, curr, self.rate_gas_average, curr))
+
+    def get_car_charging_now_tristate(self, car_n):
+        """
+        Read car_charging_now as a tri-state (True/False/None) for the #4516 Stage 1 dispatch
+        timeline's GH#5080 reconciliation note.
+
+        self.car_charging_now (set by get_car_charging_planned()) is a plain boolean used
+        throughout the planner, where "no signal" and "confirmed not charging" both have to mean
+        False - there is no room there for a genuine unknown. This diagnostic needs that
+        distinction: flagging a slot as billing-risk when Predbat actually has no idea whether the
+        car is charging would be a false positive on every dispatch, for every IOG user who hasn't
+        configured the (optional) car_charging_now sensor, or during the "unknown"/"unavailable"
+        state HA reports for a real sensor briefly after a restart.
+
+        Returns None (unknown) when the sensor isn't configured, is out of range for this car, or
+        HA is currently reporting "unknown"/"unavailable"; otherwise the normalised boolean.
+        """
+        if "car_charging_now" not in self.args:
+            return None
+        raw = self.get_arg("car_charging_now", "no", index=car_n)
+        if raw is None:
+            return None
+        if isinstance(raw, str) and raw.lower() in ("unknown", "unavailable"):
+            return None
+        return self.car_charging_now[car_n]
 
     def get_car_charging_planned(self):
         """

@@ -502,17 +502,65 @@ def run_dispatch_timeline_tests(my_predbat):
             failed = True
 
         print("Test 31: the next half-hour slot logs again")
+        # A dispatch running continuously across the boundary - Copilot review on #5077 made
+        # log_dispatch_unconfirmed() check that `started` actually covers minutes_now (below),
+        # so a slot ending exactly at the old minutes_now would no longer look "active" here.
+        slot_two_blocks = [_slot(midnight_utc + timedelta(hours=10), midnight_utc + timedelta(hours=11))]
         logged = []
         saved_log = my_predbat.log
         my_predbat.log = lambda message: logged.append(message)
         try:
             my_predbat.minutes_now = 10 * 60 + 30
-            my_predbat.log_dispatch_unconfirmed(0, slot, False)
+            my_predbat.log_dispatch_unconfirmed(0, slot_two_blocks, False)
         finally:
             my_predbat.log = saved_log
         if len(logged) != 1:
             print("  ERROR: a new slot should log again, got {!r}".format(logged))
             failed = True
+
+        print("Test 31b: started_dispatches history that has already ended does not log (Copilot review on #5077)")
+        # started_dispatches is retained by the HA integration as recent history, not trimmed to
+        # the current interval - a non-empty list alone must not be read as "a dispatch is active
+        # right now".
+        my_predbat.dispatch_unconfirmed_last = {}
+        ended_slot = [_slot(midnight_utc + timedelta(hours=9), midnight_utc + timedelta(hours=9, minutes=30))]
+        logged = []
+        saved_log = my_predbat.log
+        my_predbat.log = lambda message: logged.append(message)
+        try:
+            my_predbat.minutes_now = 10 * 60
+            my_predbat.log_dispatch_unconfirmed(0, ended_slot, False)
+        finally:
+            my_predbat.log = saved_log
+        if logged:
+            print("  ERROR: a dispatch that already ended must not log, got {!r}".format(logged))
+            failed = True
+
+        print("Test 31c: the same slot on the next day logs again, not suppressed by yesterday's note (Copilot review on #5077)")
+        # minutes_now resets to 0 at each local midnight, so a car flagged at (for example) 00:00
+        # must not have that dedup key collide with the same car's genuinely new 00:00 slot the
+        # following day.
+        my_predbat.dispatch_unconfirmed_last = {}
+        my_predbat.midnight_utc = midnight_utc
+        my_predbat.minutes_now = 0
+        midnight_dispatch_day1 = [_slot(midnight_utc, midnight_utc + timedelta(minutes=30))]
+        midnight_dispatch_day2 = [_slot(midnight_utc + timedelta(days=1), midnight_utc + timedelta(days=1, minutes=30))]
+        logged = []
+        saved_log = my_predbat.log
+        my_predbat.log = lambda message: logged.append(message)
+        try:
+            my_predbat.log_dispatch_unconfirmed(0, midnight_dispatch_day1, False)  # day 1
+            my_predbat.midnight_utc = midnight_utc + timedelta(days=1)  # day 2, same minutes_now
+            my_predbat.log_dispatch_unconfirmed(0, midnight_dispatch_day2, False)
+        finally:
+            my_predbat.log = saved_log
+            my_predbat.midnight_utc = midnight_utc
+        if len(logged) != 2:
+            print("  ERROR: the same slot on a new day should log again, got {!r}".format(logged))
+            failed = True
+
+        my_predbat.dispatch_unconfirmed_last = {}
+        my_predbat.minutes_now = 10 * 60
 
         print("Test 32: a charging car, or no dispatch, logs nothing")
         my_predbat.dispatch_unconfirmed_last = {}
@@ -549,6 +597,53 @@ def run_dispatch_timeline_tests(my_predbat):
 
         my_predbat.minutes_now = 10 * 60
         my_predbat.dispatch_unconfirmed_last = {}
+
+        # ------------------------------------------------------------------
+        # get_car_charging_now_tristate() - Copilot review on #5077: the pending capture must not
+        # mistake "no signal" (sensor not configured, or HA reporting unknown/unavailable right
+        # after a restart) for a genuine "not charging", since that would misfire GH#5080's note.
+        saved_args = my_predbat.args
+        saved_car_charging_now = my_predbat.car_charging_now
+
+        print("Test 33: car_charging_now not configured at all reads as unknown")
+        my_predbat.args = {}
+        my_predbat.car_charging_now = [False]
+        result = my_predbat.get_car_charging_now_tristate(0)
+        if result is not None:
+            print("  ERROR: expected None (unknown) when the sensor isn't configured, got {!r}".format(result))
+            failed = True
+
+        print("Test 34: HA reporting 'unknown' or 'unavailable' reads as unknown, not False")
+        for ha_state in ("unknown", "unavailable", "Unknown", "UNAVAILABLE"):
+            my_predbat.args = {"car_charging_now": ha_state}
+            my_predbat.car_charging_now = [False]  # what get_car_charging_planned() collapsed it to
+            result = my_predbat.get_car_charging_now_tristate(0)
+            if result is not None:
+                print("  ERROR: HA state {!r} should read as unknown, got {!r}".format(ha_state, result))
+                failed = True
+
+        print("Test 35: a configured sensor with a real reading passes the normalised boolean through")
+        my_predbat.args = {"car_charging_now": "Charging"}
+        my_predbat.car_charging_now = [True]
+        if my_predbat.get_car_charging_now_tristate(0) is not True:
+            print("  ERROR: expected the normalised True to pass through")
+            failed = True
+        my_predbat.args = {"car_charging_now": "Idle"}
+        my_predbat.car_charging_now = [False]
+        if my_predbat.get_car_charging_now_tristate(0) is not False:
+            print("  ERROR: expected the normalised False to pass through for a genuine non-matching state")
+            failed = True
+
+        print("Test 36: an out-of-range car index reads as unknown, not False")
+        my_predbat.args = {"car_charging_now": ["Charging"]}
+        my_predbat.car_charging_now = [True]
+        result = my_predbat.get_car_charging_now_tristate(5)
+        if result is not None:
+            print("  ERROR: an out-of-range index should read as unknown, got {!r}".format(result))
+            failed = True
+
+        my_predbat.args = saved_args
+        my_predbat.car_charging_now = saved_car_charging_now
 
         # ------------------------------------------------------------------
         # dispatch_timeline_should_log() - #4948 review: a heartbeat every 30 minutes alone would
