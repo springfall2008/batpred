@@ -404,5 +404,116 @@ def test_fetch_config_options(my_predbat):
 
     print("✓ 8-car config resolution test passed")
 
+    # Tests 16-19 (#4885/#4917 review): trust_future_dynamic_iog_slots's 'started' level needs a
+    # genuine car_charging_now sensor configured, since it's the one level that leans on a live
+    # reading rather than only Octopus's own dispatch records - without a real charger/car-reported
+    # sensor there is no way to rule out a false positive (e.g. a kettle mistaken for the car).
+    #
+    # These run after the get_arg/args mocks were already restored to the real implementation (just
+    # above, for Test 15). trust_future_dynamic_iog_slots and octopus_intelligent_limit_future_slots
+    # are CONFIG_ITEMS-backed (select/switch), so - unlike a plain apps.yaml-only setting - the real
+    # get_arg() resolves them via get_ha_config()/self.config_index first, which takes priority over
+    # self.args (see get_ha_config() in userinterface.py); config_index[name]["value"] is what has to
+    # be set here to change what get_arg() actually returns, matching the pattern used elsewhere for
+    # switch/select CONFIG_ITEMS in the test suite (e.g. test_agent_tools.py, test_compare.py).
+    # car_charging_now is a plain apps.yaml sensor reference, not CONFIG_ITEMS-backed, so it is set
+    # via self.args directly, matching fetch_config_options()'s sensor-presence check.
+    saved_had_errors = my_predbat.had_errors
+    saved_args_16 = dict(my_predbat.args)
+    saved_num_cars_16 = my_predbat.num_cars
+    saved_trust_value_16 = my_predbat.config_index["trust_future_dynamic_iog_slots"].get("value")
+    saved_limit_value_16 = my_predbat.config_index["octopus_intelligent_limit_future_slots"].get("value")
+    saved_expert_mode_16 = my_predbat.config_index["expert_mode"].get("value")
+    # Both trust_future_dynamic_iog_slots and octopus_intelligent_limit_future_slots are gated on
+    # expert_mode - enable it so get_ha_config() doesn't just null the configured value back out
+    # regardless of what config_index[...]["value"] is set to below (same pattern as
+    # test_integer_config.py/test_pv90.py for other expert_mode-gated items).
+    my_predbat.expose_config("expert_mode", True, force_ha=True)
+
+    def clear_trust_warned_flags():
+        """
+        Forget which cars have already had their missing-car_charging_now warning logged, so the
+        next fetch_config_options() call below starts from a clean warn-once state for every car.
+        """
+        my_predbat.trust_iog_no_sensor_warned = set()
+
+    # Test 16: 'started' with no car_charging_now configured at all warns and is left for
+    # rate_add_io_slots() to degrade per-car (fetch_config_options() only logs the warning; the
+    # actual per-car fallback to 'completed' happens inside rate_add_io_slots() itself - see
+    # test_rate_add_io_slots.py tests 36-37).
+    print("\n*** Test 16: 'started' with no car_charging_now configured warns ***")
+    my_predbat.args = dict(saved_args_16)  # num_cars stays at the fixture default (1)
+    my_predbat.config_index["trust_future_dynamic_iog_slots"]["value"] = "started"
+    my_predbat.args.pop("car_charging_now", None)
+    clear_trust_warned_flags()
+    my_predbat.had_errors = False
+
+    my_predbat.fetch_config_options()
+
+    assert my_predbat.trust_future_dynamic_iog_slots == "started", "trust_future_dynamic_iog_slots should still read back as 'started' - the warning doesn't change the setting itself"
+    assert 0 in my_predbat.trust_iog_no_sensor_warned, "car 0 should be flagged as warned when car_charging_now is not configured at all"
+    assert my_predbat.had_errors is True, "had_errors should be set by record_status when 'started' is selected without car_charging_now"
+
+    print("✓ 'started' without car_charging_now warns as expected")
+
+    # Test 17: 'started' with car_charging_now configured (a single value applying to every car)
+    # does not warn.
+    print("\n*** Test 17: 'started' with car_charging_now configured does not warn ***")
+    my_predbat.args["car_charging_now"] = "binary_sensor.fake_charging_now"
+    clear_trust_warned_flags()
+    my_predbat.had_errors = False
+
+    my_predbat.fetch_config_options()
+
+    assert 0 not in my_predbat.trust_iog_no_sensor_warned, "car 0 should not be flagged as warned when car_charging_now is configured"
+    assert my_predbat.had_errors is False, "had_errors should not be set when car_charging_now is genuinely configured"
+
+    print("✓ 'started' with car_charging_now configured does not warn")
+
+    # Test 18: multi-car install where car_charging_now is a list covering only car 0 - car 1 must
+    # warn independently, since a multi-car install may have the sensor for some cars and not others.
+    print("\n*** Test 18: per-car warning in a multi-car install (car 1 has no sensor) ***")
+    my_predbat.args["num_cars"] = 2  # fetch_config_options() re-derives self.num_cars from get_arg("num_cars", ...) at its start
+    my_predbat.args["car_charging_now"] = ["binary_sensor.car0_charging_now"]
+    clear_trust_warned_flags()
+    my_predbat.had_errors = False
+
+    my_predbat.fetch_config_options()
+
+    assert 0 not in my_predbat.trust_iog_no_sensor_warned, "car 0 has a sensor configured and should not warn"
+    assert 1 in my_predbat.trust_iog_no_sensor_warned, "car 1 has no sensor configured (list too short) and should warn"
+    assert my_predbat.had_errors is True, "had_errors should be set because car 1 is missing its sensor"
+
+    print("✓ Multi-car per-car warning behaves independently per car")
+
+    # Test 19: the default trust level ('planned') never triggers the warning, and the default
+    # itself is unchanged - confirms nobody's plan changes on upgrade unless they opt into a
+    # stricter level (Trefor's explicit requirement when reviewing #4885).
+    print("\n*** Test 19: default 'planned' level never warns and matches the pre-existing default ***")
+    my_predbat.args = dict(saved_args_16)  # num_cars stays at the fixture default (1)
+    my_predbat.args.pop("car_charging_now", None)
+    my_predbat.config_index["trust_future_dynamic_iog_slots"]["value"] = None  # unset - exercise get_arg's own default
+    my_predbat.config_index["octopus_intelligent_limit_future_slots"]["value"] = None
+    clear_trust_warned_flags()
+    my_predbat.had_errors = False
+
+    my_predbat.fetch_config_options()
+
+    assert my_predbat.trust_future_dynamic_iog_slots == "planned", "the default trust level should be 'planned' (today's long-standing behaviour) when unset"
+    assert my_predbat.had_errors is False, "the default 'planned' level should never trigger the started/car_charging_now warning"
+    assert my_predbat.octopus_intelligent_limit_future_slots is False, "the needed gate should also default to Off, so a fresh install sees no plan change"
+
+    print("✓ Defaults are unchanged and never warn")
+
+    # Restore state for any tests appended after this one
+    my_predbat.config_index["trust_future_dynamic_iog_slots"]["value"] = saved_trust_value_16
+    my_predbat.config_index["octopus_intelligent_limit_future_slots"]["value"] = saved_limit_value_16
+    my_predbat.expose_config("expert_mode", saved_expert_mode_16, force_ha=True)
+    my_predbat.args = saved_args_16
+    my_predbat.had_errors = saved_had_errors
+    my_predbat.num_cars = saved_num_cars_16
+    clear_trust_warned_flags()
+    my_predbat.fetch_config_options()
+
     print("\n**** All fetch_config_options tests passed! ****")
     return False
