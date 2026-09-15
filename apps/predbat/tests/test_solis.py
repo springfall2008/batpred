@@ -10,7 +10,7 @@
 
 import asyncio
 import solis as solis_module
-from datetime import datetime
+from datetime import datetime, timedelta, UTC
 from unittest.mock import MagicMock, patch
 from solis import SolisAPI, SOLIS_CID_CHARGE_ENABLE_BASE, SOLIS_CID_CHARGE_TIME, SOLIS_CID_CHARGE_SOC_BASE, SOLIS_CID_CHARGE_CURRENT, SOLIS_CID_DISCHARGE_ENABLE_BASE
 from solis import SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, SOLIS_CID_CHARGE_DISCHARGE_SETTINGS
@@ -58,7 +58,8 @@ class MockSolisAPI(SolisAPI):
         # __init__ (skipped above) sets this.
         self.queued_events = []
         self.nominal_voltage = 48.0
-        self.nominal_voltage_last_known = {}
+        self.live_voltage_last_known = {}
+        self.nominal_voltage_reported = {}
         self.nominal_pack_voltage = None
         self.capacity_voltage_warned = set()
         # No wall-clock pause in tests; the settle re-read itself is asserted by the tests that
@@ -81,6 +82,9 @@ class MockSolisAPI(SolisAPI):
         self.charge_discharge_time_windows = {}
         self.cached_infos = {}
         self.slots_reset = set()
+        self.quota_exhausted_until = None
+        self.datalogger_offline_until = {}
+        self.automatic_config_done = False
 
         # Timezone for now_utc_exact property (from ComponentBase)
         self.local_tz = datetime.now().astimezone().tzinfo
@@ -553,7 +557,9 @@ def _make_run_api(configured_sns=None, control_enable=True, automatic=False):
     api.update_success_timestamp = mock_update_success_timestamp
 
     async def mock_automatic_config():
+        # Mirrors the real method, which reports whether the args were actually bound
         api.automatic_config_calls += 1
+        return getattr(api, "_test_automatic_config_result", True)
 
     api.automatic_config = mock_automatic_config
 
@@ -1442,6 +1448,18 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_oauth_endpoint_namespace_translation())
         failed |= asyncio.run(test_oauth_execute_request_aborts_when_token_missing())
         failed |= asyncio.run(test_with_retry_aborts_on_oauth_failed())
+        failed |= asyncio.run(test_quota_exhausted_response_pauses_all_requests())
+        failed |= asyncio.run(test_with_retry_does_not_retry_settled_codes())
+        failed |= asyncio.run(test_datalogger_offline_does_not_sleep())
+        failed |= asyncio.run(test_run_retries_automatic_config_until_it_succeeds())
+        failed |= asyncio.run(test_quota_pause_is_capped_at_an_hour_and_at_utc_midnight())
+        failed |= asyncio.run(test_quota_pause_expires_and_requests_resume())
+        failed |= asyncio.run(test_health_message_names_the_quota_limit())
+        failed |= asyncio.run(test_quota_diagnostic_survives_until_a_request_succeeds())
+        failed |= asyncio.run(test_offline_datalogger_stops_being_polled())
+        failed |= asyncio.run(test_automatic_config_settles_on_a_pv_only_fleet())
+        failed |= asyncio.run(test_discovery_cache_lets_a_restart_configure_without_the_api())
+        failed |= asyncio.run(test_successful_discovery_is_cached_and_session_reused())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())
@@ -1532,6 +1550,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config())
         failed |= asyncio.run(test_get_nominal_voltage_and_capacity_voltage())
         failed |= asyncio.run(test_publish_entities_capacity_voltage_reliability())
+        failed |= test_nominal_voltage_sources_and_stability()
+        failed |= asyncio.run(test_rate_setpoints_do_not_drift_with_battery_voltage())
         failed |= asyncio.run(test_publish_entities_export_power_unit_conversion())
         failed |= asyncio.run(test_inverter_sn_filter_exact_match())
         failed |= asyncio.run(test_inverter_sn_filter_case_insensitive())
@@ -3466,8 +3486,10 @@ async def test_publish_entities():
     api.max_charge_current[inverter_sn] = 50
     api.max_discharge_current[inverter_sn] = 50
 
-    # Nominal pack voltage for the battery capacity calculation (issue #4493) - deliberately
-    # distinct from the fixture's live batteryVoltage (52.3V) used for power conversions
+    # Configured nominal pack voltage (issue #4493) - deliberately distinct from the fixture's
+    # live batteryVoltage (52.3V) so that the assertions below pin down which of the two every
+    # derived value uses. Since #5090 that is the configured voltage for all of them; the live
+    # reading survives only as the battery_voltage sensor.
     api.nominal_pack_voltage = 512.0
 
     # Call publish_entities
@@ -3496,11 +3518,11 @@ async def test_publish_entities():
     charge_soc = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_soc"]
     assert charge_soc["state"] == 95, f"Charge SOC should be 95, got {charge_soc['state']}"
 
-    # Check power conversion (amps to watts), using the LIVE measured voltage (52.3V from the
-    # fixture's batteryVoltage), not the old hard-coded 48.0V (issue #4493)
+    # Check power conversion (amps to watts), using the configured nominal pack voltage (512V) -
+    # not the old hard-coded 48.0V (issue #4493), and not the live 52.3V reading (issue #5090)
     assert f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_power" in api.dashboard_items, "Charge slot 1 power should be published"
     charge_power = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_power"]
-    expected_power = int(50 * 52.3)  # 50A * 52.3V (live measured, not nominal)
+    expected_power = int(50 * 512.0)  # 50A * 512.0V (configured nominal, not the live reading)
     assert charge_power["state"] == expected_power, f"Charge power should be {expected_power}W, got {charge_power['state']}"
     assert charge_power["attributes"]["unit_of_measurement"] == "W", "Charge power should have W unit"
 
@@ -3523,11 +3545,11 @@ async def test_publish_entities():
     reserve_soc = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_reserve_soc"]
     assert reserve_soc["state"] == "10", f"Reserve SOC should be 10, got {reserve_soc['state']}"
 
-    # Check max power numbers (converted from amps using the LIVE measured voltage, 52.3V from
-    # the fixture's batteryVoltage - not the old hard-coded 48.0V, issue #4493)
+    # Check max power numbers (converted from amps using the configured nominal pack voltage,
+    # 512V - not the old hard-coded 48.0V per issue #4493, nor the live 52.3V per issue #5090)
     assert f"number.{prefix}_solis_{inverter_sn_lower}_max_charge_power" in api.dashboard_items, "Max charge power should be published"
     max_charge = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_max_charge_power"]
-    expected_max_power = int(50 * 52.3)  # 50A * 52.3V (live measured, not nominal)
+    expected_max_power = int(50 * 512.0)  # 50A * 512.0V (configured nominal, not the live reading)
     assert max_charge["state"] == expected_max_power, f"Max charge power should be {expected_max_power}W, got {max_charge['state']}"
 
     # Check battery capacity calculation (Ah to kWh), using the configured nominal PACK voltage
@@ -5238,9 +5260,10 @@ async def test_automatic_config():
 async def test_get_nominal_voltage_and_capacity_voltage():
     """
     Test get_nominal_voltage() and get_capacity_voltage() (issue #4493): power/current
-    conversions must use the live measured battery voltage (not the old hard-coded 48V), retaining
-    the last known-good reading if it becomes unavailable, while capacity must use a separately
-    configured nominal pack voltage and never guess at one.
+    conversions must scale with the real pack voltage rather than the old hard-coded 48V, and
+    survive the live reading becoming unavailable. get_capacity_voltage() reports only the
+    configured nominal pack voltage, so that callers can tell a configured value from an
+    inferred one; it never guesses at one.
     """
     print("\n=== Test: get_nominal_voltage and get_capacity_voltage ===")
 
@@ -5252,17 +5275,18 @@ async def test_get_nominal_voltage_and_capacity_voltage():
     assert api.get_nominal_voltage(sn) == 48.0, "Should fall back to 48.0V default with no data"
     assert api.get_capacity_voltage(sn) is None, "Should return None when solis_nominal_voltage isn't configured"
 
-    # Live batteryVoltage reported - used directly, and remembered
+    # An HV batteryVoltage reported - used for conversions, as it has been since issue #4493
     api.inverter_details[sn] = {"batteryVoltage": 533.0}
-    assert api.get_nominal_voltage(sn) == 533.0, "Should use the live measured voltage"
+    assert api.get_nominal_voltage(sn) == 533.0, "Should use the reported battery voltage on an HV pack"
 
-    # Live reading becomes unavailable (e.g. API outage) - retains the last known value, not 48.0
+    # Reading becomes unavailable (e.g. API outage) - retains the last known value, not 48.0
     api.inverter_details[sn] = {"batteryVoltage": None}
-    assert api.get_nominal_voltage(sn) == 533.0, "Should retain last known-good voltage when unavailable"
+    assert api.get_nominal_voltage(sn) == 533.0, "Should retain the last known voltage when unavailable"
 
-    # solis_nominal_voltage configured - used for capacity regardless of live voltage
+    # solis_nominal_voltage configured - capacity uses it, and so does everything else
     api.nominal_pack_voltage = 512.0
     assert api.get_capacity_voltage(sn) == 512.0, "Should use the configured nominal pack voltage for capacity"
+    assert api.get_nominal_voltage(sn) == 512.0, "A configured nominal pack voltage should also win for conversions"
 
     print("PASSED: get_nominal_voltage and get_capacity_voltage behave correctly")
     return False
@@ -5273,10 +5297,11 @@ async def test_publish_entities_capacity_voltage_reliability():
     Test battery_capacity behaviour with and without solis_nominal_voltage configured (issue
     #4493). The sensor is always published - dropping it outright for every existing install
     that hasn't set the new option was judged too disruptive - but without a configured nominal
-    pack voltage it falls back to the live measured voltage and is flagged unreliable (a warning
-    is logged, and the "reliable"/"voltage_source" attributes say so), since that value wobbles
-    with charge state and is still not the true nominal figure. parallel_battery_count is applied
-    either way.
+    pack voltage it falls back to the conversion voltage get_nominal_voltage() picked (issue #5090)
+    and is flagged
+    unreliable (a warning is logged, and the "reliable"/"voltage_source" attributes say so),
+    since a measured voltage is only within a few percent of the true nominal figure.
+    parallel_battery_count is applied either way.
     """
     print("\n=== Test: publish_entities battery_capacity voltage reliability ===")
     from solis import SOLIS_CID_BATTERY_CAPACITY
@@ -5290,22 +5315,22 @@ async def test_publish_entities_capacity_voltage_reliability():
     prefix = api.prefix
     entity_id = f"sensor.{prefix}_solis_{sn.lower()}_battery_capacity"
 
-    # No solis_nominal_voltage configured - still published, using the live voltage, flagged unreliable
+    # No solis_nominal_voltage configured - still published from the HV pack's live voltage, flagged unreliable
     await api.publish_entities()
     assert entity_id in api.dashboard_items, "battery_capacity should still be published without solis_nominal_voltage configured"
     capacity_item = api.dashboard_items[entity_id]
-    expected_kwh_estimated = round(100 * 533.0 / 1000.0, 2)  # 100Ah * 533.0V (live) / 1000 = 53.3 kWh
-    assert capacity_item["state"] == expected_kwh_estimated, f"Expected {expected_kwh_estimated}kWh from live voltage, got {capacity_item['state']}"
-    assert capacity_item["attributes"]["reliable"] is False, "Should be flagged unreliable when using the live voltage"
-    assert "estimated from the live measured voltage" in capacity_item["attributes"]["voltage_source"]
-    warn_count = sum(1 for msg in api.log_messages if "estimated from the live measured voltage" in msg)
+    expected_kwh_estimated = round(100 * 533.0 / 1000.0, 2)  # 100Ah * 533.0V (HV, live) / 1000 = 53.3 kWh
+    assert capacity_item["state"] == expected_kwh_estimated, f"Expected {expected_kwh_estimated}kWh from the measured voltage, got {capacity_item['state']}"
+    assert capacity_item["attributes"]["reliable"] is False, "Should be flagged unreliable when using a measured voltage"
+    assert "estimated using an inferred pack voltage" in capacity_item["attributes"]["voltage_source"]
+    warn_count = sum(1 for msg in api.log_messages if "estimated using an inferred pack voltage" in msg)
     assert warn_count == 1, f"Should warn that the value is an estimate exactly once, got {warn_count}"
 
     # publish_entities() runs roughly once a minute in production - a second call must not repeat
     # the warning, or it would drown out the log for every install that hasn't configured this
     api.dashboard_items = {}
     await api.publish_entities()
-    warn_count = sum(1 for msg in api.log_messages if "estimated from the live measured voltage" in msg)
+    warn_count = sum(1 for msg in api.log_messages if "estimated using an inferred pack voltage" in msg)
     assert warn_count == 1, f"Warning should not repeat on a second publish_entities() call, got {warn_count}"
 
     # With solis_nominal_voltage AND 2 parallel batteries configured - both applied, flagged reliable
@@ -5320,6 +5345,127 @@ async def test_publish_entities_capacity_voltage_reliability():
     assert capacity_item["attributes"]["reliable"] is True, "Should be flagged reliable when solis_nominal_voltage is configured"
 
     print("PASSED: battery_capacity is always published, flags reliability, and respects parallel_battery_count")
+    return False
+
+
+def test_nominal_voltage_sources_and_stability():
+    """
+    Test get_nominal_voltage()'s priority order and, above all, that it holds still (issue #5090).
+
+    The inverter stores its limits as currents, so a conversion voltage that tracks the live
+    reading republishes a fixed 70A limit as a different wattage every poll. The pack class is
+    decided from the BMS-requested charge voltage, which is a setting and does not move; the live
+    reading cannot decide it because the two LV classes overlap.
+    """
+    print("\n=== Test: get_nominal_voltage sources and stability ===")
+    sn = "SN0VOLT01"
+
+    # 1. An LV pack with no BMS charge voltage reported at all - the 48V fallback. One sampled
+    #    S5-EH1P3.6K-L reports exactly this: batteryChargingVoltage absent, batteryAcvSet 0.0.
+    api = MockSolisAPI()
+    assert api.get_nominal_voltage(sn) == 48.0, f"Expected the 48V fallback with nothing reported, got {api.get_nominal_voltage(sn)}"
+    api.inverter_details[sn] = {"batteryVoltage": 51.3, "batteryAcvSet": 0.0, "batteryList": [{"battSn": "X"}]}
+    assert api.get_nominal_voltage(sn) == 48.0, f"Expected the 48V fallback when no charge voltage is reported, got {api.get_nominal_voltage(sn)}"
+
+    # 2. The charge voltage classifies the pack, from either field. The values here are the ones
+    #    measured across 14 systems: 53.2V on every 15S pack, 56.5-58.4V on every 16S.
+    for charge_voltage, expected in ((53.2, 48.0), (54.9, 48.0), (55.0, 51.2), (56.5, 51.2), (58.4, 51.2)):
+        for field, detail in (("batteryAcvSet", {"batteryAcvSet": charge_voltage}), ("batteryChargingVoltage", {"batteryList": [{"batteryChargingVoltage": charge_voltage}]})):
+            api = MockSolisAPI()
+            api.inverter_details[sn] = dict(detail, batteryVoltage=50.0)
+            got = api.get_nominal_voltage(sn)
+            assert got == expected, f"A {field} of {charge_voltage}V should give {expected}V nominal, got {got}"
+
+    # 3. The result holds still across the whole live range, which is the point of the exercise.
+    #    47.89V-53.24V is what the reporter's 15S pack actually covered over three days, and it
+    #    spans both classes' averages - so a live-voltage rule would reclassify mid-range.
+    api = MockSolisAPI()
+    api.inverter_details[sn] = {"batteryVoltage": 52.1, "batteryAcvSet": 53.2}
+    for live in (47.89, 50.0, 53.24, 53.5, 47.1):
+        api.inverter_details[sn]["batteryVoltage"] = live
+        assert api.get_nominal_voltage(sn) == 48.0, f"Conversion voltage moved to {api.get_nominal_voltage(sn)} when the live value went to {live}V"
+
+    # It is announced when chosen, not on every conversion - this runs for every published entity
+    chosen_logs = [msg for msg in api.log_messages if "for amp<->watt conversions" in msg and sn in msg]
+    assert len(chosen_logs) == 1, f"Expected exactly one conversion-voltage log line for {sn}, got {len(chosen_logs)}"
+
+    # 4. An HV pack keeps the live measured voltage, as it has since issue #4493. No LV system
+    #    sampled exceeded 57.5V live, so above 60V the charge-voltage rule must not apply.
+    hv = MockSolisAPI()
+    hv.inverter_details[sn] = {"batteryVoltage": 204.8, "batteryAcvSet": 230.0}
+    assert hv.get_nominal_voltage(sn) == 204.8, f"An HV pack should keep the live voltage, got {hv.get_nominal_voltage(sn)}"
+    hv.inverter_details[sn]["batteryVoltage"] = 0.0
+    assert hv.get_nominal_voltage(sn) == 204.8, "A missing reading should fall back to the last known live voltage, as before"
+
+    # 5. A configured solis_nominal_voltage wins outright - the pack stating its own nominal beats
+    #    any inference, and it is the only route to a stable value for an HV pack
+    configured = MockSolisAPI()
+    configured.nominal_pack_voltage = 51.2
+    configured.inverter_details[sn] = {"batteryVoltage": 53.24, "batteryAcvSet": 53.2}
+    assert configured.get_nominal_voltage(sn) == 51.2, f"Configured solis_nominal_voltage should win, got {configured.get_nominal_voltage(sn)}"
+
+    # 6. An unparseable or zero charge voltage is not a classification
+    for bad in (0, 0.0, "", None, "unknown"):
+        rejects = MockSolisAPI()
+        rejects.inverter_details[sn] = {"batteryVoltage": 51.0, "batteryAcvSet": bad}
+        assert rejects.get_nominal_voltage(sn) == 48.0, f"Expected the 48V fallback for batteryAcvSet={bad!r}, got {rejects.get_nominal_voltage(sn)}"
+
+    print("PASSED: get_nominal_voltage classifies the pack from the BMS charge voltage and holds still")
+    return False
+
+
+async def test_rate_setpoints_do_not_drift_with_battery_voltage():
+    """
+    Test that a rate written in watts reads back unchanged when the pack voltage moves (#5090).
+
+    This is the symptom the reporter saw: with the current limit untouched, max_charge_power and
+    max_discharge_power swung 3352W-3726W as the pack moved between 47.89V and 53.24V, dragging
+    battery_rate_max (auto-bound to max_charge_power) and the write tolerance derived from it with
+    them, and making Predbat rewrite slot rates it had already written correctly.
+    """
+    print("\n=== Test: rate setpoints do not drift with battery voltage ===")
+    from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, SOLIS_CID_STORAGE_MODE
+
+    api = MockSolisAPI()
+    sn = "SN0DRIFT1"
+    api.inverter_sn = [sn]
+    # A 15S LV pack: batteryAcvSet 53.2V classifies it, batteryVoltage is the reading that moves
+    api.inverter_details[sn] = {"inverterName": "Drift Test", "batteryVoltage": 52.1, "batteryAcvSet": 53.2}
+    # A constant 70A charge/discharge limit, as held by the inverter
+    api.cached_values[sn] = {SOLIS_CID_STORAGE_MODE: "33", SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "70", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT: "70"}
+    api.max_charge_current[sn] = 70
+    api.max_discharge_current[sn] = 70
+    api.charge_discharge_time_windows[sn] = {1: {"discharge_current": 0}}
+
+    prefix = api.prefix
+    max_charge_entity = f"number.{prefix}_solis_{sn.lower()}_max_charge_power"
+    max_discharge_entity = f"number.{prefix}_solis_{sn.lower()}_max_discharge_power"
+    slot_entity = f"number.{prefix}_solis_{sn.lower()}_discharge_slot1_power"
+
+    # Predbat writes a discharge rate in watts; the handler converts it to amps and republishes
+    await api.number_event_handler(slot_entity, 3437)
+    written_amps = api.charge_discharge_time_windows[sn][1]["discharge_current"]
+    before = {entity: api.dashboard_items[entity]["state"] for entity in (max_charge_entity, max_discharge_entity, slot_entity)}
+
+    # The pack now sags under the export it was just told to do, then recovers past where it began
+    for live in (47.89, 53.24):
+        api.inverter_details[sn]["batteryVoltage"] = live
+        await api.publish_entities()
+        for entity, was in before.items():
+            now = api.dashboard_items[entity]["state"]
+            assert now == was, f"{entity} moved from {was}W to {now}W at {live}V with the current unchanged"
+
+    # battery_rate_max is auto-bound to the max_charge_power entity, so a stable entity is the
+    # whole point: 70A on a 15S pack must publish as 70A at its 48V nominal, whatever the pack
+    # happens to read at the time - and 3360W is outside the 3352W-3726W the reporter observed
+    assert before[max_charge_entity] == int(70 * 48.0), f"Expected 70A at the 15S pack's 48V nominal, got {before[max_charge_entity]}W"
+
+    # ...and the round trip must close, or Predbat rewrites a setpoint that never changed and logs
+    # "Trying to write X to discharge_rate didn't complete got Y"
+    await api.number_event_handler(slot_entity, api.dashboard_items[slot_entity]["state"])
+    assert api.charge_discharge_time_windows[sn][1]["discharge_current"] == written_amps, f"Re-writing the published wattage changed the current from {written_amps}A to {api.charge_discharge_time_windows[sn][1]['discharge_current']}A"
+
+    print("PASSED: published rate wattages and the write round trip are unaffected by pack voltage")
     return False
 
 
@@ -5673,3 +5819,481 @@ async def test_queued_event_drained_after_startup():
         print("ERROR: queue should be empty after a successful run, got {}".format(api.queued_events))
         return 1
     return 0
+
+
+# ==================== Daily API allowance (issue #5087) ====================
+
+
+class _GuardQuotaSession:
+    """Fake session whose post() must never be called — asserts no request leaves while paused."""
+
+    def post(self, *args, **kwargs):
+        """Fail loudly if an HTTP request is attempted while the allowance pause is in force."""
+        raise AssertionError("HTTP request should not be issued while the daily allowance pause is in force")
+
+    async def close(self):
+        """Pretend to close the session."""
+        pass
+
+
+def _quota_api(now=None):
+    """Return a MockSolisAPI with an api-key identity, ready for _execute_request quota tests."""
+    api = MockSolisAPI()
+    api.auth_method = "api_key"
+    api.base_url = "https://solis.test"
+    if now is not None:
+        api._test_now_utc_exact = now
+    return api
+
+
+async def test_quota_exhausted_response_pauses_all_requests():
+    """R0000 pauses every further Solis request rather than sending them into a spent allowance.
+
+    Each refused request still counts against the SolisCloud daily allowance of 200, so the old
+    behaviour - treating R0000 as a generic error and retrying it - is what kept it exhausted
+    (issue #5087).
+    """
+    failed = False
+    api = _quota_api(now=datetime(2026, 3, 4, 12, 0, 0, tzinfo=UTC))
+    api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "R0000", "msg": "No authority too many request 200 times in 1DAYS"}))
+
+    try:
+        await api._execute_request(SOLIS_INVERTER_LIST_ENDPOINT, {})
+        print("ERROR: expected SolisAPIError for the R0000 response")
+        failed = True
+    except solis_module.SolisAPIError as err:
+        if err.response_code != "R0000":
+            print("ERROR: expected response_code R0000, got {}".format(err.response_code))
+            failed = True
+
+    if api.quota_exhausted_until is None:
+        print("ERROR: R0000 did not pause requests")
+        failed = True
+
+    # A second call must not reach the network at all
+    api.session = _GuardQuotaSession()
+    try:
+        await api._execute_request(SOLIS_INVERTER_LIST_ENDPOINT, {})
+        print("ERROR: expected the paused request to raise rather than be sent")
+        failed = True
+    except AssertionError:
+        print("ERROR: a request was sent while the daily allowance pause was in force")
+        failed = True
+    except solis_module.SolisAPIError as err:
+        if err.response_code != "R0000":
+            print("ERROR: paused request should report R0000, got {}".format(err.response_code))
+            failed = True
+
+    if not failed:
+        print("PASSED: R0000 pauses all Solis requests instead of spending more of the allowance")
+    return failed
+
+
+async def test_quota_pause_is_capped_at_an_hour_and_at_utc_midnight():
+    """The pause lasts an hour, or less when UTC midnight comes first.
+
+    SolisCloud doesn't document which timezone the daily allowance rolls over in, so the pause is
+    capped rather than running to the assumed boundary: a wrong guess must not leave Predbat blind
+    for a whole day, and one probe an hour costs almost nothing of the next day's budget.
+    """
+    failed = False
+
+    midday = datetime(2026, 3, 4, 12, 0, 0, tzinfo=UTC)
+    api = _quota_api(now=midday)
+    api.note_quota_exhausted()
+    if api.quota_exhausted_until != midday + timedelta(hours=1):
+        print("ERROR: midday pause should last SOLIS_QUOTA_RETRY_SECONDS, got {}".format(api.quota_exhausted_until))
+        failed = True
+
+    late = datetime(2026, 3, 4, 23, 30, 0, tzinfo=UTC)
+    api = _quota_api(now=late)
+    api.note_quota_exhausted()
+    if api.quota_exhausted_until != datetime(2026, 3, 5, 0, 0, 0, tzinfo=UTC):
+        print("ERROR: a pause crossing UTC midnight should stop there, got {}".format(api.quota_exhausted_until))
+        failed = True
+
+    if not failed:
+        print("PASSED: quota pause capped at an hour and never runs past UTC midnight")
+    return failed
+
+
+async def test_quota_pause_expires_and_requests_resume():
+    """Once the pause expires the next request is sent, so a restored allowance is noticed."""
+    failed = False
+    api = _quota_api(now=datetime(2026, 3, 4, 12, 0, 0, tzinfo=UTC))
+    api.note_quota_exhausted()
+
+    api._test_now_utc_exact = datetime(2026, 3, 4, 13, 0, 1, tzinfo=UTC)
+    api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "0", "data": {"ok": 1}}))
+
+    result = await api._execute_request(SOLIS_INVERTER_LIST_ENDPOINT, {})
+    if result != {"ok": 1}:
+        print("ERROR: expected the request to be sent once the pause expired, got {}".format(result))
+        failed = True
+    if api.quota_exhausted_until is not None:
+        print("ERROR: expired pause should have been cleared, got {}".format(api.quota_exhausted_until))
+        failed = True
+
+    if not failed:
+        print("PASSED: quota pause expires and requests resume")
+    return failed
+
+
+async def test_with_retry_does_not_retry_settled_codes():
+    """R0000 and B0115 get one attempt: retrying them cannot help and each attempt costs a request."""
+    failed = False
+
+    for code in ("R0000", "B0115"):
+        api = MockSolisAPI()
+        attempts = {"n": 0}
+
+        async def operation(code=code):
+            """Always fail with the settled code under test."""
+            attempts["n"] += 1
+            raise solis_module.SolisAPIError("boom", response_code=code)
+
+        try:
+            await api._with_retry(operation, max_retry_time=5)
+            print("ERROR: expected SolisAPIError to propagate for {}".format(code))
+            failed = True
+        except solis_module.SolisAPIError:
+            pass
+
+        if attempts["n"] != 1:
+            print("ERROR: {} should be attempted once, got {} attempts".format(code, attempts["n"]))
+            failed = True
+
+    # A genuinely transient failure must still be retried
+    api = MockSolisAPI()
+    transient_attempts = {"n": 0}
+
+    async def flaky_operation():
+        """Fail once with a server error, then succeed."""
+        transient_attempts["n"] += 1
+        if transient_attempts["n"] == 1:
+            raise solis_module.SolisAPIError("transient", status_code=500)
+        return "ok"
+
+    if await api._with_retry(flaky_operation, max_retry_time=5) != "ok" or transient_attempts["n"] != 2:
+        print("ERROR: a transient error should still be retried, got {} attempts".format(transient_attempts["n"]))
+        failed = True
+
+    if not failed:
+        print("PASSED: settled codes are not retried, transient errors still are")
+    return failed
+
+
+async def test_datalogger_offline_does_not_sleep():
+    """B0115 means the datalogger is offline, so it must not wait 10 seconds 'for rate limiting'.
+
+    The old sleep-and-retry drained the daily allowance across hours of an offline datalogger,
+    which is how the account in issue #5087 reached R0000 in the first place.
+    """
+    failed = False
+    api = _quota_api()
+    api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "B0115", "msg": "Sending failure ,the current datalogger is offline or disconnected"}))
+
+    slept = []
+
+    async def fake_sleep(seconds):
+        """Record any sleep the request path asks for."""
+        slept.append(seconds)
+
+    with patch.object(solis_module.asyncio, "sleep", fake_sleep):
+        try:
+            await api._execute_request(SOLIS_READ_ENDPOINT, {"inverterSn": "INV001", "cid": 636})
+            print("ERROR: expected SolisAPIError for the B0115 response")
+            failed = True
+        except solis_module.SolisAPIError as err:
+            if err.response_code != "B0115":
+                print("ERROR: expected response_code B0115, got {}".format(err.response_code))
+                failed = True
+
+    if slept:
+        print("ERROR: B0115 should not sleep, slept for {}".format(slept))
+        failed = True
+    if api.quota_exhausted_until is not None:
+        print("ERROR: B0115 is not a quota failure and must not pause requests")
+        failed = True
+    offline_logs = [m for m in api.log_messages if "offline or disconnected" in m]
+    if not offline_logs:
+        print("ERROR: expected a log line naming the datalogger as offline, got {}".format(api.log_messages))
+        failed = True
+    if not api.datalogger_offline("INV001"):
+        print("ERROR: B0115 should back off that inverter's reads")
+        failed = True
+
+    if not failed:
+        print("PASSED: B0115 is reported as an offline datalogger with no sleep")
+    return failed
+
+
+async def test_health_message_names_the_quota_limit():
+    """While paused, the component tells the run status why, rather than just 'component errors'."""
+    failed = False
+    api = _quota_api(now=datetime(2026, 3, 4, 12, 0, 0, tzinfo=UTC))
+
+    if api.health_message() is not None:
+        print("ERROR: a healthy component should offer no message, got {}".format(api.health_message()))
+        failed = True
+
+    api.note_quota_exhausted()
+    message = api.health_message()
+    if not message or "daily API limit" not in message:
+        print("ERROR: expected the health message to name the daily API limit, got {}".format(message))
+        failed = True
+
+    if not failed:
+        print("PASSED: health_message names the exhausted Solis daily API limit")
+    return failed
+
+
+async def test_run_retries_automatic_config_until_it_succeeds():
+    """Auto-config is retried on later cycles when the first cycle couldn't bind the args.
+
+    With the allowance gone the inverter details never arrive, so automatic_config() bails and
+    load_today is left unset - and before this it was a first-cycle-only step, so a restart into
+    an exhausted allowance left fetch_sensor_data raising ValueError until the next restart
+    (issue #5087).
+    """
+    failed = False
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn], control_enable=False, automatic=True)
+    api.inverter_sn = [sn]
+    api._test_automatic_config_result = False
+
+    await api.run(60, False)
+    if api.automatic_config_calls != 1:
+        print("ERROR: expected auto-config to be attempted once, got {}".format(api.automatic_config_calls))
+        failed = True
+    if api.automatic_config_done:
+        print("ERROR: a failed auto-config must not be marked done")
+        failed = True
+
+    # Details arrive on a later cycle and auto-config now binds the args
+    api._test_automatic_config_result = True
+    await api.run(120, False)
+    if api.automatic_config_calls != 2:
+        print("ERROR: expected auto-config to be retried, got {} calls".format(api.automatic_config_calls))
+        failed = True
+    if not api.automatic_config_done:
+        print("ERROR: a successful auto-config should be marked done")
+        failed = True
+
+    # ...and is not repeated once it has succeeded
+    await api.run(180, False)
+    if api.automatic_config_calls != 2:
+        print("ERROR: auto-config should not re-run once done, got {} calls".format(api.automatic_config_calls))
+        failed = True
+
+    if not failed:
+        print("PASSED: automatic_config is retried until it binds the args, then left alone")
+    return failed
+
+
+# ==================== Review follow-ups on issue #5087 ====================
+
+
+class _FakeStorage:
+    """In-memory stand-in for the Storage component, recording what a component saves."""
+
+    def __init__(self, contents=None):
+        self.contents = dict(contents or {})
+
+    async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
+        """Store the data under module/filename."""
+        self.contents[(module, filename)] = data
+
+    async def load(self, module, filename):
+        """Return the stored data, or None when nothing was saved."""
+        return self.contents.get((module, filename))
+
+
+def _storage_api(storage):
+    """Return a MockSolisAPI whose storage property resolves to the given fake."""
+    api = _make_run_api(configured_sns=[], control_enable=False, automatic=True)
+    # ComponentBase.storage reads through base.components, which MockBase does not have. Subclass
+    # per instance rather than patching MockSolisAPI itself, which would leak into other tests.
+    api.__class__ = type("MockSolisAPIWithStorage", (MockSolisAPI,), {"storage": property(lambda self: storage)})
+    return api
+
+
+async def test_quota_diagnostic_survives_until_a_request_succeeds():
+    """The quota diagnostic must outlive the pause window, or the run status never gets to show it.
+
+    components.is_alive() only turns false after 60 minutes without a successful poll, and the pause
+    is itself an hour, so a diagnostic tied to the pause window expires at almost exactly the moment
+    anything would consult it. It is a successful request that clears it instead.
+    """
+    failed = False
+    api = _quota_api(now=datetime(2026, 3, 4, 12, 0, 0, tzinfo=UTC))
+    api.note_quota_exhausted()
+
+    # The pause has expired, so a probe may go out - but nothing has succeeded yet
+    api._test_now_utc_exact = datetime(2026, 3, 4, 13, 30, 0, tzinfo=UTC)
+    if api.quota_paused():
+        print("ERROR: an expired pause should not hold requests back")
+        failed = True
+    if not api.health_message():
+        print("ERROR: the diagnostic should survive the pause window until a request succeeds")
+        failed = True
+
+    api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "0", "data": {"ok": 1}}))
+    await api._execute_request(SOLIS_INVERTER_LIST_ENDPOINT, {})
+
+    if api.quota_exhausted_until is not None:
+        print("ERROR: a successful request should clear the quota diagnostic")
+        failed = True
+    if api.health_message() is not None:
+        print("ERROR: expected no health message once the allowance is back, got {}".format(api.health_message()))
+        failed = True
+
+    if not failed:
+        print("PASSED: the quota diagnostic is retained until a request actually succeeds")
+    return failed
+
+
+async def test_offline_datalogger_stops_being_polled():
+    """An offline datalogger is dropped from the polling rotation until its cooldown expires.
+
+    Not retrying a B0115 is only half of it: run() polls every inverter every minute, so an offline
+    inverter left in the rotation still spends a request a minute out of the 200 a day.
+    """
+    failed = False
+    offline_sn = "INV_OFFLINE"
+    healthy_sn = "INV_OK"
+    api = _make_run_api(configured_sns=[offline_sn, healthy_sn], control_enable=False)
+    api.inverter_sn = [offline_sn, healthy_sn]
+    api._test_now_utc_exact = datetime(2026, 3, 4, 12, 0, 0, tzinfo=UTC)
+    api.note_datalogger_offline(offline_sn)
+
+    await api.run(60, False)
+
+    if offline_sn in api.fetch_inverter_details_calls:
+        print("ERROR: an offline inverter should not be polled, got {}".format(api.fetch_inverter_details_calls))
+        failed = True
+    if healthy_sn not in api.fetch_inverter_details_calls:
+        print("ERROR: the healthy inverter should still be polled, got {}".format(api.fetch_inverter_details_calls))
+        failed = True
+    if api.update_success_timestamp_calls:
+        print("ERROR: a skipped inverter must still fail the poll, so the component reads unhealthy")
+        failed = True
+    message = api.health_message()
+    if not message or offline_sn not in message:
+        print("ERROR: expected the health message to name the offline inverter, got {}".format(message))
+        failed = True
+
+    # Once the cooldown expires it is probed again
+    api._test_now_utc_exact = datetime(2026, 3, 4, 12, 20, 0, tzinfo=UTC)
+    api.fetch_inverter_details_calls = []
+    await api.run(120, False)
+    if offline_sn not in api.fetch_inverter_details_calls:
+        print("ERROR: the inverter should be re-probed once its cooldown expires")
+        failed = True
+
+    if not failed:
+        print("PASSED: an offline datalogger is skipped until its cooldown expires, then re-probed")
+    return failed
+
+
+async def test_automatic_config_settles_on_a_pv_only_fleet():
+    """A fleet that genuinely has no batteries is a final answer, not something to re-ask every cycle.
+
+    The retry added for #5087 must not turn the existing "No inverters with batteries found" warning
+    into a once-a-minute log line for everyone running PV-only inverters.
+    """
+    failed = False
+    api = MockSolisAPI()
+    api.inverter_sn = ["PV001"]
+    api.inverter_details = {"PV001": {"batteryType": "No Battery"}}
+
+    if await api.automatic_config() is not True:
+        print("ERROR: a read PV-only fleet should be settled, not retried forever")
+        failed = True
+
+    # Details missing (the API could not be reached) is the retryable case
+    api = MockSolisAPI()
+    api.inverter_sn = ["INV001"]
+    api.inverter_details = {}
+
+    if await api.automatic_config() is not False:
+        print("ERROR: missing inverter details should be retried, not settled")
+        failed = True
+
+    if not failed:
+        print("PASSED: a PV-only fleet settles while unread details stay retryable")
+    return failed
+
+
+async def test_discovery_cache_lets_a_restart_configure_without_the_api():
+    """A restart while the allowance is gone still binds load_today, from the cached fleet.
+
+    Discovery is the first thing a restart does and the first thing an exhausted allowance refuses,
+    which leaves no serial numbers to build entity names from - so automatic_config() never ran and
+    fetch_sensor_data raised ValueError every cycle (issue #5087).
+    """
+    failed = False
+    sn = "INV001"
+    storage = _FakeStorage({("solis", "discovery"): {"inverter_sn": [sn], "inverter_details": {sn: {"batteryHealthSoh": "98"}}}})
+    api = _storage_api(storage)
+
+    async def mock_get_inverter_list_refused():
+        """Discovery fails the way an exhausted daily allowance makes it fail."""
+        raise solis_module.SolisAPIError("quota", response_code="R0000")
+
+    api.get_inverter_list = mock_get_inverter_list_refused
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+
+    if api.inverter_sn != [sn]:
+        print("ERROR: expected the cached inverter list to be restored, got {}".format(api.inverter_sn))
+        failed = True
+    if api.automatic_config_calls != 1:
+        print("ERROR: auto-config should run from the cached fleet, got {} calls".format(api.automatic_config_calls))
+        failed = True
+    fallback_logs = [m for m in api.log_messages if "falling back to" in m]
+    if not fallback_logs:
+        print("ERROR: expected a log line naming the fallback, got {}".format(api.log_messages))
+        failed = True
+
+    if not failed:
+        print("PASSED: a restart with no API access configures from the cached inverter list")
+    return failed
+
+
+async def test_successful_discovery_is_cached_and_session_reused():
+    """A successful discovery is saved for next time, and startup retries reuse one ClientSession."""
+    failed = False
+    sn = "INV001"
+    storage = _FakeStorage()
+    api = _storage_api(storage)
+
+    async def mock_get_inverter_list():
+        """Discovery succeeds with one inverter."""
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    sessions = []
+
+    def make_session(*args, **kwargs):
+        """Record every ClientSession the startup path builds."""
+        sessions.append(_FakeAiohttpSession())
+        return sessions[-1]
+
+    with patch.object(solis_module.aiohttp, "ClientSession", make_session), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        await api.run(60, True)
+
+    saved = storage.contents.get(("solis", "discovery"))
+    if not saved or saved.get("inverter_sn") != [sn]:
+        print("ERROR: expected the discovered fleet to be cached, got {}".format(saved))
+        failed = True
+    if len(sessions) != 1:
+        print("ERROR: a startup retry should reuse the session, {} were created".format(len(sessions)))
+        failed = True
+
+    if not failed:
+        print("PASSED: discovery is cached and the startup retry reuses one session")
+    return failed

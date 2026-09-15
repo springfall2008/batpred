@@ -14,7 +14,7 @@ Tests for ComponentBase start method and backoff behavior
 
 import asyncio
 from types import SimpleNamespace
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from component_base import ComponentBase
@@ -492,6 +492,126 @@ def test_component_base_set_state_external(my_predbat):
     return False
 
 
+def test_component_base_midnight_utc_ignores_rewound_base(my_predbat):
+    """
+    Test ComponentBase.midnight_utc ignores a base.midnight_utc rewound by calculate_yesterday (GH#4804).
+
+    calculate_yesterday() (output.py) rewinds the shared base.midnight_utc by a day for the duration
+    of the savings calculation and restores it ~350 lines later. Components run on their own OS
+    threads (hass.py's create_task uses threading.Thread) on schedules of their own, so a component
+    reading the passthrough mid-rewind used to see yesterday's midnight - which bucketed a whole PV
+    forecast one day late, emptying "today" (the reported incident), and can shift any other
+    component's day arithmetic the same way.
+
+    The property therefore derives today's midnight from base.now_utc, the field calculate_yesterday
+    never fakes. On a healthy base the two are identical: predbat.py's update_time() sets
+    midnight_utc = now_utc.replace(hour=0, ...), so this changes nothing outside the rewind window.
+    """
+    print("\n*** Test: ComponentBase.midnight_utc ignores a rewound base.midnight_utc ***")
+
+    base = MockBase()
+    base.now_utc = datetime(2025, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    base.midnight_utc = base.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    component = TestComponent(base)
+
+    assert component.midnight_utc == datetime(2025, 6, 15, 0, 0, 0, tzinfo=timezone.utc), f"Healthy base should give today's midnight, got {component.midnight_utc}"
+
+    # A concurrent calculate_yesterday() is mid-flight: the shared field points at yesterday.
+    base.midnight_utc = base.midnight_utc - timedelta(days=1)
+    assert component.midnight_utc == datetime(2025, 6, 15, 0, 0, 0, tzinfo=timezone.utc), f"Rewound base.midnight_utc leaked into the component: {component.midnight_utc}"
+
+    print("PASS: midnight_utc derives from now_utc and ignores the rewound shared value")
+    return False
+
+
+def test_component_base_minutes_now_follows_update_time(my_predbat):
+    """
+    Test ComponentBase.minutes_now matches update_time()'s own value and ignores the faked one (GH#4804).
+
+    calculate_yesterday() (output.py) fakes base.minutes_now to 0 alongside its midnight_utc rewind.
+    0 is the nastier of the two, since it reads as a legitimate "just after midnight" rather than an
+    obviously wrong date - it would tell octopus.py to keep every expired dispatch slot, and the
+    AlphaESS/Deye/Sunsynk adapters that pick the live TOU slot by time of day to believe it is
+    midnight while writing to a real inverter.
+
+    The derived value has to agree with update_time()'s (predbat.py), including its PREDICT_STEP
+    flooring - so the first half of this test compares the two on the real base rather than
+    restating the formula, and would catch the two drifting apart later.
+    """
+    print("\n*** Test: ComponentBase.minutes_now follows update_time and ignores the faked value ***")
+
+    # The fixture pins its own clock (unit_test.py's create_predbat) and the whole suite shares this
+    # instance, so every field update_time() writes has to go back - not just the ones read here, or
+    # a later test inherits this one's wall-clock state.
+    saved = {name: getattr(my_predbat, name) for name in ("now_utc", "now_utc_real", "midnight_utc", "minutes_now", "minutes_to_midnight", "difference_minutes", "local_tz")}
+    try:
+        my_predbat.update_time(print=False)
+        component = TestComponent(my_predbat)
+        assert component.minutes_now == my_predbat.minutes_now, f"Derived {component.minutes_now} but update_time() computed {my_predbat.minutes_now}"
+        assert component.minutes_now % 5 == 0, f"Should stay on a PREDICT_STEP boundary, got {component.minutes_now}"
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+    base = MockBase()
+    base.now_utc = datetime(2025, 6, 15, 14, 37, 0, tzinfo=timezone.utc)
+    base.midnight_utc = base.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    base.minutes_now = 14 * 60 + 35
+    component = TestComponent(base)
+
+    assert component.minutes_now == 14 * 60 + 35, f"Expected 14:35 floored to a PREDICT_STEP boundary, got {component.minutes_now}"
+
+    # A concurrent calculate_yesterday() is mid-flight: the shared fields say midnight yesterday.
+    base.minutes_now = 0
+    base.midnight_utc = base.midnight_utc - timedelta(days=1)
+    assert component.minutes_now == 14 * 60 + 35, f"Faked base.minutes_now leaked into the component: {component.minutes_now}"
+
+    print("PASS: minutes_now follows update_time's computation and ignores the faked value")
+    return False
+
+
+def test_component_base_minutes_now_snapshots_the_clock(my_predbat):
+    """
+    Test minutes_now survives update_time() landing mid-read.
+
+    The value needs now_utc and the midnight derived from it, and self.midnight_utc goes back to
+    base.now_utc for its own read - so a naive implementation reads the field twice. update_time()
+    runs on the main thread while components run on theirs, so those two reads can straddle it: at
+    a day boundary that subtracts the new day's midnight from the old day's timestamp and collapses
+    23:59 to 0, which reads as midnight rather than as an error.
+
+    A base whose now_utc advances a day between reads reproduces that deterministically, without
+    needing two threads to interleave.
+    """
+    print("\n*** Test: ComponentBase.minutes_now snapshots now_utc ***")
+
+    class RollingClockBase(MockBase):
+        """A base whose clock rolls into the next day between one read of now_utc and the next."""
+
+        def __init__(self):
+            """Start the day before, with a read counter."""
+            super().__init__()
+            self.reads = 0
+
+        @property
+        def now_utc(self):
+            """Return 23:59 on the first read and the next day's noon on every read after it."""
+            self.reads += 1
+            if self.reads == 1:
+                return datetime(2025, 6, 15, 23, 59, 0, tzinfo=timezone.utc)
+            return datetime(2025, 6, 16, 12, 0, 0, tzinfo=timezone.utc)
+
+    base = RollingClockBase()
+    component = TestComponent(base)
+
+    minutes_now = component.minutes_now
+    assert base.reads == 1, f"now_utc should be read once per call, was read {base.reads} times"
+    assert minutes_now == 23 * 60 + 55, f"Expected the first read's 23:59 floored to 23:55, got {minutes_now}"
+
+    print("PASS: minutes_now reads the clock once and stays on that reading")
+    return False
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -506,6 +626,9 @@ def test_component_base_all(my_predbat):
         ("set_arg_auto", test_component_base_set_arg_auto, "set_arg_auto warns once on an apps.yaml override, silent otherwise"),
         ("set_arg_auto_keep", test_component_base_set_arg_auto_keeps_user_setting, "set_arg_auto(overwrite=False) keeps an explicit apps.yaml setting"),
         ("set_state_external", test_component_base_set_state_external, "set_state_external forwards to the HA interface"),
+        ("midnight_utc_rewound", test_component_base_midnight_utc_ignores_rewound_base, "midnight_utc ignores a rewound base.midnight_utc"),
+        ("minutes_now_derived", test_component_base_minutes_now_follows_update_time, "minutes_now follows update_time and ignores the faked value"),
+        ("minutes_now_snapshot", test_component_base_minutes_now_snapshots_the_clock, "minutes_now snapshots now_utc rather than reading it twice"),
     ]
 
     failed = []
