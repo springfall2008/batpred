@@ -1,0 +1,19 @@
+services:
+  predbat-dev:
+    image: nipar44/predbat_addon:alpine-latest
+    container_name: predbat-dev
+
+    ports:
+      - "5052:5052"
+
+    volumes:
+      - ./apps/predbat/web.py:/addon/web.py
+      - ./apps/predbat/web_helper.py:/addon/web_helper.py
+
+      # Predbat backend files currently being developed
+      - ./apps/predbat/output.py:/addon/output.py
+      - ./apps/predbat/predbat.py:/addon/predbat.py
+
+      - ./dev-config:/config
+
+    restart: unless-stopped

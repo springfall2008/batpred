@@ -497,6 +497,8 @@ class WebInterface(ComponentBase):
         app.router.add_get("/dash", self.html_dash)
         app.router.add_post("/dash", self.html_dash_post)
         app.router.add_get("/dash_content", self.html_dash_content)
+        app.router.add_get("/legacy_dash", self.html_dash_legacy)
+        app.router.add_get( "/legacy_plan",self.html_plan_legacy)
         app.router.add_get("/components", self.html_components)
         app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
@@ -536,6 +538,8 @@ class WebInterface(ComponentBase):
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
         app.router.add_get("/api/status", self.html_api_get_status)
+        app.router.add_post("/api/dashboard_control", self.html_api_dashboard_control)
+        app.router.add_get("/api/power_flow", self.html_api_power_flow)
         app.router.add_get("/metrics", metrics_handler)
         app.router.add_get("/metrics/json", metrics_json_handler)
         app.router.add_get("/metrics_dashboard", self.html_metrics_dashboard)
@@ -576,6 +580,22 @@ class WebInterface(ComponentBase):
 
         self.api_started = False
         print("Web interface stopped")
+
+    def use_modern_ui(self):
+        """
+        Return True when the React-based web interface is enabled.
+
+        The legacy interface remains the default so existing Predbat
+        installations are unaffected unless the user opts in.
+        """
+        web_ui = str(
+            self.get_arg(
+                "web_ui",
+                "legacy",
+            )
+        ).strip().lower()
+
+        return web_ui == "modern"
 
     def get_attributes_html(self, entity, from_db=False):
         """
@@ -2455,21 +2475,269 @@ chart.render();
 
     async def html_api_get_status(self, request):
         """
-        Get current Predbat status (calculating state and battery info)
+        Get current Predbat dashboard status.
+
+        This endpoint provides the live operational state used by the dashboard.
+        Existing fields are retained for backwards compatibility.
         """
         try:
+            # Existing calculation state
             calculating = self.get_arg("active", False)
+
             if self.base.update_pending:
                 calculating = True
 
+            # Existing battery HTML used by the legacy dashboard
             battery_icon = self.get_battery_status_icon()
 
-            status_data = {"calculating": calculating, "battery_html": battery_icon}
+            # Predbat status entity
+            status_entity = self.prefix + ".status"
 
-            return web.Response(content_type="application/json", text=json.dumps(status_data))
+            status = self.get_state_wrapper(
+                status_entity,
+                default="Unknown"
+            )
+
+            detail = self.get_state_wrapper(
+                status_entity,
+                attribute="detail",
+                default=""
+            )
+
+            last_updated = self.get_state_wrapper(
+                status_entity,
+                attribute="last_updated",
+                default=None
+            )
+
+            # Time Predbat was last started
+            last_started = self.get_state_wrapper(
+                self.prefix + ".last_started",
+                default=None
+            )
+
+            # Current operating mode
+            mode = self.get_arg("mode", "")
+
+            # Dashboard controls
+            debug_enable = self.get_arg(
+                "debug_enable",
+                False
+            )
+
+            read_only = self.get_arg(
+                "set_read_only",
+                False
+            )
+
+            predbat_active, _ = self.get_ha_config(
+                "active",
+                None
+            )
+
+            # Configuration health
+            config_errors = len(self.arg_errors)
+
+            status_data = {
+                # Existing API fields
+                "calculating": calculating,
+                "battery_html": battery_icon,
+
+                # Dashboard status
+                "status": status,
+                "detail": detail,
+                "last_updated": last_updated,
+                "last_started": last_started,
+
+                "version": THIS_VERSION_DISPLAY,
+
+                # Predbat configuration
+                "mode": mode,
+                "debug_enable": debug_enable,
+                "read_only": read_only,
+                "active": predbat_active,
+
+                # Configuration health
+                "config_ok": config_errors == 0,
+                "config_errors": config_errors,
+            }
+
+            return web.Response(
+                content_type="application/json",
+                text=json.dumps(status_data)
+            )
+
         except Exception as e:
-            self.log("Error getting status: {}".format(e))
-            return web.Response(status=500, content_type="application/json", text=json.dumps({"error": str(e)}))
+            self.log(
+                "Error getting status: {}".format(e)
+            )
+
+            return web.Response(
+                status=500,
+                content_type="application/json",
+                text=json.dumps({
+                    "error": str(e)
+                })
+            )
+
+    async def html_api_dashboard_control(self, request):
+        """
+        Update a Predbat dashboard control.
+
+        This provides the React dashboard with a JSON API for the same
+        controls exposed by the legacy /dash page.
+
+        Supported controls:
+        - mode
+        - debug_enable
+        - set_read_only
+        - active
+        """
+        try:
+            data = await request.json()
+
+            control = data.get("control")
+            value = data.get("value")
+
+            # Mode is represented by a Home Assistant select entity.
+            if control == "mode":
+                if not isinstance(value, str):
+                    return web.json_response(
+                        {"result": "error", "error": "Mode must be a string"},
+                        status=400
+                    )
+
+                entity_id = f"select.{self.prefix}_mode"
+
+                await self.set_state_external(
+                    entity_id,
+                    value
+                )
+
+            # The remaining dashboard controls are Home Assistant switches.
+            elif control in [
+                "debug_enable",
+                "set_read_only",
+                "active"
+            ]:
+                if not isinstance(value, bool):
+                    return web.json_response(
+                        {"result": "error", "error": "Switch value must be boolean"},
+                        status=400
+                    )
+
+                entity_id = f"switch.{self.prefix}_{control}"
+
+                await self.set_state_external(
+                    entity_id,
+                    value
+                )
+
+            else:
+                return web.json_response(
+                    {
+                        "result": "error",
+                        "error": f"Unsupported control: {control}"
+                    },
+                    status=400
+                )
+
+            self.log(
+                f"Dashboard control updated: {control} = {value}"
+            )
+
+            return web.json_response({
+                "result": "ok",
+                "control": control,
+                "value": value
+            })
+
+        except Exception as e:
+            self.log(
+                f"ERROR: Failed to update dashboard control: {str(e)}"
+            )
+
+            return web.json_response(
+                {
+                    "result": "error",
+                    "error": str(e)
+                },
+                status=500
+            )
+
+    async def html_api_power_flow(self, request):
+        """
+        Return live power-flow data for the React dashboard.
+
+        Uses the same values and sign conventions as the legacy SVG diagram
+        so the React UI does not have to reinterpret inverter data.
+        """
+        try:
+            grid_power = self.base.grid_power
+            battery_power = self.base.battery_power
+            pv_power = self.base.pv_power
+            load_power = self.base.load_power
+
+            # Car charging is handled the same way as the legacy power-flow view.
+            car_configured = self.base.car_charging_power_configured
+            car_power = self.base.car_charging_power
+            car_inside_clamp = self.base.car_energy_reported_load
+
+            house_power = (
+                max(0, load_power - car_power)
+                if car_configured and car_inside_clamp
+                else load_power
+            )
+
+            sun_state = self.get_state_wrapper(
+                entity_id="sun.sun",
+                default=None
+            )
+
+            # Match the existing diagram's direction thresholds/sign conventions.
+            grid_importing = grid_power <= -10
+            battery_discharging = battery_power >= 10
+            battery_charging = battery_power <= -10
+            pv_generating = pv_power > 0
+
+            return web.json_response({
+                "grid_power": grid_power,
+                "battery_power": battery_power,
+                "pv_power": pv_power,
+                "load_power": load_power,
+                "house_power": house_power,
+
+                "soc_percent": self.base.soc_percent,
+
+                "grid_importing": grid_importing,
+                "battery_charging": battery_charging,
+                "battery_discharging": battery_discharging,
+                "pv_generating": pv_generating,
+
+                # Home Assistant Sun integration.
+                # Usually "above_horizon" or "below_horizon".
+                "sun_state": sun_state,
+
+                "car": {
+                    "configured": car_configured,
+                    "power": car_power,
+                    "inside_clamp": car_inside_clamp,
+                    "charging": car_configured and car_power >= 10,
+                },
+
+            })
+
+        except Exception as e:
+            self.log(
+                f"ERROR: Failed to get power-flow data: {str(e)}"
+            )
+
+            return web.json_response(
+                {
+                    "error": str(e)
+                },
+                status=500
+            )
 
     async def html_api_ping(self, request):
         """
@@ -2529,6 +2797,26 @@ chart.render();
 
         # Get JSON data (with timestamps embedded in the JSON)
         plan_json = self.get_state_wrapper(entity_id=plan_entity, attribute="raw", default=None)
+        if plan_json:
+            # Work on our own copy rather than modifying the
+            # object returned from Home Assistant state.
+            plan_json = dict(plan_json)
+
+            plan_json["car_charging_from_battery"] = bool(
+                getattr(
+                    self.base,
+                    "car_charging_from_battery",
+                    True
+                )
+            )
+
+            plan_json["car_energy_reported_load"] = bool(
+                getattr(
+                    self.base,
+                    "car_energy_reported_load",
+                    False
+                )
+            )
         plan_timestamp = plan_json.get("timestamp", None) if plan_json else None
 
         yesterday_json = self.get_state_wrapper(entity_id=yesterday_entity, attribute="json", default=None)
@@ -2600,7 +2888,22 @@ chart.render();
 
         return web.json_response(response_data)
 
+
     async def html_plan(self, request):
+        """
+        Serve the selected plan interface.
+        """
+        if self.get_web_ui() == "modern":
+            raise web.HTTPFound(
+                self.get_modern_ui_url()
+                + "/plan"
+            )
+
+        return await self.html_plan_legacy(
+            request
+        )
+
+    async def html_plan_legacy(self, request):
         """
         Return the Predbat plan as an HTML page with client-side JSON rendering
         """
@@ -2695,6 +2998,23 @@ chart.render();
 
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    async def html_dash_legacy_direct(self, request):
+        """
+        Emergency/direct access to the legacy dashboard.
+        """
+        return await self.html_dash_legacy(
+            request
+        )
+
+
+    async def html_plan_legacy_direct(self, request):
+        """
+        Emergency/direct access to the legacy plan.
+        """
+        return await self.html_plan_legacy(
+            request
+        )
 
     async def html_log(self, request):
         """
@@ -3101,6 +3421,35 @@ chart.render();
             html_plan = None
         return await self.html_file("predbat_plan.html", html_plan)
 
+    def get_web_ui(self):
+        """
+        Return the selected web interface.
+
+        Legacy remains the default so existing installations are
+        unchanged unless the modern UI is explicitly enabled.
+        """
+        return str(
+            self.get_arg(
+                "web_ui",
+                "legacy",
+            )
+        ).strip().lower()
+
+
+    def get_modern_ui_url(self):
+        """
+        Development URL for the Vite frontend.
+
+        This is temporary while the modern frontend is running as
+        a separate development server.
+        """
+        return str(
+            self.get_arg(
+                "modern_ui_url",
+                "http://localhost:5174",
+            )
+        ).rstrip("/")
+
     async def html_dash_content(self, request):
         """
         Return just the dashboard body content for AJAX refresh (preserves scroll position)
@@ -3109,6 +3458,20 @@ chart.render();
         return web.Response(content_type="text/html", text=text)
 
     async def html_dash(self, request):
+        """
+        Serve the selected dashboard interface.
+        """
+        if self.get_web_ui() == "modern":
+            raise web.HTTPFound(
+                self.get_modern_ui_url()
+                + "/dash"
+            )
+
+        return await self.html_dash_legacy(
+            request
+        )
+
+    async def html_dash_legacy(self, request):
         """
         Render apps.yaml as an HTML page
         """
@@ -4778,8 +5141,19 @@ chart.render();
                 return web.json_response({"success": False, "message": "Unknown action"}, status=400)
 
             # Refresh plan
-            self.base.update_pending = True
-            self.base.plan_valid = False
+            # Setting a rate updates the manual rate input number,
+            # whose event already triggers a re-plan.
+            #
+            # Clearing a rate only updates the manual selector directly,
+            # so it needs to explicitly request a new plan here.
+            if action in [
+                "Clear Import",
+                "Clear Export",
+                "Clear Load",
+                "Clear SOC",
+            ]:
+                self.base.update_pending = True
+                self.base.plan_valid = False
 
             # Return html plan again
             self.log("Rate override processed successfully")
@@ -4836,8 +5210,8 @@ chart.render();
                     return web.json_response({"success": False, "message": "Unknown action"}, status=400)
 
             # Refresh plan
-            self.base.update_pending = True
-            self.base.plan_valid = False
+            #self.base.update_pending = True
+            #self.base.plan_valid = False
 
             # Return html plan again
             return web.json_response({"success": True}, status=200)

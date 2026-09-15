@@ -1048,7 +1048,12 @@ class Output:
             )
 
         if publish:
+            # Existing HTML version used by the classic Predbat interface.
             self.text_plan = self.get_text_plan_html(sentence)
+
+            # Keep the original textual version as well so that newer
+            # interfaces can consume it without having to parse HTML.
+            self.text_plan_raw = sentence
 
         return sentence
 
@@ -1137,6 +1142,13 @@ class Output:
         raw_plan["import_cost_threshold"] = import_cost_threshold
         raw_plan["export_cost_threshold"] = export_cost_threshold
         raw_plan["reason_templates"] = REASON_TEMPLATES
+
+        raw_plan["description"] = [
+            line.strip()[2:] if line.strip().startswith("- ") else line.strip()
+            for line in self.text_plan_raw.splitlines()
+            if line.strip()
+        ]
+        
         raw_plan["currency_symbols"] = self.currency_symbols
         raw_plan["soc"] = prediction.soc_kw if prediction is not None else self.soc_kw
         raw_plan["soc_max"] = prediction.soc_max if prediction is not None else self.soc_max
