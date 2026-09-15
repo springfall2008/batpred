@@ -62,6 +62,17 @@ SITE_MAX_AGE_MINUTES = 12 * 60
 # How long to wait before retrying a failed site fetch
 SITE_RETRY_MINUTES = 30
 
+# Under EMS control Predbat drives the plant device's slot 1 registers, so the battery inverters' own
+# settings do not need re-reading every settings cycle - but they are not static either, and a slot
+# changed behind Predbat's back silently overrides the EMS, so they are re-read on a slow cadence (#5103).
+SETTINGS_SLOW_REFRESH_SECONDS = 60 * 60
+
+# An inverter under EMS control is expected to leave its own slot 1 windows spanning the whole day so
+# that they never override a command from the EMS (see #3781). Anything else is reported.
+EMS_SLOT_FULL_DAY_START = "00:00"
+EMS_SLOT_FULL_DAY_END = "23:59"
+EMS_SLOT_FAMILIES = ("ac_charge_1", "dc_discharge_1")
+
 # 0	Current.Export	Instantaneous current flow from EV
 # 1	Current.Import	Instantaneous current flow to EV
 # 2	Current.Offered	Maximum current offered to EV
@@ -336,6 +347,46 @@ def regname_to_ha(name):
     return name
 
 
+def normalise_register_time(value):
+    """
+    Return a register time value as an HH:MM string, or None when it is not a time
+    """
+    if not isinstance(value, str):
+        return None
+    parts = value.strip().split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        return "{:02d}:{:02d}".format(int(parts[0]), int(parts[1]))
+    except ValueError:
+        return None
+
+
+def find_ems_slot_overrides(registers):
+    """
+    Return the slot 1 charge/DC discharge window registers that do not span the whole day, keyed by HA name
+    """
+    overrides = {}
+    for key in registers:
+        entry = registers[key]
+        if not isinstance(entry, dict):
+            continue
+        ha_name = regname_to_ha(entry.get("name", None) or "")
+        value = normalise_register_time(entry.get("value", None))
+        if value is None:
+            continue
+        for family in EMS_SLOT_FAMILIES:
+            if "{}_start_time".format(family) in ha_name:
+                expected = EMS_SLOT_FULL_DAY_START
+            elif "{}_end_time".format(family) in ha_name:
+                expected = EMS_SLOT_FULL_DAY_END
+            else:
+                continue
+            if value != expected:
+                overrides[ha_name] = value
+    return overrides
+
+
 def coerce_watts(value):
     """Return a non-negative power in watts taken from an API value, or None when it is not one."""
     if value is None or isinstance(value, bool):
@@ -466,6 +517,9 @@ class GECloudDirect(ComponentBase):
         self.api_fatal = False
         self.api_auth_failed = False
         self.auth_denied_reported = False
+        # Battery inverters already reported as overriding the EMS, so a standing misconfiguration
+        # raises the Predbat status once rather than on every settings refresh
+        self.ems_slot_warned = set()
         self.devices_dict = {}
         self.device_list = []
         self.ems_device = None
@@ -1006,6 +1060,29 @@ class GECloudDirect(ComponentBase):
                     elif subkey == "grid":
                         self.dashboard_item(entity_name + "_grid_import_total", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_total", {}), app="gecloud")
                         self.dashboard_item(entity_name + "_grid_export_total", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_total", {}), app="gecloud")
+
+    def check_ems_inverter_slots(self, device, registers):
+        """
+        Report a battery inverter under EMS control whose own slot 1 window would override the EMS
+        """
+        if not self.ems_device or device == self.ems_device or device == self.gateway_device:
+            return
+        if device not in self.devices_dict.get("battery", []):
+            return
+
+        overrides = find_ems_slot_overrides(registers)
+        if not overrides:
+            self.ems_slot_warned.discard(device)
+            return
+
+        detail = ", ".join("{} is {}".format(ha_name, overrides[ha_name]) for ha_name in sorted(overrides))
+        message = "Inverter {} slot 1 is not {}-{} ({}), it will override the EMS and can stop charging or discharging early".format(device, EMS_SLOT_FULL_DAY_START, EMS_SLOT_FULL_DAY_END, detail)
+        self.log("GECloud: Warn: " + message)
+        # Reported once per episode, like the auth-denied status above, so a standing misconfiguration
+        # does not inflate error_count on every refresh
+        if device not in self.ems_slot_warned and getattr(self.base, "record_status", None):
+            self.base.record_status("Warn: GE Cloud: " + message, had_errors=True)
+        self.ems_slot_warned.add(device)
 
     async def enable_default_options(self, device, registers):
         """Enable default options for the device."""
@@ -1805,7 +1882,11 @@ class GECloudDirect(ComponentBase):
             # Get All registers every now and again in case user changes them
             settings_updated = False
             for device in self.device_list:
-                if seconds == 0 or self.polling_mode or (device == self.ems_device) or (device == self.gateway_device):
+                # Under EMS control (polling_mode off) the battery inverters are not the control device, but
+                # their own registers still have to be re-read periodically or a slot changed behind Predbat's
+                # back stays invisible until a restart (#5103). `first` rather than `seconds == 0` so a startup
+                # that only succeeds on a backoff retry still takes the snapshot.
+                if first or (seconds % SETTINGS_SLOW_REFRESH_SECONDS == 0) or self.polling_mode or (device == self.ems_device) or (device == self.gateway_device):
                     if first and self.settings_from_cache and device in self.settings:
                         # Fresh cache loaded on startup — skip the slow poll for this device
                         await self.publish_registers(device, self.settings[device])
@@ -1813,6 +1894,7 @@ class GECloudDirect(ComponentBase):
                         self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
                         await self.publish_registers(device, self.settings[device])
                         settings_updated = True
+                    self.check_ems_inverter_slots(device, self.settings.get(device, {}))
 
             if settings_updated and self.storage:
                 await self.storage.save("gecloud", "settings", self.settings, format="json", expiry=None)
