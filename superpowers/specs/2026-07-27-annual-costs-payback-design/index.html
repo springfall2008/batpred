@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Annual Install Costs and Payback — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Annual Install Costs and Payback \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-07-27-annual-costs-payback-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Annual Install Costs and Payback — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="annual-install-costs-and-payback-design">Annual Install Costs and Payback — Design</h1>
+<p><strong>Status:</strong> approved
+<strong>Date:</strong> 2026-07-27</p>
+<h2 id="purpose">Purpose</h2>
+<p>The annual prediction tool answers "what would this system save me?" It does not answer
+"is it worth buying?", which needs the other half: what the system costs, and how long the
+saving takes to repay it. This adds an install-cost estimate and a simple payback period
+for each of three purchase decisions — PV alone, PV with a battery, and PV with a battery
+run by Predbat.</p>
+<p>It also lets a user describe their array the way they actually think about it: as a number
+of panels, not only as a peak-power figure.</p>
+<h2 id="1-pv-input-kwp-or-panel-count">1. PV input: kWp or panel count</h2>
+<p>Each solar array accepts <strong>either</strong> <code>kwp</code> <strong>or</strong> <code>panels</code>, with an optional <code>panel_watts</code>
+(default 400). When <code>kwp</code> is absent it is derived:</p>
+<pre><code>kwp = panels * panel_watts / 1000
+</code></pre>
+<p>This is done in <code>_validate_solar</code>, not in the web form, so a hand-written <code>annual.yaml</code>
+can use panel counts too. <code>kwp</code> remains the single canonical value the engine consumes —
+nothing downstream needs to know which way it was entered.</p>
+<p>Supplying <strong>both</strong> <code>kwp</code> and <code>panels</code> is rejected with a message naming the array, rather
+than silently preferring one. Two figures that disagree are a mistake worth surfacing, and
+guessing which the user meant is exactly the kind of quiet assumption this tool avoids.</p>
+<p><code>panels</code> must be a positive whole number; <code>panel_watts</code> a positive number. The normalised
+array retains <code>panels</code> and <code>panel_watts</code> alongside the derived <code>kwp</code> so the form can
+round-trip what the user typed instead of replacing it with a computed decimal.</p>
+<p><strong>Form:</strong> each array offers a mode toggle — enter peak power, or enter panel count. Below
+the roof-aspect fields a live summary reads:</p>
+<blockquote>
+<p>Total: 5.2 kWp across 13 panels</p>
+</blockquote>
+<p>updating as the user types. The panel count is shown only when every array was entered as
+panels; a mixed or kWp-only set shows the kWp total alone, because a partial panel count
+would read as the whole system's.</p>
+<h2 id="2-the-fourth-scenario-pv_only">2. The fourth scenario: <code>pv_only</code></h2>
+<p>Payback for PV alone needs a PV-alone number, which the engine does not currently produce.
+A fourth scenario is added between <code>no_pvbat</code> and <code>without_predbat</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Solar</th>
+<th>Battery</th>
+<th>Optimiser</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>no_pvbat</code></td>
+<td>no</td>
+<td>no</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>pv_only</code></td>
+<td><strong>yes</strong></td>
+<td><strong>no</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>without_predbat</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>cheapest-band timer</td>
+</tr>
+<tr>
+<td><code>with_predbat</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>Predbat</td>
+</tr>
+</tbody>
+</table>
+<p><code>pv_only</code> uses the same inverter and export limits as the battery scenarios but zero
+battery capacity, so surplus generation is exported rather than stored. Like <code>no_pvbat</code>
+and <code>without_predbat</code> it is a single prediction with empty charge and export windows — it
+does <strong>not</strong> call <code>calculate_plan()</code>, which is what makes a run expensive. The added
+runtime is therefore a few percent, not a third.</p>
+<p><strong>This figure is the point of the exercise.</strong> Without a battery, far more generation is
+exported instead of used, so the PV-only saving is genuinely different from — not a fixed
+fraction of — the PV-plus-battery saving. Deriving it arithmetically was considered and
+rejected for the same reason <code>self_consumed_kwh</code> was removed: it would look like a
+measurement and be an assumption.</p>
+<p><strong>Chart colour: <code>#9439ef</code>.</strong> Chosen by running the dataviz validator over a 216-colour
+sweep against the existing three in both light and dark mode, not by eye. The existing
+three (<code>#0072B2</code>, <code>#D55E00</code>, <code>#009E73</code>) are unchanged.</p>
+<pre><code>#0072B2, #9439ef, #D55E00, #009E73   (scenario order)
+
+light  CVD separation   worst all-pairs #9439ef↔#0072B2  ΔE 9.2 (deutan)   PASS
+       Normal-vision    worst all-pairs #009E73↔#0072B2  ΔE 18.7           PASS
+       Contrast         all 4 &gt;= 3:1                                       PASS
+dark   Lightness band   all 4 inside L 0.48–0.67                           PASS
+       Contrast         all 4 &gt;= 3:1                                       PASS
+</code></pre>
+<p>Worth recording because the obvious candidates all fail. The Okabe-Ito colours that look
+right — <code>#E69F00</code>, <code>#56B4E9</code> — sit at L 0.75 and 0.74, outside the dark band (0.48–0.67),
+and both drop below 3:1 contrast in light mode. <code>#CC79A7</code> reaches only ΔE 7.6 against the
+green under deuteranopia, inside the 6–8 band that is legal only with secondary encoding.
+<code>#AA4499</code> passes both modes but only at ΔE 6.4 against the blue under protanopia — and the
+blue is its immediate neighbour in scenario order, which is the worst place for a marginal
+pair. <code>#9439ef</code> clears every check outright, so the chart needs no secondary-encoding
+relief to be legible.</p>
+<p><strong>Do not substitute a colour here without re-running the validator in both modes.</strong></p>
+<h2 id="3-cost-model">3. Cost model</h2>
+<p>A new module <code>annual_costs.py</code>, pure functions with no I/O, so it is directly testable.</p>
+<h3 id="battery">Battery</h3>
+<pre><code>battery_cost = 0                                    if size_kwh &lt;= 0
+             = install + per_kwh * size_kwh          otherwise
+</code></pre>
+<p>Defaults: <code>install = £500</code>, <code>per_kwh = £300</code>.</p>
+<h3 id="pv">PV</h3>
+<pre><code>pv_cost = 0                                         if total_kwp &lt;= 0
+        = max(minimum, total_kwp * rate(total_kwp))  otherwise
+</code></pre>
+<p>Default <code>minimum = £2,500</code>. <code>total_kwp</code> is the sum across all arrays.</p>
+<p><code>rate(kwp)</code> linearly interpolates between the published band medians, each anchored at its
+band's midpoint, clamped flat outside that span:</p>
+<table>
+<thead>
+<tr>
+<th>Anchor</th>
+<th>£/kWp</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2 kWp (midpoint of 0–4)</td>
+<td>1,780</td>
+</tr>
+<tr>
+<td>7 kWp (midpoint of 4–10)</td>
+<td>1,697</td>
+</tr>
+<tr>
+<td>30 kWp (midpoint of 10–50)</td>
+<td>1,262</td>
+</tr>
+</tbody>
+</table>
+<p>Midpoints because a band median describes the typical system <em>within</em> that band, so the
+band's centre is where it applies most accurately. Interpolating rather than stepping
+avoids the discontinuity a step function produces, where a 4.1 kWp system would cost less
+in total than a 4.0 kWp one. Interpolation is monotonic in total cost across the whole
+0.1–50 kWp range (verified numerically).</p>
+<p>Computed values:</p>
+<table>
+<thead>
+<tr>
+<th>System</th>
+<th>£/kWp</th>
+<th>PV cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1.0 kWp</td>
+<td>1,780.00</td>
+<td>£2,500 (minimum applies)</td>
+</tr>
+<tr>
+<td>2.0 kWp</td>
+<td>1,780.00</td>
+<td>£3,560</td>
+</tr>
+<tr>
+<td>3.0 kWp</td>
+<td>1,763.40</td>
+<td>£5,290</td>
+</tr>
+<tr>
+<td>4.0 kWp</td>
+<td>1,746.80</td>
+<td>£6,987</td>
+</tr>
+<tr>
+<td>4.1 kWp</td>
+<td>1,745.14</td>
+<td>£7,155</td>
+</tr>
+<tr>
+<td>5.0 kWp</td>
+<td>1,730.20</td>
+<td>£8,651</td>
+</tr>
+<tr>
+<td>8.0 kWp</td>
+<td>1,678.09</td>
+<td>£13,425</td>
+</tr>
+<tr>
+<td>12.0 kWp</td>
+<td>1,602.43</td>
+<td>£19,229</td>
+</tr>
+<tr>
+<td>30.0 kWp</td>
+<td>1,262.00</td>
+<td>£37,860</td>
+</tr>
+</tbody>
+</table>
+<h3 id="configurable">Configurable</h3>
+<p>All six parameters are editable under <strong>Advanced</strong>, and travel in the config as a <code>costs</code>
+block:</p>
+<pre><code class="language-yaml">costs:
+  battery_install_gbp: 500
+  battery_per_kwh_gbp: 300
+  pv_minimum_gbp: 2500
+  pv_rate_small_gbp_per_kwp: 1780     # anchored at 2 kWp
+  pv_rate_medium_gbp_per_kwp: 1697    # anchored at 7 kWp
+  pv_rate_large_gbp_per_kwp: 1262     # anchored at 30 kWp
+  predbat_annual_gbp: 0               # recurring, not capital - see below
+</code></pre>
+<p>Every value is validated as a non-negative number. An absent <code>costs</code> block uses the
+defaults, so existing configs keep working untouched.</p>
+<h3 id="predbats-own-cost">Predbat's own cost</h3>
+<p><code>predbat_annual_gbp</code> is a <strong>recurring yearly</strong> cost, defaulting to <code>0</code> — Predbat is free
+when self-hosted. The hosted web version is expected to charge around £100/year, so the
+field exists to model that; it stays at zero unless set.</p>
+<p>Because it recurs, it is <strong>not</strong> added to capital. It reduces the net annual saving of the
+Predbat row only:</p>
+<pre><code>predbat_net_annual_saving = (no_pvbat - with_predbat) - predbat_annual_gbp
+</code></pre>
+<p>That is the correct treatment for a subscription, and it makes the comparison honest in
+both directions: if the fee exceeds what Predbat adds over a plain timer, the Predbat row's
+payback becomes <em>worse</em> than the PV-plus-battery row's, or fails to pay back at all. That
+is a real and useful signal, not something to smooth over.</p>
+<p>It does not touch any scenario's <code>cost_p</code>, which stays a pure electricity figure. The fee
+is applied at the payback layer, where it belongs.</p>
+<h2 id="4-payback">4. Payback</h2>
+<p>Simple payback in years, each measured against the no-system baseline:</p>
+<table>
+<thead>
+<tr>
+<th>Payback for</th>
+<th>Capital</th>
+<th>Annual saving</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PV only</td>
+<td>PV</td>
+<td><code>no_pvbat.cost_p − pv_only.cost_p</code></td>
+</tr>
+<tr>
+<td>PV + battery</td>
+<td>PV + battery</td>
+<td><code>no_pvbat.cost_p − without_predbat.cost_p</code></td>
+</tr>
+<tr>
+<td>PV + battery + Predbat</td>
+<td>PV + battery</td>
+<td><code>no_pvbat.cost_p − with_predbat.cost_p</code> <strong>− <code>predbat_annual_gbp</code></strong></td>
+</tr>
+</tbody>
+</table>
+<pre><code>years = capital_gbp / annual_saving_gbp
+</code></pre>
+<p>The three rows share only two capital figures: Predbat is software, so it adds no capital.
+Where it has a recurring fee, that is subtracted from its annual saving instead (see
+Predbat's own cost, above) — which is what makes its row a genuine comparison rather than a
+free upgrade.</p>
+<h3 id="two-honesty-guards">Two honesty guards</h3>
+<p><strong>A saving of zero or less does not pay back.</strong> The result records
+<code>{"pays_back": false}</code> rather than a negative or infinite year count. A negative payback
+period is meaningless, and a large positive one produced by dividing by a near-zero saving
+is worse — it looks like an answer.</p>
+<p><strong>Payback requires a complete year.</strong> It is emitted only when <code>months_included == 12</code>.
+If any month is <code>unavailable</code>, the annual total covers less than a year, so the saving is
+understated and the payback correspondingly overstated. Rather than extrapolate, the
+results say payback could not be computed and name the missing months. This matches how
+the tool already refuses to count an unavailable month as free.</p>
+<h3 id="stated-limitations">Stated limitations</h3>
+<p>The results carry a caveat, and the docs say the same: simple payback ignores panel
+degradation, electricity price inflation, battery replacement, finance costs, and any
+export-tariff change over the period. It is a comparison aid, not a financial projection.</p>
+<h2 id="5-results-document">5. Results document</h2>
+<p>The engine writes both blocks so the CLI gets them without any web-layer involvement:</p>
+<pre><code class="language-json">&quot;annual&quot;: {
+  &quot;costs&quot;: {
+    &quot;pv_gbp&quot;: 8651.0,
+    &quot;battery_gbp&quot;: 3350.0,
+    &quot;total_gbp&quot;: 12001.0,
+    &quot;pv_rate_gbp_per_kwp&quot;: 1730.2,
+    &quot;total_kwp&quot;: 5.0,
+    &quot;battery_kwh&quot;: 9.5
+  },
+  &quot;payback&quot;: {
+    &quot;pv_only&quot;: {&quot;pays_back&quot;: true, &quot;years&quot;: 9.4, &quot;capital_gbp&quot;: 8651.0, &quot;annual_saving_gbp&quot;: 920.3},
+    &quot;pv_battery&quot;: {&quot;pays_back&quot;: true, &quot;years&quot;: 11.2, &quot;capital_gbp&quot;: 12001.0, &quot;annual_saving_gbp&quot;: 1071.5},
+    &quot;pv_battery_predbat&quot;: {&quot;pays_back&quot;: true, &quot;years&quot;: 8.7, &quot;capital_gbp&quot;: 12001.0, &quot;annual_saving_gbp&quot;: 1381.6, &quot;gross_annual_saving_gbp&quot;: 1481.6, &quot;predbat_annual_gbp&quot;: 100.0}
+  }
+}
+</code></pre>
+<p>When payback cannot be computed the <code>payback</code> block is <code>{"available": false, "reason": "..."}</code>
+rather than absent, so a consumer can tell "not computed, and here is why" from "old
+results document".</p>
+<h2 id="6-web-presentation">6. Web presentation</h2>
+<p>A costs and payback table above the monthly chart, showing for each of the three
+purchase options: capital cost, annual saving, and payback period (or "does not pay back").
+The PV and battery cost breakdown is shown alongside, so the capital figure is not a
+number from nowhere.</p>
+<p>The <code>pv_only</code> scenario also joins the existing monthly chart and month table as a fourth
+series and row.</p>
+<h2 id="7-testing">7. Testing</h2>
+<p><code>annual_costs.py</code> is pure, so it is tested directly:</p>
+<ul>
+<li>the band rate at each anchor, between anchors, and clamped beyond both ends</li>
+<li>total cost monotonic across the range — the property that motivated interpolation</li>
+<li>the £2,500 minimum applying to a small system and not to a large one</li>
+<li>zero PV and zero battery each costing nothing, rather than the minimum</li>
+<li>payback arithmetic, including a zero and a negative saving producing <code>pays_back: false</code></li>
+<li>payback suppressed when <code>months_included &lt; 12</code></li>
+<li>custom <code>costs</code> values overriding every default</li>
+<li><code>predbat_annual_gbp</code> reducing only the Predbat row's saving, leaving capital and the
+  other two rows untouched</li>
+<li>a <code>predbat_annual_gbp</code> large enough to exceed what Predbat adds, producing a <em>worse</em>
+  payback than the PV-plus-battery row — and, when it exceeds the whole saving,
+  <code>pays_back: false</code>. This is the case a naive "subscription as capital" implementation
+  would get wrong, so it is asserted explicitly.</li>
+</ul>
+<p>Engine and web tests cover: <code>panels</code>/<code>panel_watts</code> deriving <code>kwp</code>; both-supplied being
+rejected; the <code>pv_only</code> scenario appearing in month rows and annual totals; the form's
+kWp/panel toggle round-tripping; and the fourth chart colour being present and distinct.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

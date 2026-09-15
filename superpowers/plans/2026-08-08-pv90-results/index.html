@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>pv90 upside scenario — Task 8 results - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "pv90 upside scenario \u2014 Task 8 results";
+        var mkdocs_page_input_path = "superpowers/plans/2026-08-08-pv90-results.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">pv90 upside scenario — Task 8 results</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="pv90-upside-scenario-task-8-results">pv90 upside scenario — Task 8 results</h1>
+<p>Branch: <code>feat/pv90-upside-scenario</code> (merge-base <code>1aa2c385</code>)
+Date: 2026-08-08
+Machine: darwin/arm64, C++ prediction kernel active (<code>prediction_kernel_lib.so</code>, ABI 3) for every run below.</p>
+<p>This document records the Stage A regression review and the Stage B experiment. It is a measurement
+report, not a change. No production code was modified for it.</p>
+<hr />
+<h2 id="stage-a-full-suite-at-the-default-weight">Stage A — full suite at the default weight</h2>
+<pre><code>cd coverage &amp;&amp; ./venv/bin/python ../apps/predbat/unit_test.py
+</code></pre>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tests passed</td>
+<td>188</td>
+</tr>
+<tr>
+<td>Tests failed</td>
+<td>1 (<code>debug_cases</code>)</td>
+</tr>
+<tr>
+<td>Exit code</td>
+<td>1</td>
+</tr>
+<tr>
+<td>Wall time</td>
+<td>90.94 s</td>
+</tr>
+</tbody>
+</table>
+<p>The single failure is <code>debug_cases</code> → <code>cases/predbat_debug_pre_saving1.yaml</code>. Its sibling
+<code>cases/predbat_debug_agile1.yaml</code> passed. <code>run_debug_cases</code> breaks on the first failure, so
+<code>pre_saving1</code> is the only case whose comparison result is reported after <code>agile1</code>.</p>
+<h3 id="the-failure-is-pre-existing-verified-directly">The failure is pre-existing, verified directly</h3>
+<p>A scratch worktree was created at the merge-base (<code>git worktree add … 1aa2c385</code>), the kernel rebuilt
+there, and <code>--test debug_cases</code> run with the same interpreter:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>branch (<code>5ad387cf</code>)</th>
+<th>merge-base (<code>1aa2c385</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>agile1</code></td>
+<td>PASSED, final metric 897.5257</td>
+<td>PASSED, final metric 897.5257</td>
+</tr>
+<tr>
+<td><code>pre_saving1</code></td>
+<td>FAILED, final metric 471.1906</td>
+<td>FAILED, final metric 471.1906</td>
+</tr>
+</tbody>
+</table>
+<p>The two <code>.actual.json</code> files produced by each side are <strong>byte-identical</strong> for both cases
+(<code>diff</code> reports no difference). The case <code>.yaml</code> and <code>.expected.json</code> inputs are also unchanged on
+this branch (<code>git diff 1aa2c385 HEAD -- coverage/cases/</code> is empty, md5s match).</p>
+<p>The <code>pre_saving1</code> diff itself is one dropped export window:</p>
+<pre><code>expected export_window_best[1] = {&quot;average&quot;: 15.0, &quot;end&quot;: 1410, &quot;start&quot;: 1320, &quot;set&quot;: 14.0, &quot;target&quot;: 4}
+expected export_limits_best    = [7.0, 0, 85]
+actual   export_limits_best    = [7.0, 85]
+</code></pre>
+<p><code>charge_limit_best</code> and <code>charge_window_best</code> match exactly. This is entirely pre-existing and is not
+attributable to this branch.</p>
+<h3 id="attribution-of-the-clamp-removal-brief-step-2">Attribution of the clamp removal (brief Step 2)</h3>
+<p>At <code>pv_metric90_weight = 0</code> no pv90 prediction runs, so the only behavioural change reaching the
+planner is <code>compute_metric</code>'s move from the pv10 downside-only clamp</p>
+<pre><code class="language-python">if metric10 &gt; metric:
+    metric += self.pv_metric10_weight * (metric10 - metric)
+</code></pre>
+<p>to the unconditional signed average. These differ only on candidates where <code>metric10 &lt; metric</code>.
+Instrumenting <code>compute_metric</code> shows that branch <strong>is</strong> exercised and is still plan-neutral:</p>
+<table>
+<thead>
+<tr>
+<th>case</th>
+<th><code>compute_metric</code> calls</th>
+<th>candidates with <code>metric10 &lt; metric</code></th>
+<th>largest gap</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>predbat_no_export_100.txt</code></td>
+<td>387</td>
+<td>0</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>cases/predbat_debug_agile1.yaml</code></td>
+<td>~3 538</td>
+<td>1</td>
+<td>65.99 p</td>
+</tr>
+<tr>
+<td><code>cases/predbat_debug_pre_saving1.yaml</code></td>
+<td>~6 082</td>
+<td>9</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>Despite <code>agile1</code> and <code>pre_saving1</code> both containing candidates the old clamp would have suppressed,
+both produce identical plans to the merge-base. <strong>No debug case changed. Nothing needs regenerating
+for Stage A.</strong></p>
+<hr />
+<h2 id="stage-b-weight-sweep">Stage B — weight sweep</h2>
+<p><code>pv_metric90_weight</code> was set at runtime on a freshly built <code>create_predbat()</code> per weight (the config
+default was not touched). The value was read back after each run to confirm it survived
+<code>read_debug_yaml</code> — it did, at every weight, because the dumps predate the setting.</p>
+<h3 id="case-1-coveragepredbat_no_export_100txt-the-target-redotrue">Case 1 — <code>coverage/predbat_no_export_100.txt</code> (the target, <code>redo=True</code>)</h3>
+<p>Baseline in the dump: <code>charge_limit_best = [9.52, 9.52]</code> = <strong>[100 %, 100 %]</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>w90</th>
+<th>chosen limits</th>
+<th>nominal cost of chosen plan</th>
+<th>blended metric @ w90</th>
+<th>metric re-scored @ w90=0</th>
+<th>plan seconds</th>
+<th>pv90 sims</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0.00</td>
+<td><strong>[100 %, 100 %]</strong></td>
+<td>402.4248</td>
+<td>386.2869</td>
+<td>386.2869</td>
+<td>0.21</td>
+<td>0</td>
+</tr>
+<tr>
+<td>0.05</td>
+<td><strong>[100 %, 100 %]</strong></td>
+<td>402.4248</td>
+<td>385.2692</td>
+<td>386.2869</td>
+<td>0.24</td>
+<td>386</td>
+</tr>
+<tr>
+<td>0.10</td>
+<td><strong>[100 %, 100 %]</strong></td>
+<td>402.4248</td>
+<td>384.2516</td>
+<td>386.2869</td>
+<td>0.25</td>
+<td>386</td>
+</tr>
+<tr>
+<td>0.20</td>
+<td><strong>[100 %, 100 %]</strong></td>
+<td>402.4248</td>
+<td>382.2163</td>
+<td>386.2869</td>
+<td>0.25</td>
+<td>386</td>
+</tr>
+</tbody>
+</table>
+<p>The plan does not move. The blended metric falls exactly linearly in w90
+(<code>386.2869 − 20.353 · w90</code>), i.e. pv90 contributes a pure level shift and no ranking change.</p>
+<h3 id="case-2-coveragecasespredbat_debug_agile1yaml-redofalse-compared-against-its-expectation">Case 2 — <code>coverage/cases/predbat_debug_agile1.yaml</code> (<code>redo=False</code>, compared against its expectation)</h3>
+<table>
+<thead>
+<tr>
+<th>w90</th>
+<th>chosen limits (%)</th>
+<th>nominal cost</th>
+<th>metric re-scored @ w90=0</th>
+<th>plan seconds</th>
+<th>matches expectation</th>
+<th>pv90 sims</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0.00</td>
+<td><code>[4,4,100,4,4,100,100,100,100,100,100,100,100]</code></td>
+<td>765.3935</td>
+<td>687.3767</td>
+<td>1.54</td>
+<td>yes</td>
+<td>0</td>
+</tr>
+<tr>
+<td>0.05</td>
+<td>identical</td>
+<td>765.3935</td>
+<td>687.3767</td>
+<td>1.96</td>
+<td>yes</td>
+<td>3 649</td>
+</tr>
+<tr>
+<td>0.10</td>
+<td>identical</td>
+<td>765.3935</td>
+<td>687.3767</td>
+<td>1.97</td>
+<td>yes</td>
+<td>3 649</td>
+</tr>
+<tr>
+<td>0.20</td>
+<td>identical</td>
+<td>765.3935</td>
+<td>687.3767</td>
+<td>1.97</td>
+<td>yes</td>
+<td>3 649</td>
+</tr>
+</tbody>
+</table>
+<p>No movement, and the expectation still matches at every weight.</p>
+<h3 id="case-3-coveragecasespredbat_debug_pre_saving1yaml-run-for-completeness-reported-separately">Case 3 — <code>coverage/cases/predbat_debug_pre_saving1.yaml</code> (run for completeness; reported separately)</h3>
+<table>
+<thead>
+<tr>
+<th>w90</th>
+<th>chosen limits (%)</th>
+<th>export limits</th>
+<th>nominal cost</th>
+<th>metric re-scored @ w90=0</th>
+<th>plan seconds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0.00</td>
+<td><code>[32,4,4,100,100,100,87,4,100,100]</code></td>
+<td><code>[7.0, 85]</code></td>
+<td>405.1244</td>
+<td>419.1929</td>
+<td>6.36</td>
+</tr>
+<tr>
+<td>0.05</td>
+<td><code>[32,4,4,100,100,100,100,4,5,100,100]</code></td>
+<td><code>[7.0, 5.0, 84]</code></td>
+<td>404.4165</td>
+<td>419.3887</td>
+<td>8.10</td>
+</tr>
+<tr>
+<td>0.10</td>
+<td><code>[32,4,4,100,100,100,100,4,100,100]</code></td>
+<td><code>[7.0, 5.0, 84]</code></td>
+<td>404.4165</td>
+<td>419.0974</td>
+<td>7.53</td>
+</tr>
+<tr>
+<td>0.20</td>
+<td><code>[4,4,11,4,100,100,100,4,5,4,100,100]</code></td>
+<td><code>[11.0, 88.0, 94.0]</code></td>
+<td>405.5864</td>
+<td>417.7243</td>
+<td>8.19</td>
+</tr>
+</tbody>
+</table>
+<p>This case <strong>does</strong> change from w90 ≥ 0.05. Note the total prediction count also changes
+(6 118 → 5 416 → 5 054 → 5 282 nominal sims), so part of the difference is the search taking a
+different path, not purely a different objective. Note also that the w90 = 0.2 plan scores <em>better</em>
+than the w90 = 0 plan under the w90 = 0 objective (417.72 vs 419.19) — the search is a heuristic, and
+perturbing it can find a better plan under the old objective. This is worth remembering when reading
+any debug-case diff caused by this feature.</p>
+<h3 id="runtime-cost-of-enabling-pv90">Runtime cost of enabling pv90</h3>
+<table>
+<thead>
+<tr>
+<th>case</th>
+<th>plan seconds @ w90=0</th>
+<th>@ w90=0.1</th>
+<th>overhead</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>predbat_no_export_100.txt</code></td>
+<td>0.21</td>
+<td>0.25</td>
+<td>+19 %</td>
+</tr>
+<tr>
+<td><code>agile1</code></td>
+<td>1.54</td>
+<td>1.97</td>
+<td>+28 %</td>
+</tr>
+<tr>
+<td><code>pre_saving1</code></td>
+<td>6.36</td>
+<td>7.53</td>
+<td>+18 %</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="evidence-for-the-four-interpretation-points">Evidence for the four interpretation points</h2>
+<h3 id="1-the-dump-has-no-forecast90-so-pv90-is-the-load-only-upside-confirmed-not-assumed">1. The dump has no <code>forecast90</code>, so pv90 is the load-only upside — confirmed, not assumed</h3>
+<p><code>grep '^pv_forecast_minute90:' coverage/predbat_no_export_100.txt</code> returns nothing; the dump carries
+only <code>pv_forecast_minute</code> and <code>pv_forecast_minute10</code>. The guard in <code>calculate_plan</code> therefore fires
+and copies p50. Measured after the run:</p>
+<pre><code>pv90_series_is_copy_of_p50 = True
+pv_total_kwh   = 16.24   pv90_total_kwh = 16.24
+</code></pre>
+<p>Same for <code>agile1</code> (2.295 / 2.295) and <code>pre_saving1</code> (2.427 / 2.427). Stage B is a <strong>load-only</strong>
+upside on all three cases.</p>
+<h3 id="2-where-the-plan-landed">2. Where the plan landed</h3>
+<p>It did not land anywhere — no movement, on either the target case or <code>agile1</code>. Per the brief's rubric
+that is <strong>inconclusive</strong>, not negative. Sections below establish <em>why</em>, which narrows it
+considerably.</p>
+<h3 id="3-load_scaling90-composes-relatively-and-pv90s-load-really-is-below-nominal-confirmed">3. <code>load_scaling90</code> composes relatively and pv90's load really is below nominal — confirmed</h3>
+<table>
+<thead>
+<tr>
+<th>case</th>
+<th><code>load_scaling</code></th>
+<th><code>load_scaling10</code></th>
+<th><code>load_scaling90</code></th>
+<th>nominal load kWh</th>
+<th>pv10 load kWh</th>
+<th><strong>pv90 load kWh</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>predbat_no_export_100.txt</code></td>
+<td>1.05</td>
+<td>1.1</td>
+<td>0.9</td>
+<td>33.5232</td>
+<td>35.1217</td>
+<td><strong>30.1723</strong></td>
+</tr>
+<tr>
+<td><code>agile1</code></td>
+<td>0.5</td>
+<td>0.6</td>
+<td>0.9</td>
+<td>8.9791</td>
+<td>10.7749</td>
+<td><strong>8.0797</strong></td>
+</tr>
+<tr>
+<td><code>pre_saving1</code></td>
+<td>—</td>
+<td>—</td>
+<td>0.9</td>
+<td>37.8238</td>
+<td>—</td>
+<td><strong>34.0388</strong></td>
+</tr>
+</tbody>
+</table>
+<p><code>30.1723 / 33.5232 = 0.9000</code> and <code>8.0797 / 8.9791 = 0.8998</code>. The scenario is the right way up: pv90's
+load is 10 % below nominal in every case, including <code>agile1</code> where <code>load_scaling = 0.5</code> would have
+inverted it under an absolute composition. The numbers below are meaningful.</p>
+<h3 id="4-pv90-runs-only-when-the-weight-is-above-zero-confirmed-both-ways">4. pv90 runs only when the weight is above zero — confirmed both ways</h3>
+<p>Counted by wrapping <code>Prediction.run_prediction</code> and tallying <code>pv_scenario</code>:</p>
+<table>
+<thead>
+<tr>
+<th>case</th>
+<th>w90</th>
+<th>nominal sims</th>
+<th>pv10 sims</th>
+<th>pv90 sims</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>no_export_100</code></td>
+<td>0.0</td>
+<td>423</td>
+<td>389</td>
+<td><strong>0</strong></td>
+</tr>
+<tr>
+<td><code>no_export_100</code></td>
+<td>0.1</td>
+<td>423</td>
+<td>389</td>
+<td><strong>386</strong></td>
+</tr>
+<tr>
+<td><code>agile1</code></td>
+<td>0.0</td>
+<td>3 573</td>
+<td>3 538</td>
+<td><strong>0</strong></td>
+</tr>
+<tr>
+<td><code>agile1</code></td>
+<td>0.1</td>
+<td>3 688</td>
+<td>3 653</td>
+<td><strong>3 649</strong></td>
+</tr>
+<tr>
+<td><code>pre_saving1</code></td>
+<td>0.0</td>
+<td>6 118</td>
+<td>6 082</td>
+<td><strong>0</strong></td>
+</tr>
+<tr>
+<td><code>pre_saving1</code></td>
+<td>0.1</td>
+<td>5 054</td>
+<td>5 018</td>
+<td><strong>5 014</strong></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="why-the-target-case-does-not-move-the-metric-surface">Why the target case does not move: the metric surface</h2>
+<p>The charge limit of window 0 (23:30 → 05:30, the overnight charge in question) was swept from 30 % to
+100 % and each scenario scored independently, with <code>end_record = 2300</code>, <code>soc_max = 9.52</code>,
+<code>rate_min = 6.9</code>, <code>inverter_loss = 0.96</code>, <code>battery_loss = 0.97</code>.</p>
+<p>The residual battery credit is <code>max(6.9/0.96/0.97, 1.0, rate_export_min) = 7.4098 p/kWh</code>
+(<code>rate_export_min</code> is negative here because the export rate is 0). That is exactly the marginal cost
+of storing a kWh bought at 6.9 p, which is what makes the mid metric flat.</p>
+<p>Metric across the plateau (66 % → 100 %), in pence:</p>
+<table>
+<thead>
+<tr>
+<th>scenario weighting</th>
+<th>66 %</th>
+<th>80 %</th>
+<th>100 %</th>
+<th>spread (100 % − 66 %)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>nominal only (<code>w10=0, w90=0</code>)</td>
+<td>374.4728</td>
+<td>374.4728</td>
+<td>374.4728</td>
+<td><strong>0.000</strong> — dead flat, as expected</td>
+</tr>
+<tr>
+<td>pv10 only (<code>w10=1</code>)</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td><strong>−62.973</strong> — pulls hard to 100 %</td>
+</tr>
+<tr>
+<td><strong>pv90 only (<code>w90=1</code>)</strong></td>
+<td>354.1198</td>
+<td>354.1198</td>
+<td>354.1198</td>
+<td><strong>0.000 — also dead flat</strong></td>
+</tr>
+<tr>
+<td>legacy blend (<code>w10=0.1</code>)</td>
+<td>392.5841</td>
+<td>389.9911</td>
+<td>386.2869</td>
+<td>−6.297</td>
+</tr>
+<tr>
+<td>new blend (<code>w10=0.1, w90=0.1</code>)</td>
+<td>390.5488</td>
+<td>387.9558</td>
+<td>384.2516</td>
+<td><strong>−6.297 (identical)</strong></td>
+</tr>
+<tr>
+<td>new blend (<code>w10=0.1, w90=0.5</code>)</td>
+<td>382.4077</td>
+<td>379.8146</td>
+<td>376.1104</td>
+<td><strong>−6.297 (identical)</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>This is the finding.</strong> With the p50 fallback, the pv90 metric is flat across the same plateau the
+mid metric is flat across, for exactly the same reason (the residual credit equals the marginal
+storage cost, and lower load does not change that). Since the blend is
+<code>(1−w10−w90)·mid + w10·m10 + w90·m90</code>, and both <code>mid</code> and <code>m90</code> have zero slope, the blend's slope is
+<code>w10 · slope10</code> regardless of <code>w90</code>. Raising w90 takes weight away from <code>mid</code> (flat) and gives it to
+<code>m90</code> (also flat), leaving the pv10 pull completely untouched.</p>
+<p><code>export_kwh</code> is <strong>0.0 at every charge limit in both the nominal and the pv90 scenario</strong> — with the
+same PV as p50 and 33.5 kWh of load against 16.2 kWh of PV, nothing ever spills, so there is no spill
+for pv90 to price.</p>
+<p>Consequence: <strong>no value of <code>pv_metric90_weight</code> can move this plan.</strong> Confirmed empirically by
+scanning w90 = 0.0 … 1.0 with the real (fallback) p90 series — the plan is <code>[100 %, 100 %]</code> at all
+nine weights tested.</p>
+<hr />
+<h2 id="would-a-real-p90-pv-series-fix-it-a-synthetic-probe">Would a real p90 PV series fix it? A synthetic probe</h2>
+<p>To separate "the mechanism is broken" from "the dump lacks the data", <code>pv_forecast_minute90</code> was
+replaced with <code>p50 × factor</code> and the plan recomputed. This is <strong>directional evidence only</strong> — a real
+Solcast p90 is peakier around midday rather than a uniform scale-up, and would clip harder for the
+same daily total, so the numbers below are an approximation of the shape of the effect, not a
+measurement of real p90 behaviour.</p>
+<table>
+<thead>
+<tr>
+<th>p90 factor</th>
+<th>p90 total kWh</th>
+<th>pv90 spill at 100 %</th>
+<th>pv90 metric spread (66 %→100 %)</th>
+<th>pv10 spread</th>
+<th>breakeven w90 at w10 = 0.1</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1.00 (the real fallback)</td>
+<td>16.24</td>
+<td>0.000 kWh</td>
+<td><strong>+0.000</strong></td>
+<td>−62.973</td>
+<td>never</td>
+</tr>
+<tr>
+<td>1.15</td>
+<td>18.67</td>
+<td>0.418 kWh</td>
+<td>+2.196</td>
+<td>−62.973</td>
+<td>2.87</td>
+</tr>
+<tr>
+<td>1.25</td>
+<td>20.30</td>
+<td>1.137 kWh</td>
+<td>+6.502</td>
+<td>−62.973</td>
+<td>0.97</td>
+</tr>
+<tr>
+<td>1.50</td>
+<td>24.36</td>
+<td>2.928 kWh</td>
+<td>+17.135</td>
+<td>−62.973</td>
+<td>0.37</td>
+</tr>
+<tr>
+<td>2.00</td>
+<td>32.48</td>
+<td>9.895 kWh</td>
+<td>+19.364</td>
+<td>−62.973</td>
+<td>0.33</td>
+</tr>
+</tbody>
+</table>
+<p>With a real p90 the pv90 term does acquire the intended positive gradient: it penalises 100 % because
+the battery starts spilling to a 0 p export. But the pv10 downside pull in this dump is 63 p across
+the plateau, and a 1.5× p90 only musters 17 p against it.</p>
+<p>Where the plan actually lands when w90 is raised:</p>
+<table>
+<thead>
+<tr>
+<th>w90</th>
+<th>p90 = 1.0× (real fallback)</th>
+<th>p90 = 1.5× (synthetic)</th>
+<th>p90 = 2.0× (synthetic)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0.0</td>
+<td>100 %</td>
+<td>100 %</td>
+<td>100 %</td>
+</tr>
+<tr>
+<td>0.1</td>
+<td>100 %</td>
+<td>100 %</td>
+<td>100 %</td>
+</tr>
+<tr>
+<td>0.2</td>
+<td>100 %</td>
+<td>100 %</td>
+<td>100 %</td>
+</tr>
+<tr>
+<td>0.3</td>
+<td>100 %</td>
+<td>100 %</td>
+<td>100 %</td>
+</tr>
+<tr>
+<td>0.4</td>
+<td>100 %</td>
+<td><strong>71 %</strong></td>
+<td><strong>66 %</strong></td>
+</tr>
+<tr>
+<td>0.5</td>
+<td>100 %</td>
+<td><strong>71 %</strong></td>
+<td><strong>66 %</strong></td>
+</tr>
+<tr>
+<td>0.7</td>
+<td>100 %</td>
+<td><strong>68 %</strong></td>
+<td><strong>63 %</strong></td>
+</tr>
+<tr>
+<td>1.0</td>
+<td>100 %</td>
+<td><strong>68 %</strong></td>
+<td><strong>34 %</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Two things worth noting. First, when the term does bite it lands at an <strong>interior</strong> value (71 %,
+68 %) rather than collapsing to the plateau floor — so the gradient it produces is real, the strong
+shape, not a tiebreak flip. Second, it only bites at w90 ≈ 0.4, four times the weight Task 9
+proposes, and only when handed a p90 that is 50 % above p50.</p>
+<hr />
+<h2 id="verdict">Verdict</h2>
+<p><strong>pv90 does not fix the scenario it was built for, at the proposed weight, on the available data.</strong></p>
+<p>Precisely:</p>
+<ol>
+<li>On <code>predbat_no_export_100.txt</code> the plan stays at <code>[100 %, 100 %]</code> at w90 = 0, 0.05, 0.1 and 0.2 —
+   and at every weight up to 1.0. Per the brief's rubric this is "no movement", i.e. inconclusive on
+   its face.</li>
+<li>It is stronger than inconclusive, though, because the reason is identified and is not "we need
+   more p90 data to see the effect": with the p50 fallback the pv90 metric is <strong>provably flat</strong> over
+   the plateau (spread 0.000 p) and <code>export_kwh</code> is 0 in the pv90 scenario, so pv90's contribution to
+   the blend's <em>slope</em> is exactly zero at any weight. The load-only lower bound is not "small", it is
+   <strong>identically zero</strong>.</li>
+<li>The mechanism is not broken — with a synthetic p90 carrying genuinely more PV, pv90 does price the
+   spill and does produce an interior landing. But it needs w90 ≈ 0.4 against this dump's 63 p pv10
+   pull, and even then only with a p90 ≥ 1.5× p50.</li>
+<li>Neither <code>agile1</code> nor the target case changes at w90 = 0.1. <code>pre_saving1</code> does change from
+   w90 = 0.05, partly through search-path perturbation rather than objective change alone.</li>
+</ol>
+<p>So: <strong>weak/negative, not strong.</strong> The counterweight exists and is correctly wired, but at 0.1 it is
+roughly 4× too light to overcome the pv10 hedge in the very case that motivated it, and against real
+Solcast p90 data it would still be fighting a 63 p pull with (extrapolating) something in the
+6–20 p range.</p>
+<p>Honest caveat on what is <em>not</em> established: no dump in the repo carries a real <code>forecast90</code>, so the
+1.15×–2.0× synthetic is the only evidence about non-zero p90 gradients, and its uniform-scale shape
+understates the midday clipping a real p90 would cause. A dump with real Solcast p90 could show a
+materially larger spread than the table above. It would have to be about 4× larger to change the
+conclusion at w90 = 0.1.</p>
+<hr />
+<h2 id="recommendation-on-task-9">Recommendation on Task 9</h2>
+<p><strong>Do not flip the default from 0.0 to 0.1.</strong> Reasons, in order of weight:</p>
+<ol>
+<li>It buys nothing on the motivating case. At 0.1 the no-export plan is unchanged, so the default
+   change would not deliver the behaviour the feature was requested for.</li>
+<li>It costs ~18–28 % of plan time on every user's every cycle (measured above), because a third full
+   prediction runs per candidate.</li>
+<li>It is not inert on other cases: <code>pre_saving1</code> changes at w90 ≥ 0.05. So the default flip <em>would</em>
+   require regenerating at least one debug-case expectation, for a change that does not fix the
+   target case. (<code>agile1</code> is unaffected and would not need regenerating.)</li>
+<li>Some of that <code>pre_saving1</code> movement is search-path perturbation rather than a cleaner objective,
+   which makes the regenerated expectation hard to review honestly.</li>
+</ol>
+<p>Suggested alternatives, in preference order:</p>
+<ul>
+<li><strong>Ship at default 0.0</strong> and leave <code>pv_metric90_weight</code> as an expert opt-in. Tasks 1–7 are sound,
+  regression-clean, and the plumbing is correct — that is worth landing on its own.</li>
+<li><strong>Get a dump with a real <code>forecast90</code></strong> before revisiting the default. That single artefact would
+  replace the synthetic table above and is the only thing that can settle point 3 of the verdict.</li>
+<li>If the zero-export over-charging is to be fixed now, the evidence points at a different lever: the
+  flat mid plateau comes from the residual credit being <em>exactly</em> the marginal storage cost, and the
+  decision is then made entirely by a 63 p pv10 pull with no opposing term. Capping the residual
+  credit by the realistic <em>usable</em> headroom, or damping the pv10 hedge when the export rate is 0,
+  would both attack the actual cause more directly than adding a weight that has to out-shout it.</li>
+</ul>
+<hr />
+<h2 id="reproduction">Reproduction</h2>
+<p>All scratch harnesses live outside the repo, under the session scratchpad:</p>
+<ul>
+<li><code>pv90_sweep.py &lt;case&gt; &lt;tag&gt; redo|noredo [expected.json]</code> — the weight sweep and instrumentation</li>
+<li><code>pv90_surface.py &lt;case&gt; &lt;tag&gt; redo|noredo</code> — the per-scenario metric surface across charge limits</li>
+<li><code>pv90_synthetic.py</code> — synthetic p90 injection and its surface</li>
+<li><code>pv90_breakeven.py</code> — scenario spreads, breakeven w90, and the weight scan</li>
+</ul>
+<p>Raw outputs: <code>/tmp/stage_a.txt</code>, <code>/tmp/stage_a_mergebase.txt</code>, <code>/tmp/stage_b_noexport.txt</code>,
+<code>/tmp/stage_b_agile1.txt</code>, <code>/tmp/stage_b_presaving.txt</code>, <code>/tmp/surface_noexport.txt</code>,
+<code>/tmp/synth_noexport.txt</code>, <code>/tmp/breakeven.txt</code>.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

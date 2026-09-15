@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Planning performance: batching the fan-out and pooling the kernel's threads - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Planning performance: batching the fan-out and pooling the kernel\u0027s threads";
+        var mkdocs_page_input_path = "superpowers/reports/2026-08-16-planning-performance.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Planning performance: batching the fan-out and pooling the kernel's threads</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="planning-performance-batching-the-fan-out-and-pooling-the-kernels-threads">Planning performance: batching the fan-out and pooling the kernel's threads</h1>
+<p>Report on the work in PR #4540 and PR #4546, both merged on 2026-08-16.</p>
+<p><strong>Result: the 20-scenario planning benchmark goes from 39.5s to 24.8s, 37% faster, with every
+scenario producing an identical plan.</strong></p>
+<h2 id="the-measurement">The measurement</h2>
+<p>Current <code>main</code> against the two branches together. Each side runs its own Python and its own compiled
+kernel, interleaved on one 16-core machine, best of three rounds.</p>
+<table>
+<thead>
+<tr>
+<th>20-scenario suite</th>
+<th><code>main</code></th>
+<th>both PRs</th>
+<th>change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Serial (<code>threads: 0</code>)</td>
+<td>41.70s</td>
+<td>26.26s</td>
+<td>37.0% faster</td>
+</tr>
+<tr>
+<td>Default (<code>threads: auto</code>)</td>
+<td>39.53s</td>
+<td>24.82s</td>
+<td>37.2% faster</td>
+</tr>
+</tbody>
+</table>
+<p>All 20 scenarios identical on metric, cost, both PV futures, final SoC, battery cycles and carbon —
+zero mismatches across 140 compared fields. The win holds with parallelism switched off, so it comes
+from the batching rather than a threading effect that might not transfer to other hardware.</p>
+<h2 id="what-changed">What changed</h2>
+<h3 id="batching-the-fan-out-4540">Batching the fan-out (#4540)</h3>
+<p>The optimiser runs thousands of trial simulations per plan. Each <code>launch_run_prediction_*</code> used to
+run one immediately, or hand it to a pool of worker processes. It now prepares the trial inputs,
+queues a job on the <code>Prediction</code>, and returns a handle. The first <code>.get()</code> flushes the whole fan-out:
+prediction-cache hits resolved in Python, duplicate trials collapsed, and the remainder marshalled
+once and run in a single call across the C boundary.</p>
+<p>The call sites did not have to change — every fan-out in <code>plan.py</code> was already written
+launch-all-then-collect-all for the old pool. The process pool, <code>PRED_GLOBAL</code> and the wrapper
+trampolines are all deleted.</p>
+<h3 id="a-thread-pool-inside-the-kernel-4546">A thread pool inside the kernel (#4546)</h3>
+<p>With batching in place, threading still bought only 1.6%. Instrumenting the kernel over one full plan
+showed why:</p>
+<table>
+<thead>
+<tr>
+<th>Per plan, inside <code>pk_run_batch</code></th>
+<th>serial</th>
+<th>threaded</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Calls / jobs</td>
+<td>25,091 / 253,899</td>
+<td>same</td>
+</tr>
+<tr>
+<td>Threads created</td>
+<td>0</td>
+<td>201,545</td>
+</tr>
+<tr>
+<td>Wall time in the function</td>
+<td>3131 ms</td>
+<td>2409 ms</td>
+</tr>
+<tr>
+<td>— of which thread creation</td>
+<td>—</td>
+<td>1507 ms</td>
+</tr>
+<tr>
+<td>— of which work</td>
+<td>3131 ms</td>
+<td>902 ms</td>
+</tr>
+</tbody>
+</table>
+<p>The parallel work compresses well: 3131 ms of simulation becomes 902 ms across eight lanes. Thread
+creation then ate almost all of it. The median batch is six jobs, so each call was paying eight
+thread creations at 7.5 microseconds to cover roughly 180 microseconds of work. Workers now park on a
+condition variable for the life of the process.</p>
+<h2 id="what-measurement-overturned">What measurement overturned</h2>
+<p>Four things that seemed sound in design did not survive a benchmark. They are recorded here and in
+the code rather than quietly dropped.</p>
+<h3 id="per-thread-scratch-buffers-no-effect">Per-thread scratch buffers: no effect</h3>
+<p>The kernel allocated roughly 70KB of scratch per call, 25,000 times per plan. Removing that was
+expected to pay on the serial path. It measured 26.291s before and 26.344s after — nothing, against
+1.8% run-to-run spread.</p>
+<p>The premise was a misreading. The kernel's own comment about the allocator being a bottleneck was
+recorded under four threads contending, which is a different problem from one thread repeatedly
+allocating and freeing the same-sized block and never leaving its thread cache. The change survives
+only because the parked workers need per-thread scratch anyway.</p>
+<h3 id="broadcasting-to-wake-workers-cost-24">Broadcasting to wake workers: cost 2.4%</h3>
+<p>Built as designed, with one condition variable broadcast to all workers, the pool was worth 1.3%. A
+six-job batch woke all fifteen workers and eleven went straight back to sleep — roughly 250,000
+wasted wakeups per plan. Giving each worker its own flag and condition variable, so only the needed
+lanes wake, took it to 3.7% on that change alone.</p>
+<h3 id="capping-the-default-thread-count-reversed">Capping the default thread count: reversed</h3>
+<p>On a fast 16-core machine the curve peaks below the core count — 24.71s at six threads against 25.04s
+at sixteen — which argued for capping <code>auto</code>.</p>
+<p>Re-running with each job made eight times dearer, which is how a machine where the kernel dominates
+behaves, the curve stops turning over at all:</p>
+<table>
+<thead>
+<tr>
+<th><code>threads</code></th>
+<th>normal</th>
+<th>kernel 8x dearer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0 (serial)</td>
+<td>26.33s</td>
+<td>48.92s</td>
+</tr>
+<tr>
+<td>4</td>
+<td>24.89s</td>
+<td>32.03s</td>
+</tr>
+<tr>
+<td>6</td>
+<td>24.71s</td>
+<td>29.98s</td>
+</tr>
+<tr>
+<td>8</td>
+<td>24.91s</td>
+<td>29.85s</td>
+</tr>
+<tr>
+<td>16</td>
+<td>25.04s</td>
+<td>28.94s</td>
+</tr>
+</tbody>
+</table>
+<p>Capping at four would cost 0.7% on fast hardware but 10.7% on the weak hardware the cap was meant to
+protect. The cap was removed; <code>resolve_batch_threads</code> in <code>plan.py</code> carries the numbers.</p>
+<h3 id="the-inherited-baseline-stale">The inherited baseline: stale</h3>
+<p>A 31.6s baseline had been carried forward from an earlier session's notes. Re-measured on the same
+machine it was 41.7s. Every figure in this report was measured fresh, interleaved, best of three.</p>
+<h2 id="defects-found-along-the-way">Defects found along the way</h2>
+<h3 id="a-stale-kernel-binary-was-loaded-instead-of-rejected">A stale kernel binary was loaded instead of rejected</h3>
+<p>An earlier commit made the SoC output buffer optional — Python passes null for every cached run,
+which is the common path — but left <code>PK_ABI_VERSION</code> at 3. An ABI 3 binary writes to that pointer
+unconditionally, so the loader accepted a stale binary and Predbat segfaulted on its first prediction
+rather than falling back to the Python engine.</p>
+<p>Reproduced by building the kernel from <code>main</code> and pointing <code>PREDBAT_KERNEL_SO</code> at it: <code>model_kernel</code>
+exits 139. Now bumped to ABI 4, so the loader reports a stale binary and uses the Python engine, which
+is what the check exists to do. Anyone with a locally built library from an older checkout, or an
+install whose per-architecture binary was not replaced, would have hit this.</p>
+<h3 id="the-old-process-pool-was-broken-off-the-main-entry-point">The old process pool was broken off the main entry point</h3>
+<p>Pool workers rebuilt their <code>Prediction</code> from a module global that only exists in the parent, which
+needs <code>fork</code> start semantics that <code>hass.py</code> sets only under <code>if __name__ == "__main__"</code>. On any
+spawn-default platform, macOS since Python 3.8, every worker started empty and every scenario died
+with <code>KeyError: 'dict'</code>. Removing the pool removes the failure mode.</p>
+<h3 id="a-trial-mutating-the-callers-data">A trial mutating the caller's data</h3>
+<p>The export trial wrote its start time straight into the caller's window dictionary, safe only because
+each pool worker mutated its own unpickled copy. A batched fan-out shares one list across every job,
+so this had to become local before anything else could proceed.</p>
+<h3 id="a-header-that-only-libc-provides-transitively">A header that only libc++ provides transitively</h3>
+<p>The pool catches <code>std::system_error</code> when the system refuses a thread. libc++ declares it through
+<code>&lt;thread&gt;</code>; libstdc++ does not, so the file compiled on macOS and failed to parse on GCC.</p>
+<p>Worth knowing for the next kernel change: neither local build catches this. The native macOS build is
+clang/libc++, and <code>build_kernel_cross.sh</code> produces the shipped Linux binaries through zig, which
+bundles libc++ as well. So the cross-build targets glibc but not libstdc++, and it will happily
+produce six loadable Linux binaries from source that a maintainer building with <code>g++</code> cannot compile.
+Only CI, which builds natively with g++, closes that gap.</p>
+<h2 id="how-the-tests-were-checked">How the tests were checked</h2>
+<p>Every new test was verified by deliberately breaking the thing it guards and confirming it fails.
+That found five tests, three of them written during this work, that could not have failed:</p>
+<ul>
+<li>A gate keeping debug runs on the Python engine was pinned by comparing values the two engines agree
+  on to within 1e-6. Deleting the gate entirely left the suite green.</li>
+<li>Nothing constrained how batch results were matched back to their jobs. A deliberately reversed
+  mapping — every trial receiving another trial's cost — passed three separate suites.</li>
+<li>A replacement routing test had nine of ten trials producing identical costs, so a misrouted result
+  would have coincidentally matched. The trial shape and seed were changed until all ten differ, and
+  the distinctness is now asserted rather than assumed.</li>
+<li>The concurrency test passed with the dispatch mutex deleted: at 25 rounds the interpreter lock kept
+  the two callers from overlapping. At 400 rounds over 8 lanes it deadlocks within seconds. That round
+  count is load-bearing and the test says so.</li>
+<li>The fork test does earn its place. Remove the <code>pthread_atfork</code> handler and the forked child
+  deadlocks on workers that no longer exist, which the test kills on a deadline rather than hanging
+  the suite.</li>
+</ul>
+<p>Alongside that: the full suite of 211 tests, the 20-scenario byte-identical gate re-run at every step,
+and kernel parity pinned bit-identical across one, two, four and eight threads.</p>
+<h2 id="notes-for-whoever-picks-this-up">Notes for whoever picks this up</h2>
+<p><code>PK_PARITY_REVISION</code> stays at 5 while the ABI moved to 4. The bucket-table change altered how the hot
+loop computes SoC percent, and it is pinned equivalent by <code>pk_verify_soc_percent_table</code>, so results do
+not diverge. That is the same class of judgement that was got wrong for the ABI version, so it is
+worth a second opinion.</p>
+<p>The kernel is now about 12% of plan time, which caps what any further C++ work can return. The
+remaining 88% is Python, and the batch-size census says those fan-outs are small and frequent — a
+median of six jobs against an expected thousand, because a large fan-out's ~1176 launches become ~363
+kernel jobs once the 44% prediction-cache hit rate and the intra-batch deduplication have taken their
+share. Widening them means changing optimiser search semantics in <code>optimise_charge_limit</code>, where a
+min/max pre-pass computes the SoC-pruning envelope that decides which trials are launched at all. That
+is a design decision with real plan-difference risk, not an optimisation.</p>
+<h2 id="method">Method</h2>
+<p>Benchmarks were run on a 16-core machine, interleaved rather than grouped, best of three, with the
+kernel confirmed active on both sides of every comparison. Run-to-run spread on this benchmark is
+2-6%, so single runs were not trusted. Plan equality was checked field by field across all 20
+scenarios rather than on the headline metric alone.</p>
+<p>Two measurement mistakes are worth recording. An early run reported plausible numbers that were
+actually a stale <code>random_results.json</code> being re-read after every run had crashed; the runner now
+deletes that file before each run so the failure mode is impossible rather than merely unlikely. And
+<code>main</code>'s threaded column required forcing <code>fork</code> start semantics — left alone its process pool dies
+with <code>KeyError: 'dict'</code>, which would have flattered these branches for an unrelated reason.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Annual Debug Plans Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Annual Debug Plans Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-07-27-annual-debug-plans.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Annual Debug Plans Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="annual-debug-plans-implementation-plan">Annual Debug Plans Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Under an opt-in debug flag, retain each sampled day's plan JSON inside the annual results document so the web UI can render any scenario with Predbat's existing client-side plan renderer.</p>
+<p><strong>Architecture:</strong> <code>publish_html_plan(..., publish=False)</code> already returns <code>(html, raw_plan)</code> and writes nothing to Home Assistant; <code>raw_plan</code> is byte-for-byte the structure the <code>/plan</code> page hands to <code>renderPlanTable()</code> as <code>window.planData</code>. The engine captures that structure per scenario per sampled day into the month rows, and the Annual tab gains a plan viewer that fetches one plan at a time from a new route and renders it with <code>get_plan_css()</code> + <code>get_plan_renderer_js()</code>. No new rendering code, and no new files on disk — the plans travel inside the results document that already goes through Storage.</p>
+<p><strong>Tech Stack:</strong> Python 3, aiohttp, the existing <code>renderPlanTable</code> JavaScript in <code>web_helper.py</code>.</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li><strong>Never re-read <code>apps.yaml</code>.</strong> The Annual page reads live settings only via the predbat args dictionary; apps.yaml may not exist.</li>
+<li><strong>No direct file access.</strong> Everything persists through the Storage abstraction (<code>components.get_component("storage")</code>). Storage has no <code>delete</code> method.</li>
+<li><strong>Debug is opt-in and off by default.</strong> A non-debug run's results document must be byte-identical in shape to today's — no empty <code>plans</code> keys.</li>
+<li><strong><code>pre-commit run --all-files</code> silently skips untracked files</strong> (it uses <code>git ls-files</code>). Always <code>git add</code> new files first, or pass <code>--files</code> explicitly. Run it as <code>coverage/venv/bin/pre-commit</code>.</li>
+<li><strong>Line length 256 (Black) / 250 (Flake8); docstrings required on every function and class (<code>interrogate</code>, 100%); British English spelling (CSpell, <code>en-gb</code>).</strong></li>
+<li>Tests live in <code>apps/predbat/tests/</code>, are registered in <code>TEST_REGISTRY</code> in <code>coverage/unit_test.py</code>, and run from <code>coverage/</code> via <code>./run_all --test &lt;name&gt;</code>. <strong>Always redirect test output to a file and grep the file afterwards.</strong></li>
+<li>Never leave <code>debug_enable = True</code> on the shared <code>my_predbat</code> fixture — <code>kernel_supported()</code> requires <code>not pred.debug_enable</code>, and leaking it makes every later test run pure Python (an 8× slowdown that has already caused one apparent hang). Restore it in a <code>finally</code>.</li>
+</ul>
+<hr />
+<h3 id="task-1-capture-plan-json-in-the-engine-under-a-debug-flag">Task 1: Capture plan JSON in the engine under a debug flag</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/annual.py</code>
+- Test: <code>apps/predbat/tests/test_annual_results.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>publish_html_plan(pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=False, prediction=None) -&gt; (html, raw_plan)</code> from <code>output.py:947</code>.
+- Produces: <code>validate_config()</code> gains a <code>"debug"</code> boolean key. Month rows in the results document gain an optional <code>"plans"</code> list, described below.</p>
+<p><strong>The results-document addition.</strong> When and only when debug is on, each <code>ok</code>/<code>degraded</code> month row gains:</p>
+<pre><code class="language-python">&quot;plans&quot;: [
+    {
+        &quot;day&quot;: &quot;2025-01-15&quot;,
+        &quot;leg&quot;: &quot;single&quot;,              # or &quot;with_car&quot; / &quot;without_car&quot;
+        &quot;scenarios&quot;: {&quot;no_pvbat&quot;: {...raw_plan...}, &quot;without_predbat&quot;: {...}, &quot;with_predbat&quot;: {...}},
+    },
+    ...
+]
+</code></pre>
+<p><code>leg</code> distinguishes the two legs <code>run_day()</code> blends when a car is configured: <code>"single"</code> when no car is configured (one <code>_run_scenarios()</code> call), otherwise <code>"with_car"</code> and <code>"without_car"</code>. The blended month figures come from both, so both must be inspectable.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_annual_results.py</code>:</p>
+<pre><code class="language-python">def test_annual_debug_flag():
+    &quot;&quot;&quot;Verify the debug flag defaults off and is coerced to a bool when set.&quot;&quot;&quot;
+    failed = False
+    print(&quot;Test: debug defaults to False&quot;)
+    config = validate_config(base_config())
+    if config[&quot;debug&quot;] is not False:
+        print(&quot;  ERROR: debug should default to False, got {!r}&quot;.format(config[&quot;debug&quot;]))
+        failed = True
+
+    print(&quot;Test: debug is coerced to a bool, so a form's 'on' string does not become a truthy string&quot;)
+    raw = base_config()
+    raw[&quot;debug&quot;] = &quot;on&quot;
+    config = validate_config(raw)
+    if config[&quot;debug&quot;] is not True:
+        print(&quot;  ERROR: debug should coerce to True, got {!r}&quot;.format(config[&quot;debug&quot;]))
+        failed = True
+
+    print(&quot;Test: debug is not echoed into the scrubbed raw config as a secret&quot;)
+    if config[&quot;raw&quot;].get(&quot;debug&quot;) != &quot;on&quot;:
+        print(&quot;  ERROR: raw config should retain the submitted value&quot;)
+        failed = True
+    return failed
+</code></pre>
+<p>Write <code>base_config()</code> as a module-level helper returning the same minimal valid config dict the existing <code>make_predictor()</code> uses (reuse its literal rather than inventing new values), and call <code>test_annual_debug_flag()</code> from the module's existing entry point, folding its result into the existing <code>failed</code> flag.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run it and watch it fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test annual_results &gt; /tmp/t.txt 2&gt;&amp;1; grep -iE &quot;ERROR|FAIL|Traceback&quot; /tmp/t.txt
+</code></pre>
+<p>Expected: <code>KeyError: 'debug'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add the config flag</strong></li>
+</ul>
+<p>In <code>validate_config()</code>'s returned dict in <code>apps/predbat/annual.py</code>, alongside <code>"samples_per_month"</code>:</p>
+<pre><code class="language-python">&quot;debug&quot;: bool(raw.get(&quot;debug&quot;, False)),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Add the capture helper</strong></li>
+</ul>
+<p>Add above <code>_run_scenarios()</code> in <code>apps/predbat/annual.py</code>:</p>
+<pre><code class="language-python">def _capture_plan(predbat, pv_step, pv_step10, load_step, load_step10, end_record):
+    &quot;&quot;&quot;Return the current scenario's plan as the JSON structure the web plan renderer consumes.
+
+    This is the same ``raw_plan`` the live ``/plan`` page renders from - ``publish_html_plan()``
+    builds it from ``charge_limit_best``/``charge_window_best``/``export_*_best`` and the step
+    data, exactly as they stand for the scenario just costed. ``publish=False`` keeps it from
+    touching Home Assistant, so this is safe in a headless run: it only reads state and returns.
+    &quot;&quot;&quot;
+    _, raw_plan = predbat.publish_html_plan(pv_step, pv_step10, load_step, load_step10, end_record, publish=False, prediction=predbat.prediction)
+    return raw_plan
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Capture each scenario</strong></li>
+</ul>
+<p>Give <code>_run_scenarios()</code> a trailing <code>plans=None</code> parameter (a dict the caller supplies when it wants plans; filled in place so the return type and <code>_blend_results()</code> are untouched). After each of the three <code>_billed_result(...)</code> calls, capture with the same series that scenario was costed against:</p>
+<pre><code class="language-python">    results[&quot;no_pvbat&quot;] = _billed_result(predbat, DAY_MINUTES, zero_step)
+    if plans is not None:
+        plans[&quot;no_pvbat&quot;] = _capture_plan(predbat, zero_step, zero_step, load_step, load_step, DAY_MINUTES)
+</code></pre>
+<pre><code class="language-python">    results[&quot;without_predbat&quot;] = _billed_result(predbat, DAY_MINUTES, actual_step)
+    if plans is not None:
+        plans[&quot;without_predbat&quot;] = _capture_plan(predbat, actual_step, actual_step, load_step, load_step, DAY_MINUTES)
+</code></pre>
+<pre><code class="language-python">    results[&quot;with_predbat&quot;] = _billed_result(predbat, DAY_MINUTES, actual_step)
+    if plans is not None:
+        plans[&quot;with_predbat&quot;] = _capture_plan(predbat, actual_step, actual_step, predbat_load_step, predbat_load_step, DAY_MINUTES)
+</code></pre>
+<p>Each capture must use the same series passed to that scenario's <code>Prediction(...)</code> — a plan drawn against a different PV or load series than the one billed would defeat the entire point of the feature, which is cross-checking the billed numbers.</p>
+<ul>
+<li>[ ] <strong>Step 6: Thread it through <code>run_day()</code></strong></li>
+</ul>
+<p>Give <code>run_day()</code> a trailing <code>plans=None</code> parameter. <code>plans</code>, when supplied, is a <strong>list</strong> the function appends leg entries to:</p>
+<pre><code class="language-python">    if car_kwh &lt;= 0 or sessions_per_week &lt;= 0:
+        leg_plans = {} if plans is not None else None
+        result = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw, plans=leg_plans)
+        if plans is not None:
+            plans.append({&quot;leg&quot;: &quot;single&quot;, &quot;scenarios&quot;: leg_plans})
+        return result
+</code></pre>
+<p>Match the existing early-return's actual condition rather than copying the line above verbatim — read the current body of <code>run_day()</code> and preserve its logic exactly, adding only the capture. Do the same for the two-leg path, appending <code>{"leg": "with_car", ...}</code> and <code>{"leg": "without_car", ...}</code> in that order.</p>
+<ul>
+<li>[ ] <strong>Step 7: Collect into the month rows</strong></li>
+</ul>
+<p>In <code>AnnualPredictor.run()</code>'s sampled-day loop (around <code>annual.py:1293</code>), when <code>self.config["debug"]</code> is set, pass a fresh list per day and record the surviving days' plans. A day that raised is skipped by the existing <code>except</code> and must contribute no plans. Because <code>surviving_samples</code> and <code>day_results</code> are appended together after a successful <code>run_day()</code>, append the day's plan entries in the same place, tagging each with the day:</p>
+<pre><code class="language-python">                day_plans = [] if self.config[&quot;debug&quot;] else None
+                try:
+                    result = run_day(self.predbat, self.config, self.weather, self.tariff, self.load_source, day, midnight_utc, plans=day_plans)
+                except Exception as exc:  # noqa: BLE001 - one bad sample must not abort the whole year
+                    ...unchanged...
+                surviving_samples.append((day, weight))
+                day_results.append(result)
+                if day_plans is not None:
+                    month_plans.extend(dict(entry, day=day.isoformat()) for entry in day_plans)
+</code></pre>
+<p>Initialise <code>month_plans = []</code> beside <code>day_results</code>, and add it to the month row only under debug:</p>
+<pre><code class="language-python">            row = {
+                &quot;month&quot;: month,
+                ...unchanged...
+            }
+            if self.config[&quot;debug&quot;]:
+                row[&quot;plans&quot;] = month_plans
+            months.append(row)
+</code></pre>
+<p>A month that is dropped after <code>_reweight_survivors()</code> keeps its plans — the plans are diagnostics for what actually ran, not an input to the totals.</p>
+<ul>
+<li>[ ] <strong>Step 8: Test the capture end to end</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_annual_results.py</code> a test that runs <code>_run_scenarios()</code> through the real fixture with <code>plans={}</code> supplied and asserts all three scenario keys are populated with a dict carrying a non-empty <code>"rows"</code> list, and that passing <code>plans=None</code> leaves behaviour unchanged. If <code>_run_scenarios()</code> is too heavy to call directly in a unit test, assert instead against <code>_capture_plan()</code> driven by the <code>my_predbat</code> fixture with <code>charge_limit_best</code>/<code>charge_window_best</code>/<code>export_window_best</code>/<code>export_limits_best</code> set to empty lists and <code>predbat.prediction</code> left as the fixture leaves it — the assertion that matters is that the returned structure has <code>rows</code>, <code>soc_max</code> and <code>end_record</code> keys, which is what <code>renderPlanTable</code> requires.</p>
+<ul>
+<li>[ ] <strong>Step 9: Run the annual tests</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test annual_results --test annual_cli --test annual_bootstrap --test annual_integration &gt; /tmp/t.txt 2&gt;&amp;1; echo &quot;EXIT=$?&quot;; grep -iE &quot;ERROR|FAIL|Traceback&quot; /tmp/t.txt
+</code></pre>
+<p>Expected: all pass, exit 0.</p>
+<ul>
+<li>[ ] <strong>Step 10: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/annual.py apps/predbat/tests/test_annual_results.py
+git commit -m &quot;feat(annual): retain each sampled day's plan JSON under a debug flag&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-render-the-captured-plans-in-the-annual-tab">Task 2: Render the captured plans in the Annual tab</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/web_annual.py</code>, <code>apps/predbat/web.py</code>
+- Test: <code>apps/predbat/tests/test_web_annual.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: the <code>"plans"</code> month-row key from Task 1; <code>get_plan_css()</code> and <code>get_plan_renderer_js()</code> from <code>web_helper.py</code>; <code>renderPlanTable(jsonData, overrides, showDebug, editable)</code> defined inside <code>get_plan_renderer_js()</code>.
+- Produces: a new route <code>./annual_plan</code>.</p>
+<p><strong>The renderer's contract, verified against <code>web_helper.py:6370</code>:</strong>
+- <code>jsonData</code> is the <code>raw_plan</code> structure; it returns an error paragraph if <code>jsonData.rows</code> is missing.
+- <code>overrides</code> is dereferenced immediately as <code>overrides.manual_charge_times.concat(overrides.manual_export_times, overrides.manual_freeze_charge_times, overrides.manual_freeze_export_times, overrides.manual_demand_times)</code> — so it must be an object with <strong>all five</strong> of those arrays present. Passing <code>{}</code> throws.
+- <code>editable</code> must be <code>false</code>: a historical plan has nothing to edit and the edit dropdowns post to the live plan's override routes.
+- It <strong>returns</strong> an HTML string; it does not insert into the DOM itself.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_web_annual.py</code>, following the file's existing print-and-flag style:</p>
+<pre><code class="language-python">    print(&quot;Test: the form offers a debug checkbox, defaulting off&quot;)
+    form = page.render_form(page.prefill_config())
+    if 'name=&quot;debug&quot;' not in form:
+        print(&quot;  ERROR: the form should offer a debug checkbox&quot;)
+        failed = True
+    if re.search(r'name=&quot;debug&quot;[^&gt;]*checked', form):
+        print(&quot;  ERROR: debug must default to off&quot;)
+        failed = True
+
+    print(&quot;Test: a submitted debug checkbox becomes a true config flag&quot;)
+    postdata = valid_postdata()
+    postdata[&quot;debug&quot;] = &quot;on&quot;
+    config = page.config_from_post(postdata)
+    if config.get(&quot;debug&quot;) is not True:
+        print(&quot;  ERROR: debug should be True when checked, got {!r}&quot;.format(config.get(&quot;debug&quot;)))
+        failed = True
+
+    print(&quot;Test: an unchecked debug box is False, not absent&quot;)
+    config = page.config_from_post(valid_postdata())
+    if config.get(&quot;debug&quot;) is not False:
+        print(&quot;  ERROR: debug should be False when unchecked, got {!r}&quot;.format(config.get(&quot;debug&quot;)))
+        failed = True
+</code></pre>
+<p>And a test for the viewer against a results document carrying one plan:</p>
+<pre><code class="language-python">    print(&quot;Test: a run with captured plans offers a plan viewer&quot;)
+    debug_results = copy.deepcopy(results)
+    debug_results[&quot;months&quot;][0][&quot;plans&quot;] = [{&quot;day&quot;: &quot;2025-01-15&quot;, &quot;leg&quot;: &quot;single&quot;, &quot;scenarios&quot;: {&quot;with_predbat&quot;: {&quot;rows&quot;: [], &quot;soc_max&quot;: 9.5}}}]
+    html_text = page.render_results(debug_results, runs, runs[0][&quot;id&quot;])
+    if &quot;annual-plan-viewer&quot; not in html_text:
+        print(&quot;  ERROR: a run with plans should render the plan viewer&quot;)
+        failed = True
+    if &quot;renderPlanTable&quot; not in html_text:
+        print(&quot;  ERROR: the viewer must use the existing plan renderer&quot;)
+        failed = True
+
+    print(&quot;Test: a run with no captured plans renders no viewer&quot;)
+    html_text = page.render_results(results, runs, runs[0][&quot;id&quot;])
+    if &quot;annual-plan-viewer&quot; in html_text:
+        print(&quot;  ERROR: a non-debug run must not show an empty plan viewer&quot;)
+        failed = True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run them and watch them fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test web_annual &gt; /tmp/t.txt 2&gt;&amp;1; grep -iE &quot;ERROR|FAIL|Traceback&quot; /tmp/t.txt
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Add the debug checkbox</strong></li>
+</ul>
+<p>In <code>render_form()</code>, in the same fieldset as <code>samples_per_month</code>, add a checkbox named <code>debug</code>, checked from <code>config.get("debug")</code>, labelled "Save plans for debugging" with the help text "Keeps each sampled day's plan so you can inspect it below. Makes the saved run much larger." In <code>config_from_post()</code>, set <code>"debug": postdata.get("debug") is not None</code> — matching how the existing <code>battery_hybrid</code> checkbox is read (a checkbox absent from postdata means unchecked).</p>
+<ul>
+<li>[ ] <strong>Step 4: Add the plan route</strong></li>
+</ul>
+<p>In <code>web.py</code>, beside the other five Annual routes, register:</p>
+<pre><code class="language-python">        app.router.add_get(&quot;/annual_plan&quot;, self.annual_page.html_annual_plan)
+</code></pre>
+<p>In <code>web_annual.py</code>, add the handler. It takes <code>run</code>, <code>month</code>, <code>index</code> and <code>scenario</code> query parameters, loads the stored run, walks to <code>months[?]["plans"][index]["scenarios"][scenario]</code>, and returns it as JSON — 404 with a JSON error body if any step is missing:</p>
+<pre><code class="language-python">    async def html_annual_plan(self, request):
+        &quot;&quot;&quot;Return one captured plan as JSON, for the results page's plan viewer to render.&quot;&quot;&quot;
+        run_id = request.query.get(&quot;run&quot;, &quot;&quot;)
+        results = await load_run(self.base, run_id) if run_id else None
+        if not results:
+            return web.json_response({&quot;error&quot;: &quot;run not found&quot;}, status=404)
+        plan = self._find_plan(results, request.query.get(&quot;month&quot;), request.query.get(&quot;index&quot;), request.query.get(&quot;scenario&quot;))
+        if plan is None:
+            return web.json_response({&quot;error&quot;: &quot;plan not found&quot;}, status=404)
+        return web.json_response(plan)
+</code></pre>
+<p>Write <code>_find_plan(results, month, index, scenario)</code> as a pure function that coerces <code>month</code> and <code>index</code> with a <code>try</code>/<code>except (TypeError, ValueError)</code> returning <code>None</code> — the query string is attacker-controlled and must never raise out of the handler. Match the surrounding file's import style for <code>web.json_response</code> (<code>from aiohttp import web</code>).</p>
+<ul>
+<li>[ ] <strong>Step 5: Render the viewer</strong></li>
+</ul>
+<p>In <code>render_results()</code>, after the month table, when any month row carries a non-empty <code>plans</code> list, emit a <code>&lt;div class='annual-plan-viewer'&gt;</code> containing:</p>
+<ul>
+<li>three <code>&lt;select&gt;</code> elements: day (label <code>"{day} ({leg})"</code>, value <code>"{month}:{index}"</code> built from the row's month and the plan's position in that row's list), scenario (the three <code>SCENARIO_LABELS</code>), and a "Show debug columns" checkbox;</li>
+<li>an empty <code>&lt;div id='annual-plan-container'&gt;&lt;/div&gt;</code>;</li>
+<li><code>get_plan_css()</code> and <code>get_plan_renderer_js()</code>, and a script that fetches and renders:</li>
+</ul>
+<pre><code class="language-javascript">const ANNUAL_EMPTY_OVERRIDES = {
+    manual_charge_times: [], manual_export_times: [], manual_freeze_charge_times: [],
+    manual_freeze_export_times: [], manual_demand_times: [],
+    manual_import_rates: [], manual_export_rates: [], manual_load_adjust: [], manual_soc: []
+};
+async function annualLoadPlan() {
+    const [month, index] = document.getElementById('annual-plan-day').value.split(':');
+    const scenario = document.getElementById('annual-plan-scenario').value;
+    const showDebug = document.getElementById('annual-plan-debug').checked;
+    const container = document.getElementById('annual-plan-container');
+    const params = new URLSearchParams({run: ANNUAL_RUN_ID, month: month, index: index, scenario: scenario});
+    try {
+        const response = await fetch('./annual_plan?' + params.toString());
+        if (!response.ok) { container.innerHTML = '&lt;p&gt;That plan is not available.&lt;/p&gt;'; return; }
+        container.innerHTML = renderPlanTable(await response.json(), ANNUAL_EMPTY_OVERRIDES, showDebug, false);
+    } catch (error) {
+        container.innerHTML = '&lt;p&gt;Could not load that plan.&lt;/p&gt;';
+    }
+}
+</code></pre>
+<p>Emit <code>ANNUAL_RUN_ID</code> with <code>json.dumps(selected_id)</code> so the id is escaped rather than interpolated raw, and wire all three controls to <code>annualLoadPlan()</code> via <code>onchange</code>. Call it once on load so the first plan appears without interaction. Every value interpolated into an HTML attribute must go through <code>html.escape(..., quote=True)</code>, as the rest of this file already does.</p>
+<ul>
+<li>[ ] <strong>Step 6: Run the tests</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test web_annual --test annual_results &gt; /tmp/t.txt 2&gt;&amp;1; echo &quot;EXIT=$?&quot;; grep -iE &quot;ERROR|FAIL|Traceback&quot; /tmp/t.txt
+</code></pre>
+<p>Expected: all pass, exit 0.</p>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/web_annual.py apps/predbat/web.py apps/predbat/tests/test_web_annual.py
+git commit -m &quot;feat(annual): view a debug run's captured plans with the existing plan renderer&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-document-the-debug-mode">Task 3: Document the debug mode</h3>
+<p><strong>Files:</strong>
+- Modify: <code>docs/annual-prediction.md</code></p>
+<ul>
+<li>[ ] <strong>Step 1: Document it</strong></li>
+</ul>
+<p>Add a "Debugging a run" section after "Reading the results" covering: what the checkbox (and the config's <code>debug: true</code>) does; that each sampled day's plan is kept for all three scenarios, and for both the with-car and without-car legs when a car is configured; that the viewer is the same renderer as the live <code>/plan</code> page; and that a debug run's saved results are substantially larger, so the flag is off by default. State plainly that the plans are the ones actually billed — the same charge/export windows and the same PV and load series — which is what makes them usable for cross-checking a suspicious figure.</p>
+<ul>
+<li>[ ] <strong>Step 2: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add docs/annual-prediction.md
+git commit -m &quot;docs(annual): document the debug plan capture and viewer&quot;
+</code></pre>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

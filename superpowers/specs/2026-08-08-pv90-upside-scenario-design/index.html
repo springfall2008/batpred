@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>pv90 upside scenario - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "pv90 upside scenario";
+        var mkdocs_page_input_path = "superpowers/specs/2026-08-08-pv90-upside-scenario-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">pv90 upside scenario</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="pv90-upside-scenario">pv90 upside scenario</h1>
+<p><strong>Date:</strong> 2026-08-08
+<strong>Status:</strong> Approved</p>
+<h2 id="problem">Problem</h2>
+<p>Predbat simulates two futures: nominal (p50) and a pessimistic bundle (<code>pv10</code>: low PV, load
+scaled to 110%, charge rate de-rated to 80%, Octopus IO slots assumed to vanish). Risk is
+therefore one-sided. The optimiser is rewarded for hedging against a bad solar day and is never
+charged for a hedge that turns out to be unnecessary.</p>
+<p>The symptom, from the debug dump <code>coverage/predbat_no_export_100.txt</code> (GivEnergy 9.52 kWh,
+export rate 0p everywhere, import 6.9p off-peak / 28.85p peak): Predbat charges to 100% overnight
+even though the plan carries ~40% battery at <code>end_record</code> and the battery reaches 99% at 05:10
+with only 0.07 kWh of headroom against an 8.39 kWh forecast solar day. Any PV over-performance
+spills to the grid at 0p — energy bought at 6.9p and given away.</p>
+<h3 id="why-100-wins-today">Why 100% wins today</h3>
+<p>Two effects compound.</p>
+<p><strong>The central forecast is exactly indifferent.</strong> <code>compute_metric</code> (plan.py) credits leftover
+battery at <code>end_record</code> using</p>
+<pre><code class="language-python">rate_min = rate_min_forward.get(minutes_now + end_record) / inverter_loss / battery_loss
+battery_value = soc * metric_battery_value_scaling * max(rate_min, 1.0, rate_export_min)
+</code></pre>
+<p>With <code>rate_min_forward</code> at 6.9p and losses of 0.96 x 0.97 this credits <strong>7.4098 p per stored
+kWh</strong>. The marginal cost of putting a kWh into the battery in that same 6.9p window is
+<code>6.9 / (0.96 x 0.97)</code> = <strong>7.4098 p</strong>. Identical. Measured across the candidate charge limits:</p>
+<table>
+<thead>
+<tr>
+<th>target</th>
+<th>cost</th>
+<th>battery_value</th>
+<th>cost - value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>9.52 (100%)</td>
+<td>402.42</td>
+<td>27.95</td>
+<td>374.47</td>
+</tr>
+<tr>
+<td>9.02 (95%)</td>
+<td>398.72</td>
+<td>24.25</td>
+<td>374.47</td>
+</tr>
+<tr>
+<td>8.52 (89%)</td>
+<td>395.01</td>
+<td>20.54</td>
+<td>374.47</td>
+</tr>
+<tr>
+<td>8.27 (87%)</td>
+<td>393.16</td>
+<td>18.69</td>
+<td>374.47</td>
+</tr>
+</tbody>
+</table>
+<p>The metric is flat from 6.27 kWh (66%) to 9.52 kWh (100%). Below 66% the battery hits reserve and
+the metric climbs steeply.</p>
+<p><strong>So the decision falls entirely to tiebreaks, and only a pessimistic one exists.</strong> In the pv10
+scenario the battery ends at reserve for every candidate, so <code>cost10</code> falls about 19.5p per extra
+kWh of target; at weight 0.1 that is ~1.95 p/kWh pulling towards 100%. Failing that, an explicit
+<code>metric -= 0.002</code> bonus for <code>try_soc == soc_max</code> (plan.py) settles it.</p>
+<p>Confirmed by sweeping the dump:</p>
+<table>
+<thead>
+<tr>
+<th>setting</th>
+<th>chosen limits</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>baseline</td>
+<td>100%, 100%</td>
+</tr>
+<tr>
+<td><code>pv_metric10_weight</code> = 0</td>
+<td>100%, 100% (flat plateau + the soc_max bonus)</td>
+</tr>
+<tr>
+<td><code>pv_metric10_weight</code> = 0.3</td>
+<td>100%, 100%</td>
+</tr>
+<tr>
+<td><code>metric_battery_value_scaling</code> = 0.75</td>
+<td>100%, 100%</td>
+</tr>
+<tr>
+<td><code>metric_battery_value_scaling</code> = 0.70</td>
+<td>66%, 100%</td>
+</tr>
+</tbody>
+</table>
+<p>The flip point matches the arithmetic: a residual-value haircut must beat the pv10 pull,
+<code>(1 - s) x 7.4098 &gt; 1.95</code> → <code>s &lt; 0.737</code>.</p>
+<h3 id="why-a-valuation-fix-alone-is-not-the-answer">Why a valuation fix alone is not the answer</h3>
+<p>The formula does over-value residual battery: it credits the <em>entry cost</em>
+(<code>rate / (inv_loss x batt_loss)</code> = 7.4098p) where the exit value is
+<code>rate x inv_loss x batt_loss_discharge</code> = 6.4253p — losses grossed up where a discharge-side
+quantity should be scaled down, an over-valuation of ~15.3%. Correcting it was measured on this
+case:</p>
+<table>
+<thead>
+<tr>
+<th>formula</th>
+<th>credit</th>
+<th>w10 = 0.1</th>
+<th>w10 = 0</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>current</td>
+<td>7.4098 p</td>
+<td>100%</td>
+<td>100%</td>
+</tr>
+<tr>
+<td>exit-value</td>
+<td>6.4253 p</td>
+<td>100%</td>
+<td>66%</td>
+</tr>
+<tr>
+<td>no loss gross-up</td>
+<td>6.9 p</td>
+<td>100%</td>
+<td>66%</td>
+</tr>
+</tbody>
+</table>
+<p>The correction creates a ~0.99 p/kWh preference for charging less — the physically real
+round-trip loss — but the pv10 hedge outweighs it at 1.95 p/kWh.</p>
+<p>More fundamentally, the residual is not the problem. The plan ends at 40% and the house genuinely
+consumes all of it in the p50 model. What is risky is <em>mid-plan</em> fullness. No residual-valuation
+formula can separate 80% from 100% on economics, because in the p50 model both are correct. The
+difference between them is <strong>risk</strong>, and risk lives in the scenario set.</p>
+<p><code>metric_battery_value_scaling</code> = 0.5 "fixes" the symptom only by making carrying energy so lossy
+that it swamps the pv10 hedge, which would also stop Predbat carrying energy in cases where doing
+so is right.</p>
+<h2 id="approach">Approach</h2>
+<p>Add a third simulated scenario, <code>pv90</code> (high PV, low load), and replace the one-sided pv10 risk
+clamp with a signed weighted average over all three.</p>
+<p>The one-sided clamp is load-bearing here: today's blend is
+<code>if metric10 &gt; metric: metric += (metric10 - metric) * weight</code>. In the pv90 world there is more PV
+and less load, so <code>metric90 &lt; metric</code> essentially always, and a one-sided clamp would contribute
+exactly zero at every candidate charge limit. pv90 only produces a gradient as a true signed
+weighted average.</p>
+<h2 id="design">Design</h2>
+<h3 id="1-scenario-selector-replaces-the-pv10-boolean">1. Scenario selector replaces the <code>pv10</code> boolean</h3>
+<p><code>pv10</code> becomes an integer <code>pv_scenario</code> with constants <code>PV_SCENARIO_NOMINAL = 0</code>,
+<code>PV_SCENARIO_PV10 = 1</code>, <code>PV_SCENARIO_PV90 = 2</code>.</p>
+<p>Threaded through the four <code>launch_run_prediction_*</code> methods (plan.py:629-671), the four
+<code>wrapped_*</code> module functions and four <code>thread_run_prediction_*</code> methods (prediction.py:36-61,
+209-375), <code>Prediction.run_prediction</code>, and <code>run_prediction_kernel</code>.</p>
+<p>Behaviour by scenario inside <code>run_prediction</code>:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>nominal</th>
+<th>pv10</th>
+<th>pv90</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PV series</td>
+<td><code>pv_forecast_minute_step</code></td>
+<td><code>pv_forecast_minute10_step</code></td>
+<td><code>pv_forecast_minute90_step</code></td>
+</tr>
+<tr>
+<td>load series</td>
+<td><code>load_minutes_step</code></td>
+<td><code>load_minutes_step10</code></td>
+<td><code>load_minutes_step90</code></td>
+</tr>
+<tr>
+<td>charge rate scaling</td>
+<td><code>battery_rate_max_scaling</code></td>
+<td><code>x charge_scaling10</code></td>
+<td><code>battery_rate_max_scaling</code> (no de-rate)</td>
+</tr>
+<tr>
+<td>IO slot assumption</td>
+<td>normal</td>
+<td>assumed lost, <code>rate_max</code> applied</td>
+<td>normal</td>
+</tr>
+</tbody>
+</table>
+<p><code>PV_SCENARIO_PV10 = 1</code> keeps any stale <code>pv10=True</code> numerically valid, but every call site is
+updated explicitly rather than relying on that.</p>
+<p>There is deliberately no <code>charge_scaling90</code>. The pv10 de-rate models a hedge against slow
+charging; it has no upside counterpart.</p>
+<h3 id="2-pv90-data">2. pv90 data</h3>
+<p>Source chain, first available wins:</p>
+<ol>
+<li><code>forecast90</code> attribute on <code>sensor.&lt;prefix&gt;_pv_forecast_raw</code> (new)</li>
+<li>Fallback: <code>pv90[m] = pv50[m]</code> — the nominal series, unchanged</li>
+</ol>
+<p>No upside is synthesised. Solcast generates a real p90 in practice, so the fallback only covers
+sources that do not (<code>solar_model.py</code>, Open-Meteo) and historical debug dumps captured before
+<code>forecast90</code> existed. Mirroring the p10 spread about p50 was considered and rejected: solar
+upside is bounded by clear-sky while the downside is not, so a mirrored p90 would overstate the
+upside and contaminate any result measured through it.</p>
+<p>The consequence is that under the fallback the pv90 scenario differs from nominal <strong>only</strong> by
+<code>load_scaling90</code>. That is deliberate. It makes the fallback strictly conservative — the scenario
+can only ever be milder than a real p90 would be, never more aggressive — so a result obtained
+through it is a lower bound on the effect, and real p90 data can strengthen the conclusion but
+not overturn it.</p>
+<p>If <code>load_scaling90</code> is also left at 1.0 the pv90 scenario becomes identical to nominal,
+<code>metric90 == metric</code>, and the blend degenerates to an identity. Harmless, and worth a test.</p>
+<p><code>solcast.py</code> already computes <code>pv_estimate90</code> per period and a <code>best_day_scaling</code> in the
+calibration path, but only ever builds a <em>minute</em> array for p10. Changes:</p>
+<ul>
+<li>build <code>pv_forecast_minute90</code> alongside <code>pv_forecast_minute10</code></li>
+<li><code>pv_calibration()</code> (solcast.py:850) returns it</li>
+<li><code>pack_and_store_forecast()</code> (solcast.py:1228) packs it and publishes <code>forecast90</code></li>
+</ul>
+<p><code>fetch.py</code>:</p>
+<ul>
+<li><code>fetch_pv_forecast()</code> (fetch.py:1292) returns a third dict, reading <code>forecast90</code> when present
+  and copying the p50 series when absent</li>
+<li>stored as <code>self.pv_forecast_minute90</code></li>
+</ul>
+<p><code>solar_model.py</code> and Open-Meteo produce no p90 and fall through to the p50 fallback.</p>
+<p><code>plan.py</code> builds <code>pv_forecast_minute90_step</code> and <code>load_minutes_step90</code> alongside the existing
+step arrays, using <code>load_scaling90</code> for the load series.</p>
+<p>pv90 uses the <strong>nominal</strong> <code>metric_cloud_coverage</code> and <code>metric_load_divergence</code> rather than
+mirrored variants. <code>cloud_factor</code> in <code>step_data_history</code> shuffles energy between adjacent
+5-minute slots and preserves the total (fetch.py:161-171), so mirroring it would add knobs
+without changing the scenario's level. The scenario is defined purely by the p90 PV series and
+<code>load_scaling90</code>.</p>
+<h3 id="3-configuration">3. Configuration</h3>
+<p>Two new <code>CONFIG_ITEMS</code> entries, both <code>enable: expert_mode</code> (matching <code>charge_scaling10</code>):</p>
+<table>
+<thead>
+<tr>
+<th>name</th>
+<th>type</th>
+<th>default</th>
+<th>min</th>
+<th>max</th>
+<th>step</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pv_metric90_weight</code></td>
+<td>input_number</td>
+<td><strong>0</strong> initially, 0.1 only at stage C</td>
+<td>0</td>
+<td>1.0</td>
+<td>0.01</td>
+</tr>
+<tr>
+<td><code>load_scaling90</code></td>
+<td>input_number</td>
+<td>0.9</td>
+<td>0</td>
+<td>2.0</td>
+<td>0.01</td>
+</tr>
+</tbody>
+</table>
+<p>Both read in <code>fetch_config_options()</code> (fetch.py:2352-2355) alongside the existing pv10 settings.</p>
+<p><code>pv_metric90_weight</code> ships at 0 so the feature is inert until deliberately enabled; the 0.1 the
+target design calls for is applied only if stage C goes ahead. See Validation.</p>
+<h3 id="4-metric-blend">4. Metric blend</h3>
+<p><code>compute_metric</code> gains three optional keyword arguments so the ten non-planner call sites in
+<code>annual.py</code>, <code>output.py</code>, <code>compare.py</code> and the tests need no change:</p>
+<pre><code class="language-python">def compute_metric(self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10,
+                   battery_cycle, metric_keep, final_carbon_g, import_kwh_battery,
+                   import_kwh_house, export_kwh,
+                   soc90=None, cost90=None, final_iboost90=0.0):
+</code></pre>
+<p><code>cost90 is not None</code> is the single switch that activates the pv90 term; <code>soc90</code> and
+<code>final_iboost90</code> are only read when it is set. <code>battery_value90</code> is computed from them exactly as
+<code>battery_value10</code> is, and <code>metric90 = cost90 - battery_value90</code>, mirroring <code>metric10</code>. The blend:</p>
+<pre><code class="language-python">w10 = self.pv_metric10_weight
+w90 = self.pv_metric90_weight if cost90 is not None else 0.0
+if w10 + w90 &gt; 1.0:                    # keep the nominal weight non-negative
+    w10, w90 = w10 / (w10 + w90), w90 / (w10 + w90)
+metric = (1.0 - w10 - w90) * metric + w10 * metric10 + w90 * metric90
+</code></pre>
+<p>The carbon, self-sufficiency, battery-cycle and <code>metric_keep</code> terms continue to be applied after
+the blend using the nominal-case values only, unchanged.</p>
+<p>This drops the <code>if metric10 &gt; metric</code> clamp. At <code>w90 = 0</code> results match today wherever
+<code>metric10 &gt;= metric</code> — the overwhelmingly common case, since pv10 is both lower PV and higher
+load — and differ only where pv10 was <em>better</em> than nominal.</p>
+<p>The callers in <code>annual.py</code>, <code>compare.py</code> and <code>output.py</code> that pass the mid-case values for both
+arguments (<code>cost10 = cost</code>, <code>soc10 = soc</code>) are unaffected in every case: <code>metric10 == metric</code>
+makes the blend an identity regardless of the weights.</p>
+<h3 id="5-optimiser-wiring">5. Optimiser wiring</h3>
+<p>Everywhere a pv10 simulation is launched, a pv90 simulation is launched too, but <strong>only when
+<code>pv_metric90_weight &gt; 0</code></strong>:</p>
+<ul>
+<li><code>optimise_charge_limit</code> — a <code>result90</code> dict alongside <code>resultmid</code> and <code>result10</code></li>
+<li><code>optimise_export</code> — the same</li>
+<li>the two remaining <code>compute_metric</code> sites at plan.py:520 and plan.py:882</li>
+</ul>
+<p>When the weight is 0 the third simulation is skipped entirely, so users who leave the feature off
+pay no simulation cost. They still pay for building the p90 step arrays and carrying them in the
+kernel context (see section 6), which is a fixed per-plan cost rather than a per-candidate one.</p>
+<h3 id="6-kernel-pv90-is-a-first-class-scenario">6. Kernel: pv90 is a first-class scenario</h3>
+<p>pv90 gets its own arrays in the existing <code>PkContext</code>. It is explicitly <strong>not</strong> implemented by
+building a second context with the p90 series smuggled into the <code>pv10</code> slots.</p>
+<p>The reason is the pool model. <code>plan.py:1173</code> creates <code>multiprocessing.Pool(processes=cpu_count())</code>
+— a <em>process</em> pool — and workers reconstruct their <code>Prediction</code> from
+<code>PRED_GLOBAL["dict"] = self.__dict__.copy()</code> (prediction.py:207), inheriting the parent's kernel
+allocation by fork. A second context would duplicate the whole array set into every forked
+worker, multiplied by <code>cpu_count()</code>. Adding two arrays to the single existing context pays that
+cost once.</p>
+<p><code>prediction_kernel.py</code>:</p>
+<ul>
+<li><code>PkContext._fields_</code> gains <code>pv90</code> and <code>load90</code> (<code>POINTER(c_double)</code>), placed immediately after
+  <code>load10</code> — field order must match the <code>.cpp</code> exactly</li>
+<li><code>PkScenario.pv10</code> becomes <code>pv_scenario</code> (<code>c_int32</code>, values 0/1/2). Same width, so this is a
+  semantic change rather than a layout change</li>
+<li><code>create_kernel_context</code> builds the <code>pv90</code> and <code>load90</code> arrays alongside the existing ones</li>
+<li><code>run_prediction_kernel</code> passes the scenario through to <code>scenario.pv_scenario</code></li>
+<li><code>KERNEL_ABI_VERSION</code> 2 → 3 (context layout changed) and <code>KERNEL_PARITY_REVISION</code> bumped</li>
+</ul>
+<p>No <code>battery_rate_max_scaling90</code> scalar is needed: pv90 uses the plain <code>battery_rate_max_scaling</code>
+the kernel already holds.</p>
+<p><code>prediction_kernel.cpp</code>:</p>
+<ul>
+<li><code>PkContext</code> / <code>PkScenario</code> struct fields to match</li>
+<li><code>PkStore</code> (line 188) gains <code>pv90</code>, <code>load90</code> vectors, assigned in the context-copy path
+  alongside the existing <code>pv10</code>/<code>load10</code> copies (lines 283-305)</li>
+<li>line 348 <code>const bool pv10 = s-&gt;pv10 != 0;</code> becomes a three-way scenario integer</li>
+<li>line 412 scaling select and lines 414-415 array select become three-way</li>
+<li>line 425 <code>io_flag</code> worst-case rate stays gated to the pv10 scenario only</li>
+<li><code>PK_PARITY_REVISION</code> bumped to match</li>
+</ul>
+<p>The p90 step arrays are built unconditionally so the context is always valid, even when
+<code>pv_metric90_weight</code> is 0. That is one extra <code>step_data_history</code> pass per plan, negligible against
+the thousands of simulations. Only the <em>simulations</em> are skipped when the weight is 0.</p>
+<p>Binaries: <code>bash apps/predbat/build_kernel.sh</code> locally before running tests, or the loader reports
+a stale binary and silently falls back to the Python engine. CI covers the rest — the
+<code>kernel-binaries</code> job in <code>.github/workflows/code-quality.yml</code> cross-builds all six platform <code>.so</code>
+files with zig and auto-commits them back to the PR branch, and the test job runs with
+<code>PREDBAT_KERNEL_REQUIRED=1</code> so a stale binary fails rather than falling back.</p>
+<p><code>sim_hash</code> already mixes <code>hash(pv10)</code> (prediction.py:407); with an integer the three scenarios
+hash distinctly, so the prediction cache stays correct.</p>
+<h2 id="testing">Testing</h2>
+<p>New <code>tests/test_pv90.py</code>, registered in <code>TEST_REGISTRY</code> in <code>unit_test.py</code>:</p>
+<ul>
+<li>the p50 fallback returns the nominal series unchanged when no <code>forecast90</code> is present, and
+  <code>pv_forecast_minute90</code> is always populated so downstream step-array building cannot KeyError</li>
+<li><code>fetch_pv_forecast()</code> reads <code>forecast90</code> when present and derives it when absent</li>
+<li>both config items exist, are expert-gated, and carry the specified defaults</li>
+<li><code>compute_metric</code> blend: weights sum correctly, renormalisation when <code>w10 + w90 &gt; 1</code>,
+  <code>cost90=None</code> back-compatibility, and that <code>w90 = 0</code> with <code>metric10 &gt; metric</code> reproduces the
+  pre-change value</li>
+<li>the scenario selector picks the right PV and load arrays, and applies the charge de-rate for
+  pv10 only</li>
+</ul>
+<p><code>tests/test_kernel_parity.py</code> gains pv90 coverage. The kernel change is now an ABI change, so
+parity matters more than for a pure-Python feature:</p>
+<ul>
+<li>all three scenarios (nominal, pv10, pv90) must match between the kernel and the Python engine</li>
+<li>pv90 must use the undelated charge rate and must <em>not</em> apply the <code>io_flag</code> worst-case import
+  rate, distinguishing it from pv10 in a case where a copy-paste of the pv10 branch would pass a
+  naive equality check</li>
+<li>the <code>KERNEL_ABI_VERSION</code> / <code>KERNEL_PARITY_REVISION</code> guard rejects a stale binary</li>
+</ul>
+<p>Run <code>bash apps/predbat/build_kernel.sh</code> before the suite; otherwise the loader falls back to the
+Python engine and the parity tests pass vacuously.</p>
+<h2 id="validation">Validation</h2>
+<p>Ordered so that the experiment happens before any reference files are touched. The experiment
+sets the weight at runtime, so if the feature is dropped there is nothing to revert.</p>
+<p><strong>Stage A</strong> — land with <code>pv_metric90_weight</code> default <strong>0</strong>. Run <code>./run_all</code>. Any diff is
+attributable purely to the clamp removal; review and accept or adjust.</p>
+<p><strong>Stage B</strong> — the experiment. Replay <code>coverage/predbat_no_export_100.txt</code> with the weight set at
+runtime to 0, 0.05, 0.1 and 0.2, reporting the chosen charge limits and the plan duration at each.
+Decide whether the feature is worth keeping.</p>
+<p>The dump predates <code>forecast90</code>, so pv90 falls back to p50 and this measures the <strong>load-only</strong>
+upside: 10% lower load, identical PV. That makes Stage B a lower bound. If it moves the plan off
+100% on load alone, real p90 data can only push harder in the same direction. If it does <em>not</em>
+move the plan, the result is inconclusive rather than negative, and the next step is to re-run
+against a dump carrying real Solcast p90 before drawing a conclusion.</p>
+<p>Also worth recording at each weight: whether the plan moves to the bottom of the 66-100% plateau
+or somewhere in between. Landing at 66% would mean pv90 is merely overpowering the pv10 hedge and
+letting the plateau's lower tiebreak win, rather than genuinely pricing the spill risk — a
+different and weaker outcome than landing at an interior value.</p>
+<p><strong>Stage C</strong> — only if the feature is kept, and a separate decision: flip the
+<code>pv_metric90_weight</code> default to 0.1 and regenerate the <code>debug_cases</code> <code>.expected.json</code> references
+with manual review.</p>
+<p>Because both config items are expert-gated, shipping permanently at default 0 is a viable end
+state: opt-in, no reference regeneration, and no change for existing users.</p>
+<h2 id="out-of-scope">Out of scope</h2>
+<ul>
+<li>Correcting the entry-cost / exit-value error in the residual battery valuation. It is a real
+  defect (~15.3% over-valuation) but is independent of this change, does not fix this scenario on
+  its own, and would shift every plan. Tracked separately.</li>
+<li>Changing the <code>metric -= 0.002</code> bias towards <code>soc_max</code> in <code>optimise_charge_limit</code>.</li>
+<li>Plumbing p90 into <code>solar_model.py</code> or Open-Meteo; both fall back to p50, so for those sources
+  pv90 is a load-only scenario until real p90 data is added.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

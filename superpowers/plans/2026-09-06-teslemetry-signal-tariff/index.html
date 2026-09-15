@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Teslemetry Signal Tariff (TBC control mode) Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Teslemetry Signal Tariff (TBC control mode) Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-09-06-teslemetry-signal-tariff.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Teslemetry Signal Tariff (TBC control mode) Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="teslemetry-signal-tariff-tbc-control-mode-implementation-plan">Teslemetry Signal Tariff (TBC control mode) Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Let Predbat drive a Tesla Powerwall at its full charge rate by pushing a synthetic "signal" tariff that tells Tesla's own optimiser when to charge and export, gated behind a trial setting that defaults off.</p>
+<p><strong>Architecture:</strong> The pushed time-of-use tariff stops describing real prices and becomes a control signal: 0p over the charge window, 100p over the export window, 50p buy / 0p sell everywhere else, mirrored identically across all seven days so the tariff is a pure function of the two committed windows. Device state moves to <code>autonomous</code> mode throughout so Tesla's optimiser acts on it, with backup reserve carrying only its designed meaning (a floor) plus a reserve-100 hold. Both behaviours sit behind one component arg, so the existing real-rate path is untouched when the arg is off.</p>
+<p><strong>Tech Stack:</strong> Python 3, <code>apps/predbat/teslemetry.py</code>, the Predbat component arg system in <code>apps/predbat/components.py</code>, and the repo's own unit-test harness (<code>apps/predbat/tests/test_teslemetry.py</code>, run through <code>tools/triage_test.sh</code>).</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-09-06-teslemetry-signal-tariff.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li><strong>Line length:</strong> 256 chars (Black), 250 chars (Flake8).</li>
+<li><strong>Docstrings:</strong> 100% coverage required (<code>interrogate</code>) — every function, method and class needs one, including test functions.</li>
+<li><strong>Spell checking:</strong> British English (<code>en-gb</code>) via CSpell. Unknown words go in <code>.cspell/custom-dictionary-workspace.txt</code>, which is auto-sorted on commit, so re-stage after running pre-commit.</li>
+<li><strong>Variable naming:</strong> <code>lower_case_with_underscores</code>.</li>
+<li><strong>All checks run via <code>./run_pre_commit</code></strong> from the repo root and must pass before the final commit.</li>
+<li><strong>Unit tests must be added for all new code.</strong></li>
+<li><strong>Run one test module, never the full suite:</strong> <code>tools/triage_test.sh teslemetry /tmp/tesla-test.log</code> from the repo root. It prints the exit status and the last 30 lines; grep the log for anything more. Never pipe test output straight to grep — a wrong search means re-running.</li>
+<li><strong>The trial arg defaults to <code>False</code>.</strong> No existing user's behaviour may change from this work.</li>
+<li><strong>Do not modify</strong> <code>build_tariff</code>, <code>_quantise_side</code>, <code>_rate_side</code>, <code>_side_rates</code>, <code>current_rates</code>, <code>_boost_segments</code>, <code>_apply_boost</code>, <code>_side_layout</code>, <code>_local_today_weekday</code>, <code>_tesla_dow</code> or <code>_boost_price</code>. They remain the legacy path and their existing tests must keep passing untouched.</li>
+</ul>
+<hr />
+<h3 id="task-1-signal-tariff-builder">Task 1: Signal tariff builder</h3>
+<p>Builds the synthetic tariff from the two committed windows. Pure functions with no clock, no day-of-week and no live SoC — that independence is the property that stops the tariff re-pushing at every midnight rollover, and it is asserted directly in Step 9.</p>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/teslemetry.py</code> (constants after line 71; new methods beside <code>_discharge_window</code> at line 1108)
+- Test: <code>apps/predbat/tests/test_teslemetry.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: existing <code>_carve_interval(intervals, start_min, end_min, tier)</code>, <code>_render_side(layout, tier_prices)</code>, <code>_assemble_tariff(code, buy_charges, buy_periods, sell_charges, sell_periods)</code>, <code>time_to_minutes(value)</code>, and the module constant <code>BOOST_TIER</code>.
+- Produces:
+  - <code>SIGNAL_CHEAP_TIER</code> / <code>SIGNAL_BASE_TIER</code> / <code>SIGNAL_PEAK_TIER</code> — <code>str</code> tier names.
+  - <code>SIGNAL_BUY_PRICES</code> / <code>SIGNAL_SELL_PRICES</code> — <code>dict[str, float]</code>, GBP per kWh.
+  - <code>SIGNAL_HOLD_DEADBAND_PERCENT: int</code> and <code>SIGNAL_HOLD_RESERVE: int</code> (used by Task 2, defined here so all signal-mode constants live together).
+  - <code>TeslemetryAPI._window_intervals(window) -&gt; list[tuple[int, int]]</code> (staticmethod).
+  - <code>TeslemetryAPI._signal_layout(charge_window, export_window) -&gt; dict[int, list[tuple[int, int, str]]]</code> (staticmethod).
+  - <code>TeslemetryAPI.build_signal_tariff(charge_window=None, export_window=None) -&gt; dict</code>.
+  - <code>TeslemetryAPI._charge_window() -&gt; tuple[int, int] | None</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Add the module constants</strong></li>
+</ul>
+<p>In <code>apps/predbat/teslemetry.py</code>, directly after the existing <code>SLOT_MINUTES = 30</code> line (line 71 area), add:</p>
+<pre><code class="language-python"># Signal-tariff control mode (GH#4892). In this mode the pushed tariff stops describing real prices
+# and becomes a control signal saying when Predbat wants energy moved, so Tesla's own optimiser runs
+# the charge and reaches the full rate that reserve-driven charging cannot. Three fixed bands,
+# written identically to every day of the week, which is what makes the tariff a pure function of the
+# two committed windows - no clock, no day-of-week arithmetic, and no re-push at midnight.
+SIGNAL_CHEAP_TIER = &quot;SUPER_OFF_PEAK&quot;
+SIGNAL_BASE_TIER = &quot;PARTIAL_PEAK&quot;
+SIGNAL_PEAK_TIER = BOOST_TIER
+# GBP/kWh. Buy and sell match inside each window so the optimiser can never profit by charging to
+# re-export within the same band (the same invariant the real-rate path keeps by mirroring the boost
+# onto the buy side). The 0p sell floor outside both windows means deferring an export past its
+# window end earns nothing at all, rather than merely less.
+SIGNAL_BUY_PRICES = {SIGNAL_CHEAP_TIER: 0.0, SIGNAL_BASE_TIER: 0.5, SIGNAL_PEAK_TIER: 1.0}
+SIGNAL_SELL_PRICES = {SIGNAL_CHEAP_TIER: 0.0, SIGNAL_BASE_TIER: 0.0, SIGNAL_PEAK_TIER: 1.0}
+# Percent below the charge target that still counts as being at it. A freeze charge arrives as a
+# charge window whose target is the SOC at the moment execute.py wrote it, so house load can drop SOC
+# a fraction below that before the next cycle - without a deadband the state would flip out of hold
+# and import against the 0p band.
+SIGNAL_HOLD_DEADBAND_PERCENT = 1
+# The only reserve above 80 that Tesla still accepts: since firmware 25.18.4, 81-99 snap to 80.
+SIGNAL_HOLD_RESERVE = 100
+# Highest reserve below the snap band. A request above this is rounded UP to SIGNAL_HOLD_RESERVE
+# rather than left to be snapped down to 80 by the device: Predbat only asks for a reserve up here
+# when it wants a hold (execute.py writes soc+1 under set_reserve_hold), and 80 would not hold it.
+# Either way what Predbat models and what the battery honours must agree, which is the divergence
+# GH#4953/#4956 fixed for the reserve floor generally.
+SIGNAL_MAX_SETTABLE_RESERVE = 80
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Write the failing tests for the tariff builder</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_teslemetry.py</code>, after the existing <code>test_teslemetry_build_tariff_*</code> block (which ends around line 760). First the shared helper, then five tests:</p>
+<pre><code class="language-python">def _signal_tier_at(tariff, day, minute, sell=False):
+    &quot;&quot;&quot;Return the tier name covering a minute on a day-of-week in a rendered signal tariff.&quot;&quot;&quot;
+    seasons = tariff[&quot;sell_tariff&quot;][&quot;seasons&quot;] if sell else tariff[&quot;seasons&quot;]
+    for tier, block in seasons[&quot;AllYear&quot;][&quot;tou_periods&quot;].items():
+        for period in block[&quot;periods&quot;]:
+            if not (period[&quot;fromDayOfWeek&quot;] &lt;= day &lt;= period[&quot;toDayOfWeek&quot;]):
+                continue
+            start = period[&quot;fromHour&quot;] * 60 + period[&quot;fromMinute&quot;]
+            end = period[&quot;toHour&quot;] * 60 + period[&quot;toMinute&quot;]
+            if end == 0:
+                end = 1440
+            if start &lt;= minute &lt; end:
+                return tier
+    return None
+
+
+def test_teslemetry_signal_tariff_mirrors_every_day():
+    &quot;&quot;&quot;The signal tariff writes one shape to all seven days, so no day-of-week logic is needed.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff((120, 300), (1020, 1140))  # charge 02:00-05:00, export 17:00-19:00
+    for day in range(7):
+        assert _signal_tier_at(tariff, day, 180) == &quot;SUPER_OFF_PEAK&quot;  # 03:00, inside the charge window
+        assert _signal_tier_at(tariff, day, 1080) == &quot;ON_PEAK&quot;  # 18:00, inside the export window
+        assert _signal_tier_at(tariff, day, 600) == &quot;PARTIAL_PEAK&quot;  # 10:00, outside both
+
+
+def test_teslemetry_signal_tariff_fixed_band_prices():
+    &quot;&quot;&quot;Bands carry the fixed signal prices, with buy and sell equal inside both windows.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff((120, 300), (1020, 1140))
+    assert tariff[&quot;energy_charges&quot;][&quot;AllYear&quot;][&quot;rates&quot;] == {&quot;SUPER_OFF_PEAK&quot;: 0.0, &quot;PARTIAL_PEAK&quot;: 0.5, &quot;ON_PEAK&quot;: 1.0}
+    assert tariff[&quot;sell_tariff&quot;][&quot;energy_charges&quot;][&quot;AllYear&quot;][&quot;rates&quot;] == {&quot;SUPER_OFF_PEAK&quot;: 0.0, &quot;PARTIAL_PEAK&quot;: 0.0, &quot;ON_PEAK&quot;: 1.0}
+
+
+def test_teslemetry_signal_tariff_midnight_wrap_is_two_intervals():
+    &quot;&quot;&quot;A window crossing midnight becomes two ranges on every day and still partitions the day.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff((1380, 300), None)  # charge 23:00 -&gt; 05:00
+    for day in range(7):
+        assert _signal_tier_at(tariff, day, 1410) == &quot;SUPER_OFF_PEAK&quot;  # 23:30, before midnight
+        assert _signal_tier_at(tariff, day, 60) == &quot;SUPER_OFF_PEAK&quot;  # 01:00, after midnight
+        assert _signal_tier_at(tariff, day, 600) == &quot;PARTIAL_PEAK&quot;  # 10:00, outside
+        day_periods = {tier: {&quot;periods&quot;: [p for p in block[&quot;periods&quot;] if p[&quot;fromDayOfWeek&quot;] &lt;= day &lt;= p[&quot;toDayOfWeek&quot;]]} for tier, block in tariff[&quot;seasons&quot;][&quot;AllYear&quot;][&quot;tou_periods&quot;].items()}
+        _assert_tou_periods_partition_day(day_periods)
+
+
+def test_teslemetry_signal_tariff_is_independent_of_the_clock_and_rates():
+    &quot;&quot;&quot;Same windows -&gt; byte-identical tariff whatever the day, time or real rates.
+
+    This is the property that stops a re-push firing at every midnight rollover: the real-rate path
+    re-serialises differently once the day index moves, and the signal path must not.
+    &quot;&quot;&quot;
+    import json
+    from datetime import datetime
+
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    first = json.dumps(api.build_signal_tariff((120, 300), (1020, 1140)), sort_keys=True)
+    api.base.now = datetime(2026, 7, 23, 3, 30)  # different weekday and time of day
+    api.base.rate_import = {minute: 9.0 for minute in range(0, 2880)}  # and different real rates
+    second = json.dumps(api.build_signal_tariff((120, 300), (1020, 1140)), sort_keys=True)
+    assert first == second
+
+
+def test_teslemetry_signal_tariff_without_windows_is_flat_base():
+    &quot;&quot;&quot;With neither window committed there is nothing cheap and nothing at peak - only the base band.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    tariff = api.build_signal_tariff(None, None)
+    assert set(tariff[&quot;seasons&quot;][&quot;AllYear&quot;][&quot;tou_periods&quot;]) == {&quot;PARTIAL_PEAK&quot;}
+    assert tariff[&quot;energy_charges&quot;][&quot;AllYear&quot;][&quot;rates&quot;] == {&quot;PARTIAL_PEAK&quot;: 0.5}
+    assert tariff[&quot;sell_tariff&quot;][&quot;energy_charges&quot;][&quot;AllYear&quot;][&quot;rates&quot;] == {&quot;PARTIAL_PEAK&quot;: 0.0}
+
+
+def test_teslemetry_charge_window_accessor():
+    &quot;&quot;&quot;_charge_window mirrors _discharge_window: None unless enabled with a non-empty span.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.schedule = {&quot;reserve&quot;: 20, &quot;charge&quot;: {&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: 1}, &quot;discharge&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 10, &quot;enable&quot;: 0}}
+    assert api._charge_window() == (120, 300)
+    api.schedule[&quot;charge&quot;][&quot;enable&quot;] = 0
+    assert api._charge_window() is None
+    api.schedule[&quot;charge&quot;].update({&quot;enable&quot;: 1, &quot;end_time&quot;: &quot;02:00:00&quot;})
+    assert api._charge_window() is None
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Register the new tests</strong></li>
+</ul>
+<p>The module's tests are collected by an explicit list. Open <code>apps/predbat/tests/test_teslemetry.py</code>, find the <code>test_teslemetry()</code> entry point near the end of the file, and add the six new function names to the list of tests it calls, following the existing style exactly.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>tools/triage_test.sh teslemetry /tmp/tesla-test.log</code>
+Expected: FAIL with <code>AttributeError: 'MockTeslemetryAPI' object has no attribute 'build_signal_tariff'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Implement the builder</strong></li>
+</ul>
+<p>In <code>apps/predbat/teslemetry.py</code>, add these four methods immediately after <code>_discharge_window</code> (line 1108-1115):</p>
+<pre><code class="language-python">    def _charge_window(self):
+        &quot;&quot;&quot;Return (start_min, end_min) for the committed charge window when enabled, else None.&quot;&quot;&quot;
+        charge = self.schedule.get(&quot;charge&quot;, {})
+        if not charge.get(&quot;enable&quot;):
+            return None
+        start = self.time_to_minutes(charge.get(&quot;start_time&quot;, &quot;00:00:00&quot;))
+        end = self.time_to_minutes(charge.get(&quot;end_time&quot;, &quot;00:00:00&quot;))
+        return None if start == end else (start, end)
+
+    @staticmethod
+    def _window_intervals(window):
+        &quot;&quot;&quot;Split a (start, end) minute window into non-wrapping [from, to) ranges inside one day.
+
+        A window whose start is after its end wraps midnight and becomes two ranges. Because the same
+        shape is written to every day of the week, that is all a midnight crossing needs here - there
+        is no &quot;which day does this land on&quot; question of the kind _boost_segments has to answer on the
+        real-rate path.
+        &quot;&quot;&quot;
+        if not window:
+            return []
+        start, end = window
+        if start == end:
+            return []
+        if start &lt; end:
+            return [(start, end)]
+        return [(start, 1440), (0, end)]
+
+    @staticmethod
+    def _signal_layout(charge_window, export_window):
+        &quot;&quot;&quot;Return the per-day interval layout for the signal tariff, identical on all seven days.
+
+        Starts from a base band covering the whole day and carves the export then charge windows into
+        it. Predbat's optimiser guarantees the two windows never overlap, so the carve order decides
+        no minute's band; it is fixed only so the rendered output is deterministic.
+        &quot;&quot;&quot;
+        intervals = [(0, 1440, SIGNAL_BASE_TIER)]
+        for window, tier in ((export_window, SIGNAL_PEAK_TIER), (charge_window, SIGNAL_CHEAP_TIER)):
+            for start, end in TeslemetryAPI._window_intervals(window):
+                intervals = TeslemetryAPI._carve_interval(intervals, start, end, tier)
+        return {day: list(intervals) for day in range(7)}
+
+    def build_signal_tariff(self, charge_window=None, export_window=None):
+        &quot;&quot;&quot;Build the signal tariff: fixed 0p/50p/100p bands over the committed windows (GH#4892).
+
+        Deliberately takes no clock, no day-of-week and no live SOC, so the serialised body changes
+        only when a window changes - which is what makes set_tariff's write-on-change dedupe mean
+        something rather than firing once a day on the calendar alone. One layout serves both sides
+        and only the price map differs, so the buy and sell periods cannot drift apart.
+        &quot;&quot;&quot;
+        layout = self._signal_layout(charge_window, export_window)
+        buy_charges, buy_periods = self._render_side(layout, SIGNAL_BUY_PRICES)
+        sell_charges, sell_periods = self._render_side(layout, SIGNAL_SELL_PRICES)
+        return self._assemble_tariff(&quot;PREDBAT&quot;, buy_charges, buy_periods, sell_charges, sell_periods)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>tools/triage_test.sh teslemetry /tmp/tesla-test.log</code>
+Expected: PASS, with every pre-existing teslemetry test still passing. If any <code>test_teslemetry_build_tariff_*</code> test fails, the legacy path has been disturbed — revert and re-check that only new code was added.</p>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): build a signal tariff from the committed windows (#4892)&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-device-state-mapping-under-signal-tariff-control">Task 2: Device-state mapping under signal-tariff control</h3>
+<p>Maps the committed schedule to the device tuple in the new mode. Separate from Task 1 because a reviewer could accept the tariff shape and still reject the reserve/mode policy — this is where the reserve stops being an overloaded charge signal and goes back to carrying only the reserve Predbat actually asked for.</p>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/teslemetry.py</code> (new methods beside <code>evaluate_schedule</code> at line 524)
+- Test: <code>apps/predbat/tests/test_teslemetry.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>SIGNAL_HOLD_DEADBAND_PERCENT</code>, <code>SIGNAL_HOLD_RESERVE</code>, <code>SIGNAL_MAX_SETTABLE_RESERVE</code> from Task 1; existing <code>in_window(minutes_now, window)</code> and <code>self.schedule</code>.
+- Produces:
+  - <code>TeslemetryAPI._settable_reserve(percent) -&gt; int</code> (staticmethod).
+  - <code>TeslemetryAPI.evaluate_schedule_tbc(minutes_now, soc) -&gt; dict</code> with the same four keys as <code>evaluate_schedule</code>: <code>export_rule</code>, <code>grid_charging</code>, <code>reserve</code>, <code>mode</code>.</p>
+<p><strong>Design note the implementer needs.</strong> Reserve is whatever Predbat wrote into <code>schedule["reserve"]</code> via the <code>reserve</code> arg, which <code>automatic_config</code> binds to the <code>schedule_reserve</code> number entity — the real reserve, in every state. It is deliberately <strong>not</strong> the export target: under this mode Predbat's charge and export targets are advisory (Tesla decides how much energy to move) and window length is the lever for them, so overloading reserve as an export floor would be the one place the component second-guessed that decision.</p>
+<p>The 81–99 band still has to be handled, because Predbat itself reaches it: <code>execute.py:306</code>, <code>:593</code> and <code>:620</code> write <code>adjust_reserve(min(soc_percent + 1, 100))</code> under <code>set_reserve_hold</code>, so a battery at 85% produces a reserve request of 86. That request means "hold above 80", and 80 would not hold it — the battery would be free to discharge back down to 80. So such a request rounds <strong>up</strong> to 100, which does hold, with grid charging disabled alongside so the device cannot import to reach it.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_teslemetry.py</code>, after the Task 1 tests:</p>
+<pre><code class="language-python">def _tbc_api(charge=None, discharge=None, reserve=15):
+    &quot;&quot;&quot;Build a mock API with a committed schedule for the signal-tariff state tests.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.schedule = {
+        &quot;reserve&quot;: reserve,
+        &quot;charge&quot;: charge or {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 100, &quot;enable&quot;: 0},
+        &quot;discharge&quot;: discharge or {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 10, &quot;enable&quot;: 0},
+    }
+    return api
+
+
+def test_teslemetry_tbc_charging_below_target_enables_grid_at_the_real_reserve():
+    &quot;&quot;&quot;Below the charge target the tariff does the work: grid charging on, reserve left where Predbat set it.&quot;&quot;&quot;
+    api = _tbc_api(charge={&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: 1})
+    assert api.evaluate_schedule_tbc(3 * 60, 40) == {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: True, &quot;reserve&quot;: 15, &quot;mode&quot;: &quot;autonomous&quot;}
+
+
+def test_teslemetry_tbc_at_target_holds_with_reserve_100_and_no_grid():
+    &quot;&quot;&quot;At target it holds: reserve 100 stops discharge, grid charging off stops it importing to reach it.&quot;&quot;&quot;
+    api = _tbc_api(charge={&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: 1})
+    assert api.evaluate_schedule_tbc(3 * 60, 90) == {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: 100, &quot;mode&quot;: &quot;autonomous&quot;}
+
+
+def test_teslemetry_tbc_hold_deadband_survives_a_one_percent_sag():
+    &quot;&quot;&quot;A freeze charge whose SOC has sagged 1% below the written target still holds, rather than importing.&quot;&quot;&quot;
+    api = _tbc_api(charge={&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 85, &quot;enable&quot;: 1})
+    assert api.evaluate_schedule_tbc(3 * 60, 84)[&quot;grid_charging&quot;] is False
+    assert api.evaluate_schedule_tbc(3 * 60, 84)[&quot;reserve&quot;] == 100
+    # Two points below the target is a real shortfall, not sensor sag, so charging resumes.
+    assert api.evaluate_schedule_tbc(3 * 60, 83)[&quot;grid_charging&quot;] is True
+
+
+def test_teslemetry_tbc_export_uses_the_real_reserve_not_the_export_target():
+    &quot;&quot;&quot;Exporting leaves reserve at the real reserve; the export target is advisory under this mode.
+
+    Reserve is not overloaded as an export floor here: Tesla decides how much to move, and window
+    length is the lever for the target, so writing the target as a floor would second-guess that.
+    &quot;&quot;&quot;
+    api = _tbc_api(discharge={&quot;start_time&quot;: &quot;17:00:00&quot;, &quot;end_time&quot;: &quot;19:00:00&quot;, &quot;soc&quot;: 20, &quot;enable&quot;: 1}, reserve=5)
+    state = api.evaluate_schedule_tbc(18 * 60, 60)
+    assert state == {&quot;export_rule&quot;: &quot;battery_ok&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: 5, &quot;mode&quot;: &quot;autonomous&quot;}
+
+
+def test_teslemetry_tbc_export_stops_at_the_target():
+    &quot;&quot;&quot;Once down to the target the export rule drops back to pv_only, reserve still the real reserve.&quot;&quot;&quot;
+    api = _tbc_api(discharge={&quot;start_time&quot;: &quot;17:00:00&quot;, &quot;end_time&quot;: &quot;19:00:00&quot;, &quot;soc&quot;: 20, &quot;enable&quot;: 1}, reserve=5)
+    assert api.evaluate_schedule_tbc(18 * 60, 20) == {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: 5, &quot;mode&quot;: &quot;autonomous&quot;}
+
+
+def test_teslemetry_tbc_demand_is_autonomous_with_no_grid_charging():
+    &quot;&quot;&quot;Outside both windows: autonomous on the base band, real reserve, and no route to import.&quot;&quot;&quot;
+    api = _tbc_api()
+    assert api.evaluate_schedule_tbc(12 * 60, 50) == {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: 15, &quot;mode&quot;: &quot;autonomous&quot;}
+
+
+def test_teslemetry_tbc_charge_wins_over_an_overlapping_export():
+    &quot;&quot;&quot;Charge is tested first, matching execute.py and the real-rate path's own precedence.&quot;&quot;&quot;
+    api = _tbc_api(
+        charge={&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: 1},
+        discharge={&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 20, &quot;enable&quot;: 1},
+    )
+    assert api.evaluate_schedule_tbc(3 * 60, 40)[&quot;grid_charging&quot;] is True
+
+
+def test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off():
+    &quot;&quot;&quot;Predbat's own reserve hold (soc+1) lands in the band Tesla rejects and must round UP, not down.
+
+    execute.py writes adjust_reserve(soc+1) under set_reserve_hold, so a battery at 85% asks for 86.
+    Snapping that to 80 would let it discharge 6% during a hold; 100 actually holds, and grid
+    charging off is what stops it importing to reach 100.
+    &quot;&quot;&quot;
+    api = _tbc_api(reserve=86)
+    assert api.evaluate_schedule_tbc(12 * 60, 85) == {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: 100, &quot;mode&quot;: &quot;autonomous&quot;}
+
+
+def test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window():
+    &quot;&quot;&quot;A hold reserve inside a charge window must not import to fill to 100 against the 0p band.&quot;&quot;&quot;
+    api = _tbc_api(charge={&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: 1}, reserve=86)
+    state = api.evaluate_schedule_tbc(3 * 60, 40)
+    assert state[&quot;reserve&quot;] == 100
+    assert state[&quot;grid_charging&quot;] is False
+
+
+def test_teslemetry_tbc_never_writes_a_reserve_in_the_invalid_band():
+    &quot;&quot;&quot;Tesla snaps 81-99 to 80, so no state may ask for a reserve in that band, whatever is committed.
+
+    Sweeps every reserve Predbat could write, in each of the three states, since the reserve is now
+    the single value that reaches the device from all of them.
+    &quot;&quot;&quot;
+    for reserve in range(0, 101):
+        states = [
+            _tbc_api(charge={&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: 1}, reserve=reserve).evaluate_schedule_tbc(3 * 60, 40),
+            _tbc_api(discharge={&quot;start_time&quot;: &quot;17:00:00&quot;, &quot;end_time&quot;: &quot;19:00:00&quot;, &quot;soc&quot;: 20, &quot;enable&quot;: 1}, reserve=reserve).evaluate_schedule_tbc(18 * 60, 60),
+            _tbc_api(reserve=reserve).evaluate_schedule_tbc(12 * 60, 50),
+        ]
+        for state in states:
+            assert state[&quot;reserve&quot;] &lt;= 80 or state[&quot;reserve&quot;] == 100
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Register the new tests</strong></li>
+</ul>
+<p>Add the ten new function names to the list in <code>test_teslemetry()</code>, as in Task 1 Step 3.</p>
+<ul>
+<li>[ ] <strong>Step 3: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>tools/triage_test.sh teslemetry /tmp/tesla-test.log</code>
+Expected: FAIL with <code>AttributeError: 'MockTeslemetryAPI' object has no attribute 'evaluate_schedule_tbc'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 4: Implement the mapping</strong></li>
+</ul>
+<p>In <code>apps/predbat/teslemetry.py</code>, add both methods immediately after <code>evaluate_schedule</code> (which ends at line 545):</p>
+<pre><code class="language-python">    @staticmethod
+    def _settable_reserve(percent):
+        &quot;&quot;&quot;Map a requested reserve onto one the Powerwall will actually hold.
+
+        Since firmware 25.18.4 only 0-80 and exactly 100 are honoured; 81-99 are silently snapped
+        down to 80. A request in that band is Predbat asking to hold above 80 - execute.py writes
+        adjust_reserve(soc+1) under set_reserve_hold - and 80 would not hold it, leaving the battery
+        free to discharge back down to 80 during a window meant to keep SOC flat. So it rounds UP to
+        the one value above 80 that is honoured. Callers disable grid charging whenever this returns
+        SIGNAL_HOLD_RESERVE, which is what stops the device importing to reach it.
+        &quot;&quot;&quot;
+        percent = int(percent)
+        if percent &lt;= SIGNAL_MAX_SETTABLE_RESERVE:
+            return percent
+        return SIGNAL_HOLD_RESERVE
+
+    def evaluate_schedule_tbc(self, minutes_now, soc):
+        &quot;&quot;&quot;Map the committed schedule to the device tuple under signal-tariff control (GH#4892).
+
+        Mode is autonomous in every state, because Tesla's optimiser only acts on the pushed tariff
+        under Time-Based Control - the tariff, not this tuple, is what asks for the charge or the
+        export. Reserve therefore stops being an overloaded charge signal and is simply the reserve
+        Predbat asked for, in every state; the charge and export target percentages are advisory
+        under this mode, since Tesla decides how much energy actually moves, and window length rather
+        than a reserve floor is the lever for them.
+
+        Grid charging is enabled only while a charge is actually wanted and no hold is in force, so
+        no other state can import unexpectedly whatever the optimiser decides.
+        &quot;&quot;&quot;
+        charge = self.schedule.get(&quot;charge&quot;, {})
+        discharge = self.schedule.get(&quot;discharge&quot;, {})
+        reserve = self._settable_reserve(self.schedule.get(&quot;reserve&quot;, 20))
+        if self.in_window(minutes_now, charge):
+            target = int(charge.get(&quot;soc&quot;, 100))
+            if soc &gt;= target - SIGNAL_HOLD_DEADBAND_PERCENT:
+                # At (or effectively at) target: hold. Reserve 100 stops the discharge and grid
+                # charging off stops it importing to reach that reserve; solar may still charge,
+                # which is what a freeze charge wants.
+                return {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: SIGNAL_HOLD_RESERVE, &quot;mode&quot;: &quot;autonomous&quot;}
+            # Charging. A reserve that came back as SIGNAL_HOLD_RESERVE is a hold request Predbat
+            # made in its own right, and must not be turned into an import up to 100% against the 0p
+            # band, so grid charging is suppressed in that case.
+            return {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: reserve &lt; SIGNAL_HOLD_RESERVE, &quot;reserve&quot;: reserve, &quot;mode&quot;: &quot;autonomous&quot;}
+        if self.in_window(minutes_now, discharge):
+            target = int(discharge.get(&quot;soc&quot;, 10))
+            return {&quot;export_rule&quot;: &quot;battery_ok&quot; if soc &gt; target else &quot;pv_only&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: reserve, &quot;mode&quot;: &quot;autonomous&quot;}
+        return {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: reserve, &quot;mode&quot;: &quot;autonomous&quot;}
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>tools/triage_test.sh teslemetry /tmp/tesla-test.log</code>
+Expected: PASS, all pre-existing tests included.</p>
+<ul>
+<li>[ ] <strong>Step 6: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): map device state for signal-tariff control (#4892)&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-gate-both-behaviours-behind-the-trial-setting">Task 3: Gate both behaviours behind the trial setting</h3>
+<p>Wires the two new behaviours to a component arg that defaults off, so nothing changes for existing users, and documents it. Folded into one task because the arg, the two dispatch points, the docs row and the dictionary entry are one reviewable decision: "this feature is now reachable".</p>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/components.py</code> (the <code>"teslemetry"</code> args block, lines 626-634)
+- Modify: <code>apps/predbat/teslemetry.py</code> (<code>evaluate_schedule</code> line 524, <code>sync_tariff</code> line 1206)
+- Modify: <code>docs/inverter-setup.md</code> (the Teslemetry configuration section)
+- Modify: <code>.cspell/custom-dictionary-workspace.txt</code>
+- Test: <code>apps/predbat/tests/test_teslemetry.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>build_signal_tariff</code> and <code>_charge_window</code> from Task 1, <code>evaluate_schedule_tbc</code> from Task 2.
+- Produces: component arg <code>tbc_control</code> (apps.yaml key <code>teslemetry_tbc_control</code>), read as <code>self.tbc_control</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_teslemetry.py</code>:</p>
+<pre><code class="language-python">def test_teslemetry_tbc_control_defaults_off_and_uses_the_real_rate_tariff():
+    &quot;&quot;&quot;With the trial setting off nothing changes: the real-rate builder is still what gets pushed.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.schedule = {&quot;reserve&quot;: 15, &quot;charge&quot;: {&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: 1}, &quot;discharge&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 10, &quot;enable&quot;: 0}}
+    assert api.tbc_control is False
+    pushed = {}
+    api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
+    run_async(api.sync_tariff())
+    # The real-rate path prices from rate_import, so a 28p flat import cannot render as the 0p/50p
+    # signal bands - asserting the absence of the signal shape rather than an exact legacy body.
+    assert pushed[&quot;tariff&quot;][&quot;energy_charges&quot;][&quot;AllYear&quot;][&quot;rates&quot;] != {&quot;SUPER_OFF_PEAK&quot;: 0.0, &quot;PARTIAL_PEAK&quot;: 0.5, &quot;ON_PEAK&quot;: 1.0}
+    assert api.evaluate_schedule(3 * 60, 40)[&quot;mode&quot;] == &quot;backup&quot;
+
+
+def test_teslemetry_tbc_control_on_pushes_the_signal_tariff():
+    &quot;&quot;&quot;With the trial setting on, the committed windows drive the signal bands and autonomous mode.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.tbc_control = True
+    api.schedule = {&quot;reserve&quot;: 15, &quot;charge&quot;: {&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: 1}, &quot;discharge&quot;: {&quot;start_time&quot;: &quot;17:00:00&quot;, &quot;end_time&quot;: &quot;19:00:00&quot;, &quot;soc&quot;: 20, &quot;enable&quot;: 1}}
+    pushed = {}
+    api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
+    run_async(api.sync_tariff())
+    assert pushed[&quot;tariff&quot;][&quot;energy_charges&quot;][&quot;AllYear&quot;][&quot;rates&quot;] == {&quot;SUPER_OFF_PEAK&quot;: 0.0, &quot;PARTIAL_PEAK&quot;: 0.5, &quot;ON_PEAK&quot;: 1.0}
+    assert _signal_tier_at(pushed[&quot;tariff&quot;], 0, 180) == &quot;SUPER_OFF_PEAK&quot;
+    assert _signal_tier_at(pushed[&quot;tariff&quot;], 0, 1080) == &quot;ON_PEAK&quot;
+    assert api.evaluate_schedule(3 * 60, 40)[&quot;mode&quot;] == &quot;autonomous&quot;
+</code></pre>
+<p>Add this helper next to <code>_signal_tier_at</code>:</p>
+<pre><code class="language-python">async def _record_tariff(pushed, tariff):
+    &quot;&quot;&quot;Stand in for set_tariff, capturing the tariff that would have been sent.&quot;&quot;&quot;
+    pushed[&quot;tariff&quot;] = tariff
+    return True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Give the mock the new attribute</strong></li>
+</ul>
+<p>In <code>MockTeslemetryAPI.__init__</code> in <code>apps/predbat/tests/test_teslemetry.py</code>, beside the existing <code>self.automatic = False</code> line, add:</p>
+<pre><code class="language-python">        self.tbc_control = False
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Register the new tests</strong></li>
+</ul>
+<p>Add the two new function names to the list in <code>test_teslemetry()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>tools/triage_test.sh teslemetry /tmp/tesla-test.log</code>
+Expected: FAIL — <code>test_teslemetry_tbc_control_on_pushes_the_signal_tariff</code> asserts the signal bands but <code>sync_tariff</code> still calls the real-rate builder, so the rates dict will not match.</p>
+<ul>
+<li>[ ] <strong>Step 5: Declare the component arg</strong></li>
+</ul>
+<p>In <code>apps/predbat/components.py</code>, inside the <code>"teslemetry"</code> entry's <code>"args"</code> dict (after the <code>"automatic"</code> line at 630), add:</p>
+<pre><code class="language-python">            &quot;tbc_control&quot;: {&quot;required&quot;: False, &quot;default&quot;: False, &quot;config&quot;: &quot;teslemetry_tbc_control&quot;},
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Dispatch on the arg</strong></li>
+</ul>
+<p>In <code>apps/predbat/teslemetry.py</code>, add this as the first statement in the body of <code>evaluate_schedule</code>, immediately after its docstring (line 532):</p>
+<pre><code class="language-python">        if getattr(self, &quot;tbc_control&quot;, False):
+            return self.evaluate_schedule_tbc(minutes_now, soc)
+</code></pre>
+<p>Then in <code>sync_tariff</code> (line 1206), replace the single <code>tariff = ...</code> line so the body reads:</p>
+<pre><code class="language-python">        if self._is_read_only():
+            return True
+        if getattr(self, &quot;tbc_control&quot;, False):
+            tariff = self.build_signal_tariff(self._charge_window(), self._discharge_window())
+        else:
+            tariff = self.build_tariff(self._discharge_window())
+        return await self.set_tariff(tariff)
+</code></pre>
+<p><code>getattr</code> rather than plain attribute access at both sites: the standalone CLI harness at the bottom of this module constructs the class without going through the component arg system, so the attribute is not guaranteed to exist there.</p>
+<ul>
+<li>[ ] <strong>Step 7: Add a sentence to each dispatching docstring</strong></li>
+</ul>
+<p>Append to <code>evaluate_schedule</code>'s docstring, as its own paragraph:</p>
+<pre><code>        With teslemetry_tbc_control set this delegates to evaluate_schedule_tbc, which drives Tesla's
+        own optimiser through the tariff instead of asserting a charge directly - see GH#4892.
+</code></pre>
+<p>Append to <code>sync_tariff</code>'s docstring, as its own paragraph:</p>
+<pre><code>        With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one; it
+        depends only on the committed windows, so it re-pushes strictly less often.
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 8: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>tools/triage_test.sh teslemetry /tmp/tesla-test.log</code>
+Expected: PASS, including every pre-existing test — the default-off path must be unchanged.</p>
+<ul>
+<li>[ ] <strong>Step 9: Document the setting</strong></li>
+</ul>
+<p>In <code>docs/inverter-setup.md</code>, find the Teslemetry configuration section that lists <code>teslemetry_automatic</code> and add an entry for <code>teslemetry_tbc_control</code> in the same format, saying: it is off by default; when on, Predbat pushes a control-signal tariff (0p over the charge window, 100p over the export window, 50p import elsewhere) and switches the Powerwall to Time-Based Control so Tesla's Opticaster runs the charge at full rate rather than the slower reserve-driven charge; it is a trial setting, and while it is on Predbat's charge and export target percentages are advisory because Tesla decides how much to move.</p>
+<ul>
+<li>[ ] <strong>Step 10: Add Opticaster to the spell dictionary</strong></li>
+</ul>
+<p>Add <code>Opticaster</code> to <code>.cspell/custom-dictionary-workspace.txt</code>. The file is auto-sorted on commit, so run pre-commit and re-stage it.</p>
+<ul>
+<li>[ ] <strong>Step 11: Run the full pre-commit suite</strong></li>
+</ul>
+<p>Run: <code>./run_pre_commit</code>
+Expected: all hooks pass. Re-stage any file the hooks rewrite, then run it again to confirm a clean pass.</p>
+<ul>
+<li>[ ] <strong>Step 12: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/components.py apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py docs/inverter-setup.md .cspell/custom-dictionary-workspace.txt
+git commit -m &quot;feat(teslemetry): add the teslemetry_tbc_control trial setting (#4892)&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-guard-manual-freeze-export-by-the-inverters-capability">Task 4: Guard manual freeze export by the inverter's capability</h3>
+<p>Independent of Tasks 1–3 and worth doing either way, but required before the trial: a manual freeze export currently reaches the component on an inverter that declares freeze export unsupported, and under the signal tariff it would carve the 100p band over a window meant to hold.</p>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/plan.py:4405-4406</code>
+- Test: <code>apps/predbat/tests/test_manual_overrides.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>self.set_export_freeze</code> (already forced off from <code>INVERTER_DEF[...]["support_discharge_freeze"]</code> by <code>execute.py:962-966</code>), and <code>EXPORT_LIMIT_IDLE</code>, already imported in the test module at <code>test_manual_overrides.py:10</code> and in <code>plan.py</code>.
+- Produces: no new symbols.</p>
+<p><strong>Conventions in this test module</strong> (read <code>test_manual_overrides.py:14-80</code> before writing): every test takes <code>my_predbat</code>, returns a truthy value on failure, and is aggregated in <code>run_manual_overrides_tests</code> as <code>failed |= test_name(my_predbat)</code>. <code>setup(my_predbat, ...)</code> puts one charge and one export window at minute 720 into a known state; <code>check_export_limit(name, my_predbat, expected)</code> takes the test name first and returns the failure bool.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_manual_overrides.py</code>, after <code>test_manual_freeze_export_unaffected_by_export_freeze_only</code>:</p>
+<pre><code class="language-python">def test_manual_freeze_export_dropped_when_inverter_cannot_freeze(my_predbat):
+    &quot;&quot;&quot;An inverter that cannot freeze export must not have a manual freeze export planned for it.
+
+    execute.py forces set_export_freeze off from the inverter's support_discharge_freeze capability
+    (TESLA declares it False), but this override wrote EXPORT_LIMIT_FREEZE regardless - so the plan
+    assumed a hold the hardware would never perform. Falls back to demand rather than a forced
+    export: the user asked to hold the battery, and exporting it would be the opposite request.
+    &quot;&quot;&quot;
+    setup(my_predbat)
+    my_predbat.set_export_freeze = False
+    my_predbat.manual_freeze_export_times = [720]
+    my_predbat.optimise_charge_windows_manual()
+    return check_export_limit(&quot;test_manual_freeze_export_dropped_when_inverter_cannot_freeze&quot;, my_predbat, EXPORT_LIMIT_IDLE)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Register the test and reset the switch it leaves behind</strong></li>
+</ul>
+<p><code>set_export_freeze</code> is read all over the planner and this module shares one <code>PredBat</code> instance with every other test module, so leaving it False would silently change later tests. The existing <code>finally</code> block exists for exactly this reason — extend it rather than adding a new one.</p>
+<p>In <code>run_manual_overrides_tests</code>, add the call alongside the other export tests:</p>
+<pre><code class="language-python">        failed |= test_manual_freeze_export_dropped_when_inverter_cannot_freeze(my_predbat)
+</code></pre>
+<p>and add to the existing <code>finally</code> block, beside the two switches already reset there:</p>
+<pre><code class="language-python">        my_predbat.set_export_freeze = True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Run the test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>tools/triage_test.sh manual_overrides /tmp/manual-test.log</code>
+Expected: FAIL, printing <code>ERROR: test_manual_freeze_export_dropped_when_inverter_cannot_freeze - export limit should be 100.0 got 99.0</code>.</p>
+<ul>
+<li>[ ] <strong>Step 4: Implement the guard</strong></li>
+</ul>
+<p>In <code>apps/predbat/plan.py</code>, replace lines 4405-4406:</p>
+<pre><code class="language-python">                elif self.export_window_best[window_n][&quot;start&quot;] in self.manual_freeze_export_times:
+                    self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
+</code></pre>
+<p>with:</p>
+<pre><code class="language-python">                elif self.export_window_best[window_n][&quot;start&quot;] in self.manual_freeze_export_times:
+                    if not self.set_export_freeze:
+                        # execute.py forces set_export_freeze off for an inverter whose INVERTER_DEF
+                        # says support_discharge_freeze is False, but this override wrote a freeze
+                        # anyway - so the plan assumed a hold the hardware cannot perform. Drop to
+                        # demand rather than a forced export: the user asked to hold the battery, and
+                        # exporting it is the opposite of that request (GH#4892).
+                        self.log(&quot;Warn: Manual freeze export time {} dropped to demand as this inverter does not support freeze export&quot;.format(self.time_abs_str(self.export_window_best[window_n][&quot;start&quot;])))
+                        self.export_limits_best[window_n] = EXPORT_LIMIT_IDLE
+                    else:
+                        self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>tools/triage_test.sh manual_overrides /tmp/manual-test.log</code>
+Expected: PASS, with all eight pre-existing tests in the module still passing.</p>
+<ul>
+<li>[ ] <strong>Step 6: Confirm no ordering pollution</strong></li>
+</ul>
+<p>Run the two modules that share planner state in one go and confirm both still pass:</p>
+<p>Run: <code>tools/triage_test.sh manual_overrides /tmp/manual-test.log</code> then <code>tools/triage_test.sh plan_tiebreak /tmp/plan-test.log</code>
+Expected: PASS for both. A test that passes alone but fails in a full run is the shared-instance pollution this module's <code>finally</code> block guards against.</p>
+<ul>
+<li>[ ] <strong>Step 7: Run the pre-commit suite</strong></li>
+</ul>
+<p>Run: <code>./run_pre_commit</code>
+Expected: all hooks pass.</p>
+<ul>
+<li>[ ] <strong>Step 8: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/plan.py apps/predbat/tests/test_manual_overrides.py
+git commit -m &quot;fix(plan): don't plan a manual freeze export on an inverter that cannot do it (#4892)&quot;
+</code></pre>
+<hr />
+<h2 id="verification-before-opening-the-pr">Verification before opening the PR</h2>
+<ul>
+<li>[ ] Run both touched test modules and confirm they pass:
+  <code>tools/triage_test.sh teslemetry /tmp/tesla-test.log</code> then <code>tools/triage_test.sh manual_overrides /tmp/manual-test.log</code></li>
+<li>[ ] Run <code>./run_pre_commit</code> from the repo root and confirm a clean pass.</li>
+<li>[ ] Run <code>detect_changes({scope: "compare", base_ref: "main"})</code> via the GitNexus MCP tool and confirm the affected symbols are only those this plan names — <code>build_signal_tariff</code>, <code>_signal_layout</code>, <code>_window_intervals</code>, <code>_charge_window</code>, <code>evaluate_schedule_tbc</code>, <code>evaluate_schedule</code>, <code>sync_tariff</code> and <code>optimise_charge_windows_manual</code>.</li>
+<li>[ ] Confirm by inspection that with <code>teslemetry_tbc_control</code> unset, <code>sync_tariff</code> and <code>evaluate_schedule</code> take exactly the paths they took before this work.</li>
+<li>[ ] State plainly in the PR description that the hardware behaviour is unverified, and list the five questions from the spec's "Hardware questions the trial must answer" section as what the trial needs to establish — in particular whether reserve 100 with grid charging disabled genuinely avoids importing, because the hold depends on it.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

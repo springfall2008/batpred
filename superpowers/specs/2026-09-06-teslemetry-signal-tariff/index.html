@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Teslemetry Signal Tariff (TBC control mode) — Spec - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Teslemetry Signal Tariff (TBC control mode) \u2014 Spec";
+        var mkdocs_page_input_path = "superpowers/specs/2026-09-06-teslemetry-signal-tariff.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Teslemetry Signal Tariff (TBC control mode) — Spec</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="teslemetry-signal-tariff-tbc-control-mode-spec">Teslemetry Signal Tariff (TBC control mode) — Spec</h1>
+<p><strong>Issue:</strong> <a href="https://github.com/springfall2008/batpred/issues/4892">https://github.com/springfall2008/batpred/issues/4892</a></p>
+<h2 id="problem">Problem</h2>
+<p>Predbat charges a Powerwall by asserting operation mode <code>backup</code> plus a raised
+<code>backup_reserve_percent</code> plus grid charging (<code>teslemetry.py:539</code>). Tesla firmware
+25.18.4 (mid-2025) throttled reserve-driven grid charging, so this path reaches
+roughly 3.3 kW per Powerwall against a 5 kW nameplate. The full rate is only
+reached when Tesla's own optimiser (Opticaster) decides to charge, under
+Time-Based Control in <code>autonomous</code> mode. The Fleet API exposes no direct
+"charge at N kW" command — the only levers are operation mode, backup reserve,
+the grid import/export flags, and the pushed time-of-use tariff.</p>
+<p>The same firmware change made backup reserve values of 81–99% invalid: they snap
+to 80%. Predbat currently forwards the charge target SoC as the reserve, so a
+target in that band cannot be set.</p>
+<h2 id="approach">Approach</h2>
+<p>Stop using the pushed tariff to describe real prices. Use it purely as a control
+signal that tells Opticaster when Predbat wants energy moved, and let Opticaster
+run the charge at full rate.</p>
+<h3 id="tariff-shape">Tariff shape</h3>
+<p>Three price levels, mirrored identically across all seven days of the week:</p>
+<table>
+<thead>
+<tr>
+<th>Band</th>
+<th>Buy (import)</th>
+<th>Sell (export)</th>
+<th>Applies to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cheap</td>
+<td>0p/kWh</td>
+<td>0p/kWh</td>
+<td>the committed charge window</td>
+</tr>
+<tr>
+<td>Peak</td>
+<td>100p/kWh</td>
+<td>100p/kWh</td>
+<td>the committed export window</td>
+</tr>
+<tr>
+<td>Base</td>
+<td>50p/kWh</td>
+<td>0p/kWh</td>
+<td>everything else</td>
+</tr>
+</tbody>
+</table>
+<p>Rationale for each choice:</p>
+<ul>
+<li><strong>Equal buy and sell inside each window.</strong> 0p/0p over the charge window stops
+  charge-then-immediately-export; 100p/100p over the export window stops
+  import-to-re-export. This preserves an invariant the existing code maintains
+  deliberately ("buy mirrors sell so it never grid-charges to re-export",
+  <code>teslemetry.py:1129</code>).</li>
+<li><strong>0p sell outside the windows.</strong> Deferring an export past the window end earns
+  nothing, which is a hard cliff rather than the gentle slope that let TBC defer
+  most of a discharge to the last half hour (#4887).</li>
+<li><strong>50p buy outside the windows.</strong> The most expensive non-export band, so there
+  is nothing to arbitrage from except the cheap window, and avoiding import is
+  worth more than anything else the battery could do.</li>
+<li><strong>Mirrored on all seven days.</strong> Matches the inverter contract Predbat already
+  has everywhere else (a daily repeating start/end time with no date), makes a
+  midnight-crossing window two ordinary intervals per day instead of
+  day-offset arithmetic, removes the day-of-week mapping that GH#4610 lived in,
+  and makes the tariff a pure function of the two windows — so it no longer
+  re-pushes at every midnight rollover purely because the day index changed.</li>
+</ul>
+<p>Only one charge window and one export window are ever mapped. The Predbat
+optimiser guarantees they never overlap, so no overlap resolution is needed.</p>
+<h3 id="device-state">Device state</h3>
+<p>Operation mode becomes <code>autonomous</code> in every state, because Opticaster only acts
+on the tariff under Time-Based Control.</p>
+<p>Reserve is the real reserve Predbat wrote, in every state — <code>automatic_config</code>
+binds the <code>reserve</code> arg to the <code>schedule_reserve</code> entity, so it is exactly what
+<code>adjust_reserve()</code> asked for. It is deliberately never the charge or export
+target: under this mode those targets are advisory, because Tesla decides how
+much energy actually moves, and window length is the lever for them.</p>
+<table>
+<thead>
+<tr>
+<th>Predbat state</th>
+<th>Reserve</th>
+<th>Grid charging</th>
+<th>Export rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Charge window, <code>soc &lt; target</code></td>
+<td>real reserve</td>
+<td>on (off if the reserve is itself a hold request)</td>
+<td><code>pv_only</code></td>
+</tr>
+<tr>
+<td>Charge window, <code>soc &gt;= target - 1</code> (hold)</td>
+<td>100</td>
+<td>off</td>
+<td><code>pv_only</code></td>
+</tr>
+<tr>
+<td>Export window, <code>soc &gt; target</code></td>
+<td>real reserve</td>
+<td>off</td>
+<td><code>battery_ok</code></td>
+</tr>
+<tr>
+<td>Export window, <code>soc &lt;= target</code></td>
+<td>real reserve</td>
+<td>off</td>
+<td><code>pv_only</code></td>
+</tr>
+<tr>
+<td>Demand (no window)</td>
+<td>real reserve</td>
+<td>off</td>
+<td><code>pv_only</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>The hold uses reserve 100 with grid charging disabled.</strong> Reserve 100 is the
+  only value above 80 Tesla still accepts, and it genuinely stops discharge;
+  disabling grid charging is what stops it importing to reach 100. Clamping to
+  80 instead would not hold — a battery at 85% would be free to discharge to
+  80%, up to 19% of the pack, during a window whose purpose is to hold SoC flat.
+  Freeze charge mostly fires when the battery is already well filled, so that is
+  the common case rather than an edge case.</li>
+<li><strong>A 1% deadband on the hold test.</strong> A freeze charge arrives as a charge window
+  whose target equals the SoC at the moment <code>execute.py</code> wrote it; house load
+  can drop SoC a fraction below that before the next cycle, which would
+  otherwise flip the state from hold back to charge and import against the 0p
+  band.</li>
+<li><strong>A reserve request in the 81–99 band rounds up to 100, not down to 80.</strong>
+  Predbat reaches that band itself: <code>execute.py:306</code>, <code>:593</code> and <code>:620</code> write
+  <code>adjust_reserve(min(soc_percent + 1, 100))</code> under <code>set_reserve_hold</code>, so a
+  battery at 85% asks for 86. That request means "hold above 80", and 80 would
+  not hold it — the battery would be free to discharge back down to 80. Rounding
+  up to 100 does hold, and the caller disables grid charging alongside so the
+  device cannot import to reach it. The hold and the band mapping are therefore
+  the same mechanism rather than two competing ones, and what Predbat models
+  matches what the battery honours — the divergence #4953/#4956 fixed for the
+  reserve floor generally.</li>
+<li><strong>Grid charging is off in every state except an active charge.</strong> The tariff
+  already discourages import elsewhere; turning the flag off makes it certain.</li>
+<li><strong>The tariff never depends on live SoC</strong>, only on the committed windows. If it
+  did, it would re-push as SoC moved and defeat the write-on-change dedupe.</li>
+</ul>
+<h3 id="freeze-export">Freeze export</h3>
+<p>Already handled and needs no new code: <code>INVERTER_DEF["TESLA"]</code> declares
+<code>"support_discharge_freeze": False</code> (<code>config.py:2209</code>), and
+<code>fetch_inverter_data()</code> forces <code>set_export_freeze</code> and <code>set_export_freeze_only</code>
+off from that flag every cycle before the planner reads them
+(<code>execute.py:962-966</code>).</p>
+<p>One gap remains: <code>manual_freeze_export</code> sets <code>EXPORT_LIMIT_FREEZE</code>
+unconditionally (<code>plan.py:4405-4406</code>) with no capability check, unlike the
+manual-export branch above it which does consult <code>set_export_freeze_only</code>. Under
+the signal tariff that would carve the 100p band over a window meant to hold.</p>
+<h2 id="scope-boundaries">Scope boundaries</h2>
+<p><strong>In scope:</strong> the synthetic tariff builder, the TBC device-state mapping, the
+trial setting that gates both, and the <code>manual_freeze_export</code> capability guard.</p>
+<p><strong>Out of scope, deliberately:</strong></p>
+<ul>
+<li><strong>Enforcing the charge or export target.</strong> With 0p import and a 100p export
+  window later, the rational move for Opticaster is to fill completely; a tariff
+  cannot express a ceiling, and reserve is left carrying the real reserve rather
+  than being overloaded as a floor at the export target. Both targets are
+  therefore advisory in this mode. The agreed lever is to shorten the window to
+  deliver the target kWh, deferred until the trial shows whether it matters. That work depends on <code>battery_rate_max</code> carrying the
+  achieved rate rather than the 5 kW nameplate, which <code>automatic_config</code>
+  currently overwrites every cycle whenever <code>teslemetry_automatic</code> is on.</li>
+<li><strong>Closing #4887.</strong> Within-window export deferral is still possible, since the
+  export window is still a single flat band.</li>
+<li><strong>Supervision fallback</strong> (detecting no SoC progress mid-window and reverting
+  to <code>backup</code> mode). Worth having, but it should be designed against what the
+  trial actually observes.</li>
+</ul>
+<h2 id="hardware-questions-the-trial-must-answer">Hardware questions the trial must answer</h2>
+<p>None of these can be settled by a unit test:</p>
+<ol>
+<li>Does Opticaster act on the 0p band, and how quickly? It re-plans every few
+   minutes.</li>
+<li>Is the resulting charge actually at or near 5 kW?</li>
+<li>Does reserve 100 with <code>disallow_charge_from_grid_with_solar_installed</code> set
+   genuinely avoid grid import? If it imports at the throttled rate anyway, the
+   hold is worse than leaking and the fallback is to clamp to 80 <strong>and model
+   80</strong>, so the plan does not assume a flat SoC the device will not deliver
+   (the divergence #4953/#4956 just fixed for the reserve floor).</li>
+<li>Does a 100p buy band suppress import during the export window?</li>
+<li>Does 0p export outside the windows cause solar curtailment rather than
+   export?</li>
+</ol>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

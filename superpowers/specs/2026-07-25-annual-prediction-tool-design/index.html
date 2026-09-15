@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Annual Prediction Tool — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Annual Prediction Tool \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-07-25-annual-prediction-tool-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Annual Prediction Tool — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="annual-prediction-tool-design">Annual Prediction Tool — Design</h1>
+<p>Date: 2026-07-25
+Status: Approved (design review complete)</p>
+<h2 id="goal">Goal</h2>
+<p>Add a standalone tool that projects a <strong>year</strong> of household electricity costs
+using the real Predbat planning engine, so a prospective or existing user can
+answer "what would a battery, or solar, or Predbat itself, actually save me
+over a year?" without owning any of the hardware.</p>
+<p>For each month the tool reports three scenarios:</p>
+<ol>
+<li><strong>No PV, no battery</strong> — the counterfactual bill.</li>
+<li><strong>PV and battery, without Predbat</strong> — a dumb battery charging on a static
+   cheap-rate timer.</li>
+<li><strong>PV and battery, with Predbat</strong> — the optimiser's plan.</li>
+</ol>
+<p>This spec covers the <strong>prediction engine only</strong>. The web UI that consumes its
+output is a separate, later piece of work; the design's job here is to leave a
+clean programmatic interface for it.</p>
+<h2 id="scope-decisions-agreed">Scope decisions (agreed)</h2>
+<ul>
+<li><strong>Packaged as shipped modules, not a dev script</strong> — new <code>annual_*.py</code> modules
+  in <code>apps/predbat/</code> plus a thin CLI, following the <code>compare.py</code> precedent, so
+  the web UI can import the engine directly later.</li>
+<li><strong>Drives the real <code>PredBat</code> object</strong> — the tool injects state and calls
+  <code>calculate_plan()</code> / <code>run_prediction()</code>. It does not re-implement the
+  optimiser. Numbers are defensible because they come from the same code that
+  runs live.</li>
+<li><strong>Two sampled days per month, configurable</strong> — chosen by irradiance
+  percentile, not by calendar position.</li>
+<li><strong>Real historical rates for the sampled date</strong> — genuine Agile/Tracker/Flux
+  shape and seasonal price movement.</li>
+<li><strong>Load is either synthetic or Octopus-derived, never both</strong> — providing an
+  Octopus API key together with <code>annual_kwh</code>/<code>car_charging_kwh</code> is a config
+  validation error.</li>
+<li><strong>Car charging is smart under Predbat, timer-driven in the baselines</strong> —
+  Predbat is credited only for what it wins over an off-peak timer.</li>
+<li><strong>Predbat plans on the archived forecast and is billed on actuals</strong> — it does
+  not get perfect foresight, and P10 comes from measured forecast error rather
+  than a constant.</li>
+</ul>
+<h2 id="architecture">Architecture</h2>
+<p>Six new flat modules in <code>apps/predbat/</code>. Flat <code>annual_</code> prefixing matches repo
+convention (no subpackages exist besides <code>tests/</code> and <code>config/</code>).</p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Responsibility</th>
+<th>Depends on</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>annual.py</code></td>
+<td><code>AnnualPredictor</code> orchestrator, public API, config validation</td>
+<td>all below, <code>PredBat</code></td>
+</tr>
+<tr>
+<td><code>annual_weather.py</code></td>
+<td>Open-Meteo actuals + forecast archive clients → per-day PV kW series per array, plus monthly P10 ratios</td>
+<td>shared GTI helper</td>
+</tr>
+<tr>
+<td><code>annual_load.py</code></td>
+<td><code>LoadProfileSource</code>: synthetic and Octopus-consumption implementations</td>
+<td><code>annual_profiles</code></td>
+</tr>
+<tr>
+<td><code>annual_profiles.py</code></td>
+<td>Embedded half-hourly domestic shape tables and monthly weights (data only)</td>
+<td>nothing</td>
+</tr>
+<tr>
+<td><code>annual_tariff.py</code></td>
+<td>Per-date rate resolution: Octopus URL or basic rates</td>
+<td><code>basic_rates()</code></td>
+</tr>
+<tr>
+<td><code>annual_cli.py</code></td>
+<td>Argument parsing, progress output, JSON and table writing</td>
+<td><code>annual</code></td>
+</tr>
+</tbody>
+</table>
+<p>The boundary that matters: <strong><code>annual.py</code> performs no HTTP.</strong> All network access
+lives in <code>annual_weather.py</code>, <code>annual_tariff.py</code> and <code>annual_load.py</code>. That keeps
+the web UI's future job to "build a config dict, call <code>AnnualPredictor.run()</code>,
+render the returned JSON", and lets every module be tested against fixtures
+rather than the network.</p>
+<p><code>annual_weather.py</code> never touches <code>PredBat</code>. <code>annual_tariff.py</code> does hold a
+<code>PredBat</code> reference, legitimately: it calls <code>resolve_arg()</code> to expand a
+templated Octopus URL and <code>basic_rates()</code> to expand a static rate structure -
+both listed as its dependency above - rather than reimplementing either. That
+reference is used only for those two calls, never to drive a plan or touch
+live state, so it does not compromise the no-HTTP boundary above.</p>
+<p>HTTP responses are cached through the Storage component's <code>fetch_cached()</code>
+(per CLAUDE.md, never direct file access): one cached blob per array-year per
+source for weather — actuals and forecast are separate entries — and one per
+tariff-month for rates.</p>
+<h3 id="public-interface">Public interface</h3>
+<pre><code class="language-python">class AnnualPredictor:
+    def __init__(self, config: dict, log=None, storage=None): ...
+    async def run(self, progress=None) -&gt; dict: ...
+</code></pre>
+<p><code>progress</code> is an optional callable receiving <code>(completed, total, message)</code> so
+the future web UI can stream status. <code>run()</code> returns the results document
+described under "Results" below.</p>
+<h2 id="reused-existing-code">Reused existing code</h2>
+<p>The tool leans on four things that already exist, rather than reinventing them:</p>
+<ul>
+<li><strong><code>calculate_yesterday()</code></strong> (<code>apps/predbat/output.py</code>) already runs exactly
+  these three scenarios against a past day — zeroed-PV/<code>soc_max=0</code> for the
+  no-system case, a cheapest-window dumb charge for the baseline, and the
+  optimised plan. It is the template for the per-sample execution.</li>
+<li><strong><code>Compare.apply_hardware_overrides()</code></strong> (<code>apps/predbat/compare.py</code>) already
+  maps battery kWh / charge rate / inverter limit onto a <code>PredBat</code> instance.</li>
+<li><strong>The battery-value correction</strong> <code>metric_end − metric_start</code> via
+  <code>compute_metric()</code>, as <code>Compare.run_scenario()</code> applies it.</li>
+<li><strong>The GTI→kW model</strong> in <code>apps/predbat/solcast.py</code> (<code>download_open_meteo_data</code>).</li>
+</ul>
+<p><code>Compare</code> itself is <em>not</em> reused as a class: it is coupled to
+<code>fetch_sensor_data()</code> and live inverter state, and plans "now → +48h" rather
+than an arbitrary historical date. Bending it to serve a second purpose would
+damage it.</p>
+<h2 id="inputs">Inputs</h2>
+<p>A single YAML file, or the equivalent dict from the future web UI. Every
+optional field has a stated default so a minimal config is short.</p>
+<pre><code class="language-yaml">annual:
+  location:
+    postcode: &quot;SW1A 1AA&quot;        # or latitude/longitude; resolved via postcodes.io
+  year: 2025                     # defaults to the most recent complete calendar year
+
+  solar:                         # list — multiple arrays supported; omit for battery-only
+    - kwp: 5.6
+      declination: 35            # pitch in degrees. Default 35
+      azimuth: 180               # 180 = south. Default 180
+      efficiency: 0.95           # system loss. Default 0.95
+
+  battery:                       # omit entirely for a PV-only run
+    size_kwh: 9.5
+    inverter_kw: 5.0
+    export_limit_kw: 5.0
+    hybrid: true                 # false = AC coupled
+    charge_rate_kw: 3.6          # defaults to inverter_kw
+    discharge_rate_kw: 3.6       # defaults to inverter_kw
+
+  load:
+    annual_kwh: 3800             # mutually exclusive with load.octopus
+    shape: flat                  # night | day | flat
+    car_charging_kwh: 2500       # annual; 0 to disable
+    octopus:                     # mutually exclusive with annual_kwh/car_charging_kwh
+      api_key: !secret octopus_key
+      account_id: A-1234ABCD
+
+  tariff:
+    import_octopus_url: &quot;https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/&quot;
+    export_octopus_url: &quot;...&quot;
+    # or: rates_import: [{start: &quot;00:30:00&quot;, end: &quot;05:30:00&quot;, rate: 7.0}, ...]
+    standing_charge_p_per_day: 60.0
+
+  samples_per_month: 2
+  pv10_derate_fallback: 0.7      # only used when the forecast archive lacks the year
+</code></pre>
+<h3 id="input-rules">Input rules</h3>
+<ul>
+<li><strong>Battery and solar are each optional.</strong> Omitting <code>battery:</code> produces a
+  two-scenario run (no-PV/no-battery versus PV-only); omitting <code>solar:</code>
+  produces a battery-only run. The tool must not force the user to configure
+  the very thing they are trying to evaluate.</li>
+<li><strong><code>load.octopus</code> versus <code>load.annual_kwh</code> is exclusive</strong>, and supplying both
+  is rejected at config-load time with a clear message. The Octopus consumption
+  series already contains any car charging, so accepting both would
+  double-count it. The consequence — a real-data user gets an accurate baseline
+  but no separately smart-planned EV — is documented in the CLI help and the
+  results document.</li>
+<li><strong><code>{dno_region}</code> is resolved</strong> through Predbat's existing region mechanism, so
+  a postcode selects the correct regional tariff. Silently defaulting to region
+  A would quote the wrong prices with no visible symptom.</li>
+<li><strong>Secrets are scrubbed</strong> from the results document and any debug output,
+  matching the existing <code>_key</code> / <code>password</code> redaction in <code>create_debug_yaml()</code>.</li>
+<li><strong><code>year</code> is accepted for any date the actuals archive covers</strong>, but years
+  before the forecast archive begins (around 2021–2022) lose the forecast
+  grounding and fall back as described under "P10 estimate". The default — the
+  most recent complete calendar year — is always within coverage.</li>
+</ul>
+<h2 id="data-flow">Data flow</h2>
+<h3 id="1-weather">1. Weather</h3>
+<p><strong>Two</strong> Open-Meteo requests per array, each covering the whole year plus one
+buffer day (the last sampled day needs a following day for its 48h plan). Both
+endpoints serve <code>global_tilted_irradiance</code> with <code>tilt</code> / <code>azimuth</code> and both
+accept <code>start_date</code> / <code>end_date</code>.</p>
+<p><strong>Actuals</strong> — ERA5 reanalysis, what genuinely happened. Data back to 1940.</p>
+<pre><code>https://archive-api.open-meteo.com/v1/archive?latitude=..&amp;longitude=..
+  &amp;start_date=YYYY-01-01&amp;end_date=YYYY+1-01-01
+  &amp;hourly=global_tilted_irradiance,temperature_2m,wind_speed_10m
+  &amp;tilt=..&amp;azimuth=..&amp;wind_speed_unit=ms&amp;timezone=UTC
+</code></pre>
+<p><strong>Forecast</strong> — the archived short-range forecast for those same past dates, i.e.
+what Predbat would actually have been looking at. Coverage starts around
+2021–2022 depending on model.</p>
+<pre><code>https://historical-forecast-api.open-meteo.com/v1/forecast?latitude=..&amp;longitude=..
+  &amp;start_date=YYYY-01-01&amp;end_date=YYYY+1-01-01
+  &amp;hourly=global_tilted_irradiance,temperature_2m,wind_speed_10m
+  &amp;tilt=..&amp;azimuth=..&amp;wind_speed_unit=ms&amp;timezone=UTC
+</code></pre>
+<p>The field names match the live forecast endpoint already used, so one conversion
+serves all three.</p>
+<p><strong>The GTI→kW conversion is extracted, not copied.</strong> The cell-temperature model,
+the −0.4%/°C derate, the trapezoidal hourly integration, and <code>convert_azimuth</code>
+move out of <code>SolarAPI.download_open_meteo_data()</code> into a shared helper that both
+<code>solcast.py</code> and <code>annual_weather.py</code> call. Duplicating it would guarantee the
+two drift; the azimuth convention in particular (Open-Meteo uses 0 = south) is
+easy to get silently wrong and produces plausible-looking but incorrect output.</p>
+<p>Open-Meteo's Previous Runs API would give cleaner fixed-lead-time forecasts, but
+it accepts only <code>past_days</code> rather than a date range, so it cannot reach an
+arbitrary past year. It is not used.</p>
+<h4 id="plan-on-forecast-bill-on-actuals">Plan on forecast, bill on actuals</h4>
+<p>Predbat plans against the <strong>forecast</strong> series and is costed against the
+<strong>actuals</strong> series. Without this the tool would grant Predbat perfect foresight
+and overstate what it can really achieve.</p>
+<p>Mechanically: <code>calculate_plan()</code> runs with <code>pv_forecast_minute</code> set to the
+forecast series; then, before the costing <code>run_prediction()</code>, <code>self.prediction</code>
+is rebuilt from the actuals step data and the plan's best windows are replayed
+against it. This is the same Prediction-swap that <code>calculate_yesterday()</code> and
+<code>Compare.run_scenario()</code> already perform.</p>
+<p>This applies to scenario 3 only. Scenario 1 has no PV, and scenario 2's charge
+window is derived from rates rather than from the PV forecast, so neither
+depends on forecast quality — both run directly on actuals. <code>pv_generated_kwh</code>
+in the results is always taken from the actuals series.</p>
+<h4 id="p10-estimate">P10 estimate</h4>
+<p>The archive exposes no ensemble members, so P10 is derived from <strong>measured
+forecast error</strong>. For each month, the daily energy ratio
+<code>r = actual_kWh / forecast_kWh</code> is computed across every day of that month; the
+10th percentile of <code>r</code> becomes that month's <code>p10_ratio</code>, and the planning P10
+series is the forecast series scaled by it (clamped to ≤ 1). Location- and
+season-specific, and grounded in data rather than a constant.</p>
+<p>Why this matters more than it looks: because the plan is costed against a fixed
+actuals series, hedging can only ever <em>add</em> cost — a pessimistic P10 makes
+Predbat over-charge and understates its own savings, while <code>P10 = P50</code> yields a
+perfect-foresight upper bound. P10 is therefore not a free parameter, and it
+must not be derived from within-month climatological spread, which is far wider
+than 24-hour-ahead forecast error and would bias the tool against itself.</p>
+<p>Two honest caveats, recorded in the results document:</p>
+<ul>
+<li>The forecast-versus-ERA5 gap includes systematic model bias, not purely
+  forecast error, so measured uncertainty is slightly overstated.</li>
+<li>P90 is not used. The planner consumes only <code>pv_forecast_minute</code> and
+  <code>pv_forecast_minute10</code>; P90 reaches no decision, so computing it would be
+  decoration.</li>
+</ul>
+<p><strong>Fallback.</strong> If the forecast archive does not cover the requested year, the
+tool logs a clear warning, plans on actuals, and applies a flat
+<code>pv10_derate_fallback</code> (default 0.7 — <code>solcast.py</code>'s existing no-ensemble
+fallback). The results document records that the fallback was used, so a
+degraded run is never mistaken for a grounded one.</p>
+<h3 id="2-load">2. Load</h3>
+<p><code>annual_load.py</code> produces a <strong>forward cumulative kWh series keyed by absolute
+minute</strong>, assigned to <code>load_forecast</code>, with <code>load_forecast_only = True</code>.</p>
+<p>This is the clean injection point: with <code>load_forecast_only</code> set,
+<code>step_data_history()</code> ignores historical load entirely
+(<code>apps/predbat/fetch.py</code>, in the <code>type_load and not forward</code> branch) and builds
+the forward profile purely from <code>load_forecast</code>, which it reads via
+<code>get_from_incrementing(..., backwards=False)</code>. No synthetic backwards history
+needs to be fabricated.</p>
+<p><strong>Synthetic path.</strong> <code>annual_kwh × month_weight[m] / days_in_month</code> gives the
+day's kWh, multiplied by a 48-point half-hourly domestic shape. The night/day
+shape setting tilts energy between the 00:00–07:00 band and the daytime band
+while preserving the daily total exactly — an invariant with a dedicated test.
+The tilt magnitude is a named constant in <code>annual_profiles.py</code> (a fixed
+proportion of the day's energy moved between bands) so it can be tuned against
+real data without touching the tilt logic. Monthly weights carry the
+winter/summer split, which drives much of the annual answer.</p>
+<p><code>annual_profiles.py</code> holds these tables as data only, with no logic, so they can
+be revised against real measurements without touching behaviour.</p>
+<p><strong>Octopus path.</strong> Account lookup resolves MPAN and meter serial, then the
+half-hourly consumption endpoint supplies each sampled date directly. Gaps fall
+back to the synthetic profile for that date and are logged.</p>
+<h3 id="3-tariff">3. Tariff</h3>
+<p>One fetch per tariff per month using <code>period_from</code> / <code>period_to</code>, sliced per
+sampled day. Per-month rather than per-day fetching keeps the API call count
+low; the existing pagination handling in <code>download_octopus_rates_func()</code> still
+applies. Basic rates go through <code>basic_rates()</code> unchanged.</p>
+<h3 id="4-sample-selection">4. Sample selection</h3>
+<p>Within each month, every day's total PV kWh from the <strong>actuals</strong> series is
+summed across all arrays and the days sorted ascending — ranking on the forecast
+would select days by what was predicted rather than by what the month really
+contained. For <code>N</code> samples, the day at percentile <code>(i + 0.5) / N</code>
+is taken for <code>i</code> in <code>0..N-1</code> — so <code>N=2</code> picks the 25th and 75th percentile days,
+each representing exactly half the month. Selection is fully deterministic; the
+same config always yields the same days.</p>
+<p>Days without a valid following day are excluded from the candidate set, since
+the 48h plan requires one.</p>
+<h3 id="5-per-sample-execution">5. Per-sample execution</h3>
+<p>State is reset, then <code>midnight_utc = D</code>, <code>minutes_now = 0</code>,
+<code>forecast_minutes = 48 * 60</code>, <code>end_record = 24 * 60</code>. Three scenarios run
+against the same day:</p>
+<ol>
+<li><strong>No PV, no battery</strong> — <code>Prediction(..., pv_zero, pv_zero, load, load,
+   soc_kw=0, soc_max=0)</code> then <code>run_prediction([], [], [], [])</code>.</li>
+<li><strong>Without Predbat</strong> — dumb battery: the cheapest static charge window from
+   <code>compute_rate_low_for_yesterday()</code> + <code>rate_scan_window()</code>, capped at
+   <code>calculate_savings_max_charge_slots</code>, charging to 100%, with no export
+   optimisation.</li>
+</ol>
+<p>The car, where configured, charges in scenarios 1 and 2 on a fixed timer: the
+same cheapest static window scenario 2 derives for the battery, extended as
+needed to fit the session's kWh at the configured charge rate. Scenario 1 uses
+that identical window even though it has no battery, so the only difference
+between the three scenarios is the system being evaluated. Only scenario 3
+plans the car smartly.</p>
+<h4 id="charging-is-episodic-not-a-daily-trickle">Charging is episodic, not a daily trickle</h4>
+<p>Spreading the annual car figure evenly across 365 days is wrong in a way that
+matters. A 2,500 kWh/year smear is 6.85 kWh/day — under an hour at 7.4 kW —
+which fits trivially inside any cheap overnight window, so the dumb timer gets
+the cheap rate too and the gap between it and Predbat collapses to nothing. Real
+owners charge in sessions of 20-40 kWh that can overflow a short cheap band
+(Flux, Cosy), forcing part onto expensive rates under a timer while Predbat
+splits the load across the cheapest half-hours. That overflow is where smart
+charging earns its money, and smearing deletes it.</p>
+<p>The schedule is derived, not configured:</p>
+<ul>
+<li>One session per week by default, carrying the whole week's energy.</li>
+<li>If that session would exceed <strong>six hours</strong> at the configured charge rate, split
+  into as many sessions per week as needed to bring each under six hours,
+  capped at seven (daily).</li>
+</ul>
+<p>Each sampled day is then planned <strong>twice</strong> — once carrying a full session, once
+with no car — and the two results are blended by how often charging actually
+happens: <code>cost = f × with_car + (1 − f) × without_car</code>, where
+<code>f = sessions_per_week / 7</code>. Blending per sampled day rather than dedicating
+separate sample days keeps the irradiance stratification intact; every cost and
+energy field blends linearly, and <code>pv_generated_kwh</code> is identical in both legs.</p>
+<p>This doubles the plan count for configs with a car (24 → 48 runs/year). Configs
+without one are unaffected.
+3. <strong>With Predbat</strong> — <code>calculate_plan(recompute=True, publish=False)</code> then
+   <code>run_prediction(charge_limit_best, charge_window_best, export_window_best,
+   export_limits_best)</code>. The car uses real smart slot planning.</p>
+<p>Each is billed over the <strong>first 24 hours only</strong>; the second day exists purely as
+lookahead so the optimiser does not artificially drain the battery at the
+horizon. Leftover or consumed charge is valued via the <code>compute_metric</code>
+correction (<code>metric_end − metric_start</code>), so ending on a full battery is not
+free.</p>
+<h3 id="6-state-isolation">6. State isolation</h3>
+<p>This is the principal risk of driving the real <code>PredBat</code> object. <code>PredBat</code> is a
+large mutable object and derived state leaks between runs — the debug-case
+harness already documents this for <code>dynamic_load_baseline</code> and
+<code>battery_rate_max_export</code> (<code>apps/predbat/tests/test_single_debug.py</code>).</p>
+<p>Between samples the tool resets an explicit allow-list of mutable fields, and a
+test asserts that a single month run in isolation produces output identical to
+that same month within a full-year run. Without that test this class of bug is
+invisible: results stay plausible while silently depending on run order.</p>
+<h2 id="results">Results</h2>
+<p>Monthly cost for a scenario is <code>Σ over samples (sample_daily_cost ×
+days_in_month / N)</code>. Stratified percentile sampling gives each sample an equal
+share of the month, so the weights are uniform.</p>
+<p>Per month, per scenario:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cost_p</code></td>
+<td><code>run_prediction</code> metric, battery-value corrected, excluding standing charge</td>
+</tr>
+<tr>
+<td><code>import_kwh</code></td>
+<td><code>import_kwh_battery + import_kwh_house</code></td>
+</tr>
+<tr>
+<td><code>export_kwh</code></td>
+<td><code>export_kwh</code></td>
+</tr>
+<tr>
+<td><code>export_credit_p</code></td>
+<td><code>export_kwh</code> valued at the export rate</td>
+</tr>
+<tr>
+<td><code>pv_generated_kwh</code></td>
+<td>summed <code>pv_forecast_minute_step</code> over the billed 24h</td>
+</tr>
+<tr>
+<td><code>self_consumed_kwh</code></td>
+<td><code>pv_generated_kwh − export_kwh</code>, clamped at 0</td>
+</tr>
+<tr>
+<td><code>battery_throughput_kwh</code></td>
+<td><code>battery_cycle</code></td>
+</tr>
+<tr>
+<td><code>standing_charge_p</code></td>
+<td><code>standing_charge_p_per_day × days_in_month</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>standing_charge_p</code> is identical across scenarios and reported separately, so
+savings comparisons are not diluted by a fixed cost neither system affects.</p>
+<p><code>self_consumed_kwh</code> is an approximation: when the battery exports grid-charged
+energy, <code>export_kwh</code> exceeds the PV contribution and self-consumption is
+understated. This is documented in the field description rather than papered
+over with a decomposition the prediction does not actually track.</p>
+<p>Annual totals are the sum of the twelve months, plus two derived savings
+figures: PV+battery versus no-PV/no-battery, and Predbat versus without-Predbat.</p>
+<p>Output is a JSON document — the future web UI's input — and a human-readable
+table on stdout. <code>--debug</code> additionally retains the per-sample HTML plans; off
+by default, since 24 retained plans make the payload large.</p>
+<h2 id="failure-handling">Failure handling</h2>
+<p><strong>Failures are visible, never silent.</strong></p>
+<table>
+<thead>
+<tr>
+<th>Condition</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Missing archive weather for a sampled day</td>
+<td>Substitute the next-nearest day within the same percentile stratum; log it</td>
+</tr>
+<tr>
+<td>Forecast archive does not cover the requested year</td>
+<td>Plan on actuals with <code>pv10_derate_fallback</code>; warn, and record the degradation in the results document</td>
+</tr>
+<tr>
+<td>Forecast archive has gaps within a covered year</td>
+<td>Exclude those days from the month's <code>p10_ratio</code> sample; if fewer than seven days remain, fall back for that month and record it</td>
+</tr>
+<tr>
+<td>Missing rate data for a month</td>
+<td>Mark the month <code>"status": "unavailable"</code>, exclude it from annual totals, and state the exclusion in the printed output</td>
+</tr>
+<tr>
+<td>Octopus consumption gap for a sampled date</td>
+<td>Fall back to the synthetic profile for that date; log it</td>
+</tr>
+<tr>
+<td>Octopus account lookup failure</td>
+<td>Fail the run with a clear message rather than silently degrading to synthetic</td>
+</tr>
+</tbody>
+</table>
+<p>A month must never quietly become zero. A zero month reads as "free
+electricity" in a chart, and the user has no way to tell it apart from a real
+result.</p>
+<h2 id="testing">Testing</h2>
+<p>All tests run offline against fixtures and are registered in <code>TEST_REGISTRY</code> in
+<code>unit_test.py</code>, following the <code>tests/test_&lt;feature&gt;.py</code> convention.</p>
+<ul>
+<li><strong>Load profile</strong> — shape tilts preserve the daily total exactly; the twelve
+  monthly totals sum to <code>annual_kwh</code>.</li>
+<li><strong>Weather</strong> — fixture GTI converts to known kW; the extracted shared helper
+  produces output identical to <code>solcast.py</code>'s current path for the same inputs.
+  This is what prevents the extraction being a silent regression.</li>
+<li><strong>P10 derivation</strong> — a fixture pair of forecast and actual series yields the
+  expected monthly <code>p10_ratio</code>; a year outside forecast-archive coverage falls
+  back to <code>pv10_derate_fallback</code> and flags the degradation.</li>
+<li><strong>Plan-on-forecast, bill-on-actuals</strong> — with a deliberately inflated forecast
+  series, scenario 3's reported cost and <code>pv_generated_kwh</code> track the actuals,
+  not the forecast. Without this test the Prediction swap could silently be
+  skipped and every result would quietly assume perfect foresight.</li>
+<li><strong>Sample selection</strong> — deterministic percentile picks for a known irradiance
+  series; correct handling of a month with missing days.</li>
+<li><strong>Config validation</strong> — Octopus key plus manual load is rejected; a missing
+  <code>battery:</code> block yields a two-scenario run; <code>{dno_region}</code> resolves.</li>
+<li><strong>Scenario ordering</strong> — on a synthetic day,
+  <code>predbat_cost ≤ without_predbat_cost ≤ no_pvbat_cost</code>.</li>
+<li><strong>State isolation</strong> — a single month run in isolation matches that month
+  within a full-year run.</li>
+<li><strong>Rate fetch</strong> — <code>period_from</code> / <code>period_to</code> slicing and pagination against a
+  fixture.</li>
+</ul>
+<h2 id="performance">Performance</h2>
+<p>Twelve months at two samples is 24 <code>calculate_plan()</code> runs, roughly one to three
+minutes. <code>AnnualPredictor.run()</code> accepts a progress callback so the later web UI
+can stream status rather than block on a silent request.</p>
+<h2 id="out-of-scope">Out of scope</h2>
+<ul>
+<li>The web UI (separate, later work).</li>
+<li>Heat pump, iBoost, or gas modelling.</li>
+<li>Multi-year averaging or typical-meteorological-year construction.</li>
+<li>A P90-based confidence band on the monthly figures. The forecast-error
+  distribution would support one, but nothing consumes it and no decision
+  depends on it.</li>
+<li>Tariff recommendation — the tool evaluates the tariff it is given.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Annual Pages, Run Comparison and Split Plan Storage — Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Annual Pages, Run Comparison and Split Plan Storage \u2014 Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-07-28-annual-pages-and-compare.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Annual Pages, Run Comparison and Split Plan Storage — Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="annual-pages-run-comparison-and-split-plan-storage-implementation-plan">Annual Pages, Run Comparison and Split Plan Storage — Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Split the Annual tab into three navigable pages (configure / view / compare), add a run-comparison table, and move captured debug plans out of the results document.</p>
+<p><strong>Architecture:</strong> The storage layer gains a per-run <code>summary</code> on the index (so the compare table never reads a run document) and splits captured plans into one key per leg (so <code>/annual_plan</code> reads ~177 KB rather than 4–8 MB). The engine, the CLI and the results-document schema are untouched — the split happens at <code>save_run</code>, the storage boundary. The web layer's single page handler becomes three, sharing a tab strip.</p>
+<p><strong>Tech Stack:</strong> Python 3, aiohttp, the Storage abstraction.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-07-28-annual-pages-and-compare-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li><strong>Storage has no <code>delete</code> method.</strong> <code>_discard_run</code> overwrites with <code>None</code> and a past expiry so <code>storage.cleanup()</code> can reclaim later, preferring <code>delete</code> when a backend provides one. Anything new that is stored must be discarded the same way.</li>
+<li><strong>Never read a run's figures from anywhere but that run.</strong> The compare table and the run-details table both describe stored runs; taking a value from the live form or another run misattributes every figure on the row. This has already been a defect once on this branch.</li>
+<li><strong>A figure that cannot be computed is shown as "—" or "does not pay back", never as a number or a zero.</strong> A zero reads as "free", which is the opposite of "unknown".</li>
+<li><strong>The engine, <code>annual_cli.py</code>, and the results-document schema do not change.</strong> The engine emits plans embedded (that is the transport); only <code>save_run</code> splits them out.</li>
+<li><strong>Backward compatibility is required.</strong> Runs stored before this change have plans embedded and no <code>summary</code>. They must stay viewable and comparable, not silently lose data.</li>
+<li><strong>The compare page must not write storage when nothing changed.</strong> Backfill writes the index once per visit, and only if it actually filled something in.</li>
+<li>Line length 256 (Black) / 250 (Flake8); 100% docstrings (<code>interrogate</code>); British English (CSpell).</li>
+<li>Tests live in <code>apps/predbat/tests/</code>, registered in <code>TEST_REGISTRY</code> in <code>apps/predbat/unit_test.py</code>. <strong>Always redirect test output to a file and grep the file</strong> — never pipe straight to grep.</li>
+<li><strong>Registry names are not file names.</strong> <code>./run_all --test web_annual</code> runs ONLY <code>test_web_annual</code>. Use <code>./run_all -k web_annual</code> / <code>-k annual</code>, and confirm new assertions ran by grepping the output file for their printed "Test: ..." lines. A green run does not prove your test executed.</li>
+<li>Run pre-commit as <code>coverage/venv/bin/pre-commit run --files &lt;paths&gt;</code>; <code>--all-files</code> silently skips untracked files.</li>
+<li><strong>Verify new tests discriminate.</strong> Break the code the test covers, confirm the test fails, restore, and verify with <code>git diff</code> that nothing was left broken. Defects have shipped green on this branch three times because assertions matched broken code, and one implementer crashed leaving a deliberate mutation in production code.</li>
+</ul>
+<hr />
+<h3 id="task-1-run-summaries-on-the-index">Task 1: Run summaries on the index</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/annual_store.py</code>
+- Test: <code>apps/predbat/tests/test_annual_store.py</code></p>
+<p><strong>Interfaces produced:</strong>
+- <code>build_summary(results, config) -&gt; dict</code>
+- <code>save_run</code> writes <code>summary</code> onto the index entry
+- <code>backfill_summaries(storage, runs) -&gt; list</code> — returns the runs with summaries filled, writing the index back at most once</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_annual_store.py</code>:</p>
+<pre><code class="language-python">    print(&quot;Test: build_summary lifts the headline figures off a results document&quot;)
+    results = {
+        &quot;annual&quot;: {
+            &quot;scenarios&quot;: {&quot;no_pvbat&quot;: {&quot;cost_p&quot;: 180000.0}, &quot;with_predbat&quot;: {&quot;cost_p&quot;: 66000.0}},
+            &quot;months_included&quot;: 12,
+            &quot;costs&quot;: {&quot;total_kwp&quot;: 5.6, &quot;battery_kwh&quot;: 9.5},
+            &quot;payback&quot;: {
+                &quot;available&quot;: True,
+                &quot;pv_only&quot;: {&quot;pays_back&quot;: True, &quot;years&quot;: 17.8},
+                &quot;pv_battery&quot;: {&quot;pays_back&quot;: True, &quot;years&quot;: 13.61},
+                &quot;pv_battery_predbat&quot;: {&quot;pays_back&quot;: False, &quot;years&quot;: None},
+            },
+        }
+    }
+    config = {&quot;tariff&quot;: {&quot;import_octopus_url&quot;: &quot;https://api.octopus.energy/v1/products/AGILE-24-10-01/x/&quot;}}
+    summary = build_summary(results, config)
+    if summary[&quot;total_kwp&quot;] != 5.6 or summary[&quot;battery_kwh&quot;] != 9.5:
+        print(&quot;  ERROR: the summary should carry the system size, got {}&quot;.format(summary))
+        failed = True
+    if summary[&quot;cost_with_predbat_p&quot;] != 66000.0:
+        print(&quot;  ERROR: expected the with_predbat cost, got {}&quot;.format(summary))
+        failed = True
+    if summary[&quot;saving_vs_none_p&quot;] != 114000.0:
+        print(&quot;  ERROR: saving should be no_pvbat minus with_predbat, got {}&quot;.format(summary))
+        failed = True
+    if summary[&quot;payback_years&quot;][&quot;pv_battery&quot;] != 13.61:
+        print(&quot;  ERROR: expected the pv_battery payback, got {}&quot;.format(summary))
+        failed = True
+    if summary[&quot;payback_years&quot;][&quot;pv_battery_predbat&quot;] is not None:
+        print(&quot;  ERROR: a row that does not pay back must carry None, not a number, got {}&quot;.format(summary))
+        failed = True
+
+    print(&quot;Test: a run with no usable month summarises as unknown rather than zero&quot;)
+    empty = build_summary({&quot;annual&quot;: {&quot;scenarios&quot;: None, &quot;months_included&quot;: 0}}, {})
+    if empty[&quot;cost_with_predbat_p&quot;] is not None or empty[&quot;saving_vs_none_p&quot;] is not None:
+        print(&quot;  ERROR: no usable month means unknown, not zero, got {}&quot;.format(empty))
+        failed = True
+
+    print(&quot;Test: an unavailable payback keeps its reason for the compare table to show&quot;)
+    unavailable = build_summary({&quot;annual&quot;: {&quot;scenarios&quot;: {&quot;no_pvbat&quot;: {&quot;cost_p&quot;: 10.0}, &quot;with_predbat&quot;: {&quot;cost_p&quot;: 5.0}}, &quot;months_included&quot;: 11, &quot;payback&quot;: {&quot;available&quot;: False, &quot;reason&quot;: &quot;Payback needs a full year, but only 11 of 12 months could be modelled.&quot;}}}, {})
+    if unavailable[&quot;payback_years&quot;] != {} or &quot;11 of 12&quot; not in (unavailable.get(&quot;payback_reason&quot;) or &quot;&quot;):
+        print(&quot;  ERROR: an unavailable payback should carry its reason, got {}&quot;.format(unavailable))
+        failed = True
+
+    print(&quot;Test: save_run records the summary on the index entry&quot;)
+    storage = FakeStorage()
+    await_result = run_async(save_run(storage, results, config, &quot;20260728-090000&quot;))
+    index = run_async(list_runs(storage))
+    if not index or not index[0].get(&quot;summary&quot;):
+        print(&quot;  ERROR: save_run should record a summary, got {}&quot;.format(index))
+        failed = True
+
+    print(&quot;Test: backfill fills a summary-less entry from its document and writes the index back once&quot;)
+    storage = FakeStorage()
+    run_async(save_run(storage, results, config, &quot;20260728-090100&quot;))
+    # Simulate a run stored before summaries existed.
+    stale = run_async(list_runs(storage))
+    stale[0].pop(&quot;summary&quot;, None)
+    run_async(storage.save(STORAGE_MODULE, INDEX_NAME, stale, format=&quot;json&quot;))
+    writes_before = len(storage.save_calls)
+    filled = run_async(backfill_summaries(storage, run_async(list_runs(storage))))
+    if not filled[0].get(&quot;summary&quot;):
+        print(&quot;  ERROR: backfill should fill the missing summary, got {}&quot;.format(filled))
+        failed = True
+    if len(storage.save_calls) != writes_before + 1:
+        print(&quot;  ERROR: backfill should write the index exactly once, got {} writes&quot;.format(len(storage.save_calls) - writes_before))
+        failed = True
+
+    print(&quot;Test: backfill writes nothing when every entry already has a summary&quot;)
+    writes_before = len(storage.save_calls)
+    run_async(backfill_summaries(storage, run_async(list_runs(storage))))
+    if len(storage.save_calls) != writes_before:
+        print(&quot;  ERROR: a compare page that changes nothing must not write storage, got {} writes&quot;.format(len(storage.save_calls) - writes_before))
+        failed = True
+</code></pre>
+<p>Match the module's existing helpers for <code>FakeStorage</code> and <code>run_async</code> — read the file first and reuse what is there rather than adding new ones. <code>FakeStorage</code> must record <code>save_calls</code>; if the existing fake does not, add that to it.</p>
+<p>The module currently imports <code>from annual_store import INDEX_NAME, MAX_RUNS, STORAGE_MODULE, build_label, list_runs, load_run, save_run</code> — extend that with <code>build_summary</code> and <code>backfill_summaries</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run and watch it fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k annual_store &gt; /tmp/t.txt 2&gt;&amp;1; grep -iE &quot;  ERROR|ImportError|NameError&quot; /tmp/t.txt
+</code></pre>
+<p>Expected: <code>ImportError</code> for <code>build_summary</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement <code>build_summary</code></strong></li>
+</ul>
+<p>In <code>apps/predbat/annual_store.py</code>:</p>
+<pre><code class="language-python">def build_summary(results, config):
+    &quot;&quot;&quot;Return the headline figures the compare table shows for one run.
+
+    Read once at save time and cached on the index entry, so comparing twenty runs
+    reads one small index rather than twenty results documents - a debug run's
+    document is several megabytes.
+
+    Every figure is None when it could not be computed, never zero: the compare table
+    renders None as &quot;-&quot; and a zero as a real cost, and confusing &quot;we do not know&quot; with
+    &quot;it costs nothing&quot; is exactly the failure this tool avoids elsewhere.
+    &quot;&quot;&quot;
+    annual = (results or {}).get(&quot;annual&quot;) or {}
+    scenarios = annual.get(&quot;scenarios&quot;) or {}
+    costs = annual.get(&quot;costs&quot;) or {}
+    payback = annual.get(&quot;payback&quot;) or {}
+
+    baseline = (scenarios.get(&quot;no_pvbat&quot;) or {}).get(&quot;cost_p&quot;)
+    predbat = (scenarios.get(&quot;with_predbat&quot;) or {}).get(&quot;cost_p&quot;)
+
+    payback_years = {}
+    if payback.get(&quot;available&quot;):
+        for key in [&quot;pv_only&quot;, &quot;pv_battery&quot;, &quot;pv_battery_predbat&quot;]:
+            row = payback.get(key) or {}
+            # None for a row that does not pay back, so the table can say so rather
+            # than print a number that does not exist.
+            payback_years[key] = row.get(&quot;years&quot;) if row.get(&quot;pays_back&quot;) else None
+
+    return {
+        &quot;total_kwp&quot;: costs.get(&quot;total_kwp&quot;),
+        &quot;battery_kwh&quot;: costs.get(&quot;battery_kwh&quot;),
+        &quot;tariff&quot;: _describe_tariff((config or {}).get(&quot;tariff&quot;) or {}),
+        &quot;cost_with_predbat_p&quot;: predbat,
+        &quot;saving_vs_none_p&quot;: (baseline - predbat) if (baseline is not None and predbat is not None) else None,
+        &quot;payback_years&quot;: payback_years,
+        &quot;payback_reason&quot;: None if payback.get(&quot;available&quot;) else payback.get(&quot;reason&quot;),
+        &quot;months_included&quot;: annual.get(&quot;months_included&quot;, 0),
+    }
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Record it at save time</strong></li>
+</ul>
+<p>In <code>save_run</code>'s <code>entry</code> dict, add:</p>
+<pre><code class="language-python">        &quot;summary&quot;: build_summary(results, config),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Implement the backfill</strong></li>
+</ul>
+<pre><code class="language-python">async def backfill_summaries(storage, runs):
+    &quot;&quot;&quot;Return ``runs`` with any missing summary filled in, writing the index back once.
+
+    A run stored before summaries existed has none. Rather than re-reading its document
+    on every visit to the compare page - several megabytes for a debug run - its summary
+    is computed once and persisted, so every later visit is index-only.
+
+    The index is written at most once per call, and only when something was actually
+    filled in: a compare page that changes nothing must not write storage at all.
+    &quot;&quot;&quot;
+    if not storage or not runs:
+        return runs or []
+
+    filled = False
+    for entry in runs:
+        if entry.get(&quot;summary&quot;) or not entry.get(&quot;id&quot;):
+            continue
+        results = await load_run(storage, entry[&quot;id&quot;])
+        if not isinstance(results, dict):
+            continue
+        entry[&quot;summary&quot;] = build_summary(results, results.get(&quot;config&quot;) or {})
+        filled = True
+
+    if filled:
+        await storage.save(STORAGE_MODULE, INDEX_NAME, runs, format=&quot;json&quot;)
+    return runs
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Run the tests, then verify they discriminate</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k annual_store &gt; /tmp/t.txt 2&gt;&amp;1; echo &quot;EXIT=$?&quot;; grep -iE &quot;  ERROR|FAIL&quot; /tmp/t.txt
+</code></pre>
+<p>Then make <code>backfill_summaries</code> write the index unconditionally (move the <code>await storage.save</code> outside the <code>if filled</code>), confirm the "writes nothing" test FAILS, and restore. Verify with <code>git diff</code> that the restore is exact.</p>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files apps/predbat/annual_store.py apps/predbat/tests/test_annual_store.py
+git add apps/predbat/annual_store.py apps/predbat/tests/test_annual_store.py
+git commit -m &quot;feat(annual): cache each run's headline figures on the index&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-split-captured-plans-into-their-own-storage-keys">Task 2: Split captured plans into their own storage keys</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/annual_store.py</code>
+- Modify: <code>apps/predbat/web_annual.py</code> (<code>html_annual_plan</code>, <code>html_annual_download</code>)
+- Test: <code>apps/predbat/tests/test_annual_store.py</code>, <code>apps/predbat/tests/test_web_annual.py</code></p>
+<p><strong>Interfaces produced:</strong>
+- <code>_plan_key(run_id, month, index) -&gt; str</code>
+- <code>save_run</code> strips <code>plans</code> from the stored document and writes one key per leg, recording the keys on the index entry as <code>plan_keys</code>
+- <code>load_plan(storage, run_id, month, index, scenario) -&gt; dict | None</code></p>
+<p><strong>Why this task exists — the measurement:</strong></p>
+<pre><code>one captured plan:  44,312 bytes
+   no car:   96 plans -&gt;  4.3 MB per run
+ with car:  192 plans -&gt;  8.5 MB per run
+</code></pre>
+<p><code>/annual_plan</code> currently reads that whole document to return one 44 KB plan, on every day/scenario click, and the results page reads it to render totals that ignore it.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_annual_store.py</code>:</p>
+<pre><code class="language-python">    print(&quot;Test: save_run strips the plans out of the stored document and keys them per leg&quot;)
+    storage = FakeStorage()
+    debug_results = {
+        &quot;annual&quot;: {&quot;scenarios&quot;: {&quot;no_pvbat&quot;: {&quot;cost_p&quot;: 10.0}, &quot;with_predbat&quot;: {&quot;cost_p&quot;: 5.0}}, &quot;months_included&quot;: 12},
+        &quot;months&quot;: [
+            {&quot;month&quot;: 1, &quot;status&quot;: &quot;ok&quot;, &quot;plans&quot;: [
+                {&quot;day&quot;: &quot;2025-01-08&quot;, &quot;leg&quot;: &quot;with_car&quot;, &quot;scenarios&quot;: {&quot;with_predbat&quot;: {&quot;rows&quot;: [1]}}},
+                {&quot;day&quot;: &quot;2025-01-08&quot;, &quot;leg&quot;: &quot;without_car&quot;, &quot;scenarios&quot;: {&quot;with_predbat&quot;: {&quot;rows&quot;: [2]}}},
+            ]},
+            {&quot;month&quot;: 2, &quot;status&quot;: &quot;ok&quot;, &quot;plans&quot;: [{&quot;day&quot;: &quot;2025-02-10&quot;, &quot;leg&quot;: &quot;single&quot;, &quot;scenarios&quot;: {&quot;pv_only&quot;: {&quot;rows&quot;: [3]}}}]},
+        ],
+    }
+    run_async(save_run(storage, debug_results, {}, &quot;20260728-091000&quot;))
+    stored = run_async(load_run(storage, &quot;20260728-091000&quot;))
+    if any(&quot;plans&quot; in month for month in stored[&quot;months&quot;]):
+        print(&quot;  ERROR: the stored document must not carry the plans, got {}&quot;.format(stored[&quot;months&quot;]))
+        failed = True
+    index = run_async(list_runs(storage))
+    if len(index[0].get(&quot;plan_keys&quot;) or []) != 3:
+        print(&quot;  ERROR: three legs should produce three plan keys, got {}&quot;.format(index[0].get(&quot;plan_keys&quot;)))
+        failed = True
+
+    print(&quot;Test: load_plan returns the right scenario from its own key&quot;)
+    plan = run_async(load_plan(storage, &quot;20260728-091000&quot;, 1, 1, &quot;with_predbat&quot;))
+    if plan != {&quot;rows&quot;: [2]}:
+        print(&quot;  ERROR: expected the without_car leg's plan, got {}&quot;.format(plan))
+        failed = True
+
+    print(&quot;Test: a non-debug run writes no plan keys at all&quot;)
+    storage = FakeStorage()
+    run_async(save_run(storage, {&quot;annual&quot;: {&quot;months_included&quot;: 12}, &quot;months&quot;: [{&quot;month&quot;: 1, &quot;status&quot;: &quot;ok&quot;}]}, {}, &quot;20260728-091100&quot;))
+    if run_async(list_runs(storage))[0].get(&quot;plan_keys&quot;):
+        print(&quot;  ERROR: a run with no plans should record no plan keys&quot;)
+        failed = True
+
+    print(&quot;Test: load_plan falls back to a document that still has its plans embedded&quot;)
+    # A run stored before this split. It must stay viewable rather than silently losing
+    # its plans.
+    storage = FakeStorage()
+    run_async(storage.save(STORAGE_MODULE, &quot;run_legacy&quot;, {&quot;months&quot;: [{&quot;month&quot;: 3, &quot;plans&quot;: [{&quot;leg&quot;: &quot;single&quot;, &quot;scenarios&quot;: {&quot;pv_only&quot;: {&quot;rows&quot;: [9]}}}]}]}, format=&quot;json&quot;))
+    if run_async(load_plan(storage, &quot;legacy&quot;, 3, 0, &quot;pv_only&quot;)) != {&quot;rows&quot;: [9]}:
+        print(&quot;  ERROR: a legacy embedded-plans run should still resolve&quot;)
+        failed = True
+
+    print(&quot;Test: load_plan returns None rather than raising for anything it cannot resolve&quot;)
+    for args in [(&quot;20260728-091000&quot;, 99, 0, &quot;with_predbat&quot;), (&quot;20260728-091000&quot;, 1, 99, &quot;with_predbat&quot;), (&quot;20260728-091000&quot;, 1, 0, &quot;nope&quot;), (&quot;nosuchrun&quot;, 1, 0, &quot;with_predbat&quot;)]:
+        try:
+            if run_async(load_plan(storage, *args)) is not None:
+                print(&quot;  ERROR: {} should resolve to None&quot;.format(args))
+                failed = True
+        except Exception as error:
+            print(&quot;  ERROR: {} raised {} instead of returning None&quot;.format(args, type(error).__name__))
+            failed = True
+
+    print(&quot;Test: discarding an evicted run expires its plan keys, not just its document&quot;)
+    storage = FakeStorage()
+    run_async(save_run(storage, debug_results, {}, &quot;20260728-091200&quot;))
+    keys_before = [key for key in storage.store if &quot;plans&quot; in str(key)]
+    run_async(_discard_run(storage, &quot;20260728-091200&quot;, run_async(list_runs(storage))[0].get(&quot;plan_keys&quot;)))
+    if any(storage.store.get(key) is not None for key in keys_before):
+        print(&quot;  ERROR: an evicted run's plan keys should be discarded too&quot;)
+        failed = True
+</code></pre>
+<p>Extend the test module's <code>annual_store</code> import with <code>load_plan</code> and <code>_discard_run</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run and watch it fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k annual_store &gt; /tmp/t.txt 2&gt;&amp;1; grep -iE &quot;  ERROR|ImportError&quot; /tmp/t.txt
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Implement the key and the split</strong></li>
+</ul>
+<pre><code class="language-python">def _plan_key(run_id, month, index):
+    &quot;&quot;&quot;Return the storage filename holding one leg's captured plans.&quot;&quot;&quot;
+    return &quot;run_{}_plans_{:02d}_{}&quot;.format(run_id, int(month), int(index))
+</code></pre>
+<p>In <code>save_run</code>, before storing the document, move the plans out. Use a deep copy so the
+caller's dict is not mutated — the web layer still holds it:</p>
+<pre><code class="language-python">    stored = copy.deepcopy(results) if isinstance(results, dict) else results
+    plan_keys = []
+    if isinstance(stored, dict):
+        for month in stored.get(&quot;months&quot;) or []:
+            if not isinstance(month, dict):
+                continue
+            plans = month.pop(&quot;plans&quot;, None)
+            if not isinstance(plans, list):
+                continue
+            for index, leg in enumerate(plans):
+                key = _plan_key(run_id, month.get(&quot;month&quot;, 0), index)
+                await storage.save(STORAGE_MODULE, key, leg, format=&quot;json&quot;)
+                plan_keys.append(key)
+</code></pre>
+<p>then store <code>stored</code> rather than <code>results</code>, and add <code>"plan_keys": plan_keys</code> to the index
+entry.</p>
+<ul>
+<li>[ ] <strong>Step 4: Implement <code>load_plan</code></strong></li>
+</ul>
+<pre><code class="language-python">async def load_plan(storage, run_id, month, index, scenario):
+    &quot;&quot;&quot;Return one captured plan, or None when it cannot be resolved.
+
+    Reads the single leg's own key - about 177 KB - rather than the whole results
+    document, which for a debug run is several megabytes and would be re-read on every
+    click of the plan viewer's day and scenario selectors.
+
+    Falls back to a document that still carries its plans inline, so a run stored before
+    they were split out stays viewable instead of silently losing them.
+
+    Never raises: month, index and scenario arrive off an attacker-controlled query
+    string, and every failure to resolve is a None the caller turns into a 404.
+    &quot;&quot;&quot;
+    if not storage or not run_id or not scenario:
+        return None
+    try:
+        month = int(month)
+        index = int(index)
+    except (TypeError, ValueError):
+        return None
+    if index &lt; 0:
+        return None
+
+    leg = await storage.load(STORAGE_MODULE, _plan_key(run_id, month, index))
+    if isinstance(leg, dict):
+        scenarios = leg.get(&quot;scenarios&quot;)
+        return scenarios.get(scenario) if isinstance(scenarios, dict) else None
+
+    results = await load_run(storage, run_id)
+    if not isinstance(results, dict):
+        return None
+    for entry in results.get(&quot;months&quot;) or []:
+        if not isinstance(entry, dict) or entry.get(&quot;month&quot;) != month:
+            continue
+        plans = entry.get(&quot;plans&quot;)
+        if not isinstance(plans, list) or index &gt;= len(plans):
+            return None
+        candidate = plans[index]
+        if not isinstance(candidate, dict):
+            return None
+        scenarios = candidate.get(&quot;scenarios&quot;)
+        return scenarios.get(scenario) if isinstance(scenarios, dict) else None
+    return None
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Discard the plan keys on eviction</strong></li>
+</ul>
+<p>Give <code>_discard_run</code> a <code>plan_keys=None</code> parameter and expire each key the same way it
+expires the document (prefer <code>delete</code>, else overwrite with <code>None</code> and a past expiry).
+Pass the evicted entry's <code>plan_keys</code> at the call site in <code>save_run</code>.</p>
+<ul>
+<li>[ ] <strong>Step 6: Point the web layer at it</strong></li>
+</ul>
+<p>In <code>web_annual.py</code>, replace <code>html_annual_plan</code>'s body with a <code>load_plan</code> call:</p>
+<pre><code class="language-python">        plan = await load_plan(self._storage(), request.query.get(&quot;run&quot;, &quot;&quot;), request.query.get(&quot;month&quot;), request.query.get(&quot;index&quot;), request.query.get(&quot;scenario&quot;))
+        if plan is None:
+            return web.json_response({&quot;error&quot;: &quot;plan not found&quot;}, status=404)
+        return web.json_response(plan)
+</code></pre>
+<p>Import <code>load_plan</code> from <code>annual_store</code>. Delete <code>_find_plan</code> and its test, which this
+replaces — leaving a now-unused private method behind is dead code.</p>
+<p>In <code>html_annual_download</code>'s docstring, state that the download is the results document as
+stored, with captured plans held separately.</p>
+<ul>
+<li>[ ] <strong>Step 7: Run the tests and verify discrimination</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k annual &gt; /tmp/t.txt 2&gt;&amp;1; echo &quot;EXIT=$?&quot;; grep -iE &quot;  ERROR|FAIL|Traceback&quot; /tmp/t.txt
+</code></pre>
+<p>Then remove the legacy fallback from <code>load_plan</code> (return <code>None</code> instead of reading the
+document), confirm the legacy test FAILS, and restore. Verify the restore with <code>git diff</code>.</p>
+<ul>
+<li>[ ] <strong>Step 8: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files apps/predbat/annual_store.py apps/predbat/web_annual.py apps/predbat/tests/test_annual_store.py apps/predbat/tests/test_web_annual.py
+git add apps/predbat/annual_store.py apps/predbat/web_annual.py apps/predbat/tests/
+git commit -m &quot;feat(annual): store captured plans per leg instead of inside the results&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-three-pages-and-the-tab-strip">Task 3: Three pages and the tab strip</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/web_annual.py</code> (<code>html_annual</code>, new <code>html_annual_view</code>, <code>render_nav</code>)
+- Modify: <code>apps/predbat/web.py</code> (two new routes)
+- Test: <code>apps/predbat/tests/test_web_annual.py</code></p>
+<p><strong>Interfaces produced:</strong>
+- <code>render_nav(current) -&gt; str</code> where <code>current</code> is <code>"config"</code>, <code>"view"</code> or <code>"compare"</code>
+- <code>GET /annual_view</code>, <code>GET /annual_compare</code></p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<pre><code class="language-python">    print(&quot;Test: the config page shows the form and no results&quot;)
+    page = make_page(my_predbat)
+    config_html = run_async(page.html_annual(FakeRequest()))
+    body = config_html.text
+    if 'name=&quot;solar_kwp_0&quot;' not in body:
+        print(&quot;  ERROR: the config page should show the form&quot;)
+        failed = True
+    if &quot;Annual totals for&quot; in body or &quot;What this run used&quot; in body:
+        print(&quot;  ERROR: the config page must not also render the results&quot;)
+        failed = True
+
+    print(&quot;Test: the viewer shows results and no form&quot;)
+    view_html = run_async(page.html_annual_view(FakeRequest())).text
+    if 'name=&quot;solar_kwp_0&quot;' in view_html:
+        print(&quot;  ERROR: the viewer page must not render the configuration form&quot;)
+        failed = True
+
+    print(&quot;Test: the nav marks the current page and disables the end arrows&quot;)
+    nav = page.render_nav(&quot;config&quot;)
+    if &quot;annual-nav-current&quot; not in nav:
+        print(&quot;  ERROR: the nav should mark the current page&quot;)
+        failed = True
+    if &quot;annual-nav-disabled&quot; not in nav:
+        print(&quot;  ERROR: the arrow at the first page should be disabled, not wrap&quot;)
+        failed = True
+    middle = page.render_nav(&quot;view&quot;)
+    if &quot;annual-nav-disabled&quot; in middle:
+        print(&quot;  ERROR: neither arrow should be disabled on the middle page&quot;)
+        failed = True
+    for target in [&quot;./annual&quot;, &quot;./annual_view&quot;, &quot;./annual_compare&quot;]:
+        if target not in nav:
+            print(&quot;  ERROR: the nav should link to {}&quot;.format(target))
+            failed = True
+
+    print(&quot;Test: the progress area is on every page, so a run stays visible when you navigate&quot;)
+    for name, rendered in [(&quot;config&quot;, body), (&quot;view&quot;, view_html)]:
+        if &quot;annual-progress&quot; not in rendered:
+            print(&quot;  ERROR: the {} page should carry the progress area&quot;.format(name))
+            failed = True
+
+    print(&quot;Test: a finished run sends the tab that started it to the viewer, not the form&quot;)
+    if &quot;'./annual_view'&quot; not in page.render_script():
+        print(&quot;  ERROR: run completion should navigate to the viewer page&quot;)
+        failed = True
+</code></pre>
+<p>Reuse the module's existing <code>run_async</code> and <code>FakeRequest</code> helpers rather than adding new ones.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run and watch it fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k web_annual &gt; /tmp/t.txt 2&gt;&amp;1; grep -iE &quot;  ERROR|AttributeError&quot; /tmp/t.txt
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Implement the nav</strong></li>
+</ul>
+<pre><code class="language-python">    # Ordered, because the arrows step through it. Not wrapped: &quot;next&quot; from the last page
+    # landing back on the first reads as a misclick rather than a choice.
+    NAV_PAGES = [(&quot;config&quot;, &quot;Configure&quot;, &quot;./annual&quot;), (&quot;view&quot;, &quot;Results&quot;, &quot;./annual_view&quot;), (&quot;compare&quot;, &quot;Compare&quot;, &quot;./annual_compare&quot;)]
+
+    def render_nav(self, current):
+        &quot;&quot;&quot;Return the tab strip, marking the current page and disabling the end arrows.&quot;&quot;&quot;
+        names = [name for name, _, _ in self.NAV_PAGES]
+        position = names.index(current) if current in names else 0
+        text = '&lt;div class=&quot;annual-nav&quot;&gt;\n'
+        previous = self.NAV_PAGES[position - 1][2] if position &gt; 0 else None
+        text += '&lt;a class=&quot;annual-nav-arrow{}&quot; href=&quot;{}&quot;&gt;&amp;#9664;&lt;/a&gt;\n'.format(&quot;&quot; if previous else &quot; annual-nav-disabled&quot;, previous or &quot;#&quot;)
+        for name, label, href in self.NAV_PAGES:
+            text += '&lt;a class=&quot;annual-nav-tab{}&quot; href=&quot;{}&quot;&gt;{}&lt;/a&gt;\n'.format(&quot; annual-nav-current&quot; if name == current else &quot;&quot;, href, label)
+        following = self.NAV_PAGES[position + 1][2] if position &lt; len(self.NAV_PAGES) - 1 else None
+        text += '&lt;a class=&quot;annual-nav-arrow{}&quot; href=&quot;{}&quot;&gt;&amp;#9654;&lt;/a&gt;\n'.format(&quot;&quot; if following else &quot; annual-nav-disabled&quot;, following or &quot;#&quot;)
+        text += &quot;&lt;/div&gt;\n&quot;
+        return text
+</code></pre>
+<p>Add matching CSS to <code>render_css</code>: the current tab visually distinct, a disabled arrow at
+reduced opacity with <code>pointer-events: none</code> so it cannot be followed.</p>
+<ul>
+<li>[ ] <strong>Step 4: Split the page handlers</strong></li>
+</ul>
+<p><code>html_annual</code> keeps the form and progress and drops the results:</p>
+<pre><code class="language-python">        text = self.web.get_header(&quot;Predbat Annual&quot;)
+        text += &quot;&lt;body&gt;\n&quot;
+        text += self.render_css()
+        text += self.render_nav(&quot;config&quot;)
+        text += self.render_form(config, errors=error)
+        text += self.render_progress()
+        text += self.render_script()
+        text += &quot;&lt;/body&gt;&lt;/html&gt;\n&quot;
+</code></pre>
+<p>Add <code>html_annual_view</code> carrying the results, built from the same pieces the old combined
+handler used:</p>
+<pre><code class="language-python">    async def html_annual_view(self, request):
+        &quot;&quot;&quot;Render the results viewer for one stored run.&quot;&quot;&quot;
+        self.web.default_page = &quot;./annual_view&quot;
+        text = self.web.get_header(&quot;Predbat Annual&quot;)
+        text += &quot;&lt;body&gt;\n&quot;
+        text += self.render_css()
+        text += self.render_nav(&quot;view&quot;)
+        text += self.render_progress()
+        storage = self._storage()
+        runs = await list_runs(storage)
+        selected = request.query.get(&quot;run&quot;) or (runs[0][&quot;id&quot;] if runs else None)
+        results = await load_run(storage, selected) if selected else None
+        text += self.render_results(results, runs, selected)
+        text += self.render_script()
+        text += &quot;&lt;/body&gt;&lt;/html&gt;\n&quot;
+        return web.Response(content_type=&quot;text/html&quot;, text=text)
+</code></pre>
+<p><code>render_results</code> no longer needs its own <code>&lt;hr&gt;</code>/<code>Results</code> heading now the pages are
+separate — remove those two, keeping the run-details table and everything below it.</p>
+<p><strong>This breaks an existing test, deliberately.</strong> <code>test_web_annual_results</code> currently asserts
+<code>"annual-divider" not in html</code> is false and that <code>"&gt;Results&lt;"</code> appears — those were added
+when the form and results shared one page, and the divider existed to separate them. With
+separate pages the divider is meaningless. Update that assertion to check the nav marks
+the viewer as current instead, rather than deleting it outright: the thing worth asserting
+is still "the user can tell which page they are on".</p>
+<ul>
+<li>[ ] <strong>Step 5: Send a finished run to the viewer</strong></li>
+</ul>
+<p>In <code>render_script</code>, change the completion navigation from <code>'./annual'</code> to <code>'./annual_view'</code>,
+and the "view results" link the other tabs get likewise.</p>
+<ul>
+<li>[ ] <strong>Step 6: Register the routes</strong></li>
+</ul>
+<p>In <code>web.py</code>, beside the existing Annual routes:</p>
+<pre><code class="language-python">        app.router.add_get(&quot;/annual_view&quot;, self.annual_page.html_annual_view)
+        app.router.add_get(&quot;/annual_compare&quot;, self.annual_page.html_annual_compare)
+</code></pre>
+<p><code>html_annual_compare</code> does not exist until Task 4; add a placeholder returning
+<code>self.render_nav("compare")</code> inside a minimal page so the route works, and replace its body
+in Task 4.</p>
+<ul>
+<li>[ ] <strong>Step 7: Run the tests</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all -k web_annual &gt; /tmp/t.txt 2&gt;&amp;1; echo &quot;EXIT=$?&quot;; grep -iE &quot;  ERROR|FAIL|Traceback&quot; /tmp/t.txt
+</code></pre>
+<p>Also confirm the existing route-registration test covers the two new routes; update its
+expected count if it asserts one.</p>
+<ul>
+<li>[ ] <strong>Step 8: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files apps/predbat/web_annual.py apps/predbat/web.py apps/predbat/tests/test_web_annual.py
+git add apps/predbat/web_annual.py apps/predbat/web.py apps/predbat/tests/test_web_annual.py
+git commit -m &quot;feat(annual): split the tab into configure, results and compare pages&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-the-compare-page">Task 4: The compare page</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/web_annual.py</code>
+- Test: <code>apps/predbat/tests/test_web_annual.py</code></p>
+<p><strong>Interfaces consumed:</strong> <code>build_summary</code>, <code>backfill_summaries</code> (Task 1); <code>render_nav</code> (Task 3).</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<pre><code class="language-python">    print(&quot;Test: the compare table lists every run with its own figures&quot;)
+    runs = [
+        {&quot;id&quot;: &quot;20260728-0900&quot;, &quot;label&quot;: &quot;9.5 kWh battery, 5.6 kWp, Agile&quot;, &quot;summary&quot;: {&quot;total_kwp&quot;: 5.6, &quot;battery_kwh&quot;: 9.5, &quot;tariff&quot;: &quot;Agile&quot;, &quot;cost_with_predbat_p&quot;: 66000.0, &quot;saving_vs_none_p&quot;: 114000.0, &quot;payback_years&quot;: {&quot;pv_only&quot;: 17.8, &quot;pv_battery&quot;: 13.61, &quot;pv_battery_predbat&quot;: 11.78}, &quot;payback_reason&quot;: None, &quot;months_included&quot;: 12}},
+        {&quot;id&quot;: &quot;20260728-0800&quot;, &quot;label&quot;: &quot;20 kWh battery, 12 kWp, Cosy&quot;, &quot;summary&quot;: {&quot;total_kwp&quot;: 12.0, &quot;battery_kwh&quot;: 20.0, &quot;tariff&quot;: &quot;Cosy&quot;, &quot;cost_with_predbat_p&quot;: 40000.0, &quot;saving_vs_none_p&quot;: 140000.0, &quot;payback_years&quot;: {&quot;pv_only&quot;: 9.1, &quot;pv_battery&quot;: 8.2, &quot;pv_battery_predbat&quot;: 7.0}, &quot;payback_reason&quot;: None, &quot;months_included&quot;: 12}},
+    ]
+    table = page.render_compare(runs, &quot;20260728-0900&quot;)
+    for expected in [&quot;5.6&quot;, &quot;9.5&quot;, &quot;Agile&quot;, &quot;13.6&quot;, &quot;12&quot;, &quot;20&quot;, &quot;Cosy&quot;, &quot;8.2&quot;]:
+        if expected not in table:
+            print(&quot;  ERROR: the compare table should show {}, got {}&quot;.format(expected, table))
+            failed = True
+
+    print(&quot;Test: a run whose payback was unavailable shows a dash and its reason, not a number&quot;)
+    unavailable = [{&quot;id&quot;: &quot;x&quot;, &quot;label&quot;: &quot;partial&quot;, &quot;summary&quot;: {&quot;total_kwp&quot;: 5.0, &quot;battery_kwh&quot;: 9.0, &quot;tariff&quot;: &quot;Agile&quot;, &quot;cost_with_predbat_p&quot;: 100.0, &quot;saving_vs_none_p&quot;: 50.0, &quot;payback_years&quot;: {}, &quot;payback_reason&quot;: &quot;Payback needs a full year, but only 11 of 12 months could be modelled.&quot;, &quot;months_included&quot;: 11}}]
+    text = page.render_compare(unavailable, &quot;x&quot;)
+    if &quot;11 of 12&quot; not in text:
+        print(&quot;  ERROR: the reason payback is unavailable should be available to the user&quot;)
+        failed = True
+    if &quot;0.0 years&quot; in text or &quot;None&quot; in text:
+        print(&quot;  ERROR: an unavailable payback must not render as a number, got {}&quot;.format(text))
+        failed = True
+
+    print(&quot;Test: a run that does not pay back says so rather than showing a number&quot;)
+    never = [{&quot;id&quot;: &quot;y&quot;, &quot;label&quot;: &quot;never&quot;, &quot;summary&quot;: {&quot;total_kwp&quot;: 5.0, &quot;battery_kwh&quot;: 9.0, &quot;tariff&quot;: &quot;Agile&quot;, &quot;cost_with_predbat_p&quot;: 100.0, &quot;saving_vs_none_p&quot;: -50.0, &quot;payback_years&quot;: {&quot;pv_only&quot;: None, &quot;pv_battery&quot;: None, &quot;pv_battery_predbat&quot;: None}, &quot;payback_reason&quot;: None, &quot;months_included&quot;: 12}}]
+    if &quot;does not pay back&quot; not in page.render_compare(never, &quot;y&quot;):
+        print(&quot;  ERROR: a non-paying-back run should say so&quot;)
+        failed = True
+
+    print(&quot;Test: the compare table is horizontally scrollable rather than widening the page&quot;)
+    if &quot;overflow-x&quot; not in page.render_css():
+        print(&quot;  ERROR: a nine-column table needs its own scroll container&quot;)
+        failed = True
+
+    print(&quot;Test: with no stored runs the compare page says so rather than showing an empty table&quot;)
+    if &quot;No runs&quot; not in page.render_compare([], None):
+        print(&quot;  ERROR: an empty compare page should explain itself&quot;)
+        failed = True
+</code></pre>
+<ul>
+<li>
+<p>[ ] <strong>Step 2: Run and watch it fail</strong></p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement <code>render_compare</code></strong></p>
+</li>
+</ul>
+<p>Render a <code>&lt;div class="annual-compare-scroll"&gt;</code> wrapping a table with the nine columns from
+the spec. For each run, read ONLY <code>run["summary"]</code> — never the live config or another run.
+Formatting rules, matching the viewer:</p>
+<ul>
+<li><code>cost_with_predbat_p</code> and <code>saving_vs_none_p</code> are pence; render via <code>self._pounds</code>, or <code>—</code> when None.</li>
+<li>A payback of <code>None</code> inside a populated <code>payback_years</code> means the option does not pay back → <code>does not pay back</code>.</li>
+<li>An empty <code>payback_years</code> means payback was unavailable → <code>—</code> with <code>payback_reason</code> as the cell's <code>title</code>.</li>
+<li>The row matching <code>selected_id</code> gets a <code>annual-compare-current</code> class; the label links to <code>./annual_view?run=&lt;id&gt;</code>.</li>
+<li>
+<p>Escape every interpolated value with <code>html.escape(..., quote=True)</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Implement <code>html_annual_compare</code></strong></p>
+</li>
+</ul>
+<pre><code class="language-python">    async def html_annual_compare(self, request):
+        &quot;&quot;&quot;Render the run comparison table.&quot;&quot;&quot;
+        self.web.default_page = &quot;./annual_compare&quot;
+        storage = self._storage()
+        runs = await backfill_summaries(storage, await list_runs(storage))
+        text = self.web.get_header(&quot;Predbat Annual&quot;)
+        text += &quot;&lt;body&gt;\n&quot;
+        text += self.render_css()
+        text += self.render_nav(&quot;compare&quot;)
+        text += self.render_progress()
+        text += self.render_compare(runs, request.query.get(&quot;run&quot;))
+        text += self.render_script()
+        text += &quot;&lt;/body&gt;&lt;/html&gt;\n&quot;
+        return web.Response(content_type=&quot;text/html&quot;, text=text)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the tests and verify discrimination</strong></li>
+</ul>
+<p>Change <code>render_compare</code> to read the first run's summary for every row, confirm the
+"every run with its own figures" test FAILS (the second row's 12 kWp / Cosy vanish), and
+restore. Verify with <code>git diff</code>.</p>
+<ul>
+<li>[ ] <strong>Step 6: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files apps/predbat/web_annual.py apps/predbat/tests/test_web_annual.py
+git add apps/predbat/web_annual.py apps/predbat/tests/test_web_annual.py
+git commit -m &quot;feat(annual): add a page comparing stored runs and their paybacks&quot;
+</code></pre>
+<hr />
+<h3 id="task-5-documentation">Task 5: Documentation</h3>
+<p><strong>Files:</strong>
+- Modify: <code>docs/annual-prediction.md</code></p>
+<ul>
+<li>[ ] <strong>Step 1: Document it</strong></li>
+</ul>
+<p>Update the web-interface section for the three pages: what each holds, that the tabs and
+arrows move between them, and that the arrows stop at the ends. Describe the compare table
+and its columns, and say plainly that a dash means the figure could not be computed rather
+than that it is zero.</p>
+<p>Under "Debugging a run", note that captured plans are stored separately from the results
+document — the results stay small, and a plan is fetched only when viewed — and that a run
+downloaded as JSON is the results without the plans.</p>
+<p>Run <code>cd coverage &amp;&amp; ./run_all</code> (about 4 minutes) and confirm the whole suite is green.</p>
+<ul>
+<li>[ ] <strong>Step 2: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">coverage/venv/bin/pre-commit run --files docs/annual-prediction.md
+git add docs/annual-prediction.md
+git commit -m &quot;docs(annual): describe the three pages and run comparison&quot;
+</code></pre>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
