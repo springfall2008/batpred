@@ -42,6 +42,7 @@ def run_optimise_export_copy_tests(my_predbat):
     failed = False
     failed |= test_optimise_export_does_not_deepcopy_the_windows(my_predbat)
     failed |= test_optimise_export_leaves_the_callers_windows_untouched(my_predbat)
+    failed |= test_optimise_export_floor_clamped_below_reserved_range(my_predbat)
     return failed
 
 
@@ -70,6 +71,65 @@ def test_optimise_export_does_not_deepcopy_the_windows(my_predbat):
         failed = True
 
     my_predbat.export_window_best = []
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_optimise_export_floor_clamped_below_reserved_range(my_predbat):
+    """optimise_export's own floor clamp (plan.py, GH#4914) must never hand a candidate of 99 to
+    the simulation.
+
+    calc_percent_limit(best_soc_min, soc_max) rounding to 99 would otherwise raise the floor to 99,
+    which packs with a low-power rung's fraction into [99.0, 100.0) - a value that reads as neither
+    a freeze (not == 99.0) nor a forced export (not < 99.0), silently disabling the window. This
+    hits the ladder's floor rather than clip_export_slots' post-simulation clamp (already covered in
+    test_clip_export_slots.py), so it needs its own case.
+
+    launch_run_prediction_export is monkeypatched to record every this_export_limit it is asked to
+    simulate, rather than asserting on the optimiser's eventual winner - the winner is a metric-based
+    choice among many candidates, but every candidate that reaches simulation must already be clamped.
+    """
+    print("**** test_optimise_export_floor_clamped_below_reserved_range ****")
+    failed = False
+
+    windows, record_export_windows, end_record = build_windows(my_predbat)
+    my_predbat.export_window_best = windows
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.set_export_freeze = True
+    my_predbat.set_export_freeze_only = False
+    my_predbat.set_export_low_power = True
+    # 9.9 on the fixture's 10.0 kWh battery rounds to calc_percent_limit -> 99, the boundary case
+    # the clamp exists for.
+    my_predbat.best_soc_min = 9.9
+
+    simulated_limits = []
+    real_launch = my_predbat.launch_run_prediction_export
+
+    def fake_launch(this_export_limit, *args, **kwargs):
+        simulated_limits.append(this_export_limit)
+        return real_launch(this_export_limit, *args, **kwargs)
+
+    my_predbat.launch_run_prediction_export = fake_launch
+    try:
+        my_predbat.optimise_export(0, record_export_windows, [], [], windows, [0.0], end_record=end_record)
+    finally:
+        my_predbat.launch_run_prediction_export = real_launch
+
+    reserved = [limit for limit in simulated_limits if 99.0 < limit < 100.0]
+    if reserved:
+        print("ERROR: optimise_export simulated candidate(s) in the reserved range: {}".format(sorted(set(reserved))))
+        failed = True
+
+    # The clamp exists to be reached, not just avoided: confirm a real candidate was actually
+    # floored to 98 rather than the whole 99-floor branch going untested.
+    if not any(98.0 <= limit < 99.0 for limit in simulated_limits):
+        print("ERROR: no candidate reached the 98% clamped floor - test setup does not exercise the fix, got {}".format(sorted(set(simulated_limits))))
+        failed = True
+
+    my_predbat.export_window_best = []
+    my_predbat.best_soc_min = 0
     if not failed:
         print("PASS")
     return failed
