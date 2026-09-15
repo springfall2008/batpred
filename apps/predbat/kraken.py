@@ -278,6 +278,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # case of an account with no connected EV/charger. Cached to storage so it survives restart.
         self.intelligent_devices = {}
         self.dispatch_fetched_at = None
+        # The octopus_intelligent_slot list last wired for those devices, so run() can tell a cycle
+        # that has a claim standing from one that never wired anything (and so has nothing to
+        # release). Holding the list rather than a bare flag also means the release can check the
+        # arg still holds our value before clearing it - see _release_dispatch_wiring.
+        self.dispatch_slot_list = []
 
         # Export account/MPAN from SaaS config (matched by address at onboarding time).
         # Tariff is always discovered dynamically via GraphQL so changes are detected.
@@ -1248,6 +1253,10 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         provider-scheduled windows as cheap car-charging slots, exactly like Octopus Intelligent Go.
         """
         if not self.intelligent_devices:
+            # Nothing to publish. run() only calls this method while the device map is non-empty,
+            # so in production the release below is driven from there instead; it is repeated here
+            # so a direct call cannot leave a stale claim standing either.
+            self._release_dispatch_wiring()
             return
         now = datetime.now(timezone.utc)
         slot_list = []
@@ -1273,8 +1282,42 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # list, and fetch.py only reads it for car indices within num_cars — so, like octopus, bump
         # num_cars up to the device count or the sensors would be connected but never consumed.
         self.set_arg("octopus_intelligent_slot", slot_list)
+        self.dispatch_slot_list = list(slot_list)
         if self.get_arg("num_cars", 0) < len(slot_list):
             self.set_arg("num_cars", len(slot_list))
+        # That raise only lasts until the charger registry next materialises, since it writes
+        # num_cars from the chargers it holds and a SmartFlex EV has none. Claim the count with
+        # the registry so it survives as an explicit floor, and is released when the devices go.
+        registry = getattr(self.base, "charger_registry", None)
+        if registry is not None:
+            registry.set_external_num_cars("kraken", len(slot_list))
+
+    def _release_dispatch_wiring(self):
+        """Undo the car-slot wiring and num_cars claim made for SmartFlex devices that have gone.
+
+        Unenrolled, or the account simply stopped returning them. Left standing, the car slots keep
+        watching a dispatch sensor for a device that no longer exists, and the num_cars floor
+        claimed with the charger registry holds that phantom car up for the rest of the run - the
+        registry cannot lower it on its own, because a declared claim is deliberately only ever
+        released by the component that made it (charger_registry.set_external_num_cars).
+
+        A no-op when nothing was wired, so the idle no-EV account - the common case - does not
+        re-run this every cycle. Clearing octopus_intelligent_slot is further guarded on the arg
+        still holding the list we put there: the Octopus component wires the same key for its own
+        Intelligent devices, and blanking its wiring on our way out would drop its IOG windows.
+        """
+        if not self.dispatch_slot_list:
+            return
+        current = self.get_arg("octopus_intelligent_slot", None, indirect=False)
+        if current == self.dispatch_slot_list:
+            self.set_arg("octopus_intelligent_slot", None)
+            self.log("Kraken: SmartFlex devices have gone, cleared the car slot wiring and released the num_cars claim")
+        else:
+            self.log("Kraken: SmartFlex devices have gone, releasing the num_cars claim - octopus_intelligent_slot has been set by something else, so leaving it alone")
+        self.dispatch_slot_list = []
+        registry = getattr(self.base, "charger_registry", None)
+        if registry is not None:
+            registry.set_external_num_cars("kraken", 0)
 
     async def run(self, seconds, first):
         """Component run method — called by ComponentBase.start() every 60s.
@@ -1357,6 +1400,12 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             had_success = True
         if self.intelligent_devices and (first or dispatch_due):
             self._publish_dispatch_sensors()
+        elif not self.intelligent_devices and self.dispatch_slot_list:
+            # The devices have gone since the cycle that wired them. The release has to be driven
+            # from here: _publish_dispatch_sensors is only reached while the device map is
+            # non-empty, so a car being unenrolled would otherwise never reach the registry at all
+            # and the num_cars floor claimed for it would stand for the rest of the run.
+            self._release_dispatch_wiring()
 
         # Wire import into fetch.py once tariff is discovered (retries until successful)
         if not self.wired and self.current_tariff:
