@@ -13,6 +13,7 @@ import time
 import sys
 import glob
 import argparse
+import random
 from datetime import timedelta
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -774,6 +775,8 @@ def main():
     # name three tests that are not marked slow at all, while the four that are went unmentioned.
     slow_test_names = ", ".join(name for name, _func, _desc, slow in TEST_REGISTRY if slow) or "none currently marked slow"
     parser.add_argument("--quick", "-q", action="store_true", help=f"Skip slow tests ({slow_test_names})")
+    parser.add_argument("--shuffle", action="store_true", help="Run the selected tests in a random order, to look for shared-fixture state leaks between tests (see #5079)")
+    parser.add_argument("--shuffle-seed", type=int, default=None, metavar="N", help="Seed for --shuffle (default: a random seed, printed at the start of the run)")
     parser.add_argument("--plot", action="store_true", help="Display failure plots on screen (blocks until closed); the PNG is written either way")
     parser.add_argument("--random-generate", action="store_true", help="Generate random benchmark scenarios and write to a YAML file")
     parser.add_argument("--random-count", type=int, default=100, metavar="N", help="Number of random scenarios to generate (default: 100)")
@@ -880,6 +883,11 @@ def main():
     else:
         # Run all tests from the registry
         tests_to_run = TEST_REGISTRY
+
+    if args.shuffle:
+        shuffle_seed = args.shuffle_seed if args.shuffle_seed is not None else random.randrange(2**32)
+        random.Random(shuffle_seed).shuffle(tests_to_run)
+        print(f"**** Shuffled test order with seed {shuffle_seed} ****")
 
     print(f"**** Running {len(tests_to_run)} test(s) ****")
     # Single loop to run all collected tests
