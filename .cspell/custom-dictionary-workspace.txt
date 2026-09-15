@@ -58,6 +58,7 @@ batteryb
 batusecap
 beforeunload
 bierner
+bisectable
 Bitwarden
 BLAS
 boostable
@@ -556,6 +557,7 @@ Sergoe
 sess
 setattr
 setdefault
+setpoints
 SFMB
 sg05lp1
 SIGALRM

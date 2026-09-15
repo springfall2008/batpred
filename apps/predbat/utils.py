@@ -23,7 +23,7 @@ import os
 from datetime import datetime, timedelta, timezone, time
 from io import StringIO
 from functools import lru_cache
-from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
+from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 import copy
 import json
 
@@ -31,7 +31,94 @@ DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "
 
 # The live log and the one rotated out from under it - both read whole when serving logs.
 PREDBAT_LOG_FILE = "predbat.log"
-PREDBAT_LOG_FILE_PREV = "predbat.1.log"
+
+# Rotated logs are numbered predbat.01.log .. predbat.99.log. Two digits so a directory listing
+# sorts in rotation order; before this they were single-digit, which is still read (see
+# predbat_log_file_prev()) so an upgrade does not lose the previous log.
+PREDBAT_LOG_COUNT_DEFAULT = 10
+PREDBAT_LOG_COUNT_MIN = 2
+PREDBAT_LOG_COUNT_MAX = 100
+
+
+def predbat_log_name(number):
+    """
+    Return the rotated log filename for a rotation slot, zero-padded to two digits.
+    """
+    return "predbat.{:02d}.log".format(number)
+
+
+def predbat_log_name_legacy(number):
+    """
+    Return the pre-#5076 un-padded rotated log filename for a rotation slot.
+
+    Only for finding files written by an older version; nothing writes this form any more.
+    """
+    return "predbat.{}.log".format(number)
+
+
+def predbat_log_file_prev():
+    """
+    Return the path of the most recently rotated log, or None when there is not one.
+
+    Prefers the two-digit name and falls back to the single-digit one an older Predbat wrote, so
+    the first run after an upgrade still shows the previous log rather than silently dropping it.
+    """
+    for candidate in (predbat_log_name(1), predbat_log_name_legacy(1)):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def rotate_predbat_logs(max_logs):
+    """
+    Shift rotated log slots up by one and drop anything past max_logs, against the current
+    working directory. Does not touch the live predbat.log - the caller closes/reopens that.
+
+    Walk downwards so each slot is free before anything moves into it. Both the two-digit name
+    and the single-digit one an older Predbat wrote are considered at every slot, which is what
+    migrates an existing set to the padded form: whichever name is found is renamed to the
+    two-digit name of the next slot up.
+
+    The shift runs through max_logs itself, not max_logs - 1: a legacy single-digit file sitting
+    in the oldest kept slot is a different filename from that slot's two-digit target, so it is
+    never reached by a rename landing *on* that slot from below - it has to be the *source* of a
+    rename once, onto the slot that is about to be dropped, or it is orphaned on disk under the
+    old name forever (Copilot review on #5076).
+    """
+    for num_logs in range(max_logs, 0, -1):
+        for filename in (predbat_log_name(num_logs), predbat_log_name_legacy(num_logs)):
+            if os.path.isfile(filename):
+                os.rename(filename, predbat_log_name(num_logs + 1))
+                break
+
+    # Drop anything that has aged out past the configured count - both spellings, and every slot
+    # up to the maximum rather than just the one above max_logs, so lowering the setting clears
+    # the now-surplus files instead of stranding them forever.
+    for num_logs in range(max_logs + 1, PREDBAT_LOG_COUNT_MAX + 1):
+        for filename in (predbat_log_name(num_logs), predbat_log_name_legacy(num_logs)):
+            if os.path.isfile(filename):
+                os.remove(filename)
+
+
+def predbat_log_count(args):
+    """
+    Return the configured number of log files to keep, including the live one.
+
+    Clamped to [PREDBAT_LOG_COUNT_MIN, PREDBAT_LOG_COUNT_MAX]: below 2 there is no rotation to
+    speak of, and above 100 the numbering would need a third digit. A non-numeric value falls
+    back to the default rather than stopping the log working.
+    """
+    value = (args or {}).get("log_count", PREDBAT_LOG_COUNT_DEFAULT)
+    try:
+        value = int(value)
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: YAML accepts non-finite numeric scalars (.inf, -.inf), which parse as a
+        # float int() cannot convert - falling back rather than raising out of every log() call
+        # is the same "don't stop the log working" contract as the other invalid shapes here
+        # (Copilot review on #5076).
+        return PREDBAT_LOG_COUNT_DEFAULT
+    return max(PREDBAT_LOG_COUNT_MIN, min(PREDBAT_LOG_COUNT_MAX, value))
+
 
 # Key-name substrings that mark an apps.yaml value as a credential, for mask_secret_args().
 # "_key" and "password" were the original pair; "secret" and "token" were added for #4768,
@@ -380,10 +467,15 @@ def mask_secret_yaml_text(text):
     return buf.getvalue()
 
 
-def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=PREDBAT_LOG_FILE_PREV):
+def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=None):
     """
     Return the contents of predbat.log, prefixed with the rotated previous log when one exists.
+
+    logfile_prev defaults to whichever previous log is actually present - the two-digit name, or
+    the single-digit one an older Predbat wrote. Pass it explicitly only to read a specific file.
     """
+    if logfile_prev is None:
+        logfile_prev = predbat_log_file_prev()
     # Decoded explicitly rather than with the platform default: a single non-UTF-8 byte anywhere
     # in the log - an inverter API error message carrying one, say - would otherwise raise
     # UnicodeDecodeError and take out both /api/log and the get_log MCP tool.
@@ -391,7 +483,7 @@ def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=PREDBAT_LOG_FILE_PRE
     if os.path.exists(logfile):
         with open(logfile, "r", encoding="utf-8", errors="replace") as f:
             logdata = f.read()
-    if os.path.exists(logfile_prev):
+    if logfile_prev and os.path.exists(logfile_prev):
         with open(logfile_prev, "r", encoding="utf-8", errors="replace") as f:
             logdata = f.read() + "\n" + logdata
     return logdata
@@ -1803,13 +1895,25 @@ def find_charge_rate(
     battery_temperature_curve=None,
     current_charge_rate=None,
     pv_window_kwh=0.0,
+    low_power_pv_threshold_w=0.0,
+    solar_full_rate=True,
 ):
     """
     Find the lowest charge rate that fits the charge slow
 
-    pv_window_kwh is the PV forecast in kWh over the remainder of the charge window, when the window
-    overlaps PV production low power charging is abandoned as the throttled rate applies for the whole
-    window and would push the PV out of the battery, raising the cost above the planned full rate charge
+    pv_window_kwh is the PV forecast in kWh over the remainder of the charge window, when the window's
+    own average power over that remainder exceeds low_power_pv_threshold_w, low power charging is
+    abandoned - the throttled rate applies for the whole window and would push that PV out of the
+    battery, raising the cost above the planned full rate charge. Comparing an average rather than
+    pv_window_kwh directly against a fixed energy figure keeps the decision independent of how long the
+    remaining window happens to be - a long window at a low constant trickle should not accumulate its
+    way past a threshold sized for "is this bright enough to matter" (#4699 follow-up).
+
+    solar_full_rate turns that abandon off (#4975). Whether spilling PV to hold a throttled rate is
+    worth it depends on what import costs in this particular window, which is not something the PV
+    forecast can answer - a user charging in a free or very cheap daytime window loses nothing by
+    throttling, while on a normal tariff the exported surplus has to be bought back later. Defaults to
+    True, the behaviour of #4373.
     """
     if battery_temperature_curve is None:
         battery_temperature_curve = {}
@@ -1828,15 +1932,19 @@ def find_charge_rate(
 
     min_battery_rate = max(400, int(round(battery_rate_min * MINUTE_WATT)))
     if set_charge_low_power:
-        # If the charge window overlaps with PV production then charge at max rate, a throttled rate would
-        # cap the PV going into the battery, exporting the surplus and importing to make the target up later
-        if pv_window_kwh > LOW_POWER_PV_THRESHOLD:
-            if log_to:
-                log_to("Low power mode: PV forecast in window {}kWh > {}kWh, default to max rate".format(dp2(pv_window_kwh), LOW_POWER_PV_THRESHOLD))
-            return max_rate, max_rate_real
-
         minutes_left = window["end"] - minutes_now - margin
         abs_minutes_left = window["end"] - minutes_now
+
+        # If the charge window's own average PV power over its remainder is above the threshold, charge
+        # at max rate instead - a throttled rate would cap the PV going into the battery, exporting the
+        # surplus and importing to make the target up later. Turned off by
+        # set_charge_low_power_solar_full_rate for a window where that trade does not apply, e.g. a
+        # free import period, where the throttled rate is wanted even though PV will spill (#4975)
+        low_power_pv_threshold_kwh = (low_power_pv_threshold_w / MINUTE_WATT) * max(abs_minutes_left, 0)
+        if solar_full_rate and pv_window_kwh > 0 and pv_window_kwh >= low_power_pv_threshold_kwh:
+            if log_to:
+                log_to("Low power mode: PV forecast in window {}kWh > {}kWh ({}W over {} minutes), default to max rate".format(dp2(pv_window_kwh), dp2(low_power_pv_threshold_kwh), low_power_pv_threshold_w, abs_minutes_left))
+            return max_rate, max_rate_real
 
         # If we don't have enough minutes left go to max
         if abs_minutes_left < 0:
