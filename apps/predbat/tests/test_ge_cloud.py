@@ -12,6 +12,7 @@
 from gecloud import GECloudDirect, GECloudData, regname_to_ha
 from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
 from gecloud import GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
+from gecloud import SETTINGS_SLOW_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
 from utils import dp4
 import asyncio
 import json
@@ -69,6 +70,7 @@ class MockGECloudDirect(GECloudDirect):
         self.evc_devices_dict = []
         self.ems_device = None
         self.gateway_device = None
+        self.ems_slot_warned = set()
         self._now_utc_exact = datetime.now(timezone.utc)
         self.settings_from_cache = False
         self.default_options_stamp = None
@@ -264,6 +266,8 @@ def test_ge_cloud(my_predbat=None):
         ("smart_device", _test_async_get_smart_device, "Get smart device"),
         ("evc_sessions", _test_async_get_evc_sessions, "Get EV charger sessions"),
         ("run_method", _test_run_method, "Run method execution"),
+        ("ems_slot_overrides", _test_ems_slot_overrides, "EMS slot 1 override detection"),
+        ("ems_settings_reread", _test_run_ems_rereads_inverter_settings, "EMS battery inverter settings re-read and slot warning"),
         ("settings_saved_to_storage", _test_settings_saved_to_storage, "Settings saved to storage after poll"),
         ("settings_restored_from_cache", _test_settings_restored_from_fresh_cache, "Settings restored from fresh storage cache"),
         ("inverter_status", _test_async_get_inverter_status, "Get inverter status"),
@@ -2861,6 +2865,201 @@ def _test_run_method(my_predbat):
 # =============================================================================
 # Data Fetching Tests
 # =============================================================================
+
+
+def _ems_time_register(name, value):
+    """Build a settings register entry for a time-typed register"""
+    return {"name": name, "value": value, "validation_rules": ["date_format:H:i"], "validation": "Value should be a time"}
+
+
+def _test_ems_slot_overrides(my_predbat):
+    """find_ems_slot_overrides must name exactly the slot 1 windows that do not span the whole day"""
+
+    # A compliant inverter: slot 1 spans the day, higher slots are zeroed as the EMS setup asks
+    compliant = {
+        "17": _ems_time_register("AC Charge 1 Start Time", "00:00"),
+        "18": _ems_time_register("AC Charge 1 End Time", "23:59"),
+        "53": _ems_time_register("DC Discharge 1 Start Time", "00:00"),
+        "54": _ems_time_register("DC Discharge 1 End Time", "23:59"),
+        "55": _ems_time_register("DC Discharge 2 Start Time", "00:00"),
+        "56": _ems_time_register("DC Discharge 2 End Time", "00:00"),
+        "77": {"name": "Battery Charge Power", "value": 3000, "validation_rules": ["between:0,6000"]},
+    }
+    if find_ems_slot_overrides(compliant):
+        print("ERROR: a compliant inverter should report no slot overrides, got {}".format(find_ems_slot_overrides(compliant)))
+        return 1
+
+    # The reported failure: one inverter's DC discharge slot 1 ends at 19:00, so the battery stops
+    # discharging then no matter what the EMS asks for
+    broken = dict(compliant)
+    broken["54"] = _ems_time_register("DC Discharge 1 End Time", "19:00")
+    overrides = find_ems_slot_overrides(broken)
+    if overrides != {"dc_discharge_1_end_time": "19:00"}:
+        print("ERROR: expected only the DC discharge 1 end time to be reported, got {}".format(overrides))
+        return 1
+
+    # A zeroed slot 1 is an override too - Predbat enables the per-inverter discharge switch under
+    # EMS control, so a 00:00-00:00 window bars discharge entirely
+    zeroed = dict(compliant)
+    zeroed["54"] = _ems_time_register("DC Discharge 1 End Time", "00:00")
+    if find_ems_slot_overrides(zeroed) != {"dc_discharge_1_end_time": "00:00"}:
+        print("ERROR: a zeroed slot 1 end time should be reported, got {}".format(find_ems_slot_overrides(zeroed)))
+        return 1
+
+    # Seconds and unpadded hours are the same window, not an override
+    tolerant = {
+        "17": _ems_time_register("AC Charge 1 Start Time", "0:00"),
+        "18": _ems_time_register("AC Charge 1 End Time", "23:59:00"),
+    }
+    if find_ems_slot_overrides(tolerant):
+        print("ERROR: HH:MM:SS and unpadded times should normalise, got {}".format(find_ems_slot_overrides(tolerant)))
+        return 1
+
+    # Non-time values must never be reported - a null register, or a name Predbat cannot parse
+    junk = {
+        "17": _ems_time_register("AC Charge 1 Start Time", None),
+        "18": _ems_time_register("AC Charge 1 End Time", "unknown"),
+        "19": {"name": None, "value": "19:00", "validation_rules": []},
+        "20": "not-a-dict",
+    }
+    if find_ems_slot_overrides(junk):
+        print("ERROR: unparsable register values should be ignored, got {}".format(find_ems_slot_overrides(junk)))
+        return 1
+
+    if normalise_register_time("7:5") != "07:05":
+        print("ERROR: normalise_register_time should zero pad, got {}".format(normalise_register_time("7:5")))
+        return 1
+    for bad in (None, True, 1900, "1900", "ab:cd", ""):
+        if normalise_register_time(bad) is not None:
+            print("ERROR: normalise_register_time({!r}) should be None, got {}".format(bad, normalise_register_time(bad)))
+            return 1
+
+    return 0
+
+
+def _test_run_ems_rereads_inverter_settings(my_predbat):
+    """Under EMS control the battery inverters' settings must be re-read on a slow cadence, and a
+    slot 1 window that would override the EMS must be reported once per episode (#5103).
+    """
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud.ems_device = "ems001"
+        ge_cloud.polling_mode = False
+        ge_cloud.devices_dict = {"battery": ["inv001"], "ems": "ems001", "gateway": None, "pv": []}
+        ge_cloud.device_list = ["inv001", "ems001"]
+        ge_cloud.pending_writes = {"inv001": [], "ems001": []}
+        # Already run once today, so the 24h enable_default_options pass stays out of the way
+        ge_cloud.default_options_stamp = ge_cloud.now_utc_exact
+
+        inverter_registers = {
+            "17": _ems_time_register("AC Charge 1 Start Time", "00:00"),
+            "18": _ems_time_register("AC Charge 1 End Time", "23:59"),
+            "53": _ems_time_register("DC Discharge 1 Start Time", "00:00"),
+            "54": _ems_time_register("DC Discharge 1 End Time", "23:59"),
+        }
+        ge_cloud.settings = {"inv001": dict(inverter_registers), "ems001": {}}
+
+        settings_reads = []
+        status_messages = []
+
+        def capture_status(message, had_errors=False, **kwargs):
+            status_messages.append(message)
+
+        ge_cloud.base.record_status = capture_status
+
+        async def benign(*args, **kwargs):
+            return {}
+
+        async def mock_get_inverter_settings(device, first, previous):
+            settings_reads.append(device)
+            return dict(inverter_registers) if device == "inv001" else {}
+
+        async def mock_publish_registers(device, settings, select_key=None):
+            return None
+
+        ge_cloud.update_account = benign
+        ge_cloud.update_site = benign
+        ge_cloud.async_get_inverter_status = benign
+        ge_cloud.publish_status = benign
+        ge_cloud.async_get_inverter_meter = benign
+        ge_cloud.publish_meter = benign
+        ge_cloud.async_get_device_info = benign
+        ge_cloud.publish_info = benign
+        ge_cloud.publish_site_export_limit = benign
+        ge_cloud.async_get_inverter_settings = mock_get_inverter_settings
+        ge_cloud.publish_registers = mock_publish_registers
+
+        # A 10-minute settings cycle still only re-reads the EMS - the battery inverters are not the
+        # control device and re-reading them every cycle is what #4232 warns about
+        settings_reads.clear()
+        await ge_cloud.run(seconds=600, first=False)
+        if settings_reads != ["ems001"]:
+            print("ERROR: at seconds=600 only the EMS should be re-read, got {}".format(settings_reads))
+            return 1
+
+        # ... but on the hourly cadence the battery inverter is re-read, so a slot changed behind
+        # Predbat's back becomes visible without a restart
+        settings_reads.clear()
+        await ge_cloud.run(seconds=SETTINGS_SLOW_REFRESH_SECONDS, first=False)
+        if settings_reads != ["inv001", "ems001"]:
+            print("ERROR: at the slow refresh cadence the battery inverter should be re-read, got {}".format(settings_reads))
+            return 1
+
+        # Nothing to warn about while slot 1 spans the whole day
+        if status_messages:
+            print("ERROR: a compliant inverter should not raise a status, got {}".format(status_messages))
+            return 1
+
+        # Now the reported failure arrives: slot 1 discharge ends at 19:00
+        inverter_registers["54"] = _ems_time_register("DC Discharge 1 End Time", "19:00")
+        ge_cloud.log_messages.clear()
+        await ge_cloud.run(seconds=SETTINGS_SLOW_REFRESH_SECONDS * 2, first=False)
+
+        if len(status_messages) != 1:
+            print("ERROR: the slot override should raise exactly one status, got {}".format(status_messages))
+            return 1
+        for expected in ("inv001", "dc_discharge_1_end_time", "19:00", "23:59"):
+            if expected not in status_messages[0]:
+                print("ERROR: status should name {}, got {}".format(expected, status_messages[0]))
+                return 1
+        if not any("dc_discharge_1_end_time is 19:00" in message for message in ge_cloud.log_messages):
+            print("ERROR: the slot override should be logged, got {}".format(ge_cloud.log_messages))
+            return 1
+
+        # A standing misconfiguration must not re-raise the status every hour
+        await ge_cloud.run(seconds=SETTINGS_SLOW_REFRESH_SECONDS * 3, first=False)
+        if len(status_messages) != 1:
+            print("ERROR: a standing slot override should be reported once per episode, got {}".format(status_messages))
+            return 1
+
+        # Once it is put back the state is re-armed, so a later recurrence is reported again
+        inverter_registers["54"] = _ems_time_register("DC Discharge 1 End Time", "23:59")
+        await ge_cloud.run(seconds=SETTINGS_SLOW_REFRESH_SECONDS * 4, first=False)
+        inverter_registers["54"] = _ems_time_register("DC Discharge 1 End Time", "19:00")
+        await ge_cloud.run(seconds=SETTINGS_SLOW_REFRESH_SECONDS * 5, first=False)
+        if len(status_messages) != 2:
+            print("ERROR: a recurrence after a clean read should be reported again, got {}".format(status_messages))
+            return 1
+
+        # The EMS device drives its own slot 1 registers, so it is never a subject of this check
+        ge_cloud.ems_slot_warned = set()
+        ge_cloud.check_ems_inverter_slots("ems001", {"1": _ems_time_register("DC Discharge 1 End Time", "19:00")})
+        if ge_cloud.ems_slot_warned:
+            print("ERROR: the EMS device itself should not be checked, got {}".format(ge_cloud.ems_slot_warned))
+            return 1
+
+        # Neither is a plant with no EMS - Predbat writes those slot 1 windows itself
+        ge_cloud.ems_device = None
+        ge_cloud.check_ems_inverter_slots("inv001", {"1": _ems_time_register("DC Discharge 1 End Time", "19:00")})
+        if ge_cloud.ems_slot_warned:
+            print("ERROR: a non-EMS plant should not be checked, got {}".format(ge_cloud.ems_slot_warned))
+            return 1
+
+        return 0
+
+    return run_async(test())
 
 
 def _test_async_get_inverter_status(my_predbat):
