@@ -1469,15 +1469,14 @@ class UserInterface:
         if values:
             values = "+" + values
 
-        # Create the new dropdown
-        time_values = []
+        # Create the new dropdown, off first so cancelling everything doesn't mean scrolling the whole list (#5105)
+        time_values = ["off"]
         for minute_str in time_overrides:
             minute_str = "[" + minute_str + "]"
             time_values.append(minute_str)
 
         if values not in time_values:
             time_values.append(values)
-        time_values.append("off")
         item["options"] = time_values
         if not values:
             values = "off"
@@ -1565,9 +1564,9 @@ class UserInterface:
         if values:
             values = "+" + values
 
-        # Create the new dropdown
+        # Create the new dropdown, off first so cancelling everything doesn't mean scrolling the whole list (#5105)
         if update:
-            time_values = []
+            time_values = ["off"]
             for minute in range(minutes_now, minutes_now + manual_rate_max, plan_interval):
                 minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
                 if minute in rate_overrides_minutes:
@@ -1578,7 +1577,6 @@ class UserInterface:
 
             if values not in time_values:
                 time_values.append(values)
-            time_values.append("off")
             item["options"] = time_values
             if not values:
                 values = "off"
@@ -1645,9 +1643,9 @@ class UserInterface:
         if values:
             values = "+" + values
 
-        # Create the new dropdown
+        # Create the new dropdown, off first so cancelling everything doesn't mean scrolling the whole list (#5105)
         if update:
-            time_values = []
+            time_values = ["off"]
             for minute in range(minutes_now, minutes_now + manual_time_max, plan_interval):
                 minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
                 if minute in time_overrides:
@@ -1656,7 +1654,6 @@ class UserInterface:
 
             if values not in time_values:
                 time_values.append(values)
-            time_values.append("off")
             item["options"] = time_values
             if not values:
                 values = "off"
