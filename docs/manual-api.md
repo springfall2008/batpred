@@ -203,7 +203,7 @@ data:
   option: "dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=2.0&energy=1.2"
 ```
 
-For one-shot forecasts created through **select.predbat_load_forecast_delta_api**, an omitted `start_time` is frozen to the current Predbat plan slot when the command is received. This prevents the published `requested_start` moving forward on later replans. If you send the same command again, Predbat treats it as a fresh request and freezes a new start time. Static YAML forecasts are different: if a YAML flexible load omits `start_time`, it continues to mean the current plan slot each time Predbat refreshes the forecast.
+For one-shot forecasts created through **select.predbat_load_forecast_delta_api**, an omitted `start_time` is frozen to the current Predbat plan slot when the command is received. This prevents the published `requested_start` moving forward on later replans. If the forecast is still active, sending the same command again preserves that frozen request time and any selected or locked window. Delete the active forecast first if you need a fresh request time. Static YAML forecasts are different: if a YAML flexible load omits `start_time`, it continues to mean the current plan slot each time Predbat refreshes the forecast.
 
 Predbat publishes the result as a binary sensor, for example **binary_sensor.predbat_load_forecast_delta_dishwasher**. For flexible loads, the most useful attributes are **requested_start**, **requested_end**, **suggested_start**, **suggested_end**, **target_times**, and **expires_at**.
 
