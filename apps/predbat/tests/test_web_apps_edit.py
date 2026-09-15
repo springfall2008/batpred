@@ -22,7 +22,7 @@ import tempfile
 from ruamel.yaml import YAML
 
 from web import WebInterface
-from utils import compile_log_secret_pattern
+from utils import compile_log_secret_pattern, mask_secret_args, SECRET_MASK
 from web_helper import get_apps_js
 
 APPS_YAML_FIXTURE = """pred_bat:
@@ -41,6 +41,15 @@ APPS_YAML_FIXTURE = """pred_bat:
       - 2
     - - 3
       - 4
+  # A credential nested under a top-level key that matches no secret substring - the shape the
+  # /apps page used to serve in the clear (#5053 review)
+  chat:
+    providers:
+      openrouter:
+        api_key: sk-live-nested-credential-1234
+  forecast_solar:
+    - api_key: fs-live-credential-5678
+      declination: 30
 """
 
 
@@ -442,6 +451,53 @@ def run_web_apps_edit_tests(my_predbat):
         discard_src = apps_js[apps_js.index("function discardAllChanges(") :]
         if "change.type === 'delete'" not in discard_src or "change.type === 'add'" not in discard_src:
             print("  ERROR: expected discardAllChanges to restore deleted rows and drop added ones, got:\n{}".format(discard_src))
+            failed += 1
+
+        # ---------------------------------------------------------------------
+        # #5053 review: the /apps page masks credentials through mask_secret_args(), so what the
+        # browser holds for a secret row is the placeholder, not the credential. Saving such a row
+        # back must be refused, or the round trip destroys the key it was careful not to show.
+        print("Test: a nested credential is masked out of what the page serves")
+        web_interface = _reset_fixture(my_predbat)
+        served = mask_secret_args(web_interface.args)
+        if served["chat"]["providers"]["openrouter"]["api_key"] != SECRET_MASK:
+            print("  ERROR: a nested api_key should be masked, got {}".format(served["chat"]["providers"]["openrouter"]["api_key"]))
+            failed += 1
+        if served["forecast_solar"][0]["api_key"] != SECRET_MASK:
+            print("  ERROR: an api_key nested in a list should be masked, got {}".format(served["forecast_solar"][0]["api_key"]))
+            failed += 1
+        if served["forecast_solar"][0]["declination"] != 30:
+            print("  ERROR: masking must not disturb non-credential siblings, got {}".format(served["forecast_solar"][0]["declination"]))
+            failed += 1
+        if web_interface.args["chat"]["providers"]["openrouter"]["api_key"] != "sk-live-nested-credential-1234":
+            print("  ERROR: masking must deep-copy - the live args were mutated")
+            failed += 1
+
+        print("Test: saving a masked credential row back is refused, not written")
+        for path in ("chat.providers.openrouter.api_key", "forecast_solar[0].api_key"):
+            web_interface = _reset_fixture(my_predbat)
+            result = _post_changes(web_interface, {path: {"rowId": 1001, "originalValue": SECRET_MASK, "newValue": SECRET_MASK, "type": "string", "isNested": True, "path": path}})
+            if result.get("success"):
+                print("  ERROR: expected {} to be refused, got: {}".format(path, result))
+                failed += 1
+            elif SECRET_MASK not in result.get("message", ""):
+                print("  ERROR: the refusal for {} should name the placeholder, got: {}".format(path, result))
+                failed += 1
+            saved = _load_yaml()["pred_bat"]
+            still_set = saved["chat"]["providers"]["openrouter"]["api_key"] if path.startswith("chat") else saved["forecast_solar"][0]["api_key"]
+            if still_set == SECRET_MASK:
+                print("  ERROR: {} was overwritten with the placeholder on disk".format(path))
+                failed += 1
+
+        print("Test: a genuine new value for a credential is still accepted")
+        web_interface = _reset_fixture(my_predbat)
+        path = "chat.providers.openrouter.api_key"
+        result = _post_changes(web_interface, {path: {"rowId": 1001, "originalValue": SECRET_MASK, "newValue": "sk-live-rotated-key-9999", "type": "string", "isNested": True, "path": path}})
+        if not result.get("success"):
+            print("  ERROR: rotating a credential to a real new value should succeed, got: {}".format(result))
+            failed += 1
+        elif _load_yaml()["pred_bat"]["chat"]["providers"]["openrouter"]["api_key"] != "sk-live-rotated-key-9999":
+            print("  ERROR: the rotated credential was not written")
             failed += 1
 
     finally:

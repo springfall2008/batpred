@@ -464,7 +464,7 @@ def _collect_secret_values(value, found, label_prefix=""):
             if not label_prefix and str(key).lower() in SECRET_KEY_EXPLICIT_NAMES:
                 continue
             if is_secret_key(key):
-                key_label = (label_prefix + "." + key) if label_prefix else key
+                key_label = (label_prefix + "." + str(key)) if label_prefix else str(key)
                 if isinstance(item, (str, int, float)) and not isinstance(item, bool) and str(item) and str(item) not in found:
                     found[str(item)] = key_label
                 elif isinstance(item, list):
@@ -483,11 +483,52 @@ def _collect_secret_values(value, found, label_prefix=""):
             else:
                 nested_prefix = label_prefix
                 if isinstance(item, (dict, list)):
-                    nested_prefix = (label_prefix + "." + key) if label_prefix else key
+                    # str(key): a YAML mapping may legitimately have a non-string key
+                    # ({123: {password: ...}}), and this traversal runs from log() on the very
+                    # first startup line - a raw concatenation raised TypeError there, aborting
+                    # startup before config validation could report it (#5053 review).
+                    nested_prefix = (label_prefix + "." + str(key)) if label_prefix else str(key)
                 _collect_secret_values(item, found, nested_prefix)
     elif isinstance(value, list):
         for entry in value:
             _collect_secret_values(entry, found, label_prefix)
+
+
+def _flatten_denylist_value(value):
+    """
+    Yield every scalar inside a redact_strings/redact_strings_labelled entry, as strings.
+
+    The denylists are the user's explicit "never log these values" list, so a shape this does not
+    understand must not be dropped on the floor - dropping one leaves the credential the user
+    asked to hide in the clear, which is worse than redacting something harmless. Both entry
+    points previously tested `isinstance(value, (str, int, float))` and silently skipped anything
+    else, so `redact_strings: [[1234567890123]]` or `redact_strings_labelled: {mpan: [123...]}`
+    never entered the pattern even though validation accepted them (#5053 review).
+
+    Recurses lists/tuples/sets and dict values, coerces scalars with str() the way log() does when
+    it serialises a message, and drops only None, bools and empty strings - None and True/False
+    have no useful log representation to match on, and an empty string would match everywhere.
+    """
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, (str, int, float)):
+        text = str(value)
+        if text:
+            yield text
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _flatten_denylist_value(item)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _flatten_denylist_value(item)
+        return
+    # Any other type (a YAML date, say): str() it rather than ignore it, for the same
+    # fail-safe reason - the user put it on the denylist deliberately.
+    text = str(value)
+    if text:
+        yield text
 
 
 def collect_log_secret_values(args, secrets, redact_strings=None, redact_strings_labelled=None):
@@ -522,16 +563,15 @@ def collect_log_secret_values(args, secrets, redact_strings=None, redact_strings
     a key-name heuristic that could coincidentally catch an ordinary word, so a short entry is
     still exactly what was asked to be redacted.
 
-    redact_strings/redact_strings_labelled are type-checked (list/dict) before use, not just
-    trusted: log() calls this on the very first startup log line, before APPS_SCHEMA validation
-    has run at all, so a malformed value here (the string APPS_SCHEMA's own validator would
-    later reject) must degrade to "nothing from this source" rather than crash the whole of
-    Predbat's startup on a config typo, before the user ever sees the validation warning.
-
-    Scalar (str/int/float) secrets.yaml and redact_strings_labelled values are coerced to string
-    before matching - an unquoted numeric MPAN or account ID (e.g. landlord_mpan: 1234567890123)
-    loads from YAML as an int, and log() serializes every message with str(msg), so a value
-    dropped here for not already being a str would reach the log in the clear (#5053 review).
+    redact_strings/redact_strings_labelled are not trusted to be well-formed: log() calls this on
+    the very first startup log line, before APPS_SCHEMA validation has run at all, so anything
+    malformed here must degrade rather than crash the whole of Predbat's startup on a config
+    typo, before the user ever sees the validation warning. Both go through
+    _flatten_denylist_value(), which accepts any shape - a bare scalar (apps.yaml's
+    "redact_strings: !secret my_mpan" reaches validate_config() unwrapped by get_arg()), a nested
+    list, or a dict - and yields every scalar inside it as a string. Values are coerced with
+    str() because log() serialises messages the same way, so an unquoted numeric MPAN or account
+    ID (landlord_mpan: 1234567890123, an int out of YAML) still matches (#5053 review).
     """
     found = {}
     if secrets:
@@ -553,23 +593,12 @@ def collect_log_secret_values(args, secrets, redact_strings=None, redact_strings
     # (a 4-digit PIN, say) is still exactly what they asked to have redacted.
     if isinstance(redact_strings_labelled, dict):
         for label, value in redact_strings_labelled.items():
-            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
-                value = str(value)
-                if value and value not in found:
-                    found[value] = str(label)
-    # redact_strings is declared "string_list", but the normal getter wraps a bare scalar into a
-    # one-item list only when it goes through get_arg() - validate_config() reads it directly, so
-    # "redact_strings: !secret my_mpan" arrives here as a plain string. A list-only guard dropped
-    # it silently, leaving exactly the value the user asked to have hidden in the clear
-    # (#5053 review).
-    if isinstance(redact_strings, (str, int, float)) and not isinstance(redact_strings, bool):
-        redact_strings = [redact_strings]
-    if isinstance(redact_strings, list):
-        for value in redact_strings:
-            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
-                value = str(value)
-                if value and value not in found:
-                    found[value] = "redact_strings"
+            for scalar in _flatten_denylist_value(value):
+                if scalar not in found:
+                    found[scalar] = str(label)
+    for scalar in _flatten_denylist_value(redact_strings):
+        if scalar not in found:
+            found[scalar] = "redact_strings"
     return found
 
 
