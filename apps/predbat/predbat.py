@@ -73,6 +73,7 @@ from const import (
     CONFIG_REFRESH_PERIOD,
     INVERTER_QUICK_UPDATE_SECONDS,
     DEBUG_ENABLE_MAX_HOURS,
+    PREDBAT_MAX_CARS,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
@@ -532,6 +533,20 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
+        self.octopus_intelligent_limit_future_slots = False
+        self.trust_future_dynamic_iog_slots = "planned"
+        self.trusted_dynamic_minutes = set()
+        # Per-car "trusted streak" state for trust_future_dynamic_iog_slots "started", maintained by
+        # get_car_charging_planned() (fetch.py) and read by rate_add_io_slots() (octopus.py). Sized
+        # for PREDBAT_MAX_CARS rather than num_cars, which isn't known until apps.yaml is read, and
+        # grown no further - num_cars is clamped to PREDBAT_MAX_CARS (#4533). Deliberately NOT reset
+        # per cycle, unlike trusted_dynamic_minutes above: a streak's whole purpose is to carry
+        # evidence across cycles.
+        self.car_charging_now_confirmed_slots = [set() for _ in range(PREDBAT_MAX_CARS)]
+        self.car_charging_now_streak_last_read = [None for _ in range(PREDBAT_MAX_CARS)]
+        # car_n's whose missing-car_charging_now warning has already been logged once, so the
+        # "started without a sensor" warning doesn't repeat every cycle.
+        self.trust_iog_no_sensor_warned = set()
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.dispatch_timeline_last = {}
