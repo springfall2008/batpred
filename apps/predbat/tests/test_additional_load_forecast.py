@@ -69,6 +69,8 @@ def configure_additional_load_test(my_predbat):
     my_predbat.house_load_additional_forecast_adjust = {}
     my_predbat.house_load_additional_history = []
     my_predbat.house_load_additional_history_loaded = True
+    if "load_forecast_delta_api" in my_predbat.config_index:
+        my_predbat.config_index["load_forecast_delta_api"]["value"] = "off"
 
 
 def configure_additional_load_rates(my_predbat, cheap_start, cheap_end):
@@ -249,6 +251,37 @@ def test_additional_load_dishwasher_total_energy_weighting(my_predbat):
     failed |= check_slot(load_adjust, 21 * 60 + 30, 0.2, "dishwasher total energy weighting")
     if forecasts.get("dishwasher", {}).get("total_energy") != 1.2:
         print("ERROR: Dishwasher weighted total energy should remain 1.2")
+        failed = 1
+    return failed
+
+
+def test_additional_load_is_not_scaled_with_historical_load(my_predbat):
+    """Test known additional loads are added after historical load scaling."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.forecast_minutes = 60
+    my_predbat.load_forecast_only = True
+    my_predbat.load_scaling_dynamic = {}
+    my_predbat.dynamic_load_baseline = {}
+    my_predbat.load_inday_adjustment = 1.0
+    my_predbat.load_minutes = {}
+    my_predbat.load_forecast = {}
+
+    base_step = my_predbat.step_data_history(
+        my_predbat.load_minutes,
+        my_predbat.minutes_now,
+        forward=False,
+        scale_today=1.0,
+        scale_fixed=1.2,
+        type_load=True,
+        load_forecast={},
+        load_scaling_dynamic={},
+        load_adjust={},
+        load_baseline={},
+    )
+    load_step = my_predbat.add_additional_load_to_step_data(base_step, {minute: 0.6 for minute in range(my_predbat.minutes_now, my_predbat.minutes_now + 30)})
+    if load_step.get(0) != 0.1:
+        print("ERROR: Additional load should add exact 0.1kWh to a 5-minute prediction bucket after scaling, got {}".format(load_step))
         failed = 1
     return failed
 
@@ -525,6 +558,32 @@ def test_additional_load_delete_button_preserves_internal_delete_token(my_predba
     return failed
 
 
+def test_additional_load_rejects_duplicate_safe_names(my_predbat):
+    """Test different names with the same HA-safe suffix cannot collide."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "Dishwasher Eco", "start_time": "20:00", "duration": 1.0, "energy": 0.4},
+        {"name": "dishwasher-eco", "start_time": "21:00", "duration": 1.0, "energy": 0.5},
+    ]
+
+    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
+    if set(forecasts.keys()) != {"Dishwasher Eco"}:
+        print("ERROR: Duplicate safe names should keep only the first forecast, got {}".format(forecasts.keys()))
+        failed = 1
+    failed |= check_slot(load_adjust, 20 * 60, 0.2, "duplicate safe names kept first")
+    failed |= check_slot(load_adjust, 21 * 60, 0.0, "duplicate safe names skipped second")
+
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher-eco?start_time=22:00&duration=1.0&energy=0.6")
+    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
+    if set(forecasts.keys()) != {"Dishwasher Eco"} or load_adjust.get(22 * 60, 0.0):
+        print("ERROR: Duplicate API safe name should be skipped when YAML name exists, got forecasts {} adjust {}".format(forecasts.keys(), load_adjust))
+        failed = 1
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
 def test_additional_load_yaml_does_not_publish_delete_button(my_predbat):
     """Test YAML forecasts do not get one-shot delete buttons."""
     failed = 0
@@ -568,6 +627,25 @@ def test_additional_load_api_forecast_auto_expires(my_predbat):
         failed = 1
 
     my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_expired_startup_unpublishes_entities(my_predbat):
+    """Test expired stored API commands remove stale HA entities when discovered on startup."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.config_index["load_forecast_delta_api"]["value"] = "+dishwasher?start_time=08:00&duration=1.0&energy=0.8&_expires_at={}".format(my_predbat.additional_load_minutes_to_stamp(9 * 60))
+    my_predbat.dashboard_values["binary_sensor.predbat_load_forecast_delta_dishwasher"] = {"state": "on", "attributes": {}}
+    my_predbat.dashboard_values["button.predbat_load_forecast_delta_dishwasher_delete"] = {"state": "idle", "attributes": {}}
+    my_predbat.dashboard_index.extend(["binary_sensor.predbat_load_forecast_delta_dishwasher", "button.predbat_load_forecast_delta_dishwasher_delete"])
+    my_predbat.minutes_now = 10 * 60
+
+    my_predbat.refresh_additional_load_forecast_api()
+
+    if "binary_sensor.predbat_load_forecast_delta_dishwasher" in my_predbat.dashboard_values or "button.predbat_load_forecast_delta_dishwasher_delete" in my_predbat.dashboard_values:
+        print("ERROR: Startup expiry should unpublish stale entities, got {}".format(my_predbat.dashboard_values))
+        failed = 1
     return failed
 
 
@@ -862,6 +940,9 @@ def test_additional_load_flexible_api_metadata_survives_restart(my_predbat):
     api_command = my_predbat.api_select_update("load_forecast_delta_api")[0]
     if "_requested_start=" not in api_command or "_selected_start=" not in api_command or "_expires_at=" not in api_command:
         print("ERROR: API command should persist requested, selected, and expiry metadata, got {}".format(api_command))
+        failed = 1
+    if len(api_command) > 255 or "_selected_end=" in api_command or "_candidate_count=" in api_command:
+        print("ERROR: API command metadata should remain bounded for HA state storage, got length {} command {}".format(len(api_command), api_command))
         failed = 1
 
     my_predbat.house_load_additional_forecast_overrides = {}
@@ -1302,7 +1383,7 @@ def test_additional_load_flexible_followup_retains_better_plan(my_predbat):
 
 
 def test_additional_load_flexible_unchanged_selection_not_marked_changed(my_predbat):
-    """Test unchanged flexible selection does not request another optimisation pass."""
+    """Test unchanged flexible selection still returns load-aware step data without marking the start changed."""
     failed = 0
     configure_additional_load_test(my_predbat)
     my_predbat.minutes_now = 16 * 60
@@ -1543,26 +1624,34 @@ def test_additional_load_history_restores_from_storage(my_predbat):
     """Test additional load history is restored from persistent storage."""
     failed = 0
     configure_additional_load_test(my_predbat)
-    storage = attach_additional_load_storage(my_predbat)
-    start = my_predbat.midnight_utc - timedelta(days=1, hours=-9)
-    record = {
-        "id": "dishwasher:{}:{}".format(start.isoformat(), (start + timedelta(minutes=30)).isoformat()),
-        "name": "dishwasher",
-        "source": "api",
-        "mode": "fixed",
-        "start": start.isoformat(),
-        "end": (start + timedelta(minutes=30)).isoformat(),
-        "energy": "0.4",
-    }
-    run_async(storage.save("additional_load", "history", [record], format="json"))
-    my_predbat.house_load_additional_history = []
-    my_predbat.house_load_additional_history_loaded = False
+    original_components = my_predbat.components
+    try:
+        storage = attach_additional_load_storage(my_predbat)
+        start = my_predbat.midnight_utc - timedelta(days=1, hours=-9)
+        record = {
+            "id": "dishwasher:{}:{}".format(start.isoformat(), (start + timedelta(minutes=30)).isoformat()),
+            "name": "dishwasher",
+            "source": "api",
+            "mode": "fixed",
+            "start": start.isoformat(),
+            "end": (start + timedelta(minutes=30)).isoformat(),
+            "energy": "0.4",
+        }
+        run_async(storage.save("additional_load", "history", [record], format="json"))
+        my_predbat.house_load_additional_history = []
+        my_predbat.house_load_additional_history_loaded = False
 
-    my_predbat.load_additional_load_history()
+        my_predbat.load_additional_load_history()
 
-    if len(my_predbat.house_load_additional_history) != 1 or my_predbat.house_load_additional_history[0].get("energy") != 0.4:
-        print("ERROR: Additional load history should restore valid storage records, got {}".format(my_predbat.house_load_additional_history))
-        failed = 1
+        if len(my_predbat.house_load_additional_history) != 1 or my_predbat.house_load_additional_history[0].get("energy") != 0.4:
+            print("ERROR: Additional load history should restore valid storage records, got {}".format(my_predbat.house_load_additional_history))
+            failed = 1
+        history_sensor = my_predbat.dashboard_values.get("sensor.predbat_load_forecast_delta_history", {})
+        if history_sensor.get("state") != 1:
+            print("ERROR: Restored additional load history should publish history sensor, got {}".format(history_sensor))
+            failed = 1
+    finally:
+        my_predbat.components = original_components
     return failed
 
 
@@ -1589,6 +1678,7 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_slot_energy_weighting(my_predbat)
     failed |= test_additional_load_dishwasher_total_energy(my_predbat)
     failed |= test_additional_load_dishwasher_total_energy_weighting(my_predbat)
+    failed |= test_additional_load_is_not_scaled_with_historical_load(my_predbat)
     failed |= test_additional_load_partial_duration_keeps_total_energy(my_predbat)
     failed |= test_additional_load_duration_rounding_keeps_final_slot(my_predbat)
     failed |= test_additional_load_multiple_and_api_override(my_predbat)
@@ -1599,8 +1689,10 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_delete_button_removes_api_forecast(my_predbat)
     failed |= test_additional_load_delete_button_removes_sanitized_api_forecast(my_predbat)
     failed |= test_additional_load_delete_button_preserves_internal_delete_token(my_predbat)
+    failed |= test_additional_load_rejects_duplicate_safe_names(my_predbat)
     failed |= test_additional_load_yaml_does_not_publish_delete_button(my_predbat)
     failed |= test_additional_load_api_forecast_auto_expires(my_predbat)
+    failed |= test_additional_load_expired_startup_unpublishes_entities(my_predbat)
     failed |= test_additional_load_yaml_placeholder_not_published(my_predbat)
     failed |= test_additional_load_stale_delete_button_no_replan(my_predbat)
     failed |= test_additional_load_flexible_api_selection_survives_refresh(my_predbat)
