@@ -1081,6 +1081,7 @@ class Prediction(PredictionBatch):
                     pv_window_kwh=pv_window_kwh,
                     low_power_pv_threshold_w=self.low_power_pv_threshold_w,
                     solar_full_rate=self.set_charge_low_power_solar_full_rate,
+                    full_hysteresis_active=full_hysteresis_active,
                 )
                 charge_rate_now_curve_step = charge_rate_now_curve * step
 

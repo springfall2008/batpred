@@ -1911,6 +1911,7 @@ def find_charge_rate(
     pv_window_kwh=0.0,
     low_power_pv_threshold_w=0.0,
     solar_full_rate=True,
+    full_hysteresis_active=False,
 ):
     """
     Find the lowest charge rate that fits the charge slow

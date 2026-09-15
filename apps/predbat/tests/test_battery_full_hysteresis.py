@@ -462,3 +462,33 @@ def test_dashboard_display_reflects_hysteresis_band(my_predbat):
         my_predbat.battery_soc_full_hysteresis = original_hysteresis
 
     return failed
+
+
+def test_battery_soc_full_hysteresis_config_registered(my_predbat):
+    """
+    battery_soc_full_hysteresis must be a registered CONFIG_ITEMS entry, not just a class attribute
+    with a Python-level default. Without a config.py entry, get_arg("battery_soc_full_hysteresis")
+    (fetch.py) returns None instead of the intended default of 0 - which every other test in this file
+    masks by setting my_predbat.battery_soc_full_hysteresis directly, bypassing config loading
+    entirely. A None here has no effect on the pure-Python engine (falsy, same as 0), but crashes
+    ctypes marshalling into the C++ kernel context ("must be real number, not NoneType") the moment
+    any scenario tries to route through the kernel - silently, since nothing here fails until that
+    specific code path runs. This regressed once already (the config.py entry was silently dropped by
+    a merge that also added unrelated entries at the same spot) without any other test catching it.
+    """
+    failed = 0
+    from config import CONFIG_ITEMS
+
+    names = [item.get("name") for item in CONFIG_ITEMS]
+    if "battery_soc_full_hysteresis" not in names:
+        print("**** ERROR: battery_soc_full_hysteresis is not a registered CONFIG_ITEMS entry in config.py - get_arg() will return None instead of a real default ****")
+        failed = 1
+
+    if my_predbat.battery_soc_full_hysteresis is None:
+        print("**** ERROR: my_predbat.battery_soc_full_hysteresis is None (expected a numeric default, e.g. 0) - this will crash C++ kernel context marshalling the moment a kernel-routed scenario runs ****")
+        failed = 1
+    elif not isinstance(my_predbat.battery_soc_full_hysteresis, (int, float)):
+        print("**** ERROR: my_predbat.battery_soc_full_hysteresis is {} ({}), expected a plain number ****".format(my_predbat.battery_soc_full_hysteresis, type(my_predbat.battery_soc_full_hysteresis)))
+        failed = 1
+
+    return failed

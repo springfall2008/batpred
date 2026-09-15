@@ -1084,6 +1084,12 @@ class Output:
             pv_window_kwh=pv_window_kwh,
             low_power_pv_threshold_w=self.low_power_pv_threshold_w,
             solar_full_rate=self.set_charge_low_power_solar_full_rate,
+            # Derived from configured hysteresis and this window's soc trajectory (predict_soc_best,
+            # the actual simulation result): treats the whole band below 100% as potentially active,
+            # not just the exact leading edge at soc==100%, since a suppressed charge leaves soc stuck
+            # somewhere inside the band rather than pinned at exactly soc_max. Gated on the feature
+            # actually being enabled, so this has no effect for the default (hysteresis=0) case.
+            full_hysteresis_active=(self.battery_soc_full_hysteresis > 0 and self.soc_max > 0 and (soc / self.soc_max * 100.0) >= (100.0 - self.battery_soc_full_hysteresis)),
         )
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
