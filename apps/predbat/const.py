@@ -72,6 +72,16 @@ INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving 
 INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
 PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
 CAR_CHARGING_LIMIT_UNCAPPED = 9999.0  # Model-facing car charge limit (kWh) that makes predict()'s fill clamp inert - larger than any real car battery (#4967)
+# The car_charging_now "trusted streak" that backs trust_future_dynamic_iog_slots's "started" level
+# (#4516) - see get_car_charging_planned() in fetch.py for the mechanism these two tune.
+# Minutes of a 30-min settlement slot that must remain for a True reading to start a streak, so a
+# reading in a slot's closing minutes can't confirm the slot that follows it. Comfortably above the
+# measured sensor-edge-to-replan latency (~15s poll, 17-40s to act).
+CAR_CHARGING_NOW_CONFIRM_GUARD_MINUTES = 3
+# How far a streak rolls forward without a fresh True read of its own before lapsing. Bounds the
+# damage if a negative edge is ever missed, which would otherwise leave "started" rolling forward
+# indefinitely and behaving as "planned". 4 slots covers a 2-hour BOOST. Untuned - a judgement call.
+CAR_CHARGING_NOW_STREAK_MAX_ROLLOVER_SLOTS = 4
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
 # How far ahead a manual override may be placed. The two horizons differ on purpose: a manual
 # charge/export/freeze/demand slot is bounded by the plan, since Predbat can only act on a slot the
