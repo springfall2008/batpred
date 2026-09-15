@@ -824,6 +824,8 @@ def main():
         sys.exit(0)
 
     print("**** Starting Predbat tests ****")
+    # Used by the debug-file, random-scenario and profiling paths below. The registry test
+    # loop does not share this one - it builds a fresh instance per test (see GH#5079).
     my_predbat = create_predbat()
     print("**** Testing Predbat ****")
     failed = False
@@ -906,6 +908,13 @@ def main():
         # from the log: the elapsed figure below only appears once a test returns, so a test
         # still running (or one that hung) is identified by its unmatched start stamp.
         print(f"**** Running: {name} - {desc} (start {time.strftime('%H:%M:%S')}) ****")
+
+        # Each test gets a PredBat of its own, so state an earlier test left behind cannot
+        # reach it. Sharing one instance across the whole run made a test that mutated it
+        # without restoring break whichever unrelated test happened to follow, depending on
+        # the order they ran in (GH#5079). create_predbat() costs about 22ms, which is lost
+        # in the noise of the suite as a whole.
+        my_predbat = create_predbat()
 
         start_time = time.time()
         test_failed = func(my_predbat)

@@ -10,7 +10,7 @@
 
 import shutil
 import tempfile
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from storage import StorageComponent, StorageLocalFiles
 from tests.test_infra import run_async
@@ -46,6 +46,14 @@ def test_plan_persistence(my_predbat):
     try:
         storage = _make_storage(my_predbat, tmpdir)
         my_predbat.components = _MockComponents(storage)
+
+        # Drive the fixture clock a long way from the real one for the round trip below. Both
+        # clocks agreeing is what let the wrong-clock bug hide: an expiry of now_utc + 8h is
+        # only wrong once the two have drifted more than 8 hours apart, so with the fixture
+        # pinned near real time the test passed either way for most of the day. Pinned a year
+        # back, save_plan() computing expiry from now_utc always writes an already-expired
+        # plan and Test 1 fails at any hour.
+        my_predbat.now_utc = datetime.now(timezone.utc) - timedelta(days=365)
 
         # --- build a representative plan ---
         charge_windows = [{"start": 480, "end": 600, "average": 14.5}]
@@ -165,6 +173,12 @@ def test_plan_persistence(my_predbat):
             storage3 = _make_storage(my_predbat, tmpdir3)
             my_predbat.components = _MockComponents(storage3)
 
+            # Opposite pin to Test 1: a fixture clock in the future, so building the "already
+            # expired" timestamp from now_utc would put it ahead of real time and the plan
+            # would load. That makes the wrong-clock version of the line below fail at any
+            # hour rather than only before ~11:00 local.
+            my_predbat.now_utc = datetime.now(timezone.utc) + timedelta(days=365)
+
             plan_data = {
                 "charge_window_best": [{"start": 120, "end": 240, "average": 10.0}],
                 "charge_limit_best": [5.0],
@@ -173,7 +187,9 @@ def test_plan_persistence(my_predbat):
                 "plan_last_updated": my_predbat.now_utc.isoformat(),
                 "plan_last_updated_minutes": 60,
             }
-            past_expiry = my_predbat.now_utc - timedelta(hours=1)
+            # Expiry has to be in the past relative to the clock storage.load() actually checks
+            # against, which is the real one rather than Predbat's (#5079).
+            past_expiry = datetime.now(timezone.utc) - timedelta(hours=1)
             run_async(storage3.save("predbat", "plan", plan_data, format="json", expiry=past_expiry))
 
             my_predbat.plan_valid = False
@@ -198,7 +214,6 @@ def test_plan_persistence(my_predbat):
             my_predbat.github_url_cache_loaded = False
             my_predbat.github_url_cache = {}
 
-            from datetime import datetime
             test_url = "https://api.github.com/repos/test/releases"
             my_predbat.github_url_cache[test_url] = {"stamp": datetime.now(), "data": [{"tag_name": "v1.0"}]}
             my_predbat._save_github_url_cache_to_storage()
