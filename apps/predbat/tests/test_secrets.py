@@ -273,23 +273,44 @@ def test_collect_log_secret_values():
             print("ERROR: {} from a secret-flagged list key should be collected and labelled teslemetry_site_id, got {}".format(site_value, list_found))
             failed = True
 
-    # A malformed redact_strings_labelled (the shape APPS_SCHEMA's own validator rejects) must
-    # degrade to "nothing from this source", not crash - log() runs before validation has had a
-    # chance to run at all (Copilot review on #5053: AttributeError on .items() froze startup).
+    # A malformed redact_strings/redact_strings_labelled (a shape APPS_SCHEMA's own validator
+    # rejects) must not crash - log() runs before validation has had a chance to run at all
+    # (Copilot review on #5053: AttributeError on .items() froze startup).
     #
-    # A bare string redact_strings is the exception, and is deliberately NOT treated as malformed:
-    # "redact_strings: !secret my_mpan" is a plausible config that validate_config() reads without
-    # get_arg()'s scalar-to-list wrapping, and dropping it would leave exactly the value the user
-    # asked to hide in the clear. Safe degradation for a string is to redact it; only shapes that
-    # name no value at all (a dict here) collect nothing (#5053 review).
+    # It must also not silently collect NOTHING. Every scalar inside whatever shape was given is
+    # collected instead (_flatten_denylist_value), because the two failure modes are not
+    # symmetrical: over-collecting redacts a harmless word from the log, while under-collecting
+    # leaves a credential in the clear - and "redact_strings: {mpan: 1234567890123}" (the user
+    # reaching for redact_strings_labelled's shape) is exactly the plausible mistake that would
+    # otherwise be dropped on the floor with only a warning. An earlier revision of this test
+    # asserted the opposite for a dict; it was the collector that was wrong, not this reasoning,
+    # which the "a bare string is still redacted" case below already followed (#5053 review).
     try:
-        malformed_found = collect_log_secret_values({}, {}, {"not": "a list"}, "not_a_dict")
+        malformed_found = collect_log_secret_values({}, {}, {"mpan": "1234567890123"}, "not_a_dict")
     except (AttributeError, TypeError) as e:
         print("ERROR: malformed redact_strings/redact_strings_labelled crashed instead of degrading: {}".format(e))
         failed = True
         malformed_found = {}
-    if malformed_found:
-        print("ERROR: malformed redact_strings/redact_strings_labelled should collect nothing, got {}".format(malformed_found))
+    if malformed_found.get("1234567890123") != "redact_strings":
+        print("ERROR: a value inside a malformed redact_strings must still be redacted, got {}".format(malformed_found))
+        failed = True
+
+    # Nested one level deeper again - "redact_strings: [[1234567890123]]" was accepted by the
+    # string-list validator and reached the collector unchanged, so the MPAN never entered the
+    # pattern and later logs exposed it (Copilot review on #5053).
+    nested_found = collect_log_secret_values({}, {}, [["9876543210987"]], {"landlord": [1234509876543]})
+    if nested_found.get("9876543210987") != "redact_strings":
+        print("ERROR: a nested redact_strings entry must be collected, got {}".format(nested_found))
+        failed = True
+    if nested_found.get("1234509876543") != "landlord":
+        print("ERROR: a nested redact_strings_labelled entry must be collected and keep its label, got {}".format(nested_found))
+        failed = True
+
+    # Values that cannot usefully match a log line are still dropped - None and bools have no
+    # sensible string form to search for, and an empty string would match everywhere.
+    noise_found = collect_log_secret_values({}, {}, [None, True, False, ""], None)
+    if noise_found:
+        print("ERROR: None/bool/empty denylist entries should collect nothing, got {}".format(noise_found))
         failed = True
 
     scalar_found = collect_log_secret_values({}, {}, "1234567890123", None)
@@ -361,6 +382,20 @@ def test_collect_log_secret_values():
         non_string_key_found = {}
     if non_string_key_found:
         print("ERROR: a non-secret-flagged non-string key should not itself be collected, got {}".format(non_string_key_found))
+        failed = True
+
+    # The case above has a SCALAR value, so it never reaches the nested-prefix concatenation -
+    # which is how "{123: {password: ...}}" still raised TypeError there. A non-string key whose
+    # value is a dict/list must build its label prefix through str() and keep descending, so the
+    # credential underneath is still collected (Copilot review on #5053).
+    try:
+        nested_key_found = collect_log_secret_values({"outer": {123: {"password": "nested-under-int-key"}}}, {})
+    except TypeError as e:
+        print("ERROR: a non-string key with a nested value crashed the traversal: {}".format(e))
+        failed = True
+        nested_key_found = {}
+    if nested_key_found.get("nested-under-int-key") != "outer.123.password":
+        print("ERROR: a credential under a non-string key should be collected and labelled by path, got {}".format(nested_key_found))
         failed = True
 
     if not failed:

@@ -1190,6 +1190,13 @@ class UserInterface:
             for key in state_keys:
                 res = re.search(my_re, key)
                 if res:
+                    # TODO(#5106): this logs the matched entity id before the caller assigns it
+                    # and rebuilds the redaction pattern, so an entity whose own NAME embeds a
+                    # credential (some integrations put an MPAN or account number in the entity id)
+                    # is written out in the clear. Deferred from #5053: the value here is an entity
+                    # id rather than a resolved credential, which makes it narrower than the leaks
+                    # that PR closes, and fixing it properly means redacting against a pattern that
+                    # does not yet include the value being matched.
                     if len(res.groups()) > 0:
                         self.log("Regular expression argument {} matched {} with {}".format(arg, my_re, res.group(1)))
                         arg_value = res.group(1)
