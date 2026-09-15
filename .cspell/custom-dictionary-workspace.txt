@@ -241,7 +241,6 @@ geserial
 geseriale
 getaffinity
 getall
-getattr
 getrusage
 Ginlong
 gitnexus

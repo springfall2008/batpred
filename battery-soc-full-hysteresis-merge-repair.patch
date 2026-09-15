@@ -1,0 +1,576 @@
+diff --git a/apps/predbat/components.py b/apps/predbat/components.py
+index 75cc679c..0644e6e1 100644
+--- a/apps/predbat/components.py
++++ b/apps/predbat/components.py
+@@ -269,6 +269,8 @@ COMPONENT_LIST = {
+             "token_expires_at": {"required": False, "config": "myenergi_token_expires_at"},
+             "token_hash": {"required": False, "secret": True, "config": "myenergi_token_hash"},
+             "automatic": {"required": False, "config": "myenergi_automatic", "default": True},
++            "automatic_zappi": {"required": False, "config": "myenergi_automatic_zappi", "default": True},
++            "automatic_eddi": {"required": False, "config": "myenergi_automatic_eddi", "default": True},
+             "enable_controls": {"required": False, "config": "myenergi_enable_controls", "default": True},
+             "poll_seconds": {"required": False, "config": "myenergi_poll_seconds", "default": 60},
+             "zappi_control": {"required": False, "config": "myenergi_zappi_control", "default": False},
+@@ -954,13 +956,17 @@ class Components:
+         if not self.components[name]:
+             # Disabled components can be ignored
+             return True
+-        if not self.component_tasks[name] or not self.component_tasks[name].is_alive():
++        # .get rather than []: a component registered outside initialize() (tests register fakes
++        # directly) has no task entry, and that should read as "not yet started", not KeyError.
++        if not self.component_tasks.get(name, None) or not self.component_tasks[name].is_alive():
+             return False
+         if not self.components[name].is_alive():
+             return False
+         last_updated_time = self.last_updated_time(name)
+         diff_time = datetime.now(timezone.utc) - last_updated_time if last_updated_time else None
+-        if not diff_time or diff_time > timedelta(minutes=60):
++        # "is None" rather than falsy: a timedelta of exactly zero is falsy, so a component whose
++        # last success lands on the very microsecond of the check read as dead for that cycle.
++        if diff_time is None or diff_time > timedelta(minutes=60):
+             return False
+         return True
+ 
+@@ -997,6 +1003,54 @@ class Components:
+         """The display names of every active inverter component, for user-facing messages."""
+         return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False)]
+ 
++    def inverter_source_status(self):
++        """
++        Every configured inverter component paired with whether it is currently healthy.
++
++        The name of an inverter type is not much help when nobody chose it: with inverter_type
++        absent from apps.yaml the only thing Predbat can name is the assumed GE default, which on
++        the Solis install in #4990 read as "check the GivEnergy credentials". What the user needs
++        instead is which inverter components they actually have configured and which of those is
++        failing, so a component-level fault is reported as a component-level fault.
++
++        Components that failed to construct are included even though they are inactive, and so
++        absent from inverter_source_names(): a component that never loaded is precisely the one
++        worth telling the user about.
++
++        Current health comes from is_alive() - the same test the dashboard's health reporting
++        already consumes - because count_errors is a lifetime counter that nothing resets (a
++        component that needed retries at boot and then polled cleanly for a week would otherwise
++        be reported "in error" forever), and api_started answers "did run() ever return truthy"
++        rather than "is this serving data now" - the gateway declares itself started on a
++        successful run() with no inverter args set, so it would read OK with no data ever
++        delivered. The lifetime counter is demoted to secondary detail, and only consulted when
++        the component is not currently alive: a retrying startup has counted errors and never
++        started, while api_started-but-stale reads as "not responding". getattr keeps the
++        api_started fallback working for components that predate the flag.
++        """
++        status = []
++        for name, component_info in COMPONENT_LIST.items():
++            if not component_info.get("inverter", False):
++                continue
++            load_error = self.load_error(name)
++            component = self.components.get(name, None)
++            if load_error is not None:
++                state = "failed to start: {}".format(load_error)
++            elif not component:
++                continue
++            elif self.is_alive(name):
++                state = "OK"
++            else:
++                errors = self.get_error_count(name) or 0
++                if errors:
++                    state = "in error, {} error{} so far".format(errors, "s" if errors != 1 else "")
++                elif not getattr(component, "api_started", True):
++                    state = "still starting, no data yet"
++                else:
++                    state = "not responding"
++            status.append("{} ({})".format(component_info["name"], state))
++        return status
++
+     def get_all(self):
+         all_components = [name for name in self.components.keys()]
+         return all_components
+diff --git a/apps/predbat/config.py b/apps/predbat/config.py
+index 30064efc..a956098e 100644
+--- a/apps/predbat/config.py
++++ b/apps/predbat/config.py
+@@ -1094,6 +1094,18 @@ CONFIG_ITEMS = [
+         "enable": "set_charge_low_power",
+         "default": True,
+     },
++    {
++        "name": "battery_soc_full_hysteresis",
++        "friendly_name": "Battery SoC Full Hysteresis",
++        "type": "input_number",
++        "min": 0,
++        "max": 20,
++        "step": 0.5,
++        "unit": "%",
++        "icon": "mdi:battery-alert-variant-outline",
++        "enable": "expert_mode",
++        "default": 0,
++    },
+     {
+         "name": "set_reserve_enable",
+         "friendly_name": "Set Reserve Enable",
+@@ -2711,6 +2723,8 @@ APPS_SCHEMA = {
+     "myenergi_token_expires_at": {"type": "string", "empty": False},
+     "myenergi_token_hash": {"type": "string", "empty": False},
+     "myenergi_automatic": {"type": "boolean"},
++    "myenergi_automatic_zappi": {"type": "boolean"},
++    "myenergi_automatic_eddi": {"type": "boolean"},
+     "myenergi_enable_controls": {"type": "boolean"},
+     "myenergi_poll_seconds": {"type": "integer", "zero": False},
+     "myenergi_zappi_control": {"type": "boolean"},
+diff --git a/apps/predbat/const.py b/apps/predbat/const.py
+index 17bbcf7c..243c8d11 100644
+--- a/apps/predbat/const.py
++++ b/apps/predbat/const.py
+@@ -60,6 +60,14 @@ INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
+ INVERTER_WRITE_POLL_INTERVAL = 0.25  # Seconds before the second look, doubling after each miss
+ INVERTER_WRITE_POLL_MAX_INTERVAL = 2.0  # Ceiling for that backoff
+ INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST commands
++# Inverter clock skew bands, measured as (inverter time - Predbat computer time) in minutes.
++# At or above the restart threshold Predbat warns loudly and triggers auto_restart. Between the warn
++# and restart thresholds nothing used to be said at all, yet the drift still shifts every charge and
++# export slot Predbat writes (compensation via inverter_clock_skew_* is manual only), so a moderate
++# steady skew showed up only as expensive grid import at the edges of every window - see #4989/#4927.
++INVERTER_CLOCK_SKEW_RESTART_MINUTES = 30
++INVERTER_CLOCK_SKEW_WARN_MINUTES = 5
++INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES = 60  # Minimum gap between repeats of the moderate-skew warning, per inverter, so it doesn't fire every 5-minute cycle
+ INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
+ INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
+ PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
+diff --git a/apps/predbat/execute.py b/apps/predbat/execute.py
+index 32608245..8fcb9c1f 100644
+--- a/apps/predbat/execute.py
++++ b/apps/predbat/execute.py
+@@ -276,6 +276,7 @@ class Execute:
+                             pv_window_kwh=pv_window_kwh,
+                             low_power_pv_threshold_w=self.low_power_pv_threshold_w,
+                             solar_full_rate=self.set_charge_low_power_solar_full_rate,
++                            full_hysteresis_active=getattr(inverter, "full_hysteresis_active", False),
+                         )
+                         new_charge_rate = int(new_charge_rate * MINUTE_WATT)
+ 
+diff --git a/apps/predbat/inverter.py b/apps/predbat/inverter.py
+index 51ce14fb..d77ac6b0 100644
+--- a/apps/predbat/inverter.py
++++ b/apps/predbat/inverter.py
+@@ -23,7 +23,20 @@ import time
+ import pytz
+ from datetime import datetime, timedelta
+ from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
+-from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, EXPORT_LIMIT_IDLE, INVERTER_WRITE_POLL_INTERVAL, INVERTER_WRITE_POLL_MAX_INTERVAL
++from const import (
++    MINUTE_WATT,
++    TIME_FORMAT,
++    TIME_FORMAT_OCTOPUS,
++    INVERTER_TEST,
++    TIME_FORMAT_SECONDS,
++    INVERTER_MAX_RETRY,
++    EXPORT_LIMIT_IDLE,
++    INVERTER_WRITE_POLL_INTERVAL,
++    INVERTER_WRITE_POLL_MAX_INTERVAL,
++    INVERTER_CLOCK_SKEW_RESTART_MINUTES,
++    INVERTER_CLOCK_SKEW_WARN_MINUTES,
++    INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES,
++)
+ from control_ledger import generation_from_state, OWNED, UNOWNED
+ from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes
+ 
+@@ -99,14 +112,63 @@ class Inverter:
+         component can be active at once, so naming whichever happened to be checked first sends
+         the user to look at credentials for hardware they may not even own. Falls back to the
+         active component names when the type has no display name.
++
++        An unset type is not a statement about the hardware. With inverter_type absent from
++        apps.yaml the type is "GE" only because nothing said otherwise, so naming GivEnergy told
++        the Solis owner in #4990 to go and check credentials for hardware they do not own. The
++        active components are the better answer there, and INVERTER_DEF is consulted only if there
++        are none - a defaulted type with no component is a bare apps.yaml setup, where "GivEnergy"
++        at least matches the behaviour Predbat is actually using.
++
++        Whether the type is unset is re-derived at message time rather than taken from a
++        constructor snapshot: a component's automatic_config() writes inverter_type into
++        base.args once discovery succeeds, and Inverter objects outlive that, so a startup-time
++        flag goes stale in both directions (#4990).
+         """
++        components = getattr(self.base, "components", None)
++        names = components.inverter_source_names() if components else []
++        if self.inverter_type_is_assumed() and names:
++            return ", ".join(names)
+         name = INVERTER_DEF.get(self.inverter_type, {}).get("name", None)
+         if name:
+             return name
+-        components = getattr(self.base, "components", None)
+-        names = components.inverter_source_names() if components else []
+         return ", ".join(names) if names else self.inverter_type
+ 
++    def inverter_type_is_assumed(self):
++        """Whether inverter_type is currently unset, so GE is Predbat's assumption not a choice.
++
++        Deliberately re-derived from base.args every time rather than remembered from Inverter
++        construction: components write inverter_type into base.args after discovery (each one's
++        automatic_config()), while Inverter objects persist across cycles, so a snapshot taken at
++        construction would keep asserting "no inverter_type is set" long after Solis had been
++        discovered and configured (#4990).
++        """
++        return "inverter_type" not in self.base.args
++
++    def inverter_type_assumed_name(self):
++        """Display name of the assumed inverter type, for user-facing messages."""
++        return INVERTER_DEF.get(self.inverter_type, {}).get("name", None) or self.inverter_type
++
++    def inverter_source_hint(self):
++        """
++        What the user should go and check when a configured source returns no data.
++
++        Normally that is the named source's credentials. When inverter_type was never set there is
++        no credential Predbat can point at with any confidence, so it says so and lists the
++        inverter components that ARE configured together with whether each is in error - on #4990
++        a SolisCloud comms failure surfaced as "check the GivEnergy credentials", naming neither
++        the real component nor the real fault. The assumed type is named from INVERTER_DEF rather
++        than hardcoded, so the wording follows whatever the default actually is.
++        """
++        components = getattr(self.base, "components", None)
++        status = components.inverter_source_status() if components else []
++        if self.inverter_type_is_assumed() and status:
++            listed = "; ".join(status)
++            return "no inverter_type is set in apps.yaml so {} ({}) is assumed - configured inverter components: {} - set inverter_type to match your inverter, and check any component reported above as in error".format(
++                self.inverter_type_assumed_name(), self.inverter_type, listed
++            )
++        return "check the {} credentials and that the account still has this inverter attached".format(self.inverter_source_name())
++
+     def _poll_after_write(self, entity_id, matched, refresh=True, required_unit=None):
+         """
+         Spend one write_and_poll_sleep interval waiting for a written value, and return the last read.
+@@ -138,6 +200,36 @@ class Inverter:
+             waited += step
+             delay = min(delay * 2, INVERTER_WRITE_POLL_MAX_INTERVAL)
+ 
++    def check_clock_skew(self, tdiff, now_utc):
++        """
++        Act on the measured inverter clock skew in minutes, warning (and restarting) on a large skew and warning periodically on a moderate one
++        """
++        if abs(tdiff) >= INVERTER_CLOCK_SKEW_RESTART_MINUTES:
++            skew_message = "Inverter time is {}, Predbat computer time {}, this is {} minutes skewed".format(self.inverter_time, now_utc, tdiff)
++            message = "Warn: {}, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(skew_message)
++            self.base.log(message)
++            self.base.record_status(message, had_errors=True)
++            # Trigger restart
++            self.auto_restart("Clock skew >= {} minutes".format(INVERTER_CLOCK_SKEW_RESTART_MINUTES))
++            return
++
++        # Below the restart threshold nothing is restarted, but a steady moderate skew still shifts every
++        # charge and export slot Predbat writes, so say so periodically rather than every cycle (#4989)
++        self.base.restart_active = False
++        if abs(tdiff) >= INVERTER_CLOCK_SKEW_WARN_MINUTES:
++            last_warn = self.base.clock_skew_warn_time.get(self.id, None)
++            if (last_warn is None) or ((now_utc - last_warn) >= timedelta(minutes=INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES)):
++                self.base.clock_skew_warn_time[self.id] = now_utc
++                skew_message = "Inverter time is {}, Predbat computer time {}, this is {} minutes skewed".format(self.inverter_time, now_utc, tdiff)
++                self.base.log(
++                    "Warn: Inverter {}: {}. This is below the {} minute restart threshold but will still shift every charge and export slot Predbat writes - correct the inverter clock, or compensate for it with inverter_clock_skew_start/inverter_clock_skew_end and inverter_clock_skew_discharge_start/inverter_clock_skew_discharge_end in apps.yaml".format(
++                        self.id, skew_message, INVERTER_CLOCK_SKEW_RESTART_MINUTES
++                    )
++                )
++        else:
++            # Back within tolerance, forget the last warning so a recurrence is reported promptly
++            self.base.clock_skew_warn_time.pop(self.id, None)
++
+     def auto_restart(self, reason):
+         """
+         Attempt to restart the services required
+@@ -273,8 +365,13 @@ class Inverter:
+         self.last_export_schedule_committed = None
+ 
+         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
+-        if "inverter_type" not in self.base.args:
+-            self.log("Warn: Inverter {}: inverter_type is not set in apps.yaml, assuming GivEnergy (GE) - if this is not correct, set inverter_type to match your inverter, see the documentation".format(self.id))
++        # An assumed type is not a chosen one. The user-facing "source returned no data" warnings
++        # must not name it as though the user had picked it (#4990); those messages re-derive the
++        # fact at message time (inverter_type_is_assumed) because discovery can set the type later.
++        if self.inverter_type_is_assumed():
++            self.log(
++                "Warn: Inverter {}: inverter_type is not set in apps.yaml, assuming {} ({}) - if this is not correct, set inverter_type to match your inverter, see the documentation".format(self.id, self.inverter_type_assumed_name(), self.inverter_type)
++            )
+ 
+         # Read user defined inverter type
+         if "inverter" in self.base.args:
+@@ -432,22 +529,7 @@ class Inverter:
+             tdiff = dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
+             if not quiet:
+                 self.base.log("Inverter time {}, Predbat computer time {}, difference {} minutes".format(self.inverter_time, now_utc, tdiff))
+-            if abs(tdiff) >= 30:
+-                self.base.log(
+-                    "Warn: Inverter time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
+-                        self.inverter_time, now_utc, tdiff
+-                    )
+-                )
+-                self.base.record_status(
+-                    "Warn: Inverter time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
+-                        self.inverter_time, now_utc, tdiff
+-                    ),
+-                    had_errors=True,
+-                )
+-                # Trigger restart
+-                self.auto_restart("Clock skew >=10 minutes")
+-            else:
+-                self.base.restart_active = False
++            self.check_clock_skew(tdiff, now_utc)
+ 
+         # Get the expected minimum reserve value for the current inverter
+         reserve_min_postfix = "" if self.id == 0 else "_" + str(self.id)
+@@ -1532,8 +1614,16 @@ class Inverter:
+                 # real cause is upstream: a cloud account with no devices attached, revoked or
+                 # rotated API credentials, or a lapsed entitlement, none of which Predbat can tell
+                 # apart from here beyond naming where the data should have come from.
+-                source = self.inverter_source_name()
+-                hint = "check the {} credentials and that the account still has this inverter attached".format(source)
++                if "charge_start_time" in self.base.args:
++                    # A configured apps.yaml entity that has stopped reporting is the user's own
++                    # setup to fix, not a component outage - the same distinction the export
++                    # window makes, so the component listing does not point past a broken entity
++                    # at hardware that is fine.
++                    source = "charge_start_time"
++                    hint = "check the charge_start_time/charge_end_time entities in apps.yaml are reporting"
++                else:
++                    source = self.inverter_source_name()
++                    hint = self.inverter_source_hint()
+                 self.log("Warn: Inverter {} unable to read charge window time - {} returned no data, {}, will retry next update".format(self.id, source, hint))
+                 self.base.record_status("Warn: Inverter {} unable to read charge window time - {} returned no data, {}".format(self.id, source, hint), had_errors=True)
+                 # Set safe defaults to allow graceful recovery on next update
+@@ -1651,7 +1741,7 @@ class Inverter:
+             if export_source == "discharge_start_time":
+                 hint = "check the discharge_start_time/discharge_end_time entities in apps.yaml are reporting"
+             else:
+-                hint = "check the {} credentials and that the account still has this inverter attached".format(export_source)
++                hint = self.inverter_source_hint()
+             self.log("Warn: Inverter {} unable to read Export window - {} returned no data, {}, will retry next update".format(self.id, export_source, hint))
+             self.base.record_status("Warn: Inverter {} unable to read Export window - {} returned no data, {}".format(self.id, export_source, hint), had_errors=True)
+             # Safe defaults must be INERT, not merely disabled. forecast_minutes parks the window
+diff --git a/apps/predbat/myenergi.py b/apps/predbat/myenergi.py
+index fedd24f3..8394cb8e 100644
+--- a/apps/predbat/myenergi.py
++++ b/apps/predbat/myenergi.py
+@@ -761,12 +761,20 @@ MAX_POLL_SECONDS = 30 * 60
+ class MyEnergiAPI(ComponentBase, OAuthMixin):
+     """myenergi component providing Zappi and Eddi monitoring and boost control."""
+ 
+-    def initialize(self, auth_method=None, hub_serial=None, api_key=None, key=None, token_expires_at=None, token_hash=None, automatic=True, enable_controls=True, poll_seconds=60, zappi_control=False):
++    def initialize(self, auth_method=None, hub_serial=None, api_key=None, key=None, token_expires_at=None, token_hash=None, automatic=True, enable_controls=True, poll_seconds=60, zappi_control=False, automatic_zappi=True, automatic_eddi=True):
+         """Select a transport from the configured credentials and set up component state."""
+         configured_auth_method = (auth_method or "direct").lower()
+         self.hub_serial = hub_serial
+         self.api_key = api_key
+         self.automatic = automatic
++        # Both halves are kept apart from automatic so either device kind can be left out
++        # on its own: an Eddi owner who charges their car with something else sets
++        # automatic_zappi false, and a Zappi owner whose hot water diverter is handled
++        # elsewhere sets automatic_eddi false. Each defaults on, unlike ge_cloud_automatic_evc,
++        # because myenergi already wires both device kinds under automatic and an upgrade
++        # must not silently take that away from existing users.
++        self.automatic_zappi = automatic_zappi
++        self.automatic_eddi = automatic_eddi
+         self.enable_controls = enable_controls
+         self.zappi_control = bool(zappi_control)
+         # ComponentBase.start() calls run() on a fixed 60 second cadence, so the poll
+@@ -838,6 +846,11 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
+ 
+         The Zappi live power sensors go to car_charging_power, which is display-only: it feeds
+         the web power flow diagram and the predbat.car_charging_power sensor, never the plan.
++
++        The two halves are gated separately: a Zappi is an EV charger and an Eddi is a hot
++        water diverter, so automatic_zappi off leaves the Eddi wiring in place while
++        contributing no car inputs, and automatic_eddi off does the reverse, for an account
++        that owns only one of the two things it does.
+         """
+         zappi_energy_entities = []
+         zappi_power_entities = []
+@@ -845,11 +858,11 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
+         eddi_entity = None
+         for device in sorted(self.devices.values(), key=lambda item: item.serial):
+             prefix = self.entity_prefix(device)
+-            if device.kind == DEVICE_KIND_ZAPPI:
++            if device.kind == DEVICE_KIND_ZAPPI and self.automatic_zappi:
+                 zappi_energy_entities.append("sensor.{}_session_energy".format(prefix))
+                 zappi_power_entities.append("sensor.{}_power".format(prefix))
+                 zappi_plug_entities.append("sensor.{}_plug_status".format(prefix))
+-            elif device.kind == DEVICE_KIND_EDDI and eddi_entity is None:
++            elif device.kind == DEVICE_KIND_EDDI and self.automatic_eddi and eddi_entity is None:
+                 eddi_entity = "sensor.{}_session_energy".format(prefix)
+ 
+         if zappi_energy_entities:
+@@ -904,6 +917,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
+         if not self.automatic:
+             self.log("Warn: myenergi: myenergi_zappi_control needs myenergi_automatic to map each Zappi to a car, Zappi control is disabled")
+             return
++        if not self.automatic_zappi:
++            self.log("Warn: myenergi: myenergi_zappi_control needs myenergi_automatic_zappi to map each Zappi to a car, Zappi control is disabled")
++            return
+         if not self.enable_controls:
+             self.log("Warn: myenergi: myenergi_zappi_control is ignored while myenergi_enable_controls is off")
+             return
+diff --git a/apps/predbat/output.py b/apps/predbat/output.py
+index f39e8cac..f71280bb 100644
+--- a/apps/predbat/output.py
++++ b/apps/predbat/output.py
+@@ -1084,6 +1084,12 @@ class Output:
+             pv_window_kwh=pv_window_kwh,
+             low_power_pv_threshold_w=self.low_power_pv_threshold_w,
+             solar_full_rate=self.set_charge_low_power_solar_full_rate,
++            # Derived from configured hysteresis and this window's soc trajectory (predict_soc_best,
++            # the actual simulation result): treats the whole band below 100% as potentially active,
++            # not just the exact leading edge at soc==100%, since a suppressed charge leaves soc stuck
++            # somewhere inside the band rather than pinned at exactly soc_max. Gated on the feature
++            # actually being enabled, so this has no effect for the default (hysteresis=0) case.
++            full_hysteresis_active=(self.battery_soc_full_hysteresis > 0 and self.soc_max > 0 and (soc / self.soc_max * 100.0) >= (100.0 - self.battery_soc_full_hysteresis)),
+         )
+         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
+ 
+diff --git a/apps/predbat/predbat.py b/apps/predbat/predbat.py
+index b6ff8065..9db3b877 100644
+--- a/apps/predbat/predbat.py
++++ b/apps/predbat/predbat.py
+@@ -327,6 +327,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan,
+         self.currency_symbols = self.args.get("currency_symbols", "£p")
+         self.watch_list = []
+         self.restart_active = False
++        self.clock_skew_warn_time = {}  # Per-inverter time the moderate clock-skew warning was last logged, so it repeats hourly rather than every cycle
+         self.control_ledger = ControlLedger()
+         self.control_ledger_restored = False
+         self.inverter_needs_reset = False
+diff --git a/apps/predbat/prediction.py b/apps/predbat/prediction.py
+index d3b06db1..50706e84 100644
+--- a/apps/predbat/prediction.py
++++ b/apps/predbat/prediction.py
+@@ -1081,6 +1081,7 @@ class Prediction(PredictionBatch):
+                     pv_window_kwh=pv_window_kwh,
+                     low_power_pv_threshold_w=self.low_power_pv_threshold_w,
+                     solar_full_rate=self.set_charge_low_power_solar_full_rate,
++                    full_hysteresis_active=full_hysteresis_active,
+                 )
+                 charge_rate_now_curve_step = charge_rate_now_curve * step
+ 
+diff --git a/apps/predbat/tests/test_battery_full_hysteresis.py b/apps/predbat/tests/test_battery_full_hysteresis.py
+index 46200893..f5043135 100644
+--- a/apps/predbat/tests/test_battery_full_hysteresis.py
++++ b/apps/predbat/tests/test_battery_full_hysteresis.py
+@@ -462,3 +462,33 @@ def test_dashboard_display_reflects_hysteresis_band(my_predbat):
+         my_predbat.battery_soc_full_hysteresis = original_hysteresis
+ 
+     return failed
++
++
++def test_battery_soc_full_hysteresis_config_registered(my_predbat):
++    """
++    battery_soc_full_hysteresis must be a registered CONFIG_ITEMS entry, not just a class attribute
++    with a Python-level default. Without a config.py entry, get_arg("battery_soc_full_hysteresis")
++    (fetch.py) returns None instead of the intended default of 0 - which every other test in this file
++    masks by setting my_predbat.battery_soc_full_hysteresis directly, bypassing config loading
++    entirely. A None here has no effect on the pure-Python engine (falsy, same as 0), but crashes
++    ctypes marshalling into the C++ kernel context ("must be real number, not NoneType") the moment
++    any scenario tries to route through the kernel - silently, since nothing here fails until that
++    specific code path runs. This regressed once already (the config.py entry was silently dropped by
++    a merge that also added unrelated entries at the same spot) without any other test catching it.
++    """
++    failed = 0
++    from config import CONFIG_ITEMS
++
++    names = [item.get("name") for item in CONFIG_ITEMS]
++    if "battery_soc_full_hysteresis" not in names:
++        print("**** ERROR: battery_soc_full_hysteresis is not a registered CONFIG_ITEMS entry in config.py - get_arg() will return None instead of a real default ****")
++        failed = 1
++
++    if my_predbat.battery_soc_full_hysteresis is None:
++        print("**** ERROR: my_predbat.battery_soc_full_hysteresis is None (expected a numeric default, e.g. 0) - this will crash C++ kernel context marshalling the moment a kernel-routed scenario runs ****")
++        failed = 1
++    elif not isinstance(my_predbat.battery_soc_full_hysteresis, (int, float)):
++        print("**** ERROR: my_predbat.battery_soc_full_hysteresis is {} ({}), expected a plain number ****".format(my_predbat.battery_soc_full_hysteresis, type(my_predbat.battery_soc_full_hysteresis)))
++        failed = 1
++
++    return failed
+diff --git a/apps/predbat/tests/test_infra.py b/apps/predbat/tests/test_infra.py
+index 4e21bd84..cdd7f9d3 100644
+--- a/apps/predbat/tests/test_infra.py
++++ b/apps/predbat/tests/test_infra.py
+@@ -8,7 +8,7 @@
+ # pylint: disable=line-too-long
+ # pylint: disable=attribute-defined-outside-init
+ 
+-from datetime import datetime, timedelta
++from datetime import datetime, timedelta, timezone
+ from const import PREDBAT_MAX_CARS, MINUTE_WATT
+ from prediction import Prediction
+ import sys
+@@ -141,6 +141,41 @@ def create_aiohttp_mock_session(mock_response=None, exception=None):
+     return mock_session
+ 
+ 
++class FakeComponentTask:
++    """Stand-in for the threading.Thread Components.start() creates, reporting itself alive."""
++
++    def is_alive(self):
++        """The fake task never dies, so Components.is_alive() is left to judge the component."""
++        return True
++
++
++class FakeInverterComponent:
++    """Stand-in for a registered inverter component reporting a given current health.
++
++    Lives here rather than in the individual test suites because both test_components.py and
++    test_inverter.py need one, and the health surface it mirrors (ComponentBase.get_error_count /
++    api_started / last_updated_time) changes shape rarely but across both suites when it does.
++    """
++
++    def __init__(self, errors=0, api_started=True, updated_recently=True):
++        """Record the health this fake component should report back."""
++        self.count_errors = errors
++        self.api_started = api_started
++        self.updated_recently = updated_recently
++
++    def get_error_count(self):
++        """Errors recorded so far, as ComponentBase.get_error_count() reports them."""
++        return self.count_errors
++
++    def is_alive(self):
++        """Current health, as ComponentBase.is_alive() reports it."""
++        return self.api_started and self.updated_recently
++
++    def last_updated_time(self):
++        """Time of the last successful operation, or None if never succeeded."""
++        return datetime.now(timezone.utc) if self.updated_recently else None
++
++
+ class DummyInverter:
+     def __init__(self, log, inverter_id=0):
+         self.soc_kw = 0
+diff --git a/apps/predbat/unit_test.py b/apps/predbat/unit_test.py
+index 2f85c65e..63609ea5 100644
+--- a/apps/predbat/unit_test.py
++++ b/apps/predbat/unit_test.py
+@@ -157,6 +157,7 @@ from tests.test_battery_full_hysteresis import (
+     test_battery_full_hysteresis_kernel_parity,
+     test_record_status_preserves_hysteresis_when_no_inverters,
+     test_dashboard_display_reflects_hysteresis_band,
++    test_battery_soc_full_hysteresis_config_registered,
+ )
+ from tests.test_manual_api import run_test_manual_api
+ from tests.test_manual_soc import run_test_manual_soc
+@@ -575,6 +576,7 @@ def main():
+         ("battery_full_hysteresis_kernel_parity", test_battery_full_hysteresis_kernel_parity, "Battery full hysteresis: C++ kernel vs Python engine parity", False),
+         ("battery_full_hysteresis_startup_persist", test_record_status_preserves_hysteresis_when_no_inverters, "Battery full hysteresis: record_status preserves state across early-startup errors", False),
+         ("battery_full_hysteresis_dashboard", test_dashboard_display_reflects_hysteresis_band, "Battery full hysteresis: dashboard display reflects the whole band, gated on the feature being enabled", False),
++        ("battery_full_hysteresis_config_registered", test_battery_soc_full_hysteresis_config_registered, "Battery full hysteresis: config.py entry is registered so get_arg() returns a real default, not None", False),
+         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
+         ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),
+         ("energydataservice", run_energydataservice_tests, "Energy data service tests", False),
+diff --git a/apps/predbat/utils.py b/apps/predbat/utils.py
+index 1e22411a..5bc8f875 100644
+--- a/apps/predbat/utils.py
++++ b/apps/predbat/utils.py
+@@ -1911,6 +1911,7 @@ def find_charge_rate(
+     pv_window_kwh=0.0,
+     low_power_pv_threshold_w=0.0,
+     solar_full_rate=True,
++    full_hysteresis_active=False,
+ ):
+     """
+     Find the lowest charge rate that fits the charge slow
