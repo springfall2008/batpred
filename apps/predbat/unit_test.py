@@ -50,6 +50,7 @@ from tests.test_new_install_detection import test_new_install_detection
 from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
+from tests.test_clock import run_clock_tests
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
@@ -148,6 +149,7 @@ from tests.test_window_selection import run_window_selection_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
+from tests.test_manual_soc_max import run_test_manual_soc_max
 from tests.test_manual_times import run_test_manual_times
 from tests.test_manual_select import run_test_manual_select
 from tests.test_minute_array import test_minute_array
@@ -435,6 +437,7 @@ def main():
         ("debug_enable_auto_scope", test_debug_enable_auto_scope, "debug_enable auto-disable-after-N-hours tests (#4438 review)", False),
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
+        ("clock", run_clock_tests, "update_time clock tests", False),
         ("rate_min_forward_calc", test_rate_min_forward_calc, "Rate min forward calc tests", False),
         ("rate_export_max_forward_calc", test_rate_export_max_forward_calc, "Rate export max forward calc tests", False),
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
@@ -503,6 +506,7 @@ def main():
         ("manual_api", run_test_manual_api, "Manual API tests", False),
         ("additional_load_forecast", run_additional_load_forecast_tests, "Additional load forecast tests", False),
         ("manual_soc", run_test_manual_soc, "Manual SOC target tests", False),
+        ("manual_soc_max", run_test_manual_soc_max, "Manual SOC maximum (ceiling) target tests (issue #1578)", False),
         ("manual_times", run_test_manual_times, "Manual times tests", False),
         ("manual_select", run_test_manual_select, "Manual select tests", False),
         ("web_if", run_test_web_if, "Web interface tests", False),

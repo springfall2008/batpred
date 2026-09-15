@@ -38,6 +38,9 @@ def test_octopus_download_rates(my_predbat):
     print("\nTest 1: Successful download with single page response")
     my_predbat.octopus_url_cache = {}
     my_predbat.midnight_utc = datetime.strptime("2024-06-12T00:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z")
+    # now_utc has to move with midnight_utc - ComponentBase.midnight_utc derives today's
+    # midnight from now_utc (GH#4804), and this pin is left behind for later test modules.
+    my_predbat.now_utc = my_predbat.midnight_utc
     my_predbat.debug_enable = False
     my_predbat.failures_total = 0
     # All the mock rate data below starts at minute 0 and covers forward from there - pin "now"
@@ -251,6 +254,9 @@ def test_octopus_download_rates(my_predbat):
     my_predbat.debug_enable = False
     my_predbat.failures_total = 0
     my_predbat.midnight_utc = datetime.strptime("2024-06-12T00:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z")
+    # now_utc has to move with midnight_utc - ComponentBase.midnight_utc derives today's
+    # midnight from now_utc (GH#4804), and this pin is left behind for later test modules.
+    my_predbat.now_utc = my_predbat.midnight_utc
 
     test_url = "https://api.octopus.energy/test-func"
 

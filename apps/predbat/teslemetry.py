@@ -1201,9 +1201,15 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         return (*self._render_side(layout, tier_prices), tier_prices, layout)
 
     def _local_today_weekday(self):
-        """Return the site-local weekday (0=Mon) from base.now, falling back to the system clock in tests."""
+        """Return the site-local weekday (0=Mon) from base.now_utc, falling back to the system clock in tests.
+
+        base.now_utc is Predbat's clock in the configured timezone, so this follows clock_skew and a
+        test-pinned clock. It replaced base.now, the host timezone's clock, when that second clock
+        was removed - taking the weekday from the host would disagree with the configured timezone
+        around midnight, and silently ignore a skew.
+        """
         base = getattr(self, "base", None)
-        now = getattr(base, "now", None) if base is not None else None
+        now = getattr(base, "now_utc", None) if base is not None else None
         if now is None:
             now = datetime.now(getattr(self, "local_tz", None) or timezone.utc)
         return now.weekday()

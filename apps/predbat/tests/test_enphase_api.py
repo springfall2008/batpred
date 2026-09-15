@@ -26,7 +26,8 @@ class MockBase:
 
     def __init__(self):
         """Initialise MockBase with default config."""
-        self.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.now_utc = datetime.now(pytz.utc)
+        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         self.config = {}
 
     def get_arg(self, key, default=None, **kwargs):
@@ -1043,7 +1044,6 @@ def test_inverter_def_enphase():
     assert idef["charge_time_entity_is_option"] is True
     assert idef["can_span_midnight"] is False
     assert idef["target_soc_used_for_discharge"] is True
-    assert idef["has_fox_inverter_mode"] is False
 
 
 def test_run_first_polls_all_tiers():

@@ -122,6 +122,7 @@ Dashlane
 datain
 datalist
 datalog
+datalogger
 datap
 datapoints
 datas
@@ -316,6 +317,7 @@ keepalive
 keydb
 khtml
 killall
+Kiritimati
 kopt
 Kostal
 kostalplenticore
@@ -573,6 +575,7 @@ snakeviz
 snprintf
 socb
 socketloop
+socmax
 socs
 sofar
 SolarEdge

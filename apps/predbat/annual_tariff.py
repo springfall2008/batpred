@@ -455,7 +455,7 @@ class AnnualTariff:
         so recomputing it on every ``rates_for`` call (roughly 365 times a year)
         would repeat that work for an identical table. Entries keyed by
         ``day_of_week``/``date`` are stripped before calling it: ``basic_rates``
-        anchors those to ``predbat.midnight`` (the day the tool is run), and
+        anchors those to ``predbat.midnight_utc`` (the day the tool is run), and
         ``rates_for`` then collapses everything to a single repeating day via
         ``minute % MINUTES_PER_DAY`` - so honouring them would make a historical
         replay depend on today's weekday rather than the sampled historical date.
