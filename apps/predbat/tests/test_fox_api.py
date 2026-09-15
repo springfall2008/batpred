@@ -37,7 +37,8 @@ class MockBase:
 
     def __init__(self):
         """Initialise MockBase with default config."""
-        self.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.now_utc = datetime.now(pytz.utc)
+        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         self.config = {}
 
     def get_arg(self, key, default=None, **kwargs):
@@ -4807,14 +4808,21 @@ def test_run_midnight_reset(my_predbat):
     """
     print("  - test_run_midnight_reset")
 
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     fox = MockFoxAPIWithRunTracking()
     fox.device_list = [{"deviceSN": "TEST123"}]
 
-    # First run - initialise counters on day 1
+    saved_now_utc = my_predbat.now_utc
+    saved_midnight_utc = my_predbat.midnight_utc
+
+    # First run - initialise counters on day 1. now_utc has to move with midnight_utc:
+    # ComponentBase.midnight_utc derives today's midnight from now_utc (GH#4804), so setting
+    # midnight_utc alone no longer changes what the component sees.
     day1_midnight = datetime(2025, 12, 22, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.now_utc = day1_midnight + timedelta(hours=12)
     my_predbat.midnight_utc = day1_midnight
+    fox.base.now_utc = day1_midnight + timedelta(hours=12)
     fox.base.midnight_utc = day1_midnight
 
     # Simulate some requests on day 1
@@ -4839,7 +4847,9 @@ def test_run_midnight_reset(my_predbat):
 
     # Third run - simulate midnight crossing to day 2
     day2_midnight = datetime(2025, 12, 23, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.now_utc = day2_midnight + timedelta(minutes=5)
     my_predbat.midnight_utc = day2_midnight
+    fox.base.now_utc = day2_midnight + timedelta(minutes=5)
     fox.base.midnight_utc = day2_midnight
 
     result = run_async(fox.run(0, first=False))
@@ -4850,6 +4860,9 @@ def test_run_midnight_reset(my_predbat):
     assert fox.rate_limit_errors_today == 0, f"Expected rate_limit_errors_today to be reset to 0, got {fox.rate_limit_errors_today}"
     assert fox.last_midnight_utc == day2_midnight, "Expected last_midnight_utc to be updated to day 2"
     assert fox.start_time_today > initial_start_time, "Expected start_time_today to be reset to current time"
+
+    my_predbat.now_utc = saved_now_utc
+    my_predbat.midnight_utc = saved_midnight_utc
 
     return False
 
@@ -6900,7 +6913,12 @@ def test_fox_rate_limiting_midnight_reset(my_predbat):
     day2_midnight = datetime(2025, 12, 23, 0, 0, 0, tzinfo=timezone.utc)
     day2_time = datetime(2025, 12, 23, 0, 5, 0, tzinfo=timezone.utc)
 
-    # Update the base object's midnight_utc to simulate day change
+    # Move the base object's clock on to simulate the day change. now_utc has to move with
+    # midnight_utc: ComponentBase.midnight_utc derives today's midnight from now_utc (GH#4804),
+    # so rewriting midnight_utc alone no longer changes what the component sees.
+    saved_now_utc = my_predbat.now_utc
+    saved_midnight_utc = my_predbat.midnight_utc
+    my_predbat.now_utc = day2_time
     my_predbat.midnight_utc = day2_midnight
 
     # Mark all cached data as fresh so the age-based refresh does not trigger any API polling
@@ -6916,6 +6934,9 @@ def test_fox_rate_limiting_midnight_reset(my_predbat):
 
         # Call run() to trigger midnight reset logic
         run_async(fox.run(seconds=0, first=False))
+
+    my_predbat.now_utc = saved_now_utc
+    my_predbat.midnight_utc = saved_midnight_utc
 
     assert fox.requests_today == 0, f"Requests should be reset to 0, got {fox.requests_today}"
     assert fox.rate_limit_errors_today == 0, f"Rate limit errors should be reset to 0, got {fox.rate_limit_errors_today}"

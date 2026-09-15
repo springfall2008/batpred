@@ -58,6 +58,7 @@ batteryb
 batusecap
 beforeunload
 bierner
+bisectable
 Bitwarden
 BLAS
 boostable
@@ -122,6 +123,7 @@ Dashlane
 datain
 datalist
 datalog
+datalogger
 datap
 datapoints
 datas
@@ -315,6 +317,7 @@ keepalive
 keydb
 khtml
 killall
+Kiritimati
 kopt
 Kostal
 kostalplenticore
@@ -554,6 +557,7 @@ Sergoe
 sess
 setattr
 setdefault
+setpoints
 SFMB
 sg05lp1
 SIGALRM
