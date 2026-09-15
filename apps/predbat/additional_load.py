@@ -177,6 +177,12 @@ class AdditionalLoad:
         """
         return value.split("?", 1)[0].split("=", 1)[0].replace("[", "").replace("]", "")
 
+    def additional_load_state_metadata_keys(self):
+        """
+        Return metadata keys small enough to persist safely in the selector state.
+        """
+        return ["_requested_start", "_selected_start", "_expires_at"]
+
     def additional_load_command_args(self, value):
         """
         Return a load_forecast_delta_api command name and query arguments.
@@ -192,6 +198,7 @@ class AdditionalLoad:
                 args[arg_split[0]] = arg_split[1]
             else:
                 args[arg_split[0]] = True
+        args = {key: arg_value for key, arg_value in args.items() if not str(key).startswith("_") or key in self.additional_load_state_metadata_keys()}
         return name, args
 
     def additional_load_build_api_command(self, name, args):
@@ -311,7 +318,7 @@ class AdditionalLoad:
         for value in values.split(",") if values else []:
             command_name, args = self.additional_load_command_args(value)
             if command_name == name or self.additional_load_safe_name(command_name) == self.additional_load_safe_name(name):
-                return {key: value for key, value in args.items() if str(key).startswith("_")}
+                return {key: value for key, value in args.items() if key in self.additional_load_state_metadata_keys()}
         return {}
 
     def preserve_additional_load_api_metadata(self, value):
@@ -356,6 +363,8 @@ class AdditionalLoad:
             command_name, args = self.additional_load_command_args(value)
             if command_name == name or self.additional_load_safe_name(command_name) == self.additional_load_safe_name(name):
                 for key, metadata_value in metadata.items():
+                    if key not in self.additional_load_state_metadata_keys():
+                        continue
                     if metadata_value is not None and args.get(key) != str(metadata_value):
                         args[key] = str(metadata_value)
                         changed = True
@@ -577,6 +586,7 @@ class AdditionalLoad:
             self.log("Expired additional load forecast {}".format(name))
             self.remove_additional_load_runtime_override(name)
             self.remove_additional_load_api_command(name)
+            self.unpublish_additional_load_name(name)
         if expired_names:
             self.publish_additional_load_history()
 
@@ -658,6 +668,7 @@ class AdditionalLoad:
             self.house_load_additional_history.append(record)
         self.house_load_additional_history_loaded = True
         self.prune_additional_load_history()
+        self.publish_additional_load_history(persist=False)
 
     def prune_additional_load_history(self):
         """
@@ -678,13 +689,13 @@ class AdditionalLoad:
                 pruned.append(record)
         self.house_load_additional_history = sorted(pruned, key=lambda record: record.get("start", ""))[-1000:]
 
-    def publish_additional_load_history(self):
+    def publish_additional_load_history(self, persist=True):
         """
         Persist completed additional load records to storage and publish a summary sensor.
         """
         self.prune_additional_load_history()
         storage = self.get_additional_load_storage()
-        if storage:
+        if storage and persist:
             try:
                 run_async(storage.save("additional_load", "history", self.house_load_additional_history, format="json"))
             except Exception as e:
@@ -832,11 +843,20 @@ class AdditionalLoad:
             return []
 
         forecast_items = []
+        safe_names = {}
         for load_item in config:
             if not isinstance(load_item, dict):
                 self.log("Warn: Bad house_load_additional_forecast item {}, expected dictionary".format(load_item))
                 continue
             load_item = load_item.copy()
+            name = load_item.get("name", "")
+            safe_name = self.additional_load_safe_name(name)
+            if safe_name in safe_names:
+                warning = "Warn: Duplicate house_load_additional_forecast safe name {} for {} conflicts with {}, skipping".format(safe_name, name, safe_names[safe_name])
+                self.log(warning)
+                self.record_status(warning, had_errors=True)
+                continue
+            safe_names[safe_name] = name
             load_item["_source"] = "yaml"
             load_item["_auto_expire"] = False
             forecast_items.append(load_item)
@@ -846,6 +866,12 @@ class AdditionalLoad:
         for name, override in self.house_load_additional_forecast_overrides.items():
             runtime_overrides.setdefault(name, {}).update(override)
         for name, override in runtime_overrides.items():
+            safe_name = self.additional_load_safe_name(name)
+            if safe_name in safe_names and str(safe_names[safe_name]) != str(name):
+                warning = "Warn: Duplicate load_forecast_delta_api safe name {} for {} conflicts with {}, skipping".format(safe_name, name, safe_names[safe_name])
+                self.log(warning)
+                self.record_status(warning, had_errors=True)
+                continue
             found = False
             for index, load_item in enumerate(forecast_items):
                 if str(load_item.get("name", "")) == name:
@@ -854,6 +880,7 @@ class AdditionalLoad:
                     break
             if not found:
                 forecast_items.append(override.copy())
+                safe_names[safe_name] = name
         return forecast_items
 
     def fetch_additional_load_forecast(self, selected_flexible=None):
@@ -1125,11 +1152,13 @@ class AdditionalLoad:
         Select flexible additional load start times using full prediction metric impact.
         """
         self.house_load_additional_flexible_selection_changed = False
+        self.house_load_additional_selected_forecast_adjust = {}
         flexible_forecasts = {name: forecast for name, forecast in self.house_load_additional_forecasts.items() if forecast.get("enabled") and forecast.get("mode") == "flexible" and not forecast.get("selection_locked", False)}
         if not flexible_forecasts:
             return False, load_minutes_step, load_minutes_step10
 
         selected_flexible = {}
+        selected_load_adjust = {}
         working_load_step = load_minutes_step
         working_load_step10 = load_minutes_step10
         kernel_static_cache = {}
@@ -1178,6 +1207,8 @@ class AdditionalLoad:
                 if existing_start != best_start:
                     self.house_load_additional_flexible_selection_changed = True
                 best_adjust, _, _ = self.additional_load_candidate_profile(forecast, best_start)
+                for minute, adjustment in best_adjust.items():
+                    selected_load_adjust[minute] = dp4(selected_load_adjust.get(minute, 0.0) + adjustment)
                 working_load_step = self.add_additional_load_to_step_data(working_load_step, best_adjust)
                 working_load_step10 = self.add_additional_load_to_step_data(working_load_step10, best_adjust)
                 selected_flexible[name] = {
@@ -1196,14 +1227,8 @@ class AdditionalLoad:
                         name,
                         {
                             "_requested_start": self.additional_load_minutes_to_stamp(start_minutes),
-                            "_requested_end": self.additional_load_minutes_to_stamp(end_minutes),
                             "_selected_start": self.additional_load_minutes_to_stamp(best_start),
-                            "_selected_end": self.additional_load_minutes_to_stamp(best_start + duration_minutes),
                             "_expires_at": self.additional_load_minutes_to_stamp(best_start + duration_minutes),
-                            "_selection_reason": "prediction_metric",
-                            "_candidate_count": candidate_count,
-                            "_selected_metric": dp2(best_metric) if best_metric is not None else None,
-                            "_baseline_metric": dp2(baseline_metric),
                         },
                     )
                 self.log("Flexible additional load {} selected {}-{} using prediction metric {} from {} candidates".format(name, self.time_abs_str(best_start), self.time_abs_str(best_start + duration_minutes), dp2(best_metric), candidate_count))
@@ -1212,6 +1237,7 @@ class AdditionalLoad:
             return False, load_minutes_step, load_minutes_step10
 
         self.house_load_additional_forecast_adjust, self.house_load_additional_forecasts = self.fetch_additional_load_forecast(selected_flexible=selected_flexible)
+        self.house_load_additional_selected_forecast_adjust = selected_load_adjust
         self.publish_additional_load_forecasts()
         return True, working_load_step, working_load_step10
 

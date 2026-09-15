@@ -17,6 +17,7 @@ input_numbers, and select inputs, and routes HA events (state changes,
 service calls) to the appropriate handlers.
 """
 
+import asyncio
 import os
 from datetime import timedelta
 from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key
@@ -493,7 +494,8 @@ class UserInterface:
             if entity_id.startswith("button.{}_load_forecast_delta_".format(self.prefix)) and entity_id.endswith("_delete"):
                 name = self.additional_load_name_from_entity(entity_id)
                 if name:
-                    if self.delete_additional_load_forecast(name):
+                    loop = asyncio.get_running_loop()
+                    if await loop.run_in_executor(None, self.delete_additional_load_forecast, name):
                         self.update_pending = True
                         self.plan_valid = False
 
@@ -1433,7 +1435,9 @@ class UserInterface:
                 self.house_load_additional_forecast_overrides.clear()
             else:
                 name = self.additional_load_command_name(value)
-                if "[" not in value and self.has_additional_load_api_command(name):
+                if "[" in value:
+                    self.remove_additional_load_runtime_override(name)
+                elif self.has_additional_load_api_command(name):
                     value = self.preserve_additional_load_api_metadata(value)
                 else:
                     self.remove_additional_load_runtime_override(name)
