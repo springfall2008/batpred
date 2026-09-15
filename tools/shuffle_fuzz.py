@@ -40,6 +40,14 @@ it, and stops - so running the exact same command again finds a *different* pair
 instead of rediscovering the same handful:
 
     python3 ../tools/shuffle_fuzz.py --hunt --quick
+
+A bisected pair is re-run on its own before being recorded. bisect_order() assumes the
+failure it is narrowing is deterministic, and a test that fails for some other reason -
+depending on the wall clock is the case seen in practice - breaks that assumption: the
+search still returns a minimal subset, but its "culprit" is whichever test happened to
+precede the victim rather than a cause. Failures that cannot be reduced to a pair that
+reproduces are written to --log-dir as unreproducible_<victim>_<seed>.log instead of being
+discarded, since a flaky or clock-dependent test is a real bug of a different kind.
 """
 
 import argparse
@@ -245,6 +253,47 @@ def bisect(shuffle_seed, quick, keyword):
     sys.exit(0)
 
 
+def confirm_pair(candidates, victim):
+    """Check a bisected (culprits, victim) pair really is an ordering bug before recording it.
+
+    Two ways the bisector can hand back a pair that is not one, both seen in practice:
+
+    - The victim fails on its own, so no culprit is needed and the one named is innocent. A test
+      that depends on the wall clock does this: it fails according to the time of day, and the
+      search still converges on whichever test happened to precede it.
+    - The pair does not reproduce when re-run, meaning the failure was not deterministic and the
+      reduction was chasing noise.
+
+    Returns True only when the victim passes alone *and* fails after the culprits run, which is
+    what an ordering bug actually looks like.
+    """
+    victim_alone_ok, _elapsed, _stdout, _stderr = run_explicit([victim])
+    if not victim_alone_ok:
+        return False
+    pair_ok, _elapsed, _stdout, _stderr = run_explicit(list(candidates) + [victim])
+    return not pair_ok
+
+
+def log_unreproducible(log_dir, shuffle_seed, victim, reason, stdout, stderr):
+    """Write the output of a failure that could not be pinned to an ordering, for later reading.
+
+    These are worth keeping rather than discarding: a failure that the bisector cannot reduce is
+    usually a test that is flaky or clock-dependent, which is a real bug of a different kind and
+    otherwise leaves no trace at all once --hunt moves on to the next sample.
+    """
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        path = os.path.join(log_dir, f"unreproducible_{victim}_{shuffle_seed}.log")
+        with open(path, "w") as handle:
+            handle.write(f"victim: {victim}\nshuffle-seed: {shuffle_seed}\nreason: {reason}\n")
+            handle.write("=" * 70 + "\n")
+            handle.write(stdout)
+            handle.write(stderr)
+        print(f"****   unreproducible failure logged to {path} ****")
+    except Exception as error:
+        print(f"Warn: could not log unreproducible failure: {error}")
+
+
 # Lives in tools/, not coverage/ - coverage/*.txt is gitignored (it's normally scratch/
 # generated test output) but this file is a deliberately committed, shared record.
 KNOWN_PAIRS_PATH = "../tools/shuffle_fuzz_known_pairs.txt"
@@ -265,7 +314,7 @@ def load_known_pairs(path):
     return known
 
 
-def hunt(quick, keyword, max_attempts, known_pairs_path):
+def hunt(quick, keyword, max_attempts, known_pairs_path, log_dir):
     """One-liner "find the next problem pair": keep sampling shuffled runs, bisecting each
     failure, until one turns up whose (culprit, victim) pair isn't already in the known-pairs
     file - then print it, append it to the file, and stop. Re-running the same command finds
@@ -287,13 +336,27 @@ def hunt(quick, keyword, max_attempts, known_pairs_path):
 
         result = bisect_order(order, failed_name, quiet=True)
         if result is None:
-            print(f"  [{attempt}/{max_attempts}] shuffle-seed={shuffle_seed} victim={failed_name} did not reproduce via --test, resampling")
+            # The failure did not reproduce from a --test subset at all. That is not an ordering
+            # bug: something else about the full run made it fail (most often a test that depends
+            # on the wall clock, which fails or passes according to the time of day rather than
+            # what ran before it). Worth keeping the evidence rather than silently resampling.
+            log_unreproducible(log_dir, shuffle_seed, failed_name, "did not reproduce from any --test subset", stdout, stderr)
+            print(f"  [{attempt}/{max_attempts}] shuffle-seed={shuffle_seed} victim={failed_name} did not reproduce via --test - logged as unreproducible, resampling")
             continue
 
         candidates, victim = result
         pair_key = (", ".join(candidates), victim)
         if pair_key in known:
             print(f"  [{attempt}/{max_attempts}] shuffle-seed={shuffle_seed} -> {list(candidates)} -> {victim} (already known, resampling)")
+            continue
+
+        # Confirm the reduced pair before recording it. bisect_order() assumes a failure is
+        # deterministic; when it is not, the search still converges on *some* minimal subset, and
+        # that subset is an arbitrary innocent test rather than a real culprit. Re-running the
+        # exact pair separates the two: a genuine ordering bug reproduces every time.
+        if not confirm_pair(candidates, victim):
+            log_unreproducible(log_dir, shuffle_seed, victim, "bisected to {} -> {} but that pair passes when re-run".format("+".join(candidates) or "(nothing)", victim), stdout, stderr)
+            print(f"  [{attempt}/{max_attempts}] shuffle-seed={shuffle_seed} -> {list(candidates)} -> {victim} did not reproduce on re-run - logged as unreproducible (likely time-of-day or otherwise non-deterministic), resampling")
             continue
 
         print(f"**** New pair found on attempt {attempt}/{max_attempts} ****")
@@ -396,7 +459,7 @@ def main():
         return
 
     if args.hunt:
-        hunt(args.quick, args.keyword, args.hunt_attempts, args.known_pairs_file)
+        hunt(args.quick, args.keyword, args.hunt_attempts, args.known_pairs_file, args.log_dir)
         return
 
     if args.campaign is not None:
