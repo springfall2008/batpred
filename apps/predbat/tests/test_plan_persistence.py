@@ -10,7 +10,7 @@
 
 import shutil
 import tempfile
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from storage import StorageComponent, StorageLocalFiles
 from tests.test_infra import run_async
@@ -173,7 +173,11 @@ def test_plan_persistence(my_predbat):
                 "plan_last_updated": my_predbat.now_utc.isoformat(),
                 "plan_last_updated_minutes": 60,
             }
-            past_expiry = my_predbat.now_utc - timedelta(hours=1)
+            # Expiry has to be in the past relative to the clock storage.load() actually checks
+            # against, which is the real one - my_predbat.now_utc is pinned to the fixture's
+            # midday, so "an hour before that" is still in the future for any run before ~11:00
+            # local, and the plan would load rather than be rejected as stale (#5079).
+            past_expiry = datetime.now(timezone.utc) - timedelta(hours=1)
             run_async(storage3.save("predbat", "plan", plan_data, format="json", expiry=past_expiry))
 
             my_predbat.plan_valid = False
@@ -198,7 +202,6 @@ def test_plan_persistence(my_predbat):
             my_predbat.github_url_cache_loaded = False
             my_predbat.github_url_cache = {}
 
-            from datetime import datetime
             test_url = "https://api.github.com/repos/test/releases"
             my_predbat.github_url_cache[test_url] = {"stamp": datetime.now(), "data": [{"tag_name": "v1.0"}]}
             my_predbat._save_github_url_cache_to_storage()
