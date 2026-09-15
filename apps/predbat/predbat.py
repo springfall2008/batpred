@@ -1661,6 +1661,27 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                     self.arg_errors[name] = "Invalid type, element {} expected dict".format(item)
                                     errors += 1
                                     break
+
+                                # scalar_value_dict (e.g. redact_strings_labelled): warn when a
+                                # mapping value isn't a plain string, because quoting affects what
+                                # the value actually is - an unquoted numeric MPAN loses a leading
+                                # zero in YAML before Predbat ever sees it, which no amount of
+                                # redaction can recover. Warn, don't error, and don't rely on this
+                                # to keep the value safe: collect_log_secret_values() flattens and
+                                # str()s any shape (see _flatten_denylist_value), so redaction
+                                # holds whether or not the user acts on this (#5053 review).
+                                if spec.get("scalar_value_dict", False):
+                                    for key, sub_value in item.items():
+                                        if not isinstance(sub_value, str):
+                                            # The value is deliberately not interpolated: this
+                                            # branch exists for redact_strings_labelled, whose
+                                            # values are the very credentials that must never
+                                            # reach the log, and this warning runs before the
+                                            # redaction pattern has been built from them
+                                            # (#5053 review). The key alone identifies the entry.
+                                            self.log(
+                                                "Warn: Validation of apps.yaml found configuration item '{}' entry '{}' value is a {}, not a string - quote it to keep its exact formatting (e.g. a leading zero)".format(name, key, type(sub_value).__name__)
+                                            )
                     elif expected_type == "int_float_dict":
                         if spec.get("or_auto", False) and value == "auto":
                             matches = True
