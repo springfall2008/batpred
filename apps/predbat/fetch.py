@@ -1029,7 +1029,11 @@ class Fetch:
                 try:
                     self.iboost_tank_soc_percent = float(tank_soc)
                 except (ValueError, TypeError):
-                    self.log("Warn: Unable to read iboost_tank_soc (value {}), assuming the tank is empty".format(tank_soc))
+                    # An unreadable SoC sensor must not be treated as an empty tank: provisioning
+                    # the whole forecast can book far more than the legacy iboost_max_energy
+                    # budget, so fall back to the legacy plan for this cycle instead
+                    self.log("Warn: Unable to read iboost_tank_soc (value {}), using the legacy iBoost smart plan for this cycle".format(tank_soc))
+                    self.iboost_forecast = {}
 
         # Fetch ML forecast if enabled
         load_ml_forecast = {}
@@ -2840,6 +2844,82 @@ class Fetch:
             if minute < self.minutes_now:
                 self.load_forecast[minute] = value
 
+    def fetch_cumulative_forecasts(self, arg_name, name, scale=1.0):
+        """
+        Fetch the cumulative kWh forecast series configured under arg_name in apps.yaml.
+
+        Each entry points to a sensor (optionally sensor$attribute) whose state or attribute
+        holds either a dict of ISO timestamp -> kWh or a list of {last_updated, energy}
+        entries. Returns a list of (entity_id, forecast, first_minute, last_minute) tuples,
+        one per source that yielded data: forecast is the minute-resolution cumulative dict
+        from minute_data and first/last_minute bound that source's own raw timestamps (needed
+        because minute_data back-fills its output beyond the data). Shared by the extra load
+        forecast and the iBoost demand forecast so both read the same formats.
+        """
+        sources = []
+        entity_ids = self.get_arg(arg_name, indirect=False)
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+
+        for entity_id in entity_ids or []:
+            if not entity_id:
+                self.log("Warn: Unable to fetch {} data, check your {} setting in apps.yaml".format(name, arg_name))
+                continue
+
+            attribute = None
+            if "$" in entity_id:
+                entity_id, attribute = entity_id.split("$")
+            try:
+                self.log("Loading {} from {}, attribute {}".format(name, entity_id, attribute))
+                data = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
+            except (ValueError, TypeError) as e:
+                self.log("Warn: Unable to fetch {} data from sensor {}, exception {}".format(name, entity_id, e))
+                data = None
+
+            # Convert format from dict to array
+            if isinstance(data, dict):
+                data_array = []
+                for key, value in data.items():
+                    data_array.append({"energy": value, "last_updated": key})
+                data = data_array
+            if (data is not None) and (not isinstance(data, list)):
+                self.log("Warn: {} data from {} is not in a supported format. Skipping forecast source.".format(name, entity_id))
+                data = None
+
+            # Track the extent of the raw data; minute_data back-fills its output past the last
+            # data point, so consumers judging staleness or taking deltas need the raw bounds
+            first_minute = None
+            last_minute = None
+            for item in data or []:
+                try:
+                    item_minute = int((str2time(item["last_updated"]) - self.midnight_utc).total_seconds() / 60)
+                except (ValueError, TypeError, KeyError):
+                    continue
+                if (last_minute is None) or (item_minute > last_minute):
+                    last_minute = item_minute
+                if (first_minute is None) or (item_minute < first_minute):
+                    first_minute = item_minute
+
+            forecast, _ = minute_data(
+                data,
+                self.forecast_days + 1,
+                self.midnight_utc,
+                "energy",
+                "last_updated",
+                backwards=False,
+                clean_increment=False,
+                smoothing=True,
+                divide_by=1.0,
+                scale=scale,
+                required_unit="kWh",
+            )
+
+            if forecast and (last_minute is not None):
+                sources.append((entity_id, forecast, first_minute, last_minute))
+            else:
+                self.log("Warn: Unable to load the {} from {}. Skipping forecast source.".format(name, entity_id))
+        return sources
+
     def fetch_extra_load_forecast(self, now_utc, ml_forecast=None):
         """
         Fetch extra load forecast, this is future load data
@@ -2852,52 +2932,9 @@ class Fetch:
             load_forecast_array.append(ml_forecast)
 
         if "load_forecast" in self.args:
-            entity_ids = self.get_arg("load_forecast", indirect=False)
-            if isinstance(entity_ids, str):
-                entity_ids = [entity_ids]
-
-            for entity_id in entity_ids:
-                if not entity_id:
-                    self.log("Warn: Unable to fetch load forecast data, check your load_forecast setting in apps.yaml")
-                    continue
-
-                attribute = None
-                if "$" in entity_id:
-                    entity_id, attribute = entity_id.split("$")
-                try:
-                    self.log("Loading extra load forecast from {}, attribute {}".format(entity_id, attribute))
-                    data = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
-                except (ValueError, TypeError) as e:
-                    self.log("Error: Unable to fetch load forecast data from sensor {}, exception {}".format(entity_id, e))
-                    data = None
-
-                # Convert format from dict to array
-                if isinstance(data, dict):
-                    data_array = []
-                    for key, value in data.items():
-                        data_array.append({"energy": value, "last_updated": key})
-                    data = data_array
-
-                # Load data
-                load_forecast, _ = minute_data(
-                    data,
-                    self.forecast_days + 1,
-                    self.midnight_utc,
-                    "energy",
-                    "last_updated",
-                    backwards=False,
-                    clean_increment=False,
-                    smoothing=True,
-                    divide_by=1.0,
-                    scale=1.0,
-                    required_unit="kWh",
-                )
-
-                if load_forecast:
-                    self.log("Loaded the load forecast from {} load sensor; from midnight {}kWh to now {}kWh to midnight {}kwh".format(entity_id, load_forecast.get(0, 0), load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60, 0)))
-                    load_forecast_array.append(load_forecast)
-                else:
-                    self.log("Warn: Unable to load the load forecast from {}. Skipping forecast source.".format(entity_id))
+            for entity_id, load_forecast, _, _ in self.fetch_cumulative_forecasts("load_forecast", "load forecast"):
+                self.log("Loaded the load forecast from {} load sensor; from midnight {}kWh to now {}kWh to midnight {}kwh".format(entity_id, load_forecast.get(0, 0), load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60, 0)))
+                load_forecast_array.append(load_forecast)
 
         # Add all the load forecasts together
         for load in load_forecast_array:
@@ -2924,76 +2961,16 @@ class Fetch:
             return {}
 
         iboost_forecast_scaling = self.get_arg("iboost_forecast_scaling", 1.0)
-        demand_cumulative = {}
-        first_data_minute = None
-        last_data_minute = None
-        entity_ids = self.get_arg("iboost_forecast", indirect=False)
-        if isinstance(entity_ids, str):
-            entity_ids = [entity_ids]
-
-        for entity_id in entity_ids:
-            if not entity_id:
-                self.log("Warn: Unable to fetch iBoost demand forecast data, check your iboost_forecast setting in apps.yaml")
-                continue
-
-            attribute = None
-            if "$" in entity_id:
-                entity_id, attribute = entity_id.split("$")
-            try:
-                self.log("Loading iBoost demand forecast from {}, attribute {}".format(entity_id, attribute))
-                data = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
-            except (ValueError, TypeError) as e:
-                self.log("Warn: Unable to fetch iBoost demand forecast data from sensor {}, exception {}".format(entity_id, e))
-                data = None
-
-            # Convert format from dict to array
-            if isinstance(data, dict):
-                data_array = []
-                for key, value in data.items():
-                    data_array.append({"energy": value, "last_updated": key})
-                data = data_array
-            if (data is not None) and (not isinstance(data, list)):
-                self.log("Warn: iBoost demand forecast data from {} is not in a supported format. Skipping forecast source.".format(entity_id))
-                data = None
-
-            # Track the extent of the raw data; minute_data back-fills its output past the last
-            # data point, so staleness has to be judged from the raw timestamps.
-            for item in data or []:
-                try:
-                    item_minute = int((str2time(item["last_updated"]) - self.midnight_utc).total_seconds() / 60)
-                except (ValueError, TypeError, KeyError):
-                    continue
-                if (last_data_minute is None) or (item_minute > last_data_minute):
-                    last_data_minute = item_minute
-                if (first_data_minute is None) or (item_minute < first_data_minute):
-                    first_data_minute = item_minute
-
-            # Load data
-            forecast, _ = minute_data(
-                data,
-                self.forecast_days + 1,
-                self.midnight_utc,
-                "energy",
-                "last_updated",
-                backwards=False,
-                clean_increment=False,
-                smoothing=True,
-                divide_by=1.0,
-                scale=iboost_forecast_scaling,
-                required_unit="kWh",
-            )
-
-            if forecast:
-                for minute, value in forecast.items():
-                    demand_cumulative[minute] = demand_cumulative.get(minute, 0) + value
-            else:
-                self.log("Warn: Unable to load the iBoost demand forecast from {}. Skipping forecast source.".format(entity_id))
-
-        if not demand_cumulative:
+        sources = self.fetch_cumulative_forecasts("iboost_forecast", "iBoost demand forecast", scale=iboost_forecast_scaling)
+        if not sources:
             self.log("Warn: iboost_forecast is configured but no forecast data could be loaded, using the legacy iBoost smart plan")
             return {}
 
-        if (last_data_minute is None) or (last_data_minute <= self.minutes_now):
+        # Staleness is judged only from sources that actually loaded, so a recent but unusable
+        # sensor cannot vouch for a stale one
+        first_data_minute = min(first_minute for _, _, first_minute, _ in sources)
+        last_data_minute = max(last_minute for _, _, _, last_minute in sources)
+        if last_data_minute <= self.minutes_now:
             self.log("Warn: iBoost demand forecast ends at minute {} which is not in the future, using the legacy iBoost smart plan".format(last_data_minute))
             return {}
         if first_data_minute >= self.minutes_now + self.forecast_minutes:
@@ -3001,22 +2978,30 @@ class Fetch:
             return {}
 
         # Convert the cumulative series into demand per plan interval, aligned to the same interval
-        # grid the planner books slots on. Per-minute deltas are clamped to zero individually (the
-        # same reading get_from_incrementing gives the load forecast) so dips in the series and the
-        # region minute_data back-fills beyond the data both read as zero demand. Minutes already
+        # grid the planner books slots on. Per-minute positive deltas are taken per source (the
+        # same reading get_from_incrementing gives the load forecast) and only within that source's
+        # own raw extent, so a series that ends or resets never books phantom demand from
+        # minute_data's back-fill and one source's tail cannot mask another's draw. Minutes already
         # elapsed in the current interval are skipped: any draw there is in the tank SoC reading.
         demand = {}
         total = 0.0
         start_minute = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
         for minute in range(start_minute, start_minute + self.forecast_minutes, self.plan_interval_minutes):
             kwh = 0.0
-            for offset in range(self.plan_interval_minutes):
-                offset_minute = minute + offset
-                if offset_minute < self.minutes_now:
-                    continue
-                kwh += max(demand_cumulative.get(offset_minute + 1, 0) - demand_cumulative.get(offset_minute, 0), 0.0)
+            for _, forecast, first_minute, last_minute in sources:
+                for offset in range(self.plan_interval_minutes):
+                    offset_minute = minute + offset
+                    if offset_minute < self.minutes_now:
+                        continue
+                    if (offset_minute < first_minute) or (offset_minute + 1 >= last_minute):
+                        continue
+                    kwh += self.get_from_incrementing(forecast, offset_minute, backwards=False)
             demand[minute] = dp4(kwh)
             total += kwh
+
+        if total <= 0:
+            self.log("Warn: iBoost demand forecast contains no future demand, using the legacy iBoost smart plan")
+            return {}
 
         self.log("iBoost demand forecast loaded: {} kWh over {} intervals of {} minutes from minute {}".format(dp2(total), len(demand), self.plan_interval_minutes, start_minute))
         return demand

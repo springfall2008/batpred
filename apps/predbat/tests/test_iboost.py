@@ -379,6 +379,38 @@ def run_iboost_forecast_tests(my_predbat):
         {"sensor.hot_water_demand": {"results": make_forecast_attribute(my_predbat, [(2400, 0.0), (2500, 1.0)])}},
         expect_empty=True,
     )
+    # A cumulative series with an internal reset (6.5 down to 2.0) must not book phantom demand
+    # where minute_data's tail back-fill (the earliest sample's value) rejoins the data: only
+    # the genuine rises inside the series' own extent count
+    failed |= run_iboost_fetch_test(
+        "iboost_fetch_reset",
+        my_predbat,
+        {"iboost_forecast": ["sensor.hot_water_demand$results"]},
+        {"sensor.hot_water_demand": {"results": make_forecast_attribute(my_predbat, [(780, 6.0), (810, 6.5), (840, 2.0), (870, 2.5)])}},
+        expect_demand={780: 0.5, 840: 0.5},
+        expect_total=1.0,
+    )
+    # A recent but unusable source (non-numeric values) cannot vouch for a stale one: with only
+    # the stale source loadable the fetch falls back to the legacy plan
+    failed |= run_iboost_fetch_test(
+        "iboost_fetch_stale_mixed",
+        my_predbat,
+        {"iboost_forecast": ["sensor.hot_water_demand$results", "sensor.hot_water_junk$results"]},
+        {
+            "sensor.hot_water_demand": {"results": make_forecast_attribute(my_predbat, [(100, 0.0), (200, 1.0)])},
+            "sensor.hot_water_junk": {"results": make_forecast_attribute(my_predbat, [(780, "bad"), (900, "bad")])},
+        },
+        expect_empty=True,
+    )
+    # A fresh series carrying no future increments books nothing, so fall back to the legacy
+    # plan with a warning rather than silently disabling iBoost heating
+    failed |= run_iboost_fetch_test(
+        "iboost_fetch_flat",
+        my_predbat,
+        {"iboost_forecast": ["sensor.hot_water_demand$results"]},
+        {"sensor.hot_water_demand": {"results": make_forecast_attribute(my_predbat, [(780, 5.0), (900, 5.0)])}},
+        expect_empty=True,
+    )
     # Mid-interval fetch: the draw already taken earlier in the current interval is excluded (it
     # is reflected in the tank SoC reading), only the remainder counts as demand
     failed |= run_iboost_fetch_test(
