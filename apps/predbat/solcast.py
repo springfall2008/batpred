@@ -891,10 +891,28 @@ class SolarAPI(ComponentBase):
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
                 past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
 
-        # Find the forecast history
-        pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(
-            self.now_utc_exact, prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days + 1, required=False)), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True)
-        )
+        # Find the forecast history.
+        #
+        # Read the raw provider forecast from the sensor's "now" attribute rather than its state: while
+        # calibration is on the state is the calibrated forecast (power_nowCL, see publish_pv_stats above),
+        # so measuring actual generation against it feeds calibration its own output while the resulting
+        # factors are applied to the uncalibrated series below. That fixed point sits at
+        # f = sqrt(actual / forecast) rather than the true ratio, so only about half of a systematic bias
+        # is ever corrected (GH#5116) - the same self-reference already called out for the ceiling below.
+        #
+        # The history is scaled by pv_scaling because pv_forecast_minute - the series these factors are
+        # applied to - already carries it (see the minute_data calls in fetch_pv_forecast), and the ratio
+        # only means anything if both sides are on the same basis. A pv_scaling change part way through the
+        # window is applied to the whole of it, which settles as the window rolls over.
+        #
+        # Fall back to the state when no history point carries the attribute at all: "now" was added in the
+        # same change that made the state calibrated (c448c9ff), so a history without it was recorded by a
+        # version whose state was the raw forecast anyway.
+        forecast_history = self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days + 1, required=False)
+        forecast_history_raw = history_attribute(forecast_history, state_key="now", attributes=True, scale=self.pv_scaling)
+        if not forecast_history_raw:
+            forecast_history_raw = history_attribute(forecast_history, scale=self.pv_scaling)
+        pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(self.now_utc_exact, prune_today(forecast_history_raw, self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True))
 
         hist_days = min(pv_today_hist_days, pv_forecast_hist_days, days)
         enabled_calibration = True
@@ -1114,9 +1132,10 @@ class SolarAPI(ComponentBase):
         # sunny day. Because the ceiling and the inner max are both >= observed_slot, the cap
         # can never fall below observed generation.
         #
-        # max_pv_power_forecast is deliberately NOT used here: it is read back from the
-        # published pv_forecast_h0 sensor, whose state is this same capped output, so including
-        # it made the cap depend on its own previous result.
+        # max_pv_power_forecast is deliberately NOT used here: it is a past forecast read back from the
+        # pv_forecast_h0 sensor, not measured generation, so it is no evidence of what the array can
+        # actually produce. Until GH#5116 it was worse than that - the sensor's state is the calibrated
+        # forecast, so including it made the cap depend on its own previous result.
         observed_slot = max_pv_power_hist / 60 * self.plan_interval_minutes
         ceiling_slot = max(1.2 * max_kwh, max_pv_power_hist) / 60 * self.plan_interval_minutes
         capped_slots = 0

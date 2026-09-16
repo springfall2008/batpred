@@ -3489,6 +3489,112 @@ def test_pv_calibration_partial_history(my_predbat):
     return failed
 
 
+def _make_h0_history(now_utc, days_back, raw_kw, calibrated_kw=None):
+    """Build an HA-format pv_forecast_h0 history whose state and "now" attribute disagree.
+
+    Points are 30 minutes apart, which survives prune_today's 15-minute grouping, and span one day
+    more than the caller's generation history so hist_days is limited by that history rather than by
+    this one. The state carries calibrated_kw and the "now" attribute carries the raw provider
+    forecast, as publish_pv_stats writes them while calibration is on.
+
+    calibrated_kw of None instead builds the shape a version from before the "now" attribute existed
+    recorded: the same attributes minus "now", and the raw forecast in the state. The fallback has to
+    land on the state rather than on one of the attributes that are still there.
+    """
+    entries = []
+    start = now_utc - timedelta(days=days_back + 1)
+    for step in range((days_back + 1) * 24 * 2 + 1):
+        stamp = (start + timedelta(minutes=30 * step)).strftime("%Y-%m-%dT%H:%M:%S+0000")
+        if calibrated_kw is None:
+            # Pre-"now" shape: the raw forecast is the state, and the attributes that did exist remain
+            entries.append({"last_updated": stamp, "state": str(raw_kw), "attributes": {"now10": raw_kw, "now90": raw_kw, "nowCL": raw_kw * 0.9}})
+        else:
+            entries.append({"last_updated": stamp, "state": str(calibrated_kw), "attributes": {"now": raw_kw, "now10": raw_kw, "now90": raw_kw, "nowCL": calibrated_kw}})
+    return [entries]
+
+
+def _raw_forecast_adjustment(raw_kw, calibrated_kw=None, days_back=5, actual_kw=0.8, pv_scaling=1.0):
+    """Run pv_calibration against a real h0 history and return the total adjustment it settles on.
+
+    Every past day generates actual_kw continuously, so both the day and the slot ratios reduce to
+    actual_kw over whichever forecast level calibration read the h0 history at. Nothing between
+    get_history_wrapper and the ratios is patched - history_attribute, prune_today and
+    history_attribute_to_minute_data all run - so the returned adjustment is a direct measure of
+    which series calibration learned from.
+    """
+    test_api = create_test_solar_api()
+    solar = test_api.solar
+    base = test_api.mock_base
+    solar.pv_scaling = pv_scaling
+    h0_history = _make_h0_history(base.now_utc_exact, days_back, raw_kw, calibrated_kw=calibrated_kw)
+
+    # Cumulative pv_today kWh keyed by minutes-ago, a constant actual_kw through every past day
+    hist = {}
+    for day in range(1, days_back + 1):
+        midnight_ago = day * 1440 + base.minutes_now
+        for step in range(0, 24 * 60, 5):
+            minute_ago = midnight_ago - step
+            if minute_ago >= 0:
+                hist[minute_ago] = actual_kw * step / 60.0
+
+    def mock_minute_import_export(max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+        """Return the synthetic pv_today history."""
+        return dict(_hist) if key == "pv_today" else {}
+
+    def mock_get_history(entity_id, days, required=False, _h0=h0_history):
+        """Return the synthetic h0 forecast history."""
+        return _h0 if "pv_forecast_h0" in entity_id else []
+
+    base.minute_data_import_export = mock_minute_import_export
+    solar.get_history_wrapper = mock_get_history
+
+    pv_m = {m: 0.02 for m in range(4 * 24 * 60)}
+    pv_data = [{"period_start": "2025-06-15T00:00:00+0000", "pv_estimate": 0.5}]
+
+    try:
+        with test_api.patch_now_utc_exact():
+            solar.pv_calibration(pv_m, dict(pv_m), {}, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+        return solar.pv_calibration_total_adjustment
+    finally:
+        test_api.cleanup()
+
+
+def test_pv_calibration_learns_from_raw_forecast(my_predbat):
+    """
+    Calibration must measure actual generation against the raw provider forecast (GH#5116).
+
+    The h0 sensor's state is the calibrated forecast while calibration is on, and the raw provider
+    value is only in its "now" attribute. Reading the state fed calibration its own output while the
+    factors were applied to the uncalibrated series, so the applied factor settled at
+    sqrt(actual / forecast) and only about half of a systematic bias was ever corrected.
+
+    Each case generates 0.8 kW continuously against a 1.0 kW raw forecast, so the true ratio is 0.8.
+    The one 5-minute slot per day lost to the midnight reset of the cumulative pv_today counter puts
+    the expected value a fraction below that, hence the 0.01 tolerance.
+
+      - state 0.9 (calibrated), "now" 1.0 (raw): 0.8, not the 0.89 that reading the state gives
+      - the same history with pv_scaling 0.8: 1.0, because pv_forecast_minute - the series these
+        factors are applied to - already carries pv_scaling, so the history must too
+      - state 1.0 with no attributes at all (pre-"now" history): 0.8 from the state fallback
+    """
+    print("  - test_pv_calibration_learns_from_raw_forecast")
+    failed = False
+
+    cases = [
+        ("raw 'now' attribute preferred over the calibrated state", 0.9, 1.0, 0.8),
+        ("history scaled by pv_scaling to match pv_forecast_minute", 0.9, 0.8, 1.0),
+        ("state used when no history point carries 'now'", None, 1.0, 0.8),
+    ]
+
+    for name, calibrated_kw, pv_scaling, expected in cases:
+        adjustment = _raw_forecast_adjustment(1.0, calibrated_kw=calibrated_kw, pv_scaling=pv_scaling)
+        if abs(adjustment - expected) > 0.01:
+            print("ERROR: {}: total_adjustment {}, expected {}".format(name, adjustment, expected))
+            failed = True
+
+    return failed
+
+
 def test_pv_calibration_capped_data_clamp(my_predbat):
     """
     Test the per-slot cap in pv_calibration, and the array-ceiling clamp on the synthesised p90.
@@ -5185,6 +5291,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_raw_exceeds_ceiling_warns(my_predbat)
     failed |= test_pv_calibration_raw_within_ceiling_no_warning(my_predbat)
     failed |= test_pv_calibration_partial_history(my_predbat)
+    failed |= test_pv_calibration_learns_from_raw_forecast(my_predbat)
     failed |= test_pv_calibration_synthetic_values(my_predbat)
     failed |= test_pv_calibration_average_day_scaling_ratio_of_sums(my_predbat)
     failed |= test_pv_calibration_total_adjustment_recency_weighted(my_predbat)
