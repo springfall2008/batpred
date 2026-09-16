@@ -280,6 +280,7 @@ class GatewayMQTT(ComponentBase):
         self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
         self._site_energy_serial = None  # serial of the inverter whose counters feed the site-level *_today entities
+        self._site_energy_last = {}  # site-level counter name -> last publish (serial, raw, offset, value, day)
         self._command_id = 0  # incrementing counter included in every published command
 
         # Predbat data publish state (price/timeline for device display)
@@ -978,6 +979,13 @@ class GatewayMQTT(ComponentBase):
         data it did before. Nothing is published until a source has been chosen, or when
         the source inverter is absent from this status.
 
+        When the source changes, the new inverter's counter reads differently from the one
+        it replaces. Publishing it as is would put a step into the series, which PredBat's
+        history reads as energy used (or hides later energy behind). Instead the counter
+        carries on from its last published value, offset by the difference at the switch,
+        until the source counter resets at midnight. The source, its raw reading and the
+        offset are kept in the entity's attributes so a restart carries on the same way.
+
         Args:
             status: A decoded GatewayStatus protobuf message.
         """
@@ -987,8 +995,48 @@ class GatewayMQTT(ComponentBase):
         if source is None:
             return
         pfx = f"{self.prefix}_gateway"
-        for name, value in self._energy_today_kwh(source).items():
-            self.dashboard_item(f"sensor.{pfx}_{name}", value, attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
+        when = datetime.datetime.fromtimestamp(status.timestamp, tz=self.local_tz) if status.timestamp else datetime.datetime.now(self.local_tz)
+        day = when.strftime("%Y-%m-%d")
+        for name, raw in self._energy_today_kwh(source).items():
+            entity_id = f"sensor.{pfx}_{name}"
+            last = self._site_energy_last.get(name) or self._restore_site_energy(entity_id)
+            offset = 0.0
+            if last:
+                if last["serial"] != self._site_energy_serial:
+                    # A different inverter feeds the counter from now on; carry on from the last value
+                    # published today (a switch across midnight starts the new day from the new counter).
+                    if last["day"] == day:
+                        offset = last["value"] - raw
+                elif raw >= last["raw"]:
+                    offset = last["offset"]
+                # Otherwise the source counter has reset for a new day and the offset no longer applies.
+            value = round(raw + offset, 2)
+            self._site_energy_last[name] = {"serial": self._site_energy_serial, "raw": raw, "offset": offset, "value": value, "day": day}
+            attributes = {**GATEWAY_ATTRIBUTE_TABLE.get(name, {}), "source_serial": self._site_energy_serial, "source_kwh": raw, "offset_kwh": round(offset, 2), "day": day}
+            self.dashboard_item(entity_id, value, attributes=attributes, app="gateway")
+
+    def _restore_site_energy(self, entity_id):
+        """Read back the last published state of a site-level energy counter, so a restart keeps it continuous.
+
+        Args:
+            entity_id: The site-level energy entity.
+
+        Returns:
+            dict: ``serial``, ``raw``, ``offset``, ``value`` and ``day`` of the last publish, or None
+            when the entity was never published with them (e.g. before this version).
+        """
+        record = self.get_state_wrapper(entity_id, raw=True)
+        if not isinstance(record, dict):
+            return None
+        attributes = record.get("attributes") or {}
+        serial = attributes.get("source_serial")
+        day = attributes.get("day")
+        if not isinstance(serial, str) or not isinstance(day, str):
+            return None
+        try:
+            return {"serial": serial, "raw": float(attributes.get("source_kwh")), "offset": float(attributes.get("offset_kwh", 0)), "value": float(record.get("state")), "day": day}
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _ev_suffix(ev, multi):
