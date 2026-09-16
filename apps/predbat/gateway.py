@@ -279,6 +279,7 @@ class GatewayMQTT(ComponentBase):
         self._ev_charging_active: bool = False  # last commanded state; avoids duplicate start/stop sends
         self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
+        self._site_energy_serial = None  # serial of the inverter whose counters feed the site-level *_today entities
         self._command_id = 0  # incrementing counter included in every published command
 
         # Predbat data publish state (price/timeline for device display)
@@ -825,6 +826,9 @@ class GatewayMQTT(ComponentBase):
                 continue
             self._inject_inverter_entities(inv, _serial_suffix(inv.serial))
 
+        # Site-level energy counters (the load_today / pv_today / import_today / export_today args)
+        self._inject_site_energy_entities(status)
+
         # EV charger entities (device-level, present only when a charge point is connected)
         self._inject_ev_entities(status)
 
@@ -941,14 +945,59 @@ class GatewayMQTT(ComponentBase):
 
         # Energy counters (Wh → kWh)
         # Always set with defaults so PredBat doesn't crash on missing load_today
+        for name, value in self._energy_today_kwh(inv).items():
+            self.dashboard_item(f"sensor.{pfx}_{name}", value, attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
         energy = inv.energy if inv.energy.ByteSize() > 0 else None
-        self.dashboard_item(f"sensor.{pfx}_pv_today", round(getattr(energy, "pv_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("pv_today", {}), app="gateway")
-        self.dashboard_item(f"sensor.{pfx}_import_today", round(getattr(energy, "grid_import_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("import_today", {}), app="gateway")
-        self.dashboard_item(f"sensor.{pfx}_export_today", round(getattr(energy, "grid_export_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_today", {}), app="gateway")
-        self.dashboard_item(f"sensor.{pfx}_load_today", round(getattr(energy, "consumption_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("load_today", {}), app="gateway")
         if energy:
             self.dashboard_item(f"sensor.{pfx}_battery_charge_today", round(energy.battery_charge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_charge_today", {}), app="gateway")
             self.dashboard_item(f"sensor.{pfx}_battery_discharge_today", round(energy.battery_discharge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_discharge_today", {}), app="gateway")
+
+    @staticmethod
+    def _energy_today_kwh(inv):
+        """Return an inverter's daily energy counters in kWh, keyed by entity attribute.
+
+        Every counter is 0 when the inverter reports no energy block, so the entities
+        always exist and PredBat never finds load_today missing.
+
+        Args:
+            inv: A ``predbat_InverterEntry`` from the gateway status.
+
+        Returns:
+            dict: ``pv_today``, ``import_today``, ``export_today`` and ``load_today`` in kWh.
+        """
+        energy = inv.energy if inv.energy.ByteSize() > 0 else None
+        if energy is None:
+            return {"pv_today": 0, "import_today": 0, "export_today": 0, "load_today": 0}
+        return {
+            "pv_today": round(energy.pv_today_wh / 1000.0, 2),
+            "import_today": round(energy.grid_import_today_wh / 1000.0, 2),
+            "export_today": round(energy.grid_export_today_wh / 1000.0, 2),
+            "load_today": round(energy.consumption_today_wh / 1000.0, 2),
+        }
+
+    def _inject_site_energy_entities(self, status):
+        """Publish the site-level energy counters that PredBat's history is built from.
+
+        ``sensor.{prefix}_gateway_{pv,import,export,load}_today`` carry no serial, so
+        their history survives a change of the bound inverter (a replacement, or a
+        re-discovery that selects a different control target). Load and PV history are
+        fetched by entity id; a serial-named entity would start from zero days of history
+        every time the serial changed. The values mirror the per-inverter counters of the
+        inverter ``automatic_config`` chose as the energy source, so the plan sees the same
+        data it did before. Nothing is published until a source has been chosen, or when
+        the source inverter is absent from this status.
+
+        Args:
+            status: A decoded GatewayStatus protobuf message.
+        """
+        if not self._site_energy_serial:
+            return
+        source = next((inv for inv in status.inverters if inv.serial == self._site_energy_serial), None)
+        if source is None:
+            return
+        pfx = f"{self.prefix}_gateway"
+        for name, value in self._energy_today_kwh(source).items():
+            self.dashboard_item(f"sensor.{pfx}_{name}", value, attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
 
     @staticmethod
     def _ev_suffix(ev, multi):
@@ -1258,13 +1307,18 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("export_limit", export_limit_entities)
         self.set_arg("inverter_limit", inverter_limit_entities)
 
-        # Energy counters (first inverter)
+        # Energy counters (first inverter), read through the site-level entities so the
+        # load/PV history is not lost when the bound serial changes. Publish them now, so
+        # they exist before PredBat's first fetch rather than on the next telemetry.
         suffix0 = inverters[0].serial[-6:].lower()
         base0 = f"{self.prefix}_gateway_{suffix0}"
-        self.set_arg("pv_today", [f"sensor.{base0}_pv_today"])
-        self.set_arg("import_today", [f"sensor.{base0}_import_today"])
-        self.set_arg("export_today", [f"sensor.{base0}_export_today"])
-        self.set_arg("load_today", [f"sensor.{base0}_load_today"])
+        site = f"{self.prefix}_gateway"
+        self._site_energy_serial = inverters[0].serial
+        self.set_arg("pv_today", [f"sensor.{site}_pv_today"])
+        self.set_arg("import_today", [f"sensor.{site}_import_today"])
+        self.set_arg("export_today", [f"sensor.{site}_export_today"])
+        self.set_arg("load_today", [f"sensor.{site}_load_today"])
+        self._inject_site_energy_entities(status)
 
         # Battery health (first inverter)
         self.set_arg("battery_temperature_history", f"sensor.{base0}_battery_temperature")
