@@ -30,6 +30,56 @@ def set_rate_profile(my_predbat, profile, default_rate=20.0, export_rate=0.0):
     my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
 
+RATE_STATE_ATTRS = ["rate_min", "rate_max", "rate_average", "rate_min_forward", "rate_max_forward", "rate_min_base", "rate_max_base", "rate_export_min", "rate_export_max", "rate_export_avg", "rate_export_max_forward"]
+
+
+def snapshot_rate_state(my_predbat):
+    """
+    Snapshot the shared fixture's rate dicts and the scalars rate_scan/rate_scan_export derive
+    from them, so a suite that rewrites rates with set_rate_profile can restore them however it
+    exits (GH#5079 test-order state leaks)
+    """
+    state = {"rate_import": dict(my_predbat.rate_import), "rate_export": dict(my_predbat.rate_export)}
+    for name in RATE_STATE_ATTRS:
+        if hasattr(my_predbat, name):
+            value = getattr(my_predbat, name)
+            state[name] = dict(value) if isinstance(value, dict) else value
+    return state
+
+
+def restore_rate_state(my_predbat, state):
+    """
+    Restore the rate state captured by snapshot_rate_state
+    """
+    for name, value in state.items():
+        setattr(my_predbat, name, dict(value) if isinstance(value, dict) else value)
+
+
+def restore_iboost_state(my_predbat):
+    """
+    Restore the shared fixture's iBoost configuration to its config defaults, with the rate
+    thresholds back at the reset() default of 9999, so no iBoost test state leaks into later
+    suites
+    """
+    my_predbat.iboost_smart = False
+    my_predbat.iboost_slots = []
+    my_predbat.iboost_today = 0
+    my_predbat.iboost_max_energy = my_predbat.get_arg("iboost_max_energy")
+    my_predbat.iboost_max_power = my_predbat.get_arg("iboost_max_power") / (60 * 1000)
+    my_predbat.iboost_smart_min_length = my_predbat.get_arg("iboost_smart_min_length")
+    my_predbat.iboost_rate_threshold = 9999
+    my_predbat.iboost_rate_threshold_export = 9999
+    my_predbat.iboost_gas = False
+    my_predbat.iboost_gas_export = False
+    my_predbat.iboost_gas_scale = my_predbat.get_arg("iboost_gas_scale")
+    my_predbat.iboost_tank_capacity = my_predbat.get_arg("iboost_tank_capacity")
+    my_predbat.iboost_tank_reserve = my_predbat.get_arg("iboost_tank_reserve")
+    my_predbat.iboost_fill_rate_threshold = my_predbat.get_arg("iboost_fill_rate_threshold")
+    my_predbat.iboost_forecast = {}
+    my_predbat.iboost_tank_soc_percent = None
+    my_predbat.minutes_now = 12 * 60
+
+
 def check_slot_invariants(test_name, slots):
     """
     Check the invariants all iBoost plans must hold: sorted by time, no duplicate slot starts,
@@ -169,7 +219,20 @@ def run_iboost_smart_average_test(my_predbat):
 
 def run_iboost_smart_tests(my_predbat):
     """
-    Test for Iboost smart
+    Test for Iboost smart, with the shared fixture's rate and iBoost state snapshotted and
+    restored however the suite exits
+    """
+    saved_rates = snapshot_rate_state(my_predbat)
+    try:
+        return run_iboost_smart_test_cases(my_predbat)
+    finally:
+        restore_rate_state(my_predbat, saved_rates)
+        restore_iboost_state(my_predbat)
+
+
+def run_iboost_smart_test_cases(my_predbat):
+    """
+    The iBoost smart planner test cases, run under run_iboost_smart_tests' state guard
     """
     failed = False
     reset_inverter(my_predbat)
@@ -283,37 +346,52 @@ def run_iboost_forecast_plan_test(
     my_predbat.iboost_tank_soc_percent = tank_soc_percent
     my_predbat.iboost_fill_rate_threshold = fill_rate_threshold
     my_predbat.iboost_forecast = forecast
+    saved_gas = None
     if gas_rate is not None:
+        saved_gas = (my_predbat.iboost_gas, my_predbat.iboost_gas_scale, my_predbat.rate_gas)
         my_predbat.iboost_gas = True
         my_predbat.iboost_gas_scale = 1.0
         my_predbat.rate_gas = {minute: gas_rate for minute in range(my_predbat.forecast_minutes + my_predbat.minutes_now + 120)}
 
-    slots = my_predbat.plan_iboost_smart()
+    try:
+        slots = my_predbat.plan_iboost_smart()
+    finally:
+        my_predbat.iboost_forecast = {}
+        my_predbat.iboost_tank_soc_percent = None
+        my_predbat.iboost_fill_rate_threshold = -99.0
+        my_predbat.iboost_smart = False
+        my_predbat.iboost_today = 0
+        my_predbat.iboost_rate_threshold = 9999
+        my_predbat.iboost_rate_threshold_export = 9999
+        if saved_gas is not None:
+            my_predbat.iboost_gas, my_predbat.iboost_gas_scale, my_predbat.rate_gas = saved_gas
+        if minutes_now is not None:
+            my_predbat.minutes_now = 12 * 60
 
     if slots != expect_slots:
         print("ERROR: {} expected slots {} got {}".format(test_name, expect_slots, slots))
         failed = True
     failed |= check_slot_invariants(test_name, slots)
 
-    my_predbat.iboost_forecast = {}
-    my_predbat.iboost_tank_soc_percent = None
-    my_predbat.iboost_fill_rate_threshold = -99.0
-    my_predbat.iboost_smart = False
-    my_predbat.iboost_today = 0
-    my_predbat.iboost_rate_threshold = 100
-    my_predbat.iboost_rate_threshold_export = 100
-    if gas_rate is not None:
-        my_predbat.iboost_gas = False
-        my_predbat.rate_gas = {}
-    if minutes_now is not None:
-        my_predbat.minutes_now = 12 * 60
-
     return failed
 
 
 def run_iboost_forecast_tests(my_predbat):
     """
-    Tests for the iBoost demand forecast planner and its forecast ingestion
+    Tests for the iBoost demand forecast planner and its forecast ingestion, with the shared
+    fixture's rate and iBoost state snapshotted and restored however the suite exits
+    """
+    saved_rates = snapshot_rate_state(my_predbat)
+    try:
+        return run_iboost_forecast_test_cases(my_predbat)
+    finally:
+        restore_rate_state(my_predbat, saved_rates)
+        restore_iboost_state(my_predbat)
+
+
+def run_iboost_forecast_test_cases(my_predbat):
+    """
+    The iBoost demand forecast test cases, run under run_iboost_forecast_tests' state guard
     """
     failed = False
     reset_inverter(my_predbat)
@@ -618,16 +696,5 @@ def run_iboost_forecast_tests(my_predbat):
         failed = True
     my_predbat.iboost_smart = False
     my_predbat.iboost_today = 0
-
-    # Restore the shared instance for later tests: iboost parameters back to their config
-    # defaults and the extra rate keys set_rate_profile wrote beyond the usual test span removed
-    my_predbat.iboost_max_energy = 3.0
-    my_predbat.iboost_max_power = 2400 / 60 / 1000
-    my_predbat.iboost_smart_min_length = 30
-    for minute in range(my_predbat.forecast_minutes + my_predbat.minutes_now, my_predbat.forecast_minutes + my_predbat.minutes_now + 120):
-        if minute in my_predbat.rate_import:
-            del my_predbat.rate_import[minute]
-        if minute in my_predbat.rate_export:
-            del my_predbat.rate_export[minute]
 
     return failed
