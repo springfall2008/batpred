@@ -857,6 +857,47 @@ def test_log_secret_pattern_build_is_not_racy(my_predbat):
     return failed
 
 
+def test_resolve_arg_re_masks_secret_arg_matches(my_predbat):
+    """
+    resolve_arg_re() logs the entity id it matched before auto_config()'s caller has invalidated
+    the redaction cache to cover it (#5106). A secret-flagged arg must not put that matched value -
+    which can itself embed a credential, e.g. an MPAN in an Octopus entity id - into the log in
+    plaintext, even though the resolved value handed back to the caller is unchanged.
+    """
+    print("**** Running test_resolve_arg_re_masks_secret_arg_matches ****")
+    failed = False
+
+    log_lines = []
+    my_predbat.log = lambda message, quiet=True: log_lines.append(str(message))
+
+    secret_entity = "sensor.octopus_energy_a_1234567890123_electricity_current_rate"
+    matched, resolved = my_predbat.resolve_arg_re("octopus_api_key", "re:sensor.octopus_energy_a_[0-9]+_electricity_current_rate", [secret_entity])
+
+    if not matched or resolved != secret_entity:
+        print("ERROR: expected a match resolving to {}, got matched={} resolved={}".format(secret_entity, matched, resolved))
+        failed = True
+
+    if any(secret_entity in line for line in log_lines):
+        print("ERROR: the matched entity id for a secret-flagged arg was logged in plaintext: {}".format(log_lines))
+        failed = True
+
+    log_lines.clear()
+    plain_entity = "sensor.some_plain_status"
+    matched, resolved = my_predbat.resolve_arg_re("some_plain_status_entity", "re:sensor.some_plain_status", [plain_entity])
+
+    if not matched or resolved != plain_entity:
+        print("ERROR: expected a match resolving to {}, got matched={} resolved={}".format(plain_entity, matched, resolved))
+        failed = True
+
+    if not any(plain_entity in line for line in log_lines):
+        print("ERROR: a non-secret arg's matched entity id should still be logged, got {}".format(log_lines))
+        failed = True
+
+    if not failed:
+        print("**** test_resolve_arg_re_masks_secret_arg_matches PASSED ****")
+    return failed
+
+
 def run_secrets_tests(my_predbat=None):
     """
     Run all secrets tests
@@ -872,6 +913,7 @@ def run_secrets_tests(my_predbat=None):
     failed |= test_log_redaction_survives_a_missed_invalidation(my_predbat)
     failed |= test_auto_config_invalidates_log_secret_cache(my_predbat)
     failed |= test_log_secret_pattern_build_is_not_racy(my_predbat)
+    failed |= test_resolve_arg_re_masks_secret_arg_matches(my_predbat)
     return failed
 
 

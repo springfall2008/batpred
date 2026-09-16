@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK
 import functools
 import io
 import itertools
@@ -1232,26 +1232,20 @@ class UserInterface:
         elif isinstance(arg_value, str) and arg_value.startswith("re:"):
             matched = False
             my_re = "^" + arg_value[3:] + "$"
+            secret_arg = is_secret_key(arg)
             for key in state_keys:
                 res = re.search(my_re, key)
                 if res:
-                    # TODO(#5106): this logs the matched entity id before the caller assigns it
-                    # and rebuilds the redaction pattern, so an entity whose own NAME embeds a
-                    # credential (some integrations put an MPAN or account number in the entity id)
-                    # is written out in the clear. Deferred from #5053: the value here is an entity
-                    # id rather than a resolved credential, which makes it narrower than the leaks
-                    # that PR closes, and fixing it properly means redacting against a pattern that
-                    # does not yet include the value being matched.
                     if len(res.groups()) > 0:
-                        self.log("Regular expression argument {} matched {} with {}".format(arg, my_re, res.group(1)))
                         arg_value = res.group(1)
-                        matched = True
-                        break
                     else:
-                        self.log("Regular expression argument {} Matched {} with {}".format(arg, my_re, res.group(0)))
                         arg_value = res.group(0)
-                        matched = True
-                        break
+                    # A matched entity id can itself embed a credential (e.g. an MPAN), and this fires
+                    # before auto_config()'s caller has invalidated the log-redaction cache to cover the
+                    # new value, so a secret-flagged arg only logs the pattern and key name (#5106).
+                    self.log("Regular expression argument {} matched {} with {}".format(arg, my_re, SECRET_MASK if secret_arg else arg_value))
+                    matched = True
+                    break
         return matched, arg_value
 
     def auto_config(self, final=False):
