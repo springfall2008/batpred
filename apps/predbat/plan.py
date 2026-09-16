@@ -5440,7 +5440,11 @@ class Plan:
         total_days = self.iboost_plan_total_days()
 
         if (sum(demand) <= 0) and any(value > 0 for value in self.iboost_forecast.values()):
-            self.log("Warn: iBoost demand forecast does not align with the current plan grid ({} kWh forecast but none lands on it), no demand will be planned".format(dp2(sum(self.iboost_forecast.values()))))
+            horizon_end = start_minute + self.forecast_minutes
+            if all((minute < start_minute) or (minute >= horizon_end) for minute, value in self.iboost_forecast.items() if value > 0):
+                self.log("iBoost demand forecast has no demand within the planning horizon, nothing to plan")
+            else:
+                self.log("Warn: iBoost demand forecast does not align with the current plan grid ({} kWh forecast but none lands on it), no demand will be planned".format(dp2(sum(self.iboost_forecast.values()))))
 
         self.log("Create iBoost forecast plan, demand {} kWh, stored {} kWh, capacity {} kWh, reserve {} kWh, max {} kWh/day, power {} kW".format(dp2(sum(demand)), dp2(stored_start), capacity, reserve, iboost_max, dp2(self.iboost_max_power * 60)))
 

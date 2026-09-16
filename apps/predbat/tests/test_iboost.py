@@ -30,7 +30,7 @@ def set_rate_profile(my_predbat, profile, default_rate=20.0, export_rate=0.0):
     my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
 
-RATE_STATE_ATTRS = ["rate_min", "rate_max", "rate_average", "rate_min_forward", "rate_max_forward", "rate_min_base", "rate_max_base", "rate_export_min", "rate_export_max", "rate_export_avg", "rate_export_max_forward"]
+RATE_STATE_ATTRS = ["rate_min", "rate_max", "rate_average", "rate_min_minute", "rate_max_minute", "rate_min_forward", "rate_min_base", "rate_max_base", "rate_export_min", "rate_export_max", "rate_export_average", "rate_export_min_minute", "rate_export_max_minute", "rate_export_max_forward"]
 
 
 def snapshot_rate_state(my_predbat):
@@ -494,6 +494,17 @@ def run_iboost_forecast_test_cases(my_predbat):
         my_predbat,
         {"iboost_forecast": ["sensor.hot_water_demand$results"]},
         {"sensor.hot_water_demand": {"results": make_forecast_attribute(my_predbat, [(780, 6.0), (810, 6.5), (840, 2.0), (870, 2.5)])}},
+        expect_demand={780: 0.5, 840: 0.5},
+        expect_total=1.0,
+    )
+    # A trailing entry with a valid timestamp but an unusable value (a template sensor point
+    # still 'unavailable') must not extend the data extent: unvalidated it would let the
+    # back-fill junction book phantom demand and widen the fill horizon
+    failed |= run_iboost_fetch_test(
+        "iboost_fetch_trailing_junk",
+        my_predbat,
+        {"iboost_forecast": ["sensor.hot_water_demand$results"]},
+        {"sensor.hot_water_demand": {"results": make_forecast_attribute(my_predbat, [(780, 6.0), (810, 6.5), (840, 2.0), (870, 2.5), (900, "unavailable")])}},
         expect_demand={780: 0.5, 840: 0.5},
         expect_total=1.0,
     )

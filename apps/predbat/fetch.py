@@ -2888,11 +2888,15 @@ class Fetch:
                 data = None
 
             # Track the extent of the raw data; minute_data back-fills its output past the last
-            # data point, so consumers judging staleness or taking deltas need the raw bounds
+            # data point, so consumers judging staleness or taking deltas need the raw bounds.
+            # Only items minute_data will accept count: a parseable timestamp AND a numeric
+            # energy value, so a junk-valued entry (e.g. a template sensor point still
+            # 'unavailable') cannot extend the extent past the usable data.
             first_minute = None
             last_minute = None
             for item in data or []:
                 try:
+                    float(item["energy"])
                     item_minute = int((str2time(item["last_updated"]) - self.midnight_utc).total_seconds() / 60)
                 except (ValueError, TypeError, KeyError):
                     continue
