@@ -1208,7 +1208,8 @@ The iboost energy sensor should reset to zero each day so if your source sensor 
 - **iboost_forecast** - Optionally set to one or more sensors holding a hot water demand forecast, each pointing to a sensor and attribute in the same
 data format as [load_forecast](#load-forecast) (either a dictionary of timestamps and energy data, or a list of 'last_updated' timestamps and 'energy' values).
 The series must be cumulative kWh: Predbat takes the positive delta of the series in each plan interval as the demand for that interval, so dips in the series are ignored.
-When set, the [smart iBoost planner](customisation.md#iboost-demand-forecast) heats ahead of each forecast draw instead of spreading the daily energy budget over the cheapest slots.
+When set, the [smart iBoost planner](customisation.md#iboost-demand-forecast) heats ahead of each forecast draw instead of spreading the daily energy budget over the cheapest slots;
+note that **input_number.predbat_iboost_smart_min_length** does not apply to forecast-driven slots.
 
 ```yaml
   iboost_forecast:
