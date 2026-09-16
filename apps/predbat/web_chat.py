@@ -702,11 +702,9 @@ class WebChat:
         # Only once the file write has succeeded is the live configuration changed, so a failed
         # save never leaves Predbat running settings that are not in the file.
         block = plain_yaml_value(chat_block)
-        self.base.args["chat"] = block
-        # A provider entry can carry a nested api_key, so log()'s cached redaction pattern
-        # (hass.py) must be rebuilt on next use or a newly saved key keeps leaking into the log
-        # under the stale pattern until restart (#5053 review).
-        self.base._invalidate_log_secret_pattern()
+        # set_arg() invalidates log()'s cached redaction pattern (hass.py) too - needed here since
+        # a provider entry can carry a nested api_key (#5053 review).
+        self.base.set_arg("chat", block)
         selected, error = await self._marshal(agent, agent.apply_provider_block(copy.deepcopy(block), active))
         if error:
             return error
